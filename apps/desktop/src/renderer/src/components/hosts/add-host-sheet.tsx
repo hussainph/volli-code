@@ -50,6 +50,7 @@ import {
 } from "./add-host-model";
 import { EASE_OUT, HostGlyph, StepMark, SwapText, useMotionTiming } from "./host-parts";
 import { useAddHostFlow, type AddHostFlow, type NumberedLogLine } from "./use-add-host-flow";
+import { useRestartSessionCount } from "./use-restart-session-count";
 
 /** The sheet, open while the remote-hosts store says so. */
 export function AddHostSheet() {
@@ -249,9 +250,14 @@ function FlowScreen({
   const [hasPassword, setHasPassword] = React.useState(false);
   const questionId = view?.question?.id ?? null;
   React.useEffect(() => setHasPassword(false), [questionId]);
-  const name = view?.name ?? target;
+  const liveSessions = useRestartSessionCount(
+    view?.question?.kind === "existing-hostd" ? view.question.id : null,
+    target,
+  );
+  const host =
+    remoteHostOf(hosts, view?.hostId ?? null) ?? hosts.find((entry) => entry.target === target);
+  const name = host?.name ?? view?.name ?? target;
   const done = view?.status === "done";
-  const host = remoteHostOf(hosts, view?.hostId ?? null);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-4 px-6 pt-6 pb-4">
@@ -308,6 +314,7 @@ function FlowScreen({
               lost={lost}
               busy={busy || cancelling || confirm !== null}
               onPasswordText={setHasPassword}
+              liveSessions={liveSessions}
             />
             <AnimatePresence initial={false}>
               {details ? (
@@ -367,6 +374,7 @@ function Stopped({
   lost,
   busy,
   onPasswordText,
+  liveSessions,
 }: {
   flow: AddHostFlow;
   view: AddHostFlowView | null;
@@ -374,6 +382,7 @@ function Stopped({
   lost: boolean;
   busy: boolean;
   onPasswordText: (has: boolean) => void;
+  liveSessions: number | null;
 }) {
   const timed = useMotionTiming();
   let body: React.ReactNode = null;
@@ -393,7 +402,7 @@ function Stopped({
   } else if (view?.status === "question" && view.question !== null) {
     body = (
       <QuestionBody
-        prompt={questionPrompt(view.question, name)}
+        prompt={questionPrompt(view.question, name, liveSessions)}
         flow={flow}
         busy={busy}
         onPasswordText={onPasswordText}
@@ -467,6 +476,7 @@ function QuestionBody({
           <p className="text-ui text-muted-foreground">{prompt.note}</p>
         </>
       );
+    case "self-add":
     case "already-paired":
     case "unknown":
       return <Line tone="attention">{prompt.line}</Line>;
@@ -641,6 +651,17 @@ function Actions({
               disabled={busy}
               onClick={() => flow.answer({ kind: "accept-host-key" })}
             >
+              {prompt.action}
+            </Button>
+          </>
+        );
+      case "self-add":
+        return (
+          <>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => request("cancel")}>
+              Cancel
+            </Button>
+            <Button size="sm" disabled={busy} onClick={() => flow.answer({ kind: "open" })}>
               {prompt.action}
             </Button>
           </>

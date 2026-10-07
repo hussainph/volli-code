@@ -270,7 +270,7 @@ describe("the current host's detail", () => {
     expect(detail({ status: "incompatible", reason: "host-too-old" })).toEqual({
       kind: "incompatible",
       text: "Too old for this app",
-      action: { kind: "update-host", label: "Update host" },
+      action: { kind: "update-host", label: "Re-add to update" },
     });
     expect(detail({ status: "incompatible", reason: "database-too-new" })).toMatchObject({
       text: "Database from a newer Volli",
@@ -331,7 +331,6 @@ describe("recovery toasts", () => {
     );
     expect(hostTransitionToast(running, host({ status: "open" }, { version: "0.3.1" }))).toEqual({
       title: "hetzner-1 is on Volli host 0.3.1",
-      description: "Sessions picked up where they paused",
     });
     expect(hostTransitionToast(running, host({ status: "open" }))?.title).toBe(
       "hetzner-1 is on Volli host 0.3.0",

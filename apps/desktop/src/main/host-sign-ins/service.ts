@@ -18,6 +18,7 @@
 import type {
   HostSetGitCredentialInput,
   HostSignInRunEvent,
+  HostSignInSendResult,
   HostSignInStatus,
 } from "@volli/shared";
 
@@ -25,7 +26,8 @@ import {
   macKeyAvailability,
   sendApiKeyFromThisMac,
   type MacCredentialReader,
-  type SendFromThisMacResult,
+  type NativeSendApproval,
+  type SendConfirmationLabels,
 } from "./send-from-this-mac";
 import {
   runHostSignIn,
@@ -74,7 +76,7 @@ export interface HostSignInService {
     hostId: string,
     providerId: string,
     confirmed: true,
-  ): Promise<SendFromThisMacResult<HostSignInStatus>>;
+  ): Promise<HostSignInSendResult>;
   setApiKey(hostId: string, providerId: string, key: string): Promise<HostSignInStatus>;
   setGitCredential(hostId: string, input: HostSetGitCredentialInput): Promise<HostSignInStatus>;
   /**
@@ -94,6 +96,11 @@ export function createHostSignInService(options: {
   readonly links: HostSignInLinks;
   readonly mac: MacCredentialStore;
   readonly openExternal: (url: string) => void | Promise<void>;
+  /** Main resolves local catalog/registry names and owns the native dialog. */
+  readonly sendConfirmation: {
+    resolve(hostId: string, providerId: string): SendConfirmationLabels | null;
+    confirm(labels: SendConfirmationLabels): Promise<NativeSendApproval | "cancelled" | null>;
+  };
   /** Test seam: the relay's bind, handed to every run. */
   readonly bind?: Parameters<typeof runHostSignIn>[0]["bind"];
 }): HostSignInService {
@@ -119,12 +126,48 @@ export function createHostSignInService(options: {
     },
     sendFromThisMac: async (hostId, providerId, confirmed) => {
       const host = link(hostId);
-      return sendApiKeyFromThisMac({
-        providerId,
-        confirmed,
-        store: options.mac,
-        setApiKey: (input) => host.setApiKey(input),
+      let lost = false;
+      // Latch loss even if this link reconnects while the dialog is open.
+      const stop = host.watchLoss(() => {
+        lost = true;
       });
+      try {
+        const labels = options.sendConfirmation?.resolve(hostId, providerId);
+        if (labels == null) return { ok: false, reason: "send-failed" };
+        const isCurrent = (): boolean => {
+          const current = options.sendConfirmation.resolve(hostId, providerId);
+          // linkFor creates adapters, so their object identity is not a connection
+          // identity. watchLoss owns that fence; lookup also catches flag-off/forget.
+          return (
+            !lost &&
+            options.links.linkFor(hostId) !== null &&
+            current !== null &&
+            current.providerLabel === labels.providerLabel &&
+            current.hostName === labels.hostName &&
+            current.hostTarget === labels.hostTarget
+          );
+        };
+        const sent = await sendApiKeyFromThisMac({
+          providerId,
+          confirmed,
+          store: options.mac,
+          confirm: () => options.sendConfirmation.confirm(labels),
+          isCurrent,
+          setApiKey: (input) => host.setApiKey(input),
+        });
+        if (sent.ok) return sent;
+        if (sent.reason === "cancelled") {
+          // The existing wire success is a status projection, not a send receipt.
+          // Return the unchanged authoritative status so Cancel returns to the
+          // row without an error, a credential read, or a write on the host.
+          return { ok: true, status: await host.status() };
+        }
+        return { ok: false, reason: sent.reason };
+      } catch {
+        return { ok: false, reason: "send-failed" };
+      } finally {
+        stop();
+      }
     },
     setApiKey: async (hostId, providerId, key) => link(hostId).setApiKey({ providerId, key }),
     setGitCredential: async (hostId, input) => link(hostId).setGitCredential(input),

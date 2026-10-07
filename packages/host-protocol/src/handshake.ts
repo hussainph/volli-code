@@ -4,7 +4,7 @@ import {
   type HostConnectionActor,
   type HostScopeActor,
 } from "./actor";
-import { HOST_SCOPE_FEATURES } from "./features";
+import { HOST_CONNECTION_ONLY_FEATURES, HOST_SCOPE_FEATURES } from "./features";
 import { hostError, type HostError } from "./errors";
 import { isEpoch, isUuidV4 } from "./identity";
 import type { HostId, WorkspaceEpoch, WorkspaceId } from "./identity";
@@ -254,7 +254,9 @@ export function negotiateWelcome(
       host: { ...offer.host },
       workspace: { ...offer.workspace },
       actor,
-      features: negotiateFeatures(hello.features, offer.features),
+      features: negotiateFeatures(hello.features, offer.features).filter(
+        (feature) => !(HOST_CONNECTION_ONLY_FEATURES as readonly string[]).includes(feature),
+      ),
       proof: null,
     },
   };

@@ -127,6 +127,18 @@ someone logs in to that account (or `start --user` runs over SSH).
 that lingers, is `"boot"`), and the add-a-host checklist shows "Starts when you
 log in to <host>". A LaunchDaemon with `UserName` for no-login boot is deferred.
 
+**A launchd hostd never opens the macOS keychain, and a store the keychain
+sealed is refused.** hostd is headless: it seals saved secrets with a key file
+(`fileSecretKey`), the headless adapter on every OS; the keychain codec and the
+keychain credential backend are desktop's alone, and need Electron. On this Mac
+that means a `session-secrets.enc` the desktop app sealed with the keychain
+(`VSC1`) is refused as sealed by another adapter: it is never opened or used,
+credentials report `locked` (`other-adapter`, [Boot](#boot)), the host boots
+anyway, and the sealed file is left byte-identical. There is no key file to put
+back, so the only way forward is `volli-hostd credentials reset` — set it aside
+and enter the secrets again. hostd never reads the desktop's typed
+`host-credentials.enc` inventory either.
+
 **Git in a Mac host's Sessions never reaches the keychain.** Apple's git
 configures `credential.helper=osxkeychain`, which on a host would ask a login
 keychain nobody is there to unlock. Every Session command on a Mac gets
@@ -910,6 +922,13 @@ database it was given.
 token there does not separate you from the host's Sessions
 ([Operators](#operators), the limitation). Never point hostd at the desktop app's
 own data directory while the app runs: both would serve one database.
+
+The agent is a LaunchAgent: it loads at login, so after the Mac restarts the
+host is down until you log in — `startsAt: "login"` in `status --json`, and
+never a boot-time daemon ([Managed install](#managed-install-vc-700)). It never
+opens the macOS keychain either: a store the desktop app sealed with it is
+refused, not opened (`locked`, `other-adapter`), which is one more reason the
+data directories stay separate.
 
 ## Tests
 

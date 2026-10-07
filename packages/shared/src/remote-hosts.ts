@@ -359,7 +359,7 @@ export interface RemoteHostDevices {
 
 /** The text a refusal of an action v1 does not do yet carries. */
 export const REMOTE_HOST_UPDATE_UNAVAILABLE =
-  "Updating a host from this Mac comes in a later build: re-run Add a host to install this version.";
+  "Re-add to update: add this host again to install this version. Its projects stay; running Sessions will stop.";
 export const REMOTE_HOST_SIGN_IN_UNAVAILABLE =
   "Signing in on a host from this Mac comes in a later build.";
 

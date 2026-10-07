@@ -228,6 +228,13 @@ export function useHostsWritable(): boolean {
   return useRemoteHostsStore((state) => state.readOnly === null);
 }
 
+/** Updates use the same SSH add flow, never an in-app update operation. */
+export function readdHostToUpdate(hostId: string): void {
+  const store = useRemoteHostsStore.getState();
+  const host = remoteHostOf(store.hosts, hostId);
+  if (host !== undefined) store.openAddHost(host.target);
+}
+
 /** One remote host's registry record, or `undefined` (This Mac, or gone). */
 export function remoteHostOf(
   hosts: readonly RemoteHost[],

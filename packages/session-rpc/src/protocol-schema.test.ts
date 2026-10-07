@@ -7,7 +7,7 @@ import { CATALOG_ENTRIES, DESKTOP_ENTRIES } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 
-import type { ProcedureSchema } from "./index";
+import { sessionProcedureSchemas, type ProcedureSchema } from "./index";
 import { generateProtocolSchema } from "./protocol-schema";
 
 const sample: Record<string, ProcedureSchema> = {
@@ -56,23 +56,92 @@ describe("committed protocol schema projection", () => {
     expect(document.tiers.public!["session.reconcile"]).toMatchObject({ voidOutput: true });
   });
 
+  it("bounds the new host bootstrap proof, leaving Workspace schema and closed output tags intact", () => {
+    const schemas = sessionProcedureSchemas();
+    const host = schemas["protocol.hostWelcome"]!.output;
+    const legacy = schemas["protocol.welcome"]!.output;
+    const id = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    const common = {
+      protocolVersion: 1,
+      host: { id, version: "1" },
+      features: [],
+      proof: { scheme: "reserved.future-proof", value: "" },
+    };
+    const welcome = {
+      ...common,
+      scope: "host",
+      actor: { kind: "device", scope: "host", deviceId: id },
+    };
+    const workspace = {
+      ...common,
+      workspace: { id, epoch: 0 },
+      actor: { kind: "device", deviceId: id, workspaceId: id },
+    };
+    for (const [field, max] of [
+      ["scheme", 128],
+      ["value", 8192],
+    ] as const) {
+      for (const unit of ["x", "界", "😀"]) {
+        const exact = unit.repeat(max / unit.length);
+        const proof = { ...common.proof, [field]: exact };
+        expect(host.safeParse({ ...welcome, proof }).success).toBe(true);
+        expect(
+          host.safeParse({ ...welcome, proof: { ...proof, [field]: exact + "x" } }).success,
+        ).toBe(false);
+        expect(
+          legacy.safeParse({ ...workspace, proof: { ...proof, [field]: exact + unit } }).success,
+        ).toBe(true);
+      }
+    }
+    expect(host.safeParse({ ...welcome, proof: null }).success).toBe(true);
+    expect(host.safeParse({ ...welcome, scope: "future" }).success).toBe(false);
+    expect(
+      host.safeParse({ ...welcome, actor: { ...welcome.actor, kind: "future" } }).success,
+    ).toBe(false);
+    const output = z.toJSONSchema(host, { io: "output" });
+    expect(output.properties!.scope).toMatchObject({ const: "host" });
+    expect(JSON.stringify(output)).not.toContain("x-volli-open-enum");
+    expect(JSON.stringify(output)).toContain('"maxLength":8192');
+    expect(JSON.stringify(z.toJSONSchema(legacy, { io: "output" }))).not.toContain(
+      '"maxLength":8192',
+    );
+  });
+
   it("includes desktop-only providers without demanding public registry rows", () => {
     expect(
-      generateProtocolSchema([{ tier: "desktop", procedures: () => sample }], [], [{ key: "read" }])
-        .tiers.desktop!.read,
-    ).toMatchObject({ kind: "query", input: { type: "string" }, output: { type: "string" } });
+      generateProtocolSchema(
+        [{ tier: "desktop", procedures: () => sample }],
+        [],
+        [{ key: "read", compatibility: "host-command" }],
+      ).tiers.desktop!.read,
+    ).toMatchObject({
+      compatibility: "host-command",
+      kind: "query",
+      input: { type: "string" },
+      output: { type: "string" },
+    });
   });
 
   it("publishes exactly the declared desktop-only entries", () => {
-    expect(Object.keys(generateProtocolSchema().tiers.desktop!).toSorted()).toEqual(
+    const document = generateProtocolSchema();
+    for (const entry of DESKTOP_ENTRIES) {
+      expect(document.tiers.desktop![entry.key]).toMatchObject({
+        compatibility: entry.compatibility,
+      });
+      expect(document.tiers.public![entry.key]).toBeUndefined();
+    }
+    for (const entry of Object.values(document.tiers.public!)) {
+      expect(entry).not.toHaveProperty("compatibility");
+    }
+    expect(Object.keys(document.tiers.desktop!).toSorted()).toEqual(
       DESKTOP_ENTRIES.map(({ key }) => key).toSorted(),
     );
     expect(() =>
       generateProtocolSchema([{ tier: "desktop", procedures: () => sample }], [], []),
     ).toThrow("Schema/desktop-tier mismatch: missing ; extra read");
-    expect(() => generateProtocolSchema([], [], [{ key: "read" }])).toThrow(
-      "Schema/desktop-tier mismatch: missing read; extra",
-    );
+    expect(() =>
+      generateProtocolSchema([], [], [{ key: "read", compatibility: "host-command" }]),
+    ).toThrow("Schema/desktop-tier mismatch: missing read; extra");
   });
 
   it("refuses incomplete or duplicate providers and unpublishable schemas", () => {
@@ -87,7 +156,7 @@ describe("committed protocol schema projection", () => {
           { tier: "desktop", procedures: () => sample },
         ],
         [],
-        [{ key: "read" }],
+        [{ key: "read", compatibility: "host-command" }],
       ),
     ).toThrow("Duplicate schema provider");
     expect(() =>
@@ -99,7 +168,7 @@ describe("committed protocol schema projection", () => {
           },
         ],
         [],
-        [{ key: "opaque" }],
+        [{ key: "opaque", compatibility: "host-command" }],
       ),
     ).toThrow("Custom types cannot be represented");
   });

@@ -26,15 +26,10 @@ import {
   hostSignInStatusSchema,
   hostSignInUpdateSchema,
 } from "@volli/session-rpc";
-import type { HostSignInStatus, HostSignInUpdate } from "@volli/shared";
+import { signInWebUrl, type HostSignInStatus, type HostSignInUpdate } from "@volli/shared";
 
 import { HostUnreachableError, type HostSignInHostLink, type HostSignInService } from "./service";
-import {
-  HostFlowLedger,
-  isOpenableSignInUrl,
-  REFUSED_SIGN_IN_LINK,
-  type HostSignInRun,
-} from "./sign-in-runner";
+import { HostFlowLedger, REFUSED_SIGN_IN_LINK, type HostSignInRun } from "./sign-in-runner";
 
 /** The update kinds this build reads; any other is a newer host's, and skipped. */
 const KNOWN_UPDATE_KINDS: ReadonlySet<string> = new Set(
@@ -47,8 +42,8 @@ const KNOWN_UPDATE_KINDS: ReadonlySet<string> = new Set(
  * narrower output is a protocol break); the bound is this Client's own.
  */
 function opensOnlyAWebPage(update: HostSignInUpdate): boolean {
-  if (update.kind === "auth-url") return isOpenableSignInUrl(update.url);
-  if (update.kind === "device-code") return isOpenableSignInUrl(update.verificationUri);
+  if (update.kind === "auth-url") return signInWebUrl(update.url) !== null;
+  if (update.kind === "device-code") return signInWebUrl(update.verificationUri) !== null;
   return true;
 }
 

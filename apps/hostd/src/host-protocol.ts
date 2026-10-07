@@ -35,7 +35,11 @@ import {
 } from "@volli/host-core/board";
 import { getProjectById, getTicketRow, listProjects, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
-import { type HostCredentialVerifier, type HostV1Feature } from "@volli/host-protocol";
+import {
+  HOST_CONNECTION_ONLY_FEATURES,
+  type HostCredentialVerifier,
+  type HostV1Feature,
+} from "@volli/host-protocol";
 import type { SessionEngine } from "@volli/session-engine";
 import { hostLogger, withTrace } from "@volli/host-core/log";
 import {
@@ -245,11 +249,15 @@ export function startHostdProtocolListener(
   // Every call's start and outcome, inside the trace its frame carried (VC-699).
   logRpcDiagnostics(diagnostics, hostLogger("rpc"));
   const handlers = admittedHandlers(ports.handlers, ROUTER_POLICY);
+  const features = ports.offerLogs === true ? [...HOSTD_FEATURES, "host.logs"] : HOSTD_FEATURES;
   return startHostProtocolListener({
     router: createHostRouter(),
     bind: ports.bind,
     host: { id: ports.hostId, version: ports.version },
-    features: ports.offerLogs === true ? [...HOSTD_FEATURES, "host.logs"] : HOSTD_FEATURES,
+    features: features.filter(
+      (feature) => !(HOST_CONNECTION_ONLY_FEATURES as readonly string[]).includes(feature),
+    ),
+    hostFeatures: features,
     workspace: (workspaceId) => servedWorkspace(db, workspaceId),
     verifier: ports.verifier,
     limits: ports.limits ?? HOSTD_LISTENER_LIMITS,

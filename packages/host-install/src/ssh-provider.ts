@@ -48,7 +48,14 @@ import {
 import type { ArtifactFailure, HostdArtifact } from "./artifact";
 import { DEFAULT_SUPPORTED_TARGETS } from "./artifact";
 import type { ProvisionFailure, ProvisionQuestion, StepId } from "./failures";
-import { artifactTarget, compareVersions, probeHost, type ProbeFacts } from "./probe";
+import {
+  artifactTarget,
+  compareVersions,
+  isSelfHost,
+  probeHost,
+  type LocalMachineIdentity,
+  type ProbeFacts,
+} from "./probe";
 import {
   fingerprintsOf,
   type HostProvider,
@@ -102,6 +109,8 @@ export type SshProvisionState = ProvisionState<SshStepResults>;
 /** What the SSH adapter reaches the box and this Mac through. */
 export interface SshProviderPorts {
   readonly ssh: SshTransport;
+  /** Tests may supply local public facts; production reads only /etc/ssh/*.pub. */
+  readonly localMachine?: LocalMachineIdentity;
   readonly hostKeys: {
     discover(): Promise<HostKeyOffer | null>;
     accept(offer: HostKeyOffer): Promise<void>;
@@ -325,6 +334,12 @@ const probe: Step = async ({ state, ports }) => {
   }
   const facts = outcome.facts;
   const { request, decisions } = state;
+  if (
+    decisions.selfAdd !== true &&
+    isSelfHost(ports.ssh.target, facts.sshHostKeys, ports.localMachine)
+  ) {
+    return ask({ kind: "self-add", step: "probe" });
+  }
   // Two first-class branches: Linux (systemd) and macOS (a launchd user agent).
   const mac = facts.kernel === "Darwin";
   if (facts.kernel !== "Linux" && !mac) {

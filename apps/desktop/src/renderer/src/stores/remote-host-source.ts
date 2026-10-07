@@ -42,15 +42,13 @@ import {
   type ProjectLink,
 } from "./host-connection";
 
-/** What the source needs of the desktop tier: one subscription and four actions. */
+/** What the source needs of the desktop tier: one subscription and two actions. */
 export interface RemoteHostsClient {
   subscribe(handlers: {
     onData(snapshot: RemoteHostsSnapshot): void;
     onError(error: unknown): void;
   }): () => void;
   retry(hostId: HostId): Promise<unknown>;
-  updateHost(hostId: HostId, when: "now" | "when-idle"): Promise<unknown>;
-  cancelScheduledUpdate(hostId: HostId): Promise<unknown>;
   signIn(hostId: HostId, providerId: string): Promise<unknown>;
 }
 
@@ -283,6 +281,13 @@ export function createRemoteHostSource(
     );
   };
 
+  // Compatibility actions use the real SSH update path, not the retired RPCs.
+  const reAddHost = (hostId: HostId): void => {
+    if (closed) return;
+    const host = wire.hosts.find((entry) => entry.id === hostId);
+    if (host !== undefined) useRemoteHostsStore.getState().openAddHost(host.target);
+  };
+
   return {
     getSnapshot: () => snapshot,
     subscribe(listener) {
@@ -294,8 +299,8 @@ export function createRemoteHostSource(
       else act(client.retry(hostId));
     },
     retrySubscription: connect,
-    updateHost: (hostId, when) => act(client.updateHost(hostId, when)),
-    cancelScheduledUpdate: (hostId) => act(client.cancelScheduledUpdate(hostId)),
+    updateHost: reAddHost,
+    cancelScheduledUpdate: reAddHost,
     signIn: (hostId, providerId) =>
       act(
         client.signIn(hostId, providerId).then(() => {
@@ -327,10 +332,6 @@ export interface RemoteHostsRpc {
       ): { unsubscribe(): void };
     };
     readonly retry: { mutate(input: { hostId: string }): Promise<unknown> };
-    readonly updateHost: {
-      mutate(input: { hostId: string; when: "now" | "when-idle" }): Promise<unknown>;
-    };
-    readonly cancelScheduledUpdate: { mutate(input: { hostId: string }): Promise<unknown> };
     readonly signIn: { mutate(input: { hostId: string; providerId: string }): Promise<unknown> };
   };
 }
@@ -346,8 +347,6 @@ export function remoteHostsClient(rpc: RemoteHostsRpc): RemoteHostsClient {
       return () => subscription.unsubscribe();
     },
     retry: (hostId) => rpc.hosts.retry.mutate({ hostId }),
-    updateHost: (hostId, when) => rpc.hosts.updateHost.mutate({ hostId, when }),
-    cancelScheduledUpdate: (hostId) => rpc.hosts.cancelScheduledUpdate.mutate({ hostId }),
     signIn: (hostId, providerId) => rpc.hosts.signIn.mutate({ hostId, providerId }),
   };
 }

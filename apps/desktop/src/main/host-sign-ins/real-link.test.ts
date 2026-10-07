@@ -32,6 +32,9 @@ import { startHostProtocolListener, type HostProtocolListener } from "@volli/ses
 import type { HostSignInRunEvent } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+// Main-test cleanup imports broadcast; never load a real Electron binary.
+vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] } }));
+
 import { hostLinkSignIns, remoteSignInsPort } from "./port";
 import { createHostSignInService, type HostSignInHostLink } from "./service";
 
@@ -209,6 +212,7 @@ function desktopMain(link: HostLink, record: { starts: string[]; cancels: string
   };
   const openExternal = vi.fn();
   const service = createHostSignInService({
+    sendConfirmation: { resolve: () => null, confirm: async () => null },
     links: { linkFor: () => recorded },
     mac: { list: async () => [], read: async () => undefined },
     openExternal,

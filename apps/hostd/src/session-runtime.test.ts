@@ -182,7 +182,7 @@ function fixture() {
   const input = {
     host,
     version: "test",
-    ports: { log, events: {} } as unknown as HostCorePorts,
+    ports: { log, events: { publish: vi.fn() } } as unknown as HostCorePorts,
     secrets: { store } as unknown as HeadlessSecrets,
     env: { HOME: "/home/service", PI_CODING_AGENT_DIR: "/auth", PATH: "/service/bin" },
     socketPath: "/run/hostd.sock",
@@ -230,6 +230,11 @@ describe("headless runtime ownership", () => {
       env: f.input.env,
       gitCredentialHelper: "",
       detachedWork: f.host.detachedWork,
+      onCreated: expect.any(Function),
+    });
+    seam.workspaces.mock.lastCall![0].onCreated({ id: "new-project" });
+    expect(f.input.ports.events.publish).toHaveBeenCalledExactlyOnceWith("data-changed", {
+      projectId: "new-project",
     });
     expect(seam.handlers.mock.lastCall![1]).toMatchObject({ workspaces: service });
     await owner.close();

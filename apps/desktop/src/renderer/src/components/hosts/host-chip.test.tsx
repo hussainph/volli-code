@@ -9,7 +9,7 @@ import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-h
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useRemoteHostsStore, setRemoteHostsApi } from "@renderer/stores/remote-hosts";
-import { createFakeRemoteHostsApi } from "@renderer/stores/remote-hosts.test-support";
+import { createFakeRemoteHostsApi, registryHost } from "@renderer/stores/remote-hosts.test-support";
 import { useUiStore } from "@renderer/stores/ui";
 
 import { HostChip } from "./host-chip";
@@ -28,7 +28,11 @@ afterEach(async () => {
   toast.error.mockClear();
   setRemoteHostsApi(null);
   vi.restoreAllMocks();
-  useRemoteHostsStore.setState({ addHostActivity: null });
+  useRemoteHostsStore.setState({
+    addHostActivity: null,
+    hosts: [],
+    addHost: { open: false, target: "" },
+  });
 });
 
 /**
@@ -300,53 +304,49 @@ describe("host chip", () => {
     expect(world.remote.calls).toEqual([{ kind: "retry", hostId: HETZNER_ID }]);
   });
 
-  it("asks before updating a host with Sessions running, now or when they finish", async () => {
-    world = hostWorld({
-      hetzner: {
-        version: "0.2.4",
-        liveSessions: 2,
-        link: { status: "version-skewed", availableVersion: "0.3.0" },
-      },
-    });
-    await world.render(<HostChip />);
-    const list = await openSwitcher();
-    expect(list.textContent).toContain("Volli host 0.2.4");
-    expect(list.textContent).toContain("Volli host 0.3.0 is available");
-    await click(list, "Update");
-    expect(list.textContent).toContain("2 Sessions are running on hetzner-1.");
-    await click(list, "When they finish");
-    await click(list, "Update now");
-    expect(world.remote.calls).toEqual([
-      { kind: "updateHost", hostId: HETZNER_ID, when: "when-idle" },
-      { kind: "updateHost", hostId: HETZNER_ID, when: "now" },
-    ]);
+  it.each([null, 0, 2])(
+    "re-adds a version-skewed host, regardless of the old count %s",
+    async (liveSessions) => {
+      world = hostWorld({
+        hetzner: {
+          version: "0.2.4",
+          liveSessions,
+          link: { status: "version-skewed", availableVersion: "0.3.0" },
+        },
+      });
+      useRemoteHostsStore
+        .getState()
+        .setHosts([registryHost({ id: HETZNER_ID, target: "deploy@hetzner-1" })]);
+      await world.render(<HostChip />);
+      const list = await openSwitcher();
+      expect(list.textContent).toContain("Volli host 0.3.0 is available");
+      await click(list, "Re-add to update");
+      expect(useRemoteHostsStore.getState().addHost).toEqual({
+        open: true,
+        target: "deploy@hetzner-1",
+      });
+      expect(world.remote.calls).toEqual([]);
+      expect(list.textContent).not.toContain("When they finish");
+      expect(list.textContent).not.toContain("Update now");
+    },
+  );
 
-    world.setHetzner({ liveSessions: 1 });
-    expect(list.textContent).toContain("1 Session is running on hetzner-1.");
-  });
-
-  it("updates a host with nothing running at once", async () => {
-    world = hostWorld({
-      hetzner: { link: { status: "version-skewed", availableVersion: "0.3.0" } },
-    });
-    await world.render(<HostChip />);
-    await click(await openSwitcher(), "Update");
-    expect(world.remote.calls).toEqual([{ kind: "updateHost", hostId: HETZNER_ID, when: "now" }]);
-  });
-
-  it("shows a scheduled update with Cancel, and a running one with its progress", async () => {
+  it("re-adds instead of offering a scheduled update cancellation", async () => {
     world = hostWorld({
       hetzner: {
         link: { status: "version-skewed", availableVersion: "0.3.0" },
         update: { status: "scheduled" },
       },
     });
+    useRemoteHostsStore
+      .getState()
+      .setHosts([registryHost({ id: HETZNER_ID, target: "deploy@hetzner-1" })]);
     await world.render(<HostChip />);
     const list = await openSwitcher();
-    expect(list.textContent).toContain("Updates when Sessions finish");
-    await click(list, "Cancel");
-    expect(world.remote.calls).toEqual([{ kind: "cancelScheduledUpdate", hostId: HETZNER_ID }]);
-
+    await click(list, "Re-add to update");
+    expect(useRemoteHostsStore.getState().addHost.target).toBe("deploy@hetzner-1");
+    expect(world.remote.calls).toEqual([]);
+    expect(list.textContent).not.toContain("Updates when Sessions finish");
     world.setHetzner({ update: { status: "running", progress: 0.4, targetVersion: "0.3.0" } });
     expect(list.textContent).toContain("Updating to 0.3.0");
     expect(list.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("40");
@@ -401,11 +401,13 @@ describe("host chip", () => {
     expect(settings).toHaveBeenCalledWith(true, "updates");
 
     world.setHetzner({ link: { status: "incompatible", reason: "host-too-old" } });
-    await click(list, "Update host");
+    useRemoteHostsStore.getState().setHosts([registryHost({ id: HETZNER_ID })]);
+    await click(list, "Re-add to update");
     world.setHetzner({ link: { status: "incompatible", reason: "fenced" } });
     expect(list.textContent).toContain("No longer serves this project");
     await click(list, findDetailAction(list));
-    expect(world.remote.calls).toEqual([{ kind: "updateHost", hostId: HETZNER_ID, when: "now" }]);
+    expect(world.remote.calls).toEqual([]);
+    expect(useRemoteHostsStore.getState().addHost).toEqual({ open: true, target: "deploy@box" });
     expect(toast).toHaveBeenCalledWith("Managing hosts isn’t in this build yet");
   });
 
@@ -421,9 +423,7 @@ describe("host chip", () => {
 
     world.setHetzner({ update: { status: "running", progress: 1, targetVersion: "0.3.0" } });
     world.setHetzner({ update: null, version: "0.3.0" });
-    expect(toast.success).toHaveBeenLastCalledWith("hetzner-1 is on Volli host 0.3.0", {
-      description: "Sessions picked up where they paused",
-    });
+    expect(toast.success).toHaveBeenLastCalledWith("hetzner-1 is on Volli host 0.3.0", undefined);
 
     // mac-mini is not current, and its recovery is announced all the same.
     act(() => world?.remote.setHost(MINI_ID, { link: { status: "open" } }));

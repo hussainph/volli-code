@@ -181,6 +181,7 @@ export type QuestionPrompt =
       readonly adopt: string | null;
       readonly action: string;
     }
+  | { readonly kind: "self-add"; readonly line: string; readonly action: string }
   | { readonly kind: "already-paired"; readonly line: string; readonly action: string }
   | {
       readonly kind: "sudo-password";
@@ -223,7 +224,11 @@ const SUDO_LINES: Readonly<Record<string, string>> = {
 };
 
 /** The line the person reads, and what they can do, for the question a flow stopped on. */
-export function questionPrompt(question: AddHostQuestion, host: string): QuestionPrompt {
+export function questionPrompt(
+  question: AddHostQuestion,
+  host: string,
+  liveSessions: number | null = null,
+): QuestionPrompt {
   switch (question.kind) {
     case "host-key":
       return {
@@ -237,11 +242,20 @@ export function questionPrompt(question: AddHostQuestion, host: string): Questio
       return {
         kind: "existing-hostd",
         line: `Volli host ${version} is already running here`,
-        note: "Its workspaces stay either way.",
+        note:
+          liveSessions === null
+            ? `Its projects stay. Running Sessions on ${host} will stop.`
+            : `Its projects stay. Running Sessions on ${host} will stop. ${liveSessions} running ${liveSessions === 1 ? "Session" : "Sessions"} in connected projects.`,
         adopt: question["adoptable"] === true ? `Use ${version}` : null,
         action: "Update and pair",
       };
     }
+    case "self-add":
+      return {
+        kind: "self-add",
+        line: "This is the Mac you’re using. Its projects already run here. Add it anyway (for testing)?",
+        action: "Add anyway",
+      };
     case "already-paired":
       return {
         kind: "already-paired",

@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRequire } from "node:module";
 
-import { protocolChanges, schemaChanges, unapprovedChanges } from "./compatibility.mjs";
+import {
+  protocolChanges,
+  protocolReportLines,
+  schemaChanges,
+  unapprovedChanges,
+} from "./compatibility.mjs";
 
 // Exercise the actual generator's pinned Zod, not a hand-written approximation.
 const { z } = createRequire(new URL("../../packages/session-rpc/package.json", import.meta.url))(
@@ -16,7 +21,7 @@ const protocol = (input = shape, output = shape) => ({
   features: { sessions: ["session.snapshot"] },
   tiers: {
     public: { "session.snapshot": { kind: "query", input, output } },
-    desktop: { read: { kind: "query", input: {}, output: text } },
+    desktop: { read: { compatibility: "host-command", kind: "query", input: {}, output: text } },
   },
 });
 
@@ -165,7 +170,7 @@ test("scalar tolerance is local through nullable/array/ref containers", () => {
   );
 });
 
-test("public output enum growth fails; desktop growth is report-only, including nullable refs", () => {
+test("public and desktop host-command output enum growth fails, including nullable refs", () => {
   for (const [beforeOutput, afterOutput, suffix] of [
     [{ type: "string", enum: ["a"] }, { type: "string", enum: ["a", "b"] }, "/enum"],
     [{ type: "string", const: "a" }, { type: "string", enum: ["a", "b"] }, "/enum"],
@@ -190,23 +195,14 @@ test("public output enum growth fails; desktop growth is report-only, including 
     const after = protocol(shape, afterOutput);
     before.tiers.desktop.read.output = beforeOutput;
     after.tiers.desktop.read.output = afterOutput;
-    assert.deepEqual(
-      protocolChanges(before, after).filter(({ severity }) => severity === "warning"),
-      [
-        {
-          path: `/tiers/desktop/read/output${suffix}`,
-          reason: "output enum widened (requires tolerant reader)",
-          severity: "warning",
-        },
-      ],
-    );
+    assert.deepEqual(protocolReportLines(protocolChanges(before, after)), []);
     assert.ok(unapprovedChanges(before, after).length, "public growth still fails");
     after.tiers.public = before.tiers.public;
-    assert.deepEqual(unapprovedChanges(before, after), [], "desktop-only growth must not fail");
+    assert.ok(unapprovedChanges(before, after).length, `host-command growth fails: ${suffix}`);
   }
 });
 
-test("desktop report-only enum checks don't warn for proven tolerance or equivalent anyOf reorderings", () => {
+test("host-command enum checks don't fail for proven tolerance or equivalent anyOf reorderings", () => {
   for (const [old, next] of [
     [
       { type: "string", enum: ["a"], [enumMarker]: true },
@@ -247,7 +243,7 @@ test("desktop report-only enum checks don't warn for proven tolerance or equival
   }
 });
 
-test("desktop warnings don't loosen unions, removals, types or inputs; promotion enforces public enum rules", () => {
+test("host-command checks don't loosen unions, removals, types or inputs; promotion enforces public enum rules", () => {
   for (const [old, next] of [
     [{ enum: ["a", "b"] }, { enum: ["a"] }],
     [{ const: "a" }, { const: "b" }],
@@ -265,7 +261,7 @@ test("desktop warnings don't loosen unions, removals, types or inputs; promotion
     const after = protocol();
     before.tiers.desktop.read.output = old;
     after.tiers.desktop.read.output = next;
-    assert.ok(unapprovedChanges(before, after).length, "pre-existing desktop checks still gate");
+    assert.ok(unapprovedChanges(before, after).length, "host-command checks still gate");
   }
   const before = protocol();
   before.tiers.desktop.read.output = { type: "string", enum: ["a"] };
@@ -291,6 +287,170 @@ test("desktop warnings don't loosen unions, removals, types or inputs; promotion
   );
   inputOnly.tiers.desktop.read.input = { type: "string", enum: ["b"] };
   assert.ok(unapprovedChanges(before, inputOnly).length, "input narrowing still fails");
+});
+
+const clientProtocol = (key = "hosts.snapshot") => {
+  const document = protocol();
+  document.tiers.desktop = {
+    [key]: { ...document.tiers.desktop.read, compatibility: "client-local" },
+  };
+  return document;
+};
+
+test("client-local additions, removals and schema/operation changes pass with report lines", () => {
+  const before = clientProtocol();
+  for (const [reason, mutate] of [
+    [
+      "removed",
+      (p) => {
+        delete p.tiers.desktop["hosts.snapshot"];
+      },
+    ],
+    [
+      "changed",
+      (p) => {
+        p.tiers.desktop["hosts.snapshot"].input = { type: "string", maxLength: 5 };
+      },
+    ],
+    [
+      "changed",
+      (p) => {
+        p.tiers.desktop["hosts.snapshot"].output = { type: "number" };
+      },
+    ],
+    [
+      "changed",
+      (p) => {
+        p.tiers.desktop["hosts.snapshot"].kind = "mutation";
+      },
+    ],
+    [
+      "changed",
+      (p) => {
+        p.tiers.desktop["hosts.snapshot"].noInput = true;
+      },
+    ],
+    [
+      "changed",
+      (p) => {
+        p.tiers.desktop["hosts.snapshot"].voidOutput = true;
+      },
+    ],
+    [
+      "changed",
+      (p) => {
+        p.tiers.desktop["hosts.snapshot"].input = { properties: { extra: text } };
+      },
+    ],
+  ]) {
+    const after = structuredClone(before);
+    mutate(after);
+    assert.deepEqual(unapprovedChanges(before, after), []);
+    assert.deepEqual(protocolReportLines(protocolChanges(before, after)), [
+      `Report (client-local, not a cross-version promise): /tiers/desktop/hosts.snapshot: client-local entry ${reason}`,
+    ]);
+  }
+  assert.deepEqual(
+    unapprovedChanges(protocol(), before),
+    [{ path: "/tiers/desktop/read", reason: "catalog entry removed" }],
+    "adding a client entry cannot hide a host-command removal",
+  );
+  const added = protocol();
+  Object.assign(added.tiers.desktop, before.tiers.desktop);
+  assert.deepEqual(unapprovedChanges(protocol(), added), []);
+  assert.deepEqual(protocolReportLines(protocolChanges(protocol(), added)), [
+    "Report (client-local, not a cross-version promise): /tiers/desktop/hosts.snapshot: client-local entry added",
+  ]);
+  assert.deepEqual(protocolReportLines(protocolChanges(before, structuredClone(before))), []);
+});
+
+test("client-local enum/union growth, field removal and narrowing are report-only", () => {
+  for (const [old, next] of [
+    [shape, { ...shape, properties: { id: text } }],
+    [
+      { type: "string", enum: ["a", "b"] },
+      { type: "string", enum: ["a"] },
+    ],
+    [
+      { type: "string", enum: ["a"] },
+      { type: "string", enum: ["a", "b"] },
+    ],
+    [{ oneOf: [text] }, { oneOf: [text, { type: "number" }] }],
+    [text, { ...text, maxLength: 5 }],
+  ]) {
+    for (const direction of ["input", "output"]) {
+      const before = clientProtocol();
+      const after = clientProtocol();
+      before.tiers.desktop["hosts.snapshot"][direction] = old;
+      after.tiers.desktop["hosts.snapshot"][direction] = next;
+      assert.deepEqual(unapprovedChanges(before, after), []);
+      assert.equal(protocolReportLines(protocolChanges(before, after)).length, 1);
+      before.tiers.desktop["hosts.snapshot"].compatibility = "host-command";
+      after.tiers.desktop["hosts.snapshot"].compatibility = "host-command";
+      // Input enum growth alone is additive, all the other mutations are not.
+      if (schemaChanges(old, next, "", direction).length)
+        assert.ok(unapprovedChanges(before, after).length, "host command must stay frozen");
+    }
+  }
+});
+
+test("legacy baselines classify only the bundled client families; public is never exempt", () => {
+  for (const key of ["hosts.snapshot", "hostAdd.active", "hostSignIns.run", "hostLink.query"]) {
+    const before = clientProtocol(key);
+    delete before.tiers.desktop[key].compatibility;
+    const classified = clientProtocol(key);
+    assert.deepEqual(unapprovedChanges(before, classified), []);
+    const removed = structuredClone(before);
+    delete removed.tiers.desktop[key];
+    assert.deepEqual(unapprovedChanges(before, removed), []);
+    assert.equal(protocolReportLines(protocolChanges(before, removed)).length, 1);
+    const publicBefore = { ...before, tiers: { public: before.tiers.desktop, desktop: {} } };
+    const publicAfter = { ...removed, tiers: { public: {}, desktop: {} } };
+    assert.ok(unapprovedChanges(publicBefore, publicAfter).length);
+  }
+  const before = protocol();
+  delete before.tiers.desktop.read.compatibility;
+  const after = protocol();
+  delete after.tiers.desktop.read;
+  assert.ok(unapprovedChanges(before, after).length, "unknown legacy entries fail closed");
+});
+
+test("reclassification cannot exempt a frozen host command; client promotion earns a new public contract", () => {
+  const before = protocol();
+  const after = protocol();
+  after.tiers.desktop.read.compatibility = "client-local";
+  after.tiers.desktop.read.input = { type: "string" };
+  assert.deepEqual(
+    unapprovedChanges(before, after).map(({ path }) => path),
+    ["/tiers/desktop/read/compatibility", "/tiers/desktop/read/input/type"],
+  );
+  const client = clientProtocol();
+  const frozen = clientProtocol();
+  frozen.tiers.desktop["hosts.snapshot"].compatibility = "host-command";
+  assert.equal(
+    unapprovedChanges(client, frozen)[0].path,
+    "/tiers/desktop/hosts.snapshot/compatibility",
+  );
+  const promoted = protocol();
+  promoted.tiers.public["hosts.snapshot"] = { kind: "mutation", input: text, output: text };
+  assert.deepEqual(unapprovedChanges(client, promoted), []);
+  assert.ok(protocolReportLines(protocolChanges(client, promoted))[0].includes("removed"));
+  const next = structuredClone(promoted);
+  delete next.tiers.public["hosts.snapshot"];
+  assert.ok(unapprovedChanges(promoted, next).length);
+});
+
+test("narrowing a named desktop host command fails", () => {
+  const before = protocol();
+  const after = protocol();
+  before.tiers.desktop = { "project.reorder": { ...before.tiers.desktop.read, input: text } };
+  after.tiers.desktop = {
+    "project.reorder": { ...after.tiers.desktop.read, input: { ...text, maxLength: 5 } },
+  };
+  assert.deepEqual(unapprovedChanges(before, after), [
+    { path: "/tiers/desktop/project.reorder/input/maxLength", reason: "upper bound tightened" },
+  ]);
+  assert.deepEqual(protocolReportLines(protocolChanges(before, after)), []);
 });
 
 test("refuses field/entry removals, narrowing and newly required input", () => {

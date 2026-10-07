@@ -163,6 +163,7 @@ export type {
   PrCheck,
   TicketRetentionState,
 } from "./worktree-host";
+export * from "./sign-in-catalog";
 export * from "./remote-hosts";
 export * from "./host-workspaces";
 export * from "./remote-host-health";

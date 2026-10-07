@@ -150,6 +150,11 @@ export const HOST_SCOPE_FEATURES = [
   "host.workspaces",
 ] as const satisfies readonly HostV1Feature[];
 
+/** Features reserved for a host connection, never granted to a Workspace connection. */
+export const HOST_CONNECTION_ONLY_FEATURES = [
+  "host.workspaces",
+] as const satisfies readonly HostV1Feature[];
+
 /** Every operation some v1 feature grants, or the base set. */
 export type HostOperation =
   | (typeof HOST_BASE_OPERATIONS)[number]

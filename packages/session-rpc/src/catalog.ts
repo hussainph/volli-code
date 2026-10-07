@@ -836,6 +836,15 @@ export function createCatalogBuilders<
           "This operation requires a Workspace connection.",
         );
       }
+      // Host-level state is often shared by both scopes (sign-ins, logs).
+      // Only project discovery/creation requires the host connection itself.
+      if (
+        !isHostScopeActor(actor) &&
+        !isLocalDeviceActor(actor) &&
+        entry.key.startsWith("workspaces.")
+      ) {
+        throw new HostProcedureError("verb-refused", "This operation requires a host connection.");
+      }
       const policyActor = HOST_ACTOR_POLICY[actor.kind];
       const admitted =
         policyActor !== null &&

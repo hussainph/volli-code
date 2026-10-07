@@ -18,7 +18,7 @@ import {
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { insertProject, listProjects, openVolliDb } from "@volli/host-core/db";
-import { testProject } from "@volli/host-core/testing";
+import { captureHostLog, testProject } from "@volli/host-core/testing";
 import { COMMAND_INTENT_CONFLICT, type HostWorkspaceCreateInput } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createHostWorkspaces, type HostWorkspacesOptions } from "./host-workspaces";
@@ -105,6 +105,112 @@ function fakeGit(
 }
 
 describe("host-owned workspace registration", () => {
+  it.each(["path", "clone"] as const)(
+    "keeps the committed %s registration success when its announcement throws",
+    async (source) => {
+      const log = captureHostLog();
+      cleanups.push(() => log.restore());
+      const onCreated = vi.fn(() => {
+        throw new Error("Observer failed with private details");
+      });
+      const f = fixture({ onCreated, testOnly: { allowFileUrls: true } });
+      const path = f.folder("repo");
+      const request = source === "clone" ? cloneInput(pathToFileURL(path).href) : input(path);
+      if (source === "clone") f.git("init", path);
+      const result = await f.service.create(request);
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) throw new Error("Registration failed");
+      expect(existsSync(result.workspace.path)).toBe(true);
+      expect(listProjects(f.db)).toHaveLength(1);
+      expect(await f.service.create(request)).toBe(result);
+      expect(await f.service.create(input(result.workspace.path))).toEqual(result);
+      expect(onCreated).toHaveBeenCalledOnce();
+      expect(log.of("host-workspaces")).toMatchObject([
+        {
+          level: "warn",
+          msg: "Project registered, but its change announcement failed",
+          projectId: result.workspace.id,
+        },
+      ]);
+      expect(JSON.stringify(log.records)).not.toContain("private details");
+    },
+  );
+  it("expires settled outcomes after one hour, recovers capacity and naturally replays existing paths", async () => {
+    let at = 100;
+    const onCreated = vi.fn();
+    const f = fixture({ onCreated, testOnly: { capacity: 1, now: () => at } });
+    const path = f.folder();
+    const request = input(path);
+    const result = await f.service.create(request);
+    expect(result.ok).toBe(true);
+    expect(await f.service.create(request)).toBe(result);
+    expect(await f.service.create(input(path))).toMatchObject({
+      ok: false,
+      failure: { code: "capacity" },
+    });
+    at += 60 * 60_000 - 1;
+    expect(await f.service.create(request)).toBe(result);
+    at++;
+    const retried = await f.service.create({ ...request, name: "Different intent after expiry" });
+    expect(retried).toEqual(result);
+    expect(retried).not.toBe(result);
+    expect(onCreated).toHaveBeenCalledOnce();
+    at += 60 * 60_000;
+    expect(await f.service.create(input(path))).toEqual(result);
+    expect(onCreated).toHaveBeenCalledOnce();
+  });
+
+  it("never expires running commands and starts retention at settlement", async () => {
+    let at = 0;
+    const f = fixture();
+    const path = f.folder();
+    let release!: (path: string) => void;
+    const original = files.realpath;
+    vi.spyOn(files, "realpath").mockImplementationOnce(
+      () =>
+        new Promise<string>((done) => {
+          release = done;
+        }),
+    );
+    const service = createHostWorkspaces({
+      ...f.options,
+      testOnly: { capacity: 1, now: () => at },
+    });
+    cleanups.push(() => service.close());
+    const request = input(path);
+    const pending = service.create(request);
+    await vi.waitFor(() => expect(release).toBeDefined());
+    at = 2 * 60 * 60_000;
+    expect(await service.create(request)).toMatchObject({
+      ok: false,
+      failure: { code: "still-running" },
+    });
+    expect(await service.create(input(path))).toMatchObject({
+      ok: false,
+      failure: { code: "capacity" },
+    });
+    release(await original(path));
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    at += 60 * 60_000 - 1;
+    expect(await service.create(request)).toBe(result);
+    at++;
+    expect(await service.create(input(path))).toEqual(result);
+  });
+
+  it("expired clone intents refuse the existing destination without repeating a clone", async () => {
+    let at = 0;
+    const f = fixture({ testOnly: { allowFileUrls: true, now: () => at } });
+    const repo = f.folder("repo");
+    f.git("init", repo);
+    const request = cloneInput(pathToFileURL(repo).href);
+    expect((await f.service.create(request)).ok).toBe(true);
+    at += 60 * 60_000;
+    expect(await f.service.create(request)).toMatchObject({
+      ok: false,
+      failure: { code: "target-exists" },
+    });
+  });
   it("bounds concurrent creates without retaining unaccepted commands", async () => {
     const f = fixture();
     const service = fakeGit(
@@ -311,7 +417,7 @@ describe("host-owned workspace registration", () => {
         failure: { code: "path-unreadable" },
       });
     }
-    for (const name of [" ", "x".repeat(513)]) {
+    for (const name of [" ", "x".repeat(513), "x\ny", "x\u2028y", "x\u2029y"]) {
       expect(await f.service.create(input(f.root, name))).toMatchObject({
         ok: false,
         failure: { code: "invalid-source" },
@@ -386,6 +492,7 @@ describe("host-owned workspace registration", () => {
       env: {
         ...f.env,
         PATH: `${bin}:${process.env.PATH}`,
+        SSH_AUTH_SOCK: "/fixture/own-agent.sock",
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "credential.helper",
         GIT_CONFIG_VALUE_0: "real-helper-never-run",
@@ -412,6 +519,8 @@ describe("host-owned workspace registration", () => {
     expect(environment).toContain("GIT_TERMINAL_PROMPT=0");
     expect(environment).toContain("GIT_CONFIG_GLOBAL=/dev/null");
     expect(environment).toContain("GIT_ALLOW_PROTOCOL=https:ssh");
+    expect(environment).toContain("SSH_AUTH_SOCK=/fixture/own-agent.sock");
+    expect(environment).toContain("StrictHostKeyChecking=accept-new");
     expect(environment).not.toContain("real-helper-never-run");
     expect(environment).not.toContain("GIT_CONFIG_COUNT=");
     await service.close();
@@ -676,6 +785,84 @@ describe("host-owned workspace registration", () => {
 });
 
 describe("bounded host catalog", () => {
+  it("skips a slow filesystem row softly, finishes other rows and fences late work", async () => {
+    const f = fixture({ testOnly: { rowTimeoutMs: 1000, catalogTimeoutMs: 3000 } });
+    const slow = f.folder("slow");
+    const good = f.folder("good");
+    insertProject(f.db, testProject({ id: randomUUID(), path: slow, sortOrder: 0 }));
+    insertProject(f.db, testProject({ id: randomUUID(), path: good, sortOrder: 1 }));
+    let release!: (path: string) => void;
+    vi.spyOn(files, "realpath").mockImplementationOnce(
+      () =>
+        new Promise<string>((done) => {
+          release = done;
+        }),
+    );
+    const spawn = vi.spyOn(processes, "spawn");
+    expect(await f.service.list()).toMatchObject({ omitted: 1, workspaces: [{ path: good }] });
+    const count = spawn.mock.calls.length;
+    release(slow);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(spawn).toHaveBeenCalledTimes(count);
+  });
+
+  it("bounds the whole catalog even when every filesystem read stalls", async () => {
+    const f = fixture({ testOnly: { rowTimeoutMs: 30, catalogTimeoutMs: 40 } });
+    for (let i = 0; i < 4; i++)
+      insertProject(
+        f.db,
+        testProject({ id: randomUUID(), path: f.folder(`slow-${i}`), sortOrder: i }),
+      );
+    vi.spyOn(files, "realpath").mockImplementation(() => new Promise<string>(() => {}));
+    const started = Date.now();
+    expect(await f.service.list()).toEqual({ workspaces: [], omitted: 4 });
+    expect(Date.now() - started).toBeLessThan(500);
+    await f.service.close();
+  });
+
+  it("softly skips a timed-out Git row", async () => {
+    const f = fixture();
+    insertProject(f.db, testProject({ id: randomUUID(), path: f.folder() }));
+    const service = fakeGit(f, "exec sleep 60", { testOnly: { rowTimeoutMs: 30 } });
+    const spawn = vi.spyOn(processes, "spawn");
+    expect(await service.list()).toEqual({ workspaces: [], omitted: 1 });
+    // Let the child reach its own timeout rather than changing it to shutdown.
+    await vi.waitFor(() => expect(spawn.mock.results[0]!.value.signalCode).not.toBeNull());
+    await service.close();
+  });
+
+  it("uses UTF-8 JSON bytes and keeps complete rows when the byte budget fills", async () => {
+    const f = fixture({ testOnly: { catalogBytes: 240 } });
+    for (let i = 0; i < 3; i++)
+      insertProject(
+        f.db,
+        testProject({
+          id: randomUUID(),
+          name: "界".repeat(30),
+          path: f.folder(`byte-${i}`),
+          sortOrder: i,
+        }),
+      );
+    const result = await f.service.list();
+    expect(result.workspaces).toHaveLength(0);
+    expect(result.omitted).toBe(3);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(240);
+  });
+
+  it("breaks sort-order ties by creation time and then identity", async () => {
+    const f = fixture();
+    const a = "00000000-0000-4000-8000-000000000001";
+    const b = "00000000-0000-4000-8000-000000000002";
+    const c = "00000000-0000-4000-8000-000000000003";
+    for (const [id, createdAt] of [
+      [b, 2],
+      [c, 1],
+      [a, 2],
+    ] as const)
+      insertProject(f.db, testProject({ id, path: f.folder(id), sortOrder: 0, createdAt }));
+    expect((await f.service.list()).workspaces.map((row) => row.id)).toEqual([c, a, b]);
+  });
   it("scrubs origin credentials and omits unrepresentable paths rather than clipping them", async () => {
     const f = fixture();
     const path = f.folder();
@@ -718,6 +905,19 @@ describe("bounded host catalog", () => {
     }
   });
 
+  it("omits control characters in names and canonical paths", async () => {
+    const f = fixture();
+    for (const name of ["x\ny", "x\u2028y", "x\u2029y"])
+      insertProject(f.db, testProject({ id: randomUUID(), name, path: f.folder(randomUUID()) }));
+    const unsafe = f.folder("unsafe");
+    insertProject(f.db, testProject({ id: randomUUID(), path: unsafe }));
+    const realpath = files.realpath;
+    vi.spyOn(files, "realpath").mockImplementation((path) =>
+      String(path) === unsafe ? Promise.resolve(`${unsafe}\n`) : realpath(path),
+    );
+    expect(await f.service.list()).toEqual({ workspaces: [], omitted: 4 });
+  });
+
   it("omits invalid identities and empty names, and hides credential-looking origin path segments", async () => {
     const f = fixture();
     const path = f.folder();
@@ -751,7 +951,9 @@ describe("bounded host catalog", () => {
     const path = f.folder();
     insertProject(f.db, testProject({ id: randomUUID(), path }));
     const marker = join(f.root, "listing");
-    const service = fakeGit(f, `touch '${marker}'\nexec sleep 60`);
+    const service = fakeGit(f, `touch '${marker}'\nexec sleep 60`, {
+      testOnly: { rowTimeoutMs: 10_000 },
+    });
     const list = service.list();
     // Capture rejection before shutdown, so it never becomes an unhandled promise.
     const outcome = list.then(
@@ -761,10 +963,14 @@ describe("bounded host catalog", () => {
     await vi.waitFor(() => expect(existsSync(marker)).toBe(true), { timeout: 5000 });
     await service.close();
     expect(await outcome).toBe("interrupted");
-  });
+  }, 10_000);
 
   it("limits rows to 500 and counts every omitted project", async () => {
     const f = fixture();
+    // Isolate the row-count policy from 500 external process start times.
+    vi.spyOn(processes, "spawn").mockImplementation(() => {
+      throw new Error("No origin");
+    });
     for (let i = 0; i < 502; i++)
       insertProject(
         f.db,

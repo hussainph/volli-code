@@ -62,6 +62,7 @@ import {
   type WorkspaceAuthority,
 } from "../handshake";
 import type { WorkspaceId } from "../identity";
+import { classifyHandshakeFailure } from "./handshake-failure";
 import { mintHostTrace, nextHostSpan, withHostTrace, type HostTrace } from "../trace";
 import { validateWelcome, type WelcomeValidation, type ValidateWelcomeOptions } from "../welcome";
 import {
@@ -259,16 +260,6 @@ export class HostLinkError extends Error {
   }
 }
 
-/** Reasons a host gives for refusing a handshake. Anything else from `protocol.welcome` is a fault, retried. */
-const HANDSHAKE_REFUSALS: ReadonlySet<string> = new Set([
-  "hello-invalid",
-  "credential-invalid",
-  "workspace-unknown",
-  "protocol-version-unsupported",
-  "welcome-invalid",
-  "workspace-epoch-fenced",
-  "workspace-split-brain",
-]);
 const FENCE_REASONS: ReadonlySet<string> = new Set([
   "workspace-epoch-fenced",
   "workspace-split-brain",
@@ -987,13 +978,7 @@ function serverError(error: unknown): HostError | null {
 }
 
 function refusalOutcome(error: HostError, closeCode: number | null): Outcome {
-  if (error.reason !== undefined && FENCE_REASONS.has(error.reason)) {
-    return { status: "fenced", error };
-  }
-  if (error.reason !== undefined && HANDSHAKE_REFUSALS.has(error.reason)) {
-    return { status: "refused", error, closeCode };
-  }
-  return { status: "unreachable", error, closeCode };
+  return classifyHandshakeFailure(error, closeCode, "workspace");
 }
 
 /** A close, read by its code and reason text: refusals during the handshake, everything else a drop. */

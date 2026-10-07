@@ -78,6 +78,21 @@ describe("negotiateWelcome", () => {
     });
   });
 
+  it("never grants host.workspaces to a Workspace, retaining shared host features", () => {
+    const features = ["host.workspaces", "sign-ins", "auth.callback", "host.logs", "sessions"];
+    expect(negotiateWelcome({ ...hello, features }, { ...offer, features }, device)).toMatchObject({
+      ok: true,
+      welcome: { features: ["sign-ins", "auth.callback", "host.logs", "sessions"] },
+    });
+    expect(
+      negotiateWelcome(
+        { ...hello, features: ["host.workspaces"] },
+        { ...offer, features: ["host.workspaces"] },
+        device,
+      ),
+    ).toMatchObject({ ok: true, welcome: { features: [] } });
+  });
+
   it("welcomes first contact, which has seen no epoch", () => {
     expect(negotiateWelcome({ ...hello, lastSeen: null }, offer, device).ok).toBe(true);
   });
