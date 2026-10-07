@@ -13,6 +13,9 @@ import type {
 import type { HostSignInRunEvent } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+// Main-test cleanup imports broadcast; never load a real Electron binary.
+vi.mock("electron", () => ({ BrowserWindow: { getAllWindows: () => [] } }));
+
 import { engineSignInLinks, hostLinkSignIns, remoteSignInsPort, signInPreflight } from "./port";
 import {
   createHostSignInService,
@@ -347,6 +350,7 @@ describe("remoteSignInsPort's replacements over the real runner (VC-702 review B
     };
     const port = remoteSignInsPort(
       createHostSignInService({
+        sendConfirmation: { resolve: () => null, confirm: async () => null },
         links: { linkFor: () => host },
         mac: { list: async () => [], read: async () => undefined },
         openExternal: vi.fn(),
