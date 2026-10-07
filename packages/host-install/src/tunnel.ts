@@ -29,7 +29,7 @@ import { createConnection, createServer } from "node:net";
 
 import type { ListenAddress } from "./contract";
 import type { InstallLogger } from "./logger";
-import { classifySshFailure, type SpawnProcess } from "./ssh";
+import { classifySshFailure, exitsWithin, KILL_WAIT_MS, type SpawnProcess } from "./ssh";
 import { targetArgs, type SshTarget } from "./target";
 
 export type TunnelState =
@@ -82,6 +82,12 @@ export interface SshTunnel {
   wake(): void;
   /** Stops it for good: cancels a pending open and reaps every ssh process it started. */
   close(): void;
+  /**
+   * Past a deadline: closes it, SIGKILLs every ssh process it still owns at
+   * once, and resolves once they have exited (or a short wait has run out).
+   * Optional: a tunnel with no processes need not have it.
+   */
+  kill?(): Promise<void>;
 }
 
 /** Why a superseded or closed setup stopped: not a failure of the tunnel. */
@@ -326,6 +332,14 @@ export function createSshTunnel(options: SshTunnelOptions): SshTunnel {
     }
   };
 
+  const close = (): void => {
+    clearTimeout(retryTimer);
+    closed = true;
+    generation += 1;
+    set({ status: "closed" });
+    reapAll();
+  };
+
   return {
     get state() {
       return state;
@@ -353,12 +367,16 @@ export function createSshTunnel(options: SshTunnelOptions): SshTunnel {
       logger.info("tunnel woken", { was: state.status });
       void reconnect();
     },
-    close() {
-      clearTimeout(retryTimer);
-      closed = true;
-      generation += 1;
-      set({ status: "closed" });
-      reapAll();
+    close,
+    async kill() {
+      if (!closed) close();
+      const left = [...owned.keys()];
+      if (left.length === 0) return;
+      logger.warn("tunnel processes still running past the deadline; killing them", {
+        processes: left.length,
+      });
+      for (const child of left) child.kill("SIGKILL");
+      await exitsWithin(left, KILL_WAIT_MS);
     },
   };
 }

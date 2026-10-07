@@ -313,6 +313,32 @@ describe("the tunnel's own processes", () => {
     expect(h.children[0]!.killed).toEqual(["SIGTERM"]);
   });
 
+  it("kills what it owns at once past a deadline, after closing, and waits for it", async () => {
+    const h = harness((child) => h.open.add(portOf(child)), {
+      timing: { ...FAST, killAfterMs: 60_000 },
+    });
+    await h.tunnel.start();
+    // Ignores SIGTERM; exits only to SIGKILL.
+    h.children[0]!.process.kill = (signal) => {
+      h.children[0]!.killed.push(String(signal));
+      if (signal === "SIGKILL") h.children[0]!.exit(null);
+      return true;
+    };
+    h.tunnel.close();
+    await h.tunnel.kill!();
+    expect(h.children[0]!.killed).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(h.log.lines.map((line) => line.msg)).toContain(
+      "tunnel processes still running past the deadline; killing them",
+    );
+    // Nothing left: a second kill has nothing to do.
+    await h.tunnel.kill!();
+    expect(h.children[0]!.killed).toHaveLength(2);
+    // One never closed is closed by its kill.
+    const fresh = harness(() => {});
+    await fresh.tunnel.kill!();
+    expect(fresh.tunnel.state).toEqual({ status: "closed" });
+  });
+
   it("kills with SIGKILL a process that outlives SIGTERM, and only that one", async () => {
     const h = harness((child) => h.open.add(portOf(child)), {
       timing: { ...FAST, killAfterMs: 5 },

@@ -57,8 +57,21 @@ export interface SshTransport {
    * Ends every command still running (each answers as cancelled, once its
    * process has exited) and the shared connection. Every call after the
    * first shares it; an `exec` after it answers cancelled and spawns nothing.
+   * With a `deadline` (epoch ms), ending the connection gets no longer than
+   * what is left of it.
    */
-  close(): Promise<void>;
+  close(options?: SshCloseOptions): Promise<void>;
+  /**
+   * Past a deadline: SIGKILL every process this transport still owns, at
+   * once, and resolve once they have exited (or a short wait has run out).
+   * Closes it too. Optional: a transport with no processes need not have it.
+   */
+  kill?(): Promise<void>;
+}
+
+export interface SshCloseOptions {
+  /** Epoch ms by which closing must be done; past it, the caller kills what is left. */
+  readonly deadline?: number;
 }
 
 /** How SSH itself failed, typed from its own words. */
@@ -154,6 +167,30 @@ const MAX_OUTPUT = 4 * 1024 * 1024;
 
 /** How long a process has after SIGTERM before SIGKILL, and after SIGKILL before it is given up on. */
 export const DEFAULT_KILL_AFTER_MS = 2_000;
+
+/** How long `kill` waits for SIGKILLed processes to exit before it answers anyway. */
+export const KILL_WAIT_MS = 500;
+
+/** Resolves once every child in `children` has exited, or after `ms`. */
+export function exitsWithin(children: Iterable<ChildProcess>, ms: number): Promise<void> {
+  const exits = [...children].map(
+    (child) =>
+      new Promise<void>((resolve) => {
+        // Already exited: Node sets one of these once it has.
+        if (typeof child.exitCode === "number" || typeof child.signalCode === "string") {
+          resolve();
+          return;
+        }
+        child.once("exit", () => resolve());
+        child.once("error", () => resolve());
+      }),
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  return Promise.race([Promise.all(exits).then(() => {}), late]).finally(() => clearTimeout(timer));
+}
 
 /** What a command ended by this runner answers, after ssh's own words. */
 export const TIMED_OUT = "Connection timed out (volli)";
@@ -328,8 +365,20 @@ export function ensureControlDir(dir: string, uid: number = userInfo().uid): str
 export function systemSsh(options: SystemSshOptions): SshTransport {
   const { target, logger } = options;
   const ssh = options.sshPath ?? "ssh";
-  const spawn = options.spawn ?? LIVE_SPAWN;
+  const spawnChild = options.spawn ?? LIVE_SPAWN;
   const killAfterMs = options.killAfterMs ?? DEFAULT_KILL_AFTER_MS;
+  /** Every process it started that has not exited: a command's, or `-O exit`'s. */
+  const children = new Set<ChildProcess>();
+  const spawn: SpawnProcess = (command, args) => {
+    const child = spawnChild(command, args);
+    children.add(child);
+    const gone = (): void => {
+      children.delete(child);
+    };
+    child.once("exit", gone);
+    child.once("error", gone);
+    return child;
+  };
   const owned = options.controlDir === undefined;
   const controlDir =
     options.controlDir === undefined
@@ -373,19 +422,37 @@ export function systemSsh(options: SystemSshOptions): SshTransport {
       });
       return result;
     },
-    close() {
+    close(closeOptions = {}) {
       closed ??= (async () => {
         closing.abort();
         await Promise.all(active);
-        await runProcess(
-          spawn,
-          ssh,
-          [...connectionOptions(controlPath), "-O", "exit", ...targetArgs(target)],
-          { timeoutMs: CONTROL_EXIT_TIMEOUT_MS, killAfterMs },
-        );
+        const left =
+          closeOptions.deadline === undefined
+            ? CONTROL_EXIT_TIMEOUT_MS
+            : Math.min(CONTROL_EXIT_TIMEOUT_MS, closeOptions.deadline - Date.now());
+        if (left > 0) {
+          await runProcess(
+            spawn,
+            ssh,
+            [...connectionOptions(controlPath), "-O", "exit", ...targetArgs(target)],
+            { timeoutMs: left, killAfterMs },
+          );
+        } else {
+          logger.warn("ssh master left to its ControlPersist: no time to end it", {});
+        }
         if (owned) rmSync(controlDir, { recursive: true, force: true });
       })();
       return closed;
+    },
+    async kill() {
+      closing.abort();
+      const left = [...children];
+      if (left.length === 0) return;
+      logger.warn("ssh processes still running past the deadline; killing them", {
+        processes: left.length,
+      });
+      for (const child of left) child.kill("SIGKILL");
+      await exitsWithin(left, KILL_WAIT_MS);
     },
   };
 }

@@ -6,7 +6,7 @@
  * waking on resume, and the sudo password forgotten at every stop.
  */
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,7 +15,14 @@ import { REMOTE_HOST_LINK_CAP } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { PROBE_SCRIPT } from "./probe";
-import { answerFits, RemoteHostsUnavailableError, type RemoteHostsPorts } from "./remote-hosts";
+import {
+  answerFits,
+  createRemoteHosts,
+  DEFAULT_QUIT_GRACE_MS,
+  RemoteHostsUnavailableError,
+  type RemoteHostsPorts,
+} from "./remote-hosts";
+import { systemSsh } from "./ssh";
 import type { RegistryFile } from "./remote-hosts-registry";
 import {
   CURRENT,
@@ -215,7 +222,7 @@ describe("quit owns everything in flight (B2)", () => {
     await w.until((view) => view.steps[1]?.status === "running");
     await h.engine.close();
     expect(h.log.lines).toContainEqual(
-      expect.objectContaining({ msg: "remote hosts quit before everything in flight settled" }),
+      expect.objectContaining({ msg: "remote hosts quit at its deadline; ending what is left" }),
     );
     release();
     for (let turn = 0; turn < 10; turn += 1) await flush();
@@ -252,9 +259,34 @@ describe("quit owns everything in flight (B2)", () => {
     expect(h.log.lines).toContainEqual(
       expect.objectContaining({
         msg: "an add flow did not close cleanly",
-        fields: { error: "keychain locked" },
+        fields: { flowId: "flow-1", error: "keychain locked" },
       }),
     );
+  });
+
+  it("abandons a key removal that never ends at its deadline, says which, and returns", async () => {
+    const h = harness({ quitGraceMs: 20 });
+    h.box.trusted = false;
+    const { flowId } = await startAdd(h);
+    const held: { release?: () => void } = {};
+    h.keys.hooks.remove = () =>
+      new Promise<void>((resolve) => {
+        held.release = resolve;
+      });
+    const started = Date.now();
+    await h.engine.close();
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(h.log.lines).toContainEqual(
+      expect.objectContaining({
+        msg: "remote hosts quit at its deadline; ending what is left",
+        fields: { graceMs: 20, abandoned: flowId },
+      }),
+    );
+    // Landing late changes nothing: the engine is closed, the flow let go.
+    held.release!();
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    expect(h.store.saves).toEqual([]);
+    expect(() => h.engine.subscribeAdd(flowId, () => {})).toThrow(RemoteHostsUnavailableError);
   });
 
   it("shares one close between every caller", async () => {
@@ -440,14 +472,70 @@ setInterval(() => {}, 1000);
       await w1.until((view) => view.status === "done");
       await w2.until((view) => view.status === "done");
       await h.engine.close();
-      // SIGTERM ignored, SIGKILL after 30 ms.
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Gone by the time close answers: quit SIGKILLs what is left and waits for it.
       expect(children).toHaveLength(2);
       expect(children.map((child) => alive(child.pid!))).toEqual([false, false]);
     } finally {
       for (const child of children) if (alive(child.pid!)) child.kill("SIGKILL");
     }
   });
+
+  it("returns within the default grace when the command and ssh -O exit both ignore SIGTERM", async () => {
+    // Even the control-exit command stalls: the re-check's stubborn-control-ssh.
+    const stubborn = join(dir, "stubborn-control-ssh");
+    writeFileSync(
+      stubborn,
+      `#!/usr/bin/env node
+process.on("SIGTERM", () => {});
+process.stderr.write("ready\\n");
+setInterval(() => {}, 1000);
+`,
+    );
+    chmodSync(stubborn, 0o755);
+    const children: ChildProcess[] = [];
+    let commandRunning!: () => void;
+    const running = new Promise<void>((resolve) => {
+      commandRunning = resolve;
+    });
+    const controlDir = join(dir, "control");
+    mkdirSync(controlDir, { mode: 0o700 });
+    const h = harness();
+    const engine = createRemoteHosts({
+      ...h.ports,
+      ssh: (target) =>
+        systemSsh({
+          target,
+          logger: h.log.logger,
+          sshPath: stubborn,
+          controlDir,
+          spawn(command, args) {
+            const child = nodeSpawn(command, [...args], { stdio: ["pipe", "pipe", "pipe"] });
+            children.push(child);
+            child.stderr!.once("data", () => commandRunning());
+            return child;
+          },
+        }),
+    });
+    try {
+      await engine.startAdd({ target: "deploy@fake" });
+      await running;
+      const started = Date.now();
+      await engine.close();
+      const elapsed = Date.now() - started;
+      // The default grace, plus the short wait for what it SIGKILLed.
+      expect(elapsed).toBeLessThan(DEFAULT_QUIT_GRACE_MS + 700);
+      expect(children.length).toBeGreaterThanOrEqual(2);
+      expect(children.map((child) => alive(child.pid!))).toEqual(children.map(() => false));
+      expect(h.log.lines).toContainEqual(
+        expect.objectContaining({
+          msg: "ssh processes still running past the deadline; killing them",
+        }),
+      );
+    } finally {
+      await h.engine.close();
+      for (const child of children) if (alive(child.pid!)) child.kill("SIGKILL");
+    }
+  }, 15_000);
 
   it.each(["quit", "forget", "cancel"] as const)(
     "after %s, no fake ssh is left alive",

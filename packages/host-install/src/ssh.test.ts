@@ -22,13 +22,14 @@ import {
   discoverHostKeys,
   ensureControlDir,
   CANCELLED,
+  exitsWithin,
   runProcess,
   shellQuote,
   systemSsh,
   TIMED_OUT,
   UnsafeControlDirError,
 } from "./ssh";
-import { recordingLogger, scriptedSpawn, type FakeChild } from "./testing/fake-process";
+import { fakeChild, recordingLogger, scriptedSpawn, type FakeChild } from "./testing/fake-process";
 
 const TARGET = { destination: "deploy@box", port: null, label: "box" };
 let root: string;
@@ -439,6 +440,42 @@ setInterval(() => {}, 1000);
     } finally {
       for (const pid of pids) if (alive(pid)) process.kill(pid, "SIGKILL");
     }
+  });
+});
+
+describe("waiting out SIGKILLed processes", () => {
+  it("answers at once for one already gone, on exit or error, and after its bound for one that lingers", async () => {
+    const gone = fakeChild("ssh", []);
+    Object.assign(gone.process, { exitCode: 0, signalCode: null });
+    await exitsWithin([gone.process], 60_000);
+    const killed = fakeChild("ssh", []);
+    Object.assign(killed.process, { exitCode: null, signalCode: "SIGKILL" });
+    await exitsWithin([killed.process], 60_000);
+    const exiting = fakeChild("ssh", []);
+    const failing = fakeChild("ssh", []);
+    const both = exitsWithin([exiting.process, failing.process], 60_000);
+    exiting.exit(null);
+    failing.fail(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+    await both;
+    const stuck = fakeChild("ssh", []);
+    const started = Date.now();
+    await exitsWithin([stuck.process], 20);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(15);
+  });
+
+  it("leaves the master to ControlPersist when closing has no time left, and kills nothing it does not own", async () => {
+    const { spawn, children } = scriptedSpawn(() => {});
+    const { lines, logger } = recordingLogger();
+    const ssh = systemSsh({ target: TARGET, logger, spawn, controlDir: join(root, "c") });
+    await ssh.close({ deadline: Date.now() - 1 });
+    expect(children).toHaveLength(0);
+    expect(lines.map((line) => line.msg)).toContain(
+      "ssh master left to its ControlPersist: no time to end it",
+    );
+    await ssh.kill!();
+    expect(lines.map((line) => line.msg)).not.toContain(
+      "ssh processes still running past the deadline; killing them",
+    );
   });
 });
 
