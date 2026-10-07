@@ -3,6 +3,7 @@ import type { TicketRetentionState } from "../../../ipc/contract";
 
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";
+import { remoteHostOfTicketNow } from "@renderer/stores/remote-project";
 
 /**
  * Fetches a ticket's transient retention state (issue #76), refetching whenever
@@ -35,7 +36,8 @@ export function useTicketRetention(
 
   const reload = React.useCallback(() => {
     const token = fetchToken.claim();
-    if (!enabled) {
+    // A remote project's ticket's worktree is on its host (VC-711): no reading here.
+    if (!enabled || remoteHostOfTicketNow(ticketId) !== null) {
       setState(null);
       return;
     }

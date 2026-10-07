@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore, venueKey } from "@renderer/stores/venue";
@@ -20,9 +21,11 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { BoardSync, type BoardSyncTransport } from "@renderer/stores/board-sync";
 
 import { boardProtocol, startBoardProtocol, stopBoardProtocol } from "./board-protocol";
+import { sessionListingReaderForProject } from "./session-listing-reader";
 import { sessionRpcClient } from "./session-rpc-ipc-link";
 import {
   boot,
+  followRemoteProjects,
   refreshPlanningData,
   startBoardProtocolIfEnabled,
   type BootGateway,
@@ -1133,6 +1136,23 @@ describe("startBoardProtocolIfEnabled", () => {
     });
   });
 
+  // VC-711 with VC-713: a remote project's listing rides its Workspace link.
+  it("reads a remote project's Session listing over the relay, never this Mac's bridge", async () => {
+    const { request } = stubBoardBridge({ p1: [], p2: [] });
+    expect(await startBoardProtocolIfEnabled(async () => true)).toBe(true);
+    claim("r1");
+    try {
+      const answer = await sessionListingReaderForProject("r1").list({ projectId: "r1" });
+      expect(answer.ok).toBe(false);
+      expect(request.mock.calls.map(([call]) => [call.path, call.input])).toContainEqual([
+        "hostLink.query",
+        { workspaceId: "r1", path: "session.listing", input: { projectId: "r1" } },
+      ]);
+    } finally {
+      claim();
+    }
+  });
+
   it("says which Workspace it could not open, and opens the rest", async () => {
     stubBoardBridge({ p1: [boardTicket("a", "p1")] });
     const error = vi.spyOn(toast, "error");
@@ -1365,5 +1385,117 @@ describe("refreshPlanningData with the protocol on", () => {
     expect(await refreshPlanningData({}, gateway)).toEqual({ ok: false, error: "db locked" });
 
     expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1"]);
+  });
+});
+
+// ---- remote projects (VC-711) --------------------------------------------------------------
+
+/** Claims these projects for a remote host, and only these. */
+const claim = (...ids: string[]) =>
+  useHostConnectionStore.setState({
+    projects: Object.fromEntries(
+      ids.map((id) => [id, { hostId: "box", link: { status: "open" } }]),
+    ),
+  });
+
+describe("remote projects", () => {
+  beforeEach(() => {
+    // The selection is persisted, and a forgotten board tears down its terminals.
+    vi.stubGlobal("window", {
+      api: {
+        appState: { set: vi.fn(async () => ({ ok: true })) },
+        terminal: { kill: vi.fn(async () => ({ ok: true })) },
+      },
+    });
+    useBoardStore.getState().hydrate({}, {});
+    useProjectsStore.getState().hydrate([workspace("p1")], "p1");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useHostConnectionStore.setState({ hosts: [], projects: {} });
+    useProjectsStore.getState().hydrate([], null);
+    stopBoardProtocol();
+    vi.restoreAllMocks();
+  });
+
+  it("follows each remote claim: opens its board, and drops its board and row when it goes", async () => {
+    const opened: string[] = [];
+    const closed: string[] = [];
+    const sync = {
+      open: vi.fn(async (projectId: string) => {
+        opened.push(projectId);
+        // Its snapshot's project is its row.
+        useProjectsStore.getState().adoptProject(workspace(projectId));
+        useBoardStore.getState().paintProtocolBoard(projectId, [], [], new Set());
+        if (projectId === "r2") throw new Error("the box is away");
+      }),
+      close: vi.fn((projectId: string) => void closed.push(projectId)),
+    };
+    claim("r1");
+    const stop = followRemoteProjects(sync);
+    await vi.waitFor(() => expect(opened).toEqual(["r1"]));
+    expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1", "r1"]);
+    // Another claim, whose open fails: the board retries it itself, quietly.
+    claim("r1", "r2");
+    await vi.waitFor(() => expect(opened).toEqual(["r1", "r2"]));
+    // An unrelated change opens nothing twice.
+    claim("r1", "r2");
+    expect(opened).toEqual(["r1", "r2"]);
+    useProjectsStore.getState().select("r1");
+    claim("r2");
+    expect(closed).toEqual(["r1"]);
+    expect(useBoardStore.getState().ticketsByProject.r1).toBeUndefined();
+    expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1", "r2"]);
+    // The selection falls to the neighbour that took its place.
+    expect(useProjectsStore.getState().selectedProjectId).toBe("r2");
+    stop();
+    claim();
+    expect(closed).toEqual(["r1"]);
+  });
+
+  it("lets go of the store once the protocol path it served is gone", () => {
+    const sync = { open: vi.fn(async () => {}), close: vi.fn() };
+    let alive = true;
+    followRemoteProjects(sync, useHostConnectionStore, () => alive);
+    claim("r1");
+    expect(sync.open).toHaveBeenCalledTimes(1);
+    alive = false;
+    claim();
+    claim("r1");
+    expect(sync.close).not.toHaveBeenCalled();
+    expect(sync.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a remote project's board and row when this Mac's Workspace list is re-read", async () => {
+    startBoardProtocol({
+      view: {
+        paint: vi.fn(),
+        adoptProject: vi.fn(),
+        notePlanningChange: vi.fn(),
+        checkoutMoved: vi.fn(),
+        failed: vi.fn(),
+      },
+      client: {} as never,
+      sync: { transport: unusedTransport() },
+    });
+    vi.spyOn(boardProtocol()!.sync, "open").mockResolvedValue();
+    claim("r1");
+    useProjectsStore.getState().adoptProject(workspace("r1"));
+    const remoteBoard = [boardTicket("rt", "r1")];
+    useBoardStore.getState().paintProtocolBoard("r1", remoteBoard, [], new Set());
+    useProjectsStore.getState().select("r1");
+    const gateway = fakeGateway({
+      bootstrap: vi.fn<BootGateway["bootstrap"]>(async () => ({
+        ok: true,
+        data: payload({ projects: [workspace("p1")], ticketsByProject: { p1: [] } }),
+      })),
+    });
+
+    expect(await refreshPlanningData({}, gateway)).toEqual({ ok: true });
+
+    expect(useProjectsStore.getState().projects.map(({ id }) => id)).toEqual(["p1", "r1"]);
+    expect(useProjectsStore.getState().selectedProjectId).toBe("r1");
+    expect(useBoardStore.getState().ticketsByProject.r1).toEqual(remoteBoard);
   });
 });

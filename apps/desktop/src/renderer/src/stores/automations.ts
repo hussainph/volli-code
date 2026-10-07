@@ -37,6 +37,7 @@ import {
 import type { AutomationCreateInput, AutomationUpdateInput } from "../../../ipc/contract";
 import { duplicateName } from "@renderer/components/automations/automations-page-model";
 import { toastError } from "@renderer/lib/toast";
+import { notAvailableOn, refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
 
 type AutomationDraftInput = Omit<AutomationCreateInput, "commandId"> & {
   /** Kept by a caller across a transport retry; generated here when omitted. */
@@ -295,6 +296,12 @@ export function createAutomationsStore() {
     },
 
     async refresh(projectId) {
+      // A remote project's Automations are its host's, not this Mac's (VC-711):
+      // none listed here, and nothing asked of this Mac's database.
+      if (remoteHostNow(projectId) !== null) {
+        set((state) => ({ byProject: { ...state.byProject, [projectId]: [] } }));
+        return true;
+      }
       try {
         const result = await window.api.automations.list({ projectId });
         if (!result.ok) {
@@ -310,6 +317,10 @@ export function createAutomationsStore() {
     },
 
     async refreshArming(projectId) {
+      if (remoteHostNow(projectId) !== null) {
+        set((state) => ({ armingByProject: { ...state.armingByProject, [projectId]: [] } }));
+        return true;
+      }
       try {
         const result = await window.api.automations.armings({ projectId });
         if (!result.ok) {
@@ -327,6 +338,10 @@ export function createAutomationsStore() {
     },
 
     async refreshOrder(projectId) {
+      if (remoteHostNow(projectId) !== null) {
+        set((state) => ({ orderByProject: { ...state.orderByProject, [projectId]: [] } }));
+        return true;
+      }
       try {
         const result = await window.api.automations.columnOrders({ projectId });
         if (!result.ok) {
@@ -344,6 +359,8 @@ export function createAutomationsStore() {
     },
 
     async setColumnOrder(input) {
+      const host = remoteHostNow(input.projectId);
+      if (host !== null) return notAvailableOn(host);
       try {
         const result = await window.api.automations.setColumnOrder({
           // Durable intent, like every other write here: the projection this
@@ -366,6 +383,8 @@ export function createAutomationsStore() {
     },
 
     async arm(input) {
+      const host = remoteHostNow(input.projectId);
+      if (host !== null) return notAvailableOn(host);
       try {
         const result = await window.api.automations.arm({
           // Durable intent, like every other write here: the projection this
@@ -386,6 +405,7 @@ export function createAutomationsStore() {
     },
 
     async refreshRuns(projectId) {
+      if (remoteHostNow(projectId) !== null) return;
       try {
         const result = await window.api.automations.runsForProject({ projectId });
         if (!result.ok) {
@@ -400,6 +420,7 @@ export function createAutomationsStore() {
 
     async refreshAutomationHistory(projectId, automationId) {
       const key = automationHistoryKey(projectId, automationId);
+      if (remoteHostNow(projectId) !== null) return;
       try {
         const [runs, skips] = await Promise.all([
           window.api.automations.runsForAutomation({ projectId, automationId }),
@@ -425,6 +446,7 @@ export function createAutomationsStore() {
     },
 
     async refreshSkips(projectId) {
+      if (remoteHostNow(projectId) !== null) return;
       try {
         const result = await window.api.automations.skipsForProject({ projectId });
         if (!result.ok) {
@@ -493,6 +515,8 @@ export function createAutomationsStore() {
     },
 
     async save(input) {
+      const host = remoteHostNow(input.projectId ?? get().editor?.projectId);
+      if (host !== null) return notAvailableOn(host);
       try {
         const { commandId, ...draft } = input;
         const result = await window.api.automations.create({
@@ -540,6 +564,7 @@ export function createAutomationsStore() {
     },
 
     async duplicate(projectId, automation) {
+      if (refuseRemote(projectId)) return;
       const listed = get().byProject[projectId] ?? [];
       try {
         const result = await window.api.automations.create({
@@ -584,6 +609,7 @@ export function createAutomationsStore() {
     },
 
     async remove(projectId, automation) {
+      if (refuseRemote(projectId)) return;
       try {
         const result = await window.api.automations.delete({
           commandId: crypto.randomUUID(),

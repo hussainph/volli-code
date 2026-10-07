@@ -10,6 +10,15 @@
  * feedback (the rail calls it on every pointer-cross) and does NOT persist —
  * persistence is the separate `commitReorder`, which the rail calls once, on
  * drag end/cancel, so a single drag doesn't spam `project.reorder`.
+ *
+ * **Remote projects (VC-711).** A project a remote host serves is not in
+ * this Mac's database: its row arrives from its Workspace's board snapshot
+ * (`adoptProject`, for an id the host-connection store claims for a remote
+ * host) and lives here, in memory, beside the local bootstrap's rows. A
+ * wholesale `hydrate` from the local bootstrap keeps them; they leave when
+ * their claim does (`dropRemoteProject`). This Mac's own writes (add, remove,
+ * relink, the persisted rail order) never name one: they are this Mac's
+ * database's, and a remote id would mean nothing there.
  */
 import {
   errorMessage,
@@ -35,6 +44,7 @@ import {
 } from "@renderer/terminal/session-lifecycle";
 
 import { useBoardStore } from "./board";
+import { isRemoteProject, useHostConnectionStore } from "./host-connection";
 import { writeThrough } from "./mutate";
 import { setProjectRowSink, useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
@@ -164,6 +174,12 @@ interface ProjectsState {
    */
   adoptProject(project: Project): void;
   /**
+   * A remote project's claim went (its host was forgotten, or it was closed
+   * there): its row goes, and the selection falls to a neighbour. Nothing is
+   * written: the project was never this Mac's.
+   */
+  dropRemoteProject(id: string): void;
+  /**
    * Adds the chosen folder as a project — UNLESS it might be a project Volli
    * already has.
    *
@@ -255,10 +271,20 @@ export type ProjectRelinkSettlement =
   | { ok: true; aftermath: ProjectRelinkAftermath }
   | { ok: false; refusal: ProjectRelinkRefusal | null };
 
+/** Whether a remote host serves the project: the host-connection store's claim. */
+export type RemoteProjectTest = (projectId: string) => boolean;
+
+const defaultIsRemote: RemoteProjectTest = (projectId) =>
+  isRemoteProject(useHostConnectionStore.getState(), projectId);
+
+/** What a remote project's local-only write says instead of reaching this Mac's database. */
+export const REMOTE_PROJECT_LOCAL_ONLY = "That isn’t available for a project on a remote host yet.";
+
 /** Factory so tests can inject a fake gateway (and scope listener) instead of the real seams. */
 export function createProjectsStore(
   gateway: ProjectsGateway = defaultGateway,
   onSelectedProjectChange: SelectedProjectListener = defaultSelectedProjectListener,
+  isRemote: RemoteProjectTest = defaultIsRemote,
 ) {
   /**
    * Chains `gateway.update` calls for the SAME project id so only one is ever
@@ -383,14 +409,48 @@ export function createProjectsStore(
 
       hydrate(projects, selectedProjectId) {
         const previous = get().selectedProjectId;
-        set({ projects, selectedProjectId });
-        announceSelection(previous, selectedProjectId);
+        // The local bootstrap knows nothing of remote rows: keep each one still
+        // claimed, after this Mac's own.
+        const local = new Set(projects.map(({ id }) => id));
+        const remote = get().projects.filter(({ id }) => !local.has(id) && isRemote(id));
+        const merged = remote.length === 0 ? projects : [...projects, ...remote];
+        // A remote project selected before stays selected: the bootstrap's
+        // fallback only stands in for a selection this Mac's list lost.
+        const selected =
+          previous !== null && remote.some(({ id }) => id === previous)
+            ? previous
+            : selectedProjectId;
+        set({ projects: merged, selectedProjectId: selected });
+        announceSelection(previous, selected);
       },
 
       adoptProject(project) {
         const projects = get().projects;
-        if (!projects.some(({ id }) => id === project.id)) return;
+        if (!projects.some(({ id }) => id === project.id)) {
+          // A remote Workspace's first snapshot: its row joins the rail. Any
+          // other unknown row is a project removed while its write was in flight.
+          if (isRemote(project.id)) set({ projects: [...projects, project] });
+          return;
+        }
         set({ projects: projects.map((row) => (row.id === project.id ? project : row)) });
+      },
+
+      dropRemoteProject(id) {
+        const { projects, selectedProjectId } = get();
+        const removedIndex = projects.findIndex((project) => project.id === id);
+        if (removedIndex === -1) return;
+        const nextProjects = projects.filter((project) => project.id !== id);
+        if (selectedProjectId !== id) {
+          set({ projects: nextProjects });
+          return;
+        }
+        const nextSelectedId =
+          nextProjects.length === 0
+            ? null
+            : nextProjects[Math.min(removedIndex, nextProjects.length - 1)]!.id;
+        set({ projects: nextProjects, selectedProjectId: nextSelectedId });
+        persistSelection(nextSelectedId);
+        announceSelection(selectedProjectId, nextSelectedId);
       },
 
       async addProject({ path, defaultName }) {
@@ -431,6 +491,10 @@ export function createProjectsStore(
       },
 
       async relink(id, path) {
+        if (isRemote(id)) {
+          toastError(`Couldn't relink project: ${REMOTE_PROJECT_LOCAL_ONLY}`);
+          return { ok: false, refusal: null };
+        }
         // The refusal id is read on the way THROUGH `writeThrough` rather than
         // from its answer: that helper's job is the toast, and it collapses every
         // failure to `null` on purpose. Catching the id here keeps the shared
@@ -504,6 +568,10 @@ export function createProjectsStore(
         // No-op (and no IPC) for an unknown id — checked against the pre-await
         // snapshot; the fresh re-read below handles what actually changed.
         if (!get().projects.some((project) => project.id === id)) return;
+        if (isRemote(id)) {
+          toastError(`Couldn't remove project: ${REMOTE_PROJECT_LOCAL_ONLY}`);
+          return;
+        }
 
         const result = await writeThrough("remove project", (): Promise<ProjectMutationResult> =>
           gateway.remove(id),
@@ -565,10 +633,12 @@ export function createProjectsStore(
         const { projects } = get();
         if (sameOrder(projects, previousOrder)) return; // nothing moved since the drag started
 
+        // This Mac's database orders its own projects; a remote row's place
+        // in the rail is this window's.
         const result = await writeThrough(
           "save project order",
           (): Promise<ProjectMutationResult> =>
-            gateway.reorder(projects.map((project) => project.id)),
+            gateway.reorder(projects.filter(({ id }) => !isRemote(id)).map(({ id }) => id)),
         );
         if (result) return; // persisted — the optimistic order stands
 

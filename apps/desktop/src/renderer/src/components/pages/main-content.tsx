@@ -7,6 +7,7 @@ import { ConfigurePage } from "@renderer/components/pages/configure-page";
 import { SettingsPage } from "@renderer/components/pages/settings-page";
 import { SessionEnvironmentAlert } from "@renderer/components/session-environment-alert";
 import { WorkspaceDependenciesOffer } from "@renderer/components/workspace-dependencies-offer";
+import { LocalOnly } from "@renderer/components/hosts/local-only";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useActiveNav } from "@renderer/hooks/use-active-nav";
@@ -38,11 +39,17 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <SessionEnvironmentAlert />
+      {/* Both measure THIS Mac's tools in the project's folder: a remote
+          project's folder is on its host (VC-711), so neither runs for it. */}
+      <LocalOnly projectId={selected?.id ?? null} fallback={null}>
+        <SessionEnvironmentAlert />
+      </LocalOnly>
       {/* Under the fault surface, because it is not one: an uninstalled
           workspace is a normal state with an action attached, and it must
           never be the loudest thing on a freshly added project (VC-156). */}
-      <WorkspaceDependenciesOffer />
+      <LocalOnly projectId={selected?.id ?? null} fallback={null}>
+        <WorkspaceDependenciesOffer />
+      </LocalOnly>
       {/* Home renders its own strip, its board (or the ticket that has taken it
           over) and its Session planes, in that DOM order, so the strip is the
           top edge of whatever is below it. It is a fragment on purpose: it
@@ -65,7 +72,9 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
         ) : activeNav === "automations" ? (
           // Stateless like Configure, so plain conditional rendering: nothing
           // on this page owns a live PTY, and it re-reads its record on mount.
-          <AutomationsPage />
+          <LocalOnly projectId={selected.id}>
+            <AutomationsPage />
+          </LocalOnly>
         ) : null /* home: rendered by the always-mounted HomeSurface above */
       }
     </div>

@@ -9,6 +9,7 @@ import {
   createHostLinkTracker,
   HOST_OFFLINE_AFTER_MS,
   hostIdOfProject,
+  isRemoteProject,
   hostLinkView,
   hostLinkViewChangesAt,
   hostOfProject,
@@ -63,6 +64,11 @@ describe("host-connection store", () => {
     expect(hostIdOfProject(store.getState(), "p2")).toBe(HETZNER.id);
     expect(hostIdOfProject(store.getState(), "p3")).toBe(MINI.id);
     expect(hostIdOfProject(store.getState(), null)).toBe(THIS_MAC_HOST_ID);
+    // VC-711: a project a remote host claims is remote; This Mac's, none and null are not.
+    expect(isRemoteProject(store.getState(), "p2")).toBe(true);
+    expect(isRemoteProject(store.getState(), "p1")).toBe(false);
+    expect(isRemoteProject(store.getState(), "nobody")).toBe(false);
+    expect(isRemoteProject(store.getState(), null)).toBe(false);
     expect(hostOfProject(store.getState(), "p2")).toBe(HETZNER);
     expect(hostOfProject(store.getState(), "unknown")).toBe(THIS_MAC_HOST);
     expect(projectCounts(store.getState())).toEqual(

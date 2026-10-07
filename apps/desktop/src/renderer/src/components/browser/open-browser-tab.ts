@@ -5,6 +5,7 @@ import type { BrowserApi } from "./browser-api";
 import { browserTabId } from "@renderer/components/home/home-tabs";
 import { toastError } from "@renderer/lib/toast";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { refuseRemote } from "@renderer/stores/remote-project";
 
 /** The same Browser door for strip and empty-pane actions at either scope. */
 export async function openBrowserTab(
@@ -12,6 +13,8 @@ export async function openBrowserTab(
   scope: { projectId: string; ticketId?: string },
   activate: (tabId: string) => void,
 ): Promise<void> {
+  // Browser Tabs live on this Mac: a remote project has none yet (VC-711).
+  if (refuseRemote(scope.projectId)) return;
   try {
     const result = await api.open({ ...scope, url: BROWSER_START_URL });
     if (!result.ok) {
