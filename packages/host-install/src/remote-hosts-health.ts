@@ -22,6 +22,7 @@ export function statusEvidence(
   result: SshExecResult,
   hostId: string,
   name: string,
+  expectedListen: { host: string; port: number },
 ): {
   state: RemoteHostLinkState;
   version: string | null;
@@ -34,12 +35,17 @@ export function statusEvidence(
   const facts =
     typeof running === "object" && running !== null ? (running as Record<string, unknown>) : null;
   const version = facts?.version;
+  const listen = facts?.listen;
+  const listener =
+    typeof listen === "object" && listen !== null ? (listen as Record<string, unknown>) : null;
   if (
     ssh === null &&
     result.code === 0 &&
     said?.verdict === "serving" &&
     facts?.state === "serving" &&
     facts.hostId === hostId &&
+    listener?.host === expectedListen.host &&
+    listener.port === expectedListen.port &&
     typeof version === "string" &&
     version.length <= 128 &&
     /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)

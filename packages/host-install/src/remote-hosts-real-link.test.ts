@@ -12,6 +12,7 @@ import {
   DEVICE_ID,
   HOST_ID,
   HOST_KEY,
+  LISTEN,
   OTHER_ID,
   WS1,
   harness,
@@ -94,7 +95,12 @@ async function fixture() {
               management: 1,
               verdict: serving ? "serving" : "not-serving",
               running: serving
-                ? { state: "serving", hostId: identity.id, version: identity.version }
+                ? {
+                    state: "serving",
+                    hostId: identity.id,
+                    version: identity.version,
+                    listen: LISTEN,
+                  }
                 : null,
             })
           : undefined,

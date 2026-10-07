@@ -5,6 +5,7 @@ import type { TunnelState } from "./tunnel";
 import { createRemoteHosts } from "./remote-hosts";
 import {
   HOST_ID,
+  LISTEN,
   WS1,
   harness,
   hostEntry,
@@ -18,7 +19,7 @@ const serving = () =>
   json({
     v: 1,
     verdict: "serving",
-    running: { state: "serving", hostId: HOST_ID, version: "1.2.0" },
+    running: { state: "serving", hostId: HOST_ID, version: "1.2.0", listen: LISTEN },
   });
 function deferred<T>() {
   let resolve!: (value: T) => void;

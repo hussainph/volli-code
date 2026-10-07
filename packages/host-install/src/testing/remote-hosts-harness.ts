@@ -189,7 +189,7 @@ export function fakeBoxes(...overrides: Handler[]) {
         v: 1,
         management: 1,
         verdict: "serving",
-        running: { state: "serving", hostId: box.enrollHostId, version: "1.1.0" },
+        running: { state: "serving", hostId: box.enrollHostId, version: "1.1.0", listen: LISTEN },
       });
     if (options.label === "upload: check") return { stdout: "\n" };
     if (script.includes("cat > ")) return {};

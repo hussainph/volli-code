@@ -999,7 +999,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
           ]);
           if (runtime.closed || runtimes.get(runtime.id) !== runtime || runtime.probe !== probe)
             return;
-          const evidence = statusEvidence(result, runtime.id, entry.name);
+          const evidence = statusEvidence(result, runtime.id, entry.name, runtime.remote.listen);
           runtime.health = evidence.state;
           runtime.lastSshFailure = evidence.sshFailure;
           if (evidence.version !== null) noteVersion(runtime, evidence.version);
@@ -1996,9 +1996,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       return flowFacts(flow.results, flow.state.decisions);
     },
     async cancelAdd(flowId) {
-      // The one call that stays open with `cloud` off: a flow already under
-      // way when the flag turned off is still stopped (the window cancels it
-      // as its sheet unmounts). It starts nothing, and needs no started engine.
+      // Explicit cancellation stays available with `cloud` off for a flow
+      // already under way. Sheet unmount only releases UI observation.
+      // This starts nothing and needs no started engine.
       if (closed) throw new RemoteHostsUnavailableError();
       const flow = flowOf(flowId);
       // Done: the host is in the registry, too late to cancel (Forget undoes it).
