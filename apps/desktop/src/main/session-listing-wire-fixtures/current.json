@@ -1,0 +1,270 @@
+{
+  "provenance": {
+    "revision": "VC-713 branch, first captured on top of 119235167",
+    "peer": "VC-713 public Session listing client (sessions.listing)",
+    "producer": "createHostRouter() through startHostProtocolListener, over host-core's createHostHandlers with sessionListing sources on a test database (session-listing-wire-compatibility.test.ts)",
+    "sources": [
+      "packages/session-rpc/src/session-listing-schema.ts",
+      "packages/host-core/src/session-control/listing-roster.ts",
+      "packages/host-core/src/session-control/listing-row.ts"
+    ],
+    "format": "Application-wire payloads as the stock tRPC WebSocket client receives them through the production listener; transport-local request ids omitted",
+    "regenerate": "VOLLI_RECORD_SESSION_LISTING_WIRE=1 vp test run src/main/session-listing-wire-compatibility.test.ts (in apps/desktop), then vp fmt the JSON"
+  },
+  "welcome": {
+    "requested": [
+      "sessions",
+      "sessions.queue",
+      "sessions.subscribe",
+      "sessions.history",
+      "session.read",
+      "board.read",
+      "board.write",
+      "sign-ins",
+      "auth.callback",
+      "sessions.listing"
+    ],
+    "granted": [
+      "sessions",
+      "sessions.queue",
+      "sessions.subscribe",
+      "sessions.history",
+      "session.read",
+      "board.read",
+      "board.write",
+      "sign-ins",
+      "auth.callback",
+      "sessions.listing"
+    ]
+  },
+  "listing": {
+    "procedure": "session.listing",
+    "input": {
+      "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+    },
+    "output": {
+      "sessions": [
+        {
+          "kind": "chat",
+          "record": {
+            "latestTurnOrigin": {
+              "kind": "user"
+            },
+            "resumedAfterStop": false,
+            "sessionId": "c0ffee00-0000-4000-8000-000000000001",
+            "title": "Session c0ff",
+            "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+            "ticketId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+            "createdAt": 1,
+            "adapterId": "pi",
+            "live": true,
+            "activity": "waiting",
+            "waitingOn": "question",
+            "outcome": null,
+            "lastActivityAt": 30,
+            "bornTicketless": false,
+            "role": "ticket",
+            "parentSessionId": null,
+            "model": null
+          },
+          "usage": {
+            "requestCount": 0,
+            "tokenRequestCount": 0,
+            "pricedRequestCount": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "knownCostUsd": null,
+            "costCoverage": "unavailable",
+            "costBasis": "unavailable",
+            "cachedInputShare": null
+          },
+          "provenance": {
+            "kind": "user"
+          }
+        },
+        {
+          "kind": "chat",
+          "record": {
+            "latestTurnOrigin": {
+              "kind": "user"
+            },
+            "resumedAfterStop": false,
+            "sessionId": "c0ffee00-0000-4000-8000-000000000002",
+            "title": "Session c0ff",
+            "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+            "ticketId": null,
+            "createdAt": 1,
+            "adapterId": "pi",
+            "live": false,
+            "activity": "idle",
+            "waitingOn": null,
+            "outcome": "completed",
+            "lastActivityAt": 10,
+            "bornTicketless": true,
+            "role": "project",
+            "parentSessionId": null,
+            "model": {
+              "providerId": "anthropic",
+              "modelId": "model-a",
+              "reasoningLevel": "high"
+            }
+          },
+          "usage": {
+            "requestCount": 0,
+            "tokenRequestCount": 0,
+            "pricedRequestCount": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "knownCostUsd": null,
+            "costCoverage": "unavailable",
+            "costBasis": "unavailable",
+            "cachedInputShare": null
+          },
+          "provenance": {
+            "kind": "user"
+          }
+        },
+        {
+          "kind": "terminal",
+          "record": {
+            "id": "c0ffee00-0000-4000-8000-000000000003",
+            "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+            "ticketId": null,
+            "harnessId": "claude-code",
+            "activeHarnessId": null,
+            "harnessSessionId": null,
+            "launchKind": "unknown",
+            "placement": "unknown",
+            "title": "Terminal companion",
+            "cwd": "/repo",
+            "createdAt": 3,
+            "endedAt": null,
+            "exitCode": null,
+            "lastActivityAt": 3,
+            "bornTicketless": true
+          },
+          "usage": {
+            "requestCount": 0,
+            "tokenRequestCount": 0,
+            "pricedRequestCount": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "knownCostUsd": null,
+            "costCoverage": "unavailable",
+            "costBasis": "unavailable",
+            "cachedInputShare": null
+          },
+          "provenance": {
+            "kind": "user"
+          }
+        }
+      ],
+      "omitted": 0
+    }
+  },
+  "listingForTicket": {
+    "procedure": "session.listingForTicket",
+    "input": {
+      "ticketId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    "output": {
+      "sessions": [
+        {
+          "kind": "chat",
+          "record": {
+            "latestTurnOrigin": {
+              "kind": "user"
+            },
+            "resumedAfterStop": false,
+            "sessionId": "c0ffee00-0000-4000-8000-000000000001",
+            "title": "Session c0ff",
+            "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+            "ticketId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+            "createdAt": 1,
+            "adapterId": "pi",
+            "live": true,
+            "activity": "waiting",
+            "waitingOn": "question",
+            "outcome": null,
+            "lastActivityAt": 30,
+            "bornTicketless": false,
+            "role": "ticket",
+            "parentSessionId": null,
+            "model": null
+          },
+          "usage": {
+            "requestCount": 0,
+            "tokenRequestCount": 0,
+            "pricedRequestCount": 0,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadTokens": 0,
+            "cacheWriteTokens": 0,
+            "knownCostUsd": null,
+            "costCoverage": "unavailable",
+            "costBasis": "unavailable",
+            "cachedInputShare": null
+          },
+          "provenance": {
+            "kind": "user"
+          }
+        }
+      ],
+      "omitted": 0
+    }
+  },
+  "refusal": {
+    "procedure": "session.listingForTicket",
+    "input": {
+      "ticketId": "f0e1d2c3-b4a5-4968-8776-655443322110"
+    },
+    "output": {
+      "code": "NOT_FOUND",
+      "message": "Not found in this Workspace.",
+      "reason": "workspace-unknown"
+    }
+  },
+  "oldClient": {
+    "requested": [
+      "sessions",
+      "sessions.queue",
+      "host.logs",
+      "sessions.subscribe",
+      "sessions.history",
+      "session.read",
+      "board.read",
+      "board.write",
+      "model-access",
+      "sign-ins",
+      "auth.callback"
+    ],
+    "granted": [
+      "sessions",
+      "sessions.queue",
+      "sessions.subscribe",
+      "sessions.history",
+      "session.read",
+      "board.read",
+      "board.write",
+      "sign-ins",
+      "auth.callback"
+    ],
+    "refusal": {
+      "procedure": "session.listing",
+      "input": {
+        "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+      },
+      "output": {
+        "code": "FORBIDDEN",
+        "message": "session.listing is not among the features this connection negotiated.",
+        "reason": "verb-refused"
+      }
+    }
+  }
+}

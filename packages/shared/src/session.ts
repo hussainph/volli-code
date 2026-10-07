@@ -284,6 +284,41 @@ export type SessionListingRow = SessionListingIdentity & {
 };
 
 /**
+ * A host's Session listing over the host protocol (VC-713, feature
+ * `sessions.listing`): the rows `volli:session-list` serves, bounded so one
+ * answer fits a WebSocket frame. Every row a person must act on (waiting) or
+ * that is running now (working) is kept; past the bound, the rows with the
+ * oldest activity are left out and counted.
+ */
+export interface SessionListingPage {
+  sessions: SessionListingRow[];
+  /** Rows the host left out past its bound; 0 when the listing is whole. */
+  omitted: number;
+}
+
+/**
+ * The bounds of one `session.listing` answer (VC-713), frozen with the
+ * feature: the wire schema publishes them and the host clips to them before it
+ * answers, so a long title shortens a row rather than failing the listing.
+ *
+ * - `rows`: at most this many rows. A row is about 1 KiB of JSON and hostd
+ *   refuses an answer past 2 MiB whole (`response-too-large`).
+ * - `id`: any id a row carries (Session, project, ticket, attachment, run,
+ *   harness Session). Never clipped: ids this host mints are far shorter.
+ * - `text`: a display string (a title, an Automation's or a parent's name),
+ *   clipped with an ellipsis.
+ * - `path`: a working directory, clipped the same way.
+ * - `name`: a provider, model or harness id.
+ */
+export const SESSION_LISTING_BOUNDS = Object.freeze({
+  rows: 500,
+  id: 1024,
+  text: 512,
+  path: 4096,
+  name: 256,
+});
+
+/**
  * The identity half of a listing row: which kind of Session, and its record.
  *
  * Named so a helper that only CLASSIFIES or NAMES a Session — what to label its

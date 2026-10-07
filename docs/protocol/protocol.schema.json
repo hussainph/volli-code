@@ -92,6 +92,10 @@
     "sessions.history": [
       "session.history"
     ],
+    "sessions.listing": [
+      "session.listing",
+      "session.listingForTicket"
+    ],
     "sessions.queue": [
       "session.cancelQueued",
       "session.editQueued",
@@ -15722,6 +15726,1746 @@
           "required": [
             "sessions",
             "hidden"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "session.listing": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "projectId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "omitted": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sessions": {
+              "items": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "terminal",
+                        "type": "string"
+                      },
+                      "provenance": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "user",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "automationName": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 512,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "automationRunId": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 1024,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "const": "automation",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "automationName",
+                              "automationRunId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "session",
+                                "type": "string"
+                              },
+                              "parentSessionId": {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              "parentTitle": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 512,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "parentSessionId",
+                              "parentTitle"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "read": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "unreadSince": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "unreadSince"
+                        ],
+                        "type": "object"
+                      },
+                      "record": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "activeHarnessId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 256,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "bornTicketless": {
+                            "type": "boolean"
+                          },
+                          "createdAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "cwd": {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          "endedAt": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "exitCode": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "harnessId": {
+                            "maxLength": 256,
+                            "type": "string"
+                          },
+                          "harnessSessionId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "id": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "lastActivityAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "launchKind": {
+                            "enum": [
+                              "agent",
+                              "shell",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          },
+                          "placement": {
+                            "enum": [
+                              "tab",
+                              "split",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          },
+                          "projectId": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "ticketId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "title": {
+                            "maxLength": 512,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "projectId",
+                          "ticketId",
+                          "harnessId",
+                          "activeHarnessId",
+                          "harnessSessionId",
+                          "launchKind",
+                          "placement",
+                          "title",
+                          "cwd",
+                          "createdAt",
+                          "endedAt",
+                          "exitCode",
+                          "lastActivityAt",
+                          "bornTicketless"
+                        ],
+                        "type": "object"
+                      },
+                      "usage": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cacheReadTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cacheWriteTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cachedInputShare": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "costBasis": {
+                            "enum": [
+                              "provider-reported",
+                              "catalog-estimate",
+                              "unavailable",
+                              "mixed"
+                            ],
+                            "type": "string"
+                          },
+                          "costCoverage": {
+                            "enum": [
+                              "complete",
+                              "partial",
+                              "unavailable"
+                            ],
+                            "type": "string"
+                          },
+                          "inputTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "knownCostUsd": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outputTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "pricedRequestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "requestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "tokenRequestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "requestCount",
+                          "tokenRequestCount",
+                          "pricedRequestCount",
+                          "inputTokens",
+                          "outputTokens",
+                          "cacheReadTokens",
+                          "cacheWriteTokens",
+                          "knownCostUsd",
+                          "costCoverage",
+                          "costBasis",
+                          "cachedInputShare"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "record",
+                      "usage",
+                      "provenance"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "chat",
+                        "type": "string"
+                      },
+                      "provenance": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "user",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "automationName": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 512,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "automationRunId": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 1024,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "const": "automation",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "automationName",
+                              "automationRunId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "session",
+                                "type": "string"
+                              },
+                              "parentSessionId": {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              "parentTitle": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 512,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "parentSessionId",
+                              "parentTitle"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "read": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "unreadSince": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "unreadSince"
+                        ],
+                        "type": "object"
+                      },
+                      "record": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "activity": {
+                            "enum": [
+                              "working",
+                              "waiting",
+                              "idle",
+                              "stopped",
+                              "interrupted"
+                            ],
+                            "type": "string"
+                          },
+                          "adapterId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 256,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "bornTicketless": {
+                            "type": "boolean"
+                          },
+                          "createdAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "lastActivityAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "latestTurnOrigin": {
+                            "anyOf": [
+                              {
+                                "oneOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "user",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "session",
+                                        "type": "string"
+                                      },
+                                      "sessionId": {
+                                        "maxLength": 1024,
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "sessionId"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "automationName": {
+                                        "anyOf": [
+                                          {
+                                            "maxLength": 512,
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "automationRunId": {
+                                        "maxLength": 1024,
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "const": "automation",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "automationRunId",
+                                      "automationName"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "volli",
+                                        "type": "string"
+                                      },
+                                      "reason": {
+                                        "enum": [
+                                          "watch-notice",
+                                          "subagent-notice",
+                                          "relaunch-recovery",
+                                          "scheduled-resume",
+                                          "supervision",
+                                          "browser-notice",
+                                          "shell-notice",
+                                          "worktree-notice",
+                                          "auto-title"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "reason"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "live": {
+                            "type": "boolean"
+                          },
+                          "model": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "modelId": {
+                                    "maxLength": 256,
+                                    "type": "string"
+                                  },
+                                  "providerId": {
+                                    "maxLength": 256,
+                                    "type": "string"
+                                  },
+                                  "reasoningLevel": {
+                                    "enum": [
+                                      "off",
+                                      "minimal",
+                                      "low",
+                                      "medium",
+                                      "high",
+                                      "xhigh",
+                                      "max"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "providerId",
+                                  "modelId",
+                                  "reasoningLevel"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outcome": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "completed",
+                                  "interrupted",
+                                  "failed"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "parentSessionId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "projectId": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "resumedAfterStop": {
+                            "type": "boolean"
+                          },
+                          "role": {
+                            "enum": [
+                              "project",
+                              "ticket",
+                              "subagent"
+                            ],
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "ticketId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "title": {
+                            "maxLength": 512,
+                            "type": "string"
+                          },
+                          "waitingOn": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "question",
+                                  "permission",
+                                  "auth"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sessionId",
+                          "title",
+                          "projectId",
+                          "ticketId",
+                          "createdAt",
+                          "adapterId",
+                          "live",
+                          "activity",
+                          "waitingOn",
+                          "outcome",
+                          "lastActivityAt",
+                          "bornTicketless",
+                          "role",
+                          "parentSessionId",
+                          "model"
+                        ],
+                        "type": "object"
+                      },
+                      "usage": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cacheReadTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cacheWriteTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cachedInputShare": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "costBasis": {
+                            "enum": [
+                              "provider-reported",
+                              "catalog-estimate",
+                              "unavailable",
+                              "mixed"
+                            ],
+                            "type": "string"
+                          },
+                          "costCoverage": {
+                            "enum": [
+                              "complete",
+                              "partial",
+                              "unavailable"
+                            ],
+                            "type": "string"
+                          },
+                          "inputTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "knownCostUsd": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outputTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "pricedRequestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "requestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "tokenRequestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "requestCount",
+                          "tokenRequestCount",
+                          "pricedRequestCount",
+                          "inputTokens",
+                          "outputTokens",
+                          "cacheReadTokens",
+                          "cacheWriteTokens",
+                          "knownCostUsd",
+                          "costCoverage",
+                          "costBasis",
+                          "cachedInputShare"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "record",
+                      "usage",
+                      "provenance"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "maxItems": 500,
+              "type": "array"
+            }
+          },
+          "required": [
+            "sessions",
+            "omitted"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "session.listingForTicket": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "ticketId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "ticketId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "omitted": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sessions": {
+              "items": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "terminal",
+                        "type": "string"
+                      },
+                      "provenance": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "user",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "automationName": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 512,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "automationRunId": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 1024,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "const": "automation",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "automationName",
+                              "automationRunId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "session",
+                                "type": "string"
+                              },
+                              "parentSessionId": {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              "parentTitle": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 512,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "parentSessionId",
+                              "parentTitle"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "read": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "unreadSince": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "unreadSince"
+                        ],
+                        "type": "object"
+                      },
+                      "record": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "activeHarnessId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 256,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "bornTicketless": {
+                            "type": "boolean"
+                          },
+                          "createdAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "cwd": {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          "endedAt": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "exitCode": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "harnessId": {
+                            "maxLength": 256,
+                            "type": "string"
+                          },
+                          "harnessSessionId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "id": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "lastActivityAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "launchKind": {
+                            "enum": [
+                              "agent",
+                              "shell",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          },
+                          "placement": {
+                            "enum": [
+                              "tab",
+                              "split",
+                              "unknown"
+                            ],
+                            "type": "string"
+                          },
+                          "projectId": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "ticketId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "title": {
+                            "maxLength": 512,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "projectId",
+                          "ticketId",
+                          "harnessId",
+                          "activeHarnessId",
+                          "harnessSessionId",
+                          "launchKind",
+                          "placement",
+                          "title",
+                          "cwd",
+                          "createdAt",
+                          "endedAt",
+                          "exitCode",
+                          "lastActivityAt",
+                          "bornTicketless"
+                        ],
+                        "type": "object"
+                      },
+                      "usage": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cacheReadTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cacheWriteTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cachedInputShare": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "costBasis": {
+                            "enum": [
+                              "provider-reported",
+                              "catalog-estimate",
+                              "unavailable",
+                              "mixed"
+                            ],
+                            "type": "string"
+                          },
+                          "costCoverage": {
+                            "enum": [
+                              "complete",
+                              "partial",
+                              "unavailable"
+                            ],
+                            "type": "string"
+                          },
+                          "inputTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "knownCostUsd": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outputTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "pricedRequestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "requestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "tokenRequestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "requestCount",
+                          "tokenRequestCount",
+                          "pricedRequestCount",
+                          "inputTokens",
+                          "outputTokens",
+                          "cacheReadTokens",
+                          "cacheWriteTokens",
+                          "knownCostUsd",
+                          "costCoverage",
+                          "costBasis",
+                          "cachedInputShare"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "record",
+                      "usage",
+                      "provenance"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "chat",
+                        "type": "string"
+                      },
+                      "provenance": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "user",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "automationName": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 512,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "automationRunId": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 1024,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "kind": {
+                                "const": "automation",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "automationName",
+                              "automationRunId"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "session",
+                                "type": "string"
+                              },
+                              "parentSessionId": {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              "parentTitle": {
+                                "anyOf": [
+                                  {
+                                    "maxLength": 512,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "parentSessionId",
+                              "parentTitle"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "read": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "unreadSince": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "unreadSince"
+                        ],
+                        "type": "object"
+                      },
+                      "record": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "activity": {
+                            "enum": [
+                              "working",
+                              "waiting",
+                              "idle",
+                              "stopped",
+                              "interrupted"
+                            ],
+                            "type": "string"
+                          },
+                          "adapterId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 256,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "bornTicketless": {
+                            "type": "boolean"
+                          },
+                          "createdAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "lastActivityAt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer"
+                          },
+                          "latestTurnOrigin": {
+                            "anyOf": [
+                              {
+                                "oneOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "user",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "session",
+                                        "type": "string"
+                                      },
+                                      "sessionId": {
+                                        "maxLength": 1024,
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "sessionId"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "automationName": {
+                                        "anyOf": [
+                                          {
+                                            "maxLength": 512,
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "automationRunId": {
+                                        "maxLength": 1024,
+                                        "type": "string"
+                                      },
+                                      "kind": {
+                                        "const": "automation",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "automationRunId",
+                                      "automationName"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "kind": {
+                                        "const": "volli",
+                                        "type": "string"
+                                      },
+                                      "reason": {
+                                        "enum": [
+                                          "watch-notice",
+                                          "subagent-notice",
+                                          "relaunch-recovery",
+                                          "scheduled-resume",
+                                          "supervision",
+                                          "browser-notice",
+                                          "shell-notice",
+                                          "worktree-notice",
+                                          "auto-title"
+                                        ],
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "reason"
+                                    ],
+                                    "type": "object"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "live": {
+                            "type": "boolean"
+                          },
+                          "model": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "modelId": {
+                                    "maxLength": 256,
+                                    "type": "string"
+                                  },
+                                  "providerId": {
+                                    "maxLength": 256,
+                                    "type": "string"
+                                  },
+                                  "reasoningLevel": {
+                                    "enum": [
+                                      "off",
+                                      "minimal",
+                                      "low",
+                                      "medium",
+                                      "high",
+                                      "xhigh",
+                                      "max"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "providerId",
+                                  "modelId",
+                                  "reasoningLevel"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outcome": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "completed",
+                                  "interrupted",
+                                  "failed"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "parentSessionId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "projectId": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "resumedAfterStop": {
+                            "type": "boolean"
+                          },
+                          "role": {
+                            "enum": [
+                              "project",
+                              "ticket",
+                              "subagent"
+                            ],
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "maxLength": 1024,
+                            "type": "string"
+                          },
+                          "ticketId": {
+                            "anyOf": [
+                              {
+                                "maxLength": 1024,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "title": {
+                            "maxLength": 512,
+                            "type": "string"
+                          },
+                          "waitingOn": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "question",
+                                  "permission",
+                                  "auth"
+                                ],
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sessionId",
+                          "title",
+                          "projectId",
+                          "ticketId",
+                          "createdAt",
+                          "adapterId",
+                          "live",
+                          "activity",
+                          "waitingOn",
+                          "outcome",
+                          "lastActivityAt",
+                          "bornTicketless",
+                          "role",
+                          "parentSessionId",
+                          "model"
+                        ],
+                        "type": "object"
+                      },
+                      "usage": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "cacheReadTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cacheWriteTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "cachedInputShare": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "costBasis": {
+                            "enum": [
+                              "provider-reported",
+                              "catalog-estimate",
+                              "unavailable",
+                              "mixed"
+                            ],
+                            "type": "string"
+                          },
+                          "costCoverage": {
+                            "enum": [
+                              "complete",
+                              "partial",
+                              "unavailable"
+                            ],
+                            "type": "string"
+                          },
+                          "inputTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "knownCostUsd": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outputTokens": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "pricedRequestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "requestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "tokenRequestCount": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "requestCount",
+                          "tokenRequestCount",
+                          "pricedRequestCount",
+                          "inputTokens",
+                          "outputTokens",
+                          "cacheReadTokens",
+                          "cacheWriteTokens",
+                          "knownCostUsd",
+                          "costCoverage",
+                          "costBasis",
+                          "cachedInputShare"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "record",
+                      "usage",
+                      "provenance"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              "maxItems": 500,
+              "type": "array"
+            }
+          },
+          "required": [
+            "sessions",
+            "omitted"
           ],
           "type": "object"
         },

@@ -1366,8 +1366,24 @@ describe("the host protocol listener (VC-663)", () => {
           "board.write",
           "sign-ins",
           "auth.callback",
+          "sessions.listing",
         ],
       });
+      // The listing rows a remote rail paints (VC-713): full ids, the same
+      // row the desktop's own listing builds.
+      const listing = await trpc.session.listing.query({ projectId: WORKSPACE });
+      expect(listing).toMatchObject({
+        omitted: 0,
+        sessions: [
+          {
+            kind: "chat",
+            record: { sessionId, title: "Over the wire", activity: "idle", live: false },
+          },
+        ],
+      });
+      expect(
+        await expectHostError(trpc.session.listingForTicket.query({ ticketId: "no-such-ticket" })),
+      ).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
       // The socket's own handler, scoped to this Workspace.
       const listed = await trpc.session.list.query({ projectId: WORKSPACE, all: true });
       expect(listed.sessions.map((row) => row["id"])).toEqual([sessionId.slice(0, 8)]);
@@ -1421,6 +1437,7 @@ describe("the host protocol listener (VC-663)", () => {
       const reached = faults.admissions.filter(({ door }) => door === "router");
       expect(reached.map(({ key }) => key)).toEqual(
         expect.arrayContaining([
+          "session.listing",
           "session.list",
           "session.show",
           "session.projection",

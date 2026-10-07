@@ -76,6 +76,8 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "board.write",
   "sign-ins",
   "auth.callback",
+  // The Session listing rows a remote rail paints (VC-713).
+  "sessions.listing",
 ];
 
 const MIB = 1024 * 1024;
