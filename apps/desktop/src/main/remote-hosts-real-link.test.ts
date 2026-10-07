@@ -4,8 +4,9 @@
  * production engine (`createRemoteHosts`) with desktop main's own
  * `REMOTE_HOST_LINK_FEATURES` and VC-670's real `createHostLink`, reaching a
  * real host protocol listener on a free loopback port through a tunnel that is
- * simply up. `openWorkspace` is the only thing that opens a link, and the link
- * it opens is granted every feature the later tickets use, which a host from
+ * simply up. This fixture isolates Workspace links (no HOST factory); dedicated
+ * HOST lifetime/routing has separate VC-722 acceptance tests. `openWorkspace`
+ * opens a link granted every feature the later tickets use, which a host from
  * before them grants less of. A Workspace the host does not have is refused.
  *
  * Nothing real runs on a box: the SSH runner, the key store and the registry
@@ -168,7 +169,7 @@ describe("opening a remote project over a real link", () => {
   it("opens the link only on openWorkspace, granted every widened feature, and serves one", async () => {
     const listener = await host(TODAYS_HOST);
     const engine = await engineFor(listener.url);
-    // Added, with no project open: no link, so no sign-in can borrow one.
+    // In this Workspace-only fixture no project is open, so no link exists.
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(listener.connections).toBe(0);
     expect(engine.signInLink(HOST_ID)).toBeNull();
