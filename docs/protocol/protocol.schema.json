@@ -10575,7 +10575,8 @@
                     "benign",
                     "failure"
                   ],
-                  "type": "string"
+                  "type": "string",
+                  "x-volli-open-enum": true
                 },
                 {
                   "type": "null"
@@ -11544,7 +11545,8 @@
                     "benign",
                     "failure"
                   ],
-                  "type": "string"
+                  "type": "string",
+                  "x-volli-open-enum": true
                 },
                 {
                   "type": "null"
@@ -12016,7 +12018,8 @@
                     "benign",
                     "failure"
                   ],
-                  "type": "string"
+                  "type": "string",
+                  "x-volli-open-enum": true
                 },
                 {
                   "type": "null"
