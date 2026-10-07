@@ -4,7 +4,7 @@
 // pi-ai has no in-app fake. This server is the seam instead: it speaks enough
 // of the OpenAI **Responses** API (streaming SSE, plus the non-streaming JSON
 // shape) for pi-ai's built-in `azure-openai-responses` provider to complete a
-// text turn, and it binds 127.0.0.1 only.
+// text or function-tool turn, and it binds 127.0.0.1 only.
 //
 // Why the Azure route (and not `openai`, `openrouter`, ...):
 //   • it is the one built-in chat provider whose endpoint is configured purely
@@ -33,8 +33,13 @@
 //   • `[plan]`          → a small markdown plan body
 //   • `script`          → a function `(turn) => reply | undefined` or an array of
 //                         replies consumed one per turn; a reply is a string or
-//                         `{ text?, delayMs?, status?, error? }`. Undefined /
-//                         exhausted falls back to the default behaviour.
+//                         `{ text?, toolCalls?, delayMs?, status?, error? }`.
+//                         toolCalls is an array of { name, arguments } (an
+//                         object or JSON string); without text, a nonempty
+//                         toolCalls reply emits only function calls. Scripts
+//                         can inspect turn.body.input for function_call_output
+//                         on follow-up turns. Undefined / exhausted falls back
+//                         to the default behaviour.
 // A request whose key is not the fake one gets HTTP 401.
 //
 // CLI: `node fake-provider.mjs [--port 0] [--host 127.0.0.1] [--delay 0]`
@@ -59,7 +64,8 @@ const SLOW_MARKER = /\[slow:(\d+)\]/i;
 const PLAN_MARKER = /\[plan\]/i;
 
 /**
- * @typedef {{ text?: string, delayMs?: number, status?: number, error?: string }} FakeReply
+ * @typedef {{ name: string, arguments: Record<string, unknown>|string }} FakeToolCall
+ * @typedef {{ text?: string, toolCalls?: FakeToolCall[], delayMs?: number, status?: number, error?: string }} FakeReply
  * @typedef {{ index: number, path: string, model: string|null, stream: boolean, text: string, body: any }} FakeTurn
  * @typedef {{
  *   at: number, method: string, path: string, model: string|null, stream: boolean|null,
@@ -227,21 +233,39 @@ export async function startFakeProvider(options = {}) {
       message: `msg_${randomUUID().replaceAll("-", "")}`,
     };
     const createdAt = Math.floor(Date.now() / 1000);
-    const usage = usageFor(body, reply.text);
-    const outputItem = {
-      id: ids.message,
-      type: "message",
+    const toolItems = (reply.toolCalls ?? []).map((call) => ({
+      id: `fc_${randomUUID().replaceAll("-", "")}`,
+      type: "function_call",
       status: "completed",
-      role: "assistant",
-      content: [{ type: "output_text", text: reply.text, annotations: [] }],
-    };
-    const responseObject = (status, output) => ({
+      call_id: `call_${randomUUID().replaceAll("-", "")}`,
+      name: call.name,
+      arguments:
+        typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments),
+    }));
+    const output = [];
+    // No synthetic echo/message on a tool-only turn; keep the old empty-text
+    // message behaviour for replies without tools.
+    if (reply.text.length > 0 || toolItems.length === 0) {
+      output.push({
+        id: ids.message,
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [{ type: "output_text", text: reply.text, annotations: [] }],
+      });
+    }
+    output.push(...toolItems);
+    const usage = usageFor(
+      body,
+      reply.text + toolItems.map((item) => item.name + item.arguments).join(""),
+    );
+    const responseObject = (status, items) => ({
       id: ids.response,
       object: "response",
       created_at: createdAt,
       status,
       model: model ?? modelId,
-      output,
+      output: items,
       usage: status === "completed" ? usage : null,
       error: null,
       incomplete_details: null,
@@ -251,7 +275,7 @@ export async function startFakeProvider(options = {}) {
       await sleep(reply.delayMs, () => closed);
       if (closed) return;
       sendJson(res, 200, {
-        ...responseObject("completed", [outputItem]),
+        ...responseObject("completed", output),
         output_text: reply.text,
       });
       return;
@@ -275,46 +299,43 @@ export async function startFakeProvider(options = {}) {
     // The hold happens with the stream open, so the turn reads as running.
     await sleep(reply.delayMs, () => closed);
     if (closed) return;
-    send("response.output_item.added", {
-      output_index: 0,
-      item: {
-        id: ids.message,
-        type: "message",
-        status: "in_progress",
-        role: "assistant",
-        content: [],
-      },
-    });
-    send("response.content_part.added", {
-      item_id: ids.message,
-      output_index: 0,
-      content_index: 0,
-      part: { type: "output_text", text: "", annotations: [] },
-    });
-    for (const delta of chunk(reply.text)) {
-      send("response.output_text.delta", {
-        item_id: ids.message,
-        output_index: 0,
-        content_index: 0,
-        delta,
-      });
-      await sleep(chunkDelayMs, () => closed);
-      if (closed) return;
+    for (const [outputIndex, item] of output.entries()) {
+      const address = { item_id: item.id, output_index: outputIndex };
+      if (item.type === "function_call") {
+        send("response.output_item.added", {
+          output_index: outputIndex,
+          item: { ...item, status: "in_progress", arguments: "" },
+        });
+        for (const delta of chunk(item.arguments)) {
+          send("response.function_call_arguments.delta", { ...address, delta });
+          await sleep(chunkDelayMs, () => closed);
+          if (closed) return;
+        }
+        send("response.function_call_arguments.done", { ...address, arguments: item.arguments });
+      } else {
+        send("response.output_item.added", {
+          output_index: outputIndex,
+          item: { ...item, status: "in_progress", content: [] },
+        });
+        const contentAddress = { ...address, content_index: 0 };
+        send("response.content_part.added", {
+          ...contentAddress,
+          part: { type: "output_text", text: "", annotations: [] },
+        });
+        for (const delta of chunk(reply.text)) {
+          send("response.output_text.delta", { ...contentAddress, delta });
+          await sleep(chunkDelayMs, () => closed);
+          if (closed) return;
+        }
+        send("response.output_text.done", { ...contentAddress, text: reply.text });
+        send("response.content_part.done", {
+          ...contentAddress,
+          part: { type: "output_text", text: reply.text, annotations: [] },
+        });
+      }
+      send("response.output_item.done", { output_index: outputIndex, item });
     }
-    send("response.output_text.done", {
-      item_id: ids.message,
-      output_index: 0,
-      content_index: 0,
-      text: reply.text,
-    });
-    send("response.content_part.done", {
-      item_id: ids.message,
-      output_index: 0,
-      content_index: 0,
-      part: { type: "output_text", text: reply.text, annotations: [] },
-    });
-    send("response.output_item.done", { output_index: 0, item: outputItem });
-    send("response.completed", { response: responseObject("completed", [outputItem]) });
+    send("response.completed", { response: responseObject("completed", output) });
     res.end();
   }
 
@@ -430,7 +451,8 @@ function normalizeReply(raw, text, defaultDelayMs) {
     return { text: defaultReplyText(text), delayMs: fallbackDelay };
   if (typeof raw === "string") return { text: raw, delayMs: fallbackDelay };
   return {
-    text: raw.text ?? defaultReplyText(text),
+    text: raw.text ?? (raw.toolCalls?.length > 0 ? "" : defaultReplyText(text)),
+    ...(raw.toolCalls === undefined ? {} : { toolCalls: raw.toolCalls }),
     delayMs: raw.delayMs ?? fallbackDelay,
     ...(raw.status === undefined ? {} : { status: raw.status }),
     ...(raw.error === undefined ? {} : { error: raw.error }),
