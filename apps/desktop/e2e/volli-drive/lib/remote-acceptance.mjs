@@ -371,8 +371,8 @@ export async function prepareRemoteAcceptance(layout, provider) {
           }
         }
       },
-      // Deployment precondition, NOT an acceptance action: a host has a
-      // default model configured by its operator. v1 hides the remote picker.
+      // Deployment precondition only: route Azure to the fake provider.
+      // Step 4 stores the key and chooses the default through production UI.
       async configureModel() {
         assertAcceptanceRunner();
         const plist = join(home, "Library/LaunchAgents/com.volli.hostd.plist");
@@ -405,21 +405,6 @@ export async function prepareRemoteAcceptance(layout, provider) {
         // `start` is idempotent. Cleanly stop the freshly installed daemon so
         // its next production start re-reads the operator's environment.
         await stopHostd();
-        const db = join(home, "Library/Application Support/volli-hostd/volli.db");
-        const defaults = JSON.stringify({ global: provider.pin, ticket: provider.pin }).replaceAll(
-          "'",
-          "''",
-        );
-        // Same persisted default as volli-drive's standard seedDefaultModel.
-        // No tickets, projects, Sessions, answers or logs are seeded here.
-        await exec(
-          "sqlite3",
-          [
-            db,
-            `PRAGMA busy_timeout=10000; INSERT INTO app_state(key,value,updated_at) VALUES('volli:model-access-defaults','${defaults}',${Date.now()}) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at;`,
-          ],
-          { timeout: 15_000 },
-        );
         daemonIdentity = null;
         await runHostd("start --user");
         await captureDaemon();
