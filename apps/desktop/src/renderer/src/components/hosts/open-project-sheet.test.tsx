@@ -356,7 +356,7 @@ describe("Open a project on <host>…", () => {
       return created.promise;
     };
     await openSheet("new");
-    useRemoteHostsStore.getState().setHosts([HOST, OTHER]);
+    await act(async () => useRemoteHostsStore.getState().setHosts([HOST, OTHER]));
     await type("Git URL or folder on hetzner-1", "/srv/volli/acme");
     await click(sheet(), "Create and open");
     await act(change);
@@ -374,7 +374,7 @@ describe("Open a project on <host>…", () => {
     const opened = Promise.withResolvers<null>();
     api.openWorkspace = async () => opened.promise;
     await openSheet();
-    useRemoteHostsStore.getState().setHosts([HOST, OTHER]);
+    await act(async () => useRemoteHostsStore.getState().setHosts([HOST, OTHER]));
     await click(sheet(), "Open Acme");
     await act(async () => useRemoteHostsStore.getState().openProjectSheet(OTHER.id));
     await settle();
@@ -430,6 +430,19 @@ describe("projects before a Workspace on a modern HOST connection", () => {
       name: "A",
     });
     expect(api.calls).toEqual([["openWorkspace", HOST.id, ACME.id]]);
+  });
+
+  it("requires an absolute folder path on modern hosts without SSH shell expansion", async () => {
+    const list = vi.fn(async () => ({ workspaces: [], omitted: 0 }));
+    const create = vi.fn();
+    setHostWorkspacesApi(() => ({ list, create }));
+    await openSheet("new", MODERN);
+    await type("Git URL or folder on hetzner-1", "~/acme");
+    expect(sheet().textContent).toContain("A folder on hetzner-1 is a full path");
+    expect(button("Create and open")?.disabled).toBe(true);
+    await act(async () => sheet().querySelector("form")!.requestSubmit());
+    expect(create).not.toHaveBeenCalled();
+    expect(api.calls).toEqual([]);
   });
 
   it("reuses a commandId on ambiguity/still-running, re-lists target-exists and creates a new id on edit", async () => {

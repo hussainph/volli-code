@@ -91,7 +91,13 @@ export type HostLinkState =
       readonly retryAt: number;
     }
   /** The host refused the handshake (4400/4401, or a welcome this client refused). Stays until {@link HostLink.reconnect}. */
-  | { readonly status: "refused"; readonly error: HostError; readonly closeCode: number | null }
+  | {
+      readonly status: "refused";
+      readonly error: HostError;
+      readonly closeCode: number | null;
+      /** Client-local evidence from a host handshake, never a wire error. */
+      readonly compatibility?: "host-scope-unsupported";
+    }
   /** The authority fence failed: the Workspace moved, or two hosts claim it. Stays until {@link HostLink.reconnect}. */
   | { readonly status: "fenced"; readonly error: HostError }
   /** The owner closed the link. Final. */
@@ -233,6 +239,8 @@ export interface HostLinkOptions {
   readonly verifyProof?: ValidateWelcomeOptions["verifyProof"];
   /** The platform's by default. */
   readonly WebSocket?: typeof WebSocket;
+  /** Shared admission budget, held until actual socket close (including retirement). */
+  readonly socketPool?: ClientSocketPool;
   readonly timing?: Partial<HostLinkTiming>;
   /** Backoff jitter, in [0, 1). */
   readonly random?: () => number;
@@ -277,10 +285,47 @@ const TRANSFORMER = { input: IDENTITY, output: IDENTITY };
  */
 const TRPC_RETRY_MS = 1_000;
 
-type Outcome =
-  | { readonly status: "unreachable"; readonly error: HostError; readonly closeCode: number | null }
-  | { readonly status: "refused"; readonly error: HostError; readonly closeCode: number | null }
-  | { readonly status: "fenced"; readonly error: HostError };
+type Outcome = ReturnType<typeof classifyHandshakeFailure>;
+
+/** A socket permit is released only by physical close, not by link retirement. */
+export interface ClientSocketPool {
+  acquire(signal: AbortSignal): Promise<(() => void) | null>;
+}
+
+/** FIFO admission shared by all host, Workspace and Add transports in one engine. */
+export function createClientSocketPool(limit: number): ClientSocketPool {
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid client socket limit");
+  let active = 0;
+  const waiting = new Set<() => void>();
+  return {
+    acquire(signal) {
+      if (signal.aborted) return Promise.resolve(null);
+      return new Promise((resolve) => {
+        const cancel = (): void => {
+          waiting.delete(grant);
+          resolve(null);
+        };
+        const grant = (): void => {
+          waiting.delete(grant);
+          signal.removeEventListener("abort", cancel);
+          active += 1;
+          let released = false;
+          resolve(() => {
+            if (released) return;
+            released = true;
+            active -= 1;
+            waiting.values().next().value?.();
+          });
+        };
+        if (active < limit) grant();
+        else {
+          waiting.add(grant);
+          signal.addEventListener("abort", cancel, { once: true });
+        }
+      });
+    },
+  };
+}
 
 /** One socket, one `wsClient`, one hello: everything a connection holds dies with it. */
 interface Connection<Hello = HostConnectionHello> {
@@ -289,6 +334,8 @@ interface Connection<Hello = HostConnectionHello> {
   readonly trace: HostTrace;
   /** Each request id's trace, until its frame is sent. */
   readonly traces: Map<number, HostTrace>;
+  /** Admission returned without a socket if tRPC is retired before construction. */
+  readonly releaseSocket: () => void;
   client: TRPCWebSocketClient | null;
   socket: WebSocket | null;
   phase: "handshake" | "ready";
@@ -354,7 +401,11 @@ export interface ClientLinkHandshake<Hello, Welcome> {
   readonly welcomePath: string;
   readonly validate: (welcome: unknown, hello: Hello) => WelcomeValidation<Welcome>;
   readonly accepted?: (welcome: Welcome) => void;
-  readonly isRefusal?: (error: HostError) => boolean;
+  readonly scope?: "workspace" | "host";
+  /** An N-1 listener does not know the modern bootstrap path. Read its known
+   * bootstrap to obtain the actual handshake refusal; NOT_FOUND alone is
+   * never compatibility evidence. */
+  readonly refusalProbePath?: string;
 }
 
 export function createClientLink<
@@ -372,6 +423,9 @@ export function createClientLink<
   }
   const Socket = options.WebSocket ?? globalThis.WebSocket;
   const random = options.random ?? Math.random;
+  // Even without a shared budget, one link never overlaps its retiring socket.
+  const localSockets = createClientSocketPool(1);
+  let admission: AbortController | undefined;
   const log = options.log;
   /** A span of the link's flow, or a fresh trace: what a frame with no trace of its own carries. */
   const traceFor = (given?: Pick<HostTrace, "traceId">): HostTrace => {
@@ -450,11 +504,29 @@ export function createClientLink<
     clearTimeout(retryTimer);
     clearTimeout(handshakeTimer);
     const token = ++attemptToken;
+    admission?.abort();
+    admission = new AbortController();
+    const signal = admission.signal;
     attemptTrace = traceFor();
-    // Armed before anyone hears `connecting`, so a listener's close clears it.
+    if (!setState({ status: "connecting", attempt: failures })) return;
+    // Admission waits are not handshake failures. A black-holed closing
+    // socket still counts: never free its permit on a timer. Ask for the
+    // credential only after admission so it cannot expire while waiting.
+    const releaseLocal = await localSockets.acquire(signal);
+    if (releaseLocal === null) return;
+    const releaseShared =
+      options.socketPool === undefined ? undefined : await options.socketPool.acquire(signal);
+    const release = (): void => {
+      releaseLocal();
+      releaseShared?.();
+    };
+    if (releaseShared === null || token !== attemptToken) {
+      release();
+      return;
+    }
+    // Cancellation returns the reservation until a Connection takes it.
+    signal.addEventListener("abort", release, { once: true });
     handshakeTimer = setTimeout(() => {
-      /* v8 ignore next -- every transition clears this timer; the token holds if one ever does not. */
-      if (token !== attemptToken) return;
       fail(
         connection,
         unreachable(
@@ -462,7 +534,6 @@ export function createClientLink<
         ),
       );
     }, timing.handshakeTimeoutMs);
-    if (!setState({ status: "connecting", attempt: failures })) return;
     let credential: string;
     try {
       credential = await options.credential();
@@ -473,15 +544,16 @@ export function createClientLink<
       return;
     }
     if (token !== attemptToken) return;
-    const hello = handshake.buildHello(credential);
-    open(hello);
+    signal.removeEventListener("abort", release);
+    open(handshake.buildHello(credential), release);
   }
 
-  function open(hello: Hello): void {
+  function open(hello: Hello, releaseSocket: () => void): void {
     const current: Connection<Hello> = {
       hello,
       trace: attemptTrace,
       traces: new Map(),
+      releaseSocket,
       client: null,
       socket: null,
       phase: "handshake",
@@ -503,7 +575,15 @@ export function createClientLink<
           fail(current, unreachable("The connection to the host tried to open a second socket"));
           throw new Error("A host link connection opens one socket, once");
         }
-        const socket = new target(...args);
+        let socket: WebSocket;
+        try {
+          socket = new target(...args);
+        } catch (error) {
+          releaseSocket();
+          fail(current, unreachable(`The connection to the host failed: ${messageOf(error)}`));
+          throw error;
+        }
+        socket.addEventListener("close", releaseSocket, { once: true });
         current.socket = socket;
         traceSends(current, socket);
         watch(current, socket);
@@ -520,10 +600,14 @@ export function createClientLink<
       keepAlive: { enabled: false },
       retryDelayMs: () => TRPC_RETRY_MS,
     });
+    readWelcome(current, handshake.welcomePath, true);
+  }
+
+  function readWelcome(current: Connection<Hello>, path: string, mayProbe: boolean): void {
     const welcome = request(
       current,
       "query",
-      handshake.welcomePath,
+      path,
       undefined,
       nextHostSpan(current.trace),
     ).subscribe({
@@ -538,12 +622,16 @@ export function createClientLink<
         // A transport failure here means the socket is going: its close
         // event (or the handshake timeout) is what classifies the attempt.
         if (refusal === null) return;
-        fail(
-          current,
-          handshake.isRefusal?.(refusal)
-            ? { status: "refused", error: refusal, closeCode: null }
-            : refusalOutcome(refusal, null),
-        );
+        if (
+          mayProbe &&
+          handshake.refusalProbePath !== undefined &&
+          refusal.code === "NOT_FOUND" &&
+          refusal.reason === undefined
+        ) {
+          readWelcome(current, handshake.refusalProbePath, false);
+          return;
+        }
+        fail(current, classifyHandshakeFailure(refusal, null, handshake.scope ?? "workspace"));
       },
     });
     // Retiring stops waiting for it, so a dead host's socket closes now.
@@ -581,6 +669,7 @@ export function createClientLink<
     clearTimeout(handshakeTimer);
     connection = null;
     const token = ++attemptToken;
+    admission?.abort();
     if (outcome.status === "unreachable") {
       failures += 1;
       const delay = hostLinkBackoffDelay(failures, timing, random);
@@ -618,7 +707,8 @@ export function createClientLink<
     // Never rejects: it settles what it held and closes.
     void current.client?.close();
     // A no-op on a socket already closing; a dead host's socket stops waiting on it.
-    current.socket?.close();
+    if (current.socket === null) current.releaseSocket();
+    else current.socket.close();
   }
 
   /** Ends every stream with `error`, until a handler moves the link on (its reconnect keeps the rest). */
@@ -658,7 +748,10 @@ export function createClientLink<
       fail(current, unreachable("The connection to the host failed")),
     );
     socket.addEventListener("close", (event) =>
-      fail(current, closeOutcome(event.code, event.reason, current.phase)),
+      fail(
+        current,
+        closeOutcome(event.code, event.reason, current.phase, handshake.scope ?? "workspace"),
+      ),
     );
   }
 
@@ -923,6 +1016,7 @@ export function createClientLink<
     close() {
       if (state.status === "closed") return;
       attemptToken += 1;
+      admission?.abort();
       clearTimeout(retryTimer);
       clearTimeout(handshakeTimer);
       if (connection !== null) retire(connection);
@@ -982,7 +1076,12 @@ function refusalOutcome(error: HostError, closeCode: number | null): Outcome {
 }
 
 /** A close, read by its code and reason text: refusals during the handshake, everything else a drop. */
-function closeOutcome(code: number, reason: string, phase: Connection["phase"]): Outcome {
+function closeOutcome(
+  code: number,
+  reason: string,
+  phase: Connection["phase"],
+  scope: "workspace" | "host",
+): Outcome {
   const refusal = code === HOST_PROTOCOL_CLOSE_CODES.handshakeRefused;
   const credential = code === HOST_PROTOCOL_CLOSE_CODES.credentialInvalid;
   if (phase === "handshake" && (refusal || credential)) {
@@ -994,7 +1093,12 @@ function closeOutcome(code: number, reason: string, phase: Connection["phase"]):
     }
     const error =
       named === null ? { code: "BAD_REQUEST" as const, message } : hostError(named, message);
-    return { status: "refused", error, closeCode: code };
+    return {
+      ...classifyHandshakeFailure(error, code, scope),
+      // A 4400/4401 close is terminal even when its reason is unknown.
+      status: "refused",
+      closeCode: code,
+    };
   }
   if (credential) {
     // A grant that ended mid-connection: the next handshake asks the

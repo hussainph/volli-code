@@ -96,6 +96,11 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
     );
     expect(sourceProblem({ kind: "path", path: "/srv/acme" }, "box")).toBeNull();
     expect(sourceProblem({ kind: "path", path: "~/acme" }, "box")).toBeNull();
+    // HOST path sources are absolute paths, not shell-expanded SSH arguments.
+    expect(sourceProblem({ kind: "path", path: "~/acme" }, "box", true)).toBe(
+      "A folder on box is a full path, like /srv/volli/app.",
+    );
+    expect(sourceProblem({ kind: "path", path: "/home/me/acme" }, "box", true)).toBeNull();
     expect(sourceProblem({ kind: "git", gitUrl: "file:///x" }, "box")).toBeNull();
     const plain =
       "Use the repository's plain URL: a token goes in Sign-ins on box, not in the URL.";

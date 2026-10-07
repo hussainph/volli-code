@@ -64,7 +64,6 @@ import {
   useRemoteHostsStore,
   remoteHostOf,
   readdHostToUpdate,
-  useRemoteHostsStore,
   remoteHosts,
   setRemoteHostsApi,
 } from "./remote-hosts";

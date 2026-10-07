@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { initTRPC, TRPCError, tracked } from "@trpc/server";
 import { applyWSSHandler } from "@trpc/server/adapters/ws";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
@@ -241,7 +242,10 @@ describe("host-scope link shares transport without Workspace wire fields", () =>
         f.state.error = hostError("operation-unavailable", "No host bootstrap");
       if (mode === "credentials") f.auth.enrolled.delete(DEVICE);
       const link = f.create();
-      await until(link, "refused");
+      await until(link, mode === "missing" || mode === "unavailable" ? "unreachable" : "refused");
+      if (mode === "older")
+        expect(link.getState()).toHaveProperty("compatibility", "host-scope-unsupported");
+      else expect(link.getState()).not.toHaveProperty("compatibility");
       expect(link.getState()).toMatchObject({
         error:
           mode === "missing"
@@ -259,6 +263,78 @@ describe("host-scope link shares transport without Workspace wire fields", () =>
       });
     },
   );
+
+  it("never probes or downgrades a named Workspace refusal carrying NOT_FOUND", async () => {
+    const f = await host();
+    f.state.error = hostError("workspace-unknown", "No Workspace");
+    const paths: string[] = [];
+    f.server.on("connection", (socket) =>
+      socket.on("message", (data) => {
+        const request = JSON.parse(data.toString()) as { params?: { path: string } };
+        if (request.params !== undefined) paths.push(request.params.path);
+      }),
+    );
+    const link = f.create();
+    await until(link, "refused");
+    expect(link.getState()).toMatchObject({ error: { reason: "workspace-unknown" } });
+    expect(link.getState()).not.toHaveProperty("compatibility");
+    expect(paths).toEqual(["protocol.hostWelcome"]);
+  });
+
+  it("tags the frozen actual pre-VC-722 refusal through the production transport", async () => {
+    const fixture = JSON.parse(
+      readFileSync(new URL("../../fixtures/pre-vc722-host-refusal.json", import.meta.url), "utf8"),
+    ) as {
+      received: { id: number; error: unknown }[];
+      close: { code: number; reason: string };
+    };
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 5385 });
+    await once(server, "listening");
+    const paths: string[] = [];
+    server.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const request = JSON.parse(data.toString()) as { id?: number; params?: { path: string } };
+        if (request.id === undefined) return;
+        paths.push(request.params!.path);
+        if (request.params!.path === "protocol.hostWelcome") {
+          // The frozen old router has no HOST bootstrap procedure. Its
+          // NOT_FOUND is not the hello refusal and must not retire/downgrade.
+          socket.send(
+            JSON.stringify({
+              id: request.id,
+              error: {
+                code: -32004,
+                message: "No procedure found on path protocol.hostWelcome",
+                data: { code: "NOT_FOUND", httpStatus: 404, path: "protocol.hostWelcome" },
+              },
+            }),
+          );
+          return;
+        }
+        socket.send(JSON.stringify({ ...fixture.received[0], id: request.id }));
+        socket.close(fixture.close.code, fixture.close.reason);
+      });
+    });
+    cleanups.push(async () => {
+      for (const socket of server.clients) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    const link = createHostScopeLink({
+      url: "ws://127.0.0.1:5385",
+      hostId: HOST,
+      features: [],
+      client: { kind: "desktop", version: "test" },
+      credential: () => "fixture",
+      WebSocket: NodeWebSocket as unknown as typeof WebSocket,
+    });
+    cleanups.push(() => link.close());
+    await until(link, "refused");
+    expect(paths).toEqual(["protocol.hostWelcome", "protocol.welcome"]);
+    expect(link.getState()).toMatchObject({
+      compatibility: "host-scope-unsupported",
+      error: { code: "BAD_REQUEST", reason: "hello-invalid" },
+    });
+  });
 
   it("drops late credentials and welcomes after close, and reconnects with new signed statements", async () => {
     const f = await host();

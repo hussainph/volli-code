@@ -175,7 +175,7 @@ describe("opening a remote project over a real link", () => {
 
     engine.openWorkspace(HOST_ID, WORKSPACE);
     await until(() => projectLink(engine, WORKSPACE) === "ready", "the Workspace link");
-    const link = engine.signInLink(HOST_ID);
+    const link = engine.workspaceLink(WORKSPACE);
     expect(link).not.toBeNull();
     const state = link!.getState();
     if (state.status !== "ready") throw new Error("not ready");
@@ -197,12 +197,12 @@ describe("opening a remote project over a real link", () => {
     const engine = await engineFor(listener.url);
     engine.openWorkspace(HOST_ID, WORKSPACE);
     await until(() => projectLink(engine, WORKSPACE) === "ready", "the Workspace link");
-    const state = engine.signInLink(HOST_ID)!.getState();
+    const state = engine.workspaceLink(WORKSPACE)!.getState();
     if (state.status !== "ready") throw new Error("not ready");
     expect([...state.welcome.features].toSorted()).toEqual(
       ["auth.callback", "sessions", "sign-ins"].toSorted(),
     );
-    await expect(engine.signInLink(HOST_ID)!.query("logs.tail", {})).rejects.toBeTruthy();
+    await expect(engine.workspaceLink(WORKSPACE)!.query("logs.tail", {})).rejects.toBeTruthy();
   });
 
   it("is refused for a Workspace the host does not have", async () => {

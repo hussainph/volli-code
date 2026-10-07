@@ -53,7 +53,7 @@
  * A relayed call carries the trace of the window's request (VC-699), so the
  * remote host's log lines for it carry the window's trace.
  */
-import type { HostLinkRelayPort } from "@volli/host-core/handlers";
+import type { HostLinkRelayPort, HostScopeRelayPort } from "@volli/host-core/handlers";
 import { currentTrace } from "@volli/host-core/log";
 import {
   HOST_FEATURE_OPERATIONS,
@@ -67,6 +67,8 @@ import {
   type HostLink,
   type HostLinkCallOptions,
   type HostLinkState,
+  type HostScopeLink,
+  type HostScopeLinkState,
 } from "@volli/host-protocol/client-link";
 import {
   HOST_LINK_RELAY_STREAMS_PER_LINK,
@@ -91,6 +93,22 @@ export function engineWorkspaceLinks(engine: {
   return {
     workspaceLink: (workspaceId) => engine.workspaceLink(workspaceId),
     serves: (workspaceId) => Object.hasOwn(engine.snapshot().projects, workspaceId),
+  };
+}
+
+export interface HostScopeLinkSource {
+  hostScopeLink(hostId: string): HostScopeLink | null;
+  serves(hostId: string): boolean;
+}
+
+/** The engine's dedicated HOST link and enrolled host identities, not its projects. */
+export function engineHostScopeLinks(engine: {
+  hostScopeLink(hostId: string): HostScopeLink | null;
+  snapshot(): { readonly hosts: readonly { readonly id: string }[] };
+}): HostScopeLinkSource {
+  return {
+    hostScopeLink: (hostId) => engine.hostScopeLink(hostId),
+    serves: (hostId) => engine.snapshot().hosts.some((host) => host.id === hostId),
   };
 }
 
@@ -148,8 +166,8 @@ function wire(error: HostError): HostLinkRelayError {
 }
 
 /** Why a link that left `ready` has no connection now: its own words, where it has some. */
-function lossOf(state: HostLinkState): HostError {
-  const said = "error" in state ? state.error.message : RELAY_UNREACHABLE;
+function lossOf(state: HostLinkState | HostScopeLinkState, unreachable: string): HostError {
+  const said = "error" in state ? state.error.message : unreachable;
   return hostError("host-unreachable", said);
 }
 
@@ -162,13 +180,58 @@ export function createHostLinkRelay(
   source: WorkspaceLinkSource,
   options: HostLinkRelayOptions = {},
 ): HostLinkRelay {
+  return createRelay(
+    { serves: (id) => source.serves(id), link: (id) => source.workspaceLink(id) },
+    "workspace",
+    options,
+  );
+}
+
+export interface HostScopeRelay extends HostScopeRelayPort {
+  subscribe(...args: Parameters<HostScopeRelayPort["subscribe"]>): () => void;
+  open(hostId?: string): number;
+}
+
+/** The same bounded, traced stream mechanics on a host-identity link. */
+export function createHostScopeRelay(
+  source: HostScopeLinkSource,
+  options: HostLinkRelayOptions = {},
+): HostScopeRelay {
+  const relay = createRelay(
+    { serves: (id) => source.serves(id), link: (id) => source.hostScopeLink(id) },
+    "host",
+    options,
+  );
+  return {
+    query: relay.query,
+    mutate: relay.mutate,
+    open: relay.open,
+    subscribe: (hostId, path, input, lastEventId, listener) =>
+      relay.subscribe(
+        hostId,
+        path,
+        input,
+        listener,
+        lastEventId === undefined ? {} : { lastEventId },
+      ),
+  };
+}
+
+type RelayLink = HostLink | HostScopeLink;
+function createRelay(
+  source: { serves(id: string): boolean; link(id: string): RelayLink | null },
+  scope: "host" | "workspace",
+  options: HostLinkRelayOptions,
+): HostLinkRelay {
+  const unreachable = scope === "host" ? "The host can’t be reached right now." : RELAY_UNREACHABLE;
+  const description = scope === "host" ? "this host’s connection" : "this project’s link";
   const trace = options.trace ?? (() => currentTrace());
   const cap = options.subscriptionCap ?? HOST_LINK_RELAY_SUBSCRIPTION_CAP;
   const perLink = options.streamsPerLink ?? HOST_LINK_RELAY_STREAMS_PER_LINK;
   /** Every relayed subscription not yet ended: each one's stop. */
   const open = new Set<() => void>();
   /** The streams on each link, in the order they opened. */
-  const onLink = new Map<HostLink, Stream[]>();
+  const onLink = new Map<RelayLink, Stream[]>();
 
   interface Stream {
     readonly workspaceId: string;
@@ -178,7 +241,7 @@ export function createHostLinkRelay(
   }
 
   /** Takes a slot on the link for a stream, or answers why it cannot have one. */
-  function admit(link: HostLink, stream: Stream): HostError | null {
+  function admit(link: RelayLink, stream: Stream): HostError | null {
     const held = onLink.get(link) ?? [];
     if (held.length >= perLink) {
       const newest = stream.background ? undefined : held.findLast((other) => other.background);
@@ -189,7 +252,7 @@ export function createHostLinkRelay(
     return null;
   }
 
-  function release(link: HostLink, stream: Stream): void {
+  function release(link: RelayLink, stream: Stream): void {
     const held = onLink.get(link)!.filter((other) => other !== stream);
     if (held.length === 0) onLink.delete(link);
     else onLink.set(link, held);
@@ -201,21 +264,28 @@ export function createHostLinkRelay(
   }
 
   /** The Workspace's ready link, if it may send `path`; otherwise the typed refusal, thrown. */
-  function linkFor(workspaceId: string, path: string): HostLink {
+  function linkFor(workspaceId: string, path: string): RelayLink {
     if (!source.serves(workspaceId)) {
-      throw refusal(hostError("workspace-unknown", RELAY_UNKNOWN_WORKSPACE));
-    }
-    const link = source.workspaceLink(workspaceId);
-    const state = link?.getState();
-    if (link === null || state?.status !== "ready") {
-      throw refusal(hostError("host-unreachable", RELAY_UNREACHABLE));
-    }
-    if (MAIN_OWNED_OPERATIONS.has(path) || !operationsGrantedBy(state.welcome.features).has(path)) {
       throw refusal(
         hostError(
-          "verb-refused",
-          `${path} is not among the operations this project’s link may send.`,
+          scope === "host" ? "host-unreachable" : "workspace-unknown",
+          scope === "host"
+            ? "No enrolled host on this Mac has that identity."
+            : RELAY_UNKNOWN_WORKSPACE,
         ),
+      );
+    }
+    const link = source.link(workspaceId);
+    const state = link?.getState();
+    if (link === null || state?.status !== "ready") {
+      throw refusal(hostError("host-unreachable", unreachable));
+    }
+    if (
+      MAIN_OWNED_OPERATIONS.has(path) ||
+      !operationsGrantedBy(state.welcome.features, scope).has(path)
+    ) {
+      throw refusal(
+        hostError("verb-refused", `${path} is not among the operations ${description} may send.`),
       );
     }
     return link;
@@ -232,7 +302,7 @@ export function createHostLinkRelay(
       linkFor(workspaceId, path).mutate(path, input, callOptions()),
     subscribe(workspaceId, path, input, listener, subscribeOptions = {}) {
       let ended = false;
-      let slot: { link: HostLink; stream: Stream } | null = null;
+      let slot: { link: RelayLink; stream: Stream } | null = null;
       let stopWatching: (() => void) | null = null;
       let subscription: { unsubscribe(): void } | null = null;
       const say = (event: HostLinkRelayEvent): void => {
@@ -264,7 +334,7 @@ export function createHostLinkRelay(
         });
         return () => {};
       }
-      let link: HostLink;
+      let link: RelayLink;
       try {
         link = linkFor(workspaceId, path);
       } catch (error) {
@@ -295,7 +365,8 @@ export function createHostLinkRelay(
       // The link keeps a stream across an outage, and ends it silently on
       // close: its state is the only word that the connection went.
       stopWatching = link.subscribeState((state) => {
-        if (state.status !== "ready") end({ kind: "lost", error: wire(lossOf(state)) });
+        if (state.status !== "ready")
+          end({ kind: "lost", error: wire(lossOf(state, unreachable)) });
       });
       subscription = link.subscribe(
         path,

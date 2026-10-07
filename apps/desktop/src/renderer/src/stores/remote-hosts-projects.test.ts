@@ -159,7 +159,14 @@ describe("HOST project catalog routing", () => {
 it("uses a typed HostRouter client over the dedicated HOST relay in production", async () => {
   const query = vi.fn(async () => ({ workspaces: [ROW], omitted: 0 }));
   const mutate = vi.fn(async () => ({ ok: true, workspace: ROW }));
-  vi.mocked(relayHostScope).mockReturnValue({ query, mutate, subscribe: vi.fn() });
+  vi.mocked(relayHostScope).mockImplementation((hostId) => ({
+    hostId,
+    getState: () => ({ status: "open" }),
+    subscribeState: () => () => {},
+    query,
+    mutate,
+    subscribe: vi.fn(),
+  }));
   const api = hostWorkspacesApi("host-a");
   expect(await api.list()).toEqual({ workspaces: [ROW], omitted: 0 });
   expect(await api.create(INPUT)).toEqual({ ok: true, workspace: ROW });

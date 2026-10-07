@@ -18,7 +18,14 @@
  *   through `hostSignIns.run`.
  */
 import type { RemoteSignInsPort } from "@volli/host-core/handlers";
-import type { HostLink, HostLinkState } from "@volli/host-protocol/client-link";
+import type {
+  HostLink,
+  HostLinkState,
+  HostScopeLink,
+  HostScopeLinkState,
+} from "@volli/host-protocol/client-link";
+
+type SignInConnection = HostLink | HostScopeLink;
 import {
   hostAuthCallbackDeliverResultSchema,
   hostSignInAckSchema,
@@ -57,9 +64,9 @@ function status(value: unknown): HostSignInStatus {
  * one: any other state means it dropped, was retired, refused, fenced or
  * closed, and a reconnect is a new connection that owns none of its flows.
  */
-function watchLoss(link: HostLink, lost: () => void): () => void {
+function watchLoss(link: SignInConnection, lost: () => void): () => void {
   let gone = false;
-  const check = (state: HostLinkState): void => {
+  const check = (state: HostLinkState | HostScopeLinkState): void => {
     if (gone || state.status === "ready") return;
     gone = true;
     stop();
@@ -74,7 +81,7 @@ function watchLoss(link: HostLink, lost: () => void): () => void {
 }
 
 /** One host's link as the sign-in service calls it. */
-export function hostLinkSignIns(link: HostLink): HostSignInHostLink {
+export function hostLinkSignIns(link: SignInConnection): HostSignInHostLink {
   return {
     status: async () => status(await link.query("signIns.status")),
     setApiKey: async (input) => status(await link.mutate("signIns.setApiKey", input)),
@@ -125,7 +132,7 @@ export function hostLinkSignIns(link: HostLink): HostSignInHostLink {
 
 /** Which of a host's links can take a sign-in now: the engine's `signInLink`. */
 export interface SignInLinkSource {
-  signInLink(hostId: string): HostLink | null;
+  signInLink(hostId: string): SignInConnection | null;
 }
 
 /** The service's link lookup over the engine: a ready link granted `sign-ins`, or none. */

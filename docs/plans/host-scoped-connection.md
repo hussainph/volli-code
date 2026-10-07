@@ -113,12 +113,12 @@ new durable guarantees. No schema migration or persistent outcome map is added.
 
 ## Stack and verification
 
-PR A is draft [#838](https://github.com/hussainph/volli-code/pull/838). The owner
-approved the additive contract at `bb272ad5b` while GitHub refused pushes
-repository-wide. Hostd execution and signed-device real-link acceptance are now
-implemented; final coverage, CI/CodeQL and security review remain merge gates.
-VC-719 (#836) and VC-720 (#835) have merged. PR B stays paused/unpushed until
-PR A merges and the owner permits resumption.
+PR A is [#838](https://github.com/hussainph/volli-code/pull/838). The additive
+contract, hostd implementation and security review fixes have passed focused
+protected coverage, CI gate and CodeQL at `15426148d`. VC-719 (#836), VC-720
+(#835) and VC-724 recovery UI have merged. The owner authorized PR B resumption;
+its client lifetime, desktop routing and renderer changes remain local until
+PR A merges.
 
 The actual pre-VC-722 main listener at `2323b19dac96eea3a9d77e512c1fadbccdc8f34c`
 returned `BAD_REQUEST / hello-invalid`, then closed 4400 / `hello-invalid`.
@@ -126,12 +126,40 @@ Its unmodified recordings and actual old Workspace-client/new-host evidence
 are documented in `packages/host-protocol/fixtures/pre-vc722-provenance.md`.
 The grammar-only fixture is not an independent peer exchange. New exchange
 recordings at the canary tag are T6's separate ceremony, not PR A evidence.
-The client classifies the frozen named refusal only
-while attempting host scope and keeps the SSH catalog/create path and
-Workspace-borrowed sign-ins/logs. An older user install says
-“Update <host> to create projects from here”, recovered through Re-add.
+The client classifies the frozen named refusal only while attempting host
+scope. If an old peer does not know `protocol.hostWelcome`, one
+`protocol.welcome` probe obtains that named refusal; a generic missing operation,
+credential failure or network failure is never older-peer evidence. Only this
+classification permits SSH catalog/create and Workspace-borrowed sign-ins/logs.
+An older user install says “Update <host> to create projects from here”, recovered
+through VC-724 Re-add; system installs retain their SSH project path.
 
-One host link consumes the same budgets as a Workspace link: for H connected
-hosts and W Workspace links the desktop uses H + W ≤ 24 sockets. On a box,
-every Mac's host link and Workspace links together use ≤ 32 listener sockets.
-The listener's worst-case 32 × 17 MiB = 544 MiB queue envelope is unchanged.
+One shared client socket pool covers HOST, Workspace and Add links: the desktop
+uses H + W + Add ≤ 24 physical sockets, including retired sockets still closing.
+A permit releases only on physical close, retries cannot overlap their own
+retiring socket, and canceled waiters never ask for credentials. Hostd's 32
+listener-socket cap and worst-case 32 × 17 MiB = 544 MiB queue envelope remain
+unchanged.
+
+## Desktop routing (PR B)
+
+The enrolled host owns a dedicated HOST link while Cloud is enabled, independent
+of open projects. A validated host welcome makes modern health and Add handoff
+ready. Closing the last Workspace cannot close this host link. Forget, disable
+and shutdown retire it; stale identity/key/tunnel continuations cannot reattach
+it. Modern unavailable or ungranted operations fail closed, not through SSH.
+
+Desktop-only `hostScope.query/mutate/subscribe` IPC calls address `hostId`; no
+Workspace identity or fence is fabricated. They are **client-local** compatibility
+entries, not frozen public features. Main and renderer share the Workspace relay's
+bounded stream/resume machinery, including logs cursors, trace forwarding, owner
+cancellation and stale callbacks. Sign-ins remain main-owned: generic relays refuse
+`sign-ins`/`auth.callback`, while the sign-in service prefers the HOST link and binds
+each flow's lifetime to its physical connection.
+
+`RemoteHost.hostScope` is an optional client projection with a closed status
+vocabulary (`connecting`, `ready`, `older`, `unavailable`) and an open `granted`
+string vocabulary bounded at the IPC schema. Existing consumers may ignore it.
+Modern catalog/create uses `host.workspaces`; absolute remote folder paths and
+repository URLs retain the shared registration/admission rules. The renderer
+uses HOST readiness for logs and projects, never a ready Workspace as a proxy.

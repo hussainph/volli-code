@@ -873,6 +873,29 @@ describe("the tier client and the flag", () => {
 });
 
 describe("HOST welcome facts", () => {
+  it("ignores HOST facts from a replaced subscription and after close", () => {
+    const fake = fakeClient();
+    const clock = { now: 0 };
+    const timer = timers(clock);
+    const source = createRemoteHostSource(fake.client, { setTimer: timer.setTimer });
+    const ready = snapshot([
+      remote({ hostScope: { status: "ready", granted: ["host.logs", "host.workspaces"] } }),
+    ]);
+    fake.push(ready);
+    const old = fake.handlers[0]!;
+    source.retrySubscription!();
+    fake.push(snapshot([remote({ hostScope: { status: "connecting", granted: [] } })]));
+    const next = source.getSnapshot();
+    old.onData(ready);
+    old.onError(new Error("stale"));
+    expect(source.getSnapshot()).toBe(next);
+    expect(next.hosts[0]!.hostScope).toEqual({ status: "connecting", granted: [] });
+    source.close();
+    fake.handlers[1]!.onData(ready);
+    expect(source.getSnapshot()).toBe(next);
+    expect(timer.armed).toEqual([]);
+  });
+
   it("carries hostScope without projects, retaining record identity for equal facts", () => {
     const fake = fakeClient();
     const source = createRemoteHostSource(fake.client);

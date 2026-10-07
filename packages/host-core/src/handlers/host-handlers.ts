@@ -69,6 +69,8 @@ import {
   type HostSignInAnswerInput,
   type HostSignInFlow,
   type HostSignInStartInput,
+  type HostScopeRelayCall,
+  type HostScopeRelaySubscribeCall,
   type HostLinkRelayCall,
   type HostLinkRelayEvent,
   type HostLinkRelaySubscribeCall,
@@ -105,7 +107,7 @@ import type { LogRing } from "../log/ring";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { RemoteHostsPort, RemoteHostUpdateWhen } from "./remote-hosts-port";
 import type { RemoteSignInsPort } from "./remote-sign-ins-port";
-import type { HostLinkRelayPort } from "./host-link-relay-port";
+import type { HostLinkRelayPort, HostScopeRelayPort } from "./host-link-relay-port";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import {
@@ -347,6 +349,13 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "hosts.createProject": HostHandler<CreateRemoteProjectInput, CreateRemoteProjectResult>;
   readonly "hosts.openWorkspace": HostHandler<RemoteWorkspaceInput, null>;
   readonly "hosts.closeWorkspace": HostHandler<RemoteWorkspaceInput, null>;
+  /** HOST-scoped operations before any Workspace, through desktop main's port. */
+  readonly "hostScope.query": HostHandler<HostScopeRelayCall, unknown>;
+  readonly "hostScope.mutate": HostHandler<HostScopeRelayCall, unknown>;
+  readonly "hostScope.subscribe": HostSubscriptionHandler<
+    HostScopeRelaySubscribeCall,
+    HostLinkRelayEvent
+  >;
   /**
    * The Workspace link relay (VC-711): a remote project's public operations
    * over desktop main's Workspace link, {@link HostHandlerOptions.hostLinkRelay}'s
@@ -481,6 +490,8 @@ export interface HostHandlerOptions {
    * or null on a host that holds none (hostd): `hostLink.*` answer unavailable.
    */
   readonly hostLinkRelay?: HostLinkRelayPort | null;
+  /** Desktop main's HOST links; absent or null on hostd: `hostScope.*` unavailable. */
+  readonly hostScopeRelay?: HostScopeRelayPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -496,6 +507,7 @@ const REMOTE_HOSTS_UNAVAILABLE = "Remote hosts are unavailable on this host";
 const REMOTE_SIGN_INS_UNAVAILABLE = "Remote host sign-ins are unavailable on this host";
 const LOGS_UNAVAILABLE = "This host keeps no log to read";
 const SESSION_LISTING_UNAVAILABLE = "The Session listing is unavailable on this host";
+const HOST_SCOPE_RELAY_UNAVAILABLE = "Remote host operations are unavailable on this host";
 const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
 
 /**
@@ -573,6 +585,8 @@ function hostHandlerEntries(
   const remoteSignIns = () => present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
   const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
   const listing = () => present(options.sessionListing ?? null, SESSION_LISTING_UNAVAILABLE);
+  const hostScopeRelay = () =>
+    present(options.hostScopeRelay ?? null, HOST_SCOPE_RELAY_UNAVAILABLE);
   const hostLinkRelay = () => present(options.hostLinkRelay ?? null, HOST_LINK_RELAY_UNAVAILABLE);
 
   const worktree = (database: Database.Database) =>
@@ -848,6 +862,11 @@ function hostHandlerEntries(
       done(() => remoteHosts().openWorkspace(hostId, workspaceId)),
     "hosts.closeWorkspace": ({ hostId, workspaceId }) =>
       done(() => remoteHosts().closeWorkspace(hostId, workspaceId)),
+    // HOST relay (VC-722): before any project, through desktop main's port.
+    "hostScope.query": ({ hostId, path, input }) => hostScopeRelay().query(hostId, path, input),
+    "hostScope.mutate": ({ hostId, path, input }) => hostScopeRelay().mutate(hostId, path, input),
+    "hostScope.subscribe": async ({ hostId, path, input, lastEventId }, _call, sink) =>
+      hostScopeRelay().subscribe(hostId, path, input, lastEventId, (event) => sink.emit(event)),
     // The Workspace link relay (VC-711): desktop main's, through its port.
     "hostLink.query": ({ workspaceId, path, input }) =>
       hostLinkRelay().query(workspaceId, path, input),

@@ -1470,6 +1470,253 @@
         "outputValidation": "documented-yield",
         "voidOutput": false
       },
+      "hostScope.mutate": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "input": {},
+            "path": {
+              "maxLength": 128,
+              "pattern": "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "path"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostScope.query": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "input": {},
+            "path": {
+              "maxLength": 128,
+              "pattern": "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "path"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "hostScope.subscribe": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "hostId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "input": {},
+            "lastEventId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "path": {
+              "maxLength": 128,
+              "pattern": "^[A-Za-z][A-Za-z0-9]*(?:\\.[A-Za-z][A-Za-z0-9]*)+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "hostId",
+            "path"
+          ],
+          "type": "object"
+        },
+        "kind": "subscription",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "started",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "data": {},
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "data",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "data"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "kind": {
+                  "const": "resnapshot",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "error"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "kind": {
+                  "const": "lost",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "error"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                },
+                "kind": {
+                  "const": "error",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "error"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "complete",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ],
+          "x-volli-open-union": "kind"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
       "hostSignIns.answer": {
         "compatibility": "client-local",
         "input": {
@@ -3165,6 +3412,34 @@
                     "readOnly": true,
                     "type": "array"
                   },
+                  "hostScope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "granted": {
+                        "items": {
+                          "maxLength": 128,
+                          "type": "string"
+                        },
+                        "maxItems": 256,
+                        "readOnly": true,
+                        "type": "array"
+                      },
+                      "status": {
+                        "enum": [
+                          "connecting",
+                          "ready",
+                          "older",
+                          "unavailable"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "granted"
+                    ],
+                    "type": "object"
+                  },
                   "id": {
                     "type": "string"
                   },
@@ -3885,6 +4160,34 @@
                     },
                     "readOnly": true,
                     "type": "array"
+                  },
+                  "hostScope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "granted": {
+                        "items": {
+                          "maxLength": 128,
+                          "type": "string"
+                        },
+                        "maxItems": 256,
+                        "readOnly": true,
+                        "type": "array"
+                      },
+                      "status": {
+                        "enum": [
+                          "connecting",
+                          "ready",
+                          "older",
+                          "unavailable"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "granted"
+                    ],
+                    "type": "object"
                   },
                   "id": {
                     "type": "string"

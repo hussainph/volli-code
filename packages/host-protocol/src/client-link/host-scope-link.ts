@@ -34,9 +34,8 @@ export function createHostScopeLink(options: HostScopeLinkOptions): HostScopeLin
         features: options.features,
       }),
     welcomePath: "protocol.hostWelcome",
-    isRefusal: (error) =>
-      (error.code === "NOT_FOUND" && error.reason === undefined) ||
-      error.reason === "operation-unavailable",
+    refusalProbePath: "protocol.welcome",
+    scope: "host",
     validate: (welcome, hello) =>
       validateWelcome(welcome, hello, {
         verifyProof: (validated, sent) =>

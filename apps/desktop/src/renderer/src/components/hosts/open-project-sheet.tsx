@@ -40,6 +40,7 @@ import {
   createProjectOnHost,
   projectsOnHost,
   usesLegacyProjects,
+  readdHostToUpdate,
   remoteHostOf,
   remoteHosts,
   useRemoteHostsStore,
@@ -363,7 +364,7 @@ function ListScreen({
             onNew={onNew}
             onReAdd={() => {
               useRemoteHostsStore.getState().closeProjectSheet();
-              useRemoteHostsStore.getState().openAddHost(host.target);
+              readdHostToUpdate(host.id);
             }}
           />
         )}
@@ -450,7 +451,7 @@ function NewProjectScreen({
   const modern = !usesLegacyProjects(host);
   const blocked = !modern && host.mode === "user";
   const source = projectSource(text);
-  const problem = sourceProblem(source, host.name);
+  const problem = sourceProblem(source, host.name, modern);
   const recovery = failure === null ? null : failureRecovery(failure, host.name, tries);
   const asking = recovery?.kind === "password";
   const ready =
@@ -517,7 +518,7 @@ function NewProjectScreen({
           onNew={onBack}
           onReAdd={() => {
             onDismiss();
-            useRemoteHostsStore.getState().openAddHost(host.target);
+            readdHostToUpdate(host.id);
           }}
         />
       </div>

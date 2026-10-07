@@ -546,9 +546,19 @@ describe("dedicated HOST log sources", () => {
     expect(sources).toHaveLength(1);
     expect(dedicated.made).toEqual([BOX]);
     expect(dedicated.streams).toHaveLength(2);
+    // Subscription loss retains the engine's last HOST facts, but the source
+    // marks its view offline. Never keep reading over stale ready facts.
+    hosts.set({
+      hosts: [scoped("ready", { status: "offline", since: 0, retryAt: null })],
+    });
+    expect(dedicated.streams[1]!.unsubscribed).toBe(true);
+    expect(reading.statuses.at(-1)).toEqual(["failed", "box can’t be reached right now."]);
+    expect(unregister).not.toHaveBeenCalled();
+    hosts.set({ hosts: [scoped("ready")] });
+    expect(dedicated.streams).toHaveLength(3);
     hosts.set({ hosts: [] });
     expect(unregister).toHaveBeenCalledOnce();
-    expect(dedicated.streams[1]!.unsubscribed).toBe(true);
+    expect(dedicated.streams[2]!.unsubscribed).toBe(true);
     reading.stop();
   });
 
@@ -606,9 +616,12 @@ it("adapts HOST calls, budget notices and every stream callback without borrowin
   const notices: NonNullable<Parameters<typeof relayHostScope>[1]>[] = [];
   const query = vi.fn(async () => ({ entries: [], gap: false, cursor: "r:1" }));
   const unsubscribe = vi.fn();
-  vi.mocked(relayHostScope).mockImplementation((_id, options = {}) => {
+  vi.mocked(relayHostScope).mockImplementation((hostId, options = {}) => {
     notices.push(options);
     return {
+      hostId,
+      getState: () => OPEN,
+      subscribeState: () => () => {},
       query,
       mutate: vi.fn(),
       subscribe: (_path, _input, handlers) => {

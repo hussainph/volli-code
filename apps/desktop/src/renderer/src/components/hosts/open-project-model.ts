@@ -141,7 +141,11 @@ export function projectSource(text: string): ProjectSource | null {
  * Why the field cannot be sent yet, in one line, or `null`. The host judges
  * the rest (a folder it cannot see, a URL it will not clone) in its own.
  */
-export function sourceProblem(source: ProjectSource | null, hostName: string): string | null {
+export function sourceProblem(
+  source: ProjectSource | null,
+  hostName: string,
+  modern = false,
+): string | null {
   if (source === null) return null;
   // A token rides in a query, a fragment or a URL's password: it never leaves this window.
   if (
@@ -150,7 +154,11 @@ export function sourceProblem(source: ProjectSource | null, hostName: string): s
   ) {
     return `Use the repository's plain URL: a token goes in Sign-ins on ${hostName}, not in the URL.`;
   }
-  if (source.kind === "path" && !source.path.startsWith("/") && !source.path.startsWith("~/")) {
+  if (
+    source.kind === "path" &&
+    !source.path.startsWith("/") &&
+    (modern || !source.path.startsWith("~/"))
+  ) {
     return `A folder on ${hostName} is a full path, like /srv/volli/app.`;
   }
   return null;

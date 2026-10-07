@@ -196,7 +196,11 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
   function readyOf(hostId: string): readonly LogSourceLinkChoice[] {
     const host = hostOf(hostId);
     if (host?.hostScope !== undefined && host.hostScope.status !== "older") {
-      if (host.hostScope.status !== "ready" || !host.hostScope.granted.includes(HOST_LOGS_FEATURE))
+      if (
+        host.hostScope.status !== "ready" ||
+        !isLinkReady(host.link) ||
+        !host.hostScope.granted.includes(HOST_LOGS_FEATURE)
+      )
         return [];
       let link = hostLinks.get(hostId);
       if (link === undefined) {

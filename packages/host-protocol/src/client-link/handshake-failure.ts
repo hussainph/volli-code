@@ -6,10 +6,15 @@ import { HOST_PROTOCOL_CLOSE_CODES } from "../handshake";
 export type HandshakeFailure =
   | { readonly status: "fenced"; readonly error: HostError }
   | {
-      readonly status: "refused" | "unreachable";
+      readonly status: "refused";
       readonly error: HostError;
       readonly closeCode: number | null;
       readonly compatibility?: "host-scope-unsupported";
+    }
+  | {
+      readonly status: "unreachable";
+      readonly error: HostError;
+      readonly closeCode: number | null;
     };
 
 const FENCE_REASONS: ReadonlySet<string> = new Set([

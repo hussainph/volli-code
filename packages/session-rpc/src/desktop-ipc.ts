@@ -143,7 +143,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // Its compatibility classes (VC-725) govern the schema gate, not exposure:
   // host commands (`project.reorder`, `worktree.trimSettings`) are
   // additive-only across supported skew, while the client-local families
-  // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`) ship with this
+  // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`) ship with this
   // renderer and main in one bundle and are not cross-version promises.
   "project.reorder": "ipc",
   "worktree.trimSettings": "ipc",
@@ -181,6 +181,9 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hostLink.query": "ipc",
   "hostLink.mutate": "ipc",
   "hostLink.subscribe": "ipc",
+  "hostScope.query": "ipc",
+  "hostScope.mutate": "ipc",
+  "hostScope.subscribe": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

@@ -258,6 +258,9 @@ export function sessionHandlersFrom(
     "hostLink.query": remote("hostLink.query"),
     "hostLink.mutate": remote("hostLink.mutate"),
     "hostLink.subscribe": remote("hostLink.subscribe"),
+    "hostScope.query": remote("hostScope.query"),
+    "hostScope.mutate": remote("hostScope.mutate"),
+    "hostScope.subscribe": remote("hostScope.subscribe"),
   };
   return {
     ...handlers,
