@@ -22,9 +22,12 @@ import { MotionConfig, motion } from "motion/react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
+import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { WifiSlashIcon } from "@phosphor-icons/react/dist/csr/WifiSlash";
 
+import { HostSignInSheet } from "@renderer/components/hosts/sign-ins/host-sign-in-sheet";
+import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
@@ -114,6 +117,8 @@ function EnabledHostChip() {
           <HostSwitcher current={host} view={view} onDone={() => setOpen(false)} />
         </PopoverContent>
       </Popover>
+      {/* A remote host's sign-ins (VC-702): opened from the switcher below. */}
+      <HostSignInSheet />
     </MotionConfig>
   );
 }
@@ -170,6 +175,18 @@ export function HostSwitcher({
         );
       })}
       <div className="my-1 h-px bg-border/60" />
+      {!current.local && (
+        <MenuAction
+          icon={KeyIcon}
+          label={`Sign-ins on ${current.name}…`}
+          onAct={() => {
+            onDone();
+            useHostSignInSheet
+              .getState()
+              .open({ hostId: current.id, hostName: current.name, providerId: null });
+          }}
+        />
+      )}
       <MenuAction
         icon={PlusIcon}
         label="Add a host…"

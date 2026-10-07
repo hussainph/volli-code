@@ -699,8 +699,10 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/host-sign-ins/send-from-this-mac.ts",
         "**/src/main/host-sign-ins/sign-in-runner.ts",
         "**/src/main/host-sign-ins/service.ts",
+        "**/src/main/host-sign-ins/port.ts",
         "src/components/hosts/sign-ins/host-sign-in-model.ts",
         "src/components/hosts/sign-ins/host-sign-in-controller.ts",
+        "src/components/hosts/sign-ins/remote-host-sign-in-source.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't

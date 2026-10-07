@@ -434,9 +434,7 @@ export function createDesktopRouter() {
           );
         }),
       answer: hostProcedure("hostSignIns.answer")
-        .input(
-          z.strictObject({ hostId, providerId, promptId: identifier, value: promptAnswer }),
-        )
+        .input(z.strictObject({ hostId, providerId, promptId: identifier, value: promptAnswer }))
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["hostSignIns.answer"](input, ctx.call)),
       cancel: hostProcedure("hostSignIns.cancel")

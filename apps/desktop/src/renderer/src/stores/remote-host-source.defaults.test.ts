@@ -36,6 +36,7 @@ vi.mock("../lib/session-rpc-ipc-link", () => ({ sessionRpcClient: () => bridge.c
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast: { error: toastError } }));
 
+import { useHostSignInSheet } from "../components/hosts/sign-ins/remote-host-sign-in-source";
 import { createHostConnectionStore, HOST_OFFLINE_AFTER_MS } from "./host-connection";
 import { attachRemoteHostsWhileCloud, createRemoteHostSource } from "./remote-host-source";
 
@@ -121,6 +122,26 @@ describe("the remote host source's defaults", () => {
     const orphan = snapshot({ status: "ready" });
     handlers[0]!.onData({ ...orphan, hosts: [] });
     expect(source.getSnapshot().projects["p1"]?.link).toEqual({ status: "open" });
+    source.close();
+  });
+
+  it("opens the one host sign-in sheet by default after Sign in's preflight", async () => {
+    const source = createRemoteHostSource({
+      subscribe: () => () => {},
+      retry: async () => null,
+      updateHost: async () => null,
+      cancelScheduledUpdate: async () => null,
+      signIn: async () => null,
+    });
+    source.signIn(HOST, "anthropic");
+    await vi.waitFor(() =>
+      expect(useHostSignInSheet.getState().target).toEqual({
+        hostId: HOST,
+        hostName: "the host",
+        providerId: "anthropic",
+      }),
+    );
+    useHostSignInSheet.getState().close();
     source.close();
   });
 

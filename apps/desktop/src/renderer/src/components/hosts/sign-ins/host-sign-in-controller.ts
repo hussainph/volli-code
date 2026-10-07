@@ -171,7 +171,10 @@ export class HostSignInController {
     const key = providerRowKey(providerId);
     if (this.#runs.has(key)) return;
     this.#setFlow(key, reduceSignIn(IDLE, { kind: "progress", message: "Starting" }));
+    let current: HostSignInRunHandle | null = null;
     const run = this.#source.signInOnHost(this.#hostId, providerId, (event) => {
+      // A run this surface cancelled, or one a newer run replaced, has no say.
+      if (current !== null && this.#runs.get(key) !== current) return;
       // The row's flow was set above, before the run could say anything.
       this.#setFlow(key, reduceSignIn(this.#flows[key]!, event));
       if (RUN_ENDS.has(event.kind)) {
@@ -179,6 +182,7 @@ export class HostSignInController {
         if (event.kind === "done") void this.refresh();
       }
     });
+    current = run;
     this.#runs.set(key, run);
   }
 
@@ -203,6 +207,7 @@ export class HostSignInController {
   /** Cancels whatever the row is doing; a running sign-in is cancelled on the host. */
   cancel(rowKey: string): void {
     const run = this.#runs.get(rowKey);
+    this.#runs.delete(rowKey);
     if (run !== undefined) void run.cancel();
     this.#setFlow(rowKey, IDLE);
   }

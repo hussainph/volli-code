@@ -186,6 +186,9 @@ export interface DesktopRemoteHostsOptions {
   readonly wake?: WakePlatform;
 }
 
+/** What every Workspace link to a remote host asks for. */
+export const REMOTE_HOST_LINK_FEATURES = ["sign-ins", "auth.callback"] as const;
+
 /** The engine, composed with this app's ports. */
 export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): RemoteHosts {
   const { logger, appVersion } = options;
@@ -210,6 +213,9 @@ export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): Re
     deviceName: hostname().replace(/\.local$/u, ""),
     tunnel: (tunnel) => createSshTunnel({ ...tunnel }),
     link: (link) => createHostLink(link),
+    // Sign-ins on the host (VC-702): its `sign-ins` operations, and the
+    // relay this Mac performs for a browser sign-in.
+    linkFeatures: REMOTE_HOST_LINK_FEATURES,
     ...(options.wake === undefined ? {} : { wake: desktopWakeSource(options.wake) }),
     now: Date.now,
     newId: randomUUID,
@@ -222,7 +228,15 @@ export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): Re
  * The engine as the handler map's `remoteHosts` port: its `subscribe` hears
  * changes only, and the port's opens with the current snapshot.
  */
-export function remoteHostsPort(hosts: RemoteHosts): RemoteHostsPort {
+export function remoteHostsPort(
+  hosts: RemoteHosts,
+  /**
+   * `hosts.signIn` (the host chip's "Sign in again", VC-702): answers once
+   * the host can take a sign-in; the window then runs it. Absent, the
+   * engine's own refusal.
+   */
+  signIn?: (hostId: string, providerId: string) => Promise<void>,
+): RemoteHostsPort {
   return {
     snapshot: () => hosts.snapshot(),
     subscribe(listener) {
@@ -234,7 +248,8 @@ export function remoteHostsPort(hosts: RemoteHosts): RemoteHostsPort {
     retry: (hostId) => hosts.retry(hostId),
     updateHost: (hostId, when) => hosts.updateHost(hostId, when),
     cancelScheduledUpdate: (hostId) => hosts.cancelScheduledUpdate(hostId),
-    signIn: (hostId, providerId) => hosts.signIn(hostId, providerId),
+    signIn: (hostId, providerId) =>
+      signIn === undefined ? hosts.signIn(hostId, providerId) : signIn(hostId, providerId),
     forget: (hostId) => hosts.forget(hostId),
     startAdd: (input) => hosts.startAdd(input),
     subscribeAdd: (flowId, listener) => hosts.subscribeAdd(flowId, (event) => void listener(event)),

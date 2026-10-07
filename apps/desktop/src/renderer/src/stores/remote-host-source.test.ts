@@ -263,6 +263,24 @@ describe("the remote host source", () => {
     source.close();
   });
 
+  it("opens the host's sign-ins once main's preflight for Sign in answers (VC-702)", async () => {
+    const fake = fakeClient();
+    const opened: unknown[] = [];
+    const source = createRemoteHostSource(fake.client, {
+      now: () => 0,
+      onSignIn: (target) => opened.push(target),
+    });
+    fake.push(snapshot([remote()], {}));
+    source.signIn(HOST, "anthropic");
+    source.signIn("not-a-host-we-know", "xai");
+    await vi.waitFor(() => expect(opened).toHaveLength(2));
+    expect(opened).toEqual([
+      { hostId: HOST, hostName: source.getSnapshot().hosts[0]!.name, providerId: "anthropic" },
+      { hostId: "not-a-host-we-know", hostName: "the host", providerId: "xai" },
+    ]);
+    source.close();
+  });
+
   it("merges beside This Mac: a remote project's claim wins, and actions reach it", () => {
     const store = createHostConnectionStore();
     const projects = {

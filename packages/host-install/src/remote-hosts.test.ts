@@ -950,6 +950,27 @@ describe("refusals", () => {
     expect(h.tunnels.made).toHaveLength(1);
   });
 
+  it("lends desktop main a ready link that was granted sign-ins, and none otherwise (VC-702)", () => {
+    const h = harness({
+      tunnelMode: "hold",
+      linkFeatures: ["sign-ins", "auth.callback"],
+      registry: registry(hostEntry({ workspaceIds: [WS1, WS2] })),
+    });
+    const tunnel = h.tunnels.made[0]!;
+    expect(h.engine.signInLink(HOST_ID)).toBeNull();
+    tunnel.set({ status: "up", url: tunnel.url, localPort: 1 });
+    const [one, two] = h.links.made as [FakeLink, FakeLink];
+    expect(one.options.features).toEqual(["sign-ins", "auth.callback"]);
+    // Ready, but an older host that never granted sign-ins.
+    one.set(ready());
+    expect(h.engine.signInLink(HOST_ID)).toBeNull();
+    const granted = ready();
+    if (granted.status !== "ready") throw new Error("ready");
+    two.set({ ...granted, welcome: { ...granted.welcome, features: ["sign-ins"] } });
+    expect(h.engine.signInLink(HOST_ID)).toBe(two);
+    expect(() => h.engine.signInLink(OTHER_ID)).toThrow();
+  });
+
   it("refuses updates and sign-in in v1 with the shared words", () => {
     const h = harness({ registry: registry(hostEntry()) });
     expect(() => h.engine.updateHost(HOST_ID, "when-idle")).toThrow(REMOTE_HOST_UPDATE_UNAVAILABLE);

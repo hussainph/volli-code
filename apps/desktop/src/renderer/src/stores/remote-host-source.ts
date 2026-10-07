@@ -21,6 +21,10 @@ import type { HostLinkState } from "@volli/host-protocol/client-link";
 import type { RemoteHost, RemoteHostLinkState, RemoteHostsSnapshot } from "@volli/shared";
 import { toast } from "sonner";
 
+import {
+  useHostSignInSheet,
+  type HostSignInSheetTarget,
+} from "../components/hosts/sign-ins/remote-host-sign-in-source";
 import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
 import { isExperimentOn, useExperimentsStore } from "./experiments";
 import {
@@ -52,6 +56,11 @@ export interface RemoteHostSourceOptions {
   readonly setTimer?: (run: () => void, ms: number) => () => void;
   /** Where a failed action is said; a toast by default. */
   readonly onActionError?: (message: string) => void;
+  /**
+   * After main's preflight for "Sign in" (VC-702): the window opens the
+   * host's sign-ins and starts that provider's. The sheet by default.
+   */
+  readonly onSignIn?: (target: HostSignInSheetTarget) => void;
 }
 
 /** The source, and its end: it stops the subscription and any pending re-word. */
@@ -107,6 +116,7 @@ export function createRemoteHostSource(
   const now = options.now ?? Date.now;
   const setTimer = options.setTimer ?? defaultTimer;
   const onActionError = options.onActionError ?? ((message: string) => void toast.error(message));
+  const onSignIn = options.onSignIn ?? useHostSignInSheet.getState().open;
   const listeners = new Set<() => void>();
   /** One tracker per project, kept while main keeps naming the project. */
   const trackers = new Map<string, HostLinkTracker>();
@@ -202,7 +212,13 @@ export function createRemoteHostSource(
     retry: (hostId) => act(client.retry(hostId)),
     updateHost: (hostId, when) => act(client.updateHost(hostId, when)),
     cancelScheduledUpdate: (hostId) => act(client.cancelScheduledUpdate(hostId)),
-    signIn: (hostId, providerId) => act(client.signIn(hostId, providerId)),
+    signIn: (hostId, providerId) =>
+      act(
+        client.signIn(hostId, providerId).then(() => {
+          const hostName = snapshot.hosts.find((host) => host.id === hostId)?.name ?? "the host";
+          onSignIn({ hostId, hostName, providerId });
+        }),
+      ),
     close() {
       closed = true;
       cancelTimer?.();

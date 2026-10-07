@@ -489,8 +489,7 @@ function hostHandlerEntries(
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
   const signIns = () => present(options.signIns ?? null, SIGN_INS_UNAVAILABLE);
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
-  const remoteSignIns = () =>
-    present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
+  const remoteSignIns = () => present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
   const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
 
   const worktree = (database: Database.Database) =>

@@ -287,7 +287,10 @@ describe("sign-ins on a remote host, from this desktop (VC-702 PR 2)", () => {
     });
     expect(emitted).toEqual([{ kind: "done" }]);
     expect(
-      await map["hostSignIns.answer"]({ hostId: "h", providerId: "p", promptId: "q", value: "" }, USER),
+      await map["hostSignIns.answer"](
+        { hostId: "h", providerId: "p", promptId: "q", value: "" },
+        USER,
+      ),
     ).toBeNull();
     expect(await map["hostSignIns.cancel"]({ hostId: "h", providerId: "p" }, USER)).toBeNull();
     expect(reached).toEqual([
