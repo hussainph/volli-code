@@ -584,6 +584,12 @@ export default defineConfig(({ mode }) => ({
         // A remote Workspace's Session streams within the link's budget
         // (VC-713, AM1): a missed branch is a blank chat or a leaked stream.
         "src/lib/remote-session-streams.ts",
+        // Sessions on a remote host (VC-713): which transport, listing and
+        // streams a remote project's Sessions take, and when they let go.
+        "src/lib/remote-sessions.ts",
+        // A Session's project, for the surfaces that hold only its id: a wrong
+        // answer calls `window.api` with a remote Session's id.
+        "src/lib/session-project.ts",
         // A remote project's Workspace link as the window reaches it (VC-711):
         // when a relayed stream resumes, waits for a slot, or ends is a rule
         // no screenshot shows until a board silently stops following.
