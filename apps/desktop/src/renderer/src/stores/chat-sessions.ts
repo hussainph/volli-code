@@ -567,6 +567,10 @@ export function createChatSessionsStore(
           // NOW and re-reads its snapshot, keeping the slice (and the Draft
           // store's held messages) as they are.
           disposeChatClient(sessionId);
+          // A failure the old owner reported (its stream lost, its host not
+          // connected) was that transport's; the new client re-reads and
+          // reports its own if the failure is still there.
+          if (get().sessions[sessionId]?.sessionError != null) get().settle(sessionId, null);
           void attach(sessionId).connect();
         }
       },

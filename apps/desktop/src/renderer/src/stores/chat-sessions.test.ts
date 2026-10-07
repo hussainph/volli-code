@@ -1492,7 +1492,10 @@ describe("rebindChatSessions (VC-713, B4)", () => {
     const oldClient = getChatClient("remote-chat");
     const localClient = getChatClient("local-chat");
     current = after.transport;
+    // The old owner's failure goes with it.
+    store.getState().settle("remote-chat", "Lost the Session stream: box isn’t connected");
     store.getState().rebindChatSessions(["remote"]);
+    expect(store.getState().sessions["remote-chat"]?.sessionError).toBeNull();
     await Promise.resolve();
     await Promise.resolve();
     // A new client for the moved project, re-reading over the new transport.

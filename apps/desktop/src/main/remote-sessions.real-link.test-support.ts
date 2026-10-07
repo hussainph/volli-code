@@ -14,7 +14,12 @@ import {
   type HostLink,
   type HostLinkState,
 } from "@volli/host-protocol/client-link";
-import { ipcLink, type IpcEvent, type IpcResponse } from "@volli/host-protocol/ipc";
+import {
+  ipcLink,
+  type IpcEvent,
+  type IpcRequest,
+  type IpcResponse,
+} from "@volli/host-protocol/ipc";
 import type {
   BindingHandle,
   HarnessCommand,
@@ -221,8 +226,12 @@ export async function desktopMain(link: HostLink, electron: FakeIpcMain, cleanup
 
 let senders = 1;
 
-/** A window: its WebContents as main sees it, and the bridge's real client link over it. */
+/**
+ * A window: its WebContents as main sees it, and the bridge's real client link
+ * over it. Every request it sends main is kept, in order (`requests`).
+ */
 export function window(main: Awaited<ReturnType<typeof desktopMain>>) {
+  const requests: IpcRequest[] = [];
   const pushes = new Set<(event: IpcEvent) => void>();
   const gone = new Set<() => void>();
   let destroyed = false;
@@ -243,8 +252,12 @@ export function window(main: Awaited<ReturnType<typeof desktopMain>>) {
   const client = createTRPCClient<DesktopIpcRouter>({
     links: [
       ipcLink<DesktopIpcRouter>({
-        request: async (request) =>
-          structuredClone((await main.invoke({ sender }, structuredClone(request))) as IpcResponse),
+        request: async (request) => {
+          requests.push(structuredClone(request));
+          return structuredClone(
+            (await main.invoke({ sender }, structuredClone(request))) as IpcResponse,
+          );
+        },
         onEvent: (listener) => {
           pushes.add(listener);
           return () => void pushes.delete(listener);
@@ -255,6 +268,7 @@ export function window(main: Awaited<ReturnType<typeof desktopMain>>) {
   });
   return {
     client,
+    requests,
     /** The window goes: its WebContents is destroyed. */
     close(): void {
       destroyed = true;
@@ -277,5 +291,111 @@ export function storeState(link: HostLink): RelayLinkStateSource {
         current = viewOf(state);
         listener();
       }),
+  };
+}
+
+/** How many times the window asked main's relay for `path` on the project's link. */
+export function relayAsks(requests: readonly IpcRequest[], path: string): number {
+  return requests.filter(
+    (request) =>
+      request.path.startsWith("hostLink.") &&
+      (request.input as { workspaceId?: unknown; path?: unknown } | null)?.workspaceId ===
+        PROJECT &&
+      (request.input as { path?: unknown }).path === path,
+  ).length;
+}
+
+/**
+ * A clock the test moves by hand: the binding's re-read schedule and a
+ * Workspace's stream retries run on it, so a minute of polls takes no real
+ * minute and every timer they leave is counted (`pending`).
+ */
+export function manualClock() {
+  let now = 1_000_000;
+  let nextHandle = 1;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  return {
+    now: () => now,
+    setTimeout(run: () => void, ms: number): unknown {
+      const handle = nextHandle++;
+      timers.set(handle, { at: now + ms, run });
+      return handle;
+    },
+    clearTimeout(handle: unknown): void {
+      timers.delete(handle as number);
+    },
+    /** Timers set and neither fired nor cleared. */
+    pending: (): number => timers.size,
+    /** Moves time on by `ms`, running each timer due on the way, oldest first. */
+    advance(ms: number): void {
+      const end = now + ms;
+      for (;;) {
+        let due: [number, { at: number; run: () => void }] | null = null;
+        for (const entry of timers)
+          if (entry[1].at <= end && (due === null || entry[1].at < due[1].at)) due = entry;
+        if (due === null) break;
+        timers.delete(due[0]);
+        now = due[1].at;
+        due[1].run();
+      }
+      now = end;
+    },
+  };
+}
+
+/**
+ * The window as the binding reads it: its focus and visibility events, which
+ * a test dispatches (`focus()`), and a document that stays visible.
+ */
+export function bindingWindow() {
+  const events = new EventTarget();
+  const documentEvents = new EventTarget();
+  return {
+    addEventListener: events.addEventListener.bind(events),
+    removeEventListener: events.removeEventListener.bind(events),
+    document: {
+      visibilityState: "visible" as DocumentVisibilityState,
+      addEventListener: documentEvents.addEventListener.bind(documentEvents),
+      removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
+    },
+    focus(): void {
+      events.dispatchEvent(new Event("focus"));
+    },
+  };
+}
+
+/**
+ * This Mac's own IPC as the renderer reaches it (`window.api`), recording
+ * every call and serving none: a remote project's Session must never reach
+ * it. Also the frame and timer host the chat transports pace their flushes on.
+ */
+export function thisMacWindow() {
+  const calls: string[] = [];
+  const refuse = (door: string) => {
+    calls.push(door);
+    return Promise.reject(new Error(`This Mac's IPC was asked: ${door}`));
+  };
+  return {
+    calls,
+    window: {
+      api: {
+        sessionRpc: {
+          request: (request: IpcRequest) => refuse(`sessionRpc ${request.path}`),
+          onEvent: () => () => {},
+          cancel: (subscriptionId: string) =>
+            void calls.push(`sessionRpc.cancel ${subscriptionId}`),
+        },
+        sessions: {
+          list: () => refuse("sessions.list"),
+          listForTicket: () => refuse("sessions.listForTicket"),
+        },
+      },
+      requestAnimationFrame: () => 0,
+      cancelAnimationFrame: () => {},
+      setTimeout: (run: () => void, ms: number) => setTimeout(run, ms),
+      clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    },
   };
 }

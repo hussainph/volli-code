@@ -149,10 +149,18 @@ export default defineConfig(({ mode }) => ({
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
       { extends: true, test: { name: "renderer" } },
-      // NOT extends: main tests need no plugins/alias; fresh entry avoids
-      // inheriting root src/renderer. @volli/shared resolves via workspace link.
+      // NOT extends: main tests need no plugins; a fresh entry avoids
+      // inheriting root src/renderer. It takes the renderer's alias alone
+      // (below). @volli/shared resolves via workspace link.
       {
         root: fileURLToPath(new URL(".", import.meta.url)),
+        // The renderer's alias alone: the real-link Sessions test drives the
+        // renderer's remote-Session binding and stores from desktop main.
+        resolve: {
+          alias: {
+            "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
+          },
+        },
         test: {
           name: "main",
           environment: "node",
