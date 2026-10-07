@@ -635,7 +635,7 @@ function LogView({
       ref={scroller}
       role="log"
       aria-label="Details"
-      className="h-40 overflow-y-auto rounded-[14px] border border-white/5 bg-[#101012] px-4 py-2 font-mono text-ui leading-5 text-white/60 shadow-raised"
+      className="h-40 overflow-y-auto rounded-lg border border-white/5 bg-[#101012] px-4 py-2 font-mono text-ui leading-5 text-white/60 shadow-raised"
     >
       {lines.length === 0 && detail === null ? (
         <div className="text-white/35">Nothing yet</div>

@@ -28,9 +28,14 @@ export const EASE_SWIFT = [0.32, 0.72, 0, 1] as const;
 /* ── Host tile ──────────────────────────────────────────────────────────── */
 
 const TILE = {
-  sm: { box: "size-6 rounded-sm", icon: "size-3.5", badge: "size-2.5 -right-0.5 -bottom-0.5" },
+  sm: {
+    box: "size-6",
+    radius: "rounded-sm",
+    icon: "size-3.5",
+    badge: "size-2.5 -right-0.5 -bottom-0.5",
+  },
   /** The Add-a-host sheet's and a host page's header. */
-  md: { box: "size-10 rounded-[11px]", icon: "size-5", badge: "size-4 -right-1 -bottom-1" },
+  md: { box: "size-10", radius: "rounded-md", icon: "size-5", badge: "size-4 -right-1 -bottom-1" },
 } as const;
 
 /**
@@ -66,12 +71,16 @@ export function HostGlyph({
       className={cn(
         "relative inline-grid shrink-0 place-items-center border border-border bg-gradient-to-b from-card to-muted text-foreground shadow-raised",
         tile.box,
+        tile.radius,
         className,
       )}
     >
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-1/2 rounded-[inherit] bg-gradient-to-b from-background/40 to-transparent"
+        className={cn(
+          "pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-background/40 to-transparent",
+          tile.radius,
+        )}
       />
       <Icon
         aria-hidden
