@@ -694,12 +694,19 @@ What the backend owns, beyond the registry's policy:
 - **Page-driven navigation is HTTP(S)-only, with one residual.** Every
   document request and redirect hop is checked before it is sent (`Fetch`),
   on the page's session and on every out-of-process iframe's, which attaches
-  paused and runs only once its guard is installed. A main frame the page
-  sends anywhere else (its own `blob:`, an external scheme) is refused when
-  it asks (`Page.frameRequestedNavigation`, before commit) and stays put, as
-  desktop's `will-navigate` keeps it; a commit that slips past is sent to
-  `about:blank`. Chromium itself refuses `file:`, `chrome:` and top-level
-  `data:`.
+  paused and runs only once its guard is installed. A nonopaque main frame's
+  own cancelable non-HTTP(S) navigation (including its `blob:`) is canceled
+  synchronously by the Navigation API, in an isolated world installed before
+  page scripts. The page stays put, as desktop's `will-navigate` keeps it:
+  cancellation does not race a Node/CDP `Page.stopLoading` round trip
+  (VC-708). A binding scoped to that isolated world reports only the fixed
+  refusal notice; it exposes no page-world host API. Cancellation is observable
+  as `navigateerror`; allowed document headers and scripts are not rewritten. HTTP(S) in-page
+  state/hash updates and downloads keep their existing policy layers.
+  Opaque/sandboxed pages, other initiators, non-cancelable or absent navigate
+  events, and engines without that API still require the CDP request stop;
+  a commit that slips past is still sent to `about:blank`. Chromium itself
+  refuses `file:`, `chrome:` and top-level `data:`.
 
   **The residual (not desktop parity):** same-process `data:`, `blob:` and
   `srcdoc` iframes make no network request, so no `Fetch` guard sees them,

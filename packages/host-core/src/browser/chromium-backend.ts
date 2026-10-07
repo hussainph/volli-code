@@ -25,8 +25,9 @@
  * - **Page-driven navigation stays HTTP(S)-only.** Every document request and
  *   redirect hop the page makes — on its own session and every out-of-process
  *   iframe's — is checked against `isAllowedBrowserUrl` before it is sent
- *   (`Fetch`). A main frame asked to go anywhere else is stopped before it
- *   commits; one that commits anyway is returned to `about:blank`. The
+ *   (`Fetch`). The main frame's own non-HTTP(S) navigation is canceled
+ *   synchronously in an isolated world; CDP stop/commit backstops remain for
+ *   non-cancelable events. A slipped commit returns to `about:blank`. The
  *   residual — same-process `data:`/`blob:`/`srcdoc` frames, which no CDP
  *   hook refuses before they run — is in the package README.
  * - **Dialogs** nobody can answer get the safe answer, never "leave".
@@ -67,6 +68,12 @@ import {
   type ChromiumSpawn,
 } from "./chromium-launch";
 import { CdpProtocolError, type CdpEvent, type CdpPipeConnection } from "./chromium-pipe";
+import {
+  BLOCKED_BROWSER_NAVIGATION,
+  CHROMIUM_NAVIGATION_GUARD_BINDING,
+  CHROMIUM_NAVIGATION_GUARD_SOURCE,
+  CHROMIUM_NAVIGATION_GUARD_WORLD,
+} from "./chromium-navigation-guard";
 import { jpegSize } from "./jpeg-size";
 import { ScreencastAttachment } from "./screencast";
 import {
@@ -236,6 +243,8 @@ interface ChromiumTabEntry extends BrowserTabRecord {
   target: ChromiumTarget | null;
   /** The chrome facts {@link ChromiumBrowserBackend.liveChrome} reads. */
   chrome: { url: string; title: string; loading: boolean; history: NavigationHistory | null };
+  /** Product navigations not yet answered: a startup blank-page stop cannot settle them. */
+  pendingNavigations: number;
   /** Counts main-frame load starts, so a stop is matched to the load it ends. */
   loadEpoch: number;
   /** Main-frame document requests in flight, so a failure among them is the page's. */
@@ -669,6 +678,18 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     // Out-of-process iframes and workers attach to the page's session,
     // paused, so a frame gets the page's document guard before it runs.
     await send("Target.setAutoAttach", PAUSED_AUTO_ATTACH);
+    // A renderer-local cancellation cannot lose a blob commit to the CDP
+    // round trip. Its one static notice is scoped to the isolated world,
+    // never a page-visible host API. A failed install never lets the page run.
+    await send("Runtime.addBinding", {
+      name: CHROMIUM_NAVIGATION_GUARD_BINDING,
+      executionContextName: CHROMIUM_NAVIGATION_GUARD_WORLD,
+    });
+    await send("Page.addScriptToEvaluateOnNewDocument", {
+      source: CHROMIUM_NAVIGATION_GUARD_SOURCE,
+      worldName: CHROMIUM_NAVIGATION_GUARD_WORLD,
+      runImmediately: true,
+    });
     await this.#applyViewport(target, entry.bounds);
     await send("Runtime.runIfWaitingForDebugger");
   }
@@ -698,11 +719,15 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     entry: ChromiumTabEntry,
     label: string,
     step: (target: ChromiumTarget) => Promise<unknown>,
-  ): void {
-    void entry.ready.then(step).catch((error: unknown) => {
-      if (entry.closed) return;
-      log.warn("browser tab step failed", { tabId: entry.state.tabId, step: label, error });
-    });
+  ): Promise<void> {
+    return entry.ready
+      .then(async (target) => {
+        await step(target);
+      })
+      .catch((error: unknown) => {
+        if (entry.closed) return;
+        log.warn("browser tab step failed", { tabId: entry.state.tabId, step: label, error });
+      });
   }
 
   // ---- events --------------------------------------------------------------
@@ -909,15 +934,15 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         this.#onChildDetached(entry, params);
         return;
       case "Page.frameRequestedNavigation": {
-        // The page asked its main frame to go somewhere a page may not lead
-        // it (a blob: of its own, an external scheme): refused before the
-        // navigation commits, as desktop's `will-navigate` refuses it. The
-        // commit check below stays as the backstop.
+        // Best-effort stop for what the isolated-world listener could not
+        // cancel. This notification is not an interception: a blob can
+        // commit before Chromium receives our command. Keep the commit
+        // backstop below; cancelable self-navigation is refused in-renderer.
         const url = stringParam(params, "url");
         if (!isMain(params["frameId"]) || url === undefined || this.#mayCommit(url)) return;
         this.recordConsole(entry, {
           level: "error",
-          text: "Blocked a page navigation to a non-HTTP(S) address",
+          text: BLOCKED_BROWSER_NAVIGATION,
         });
         void send("Page.stopLoading").catch(() => undefined);
         return;
@@ -949,7 +974,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
           // A load that started meanwhile is not the one that stopped.
           if (entry.closed || entry.loadEpoch !== epoch) return;
           entry.chrome.loading = false;
-          this.publish(entry, { loading: false });
+          this.publish(entry);
           this.#notifyLoad(entry);
         });
         return;
@@ -970,7 +995,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
           // catches what reached the main frame anyway (a page's own blob:).
           this.recordConsole(entry, {
             level: "error",
-            text: "Blocked a page navigation to a non-HTTP(S) address",
+            text: BLOCKED_BROWSER_NAVIGATION,
           });
           void send("Page.navigate", { url: CHROMIUM_START_URL }).catch(() => undefined);
           return;
@@ -1020,6 +1045,14 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
         this.#failLoad(entry, errorText);
         return;
       }
+      case "Runtime.bindingCalled":
+        if (
+          params["name"] !== CHROMIUM_NAVIGATION_GUARD_BINDING ||
+          params["payload"] !== BLOCKED_BROWSER_NAVIGATION
+        )
+          return;
+        this.recordConsole(entry, { level: "error", text: BLOCKED_BROWSER_NAVIGATION });
+        return;
       case "Runtime.consoleAPICalled": {
         const args = Array.isArray(params["args"]) ? (params["args"] as unknown[]) : [];
         this.recordConsole(entry, {
@@ -1258,7 +1291,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
     return {
       url: entry.chrome.url,
       title: entry.chrome.title,
-      loading: entry.chrome.loading,
+      loading: entry.chrome.loading || (entry.pendingNavigations > 0 && entry.state.error === null),
       canGoBack: history !== null && history.currentIndex > 0,
       canGoForward: history !== null && history.currentIndex < history.entries.length - 1,
     };
@@ -1300,6 +1333,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       ready: Promise.resolve() as unknown as Promise<ChromiumTarget>,
       target: null,
       chrome: { url: input.url, title: "", loading: true, history: null },
+      pendingNavigations: 0,
       loadEpoch: 0,
       mainDocuments: new Set(),
       bounds: { ...BROWSER_DEFAULT_BOUNDS },
@@ -1335,7 +1369,11 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
   /** Loads a URL through the product door, once the target exists. */
   #navigateEngine(entry: ChromiumTabEntry, url: string): void {
     entry.chrome.loading = true;
-    this.#whenReady(entry, "navigate", async (target) => {
+    // The target first loads about:blank. Its stop can arrive during setup,
+    // before this command is sent; only Page.navigate's answer makes a later
+    // stopped-loading state eligible to settle the requested navigation.
+    entry.pendingNavigations += 1;
+    void this.#whenReady(entry, "navigate", async (target) => {
       const answer = (await target.engine.connection.send(
         "Page.navigate",
         { url },
@@ -1346,10 +1384,20 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       } else if (answer.loaderId === undefined && answer.errorText === undefined) {
         // A same-document navigation has no load of its own to stop.
         entry.chrome.loading = false;
-        this.publish(entry, { loading: false });
+        this.publish(entry);
         this.#notifyLoad(entry);
       }
-    });
+    })
+      .finally(() => {
+        entry.pendingNavigations -= 1;
+        if (entry.closed) return;
+        this.publish(entry);
+        this.#notifyLoad(entry);
+      })
+      .catch((error: unknown) => {
+        if (!entry.closed)
+          log.warn("browser tab could not publish navigation", { tabId: entry.state.tabId, error });
+      });
   }
 
   close(tabId: string): void {
@@ -1417,7 +1465,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       const destination = history.entries[history.currentIndex + step];
       if (destination === undefined) {
         entry.chrome.loading = false;
-        this.publish(entry, { loading: false });
+        this.publish(entry);
         this.#notifyLoad(entry);
         return;
       }
@@ -1562,7 +1610,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
   }
 
   #settle(entry: ChromiumTabEntry, signal: AbortSignal, mode: BrowserLoadWaitMode): Promise<void> {
-    const loading = entry.chrome.loading;
+    const loading = this.liveChrome(entry).loading;
     if ((!loading && mode === "current") || signal.aborted) return Promise.resolve();
     return new Promise<void>((resolve) => {
       let grace: ReturnType<typeof setTimeout> | undefined;
@@ -1576,7 +1624,7 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       };
       const changed = (): void => {
         if (entry.closed) return finish();
-        if (entry.chrome.loading) {
+        if (this.liveChrome(entry).loading) {
           wasLoading = true;
           clearTimeout(grace);
         } else if (wasLoading) {
