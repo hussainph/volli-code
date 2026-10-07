@@ -80,6 +80,22 @@ async function main() {
     await page.waitForLoadState("domcontentloaded");
     assertBuiltRendererLoaded(page);
 
+    // DIAGNOSTIC (VC-709): main's event-loop stalls from here on.
+    await app.evaluate(({ app: electronApp, ipcMain }) => {
+      const diag = { acks: [], quitAt: null, stalls: [] };
+      globalThis.volliDiag = diag;
+      ipcMain.on("volli:client-state-flushed", () => diag.acks.push(Date.now()));
+      electronApp.on("before-quit", () => {
+        if (diag.quitAt === null) diag.quitAt = Date.now();
+      });
+      let last = Date.now();
+      setInterval(() => {
+        const now = Date.now();
+        const lag = now - last - 50;
+        if (lag > 150) diag.stalls.push([last, lag]);
+        last = now;
+      }, 50).unref();
+    });
     await must(1, "the cloud flag is on and the menu-bar seam is present", async () => {
       const seam = await app.evaluate(
         () => typeof globalThis.volliMenuBarHost?.enter === "function",
@@ -104,26 +120,12 @@ async function main() {
         const rendererAge = await page.evaluate(() => Math.round(performance.now()));
         const rendererRtt = Date.now() - rStart;
         const homeRail = await page.getByTestId("home-rail").count();
-        await app.evaluate(({ app: electronApp, ipcMain }) => {
-          const diag = { acks: [], quitAt: null, maxLagMs: 0 };
-          globalThis.volliDiag = diag;
-          ipcMain.on("volli:client-state-flushed", () => diag.acks.push(Date.now()));
-          electronApp.on("before-quit", () => {
-            if (diag.quitAt === null) diag.quitAt = Date.now();
-          });
-          let last = Date.now();
-          setInterval(() => {
-            const now = Date.now();
-            diag.maxLagMs = Math.max(diag.maxLagMs, now - last - 50);
-            last = now;
-          }, 50).unref();
-        });
         const entered = await app.evaluate(({ BrowserWindow }) => {
           const host = globalThis.volliMenuBarHost;
           const startedAt = Date.now();
-          globalThis.volliDiag.maxLagMs = 0;
           host.enter();
           globalThis.volliMenuBarEnteredAt = startedAt;
+          globalThis.volliDiag.enterSyncMs = Date.now() - startedAt;
           return {
             visible: BrowserWindow.getAllWindows().filter((window) => window.isVisible()).length,
             resident: host.isResident(),
@@ -148,7 +150,8 @@ async function main() {
             return {
               ackMs: d.acks.map((t) => t - at),
               quitMs: d.quitAt === null ? null : d.quitAt - at,
-              maxLagMs: d.maxLagMs,
+              enterSyncMs: d.enterSyncMs,
+              stalls: d.stalls.map(([t, lag]) => `${t - at}+${lag}`).join(","),
               nowMs: Date.now() - at,
             };
           })
