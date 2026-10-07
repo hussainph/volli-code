@@ -1,0 +1,104 @@
+# DIAGNOSTIC (VC-717) — TEMPORARY, never in the final diff.
+# Where does migrations.test.ts spend its time on a Linux runner, and which
+# kind of load (disk flushes or CPU) turns that into a 5 s timeout? Also: does
+# park-controller's breathe-window test fail under CPU starvation alone?
+name: diag-vc717
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diag-vc717-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: Diag migrations (${{ matrix.load }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        load: [idle, io, cpu]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fio stress-ng strace >/dev/null
+      - name: Runner facts
+        run: |
+          nproc; lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
+          df -h /tmp; findmnt -T /tmp
+          echo "--- baseline 4k write+fsync latency on /tmp"
+          fio --name=fsync-lat2 --directory=/tmp --rw=write --bs=4k --size=4m --fsync=1 | grep -A12 'sync' || true
+      - name: Start background load
+        run: |
+          case "${{ matrix.load }}" in
+            io)
+              # Four writers each flushing after every 4k write: a disk whose
+              # flush queue is shared with someone else's.
+              mkdir -p /tmp/vc717-io
+              nohup fio --name=contend --directory=/tmp/vc717-io --rw=randwrite --bs=4k --size=256m \
+                --fsync=1 --numjobs=4 --time_based --runtime=1500 >/tmp/fio.log 2>&1 &
+              ;;
+            cpu)
+              # Twice as many spinners as cores: a runner whose CPU is oversubscribed.
+              nohup stress-ng --cpu "$(( $(nproc) * 2 ))" --timeout 1500s >/tmp/stress.log 2>&1 &
+              ;;
+          esac
+          sleep 5
+          echo "--- 4k write+fsync latency under this load"
+          fio --name=fsync-lat3 --directory=/tmp --rw=write --bs=4k --size=2m --fsync=1 | grep -A12 'sync' || true
+      - name: migrations.test.ts (whole file, x3)
+        working-directory: packages/host-core
+        run: |
+          for rep in 1 2 3; do
+            echo "=== rep $rep"
+            vp test run src/db/migrations.test.ts --maxWorkers=1 > /tmp/mig-$rep.log 2>&1 || echo "FAILED rep $rep"
+            grep -E 'Tests |Duration|FAIL|timed out' /tmp/mig-$rep.log || true
+            sed -n '/VC717-BEGIN/,/VC717-END/p' /tmp/mig-$rep.log \
+              | grep -E 'tidies the legacy|kind index equal to the log|partial profiles|blobs reconciler' || true
+          done
+      - name: fsync syscalls per test (strace)
+        if: matrix.load == 'idle'
+        working-directory: packages/host-core
+        run: |
+          for name in "tidies the legacy table a fork left beside both new ones" "keeps the kind index equal to the log after every migration"; do
+            echo "=== $name"
+            strace -f -c -e trace=fsync,fdatasync,sync_file_range -o /tmp/strace.txt \
+              vp test run src/db/migrations.test.ts --maxWorkers=1 -t "$name" > /tmp/one.log 2>&1 || true
+            grep -E 'Tests ' /tmp/one.log || true
+            cat /tmp/strace.txt
+          done
+          echo "=== an empty run (vitest's own flushes)"
+          strace -f -c -e trace=fsync,fdatasync,sync_file_range -o /tmp/strace.txt \
+            vp test run src/db/migrations.test.ts --maxWorkers=1 -t "no test has this name" > /tmp/one.log 2>&1 || true
+          cat /tmp/strace.txt
+      - name: park-controller x25
+        working-directory: packages/host-core
+        run: |
+          fails=0
+          for rep in $(seq 1 25); do
+            if ! vp test run src/pty/park-controller.test.ts --maxWorkers=1 > /tmp/park.log 2>&1; then
+              fails=$((fails + 1)); grep -E 'FAIL|AssertionError' /tmp/park.log | head -4
+            fi
+          done
+          echo "park-controller failures: $fails / 25"
+      - name: Collect
+        if: always()
+        run: mkdir -p /tmp/out && cp /tmp/*.log /tmp/out/ 2>/dev/null || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: diag-vc717-${{ matrix.load }}-attempt-${{ github.run_attempt }}
+          path: /tmp/out
+          retention-days: 14

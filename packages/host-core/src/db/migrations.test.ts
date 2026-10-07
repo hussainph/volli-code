@@ -20,7 +20,8 @@ import { verifyMigrationBackup } from "./backup-integrity";
 import { internSessionEventProvenance } from "./session-event-provenance";
 import { currentSessionEventSequence } from "./session-events-cursor-repo";
 import { openRawDb } from "./test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { closeSync, fsyncSync, openSync, writeSync } from "node:fs";
 import type { LogLevel } from "@volli/shared";
 import { captureHostLog, type CapturedHostLog } from "../testing/log";
 import { MIGRATIONS, migrate } from "./migrations";
@@ -43,6 +44,61 @@ afterEach(() => {
   hostLog.restore();
   vi.restoreAllMocks();
   if (dir) rmSync(dir, { recursive: true, force: true });
+});
+
+// DIAGNOSTIC (VC-717) — TEMPORARY, never in the final diff.
+type Vc717Phases = Record<string, { n: number; ms: number }>;
+const vc717Rows: string[] = [];
+let vc717Start = 0;
+let vc717Cpu: NodeJS.CpuUsage;
+function vc717t<T>(phase: string, run: () => T): T {
+  const sink = (globalThis as { __vc717?: Vc717Phases }).__vc717;
+  if (sink === undefined) return run();
+  const start = performance.now();
+  try {
+    return run();
+  } finally {
+    const entry = (sink[phase] ??= { n: 0, ms: 0 });
+    entry.n += 1;
+    entry.ms += performance.now() - start;
+  }
+}
+function vc717FsyncProbe(): number {
+  const probeDir = mkdtempSync(join(tmpdir(), "vc717-fsync-"));
+  const start = performance.now();
+  const fd = openSync(join(probeDir, "probe"), "w");
+  writeSync(fd, Buffer.alloc(4096, 1));
+  fsyncSync(fd);
+  closeSync(fd);
+  const ms = performance.now() - start;
+  rmSync(probeDir, { recursive: true, force: true });
+  return Math.round(ms * 100) / 100;
+}
+beforeEach(() => {
+  (globalThis as { __vc717?: Vc717Phases }).__vc717 = {};
+  vc717Cpu = process.cpuUsage();
+  vc717Start = performance.now();
+});
+afterEach((context) => {
+  const wall = performance.now() - vc717Start;
+  const cpu = process.cpuUsage(vc717Cpu);
+  const phases = (globalThis as { __vc717?: Vc717Phases }).__vc717 ?? {};
+  delete (globalThis as { __vc717?: Vc717Phases }).__vc717;
+  const rounded = Object.fromEntries(
+    Object.entries(phases).map(([k, v]) => [k, { n: v.n, ms: Math.round(v.ms) }]),
+  );
+  vc717Rows.push(
+    JSON.stringify({
+      test: `${context.task.suite?.name ?? ""} > ${context.task.name}`,
+      wallMs: Math.round(wall),
+      cpuMs: Math.round((cpu.user + cpu.system) / 1000),
+      fsyncProbeMs: vc717FsyncProbe(),
+      phases: rounded,
+    }),
+  );
+});
+afterAll(() => {
+  console.log(`VC717-BEGIN\n${vc717Rows.join("\n")}\nVC717-END`);
 });
 
 /** One structured line exactly as the host log records it, at any time. */
@@ -2912,6 +2968,9 @@ describe("migration 033 — a Run's attendance", () => {
  * database VC-220 was reported against.
  */
 function buildLineageWithout020(dbPath: string): Database.Database {
+  return vc717t("t.buildLineageWithout020", () => buildLineageWithout020Inner(dbPath));
+}
+function buildLineageWithout020Inner(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
   for (const migration of MIGRATIONS.filter((m) => m.version <= 34 && m.version !== 20)) {
@@ -3102,6 +3161,9 @@ describe("migrate — 035, the blobs reconciler (VC-220)", () => {
   describe("partial profiles", () => {
     /** A fresh install's schema, to converge against. */
     function freshSchema(): Array<{ name: string; sql: string }> {
+      return vc717t("t.freshSchema", () => freshSchemaInner());
+    }
+    function freshSchemaInner(): Array<{ name: string; sql: string }> {
       const freshPath = tempDbPath();
       const fresh = openRawDb(freshPath);
       migrate(fresh, freshPath);
@@ -3572,6 +3634,9 @@ describe("migration 044 — durable Session Event sequence", () => {
 
   /** A v43 database with two Sessions whose events were committed interleaved. */
   function buildV43WithInterleavedEvents(dbPath: string): Database.Database {
+    return vc717t("t.buildV43WithInterleavedEvents", () => buildV43Inner(dbPath));
+  }
+  function buildV43Inner(dbPath: string): Database.Database {
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
     for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 43)) {
