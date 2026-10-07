@@ -111,6 +111,8 @@ export type ProvisionFailure =
   | { readonly code: "unexpected-state"; readonly step: StepId; readonly detail: string };
 
 export type ProvisionQuestion =
+  /** This is the machine the person is using; adding it is useful only for testing. */
+  | { readonly kind: "self-add"; readonly step: "probe" }
   /** An unknown host key: compare and accept, or go back. */
   | { readonly kind: "host-key"; readonly step: "connect"; readonly offer: HostKeyOffer }
   /** An older hostd runs here: update it, or use it as it is when it can be managed. */

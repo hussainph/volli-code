@@ -102,7 +102,7 @@ export const addHostStartInputSchema = z.strictObject({
   target: z.string().min(1).max(MAX_TARGET_LENGTH),
   name: z.string().min(1).max(MAX_HOST_NAME_LENGTH).optional(),
 });
-/** `AddHostAnswer`: one kind per question the flow can stop on. */
+/** `AddHostAnswer`: closed vocabulary, scoped by the named question. */
 const addHostAnswerSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("accept-host-key") }),
   z.strictObject({ kind: z.literal("update") }),

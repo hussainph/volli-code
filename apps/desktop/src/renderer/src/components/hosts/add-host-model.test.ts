@@ -267,13 +267,34 @@ describe("questions", () => {
     ).toEqual({
       kind: "existing-hostd",
       line: "Volli host 0.2.4 is already running here",
-      note: "Its workspaces stay either way.",
+      note: "Its projects stay. Running Sessions on box will stop.",
       adopt: "Use 0.2.4",
       action: "Update and pair",
     });
     expect(
       questionPrompt({ id: "q1", kind: "existing-hostd", step: "probe", adoptable: false }, "box"),
     ).toMatchObject({ line: "Volli host an older version is already running here", adopt: null });
+  });
+
+  it("adds the live count without promising Sessions survive", () => {
+    const question = { id: "q", kind: "existing-hostd", step: "probe" as const };
+    expect(questionPrompt(question, "box", 1)).toMatchObject({
+      note: "Its projects stay. Running Sessions on box will stop. 1 running Session in connected projects.",
+    });
+    expect(questionPrompt(question, "box", 3)).toMatchObject({
+      note: "Its projects stay. Running Sessions on box will stop. 3 running Sessions in connected projects.",
+    });
+    expect(questionPrompt(question, "box", 0)).toMatchObject({
+      note: "Its projects stay. Running Sessions on box will stop. 0 running Sessions in connected projects.",
+    });
+  });
+
+  it("warns before adding this Mac", () => {
+    expect(questionPrompt({ id: "q", kind: "self-add", step: "probe" }, "studio")).toEqual({
+      kind: "self-add",
+      line: "This is the Mac you’re using. Its projects already run here. Add it anyway (for testing)?",
+      action: "Add anyway",
+    });
   });
 
   it("opens a host this Mac already paired with", () => {

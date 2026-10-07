@@ -48,7 +48,8 @@ describe("remote host additive health contract", () => {
     expect(contract.REMOTE_HOST_PROJECTS_MAX).toBe(500);
     expect(contract.REMOTE_HOST_PROJECT_TEXT_MAX).toBe(4096);
     expect(contract.REMOTE_PROJECT_FAILURE_TEXT_MAX).toBe(8192);
-    expect(contract.REMOTE_HOST_UPDATE_UNAVAILABLE).toContain("Updating");
+    expect(contract.REMOTE_HOST_UPDATE_UNAVAILABLE).toContain("Re-add to update");
+    expect(contract.REMOTE_HOST_UPDATE_UNAVAILABLE).toContain("running Sessions will stop");
     expect(contract.REMOTE_HOST_SIGN_IN_UNAVAILABLE).toContain("Signing in");
   });
 });

@@ -71,6 +71,8 @@ export interface ProvisionResults {
 }
 
 export interface ProvisionDecisions {
+  /** The person acknowledged that this host is this machine. */
+  readonly selfAdd?: boolean;
   /** The fingerprints the person accepted, exactly: a different key is asked about again. */
   readonly acceptedHostKeys?: readonly string[];
   readonly existing?: "update" | "adopt";
@@ -141,6 +143,7 @@ function without<R extends ProvisionResults>(results: R, from: StepId): R {
  * intent, which no box fact answered, kept.
  */
 const DECISION_EVIDENCE: Readonly<Record<keyof ProvisionDecisions, StepId | null>> = {
+  selfAdd: "probe",
   acceptedHostKeys: "connect",
   existing: "probe",
   alreadyPaired: "probe",
@@ -199,7 +202,11 @@ export function answer<R extends ProvisionResults>(
       decisions.existing = reply.kind;
       break;
     case "open":
-      decisions.alreadyPaired = true;
+      // The current question scopes this existing wire answer: Add anyway
+      // must not skip enrollment as an already-paired host would.
+      if (state.stop?.kind === "question" && state.stop.question.kind === "self-add")
+        decisions.selfAdd = true;
+      else decisions.alreadyPaired = true;
       break;
     case "user-install":
       decisions.userInstall = true;

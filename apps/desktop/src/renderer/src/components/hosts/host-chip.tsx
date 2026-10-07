@@ -21,7 +21,6 @@
 import * as React from "react";
 import { MotionConfig, motion } from "motion/react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
-import { ClockIcon } from "@phosphor-icons/react/dist/csr/Clock";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
@@ -38,7 +37,7 @@ import {
   type HostRecord,
 } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
-import { useRemoteHostsStore } from "@renderer/stores/remote-hosts";
+import { readdHostToUpdate, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import {
   ActiveStepMark,
@@ -49,7 +48,6 @@ import {
   SwapText,
 } from "./host-parts";
 import {
-  countSessions,
   hostBadge,
   hostDetail,
   hostMeta,
@@ -315,31 +313,11 @@ function MenuAction({
 /** The one thing the current host's row has to say, under its name. */
 function HostDetailRow({ host }: { host: HostRecord }) {
   const detail = hostDetail(host);
-  const [confirming, setConfirming] = React.useState(false);
-  const kind = detail?.kind ?? null;
-  React.useEffect(() => setConfirming(false), [kind]);
   if (detail === null) return null;
-  return (
-    <DetailBody
-      host={host}
-      detail={detail}
-      confirming={confirming}
-      onConfirm={() => setConfirming(true)}
-    />
-  );
+  return <DetailBody host={host} detail={detail} />;
 }
 
-function DetailBody({
-  host,
-  detail,
-  confirming,
-  onConfirm,
-}: {
-  host: HostRecord;
-  detail: HostDetailModel;
-  confirming: boolean;
-  onConfirm: () => void;
-}) {
+function DetailBody({ host, detail }: { host: HostRecord; detail: HostDetailModel }) {
   const store = useHostConnectionStore.getState();
   switch (detail.kind) {
     case "updating":
@@ -355,50 +333,20 @@ function DetailBody({
         </div>
       );
     case "update-scheduled":
+    case "update-available":
       return (
         <DetailLine
-          icon={<ClockIcon aria-hidden className="size-4 text-muted-foreground" />}
-          text="Updates when Sessions finish"
+          text={
+            detail.kind === "update-available"
+              ? `Volli host ${detail.version} is available`
+              : "Update available"
+          }
         >
-          <Button size="xs" variant="ghost" onClick={() => store.cancelScheduledUpdate(host.id)}>
-            Cancel
+          <Button size="xs" onClick={() => readdHostToUpdate(host.id)}>
+            Re-add to update
           </Button>
         </DetailLine>
       );
-    case "update-available": {
-      const running = host.liveSessions ?? 0;
-      if (confirming && running > 0) {
-        return (
-          <div className="flex flex-col gap-2 px-2 pb-2 pl-10">
-            <p className="text-ui text-muted-foreground">
-              {countSessions(running)} {running === 1 ? "is" : "are"} running on {host.name}.
-            </p>
-            <div className="flex gap-1">
-              <Button
-                size="xs"
-                variant="secondary"
-                onClick={() => store.updateHost(host.id, "when-idle")}
-              >
-                When they finish
-              </Button>
-              <Button size="xs" onClick={() => store.updateHost(host.id, "now")}>
-                Update now
-              </Button>
-            </div>
-          </div>
-        );
-      }
-      return (
-        <DetailLine text={`Volli host ${detail.version} is available`}>
-          <Button
-            size="xs"
-            onClick={() => (running > 0 ? onConfirm() : store.updateHost(host.id, "now"))}
-          >
-            Update
-          </Button>
-        </DetailLine>
-      );
-    }
     case "offline":
       return (
         <DetailLine
