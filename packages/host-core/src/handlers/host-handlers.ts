@@ -61,6 +61,7 @@ import {
   type ModelPickerView,
   type ModelPurpose,
   type ModelSelection,
+  type LatestSessionSignal,
   type RemoteHostsSnapshot,
   type SessionReadVerb,
   type Ticket,
@@ -88,8 +89,14 @@ import {
 } from "../session-runtime/model-access-preferences";
 import type { PiRuntimeHost } from "../session-runtime/pi-adapter";
 import type { SessionAttachInput, SessionStartInput, Sessions } from "../session-runtime/sessions";
+import { createBoardHandlers, type BoardHandlerSignatures } from "../board/commands";
+import { createBoardChangeFeed, type BoardChangeFeed } from "../board/change-feed";
 import { reorderProjects } from "../db/projects-repo";
-import { executeTicketMove, type TicketMoveCommandInput } from "../ticket-move";
+import {
+  executeTicketMove,
+  type TicketMoveCommandInput,
+  type TicketMoveSeam,
+} from "../ticket-move";
 import type { BusyWorktreeSites } from "../worktree/activity";
 import { getTrimSettings } from "../worktree/trim-settings";
 import type { WorktreePorts } from "../worktree/types";
@@ -117,8 +124,7 @@ export type SessionCreateHandlerInput = Omit<SessionStartInput, "role" | "parent
  * projects structurally (it cannot import host-core, D2), and a composition
  * root's assignment of this map to that slice is the check that they agree.
  */
-export interface HostHandlerSignatures {
-  readonly "ticket.move": HostHandler<TicketMoveCommandInput, Ticket[]>;
+export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "sessions.create": HostHandler<SessionCreateHandlerInput, { sessionId: string }>;
   readonly "sessions.attach": HostHandler<SessionAttachInput, SessionStartResult>;
   readonly "settings.experiments": HostHandler<void, ExperimentSnapshot>;
@@ -301,6 +307,17 @@ export interface HostHandlerOptions {
    */
   readonly sessionReads?: SessionReadPort | null;
   /**
+   * The host's board change feeds (VC-565): every board command stamps its
+   * rows here, and the root's event bus feeds it every other writer's
+   * `data-changed` (`BoardChangeFeed.noteDataChanged`). One per host: a
+   * root passes the feed its bus feeds; absent (tests), a private one.
+   */
+  readonly boardFeed?: BoardChangeFeed;
+  /** The Session ledger's latest outcome per ticket, or null on a host without one. */
+  readonly ticketSignals?: ((projectId: string) => Promise<readonly LatestSessionSignal[]>) | null;
+  /** Where Pi keeps saved tool output, which an archive or delete releases (VC-469). */
+  readonly piSessionsDirectory?: string;
+  /**
    * The remote hosts this desktop added over SSH, and their add flows
    * (VC-700 PR 2): desktop main's registry. Absent or null (hostd, a desktop
    * that did not build one): every `hosts.*` and `hostAdd.*` entry answers
@@ -379,35 +396,57 @@ function hostHandlerEntries(
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
 
-  return {
-    "ticket.move": (input, call) => {
-      const database = board();
-      return executeTicketMove(
-        {
-          worktree: options.worktree ?? worktreeDeps(database, ports, { dataDir: options.dataDir }),
-          now,
-          busySites: options.busyWorktreeSites,
-          interruptTicketSessions: options.interruptTicketSessions,
-          // An explicit move is the Deliberate-move door: it reaches the one
-          // host-owned pending arrival, whichever door the person used.
-          onDeliberateMove: (notice) => {
-            if (automations.kind !== "live") return;
-            const execution = automations.execution;
-            if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
-          },
-          notify: (request) => ports.attention.deliver(request),
-          // The desktop window holds the committed board in its reply, so
-          // only the detached trim's worktree change is pushed back to it.
-          onMutation: (change) => {
-            if (call.origin === "desktop-window" && change.kind !== "worktree") return;
-            ports.events.publish("data-changed", change);
-          },
-          detachedWork: options.detachedWork,
+  const worktree = (database: Database.Database) =>
+    options.worktree ?? worktreeDeps(database, ports, { dataDir: options.dataDir });
+
+  /** The deliberate move (VC-629), whichever door: its write and every effect after it. */
+  const moveTicket = (
+    input: TicketMoveCommandInput,
+    call: HandlerCall,
+    seam?: TicketMoveSeam,
+  ): Ticket[] | Promise<Ticket[]> => {
+    const database = board();
+    return executeTicketMove(
+      {
+        worktree: worktree(database),
+        now,
+        busySites: options.busyWorktreeSites,
+        interruptTicketSessions: options.interruptTicketSessions,
+        // An explicit move is the Deliberate-move door: it reaches the one
+        // host-owned pending arrival, whichever door the person used.
+        onDeliberateMove: (notice) => {
+          if (automations.kind !== "live") return;
+          const execution = automations.execution;
+          if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
         },
-        input,
-        { now: now(), actor: call.actor },
-      );
-    },
+        notify: (request) => ports.attention.deliver(request),
+        // The desktop window holds the committed board in its reply, so
+        // only the detached trim's worktree change is pushed back to it.
+        onMutation: (change) => {
+          if (call.origin === "desktop-window" && change.kind !== "worktree") return;
+          ports.events.publish("data-changed", change);
+        },
+        detachedWork: options.detachedWork,
+      },
+      input,
+      { now: now(), actor: call.actor },
+      seam,
+    );
+  };
+
+  return {
+    ...createBoardHandlers({
+      db,
+      now,
+      events: ports.events,
+      feed: options.boardFeed ?? createBoardChangeFeed(),
+      worktree,
+      busyWorktreeSites: options.busyWorktreeSites,
+      detachedWork: options.detachedWork,
+      ticketSignals: options.ticketSignals ?? null,
+      piSessionsDirectory: options.piSessionsDirectory,
+      move: (input, call, seam) => moveTicket(input, call, seam),
+    }),
     "sessions.create": (input) =>
       sessions().create({ ...input, role: roleImpliedByTicket(input.ticketId) }),
     // Every Retry rides this. A ready attachment is the recovery point for an

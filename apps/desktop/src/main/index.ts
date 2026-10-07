@@ -123,6 +123,8 @@ import { createElectronClientCapabilities } from "./client-capabilities";
 import {
   getProjectById,
   getTicket,
+  getTicketRow,
+  listProjects,
   listRegisteredHarnesses,
   getFirstPaintHint,
   getGlobalAppearance,
@@ -198,6 +200,8 @@ import {
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { consoleInstallLogger, createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { keychainSecretCodec } from "./secrets/codec";
+import { installHarnessGuard } from "./harness/keychain-guard";
+import { harnessSecretPorts } from "./harness/secret-ports";
 import { registerSecretIpc } from "./secrets/ipc";
 import { registerAutomationIpcHandlers } from "./automations/ipc";
 import {
@@ -239,9 +243,10 @@ import {
   broadcastSessionsInterrupted,
   broadcastSystemAppearance,
   broadcastUpdateState,
+  tapDataChanged,
   windowEventBus,
 } from "./broadcast";
-import { subscribeTicketWake } from "@volli/host-core/board";
+import { createBoardChangeFeed, subscribeTicketWake } from "@volli/host-core/board";
 import { installDownloadedUpdate, registerUpdateIpcHandlers } from "./update-ipc";
 import {
   countOpenAgentTurns,
@@ -297,6 +302,17 @@ import {
 } from "./browser/cursor-overlay";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
+
+// Harness mode (VC-703): inert unless VOLLI_HARNESS=1, which only
+// `volli-drive` sets. When on, the boot is refused unless every home-derived
+// path sits in the instance's scratch root (and the build is a dev build);
+// every safeStorage method becomes a trap that fails the run, Chromium is told
+// to use a mock keychain, the secret ports below seal with per-instance key
+// files instead, and shell.openExternal & co. only record. First, before
+// anything else in this module can reach safeStorage or the shell, or the
+// command line is frozen at ready.
+const harnessGuard = installHarnessGuard({ env: process.env, app, safeStorage, shell });
+const harnessPorts = harnessGuard.active ? harnessSecretPorts(harnessGuard.paths) : null;
 
 // Monaco's language services require web workers, which Chromium does not
 // permit from file://. Register one standard, secure, fetch-capable app scheme
@@ -761,11 +777,13 @@ const appStartup = app.whenReady().then(async () => {
   // One keychain-wrapped key seals the host's credential inventory: the web
   // search keys' family and remote hosts' device keys alike (VC-643, VC-700).
   const credentialInventoryPath = join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME);
-  const credentialKeyring = keychainCredentialKeyring({
-    path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
-    keychain: safeStorage,
-    inventoryPath: credentialInventoryPath,
-  });
+  const credentialKeyring =
+    harnessPorts?.keyring ??
+    keychainCredentialKeyring({
+      path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
+      keychain: safeStorage,
+      inventoryPath: credentialInventoryPath,
+    });
   // Hosts this Mac added over SSH (VC-700): every call refuses while `cloud` is off.
   const remoteHosts = createDesktopRemoteHosts({
     userData: app.getPath("userData"),
@@ -790,10 +808,11 @@ const appStartup = app.whenReady().then(async () => {
     databasePath: dbPath,
     onTransactionViolation: app.isPackaged ? logTransactionViolation : throwTransactionViolation,
     devDiagnostics: isDev,
-    secretKey: keychainSecretCodec(keychainUse.keychain),
+    secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
       keyring: credentialKeyring,
-      mayUnlockUnattended: keychainUse.used,
+      // A key file never prompts, so harness mode may always unlock it.
+      mayUnlockUnattended: harnessPorts === null ? keychainUse.used : () => true,
       onResult: (result) => console.info(`[volli] web search keys: ${describeWebSealing(result)}`),
     },
     terminal: () => ({
@@ -965,7 +984,9 @@ const appStartup = app.whenReady().then(async () => {
   // about any key.
   // Whether this launch has used the keychain successfully yet (VC-643): the
   // web keys' unattended launch reconcile may fetch its own key only then.
-  if (dbHandle.ok) {
+  // Harness mode has no keychain to carry anything out of: the migration is
+  // skipped rather than left to trip the guard on a copied profile.
+  if (dbHandle.ok && harnessPorts === null) {
     const moved = migrateLegacySafeStorageSecrets(dbHandle.db);
     if (moved.carried > 0) keychainUse.markUsed();
     if (moved.carried + moved.dropped + moved.deferred > 0) {
@@ -989,7 +1010,7 @@ const appStartup = app.whenReady().then(async () => {
     liveHost?.secretStore ??
       new SecretStore(
         join(dirname(dbPath), "session-secrets.enc"),
-        keychainSecretCodec(keychainUse.keychain),
+        harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
       ),
   );
   sessionWakeBus?.subscribe(({ event }) => {
@@ -1274,6 +1295,19 @@ const appStartup = app.whenReady().then(async () => {
   const listOpenNativeBindings =
     sessionRuntime === null ? noOpenNativeBindings : () => sessionRuntime.openNativeBindings();
   const sessionDb = dbHandle.ok ? dbHandle.db : null;
+  /**
+   * The board's change feeds (VC-565): its handlers stamp their rows, and
+   * every other writer's `data-changed` on the window bus is stamped too, so
+   * a Client following the feed (the renderer with `cloud` on) misses none.
+   * With the flag off nothing subscribes, and the windows hear exactly what
+   * they heard before.
+   */
+  const boardFeed = createBoardChangeFeed({
+    projectOfTicket: (ticketId) =>
+      sessionDb === null ? undefined : getTicketRow(sessionDb, ticketId)?.project_id,
+    workspaces: () => (sessionDb === null ? [] : listProjects(sessionDb).map(({ id }) => id)),
+  });
+  tapDataChanged((change) => boardFeed.noteDataChanged(change));
   const runtimeAutomations = createRuntimeAutomations({
     host: hostCore,
     events: hostPorts.events,
@@ -1395,6 +1429,13 @@ const appStartup = app.whenReady().then(async () => {
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
       ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
+      boardFeed,
+      ticketSignals:
+        sessionEngine === null
+          ? null
+          : (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
+      // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
+      piSessionsDirectory,
       remoteHosts: remoteHostsPort(remoteHosts),
     });
   };
@@ -1548,6 +1589,10 @@ const appStartup = app.whenReady().then(async () => {
         shutdownAgentSocket: async () => {},
         prepareQuit: (event) => prepareHostQuit(event),
         stopBackgroundWork: () => webSealing.stop(),
+        onShutdownDeadline: (deadlineMs) =>
+          hostCore.warnIfFollowUpCleanCloseSkipped(
+            `quit: shutdown deadline expired after ${deadlineMs}ms`,
+          ),
         reportFailure: (error) =>
           console.error("[volli] failed to coordinate app shutdown:", errorMessage(error)),
       }),
@@ -1678,6 +1723,8 @@ const appStartup = app.whenReady().then(async () => {
     mcpSettings: mcpSettings ?? undefined,
     // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
     piSessionsDirectory,
+    // A removed Workspace's board feed is released, its followers told to resnapshot.
+    onProjectRemoved: (projectId) => boardFeed.dispose(projectId),
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its
@@ -2395,8 +2442,11 @@ const appStartup = app.whenReady().then(async () => {
   // headless installer-idempotency e2e cannot redirect it into a throwaway
   // profile. VOLLI_AGENT_HOME overrides the install/refresh/uninstall home for
   // exactly that. Unset in production, so the real home is used unchanged.
-  const agentToolsHome =
-    (isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home");
+  // Harness mode makes the contained scratch home authoritative (VC-703): the
+  // boot was refused above unless it sits inside the instance's scratch root.
+  const agentToolsHome = harnessGuard.active
+    ? harnessGuard.containment.agentHome
+    : ((isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home"));
   // The one other shim this install may claim a link from: the packaged app
   // repoints a dev profile's link (the dev shim dies with its checkout), never
   // the reverse — a dev boot must not steal the install the user actually uses.

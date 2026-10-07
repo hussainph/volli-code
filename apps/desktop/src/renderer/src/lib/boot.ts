@@ -17,6 +17,9 @@ import type {
 } from "../../../ipc/contract";
 
 import { seedAppStateCache } from "@renderer/lib/app-state-storage";
+import { boardProtocol, startBoardProtocol } from "@renderer/lib/board-protocol";
+import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
+import { toastError } from "@renderer/lib/toast";
 import { setBootNotice } from "@renderer/lib/boot-notice";
 import {
   PROJECTS_UI_APP_STATE_KEY,
@@ -113,6 +116,10 @@ export async function refreshPlanningData(
   change: { ticketId?: string; projectId?: string; kind?: DataChangeKind } = {},
   gateway: Pick<BootGateway, "bootstrap" | "projectRoster"> = defaultGateway,
 ): Promise<BootResult> {
+  // With `cloud` on, the board's own change feed carries every board change
+  // (VC-565): only the list of Workspaces is still this window's to refresh.
+  const protocol = boardProtocol();
+  if (protocol !== null) return refreshWorkspaceList(change, gateway, protocol.sync);
   const movedCheckout = change.kind === "worktree";
   if (movedCheckout) useVenueStore.getState().invalidateTickets(change.ticketId);
   if (!movesBoardData(change.kind)) {
@@ -172,6 +179,88 @@ export async function refreshPlanningData(
     // whatever SQLite just said about the board.
     if (movedCheckout) void useVenueStore.getState().refreshStale();
   }
+}
+
+/**
+ * The `cloud`-on refresh: a change that names a Workspace the board already
+ * follows is the feed's (it stamped the same write), so nothing is read. An
+ * untargeted one, or one naming a Workspace this window does not hold, may
+ * have added or removed a project: the project list is re-read (the
+ * bootstrap's projects; the board slices stay the feed's), a new Workspace is
+ * opened, and a removed one forgotten.
+ */
+async function refreshWorkspaceList(
+  change: { ticketId?: string; projectId?: string },
+  gateway: Pick<BootGateway, "bootstrap">,
+  sync: { follows(projectId: string): boolean },
+): Promise<BootResult> {
+  if (change.projectId !== undefined && sync.follows(change.projectId)) return { ok: true };
+  const result = await gateway.bootstrap();
+  if (!result.ok) return result;
+  const { projects } = result.data;
+  const previousSelection = useProjectsStore.getState().selectedProjectId;
+  const selectedProjectId = projects.some(({ id }) => id === previousSelection)
+    ? previousSelection
+    : (projects[0]?.id ?? null);
+  const known = new Set(projects.map(({ id }) => id));
+  for (const projectId of Object.keys(useBoardStore.getState().ticketsByProject)) {
+    if (!known.has(projectId)) useBoardStore.getState().forget(projectId);
+  }
+  useProjectsStore.getState().hydrate(projects, selectedProjectId);
+  for (const { id } of projects) useBoardStore.getState().seedProject(id);
+  useBoardStore.getState().notePlanningChange(change);
+  return { ok: true };
+}
+
+/** Whether the host has the `cloud` flag on: the Session router's experiments read. */
+async function readCloudFlag(): Promise<boolean> {
+  const experiments = await sessionRpcClient().settings.experiments.query();
+  return experiments.cloud.enabled;
+}
+
+/**
+ * With `cloud` on, moves the board onto the host protocol (VC-565): starts
+ * the board client and sync engine over the desktop's IPC bridge, and opens
+ * every Workspace boot hydrated, from its snapshot, following its feed. With
+ * it off (or unreadable) the board stays on the legacy IPC, exactly as before.
+ * Resolves whether the protocol path started.
+ */
+export async function startBoardProtocolIfEnabled(
+  readCloud: () => Promise<boolean> = readCloudFlag,
+): Promise<boolean> {
+  let enabled: boolean;
+  try {
+    enabled = await readCloud();
+  } catch {
+    // An unreadable flag is the default: off.
+    return false;
+  }
+  if (!enabled) return false;
+  const { sync } = startBoardProtocol({
+    view: {
+      paint: (projectId, tickets, labels, unloaded) =>
+        useBoardStore.getState().paintProtocolBoard(projectId, tickets, labels, unloaded),
+      adoptProject: (project) => useProjectsStore.getState().adoptProject(project),
+      notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
+      checkoutMoved: (ticketId) => {
+        useVenueStore.getState().invalidateTickets(ticketId);
+        void useVenueStore.getState().refreshStale();
+      },
+      failed: (message) => toastError(message),
+      // Not a failure: the write keeps being sent under its id until the host answers.
+      unconfirmed: (message) => toast.warning(message),
+    },
+  });
+  await Promise.all(
+    useProjectsStore.getState().projects.map(({ id }) =>
+      sync.open(id).catch((error: unknown) => {
+        toastError(
+          `Couldn't open the board: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }),
+    ),
+  );
+  return true;
 }
 
 /** Unwraps a zustand-persist envelope (`{state,version}`) into its `state`, or `undefined` for anything else. */

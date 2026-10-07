@@ -18,6 +18,9 @@ import {
   type AppRouter,
   type RouterCaller,
   type SessionRouterContext,
+  type BoardRouterHandlers,
+  type DesktopRouterHandlers,
+  type SessionRouterHandlers,
 } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
 import {
@@ -101,7 +104,12 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
       judgeNextRegistrationAs({ caller, resourceWorkspace });
       // One object, as main hands it: the map over the ports the case states.
       const registration = registerSessionRpcIpcHandlers({
-        handlers: sessionHandlersFrom(ports),
+        // The Session cases reach only the Session router's slice; the bridge
+        // also serves the board router (VC-565) and the desktop-only tier
+        // (VC-608), whose cases are their own.
+        handlers: sessionHandlersFrom(ports) as unknown as SessionRouterHandlers &
+          BoardRouterHandlers &
+          DesktopRouterHandlers,
         ...(diagnostics === undefined ? {} : { diagnostics }),
       });
       assertIdentityConsumed();
@@ -124,6 +132,9 @@ export function electronIpcSessionLink(): ContractLink<SessionRouterHost, AppRou
   });
   return { ...link, name: "electron-ipc" };
 }
+
+/** What the Session router alone serves: every v1 feature but the board's (VC-565). */
+const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter((feature) => !feature.startsWith("board."));
 
 /** The one credential the WebSocket link presents; its verifier answers the case's caller. */
 const HARNESS_CREDENTIAL = "contract-harness-credential";
@@ -155,7 +166,7 @@ export function webSocketSessionLink(): ContractLink<SessionRouterHost, AppRoute
         router: createSessionRouter(),
         bind: { host: "127.0.0.1", port: 0 },
         host: { id: HARNESS_HOST, version: "contract" },
-        features: HOST_V1_FEATURES,
+        features: SESSION_ROUTER_FEATURES,
         workspace: (id) => (id === actor.workspaceId ? { id, epoch: 1 } : null),
         verifier,
         // The map over the ports the case states, exactly as the IPC link hands it.
@@ -173,7 +184,7 @@ export function webSocketSessionLink(): ContractLink<SessionRouterHost, AppRoute
           client: { kind: "cli", version: "contract" },
           workspaceId: (host.caller.actor as { workspaceId: string }).workspaceId,
           credential: HARNESS_CREDENTIAL,
-          features: HOST_V1_FEATURES,
+          features: SESSION_ROUTER_FEATURES,
           lastSeen: null,
         }),
       ),

@@ -16,6 +16,7 @@ import {
 import type { HostCorePorts, LiveHostCore } from "@volli/host-core";
 import type { RetentionReclaimSeams } from "@volli/host-core/maintenance";
 import { getProjectById, getTicket } from "@volli/host-core/db";
+import type { BoardChangeFeed } from "@volli/host-core/board";
 import { createHostHandlers, type SessionReadPort } from "@volli/host-core/handlers";
 import { SecretService } from "@volli/host-core/secrets";
 import { AgentObservability, hostMcpDispatch, hostCodeMode } from "@volli/host-core/integrations";
@@ -46,6 +47,7 @@ import {
 } from "@volli/host-core/worktree";
 import type { HeadlessSecrets } from "./secrets";
 import { ownsLegacyHostdVenue } from "./venue";
+import { withAgentGit } from "./agent-git-env";
 
 export interface HeadlessRuntimeOptions {
   binDir: string;
@@ -53,6 +55,8 @@ export interface HeadlessRuntimeOptions {
   codeModeSandbox?: CodeModeSandboxAssets;
   /** A scripted provider replaces only the wire in host-container and integration proofs. */
   modelAccess?: PiModelAccess;
+  /** The box's platform (`process.platform`): on a Mac, Session git never reaches the keychain. */
+  platform?: string;
 }
 
 function headlessHomeDir(env: Readonly<Record<string, string | undefined>>): string {
@@ -86,6 +90,8 @@ export function createHeadlessSessionRuntime(input: {
   host: LiveHostCore;
   version: string;
   ports: HostCorePorts;
+  /** The host's board change feeds (VC-565): its bus already feeds them. */
+  boardFeed?: BoardChangeFeed;
   secrets: HeadlessSecrets;
   env: Readonly<Record<string, string | undefined>>;
   /** The agent socket this host serves; every Session command is pointed at it. */
@@ -165,10 +171,16 @@ export function createHeadlessSessionRuntime(input: {
     // with operators and bakes nothing. Without it the agent's `volli` answers
     // APP_UNREACHABLE and `session done` cannot reach the host that runs it.
     // The Session's identity is still composed after this, never from here.
-    concurrencyEnvFor: async (sessionId) => ({
-      ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
-      [VOLLI_SOCKET_ENV]: input.socketPath,
-    }),
+    // On a Mac, git's keychain helper is never run by a Session (VC-700):
+    // its reset is the record's first git configuration entry.
+    concurrencyEnvFor: async (sessionId) =>
+      withAgentGit(
+        {
+          ...(await concurrency({ excludeSessionId: sessionId, environment: env })),
+          [VOLLI_SOCKET_ENV]: input.socketPath,
+        },
+        options.platform ?? process.platform,
+      ),
     resolveRuntimeContext: createRuntimeContextResolver({
       db,
       sessionEngine,
@@ -320,6 +332,8 @@ export function createHeadlessSessionRuntime(input: {
           // Served before any door opens: hostd hands it over before it
           // settles the socket or starts the listener.
           sessionReads: (verb, workspaceId, args) => sessionReads!(verb, workspaceId, args),
+          ...(input.boardFeed === undefined ? {} : { boardFeed: input.boardFeed }),
+          ticketSignals: (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
         }),
       };
     },

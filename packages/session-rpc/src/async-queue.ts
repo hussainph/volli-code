@@ -1,8 +1,3 @@
-/**
- * The bounded hand-off between a subscription's source and the generator a
- * router yields from: every stream on every router (the Session router's,
- * the desktop-only tier's) drains one.
- */
 export class AsyncQueue<T> implements AsyncIterable<T> {
   readonly #values: T[] = [];
   /** Each held value's size, beside it, when the queue is bounded in bytes. */

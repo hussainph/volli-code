@@ -23,6 +23,7 @@ const noop = (_path: string): void => {};
 function controlsWith(edit: NavigatorEdit): FileNavigatorControls {
   return {
     edit,
+    canWrite: true,
     startDraft: () => {},
     startRename: () => {},
     cancelEdit: () => {},

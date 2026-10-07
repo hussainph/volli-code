@@ -35,6 +35,7 @@
  * and it is not this ticket's.
  */
 import * as React from "react";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { errorMessage } from "@volli/shared";
 
 import { fileDocumentIdentity } from "@renderer/editor/document-identity";
@@ -70,6 +71,11 @@ export interface FileNavigatorHost {
 export interface FileNavigatorControls {
   /** The inline field currently open, if any. */
   edit: NavigatorEdit;
+  /**
+   * Whether the project can be written to (VC-576): `false` while its host
+   * cannot serve. Every action below stands down then, and checks again.
+   */
+  canWrite: boolean;
   startDraft(entry: NavigatorEntryKind): void;
   startRename(relPath: string): void;
   cancelEdit(): void;
@@ -125,6 +131,7 @@ export function useFileNavigatorMutations(input: {
 }): FileNavigatorControls {
   const { cwd } = input;
   const { projectId, ticketId } = input.scope;
+  const canWrite = useCanWrite(projectId);
   const [edit, setEdit] = React.useState<NavigatorEdit>(NO_NAVIGATOR_EDIT);
 
   // The host is rebuilt by its owner on every render; holding it in a ref keeps
@@ -145,12 +152,16 @@ export function useFileNavigatorMutations(input: {
 
   const cancelEdit = React.useCallback(() => setEdit(NO_NAVIGATOR_EDIT), []);
   const startDraft = React.useCallback(
-    (entry: NavigatorEntryKind) => setEdit({ kind: "draft", entry }),
-    [],
+    (entry: NavigatorEntryKind) => {
+      if (guardWrite(projectId)) setEdit({ kind: "draft", entry });
+    },
+    [projectId],
   );
   const startRename = React.useCallback(
-    (relPath: string) => setEdit({ kind: "rename", relPath }),
-    [],
+    (relPath: string) => {
+      if (guardWrite(projectId)) setEdit({ kind: "rename", relPath });
+    },
+    [projectId],
   );
 
   const commitDraft = React.useCallback(
@@ -162,6 +173,7 @@ export function useFileNavigatorMutations(input: {
         toastError(target.error);
         return;
       }
+      if (!guardWrite(scope.projectId)) return;
       void (async () => {
         try {
           const request = { ...scope, relPath: target.relPath };
@@ -193,6 +205,7 @@ export function useFileNavigatorMutations(input: {
         toastError(target.error);
         return;
       }
+      if (!guardWrite(scope.projectId)) return;
       void (async () => {
         try {
           if (await hasUnsavedDocument(scope, relPath)) {
@@ -220,6 +233,7 @@ export function useFileNavigatorMutations(input: {
 
   const duplicate = React.useCallback(
     (relPath: string) => {
+      if (!guardWrite(scope.projectId)) return;
       void (async () => {
         try {
           const result = await window.api.files.duplicate({ ...scope, relPath });
@@ -238,6 +252,7 @@ export function useFileNavigatorMutations(input: {
 
   const remove = React.useCallback(
     (relPath: string, entry: NavigatorEntryKind) => {
+      if (!guardWrite(scope.projectId)) return;
       void (async () => {
         const noun = entry === "directory" ? "folder" : "file";
         try {
@@ -261,6 +276,7 @@ export function useFileNavigatorMutations(input: {
   return React.useMemo(
     () => ({
       edit,
+      canWrite,
       startDraft,
       startRename,
       cancelEdit,
@@ -269,6 +285,16 @@ export function useFileNavigatorMutations(input: {
       duplicate,
       remove,
     }),
-    [cancelEdit, commitDraft, commitRename, duplicate, edit, remove, startDraft, startRename],
+    [
+      canWrite,
+      cancelEdit,
+      commitDraft,
+      commitRename,
+      duplicate,
+      edit,
+      remove,
+      startDraft,
+      startRename,
+    ],
   );
 }

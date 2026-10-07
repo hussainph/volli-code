@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vite-plus/test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type Database from "better-sqlite3";
+import { createTicketCommand } from "@volli/host-core/board";
+import { insertProject, openVolliDb } from "@volli/host-core/db";
+import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { validateListenerLimits } from "@volli/session-rpc/websocket";
 
@@ -6,6 +12,8 @@ import {
   cloudEnabled,
   HOSTD_FEATURES,
   HOSTD_LISTENER_LIMITS,
+  hostdBoardFeed,
+  hostResourceWorkspace,
   isLiteralLoopback,
   sessionWorkspace,
 } from "./host-protocol";
@@ -28,6 +36,8 @@ describe("what hostd offers", () => {
       "sessions.subscribe",
       "sessions.history",
       "session.read",
+      "board.read",
+      "board.write",
     ]);
   });
 });
@@ -52,19 +62,88 @@ describe("the Session router's resource port", () => {
   });
 });
 
+describe("hostd's board feed and resource port (VC-565)", () => {
+  const PROJECT = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+  let root: string;
+  let db: Database.Database;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "hostd-board-"));
+    db = openVolliDb(join(root, "volli.db"));
+    insertProject(db, {
+      id: PROJECT,
+      name: "Fixture",
+      path: root,
+      ticketPrefix: "FX",
+      colorIndex: 0,
+      sortOrder: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    createTicketCommand(
+      db,
+      { id: "ticket-1", projectId: PROJECT, title: "One", status: "todo" },
+      { now: 2, actor: { kind: "user" } },
+    );
+    db.prepare(
+      "INSERT INTO workspace_epochs (workspace_id, epoch, host_id, created_at) VALUES (?, ?, ?, ?)",
+    ).run(PROJECT, 4, "host", 1);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("answers nothing before the database opens, and stamps nothing anywhere", () => {
+    const feed = hostdBoardFeed(() => undefined);
+    const seen: unknown[] = [];
+    feed.subscribe(PROJECT, null, (batch) => seen.push(batch));
+    feed.noteDataChanged({ ticketId: "ticket-1" });
+    feed.noteDataChanged({});
+    expect(seen).toEqual([]);
+    expect(feed.cursor(PROJECT)).toMatch(/^0:/u);
+  });
+
+  it("reads the Workspace's epoch, a ticket's project and every Workspace once it is open", () => {
+    const feed = hostdBoardFeed(() => db);
+    const seen: { changes: readonly unknown[] }[] = [];
+    feed.subscribe(PROJECT, null, (batch) => seen.push(batch));
+    expect(feed.cursor(PROJECT)).toMatch(/^4:/u);
+    // A Workspace this host has no row for has never been served: epoch 0.
+    expect(feed.cursor("no-such-project")).toMatch(/^0:/u);
+    feed.noteDataChanged({ ticketId: "ticket-1" });
+    feed.noteDataChanged({});
+    expect(seen.map(({ changes }) => changes)).toEqual([
+      [{ kind: "ticket", op: "upsert", id: "ticket-1", projectId: PROJECT }],
+      [{ kind: "project", op: "upsert", id: PROJECT, projectId: PROJECT }],
+    ]);
+  });
+
+  it("answers a Session from its ledger and every board kind from the board", async () => {
+    const resolve = hostResourceWorkspace(db, {
+      getSession: async () => null as never,
+    });
+    expect(await resolve({ kind: "ticket", id: "ticket-1" })).toBe(PROJECT);
+    expect(await resolve({ kind: "session", id: "nobody" })).toBeNull();
+    expect(await resolve({ kind: "label", id: "nothing" })).toBeNull();
+  });
+});
+
 // B9 (VC-700): until VC-575's host-wide budget, the listener's own bounds are it.
 describe("hostd's listener limits", () => {
   const MIB = 1024 * 1024;
 
-  it("are tight, valid, and bound the worst case to 584 MiB", () => {
+  it("let a desktop open every project, and bound the worst case to 544 MiB", () => {
     const limits = HOSTD_LISTENER_LIMITS;
     expect(() => validateListenerLimits(limits)).not.toThrow();
     expect(limits).toMatchObject({
-      maxConnections: 8,
-      maxSubscriptions: 8,
-      maxFrameBytes: 4 * MIB,
-      maxReplayBytes: 4 * MIB,
-      maxOutboundBytes: 8 * MIB,
+      maxConnections: 32,
+      handshakeBurst: 32,
+      maxSubscriptions: 4,
+      maxFrameBytes: 2 * MIB,
+      maxReplayBytes: 1.5 * MIB,
+      maxOutboundBytes: 4 * MIB,
       maxInboundBytes: 1 * MIB,
     });
     // A full resume and the frame behind it fit what one connection may hold unsent.
@@ -75,7 +154,7 @@ describe("hostd's listener limits", () => {
       limits.maxOutboundBytes +
       limits.maxSubscriptions * 2 * limits.maxReplayBytes +
       limits.maxInboundBytes;
-    expect(limits.maxConnections * perConnection).toBe(584 * MIB);
+    expect(limits.maxConnections * perConnection).toBe(544 * MIB);
   });
 
   it("serve a literal loopback address only, never a name", () => {

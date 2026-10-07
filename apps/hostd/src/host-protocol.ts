@@ -17,21 +17,28 @@
  *   (VC-623) is a long-lived bearer and is never accepted here. VC-575
  *   (pairing), VC-577 (the same-machine bootstrap) and a hosted control
  *   plane each plug a verifier into the same port.
- * - **What it serves.** The Session router's commands, its stream and the
- *   socket's Session reads, from the host's one handler map (VC-668) under
- *   the router's policy: the same handlers the agent socket answers through.
+ * - **What it serves.** The composed host router (VC-565): the Session
+ *   router's commands, its stream and the socket's Session reads, and the
+ *   board's reads, writes and change feed, all from the host's one handler map
+ *   (VC-668) under the router's policy: the same handlers the agent socket
+ *   answers through.
  *   `model-access` is not offered yet: VC-572 decides its policy for a
  *   paired device.
  * - **The Workspace** a hello names is a project on this host, at the
  *   highest epoch `workspace_epochs` records for it (0: never served under
  *   the flag). Raising it is promotion's (VC-591), never a connection's.
  */
-import { getProjectById, prepared } from "@volli/host-core/db";
+import {
+  boardResourceWorkspace,
+  createBoardChangeFeed,
+  type BoardChangeFeed,
+} from "@volli/host-core/board";
+import { getProjectById, getTicketRow, listProjects, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
 import { type HostCredentialVerifier, type HostV1Feature } from "@volli/host-protocol";
 import type { SessionEngine } from "@volli/session-engine";
 import {
-  createSessionRouter,
+  createHostRouter,
   RpcDiagnosticLog,
   SESSION_RESOURCE,
   type WorkspaceResource,
@@ -63,6 +70,8 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "sessions.subscribe",
   "sessions.history",
   "session.read",
+  "board.read",
+  "board.write",
 ];
 
 const MIB = 1024 * 1024;
@@ -70,30 +79,29 @@ const MIB = 1024 * 1024;
 /**
  * hostd's listener bounds while the enrolled-device verifier is its only
  * one (VC-700): a few devices of one person, over SSH tunnels to loopback.
- * Until VC-575's host-wide budget, these are the budget. Worst case, every
+ * A client holds one connection per Workspace, and the desktop opens every
+ * project a host serves, so the cap is **32 connections per host** (across
+ * every Mac), with a burst of 32 handshakes. Until VC-575's host-wide byte
+ * budget, the per-connection bounds are the budget. Worst case, every
  * connection full at once:
  *
- *   8 connections × (8 MiB unsent + 8 streams × 2 × 4 MiB staged replay
- *   + 1 MiB inbound frame) = 8 × 73 MiB = 584 MiB
+ *   32 connections × (4 MiB unsent + 4 streams × 2 × 1.5 MiB staged replay
+ *   + 1 MiB inbound frame) = 32 × 17 MiB = 544 MiB
  *
  * against the defaults' 128 × (32 + 64 × 32 + 8) MiB. An answer or event
- * past 4 MiB is refused whole (`response-too-large`; `session.history`
- * pages), and a resume past 4 MiB re-reads its snapshot instead. The
- * connection cap is **host-wide**: at most 8 active client/Workspace
- * connections per host, across every Mac (a client holds one per
- * Workspace). One Mac with a few projects open fits, with room to
- * reconnect; two Macs with four projects each fill it.
+ * past 2 MiB is refused whole (`response-too-large`; `session.history`
+ * pages), and a resume past 1.5 MiB re-reads its snapshot instead.
  */
 export const HOSTD_LISTENER_LIMITS: HostProtocolListenerLimits = Object.freeze({
   ...DEFAULT_LISTENER_LIMITS,
-  maxConnections: 8,
-  handshakeBurst: 8,
-  handshakesPerSecond: 4,
-  maxSubscriptions: 8,
-  maxFrameBytes: 4 * MIB,
-  maxReplayBytes: 4 * MIB,
+  maxConnections: 32,
+  handshakeBurst: 32,
+  handshakesPerSecond: 16,
+  maxSubscriptions: 4,
+  maxFrameBytes: 2 * MIB,
+  maxReplayBytes: 1.5 * MIB,
   // A full resume, and the next frame behind it.
-  maxOutboundBytes: 8 * MIB,
+  maxOutboundBytes: 4 * MIB,
   maxInboundBytes: 1 * MIB,
 });
 
@@ -152,6 +160,46 @@ export function sessionWorkspace(
       : null;
 }
 
+/**
+ * Every family's resource port in one (VC-565): a Session's Workspace from its
+ * ledger, a ticket's, comment's or label's from the board. The kinds are
+ * disjoint across families (`HostRouterResourceKindsDisjoint`), so each kind
+ * has exactly one answer.
+ */
+export function hostResourceWorkspace(
+  db: Database.Database,
+  sessionEngine: Pick<SessionEngine, "getSession">,
+): (resource: WorkspaceResource) => Promise<string | null> {
+  const sessions = sessionWorkspace(sessionEngine);
+  const board = boardResourceWorkspace(db);
+  return async (resource) =>
+    resource.kind === SESSION_RESOURCE ? sessions(resource) : board(resource);
+}
+
+/**
+ * hostd's board change feeds (VC-565), one per Workspace it serves: its
+ * handlers stamp their rows, and its bus feeds every other writer's
+ * `data-changed`. Made before the database opens (the bus exists first), so
+ * it reads the database through `db`, and answers nothing until it is open.
+ * A Workspace's epoch is the one its welcome names.
+ */
+export function hostdBoardFeed(db: () => Database.Database | undefined): BoardChangeFeed {
+  return createBoardChangeFeed({
+    epochOf: (workspaceId) => {
+      const open = db();
+      return open === undefined ? 0 : (servedWorkspace(open, workspaceId)?.epoch ?? 0);
+    },
+    projectOfTicket: (ticketId) => {
+      const open = db();
+      return open === undefined ? undefined : getTicketRow(open, ticketId)?.project_id;
+    },
+    workspaces: () => {
+      const open = db();
+      return open === undefined ? [] : listProjects(open).map(({ id }) => id);
+    },
+  });
+}
+
 /** What the listener needs from the composed host. */
 export interface HostdProtocolPorts {
   readonly db: Database.Database;
@@ -187,7 +235,7 @@ export function startHostdProtocolListener(
   const diagnostics = new RpcDiagnosticLog();
   const handlers = admittedHandlers(ports.handlers, ROUTER_POLICY);
   return startHostProtocolListener({
-    router: createSessionRouter(),
+    router: createHostRouter(),
     bind: ports.bind,
     host: { id: ports.hostId, version: ports.version },
     features: HOSTD_FEATURES,
@@ -197,7 +245,7 @@ export function startHostdProtocolListener(
     context: () => ({
       handlers,
       diagnostics,
-      resourceWorkspace: sessionWorkspace(sessionEngine),
+      resourceWorkspace: hostResourceWorkspace(db, sessionEngine),
     }),
     log: (event) => logListenerEvent(logger, event),
   });

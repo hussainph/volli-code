@@ -1,12 +1,7 @@
 import { procedureSchemas, type ProcedureSchema } from "./procedure-schema";
 export type { ProcedureSchema } from "./procedure-schema";
 import { TRPCError, tracked } from "@trpc/server";
-import {
-  isHostActor,
-  type HostActor,
-  type HostOperation,
-  type JsonUnsafeProcedures,
-} from "@volli/host-protocol";
+import { isHostActor, type HostActor, type JsonUnsafeProcedures } from "@volli/host-protocol";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
 export type { SessionReadInput } from "./session-reads";
 import {
@@ -140,13 +135,20 @@ export {
   type BoardTicketMoveInput,
 } from "./board-router";
 export {
+  createHostRouter,
+  type HostRouter,
+  type HostRouterCatalogBinding,
+  type HostRouterContext,
+  type HostRouterFeatureBinding,
+  type HostRouterPaths,
+} from "./host-router";
+export {
   createDesktopRouter,
   desktopProcedureSchemas,
   type DesktopRouter,
   type DesktopRouterContext,
   type DesktopRouterHandlers,
 } from "./desktop-router";
-export type { HostRouterCatalogBinding, HostRouterPaths } from "./host-router";
 export {
   DESKTOP_IPC_EXPOSURE,
   DESKTOP_IPC_PATHS,
@@ -159,6 +161,7 @@ export {
 } from "./desktop-ipc";
 export { AsyncQueue } from "./async-queue";
 export { sanitizeDiagnosticText } from "./diagnostic-text";
+export { AsyncQueue } from "./async-queue";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
@@ -1695,16 +1698,6 @@ export function sessionProcedureSchemas(
  */
 export type SessionRouterCatalogBinding = AssertNever<
   CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>, CatalogKeyOf<SessionRouterEntry>>
->;
-
-/**
- * Every operation a v1 feature grants is a procedure this router serves
- * (`HOST_FEATURE_OPERATIONS`, VC-663): a feature that names a key no router
- * has fails `pnpm typecheck` here. Moves to the composition root with the
- * catalog binding when a second area router lands.
- */
-export type SessionRouterFeatureBinding = AssertNever<
-  Exclude<HostOperation, ProcedurePaths<AppRouter["_def"]["record"]>>
 >;
 
 /**

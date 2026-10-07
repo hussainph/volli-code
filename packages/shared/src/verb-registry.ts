@@ -655,6 +655,44 @@ const MCP_SERVER_FIELDS: readonly VerbToolField[] = [
 ];
 
 /**
+ * A board read the person makes through the board router (VC-565): a
+ * Workspace query, idempotent by nature, projected onto the WebSocket and no
+ * agent surface.
+ */
+function boardRead<const Key extends string>(key: Key, summary: string) {
+  return {
+    key,
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: key },
+    listed: false,
+    group: "Read",
+    summary,
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  } as const;
+}
+
+/**
+ * A board write the person makes through the board router (VC-565): a
+ * Workspace command under a caller-minted `commandId`, answered from its
+ * durable receipt when repeated with the same intent.
+ */
+function boardWrite<const Key extends string>(key: Key, summary: string) {
+  return {
+    key,
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: key },
+    listed: false,
+    group: "Write",
+    summary,
+    options: [],
+    catalog: { scope: "workspace", idempotency: "command-id" },
+  } as const;
+}
+
+/**
  * The board area's catalog rows (VC-668): the commands a board router
  * projects, typed by exactly these rows so its family cannot build another
  * area's key (HP § Command catalog, "Adding a command"). Spread into
@@ -713,6 +751,35 @@ export const BOARD_ENTRIES = [
       { name: "--dry-run", kind: "flag", help: "Validate and preview without side effects." },
     ],
   },
+  // The board's own operations (VC-565): the person's, on the WebSocket and
+  // the desktop's IPC bridge, on no agent surface. The agent CLI keeps its
+  // `ticket.*`/`project.*` verbs and their socket handlers unchanged, so
+  // these take the router's `board.<verb>` paths rather than those keys.
+  boardRead("board.snapshot", "Read one Workspace's board: its project, tickets and labels."),
+  boardRead("board.roster", "Read one Workspace's tickets (without bodies) and labels."),
+  boardRead("board.changes", "Follow one Workspace's board changes, resuming after a cursor."),
+  boardRead("board.projectFolder", "Check whether the project's folder is still on disk."),
+  boardRead("board.ticketBody", "Read one ticket's Markdown body."),
+  boardRead("board.archivedTickets", "Read the project's archived tickets, newest first."),
+  boardRead("board.ticketEvents", "Read one ticket's event history."),
+  boardRead("board.latestSignals", "Read the latest Session outcome of each ticket."),
+  boardRead("board.statusEntries", "Read when each ticket entered its current column."),
+  boardRead("board.comments", "Read one ticket's comments."),
+  boardWrite("board.updateProject", "Set the project's base branch and setup command."),
+  boardWrite("board.setSkillModes", "Replace the project's per-skill rules."),
+  boardWrite("board.setSessionDefaults", "Replace the project's model for new Chats."),
+  boardWrite("board.createTicket", "Create a ticket."),
+  boardWrite("board.moveTickets", "Move tickets to a column position."),
+  boardWrite("board.setPriority", "Set a ticket's priority."),
+  boardWrite("board.updateTicket", "Edit a ticket's fields."),
+  boardWrite("board.setLabels", "Replace a ticket's labels."),
+  boardWrite("board.archiveTicket", "Archive a ticket."),
+  boardWrite("board.unarchiveTicket", "Return an archived ticket to the board."),
+  boardWrite("board.deleteTicket", "Delete an archived ticket."),
+  boardWrite("board.createComment", "Comment on a ticket as the person."),
+  boardWrite("board.updateComment", "Edit a comment."),
+  boardWrite("board.removeComment", "Delete a comment."),
+  boardWrite("board.setLabelColor", "Set a label's color."),
 ] as const satisfies readonly VerbEntry[];
 
 /** One board row: the board router family's entry type. */
