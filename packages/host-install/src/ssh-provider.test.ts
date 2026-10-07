@@ -1092,7 +1092,23 @@ describe("install, start and enroll on the box", () => {
     );
     expect(stoppedWith(await advanceWith(start(), ports(quiet)))).toMatchObject({
       message:
+        "Volli host on box may have crashed or returned an incompatible start answer. Try again to re-check it and install a matching copy.",
+    });
+    const diagnostic = fakeBox((script) =>
+      script.includes(" start --") ? { code: 1, stderr: "hostd crashed" } : undefined,
+    );
+    expect(stoppedWith(await advanceWith(start(), ports(diagnostic)))).toMatchObject({
+      message:
         "Volli host on box may have crashed or returned an incompatible start answer. Fix the error in Details, then try again.",
+      detail: ["hostd crashed"],
+    });
+    const silentUnrunnable = fakeBox((script) =>
+      script.includes(" enroll --") ? { code: 126 } : undefined,
+    );
+    expect(stoppedWith(await advanceWith(start(), ports(silentUnrunnable)))).toMatchObject({
+      message:
+        "Volli host on box can’t run; its permissions or runtime may be wrong. Try again to re-check it and install a matching copy.",
+      detail: [],
     });
     const dropped = fakeBox((script) =>
       script.includes(" install --")

@@ -10,6 +10,7 @@ import {
   isOperationUnavailable,
   OperationUnavailableError,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
+  type ActiveAddHost,
   type AddHostEvent,
   type AddHostFacts,
   type DataChangedEvent,
@@ -692,6 +693,11 @@ describe("remote hosts commands", () => {
     alreadyPaired: false,
   };
 
+  /** The add flows main still owns (VC-720): exactly what `hostAdd.active` answers. */
+  const ACTIVE: readonly ActiveAddHost[] = [
+    { flowId: FLOW, target: "you@box", name: "you@box", status: "question" },
+  ];
+
   const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
   const PROJECTS: RemoteHostProjects = {
     hostId: HOST,
@@ -729,6 +735,7 @@ describe("remote hosts commands", () => {
       rename: vi.fn(),
       devices: vi.fn(async () => DEVICES),
       addFacts: vi.fn(() => FACTS),
+      activeAdds: vi.fn(() => ACTIVE),
       projects: vi.fn(async () => PROJECTS),
       createProject: vi.fn(async () => CREATED),
       openWorkspace: vi.fn(),
@@ -765,6 +772,7 @@ describe("remote hosts commands", () => {
         () => map["hosts.rename"]({ hostId: HOST, name: "Box" }, WINDOW),
         () => map["hosts.devices"]({ hostId: HOST }, WINDOW),
         () => map["hostAdd.facts"]({ flowId: FLOW }, WINDOW),
+        () => map["hostAdd.active"](undefined, WINDOW),
         () => map["hosts.projects"]({ hostId: HOST }, WINDOW),
         () => map["hosts.createProject"]({ hostId: HOST, path: "/a" }, WINDOW),
         () => map["hosts.openWorkspace"]({ hostId: HOST, workspaceId: WORKSPACE }, WINDOW),
@@ -807,6 +815,7 @@ describe("remote hosts commands", () => {
     expect(await map["hosts.rename"]({ hostId: HOST, name: "Build box" }, WINDOW)).toBeNull();
     expect(await map["hosts.devices"]({ hostId: HOST }, WINDOW)).toBe(DEVICES);
     expect(await map["hostAdd.facts"]({ flowId: FLOW }, WINDOW)).toBe(FACTS);
+    expect(await map["hostAdd.active"](undefined, WINDOW)).toBe(ACTIVE);
     expect(await map["hosts.projects"]({ hostId: HOST }, WINDOW)).toBe(PROJECTS);
     const create = { hostId: HOST, gitUrl: "https://github.com/me/acme", name: "Acme" };
     expect(await map["hosts.createProject"](create, WINDOW)).toBe(CREATED);
@@ -832,6 +841,7 @@ describe("remote hosts commands", () => {
     expect(remote.rename).toHaveBeenCalledWith(HOST, "Build box");
     expect(remote.devices).toHaveBeenCalledWith(HOST);
     expect(remote.addFacts).toHaveBeenCalledWith(FLOW);
+    expect(remote.activeAdds).toHaveBeenCalledWith();
   });
 
   it("never lets a create's sudo password out in an error (VC-710)", async () => {

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import { PROBE_SCRIPT } from "@volli/host-install";
+import { harness, probeOutput, watch } from "@volli/host-install/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useExperimentsStore } from "@renderer/stores/experiments";
@@ -710,6 +712,316 @@ describe("Add a host: detach and re-attach", () => {
     await click(sheet(), "Try again");
     expect(api.calls.at(-1)).toEqual(["retryAdd", "flow-1", "connect"]);
   });
+});
+
+describe("Add a host: pending calls and owner replacement", () => {
+  it("Cancel preempts a retry RPC held for the entire resumed install (B1)", async () => {
+    await startFlow();
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "failed",
+        done: 3,
+        at: "install",
+        failure: {
+          code: "hostd-refused",
+          step: "install",
+          line: "Install failed",
+          detail: null,
+          recovery: { action: "retry", label: "Try again", from: "install" },
+        },
+      }),
+    });
+    let rejectRetry!: (error: Error) => void;
+    const retry = api.retryAdd;
+    api.retryAdd = (...args) => {
+      void retry(...args);
+      return new Promise((_, reject) => {
+        rejectRetry = reject;
+      });
+    };
+    await click(sheet(), "Try again");
+    await emit({ kind: "view", view: flowView({ done: 3, at: "install" }) });
+    expect(button("Cancel")?.disabled).toBe(false);
+    await click(sheet(), "Cancel");
+    expect(button("Keep going")?.disabled).toBe(false);
+    expect(button("Cancel add")?.disabled).toBe(false);
+    await click(sheet(), "Cancel add");
+    expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
+    expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+    expect(api.following("flow-1")).toBe(false);
+    await act(async () => rejectRetry(new Error("cancelled retry")));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("does not overwrite queued flow events with a click's older snapshot", async () => {
+    await startFlow();
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "failed",
+        done: 3,
+        at: "install",
+        failure: {
+          code: "hostd-refused",
+          step: "install",
+          line: "Install failed",
+          detail: null,
+          recovery: { action: "retry", label: "Try again", from: "install" },
+        },
+      }),
+    });
+    let finish!: () => void;
+    api.retryAdd = () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    await act(async () => {
+      // Both main events are queued before React renders, then a click uses
+      // the still-rendered failed screen. Busy must update the latest phase.
+      api.emit("flow-1", { kind: "view", view: flowView({ done: 3, at: "install" }) });
+      api.emit("flow-1", {
+        kind: "log",
+        flowId: "flow-1",
+        line: { at: "t", level: "info", message: "Newest event", fields: {} },
+      });
+      button("Try again")!.click();
+    });
+    expect(rows()[2]).toContain("Installing Volli host…");
+    await click(sheet(), "Details");
+    expect(sheet().querySelector('[role="log"]')?.textContent).toContain("Newest event");
+    await act(async () => finish());
+  });
+
+  it.each(["answer", "sudo"])(
+    "Cancel remains usable during a pending %s, even before its next view and after stream loss (B1)",
+    async (method) => {
+      await startFlow();
+      await emit({
+        kind: "view",
+        view: flowView({
+          status: "question",
+          done: 3,
+          at: "install",
+          question: {
+            id: "q1",
+            kind: "sudo-password",
+            step: "install",
+            reason: "install",
+            command: "sudo volli-hostd install --system",
+            retry: false,
+          },
+        }),
+      });
+      let finish!: () => void;
+      const held = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      if (method === "answer") {
+        const answer = api.answerAdd;
+        api.answerAdd = (...args) => {
+          void answer(...args);
+          return held;
+        };
+        await click(sheet(), "Install for my account only");
+      } else {
+        const sudo = api.sudoPassword;
+        api.sudoPassword = (...args) => {
+          void sudo(...args);
+          return held;
+        };
+        await type(input("sudo password"), "secret");
+        await click(sheet(), "Run it");
+      }
+      expect(button("Cancel")?.disabled).toBe(false);
+      await act(async () => api.fail("flow-1"));
+      expect(button("Cancel")?.disabled).toBe(false);
+      await click(sheet(), "Cancel");
+      await click(sheet(), "Keep going");
+      await click(sheet(), "Cancel");
+      await click(sheet(), "Cancel add");
+      expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
+      await act(async () => finish());
+      expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+      expect(api.following("flow-1")).toBe(false);
+      expect(toast.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("restores main's running reference and replay after cloud off/on without retyping (B2)", async () => {
+    await startFlow();
+    await emit({ kind: "view", view: flowView({ done: 3, at: "install" }) });
+    await act(async () => useExperimentsStore.setState({ snapshot: null }));
+    expect(api.following("flow-1")).toBe(false);
+    expect(useRemoteHostsStore.getState().addHostActivity).toBeNull();
+    await act(async () =>
+      useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } }),
+    );
+    expect(api.following("flow-1")).toBe(true);
+    expect(useRemoteHostsStore.getState().addHostActivity).toMatchObject({
+      name: "deploy@box",
+      status: "running",
+    });
+    await act(async () => useRemoteHostsStore.getState().openAddHost());
+    expect(rows()[2]).toContain("Installing Volli host…");
+    expect(api.calls.filter(([method]) => method === "startAdd")).toHaveLength(1);
+  });
+
+  it.each(["running", "question"])(
+    "a %s flow held by real main survives destroying and recreating its React owner (B2)",
+    async (status) => {
+      let release!: () => void;
+      let enter!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      const main = harness({
+        overrides: [
+          async (script) => {
+            if (status === "question" && script === PROBE_SCRIPT)
+              return { stdout: probeOutput({ sudo: null }) };
+            if (status === "running" && script === PROBE_SCRIPT) {
+              enter();
+              await held;
+            }
+            return undefined;
+          },
+        ],
+      });
+      const following = new Set<string>();
+      let starts = 0;
+      const { flowId } = await main.engine.startAdd({ target: "deploy@held-box" });
+      if (status === "running") await entered;
+      else {
+        const observation = watch(main.engine, flowId);
+        await observation.until((view) => view.status === "question");
+        observation.stop();
+      }
+      setRemoteHostsApi({
+        ...api,
+        activeAdds: async () => main.engine.activeAdds(),
+        startAdd: async (request) => {
+          ++starts;
+          return main.engine.startAdd(request);
+        },
+        addFacts: async (id) => main.engine.addFacts(id),
+        subscribeAdd(id, handlers) {
+          following.add(id);
+          const unsubscribe = main.engine.subscribeAdd(id, handlers.onEvent);
+          return () => {
+            following.delete(id);
+            unsubscribe();
+          };
+        },
+      });
+      try {
+        await openSheet();
+        expect(following.has(flowId)).toBe(true);
+        await world!.rerender(null); // macOS window destroy / renderer reload.
+        expect(following.has(flowId)).toBe(false);
+        expect(main.engine.activeAdds()[0]?.flowId).toBe(flowId);
+        expect(useRemoteHostsStore.getState().addHostActivity).toBeNull();
+        await world!.rerender(<HostsChrome />);
+        expect(following.has(flowId)).toBe(true);
+        expect(useRemoteHostsStore.getState().addHostActivity).toMatchObject({
+          name: "deploy@held-box",
+          status,
+        });
+        await act(async () => useRemoteHostsStore.getState().openAddHost());
+        if (status === "running") expect(rows()[1]).toContain("Checking the system…");
+        else expect(sheet().textContent).toContain("account only");
+        expect(starts).toBe(0);
+      } finally {
+        await world!.rerender(null);
+        release();
+        await main.engine.close();
+      }
+    },
+  );
+
+  it("ignores a stale discovery response after Connect starts a different flow", async () => {
+    let resolve!: (flows: Awaited<ReturnType<FakeRemoteHostsApi["activeAdds"]>>) => void;
+    api.activeAdds = () =>
+      new Promise((done) => {
+        resolve = done;
+      });
+    await openSheet("deploy@new");
+    await click(sheet(), "Connect");
+    await act(async () =>
+      resolve([{ flowId: "old-flow", target: "deploy@old", name: "old", status: "question" }]),
+    );
+    expect(api.following("old-flow")).toBe(false);
+    expect(api.following("flow-1")).toBe(true);
+  });
+
+  it("shows a failed discovery read and can restore it on reopening", async () => {
+    api.activeAdds = () => Promise.reject(new Error("Could not find active adds"));
+    await openSheet();
+    expect(sheet().textContent).toContain("Could not find active adds");
+    await click(sheet(), "Close");
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "question",
+        at: "probe",
+        question: { id: "q", kind: "already-paired", step: "probe", hostId: "h" },
+      }),
+    });
+    api.activeAdds = async () => [
+      { flowId: "flow-1", target: "deploy@box", name: "box", status: "question" },
+    ];
+    await act(async () => useRemoteHostsStore.getState().openAddHost());
+    expect(api.following("flow-1")).toBe(true);
+    expect(useRemoteHostsStore.getState().addHostActivity?.status).toBe("question");
+  });
+
+  it.each(["success", "failure"])(
+    "a late cancel %s cannot overwrite or close a replacement flow (B3)",
+    async (outcome) => {
+      await startFlow();
+      await emit({ kind: "view", view: flowView({ done: 3, at: "install" }) });
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const cancel = api.cancelAdd;
+      api.cancelAdd = (id) => {
+        void cancel(id); // Main publishes cancelled before awaiting cleanup.
+        return new Promise<void>((done, fail) => {
+          resolve = done;
+          reject = fail;
+        });
+      };
+      await click(sheet(), "Cancel");
+      await click(sheet(), "Cancel add");
+      await click(sheet(), "Close");
+      api.nextStart = { flowId: "flow-2" };
+      await act(async () => useRemoteHostsStore.getState().openAddHost("deploy@new-box"));
+      await click(sheet(), "Connect");
+      await act(async () =>
+        api.emit("flow-2", {
+          kind: "view",
+          view: flowView({
+            flowId: "flow-2",
+            target: "deploy@new-box",
+            name: "new-box",
+            done: 3,
+            at: "install",
+          }),
+        }),
+      );
+      expect(api.following("flow-2")).toBe(true);
+      await act(async () =>
+        outcome === "success" ? resolve() : reject(new Error("old cleanup failed")),
+      );
+      expect(useRemoteHostsStore.getState().addHost.open).toBe(true);
+      expect(api.following("flow-2")).toBe(true);
+      expect(useRemoteHostsStore.getState().addHostActivity?.name).toBe("new-box");
+      expect(rows()[2]).toContain("Installing Volli host…");
+      expect(toast.error).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("Add a host: the review's probes", () => {

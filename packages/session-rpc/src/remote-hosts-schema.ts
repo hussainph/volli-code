@@ -9,12 +9,14 @@
  * no custom parsers. A question's own fields are open JSON (`z.json()`).
  */
 import {
+  MAX_ACTIVE_ADD_HOSTS,
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
   REMOTE_HOST_NAME_MAX,
   REMOTE_HOST_PROJECT_TEXT_MAX,
   REMOTE_HOST_PROJECTS_MAX,
   REMOTE_PROJECT_FAILURE_TEXT_MAX,
+  type ActiveAddHost,
   type AddHostEvent,
   type AddHostFacts,
   type AddHostFailure,
@@ -238,6 +240,24 @@ export const addHostFactsSchema = z.object({
   keepsRunning: z.boolean().nullable(),
   alreadyPaired: z.boolean(),
 });
+/**
+ * `ActiveAddHost` (VC-720): what `hostAdd.active` answers per flow — exactly
+ * the four fields, nothing of the view, and the status closed to the three a
+ * flow under way can hold (`done` and `cancelled` leave the list). A name
+ * defaults to its target, so both take the target's bound; the ids are main's
+ * own, bounded like every flow id here.
+ */
+export const activeAddHostSchema = z.strictObject({
+  flowId: z.string().min(1).max(MAX_FLOW_ID_LENGTH),
+  target: z.string().min(1).max(MAX_TARGET_LENGTH),
+  name: z.string().min(1).max(MAX_TARGET_LENGTH),
+  status: z.enum(["running", "question", "failed"]),
+});
+/** `hostAdd.active`: the bounded list of them, newest first. */
+export const activeAddHostsSchema = z
+  .array(activeAddHostSchema)
+  .max(MAX_ACTIVE_ADD_HOSTS)
+  .readonly();
 const addHostLogLine = z.object({
   at: z.string(),
   level: z.enum(["debug", "info", "warn", "error"]),
@@ -334,6 +354,9 @@ export type RemoteHostsOutputSchemasMatch = AssertNever<
       : "remoteHostsSnapshotSchema")
   | (z.output<typeof addHostEventSchema> extends AddHostEvent ? never : "addHostEventSchema")
   | (z.output<typeof addHostFactsSchema> extends AddHostFacts ? never : "addHostFactsSchema")
+  | (z.output<typeof activeAddHostsSchema> extends readonly ActiveAddHost[]
+      ? never
+      : "activeAddHostsSchema")
   | (z.output<typeof remoteHostDevicesSchema> extends RemoteHostDevices
       ? never
       : "remoteHostDevicesSchema")
@@ -367,6 +390,7 @@ export type RemoteHostsSchemaKeysCoverage = AssertNever<
   | MissingKeys<RemoteProjectLink, z.output<typeof remoteProjectLink>>
   | MissingKeys<AddHostView, z.output<typeof addHostView>>
   | MissingKeys<AddHostFacts, z.output<typeof addHostFactsSchema>>
+  | MissingKeys<ActiveAddHost, z.output<typeof activeAddHostSchema>>
   | MissingKeys<AddHostFailure, z.output<typeof addHostFailure>>
   | MissingKeys<AddHostLogLine, z.output<typeof addHostLogLine>>
   | MissingKeys<RemoteHostDevices, z.output<typeof remoteHostDevicesSchema>>

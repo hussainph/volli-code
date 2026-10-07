@@ -128,6 +128,7 @@ function AddHostBody({ flow }: { flow: AddHostFlow }) {
             omitted={phase.omitted}
             lost={phase.lost}
             busy={phase.busy}
+            cancelling={phase.cancelling}
           />
         )}
       </Screen>
@@ -228,6 +229,7 @@ function FlowScreen({
   omitted,
   lost,
   busy,
+  cancelling,
 }: {
   flow: AddHostFlow;
   target: string;
@@ -236,6 +238,7 @@ function FlowScreen({
   omitted: number;
   lost: boolean;
   busy: boolean;
+  cancelling: boolean;
 }) {
   const timed = useMotionTiming();
   const hosts = useRemoteHostsStore((state) => state.hosts);
@@ -297,7 +300,7 @@ function FlowScreen({
               view={view}
               name={name}
               lost={lost}
-              busy={busy || confirm !== null}
+              busy={busy || cancelling || confirm !== null}
               onPasswordText={setHasPassword}
             />
             <AnimatePresence initial={false}>
@@ -337,10 +340,11 @@ function FlowScreen({
               view={view}
               name={name}
               lost={lost}
-              busy={busy}
+              busy={busy || cancelling}
               hasPassword={hasPassword}
               confirm={confirm}
               setConfirm={setConfirm}
+              cancelling={cancelling}
             />
           </div>
         </>
@@ -533,6 +537,7 @@ function Actions({
   hasPassword,
   confirm,
   setConfirm,
+  cancelling,
 }: {
   flow: AddHostFlow;
   view: AddHostFlowView | null;
@@ -543,11 +548,10 @@ function Actions({
   hasPassword: boolean;
   confirm: "back" | "cancel" | null;
   setConfirm: (intent: "back" | "cancel" | null) => void;
+  cancelling: boolean;
 }) {
   const close = useRemoteHostsStore.getState().closeAddHost;
-  const cancel = async () => {
-    if (await flow.leave()) close();
-  };
+  const cancel = () => flow.leave(close);
   const request = (intent: "back" | "cancel") => {
     if (lost || cancelNeedsConfirmation(view)) setConfirm(intent);
     else if (intent === "back") flow.back();
@@ -563,12 +567,12 @@ function Actions({
         <p className="w-full text-ui text-attention">
           Cancel adding {name}? Files already uploaded or installed stay on the host.
         </p>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirm(null)}>
+        <Button size="sm" variant="ghost" disabled={cancelling} onClick={() => setConfirm(null)}>
           Keep going
         </Button>
         <Button
           size="sm"
-          disabled={busy}
+          disabled={cancelling}
           onClick={() => {
             setConfirm(null);
             if (confirm === "back") flow.back();
@@ -579,6 +583,14 @@ function Actions({
         </Button>
       </div>
     );
+  // answer/retry stays outstanding while main runs the resumed steps.
+  // Cancellation is an independent intent even before its next view arrives.
+  if (busy && !lost)
+    return (
+      <Button size="sm" variant="ghost" disabled={cancelling} onClick={() => request("cancel")}>
+        Cancel
+      </Button>
+    );
   const back = (
     <Button size="sm" variant="ghost" disabled={busy} onClick={() => request("back")}>
       Back
@@ -587,7 +599,7 @@ function Actions({
   if (lost) {
     return (
       <>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => request("cancel")}>
+        <Button size="sm" variant="ghost" disabled={cancelling} onClick={() => request("cancel")}>
           Cancel
         </Button>
         <Button size="sm" onClick={close}>
@@ -690,7 +702,7 @@ function Actions({
     }
   }
   return (
-    <Button size="sm" variant="ghost" disabled={busy} onClick={() => request("cancel")}>
+    <Button size="sm" variant="ghost" disabled={cancelling} onClick={() => request("cancel")}>
       Cancel
     </Button>
   );

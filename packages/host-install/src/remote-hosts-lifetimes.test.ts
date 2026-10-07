@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { HostLinkLogEvent } from "@volli/host-protocol/client-link";
-import { REMOTE_HOST_LINK_CAP } from "@volli/shared";
+import { MAX_ACTIVE_ADD_HOSTS, REMOTE_HOST_LINK_CAP } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { PROBE_SCRIPT } from "./probe";
@@ -642,6 +642,53 @@ describe("finished flows are let go (note 3)", () => {
     expect(() => h.engine.subscribeAdd(flowId, () => {})).toThrow(
       expect.objectContaining({ code: "unknown-flow" }),
     );
+    await h.engine.close();
+  });
+});
+
+describe("the add flows main still owns (VC-720)", () => {
+  it("lists its live flows newest first, and a done or cancelled one leaves", async () => {
+    const h = harness();
+    // Each flow stops on its host key and stays there: nothing finishes, and
+    // retention keeps every terminal flow past these reads.
+    h.box.trusted = false;
+    const first = await startAdd(h, { target: "a@one", name: "One" });
+    const second = await startAdd(h, { target: "b@two" });
+    expect(first.view.status).toBe("question");
+    expect(second.view.status).toBe("question");
+    // Newest first, and exactly the four reference fields: no view, no secret.
+    expect(h.engine.activeAdds()).toEqual([
+      { flowId: second.flowId, target: "b@two", name: "b@two", status: "question" },
+      { flowId: first.flowId, target: "a@one", name: "One", status: "question" },
+    ]);
+    // A window gone makes no difference: main owns the flow either way.
+    second.w.stop();
+
+    // Done: the host is in the registry, and the flow has left the list.
+    await h.engine.answerAdd(first.flowId, "q1", { kind: "accept-host-key" });
+    await first.w.until((view) => view.status === "done");
+    expect(h.engine.activeAdds().map((active) => active.flowId)).toEqual([second.flowId]);
+
+    // Cancelled leaves too, well before retention would let it go.
+    await h.engine.cancelAdd(second.flowId);
+    expect(h.engine.activeAdds()).toEqual([]);
+    await h.engine.close();
+  });
+
+  it("answers at most MAX_ACTIVE_ADD_HOSTS of them, newest first", async () => {
+    const h = harness();
+    h.box.trusted = false;
+    const flows: string[] = [];
+    for (let index = 0; index < MAX_ACTIVE_ADD_HOSTS + 3; index += 1) {
+      const { flowId } = await startAdd(h, { target: `you@box-${index}` });
+      flows.push(flowId);
+    }
+    const active = h.engine.activeAdds();
+    expect(active).toHaveLength(MAX_ACTIVE_ADD_HOSTS);
+    // The three oldest are past the bound; the newest leads.
+    expect(active.map((entry) => entry.flowId)).toEqual(flows.slice(3).toReversed());
+    for (const flowId of flows) await h.engine.cancelAdd(flowId);
+    expect(h.engine.activeAdds()).toEqual([]);
     await h.engine.close();
   });
 });

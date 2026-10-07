@@ -78,6 +78,7 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
   const calls: FakeCall[] = [];
   /** Each flow's facts, from the last view pushed that carried some. */
   const found = new Map<string, AddHostFacts>();
+  const views = new Map<string, AddHostEvent & { kind: "view" | "replay" }>();
   const settle = (method: string): Promise<null> => {
     const message = refusals.get(method);
     if (message === undefined) return Promise.resolve(null);
@@ -86,12 +87,26 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
   };
   const api: FakeRemoteHostsApi = {
     calls,
+    activeAdds: async () =>
+      [...views.values()]
+        .toReversed()
+        .filter(
+          ({ view }) =>
+            view.status === "running" || view.status === "question" || view.status === "failed",
+        )
+        .map(({ view }) => ({
+          flowId: view.flowId,
+          target: view.target,
+          name: view.name,
+          status: view.status as "running" | "question" | "failed",
+        })),
     nextStart: { flowId: "flow-1" },
     devicesOf: new Map(),
     projectsOf: new Map(),
     nextCreate: null,
     factsOf: new Map(),
     emit(flowId, event) {
+      if (event.kind !== "log") views.set(flowId, event);
       if (event.kind !== "log" && "facts" in event.view) {
         found.set(flowId, (event.view as AddHostFlowView).facts);
       }
@@ -115,6 +130,9 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
       const set = subscribers.get(flowId) ?? new Set();
       set.add(handlers);
       subscribers.set(flowId, set);
+      const latest = views.get(flowId);
+      if (latest !== undefined)
+        handlers.onEvent({ kind: "replay", view: latest.view, log: [], omitted: 0 });
       return () => set.delete(handlers);
     },
     answerAdd(flowId, questionId, answer) {
@@ -131,6 +149,9 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
     },
     cancelAdd(flowId) {
       calls.push(["cancelAdd", flowId]);
+      const latest = views.get(flowId);
+      if (latest !== undefined)
+        api.emit(flowId, { kind: "view", view: { ...latest.view, status: "cancelled" } });
       return Promise.resolve(null);
     },
     addFacts(flowId) {

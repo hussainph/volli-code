@@ -288,6 +288,8 @@ export function remoteHostsPort(
     retryAdd: (flowId, from) => hosts.retryAdd(flowId, from),
     cancelAdd: (flowId) => hosts.cancelAdd(flowId),
     addFacts: (flowId) => hosts.addFacts(flowId),
+    // The add flows main still owns (VC-720): a reopened window's discovery read.
+    activeAdds: () => hosts.activeAdds(),
     // A host's projects (VC-710).
     projects: (hostId) => hosts.projects(hostId),
     createProject: (input) => hosts.createProject(input),

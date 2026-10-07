@@ -61,6 +61,8 @@ import {
   REMOTE_HOST_NAME_MAX as PROJECT_NAME_MAX,
   REMOTE_HOST_PROJECT_TEXT_MAX,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
+  MAX_ACTIVE_ADD_HOSTS,
+  type ActiveAddHost,
   type AddHostAnswer,
   type AddHostEvent,
   type AddHostFacts,
@@ -351,6 +353,14 @@ export interface RemoteHosts {
    * beside each view; a finished flow's until it is let go.
    */
   addFacts(flowId: string): AddHostFacts;
+  /* ── The add flows main still owns (VC-720) ── */
+  /**
+   * One secret-free {@link ActiveAddHost} per flow not yet done or
+   * cancelled, newest first, at most {@link MAX_ACTIVE_ADD_HOSTS} — what a
+   * reopened window reads to find an install it lost the subscription to.
+   * Each view travels whole only through {@link RemoteHosts.subscribeAdd}.
+   */
+  activeAdds(): readonly ActiveAddHost[];
   /** Stops everything: at quit. Every call shares the first. */
   close(): Promise<void>;
 }
@@ -1854,6 +1864,28 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       cancel(flow);
       // At once: the step in flight finds its result discarded.
       await discard(flow);
+    },
+    /* ── The add flows main still owns (VC-720) ── */
+    activeAdds() {
+      guard();
+      // `flows` inserts at `begin` and deletes at `dispose`, so its order is
+      // creation's: reversed, the newest flow is first. Done and cancelled are
+      // out; a cancelled flow stays in the map only until its retention lets
+      // it go, and is already gone from here.
+      return [...flows.values()]
+        .toReversed()
+        .map((flow): ActiveAddHost | null =>
+          flow.status === "done" || flow.status === "cancelled"
+            ? null
+            : {
+                flowId: flow.id,
+                target: flow.targetText,
+                name: flow.name,
+                status: flow.status,
+              },
+        )
+        .filter((active): active is ActiveAddHost => active !== null)
+        .slice(0, MAX_ACTIVE_ADD_HOSTS);
     },
     close() {
       closing ??= (async () => {

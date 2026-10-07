@@ -119,6 +119,57 @@
   "protocolVersion": 1,
   "tiers": {
     "desktop": {
+      "hostAdd.active": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "query",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "flowId": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "question",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "target": {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "flowId",
+              "target",
+              "name",
+              "status"
+            ],
+            "type": "object"
+          },
+          "maxItems": 20,
+          "readOnly": true,
+          "type": "array"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "hostAdd.answer": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",

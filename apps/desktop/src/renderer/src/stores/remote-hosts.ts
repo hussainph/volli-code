@@ -13,6 +13,7 @@
  * `hostAdd.sudoPassword` from the field that holds it, never through here.
  */
 import type {
+  ActiveAddHost,
   AddHostAnswer,
   AddHostEvent,
   AddHostFacts,
@@ -30,6 +31,8 @@ import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
 
 /** What managing remote hosts asks of desktop main (the desktop-only tier). */
 export interface RemoteHostsApi {
+  /** Bounded main-owned references; restores an add after the renderer owner is gone. */
+  activeAdds(): Promise<readonly ActiveAddHost[]>;
   startAdd(input: AddHostStartInput): Promise<{ readonly flowId: string }>;
   /** One replay (the view, the newest of the log) at once, then every change. */
   subscribeAdd(
@@ -73,6 +76,7 @@ export interface RemoteHostsApiRpc {
     };
   };
   readonly hostAdd: {
+    readonly active: { query(): Promise<readonly ActiveAddHost[]> };
     readonly start: { mutate(input: AddHostStartInput): Promise<{ flowId: string }> };
     readonly subscribe: {
       subscribe(
@@ -101,6 +105,7 @@ export interface RemoteHostsApiRpc {
 /** The desktop-only tier as {@link RemoteHostsApi}. */
 export function remoteHostsApi(rpc: RemoteHostsApiRpc): RemoteHostsApi {
   return {
+    activeAdds: () => rpc.hostAdd.active.query(),
     startAdd: (input) => rpc.hostAdd.start.mutate(input),
     subscribeAdd(flowId, handlers) {
       const subscription = rpc.hostAdd.subscribe.subscribe(
