@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { JSDOM } from "jsdom";
 
 import {
   currentVersion,
@@ -656,6 +657,11 @@ describe("install --user on a Mac", () => {
     expect(fake.calls).toEqual([]);
     expect(statSync(layout.dataDir).mode & 0o777).toBe(0o700);
     const plist = readFileSync(layout.agentPlist!, "utf8");
+    // Apple may tolerate invalid comments; operator plist editors use strict XML.
+    // In particular, XML comments cannot contain a double hyphen (`--user`).
+    const xml = new JSDOM(plist, { contentType: "application/xml" });
+    expect(xml.window.document.documentElement.tagName).toBe("plist");
+    xml.window.close();
     expect(plist).toContain("<key>Label</key>\n  <string>com.volli.hostd</string>");
     expect(plist).toContain(
       [
