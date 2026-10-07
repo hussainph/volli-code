@@ -30,7 +30,7 @@ import { TRPC_ERROR_CODES_BY_KEY } from "@trpc/server/rpc";
 
 import { readHostError, type HostError } from "../errors";
 import { isTraceIdShaped } from "../trace";
-import { HostLinkError, type HostLink, type HostLinkCallOptions } from "./link";
+import { HostLinkError, type HostLinkCallOptions, type HostLinkCalls } from "./link";
 
 /** The trace an operation's context names, when it names one. */
 function callOptions(context: Readonly<Record<string, unknown>> | undefined): HostLinkCallOptions {
@@ -40,7 +40,7 @@ function callOptions(context: Readonly<Record<string, unknown>> | undefined): Ho
   return isTraceIdShaped(traceId) ? { trace: { traceId } } : {};
 }
 
-export function hostLinkTrpcLink<Router extends AnyRouter>(link: HostLink): TRPCLink<Router> {
+export function hostLinkTrpcLink<Router extends AnyRouter>(link: HostLinkCalls): TRPCLink<Router> {
   return () =>
     ({ op }) =>
       observable((observer) => {

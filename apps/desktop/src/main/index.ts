@@ -200,6 +200,7 @@ import {
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
 import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { engineSignInLinks, remoteSignInsPort, signInPreflight } from "./host-sign-ins/port";
+import { createHostLinkRelay, engineWorkspaceLinks } from "./host-link-relay";
 import { createHostSignInService, type MacCredentialStore } from "./host-sign-ins/service";
 import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
@@ -1502,6 +1503,14 @@ const appStartup = app.whenReady().then(async () => {
       // Sign-ins on a remote host (VC-702): its operations over the engine's
       // link, this Mac's own key for "Send from this Mac", and the relay.
       remoteSignIns: remoteSignInsPort(hostSignIns),
+      // A remote project's public operations over its Workspace link (VC-711):
+      // the window's board, logs and Sessions for a project on a box.
+      hostLinkRelay: createHostLinkRelay(engineWorkspaceLinks(remoteHosts), {
+        onListenerError: (error) =>
+          hostLogger("host-link-relay").warn("relayed listener threw", {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      }),
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */
