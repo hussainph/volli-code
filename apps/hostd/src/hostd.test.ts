@@ -1307,7 +1307,7 @@ describe("the host protocol listener (VC-663)", () => {
     const db = host.host.database.db;
     expect(listProjects(db)).toEqual([]);
     const { privateKey, spki } = deviceKey();
-    const device = enrollDevice(
+    const enrolledDevice = enrollDevice(
       dataDirDeviceStore(join(root, "data")),
       { publicKey: spki, name: "Host-scope Mac", via: "ssh" },
       { now: () => new Date(), newId: randomUUID },
@@ -1316,7 +1316,7 @@ describe("the host protocol listener (VC-663)", () => {
     const text = deviceCredentialSigningInput({
       scope: "host",
       hostId: host.status().hostId!,
-      deviceId: device.deviceId,
+      deviceId: enrolledDevice.deviceId,
       iat,
       exp: iat + 60,
       jti: randomUUID().replaceAll("-", ""),
