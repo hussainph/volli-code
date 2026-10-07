@@ -20,7 +20,16 @@ import { verifyMigrationBackup } from "./backup-integrity";
 import { internSessionEventProvenance } from "./session-event-provenance";
 import { currentSessionEventSequence } from "./session-events-cursor-repo";
 import { applyMigrationsByHand, openRawDb } from "./test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 import type { LogLevel } from "@volli/shared";
 import { captureHostLog, type CapturedHostLog } from "../testing/log";
 import { MIGRATIONS, migrate } from "./migrations";
@@ -3528,14 +3537,34 @@ describe("migration 044 — durable Session Event sequence", () => {
     return db;
   }
 
-  it("keeps the kind index equal to the log after every migration, including future repairs", () => {
-    const dbPath = tempDbPath();
-    const db = buildV43WithInterleavedEvents(dbPath);
-    try {
-      // Walk every migration rather than maintaining a list of repair versions.
-      // Future migrations also have to retain the synchronization trigger.
-      for (const migration of MIGRATIONS.filter((candidate) => candidate.version >= 44)) {
+  describe.sequential("keeps the kind index equal to the log after every migration, including future repairs", () => {
+    let fixtureDir: string;
+    let dbPath: string;
+    let db: Database.Database;
+    let previousVersion = 43;
+
+    beforeAll(() => {
+      // Own this directory for the whole walk, outside tempDbPath's per-test
+      // cleanup. Every case observes the same interleaved event history.
+      fixtureDir = mkdtempSync(join(tmpdir(), "volli-kind-index-walk-"));
+      dbPath = join(fixtureDir, "volli.db");
+      db = buildV43WithInterleavedEvents(dbPath);
+    });
+    afterAll(() => {
+      db?.close();
+      if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+    });
+
+    // VC-717: at an 8 ms flush delay on CI, the original 19-step test still
+    // took 5427 ms after optimizing fixture setup. Give each real migration
+    // its own case, not a growing sum under one timeout. Explicit sequential
+    // execution preserves the original walk and its mutation assertions.
+    it.each(MIGRATIONS.filter((candidate) => candidate.version >= 44))(
+      "migration $version",
+      (migration) => {
+        expect(db.pragma("user_version", { simple: true })).toBe(previousVersion);
         migrate(db, dbPath, { toVersion: migration.version });
+        previousVersion = migration.version;
         expectKindIndexMatchesLog(db);
         if (migration.version >= 57) {
           const cursors = db
@@ -3557,10 +3586,8 @@ describe("migration 044 — durable Session Event sequence", () => {
           ).toEqual(cursors);
           expect(currentSessionEventSequence(db)).toBe(highWater);
         }
-      }
-    } finally {
-      db.close();
-    }
+      },
+    );
   });
 
   it("repairs pre-057 kind drift without reassigning cursors or reusing deleted positions", () => {
