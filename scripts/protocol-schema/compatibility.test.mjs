@@ -20,12 +20,12 @@ const protocol = (input = shape, output = shape) => ({
   },
 });
 
-test("allows optional fields, new entries/tiers, enum/union expansion and relaxed bounds", () => {
+test("allows optional fields, new entries/tiers, input enum/union expansion and relaxed bounds", () => {
   assert.deepEqual(
     schemaChanges(shape, { ...shape, properties: { ...shape.properties, extra: text } }),
     [],
   );
-  assert.deepEqual(schemaChanges({ enum: ["a"] }, { enum: ["a", "b"] }, "", "output"), []);
+  assert.deepEqual(schemaChanges({ enum: ["a"] }, { enum: ["a", "b"] }, "", "input"), []);
   assert.deepEqual(schemaChanges({ anyOf: [text] }, { anyOf: [{ type: "number" }, text] }), []);
   assert.deepEqual(
     schemaChanges(
@@ -39,6 +39,130 @@ test("allows optional fields, new entries/tiers, enum/union expansion and relaxe
   next.tiers.extra = {};
   next.features.board = ["board.read"];
   assert.deepEqual(protocolChanges(protocol(), next), []);
+});
+
+const enumMarker = "x-volli-open-enum";
+
+test("output enum/const growth requires scalar reader tolerance in both versions (real Zod)", () => {
+  for (const before of [z.literal("a"), z.enum(["a", "b"])]) {
+    const after = z.enum(["a", "b", "c"]);
+    const publish = (schema, markerValue) =>
+      z.toJSONSchema(schema.meta({ [enumMarker]: markerValue }));
+    for (const [oldMarker, newMarker] of [
+      [undefined, undefined],
+      [undefined, true],
+      [true, undefined],
+      ["true", "true"],
+      [false, false],
+    ]) {
+      assert.deepEqual(
+        schemaChanges(publish(before, oldMarker), publish(after, newMarker), "", "output"),
+        [{ path: "/enum", reason: "output enum widened (requires tolerant reader)" }],
+      );
+    }
+    assert.deepEqual(schemaChanges(publish(before, true), publish(after, true), "", "output"), []);
+    assert.deepEqual(schemaChanges(publish(before), publish(after), "", "input"), []);
+  }
+});
+
+test("scalar tolerance never permits member removal or type growth, and annotations alone are additive", () => {
+  const mark = (schema) => ({ ...schema, [enumMarker]: true });
+  for (const [before, after] of [
+    [{ enum: ["a", "b"] }, { enum: ["a"] }],
+    [{ enum: ["a", "b"] }, { const: "a" }],
+    [{ const: "a" }, { const: "b" }],
+    [
+      { type: "string", enum: ["a"] },
+      { type: ["string", "null"], enum: ["a", null] },
+    ],
+    [
+      { type: "string", const: "a" },
+      { type: "number", const: 1 },
+    ],
+  ]) {
+    assert.ok(schemaChanges(mark(before), mark(after), "", "output").length);
+  }
+  assert.deepEqual(schemaChanges({ const: "a" }, { enum: ["a"] }, "", "output"), []);
+  assert.deepEqual(schemaChanges({ enum: ["a"] }, { const: "a" }, "", "output"), []);
+  assert.deepEqual(schemaChanges(text, mark(text), "", "output"), []);
+  assert.deepEqual(schemaChanges(mark(text), text, "", "output"), []);
+  for (const before of [{ enum: ["a"] }, { const: "a" }]) {
+    assert.ok(schemaChanges(before, {}, "", "output").length);
+    assert.deepEqual(schemaChanges(before, {}, "", "input"), []);
+    assert.ok(schemaChanges(mark(before), mark({}), "", "output").length);
+    assert.deepEqual(
+      schemaChanges(mark({ ...before, type: "string" }), mark({ type: "string" }), "", "output"),
+      [],
+    );
+  }
+  // Both assertions apply when present; changing the enum cannot hide const.
+  assert.ok(
+    schemaChanges({ enum: ["a", "b"], const: "a" }, { enum: ["a", "b"] }, "", "output").length,
+  );
+  const old = { enum: [{ title: "a" }] };
+  assert.ok(schemaChanges(old, { enum: [...old.enum, { title: "b" }] }, "", "output").length);
+});
+
+test("marked mixed literals cannot gain new JSON value types when Zod omits type", () => {
+  const publish = (values) => z.toJSONSchema(z.literal(values).meta({ [enumMarker]: true }));
+  const old = publish(["a", 1]);
+  assert.equal(old.type, undefined);
+  for (const value of [null, true]) {
+    assert.deepEqual(schemaChanges(old, publish(["a", 1, value]), "", "output"), [
+      { path: "/type", reason: "output enum value type widened" },
+    ]);
+  }
+  assert.deepEqual(schemaChanges(old, publish(["a", 1, "b", 2]), "", "output"), []);
+  const marked = { enum: ["a"], [enumMarker]: true };
+  assert.ok(schemaChanges(marked, { ...marked, enum: ["a", { x: 1 }] }, "", "output").length);
+});
+
+test("scalar tolerance is local through nullable/array/ref containers", () => {
+  const publish = (values, marked) =>
+    z.toJSONSchema(
+      z.object({
+        values: z.array(
+          z
+            .enum(values)
+            .meta({ [enumMarker]: marked })
+            .nullable(),
+        ),
+      }),
+    );
+  const old = publish(["a", "b"], true);
+  const next = publish(["a", "b", "c"], true);
+  assert.deepEqual(schemaChanges(old, next, "", "output"), []);
+  assert.ok(schemaChanges(publish(["a", "b"]), publish(["a", "b", "c"]), "", "output").length);
+  const ref = (values, marked) => ({
+    $ref: "#/$defs/value",
+    $defs: { value: { type: "string", enum: values, [enumMarker]: marked } },
+  });
+  assert.deepEqual(schemaChanges(ref(["a"], true), ref(["a", "b"], true), "", "output"), []);
+  assert.ok(schemaChanges(ref(["a"]), ref(["a", "b"]), "", "output").length);
+  // Metadata on a reference is site-local, not a change to the shared target.
+  const shared = (values) => ({
+    type: "object",
+    properties: {
+      tolerant: { $ref: "#/$defs/value", [enumMarker]: true },
+      strict: { $ref: "#/$defs/value" },
+    },
+    $defs: { value: { type: "string", enum: values } },
+  });
+  assert.deepEqual(schemaChanges(shared(["a"]), shared(["a", "b"]), "", "output"), [
+    {
+      path: "/properties/strict/enum",
+      reason: "output enum widened (requires tolerant reader)",
+    },
+  ]);
+  assert.deepEqual(
+    schemaChanges(
+      { type: "string", enum: ["a"], [enumMarker]: true },
+      { anyOf: [{ type: "string", enum: ["a", "b"], [enumMarker]: true }] },
+      "",
+      "output",
+    ),
+    [],
+  );
 });
 
 test("refuses field/entry removals, narrowing and newly required input", () => {
@@ -235,7 +359,7 @@ test("annotation-only changes under closed unions are additive, but never hide w
   next.oneOf[0].properties.value.title = "annotation only";
   assert.deepEqual(schemaChanges(old, next, "", "output"), []);
   assert.deepEqual(schemaChanges(old, next, "", "input"), []);
-  for (const name of ["title", "description", "$defs", marker]) {
+  for (const name of ["title", "description", "$defs", marker, enumMarker]) {
     const before = { type: "object", properties: { [name]: text } };
     assert.ok(schemaChanges(before, { type: "object", properties: {} }).length, name);
     assert.ok(schemaChanges({ const: { [name]: "a" } }, { const: { [name]: "b" } }).length, name);
@@ -352,6 +476,12 @@ test("open unions preserve every old member and recursively check its fields", (
   const groupedAddition = structuredClone(old);
   groupedAddition.oneOf[1].properties.status.enum.push("d");
   assert.deepEqual(schemaChanges(old, groupedAddition, "", "output"), []);
+  const strictChild = structuredClone(old);
+  strictChild.oneOf[1].properties.value = { type: "string", enum: ["known"] };
+  const widenedChild = structuredClone(strictChild);
+  widenedChild.oneOf[1].properties.value.enum.push("future");
+  widenedChild.oneOf[1].properties.status.enum.push("d");
+  assert.ok(schemaChanges(strictChild, widenedChild, "", "output").length);
   const overlap = structuredClone(old);
   overlap.oneOf[1].properties.status.enum.push("a");
   assert.ok(schemaChanges(old, overlap, "", "output").length);
@@ -386,6 +516,29 @@ test("open unions recursively compare identical branch refs and discriminator re
   assert.deepEqual(schemaChanges(old, additive, "", "output"), []);
 });
 
+test("an open discriminator's proof does not open another field sharing its definition", () => {
+  const old = {
+    [marker]: "kind",
+    oneOf: [{ $ref: "#/$defs/branch" }],
+    $defs: {
+      tag: { type: "string", enum: ["a", "b"] },
+      branch: {
+        type: "object",
+        properties: { kind: { $ref: "#/$defs/tag" }, value: { $ref: "#/$defs/tag" } },
+        required: ["kind", "value"],
+      },
+    },
+  };
+  const next = structuredClone(old);
+  next.$defs.tag.enum.push("c");
+  assert.deepEqual(schemaChanges(old, next, "", "output"), [
+    {
+      path: "/oneOf/0/properties/value/enum",
+      reason: "output enum widened (requires tolerant reader)",
+    },
+  ]);
+});
+
 test("output type/anyOf/boolean widening breaks the N−1 promise, including nullable Zod", () => {
   for (const [before, after] of [
     [text, { type: ["string", "null"] }],
@@ -407,15 +560,20 @@ test("output type/anyOf/boolean widening breaks the N−1 promise, including nul
     assert.ok(schemaChanges(before, after, "", "output").length, JSON.stringify({ before, after }));
     assert.deepEqual(schemaChanges(before, after, "", "input"), []);
   }
-  // Equivalent wrapping/reordering is not widening; output enum growth remains
-  // the established tolerant-reader policy, distinct from admitting new types.
+  // Equivalent wrapping/reordering is not widening. Scalar enum growth inside
+  // a nullable wrapper still requires an explicit tolerant-reader contract.
   assert.deepEqual(schemaChanges(text, { anyOf: [text] }, "", "output"), []);
+  const finite = { type: "string", enum: ["a"] };
+  assert.deepEqual(schemaChanges(finite, { anyOf: [finite] }, "", "output"), []);
+  assert.ok(
+    schemaChanges(finite, { anyOf: [{ ...finite, enum: ["a", "b"] }] }, "", "output").length,
+  );
   const union = { anyOf: [text, { type: "null" }] };
   assert.deepEqual(schemaChanges(union, { anyOf: union.anyOf.toReversed() }, "", "output"), []);
   assert.deepEqual(
     schemaChanges(
-      { anyOf: [{ type: "string", enum: ["a"] }, { type: "null" }] },
-      { anyOf: [{ type: "string", enum: ["a", "b"] }, { type: "null" }] },
+      { anyOf: [{ type: "string", enum: ["a"], [enumMarker]: true }, { type: "null" }] },
+      { anyOf: [{ type: "string", enum: ["a", "b"], [enumMarker]: true }, { type: "null" }] },
       "",
       "output",
     ),
@@ -512,6 +670,49 @@ test("published receipt statuses and attention kinds remain closed at every outp
       }
     }
     assert.ok(sites > 0, `${discriminator} regression must exercise actual published sites`);
+  }
+});
+
+const refusalEnum = (schema) => schema.properties.refusal.anyOf.find((node) => node.enum);
+
+test("published command refusal severity is tolerant at every output site, without opening receipt status", () => {
+  const document = JSON.parse(
+    readFileSync(new URL("../../docs/protocol/protocol.schema.json", import.meta.url), "utf8"),
+  );
+  for (const key of ["session.command", "session.cancelQueued", "session.editQueued"]) {
+    const before = document.tiers.public[key].output;
+    assert.equal(refusalEnum(before)[enumMarker], true, key);
+    const after = structuredClone(before);
+    refusalEnum(after).enum.push("future-severity");
+    assert.deepEqual(schemaChanges(before, after, "", "output"), [], key);
+    const unmarked = structuredClone(before);
+    delete refusalEnum(unmarked)[enumMarker];
+    assert.ok(schemaChanges(unmarked, after, "", "output").length, key);
+  }
+});
+
+test("published sign-in status scalar enums remain closed", () => {
+  const document = JSON.parse(
+    readFileSync(new URL("../../docs/protocol/protocol.schema.json", import.meta.url), "utf8"),
+  );
+  const output = document.tiers.public["signIns.status"].output;
+  const sites = [];
+  const visit = (node, segments = []) => {
+    if (node === null || typeof node !== "object") return;
+    if (node.enum) sites.push(segments);
+    for (const [key, value] of Object.entries(node)) visit(value, [...segments, key]);
+  };
+  visit(output);
+  assert.ok(sites.length > 0);
+  for (const segments of sites) {
+    const at = (root) => segments.reduce((node, key) => node[key], root);
+    assert.equal(at(output)[enumMarker], undefined);
+    const next = structuredClone(output);
+    at(next).enum.push("future.reader-unsupported");
+    assert.ok(
+      schemaChanges(output, next, "", "output").length,
+      `strict sign-in reader at /${segments.join("/")} must refuse growth`,
+    );
   }
 });
 

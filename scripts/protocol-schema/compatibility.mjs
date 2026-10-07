@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 const openUnionMarker = "x-volli-open-union";
+const openEnumMarker = "x-volli-open-enum";
 const annotations = new Set([
   "$schema",
   "title",
@@ -9,6 +10,7 @@ const annotations = new Set([
   "examples",
   "$comment",
   openUnionMarker,
+  openEnumMarker,
 ]);
 const lowerBounds = new Set([
   "minimum",
@@ -88,16 +90,42 @@ export function schemaChanges(before, after, path = "", direction = "input", con
       fail(`${path}/type`, "output type widened");
     }
   }
-  for (const keyword of ["enum", "const"]) {
-    if (after[keyword] === undefined) continue;
-    const oldValues =
-      keyword === "enum" ? before.enum : before.const === undefined ? undefined : [before.const];
-    const newValues = keyword === "enum" ? after.enum : [after.const];
+  // const and enum describe the same finite vocabulary, even when Zod changes
+  // representation (a singleton literal becoming an enum). Removing the finite
+  // constraint also widens output acceptance. Tolerance must already exist in
+  // the baseline: adding a marker cannot retroactively teach an N−1 reader.
+  const oldValues = literalValues(before);
+  const newValues = literalValues(after);
+  const literalKeyword = after.enum !== undefined || before.enum !== undefined ? "enum" : "const";
+  if (
+    newValues !== undefined &&
+    (oldValues === undefined ||
+      oldValues.some((value) => !newValues.some((next) => isDeepStrictEqual(value, next))))
+  ) {
+    fail(`${path}/${literalKeyword}`, "enum member removed or literal narrowed");
+  }
+  const tolerantEnum =
+    (before[openEnumMarker] === true && after[openEnumMarker] === true) ||
+    state.tolerantEnumPaths?.includes(path);
+  if (
+    direction === "output" &&
+    oldValues !== undefined &&
+    !tolerantEnum &&
+    ((newValues === undefined && after.anyOf === undefined) ||
+      newValues?.some((next) => !oldValues.some((value) => isDeepStrictEqual(value, next))))
+  ) {
+    fail(`${path}/${literalKeyword}`, "output enum widened (requires tolerant reader)");
+  }
+  // Mixed Zod literals omit `type`. Even a tolerant scalar reader only earns
+  // new values of its existing JSON types, not new nullability/value types.
+  if (direction === "output" && oldValues !== undefined && tolerantEnum) {
+    const oldTypes = new Set(oldValues.map(literalType));
+    const newTypes = newValues?.map(literalType) ?? list(after.type);
     if (
-      oldValues === undefined ||
-      oldValues.some((value) => !newValues.some((next) => isDeepStrictEqual(value, next)))
+      (newValues === undefined && after.type === undefined && after.anyOf === undefined) ||
+      newTypes.some((type) => !oldTypes.has(type === "integer" ? "number" : type))
     ) {
-      fail(`${path}/${keyword}`, "enum member removed or literal narrowed");
+      fail(`${path}/type`, "output enum value type widened");
     }
   }
   const oldRequired = list(before.required);
@@ -137,7 +165,18 @@ export function schemaChanges(before, after, path = "", direction = "input", con
         );
         const at = `${path}/oneOf/${index}`;
         if (!next) fail(at, "open union variant removed or discriminator changed");
-        else changes.push(...compare(variant.branch, next.branch, at));
+        else
+          changes.push(
+            ...schemaChanges(variant.branch, next.branch, at, direction, {
+              ...nested,
+              // The disjointness proof permits growth of THIS discriminator,
+              // not other enums nested inside a tolerant union's known branch.
+              tolerantEnumPaths: [
+                ...(state.tolerantEnumPaths ?? []),
+                `${at}/properties/${escape(discriminator)}`,
+              ],
+            }),
+          );
       }
     }
   }
@@ -205,6 +244,20 @@ export function schemaChanges(before, after, path = "", direction = "input", con
     }
   }
   return changes;
+}
+
+function literalType(value) {
+  return value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+}
+
+/** Intersect enum and const if both assertions are present. Literal objects
+ * are wire values, so membership uses deep equality, not schema comparison. */
+function literalValues(schema) {
+  if (schema.const === undefined) return schema.enum;
+  return schema.enum === undefined ||
+    schema.enum.some((value) => isDeepStrictEqual(value, schema.const))
+    ? [schema.const]
+    : [];
 }
 
 /** Prove disjointness using a required string discriminator in every object
@@ -313,8 +366,14 @@ function resolveLocalRef(schema, root, cache, resolving = new Set()) {
   )
     throw new Error(`Assertion beside schema reference: ${ref}`);
   const resolved = resolveLocalRef(target, root, cache, resolving);
-  cache.set(schema, resolved);
-  return resolved;
+  // Zod may attach scalar metadata beside a shared schema's $ref. Preserve
+  // its site-local opt-in without marking other uses of the same definition.
+  const annotated =
+    object(resolved) && Object.hasOwn(siblings, openEnumMarker)
+      ? { ...resolved, [openEnumMarker]: siblings[openEnumMarker] }
+      : resolved;
+  cache.set(schema, annotated);
+  return annotated;
 }
 
 /**
