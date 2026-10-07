@@ -155,13 +155,14 @@ export const REFUSED_SIGN_IN_LINK = "The host sent a sign-in link Volli won’t 
 export const MAX_SIGN_IN_URL_LENGTH = 8192;
 
 /**
- * Whether this Mac may open a host's page on its own: a bounded web URL on
+ * Whether this Mac may open a host's page on its own: a bounded HTTPS URL on
  * this provider's exact authorization host in the Client's own catalog.
- * Off-domain pages need an explicit click on their domain-named in-app link.
+ * HTTP and off-domain pages need an explicit click on their domain-named link.
  */
 export function isOpenableSignInUrl(url: string, providerId: string): boolean {
   const page = signInWebUrl(url);
-  if (page === null || page.username !== "" || page.password !== "") return false;
+  if (page === null || page.protocol !== "https:" || page.username !== "" || page.password !== "")
+    return false;
   const provider = SIGN_IN_CATALOG.providers.find((entry) => entry.id === providerId);
   return provider !== undefined && provider.authorizationDomains.some((host) => host === page.host);
 }

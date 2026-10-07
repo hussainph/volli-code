@@ -320,10 +320,10 @@ export function SignInRow({
               signInWebUrl(flow.authUrl) !== null ? (
                 <Button
                   size="sm"
-                  className="self-start"
+                  className="h-auto min-h-8 max-w-full self-start whitespace-normal text-left"
                   onClick={() => controller.openPage(flow.authUrl!)}
                 >
-                  Open {siteOf(flow.authUrl)}
+                  <span className="min-w-0 break-all">Open {siteOf(flow.authUrl)}</span>
                   <ArrowSquareOutIcon />
                 </Button>
               ) : null}
@@ -395,7 +395,7 @@ function DeviceCode({ code, page, onOpen }: { code: string; page: string; onOpen
   const [copied, setCopied] = React.useState(false);
   const site = siteOf(page);
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex flex-wrap items-center gap-4">
       <button
         type="button"
         onClick={() => {
@@ -415,18 +415,29 @@ function DeviceCode({ code, page, onOpen }: { code: string; page: string; onOpen
           )}
         </span>
       </button>
-      <Button size="sm" onClick={onOpen}>
-        Open {site}
+      <Button
+        size="sm"
+        className="h-auto min-h-8 max-w-full whitespace-normal text-left"
+        onClick={onOpen}
+      >
+        <span className="min-w-0 break-all">Open {site}</span>
         <ArrowSquareOutIcon />
       </Button>
     </div>
   );
 }
 
-/** The host name of a page, for its button: "accounts.x.ai". */
+/**
+ * A bounded, ASCII host label. Elide only the excess left-hand prefix, visibly:
+ * retain 260 characters for a full DNS name (253), a root dot (1), and port (6).
+ * This preserves every valid registrable domain, even with multi-label/private
+ * suffixes, without guessing a public suffix from the last two labels. The
+ * button wraps this retained suffix rather than visually clipping it.
+ */
 export function siteOf(url: string): string {
   try {
-    return new URL(url).host;
+    const host = new URL(url).host;
+    return host.length <= 261 ? host : `…${host.slice(-260)}`;
   } catch {
     return "the provider’s page";
   }

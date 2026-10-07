@@ -301,37 +301,36 @@ describe("runHostSignIn", () => {
     expect(isOpenableSignInUrl("http://localhost:1455/start", "anthropic")).toBe(false);
   });
 
-  it("shows off-domain browser and device links without opening or ending the flow", async () => {
-    const host = fakeLink();
-    const events: HostSignInRunEvent[] = [];
-    const openExternal = vi.fn();
-    const run = runHostSignIn({
-      link: host.link,
-      providerId: "anthropic",
-      openExternal,
-      onEvent: (event) => events.push(event),
-    });
-    await run.flowId;
-    const browser = {
-      kind: "auth-url",
-      url: "https://phishing.example/login",
-      instructions: null,
-    } as const;
-    const device = {
-      kind: "device-code",
-      userCode: "WXYZ",
-      verificationUri: "https://phishing.example/device",
-      intervalSeconds: null,
-      expiresInSeconds: null,
-    } as const;
-    host.emit(browser);
-    host.emit(device);
-    await settle();
-    expect(events).toEqual([browser, device]);
-    expect(openExternal).not.toHaveBeenCalled();
-    expect(host.link.cancel).not.toHaveBeenCalled();
-    await run.cancel();
-  });
+  it.each(["https://phishing.example/login", "http://claude.ai/login"])(
+    "shows %s as a manual link without opening or ending the flow",
+    async (url) => {
+      const host = fakeLink();
+      const events: HostSignInRunEvent[] = [];
+      const openExternal = vi.fn();
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "anthropic",
+        openExternal,
+        onEvent: (event) => events.push(event),
+      });
+      await run.flowId;
+      const browser = { kind: "auth-url", url, instructions: null } as const;
+      const device = {
+        kind: "device-code",
+        userCode: "WXYZ",
+        verificationUri: "https://phishing.example/device",
+        intervalSeconds: null,
+        expiresInSeconds: null,
+      } as const;
+      host.emit(browser);
+      host.emit(device);
+      await settle();
+      expect(events).toEqual([browser, device]);
+      expect(openExternal).not.toHaveBeenCalled();
+      expect(host.link.cancel).not.toHaveBeenCalled();
+      await run.cancel();
+    },
+  );
 
   it("auto-opens only the selected provider's exact authorization host", () => {
     for (const [provider, url] of [
@@ -346,7 +345,7 @@ describe("runHostSignIn", () => {
       ["meta", "https://auth.meta.com/device"],
     ] as const)
       expect(isOpenableSignInUrl(url, provider)).toBe(true);
-    expect(isOpenableSignInUrl("http://claude.ai/login", "anthropic")).toBe(true);
+    expect(isOpenableSignInUrl("http://claude.ai/login", "anthropic")).toBe(false);
     expect(isOpenableSignInUrl("https://CLAUDE.AI:443/login", "anthropic")).toBe(true);
     for (const url of [
       "https://claude.ai.attacker.example/login",

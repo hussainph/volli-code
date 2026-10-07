@@ -221,6 +221,56 @@ describe("main's native Send confirmation", () => {
 });
 
 describe("native approval fences the key read and send", () => {
+  it.each([0, 1])(
+    "requires a separate native confirmation for two concurrent sends (second response %s)",
+    async (response) => {
+      const window = fakeWindow();
+      const firstDialog = deferred<{ response: number }>();
+      const secondDialog = deferred<{ response: number }>();
+      const showMessageBox = vi
+        .fn()
+        .mockReturnValueOnce(firstDialog.promise)
+        .mockReturnValueOnce(secondDialog.promise);
+      const confirm = createNativeSendConfirmation({
+        getWindow: () => window as unknown as BrowserWindow,
+        showMessageBox,
+      });
+      const credentials = store();
+      const setApiKey = vi.fn(async () => "status");
+      const send = () =>
+        sendApiKeyFromThisMac({
+          providerId: "openrouter",
+          confirmed: true,
+          store: credentials,
+          setApiKey,
+          confirm: () => confirm(labels),
+          isCurrent: () => true,
+        });
+      const first = send();
+      const second = send();
+      expect(showMessageBox).toHaveBeenCalledTimes(2);
+      expect(window.listenerCount("closed")).toBe(2);
+      expect(credentials.reads).toEqual([]);
+      expect(setApiKey).not.toHaveBeenCalled();
+
+      firstDialog.resolve({ response: 0 });
+      expect(await first).toEqual({ ok: true, status: "status" });
+      // Approving one request cannot release the other's read or send.
+      expect(credentials.reads).toEqual(["openrouter"]);
+      expect(setApiKey).toHaveBeenCalledOnce();
+      expect(window.listenerCount("closed")).toBe(1);
+
+      secondDialog.resolve({ response });
+      expect(await second).toEqual(
+        response === 0 ? { ok: true, status: "status" } : { ok: false, reason: "cancelled" },
+      );
+      expect(credentials.reads).toHaveLength(response === 0 ? 2 : 1);
+      expect(setApiKey).toHaveBeenCalledTimes(response === 0 ? 2 : 1);
+      expect(window.eventNames()).toEqual([]);
+      expect(window.webContents.eventNames()).toEqual([]);
+    },
+  );
+
   it.each(["absent", "cancelled", "failed", "stale-window", "stale-link"])(
     "reads nothing for %s native confirmation, even with renderer confirmed true",
     async (state) => {
