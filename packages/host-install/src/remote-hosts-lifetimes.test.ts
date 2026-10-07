@@ -97,6 +97,58 @@ function holdFirstHostKey(h: Harness): { release: () => void; held: () => boolea
   return { release: () => release!(), held: () => release !== undefined };
 }
 
+describe("a cancel at any step leaves nothing behind (the review's cancel probes)", () => {
+  it.each(["connect", "probe", "deliver", "install", "start", "enroll", "link"])(
+    "at %s: no host, no key, no tunnel, no open SSH, and the flow says cancelled",
+    async (step) => {
+      const gate: { release?: () => void; entered: boolean } = { entered: false };
+      const held = new Promise<void>((resolve) => {
+        gate.release = resolve;
+      });
+      const h = harness({
+        tunnelMode: step === "link" ? "hold" : "up",
+        overrides: [
+          async (script, options) => {
+            const matches =
+              step === "connect"
+                ? script === "echo volli-ok"
+                : step === "probe"
+                  ? script === PROBE_SCRIPT
+                  : step === "deliver"
+                    ? options.label === "upload: check"
+                    : script.includes(` ${step} --`);
+            if (!matches || step === "link") return undefined;
+            gate.entered = true;
+            await held;
+            return undefined;
+          },
+        ],
+      });
+      const { flowId } = await h.engine.startAdd({ target: "deploy@fake" });
+      const w = watch(h.engine, flowId);
+      if (step === "link") {
+        await w.until((view) => view.steps[6]?.status === "running");
+        await flush();
+      } else {
+        await until(() => gate.entered);
+      }
+      await h.engine.cancelAdd(flowId);
+      gate.release!();
+      for (let turn = 0; turn < 5; turn += 1) await flush();
+      expect(h.engine.snapshot().hosts).toEqual([]);
+      expect(h.keys.keys.size).toBe(0);
+      expect(h.store.saves).toEqual([]);
+      expect(h.tunnels.made.every((tunnel) => tunnel.closed)).toBe(true);
+      expect(h.box.transports.every((transport) => transport.closed)).toBe(true);
+      expect(w.views().at(-1)?.status).toBe("cancelled");
+      await expect(h.engine.sudoPassword(flowId, "q1", "x")).rejects.toMatchObject({
+        code: "flow-not-waiting",
+      });
+      await h.engine.close();
+    },
+  );
+});
+
 describe("quit owns everything in flight (B2)", () => {
   it("a flow writing its host's key when quit comes keeps nothing: no host, no key, no tunnel", async () => {
     const h = harness();
@@ -345,7 +397,8 @@ setInterval(() => {}, 1000);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("two finishes for one host, then quit: every fake ssh is gone", async () => {
+  /** Real tunnels over the stubborn fake: every child it spawns, kept for the check. */
+  function liveTunnels(): { tunnel: RemoteHostsPorts["tunnel"]; children: ChildProcess[] } {
     const children: ChildProcess[] = [];
     let port = 41_000;
     const tunnel: RemoteHostsPorts["tunnel"] = (options) => {
@@ -370,12 +423,17 @@ setInterval(() => {}, 1000);
         },
       });
     };
+    return { tunnel, children };
+  }
+
+  it("two finishes for one host, then quit: every fake ssh is gone", async () => {
+    const { tunnel, children } = liveTunnels();
     const h = harness({ tunnel });
     try {
       const hold = holdFirstHostKey(h);
       const one = await h.engine.startAdd({ target: "deploy@fake" });
       const w1 = watch(h.engine, one.flowId);
-      while (!hold.held()) await flush();
+      await until(() => hold.held());
       const two = await h.engine.startAdd({ target: "deploy@fake-alias" });
       const w2 = watch(h.engine, two.flowId);
       hold.release();
@@ -390,6 +448,33 @@ setInterval(() => {}, 1000);
       for (const child of children) if (alive(child.pid!)) child.kill("SIGKILL");
     }
   });
+
+  it.each(["quit", "forget", "cancel"] as const)(
+    "after %s, no fake ssh is left alive",
+    async (action) => {
+      const { tunnel, children } = liveTunnels();
+      const h = harness({ tunnel });
+      try {
+        const { flowId } = await h.engine.startAdd({ target: "deploy@fake" });
+        const w = watch(h.engine, flowId);
+        if (action === "cancel") {
+          await w.until((view) => view.steps[6]?.status === "running");
+          await until(() => children.length > 0);
+          await h.engine.cancelAdd(flowId);
+        } else {
+          await w.until((view) => view.status === "done");
+          if (action === "forget") await h.engine.forget(HOST_ID);
+          else await h.engine.close();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        expect(children.length).toBeGreaterThan(0);
+        expect(children.every((child) => !alive(child.pid!))).toBe(true);
+        await h.engine.close();
+      } finally {
+        for (const child of children) if (alive(child.pid!)) child.kill("SIGKILL");
+      }
+    },
+  );
 });
 
 describe("finished flows are let go (note 3)", () => {
