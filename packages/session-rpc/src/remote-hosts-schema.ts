@@ -148,6 +148,9 @@ const remoteHost = z.object({
   deviceId: z.string(),
   addedAt: z.string(),
   liveSessions: z.number().int().nonnegative().nullable(),
+  system: z.string().nullable(),
+  arch: z.string().nullable(),
+  hostKeys: z.array(z.string()).readonly(),
 });
 const remoteProjectLink = z.object({ hostId: z.string(), link: linkState });
 /** `RemoteHostsSnapshot`. Its arrays are read-only, as the registry hands them over. */
@@ -201,6 +204,16 @@ const addHostView = z.object({
   failure: addHostFailure.nullable(),
   hostId: z.string().nullable(),
   startup: z.string().nullable(),
+  facts: z.object({
+    user: z.string().nullable(),
+    os: z.enum(["linux", "macos"]).nullable(),
+    system: z.string().nullable(),
+    arch: z.string().nullable(),
+    memoryBytes: z.number().nonnegative().nullable(),
+    version: z.string().nullable(),
+    keepsRunning: z.boolean().nullable(),
+    alreadyPaired: z.boolean(),
+  }),
 });
 const addHostLogLine = z.object({
   at: z.string(),

@@ -9,6 +9,8 @@ import {
   questionJson,
   stepStatuses,
   stoppedAt,
+  archName,
+  flowFacts,
 } from "./remote-hosts-flow";
 
 const READY = initialProvisionState({
@@ -141,5 +143,105 @@ describe("a flow's log line", () => {
       message: "step failed",
       fields: { step: "probe", ms: 3, ok: false, none: null, failure: '{"code":"no-systemd"}' },
     });
+  });
+});
+
+describe("what an add has found", () => {
+  const probe = {
+    kernel: "Linux",
+    arch: "aarch64",
+    os: { id: "debian", version: "12", name: "Debian GNU/Linux 12 (bookworm)" },
+    user: "deploy",
+    home: "/home/deploy",
+    systemd: 252,
+    launchd: false,
+    userManager: true,
+    linger: false,
+    glibc: "2.36",
+    disk: { home: 1, system: 1 },
+    memoryBytes: 4_000_000_000,
+    sudo: "nopasswd",
+    existing: null,
+    artifactTarget: "linux-arm64",
+  } as const;
+  const started = (mode: "system" | "user", linger: boolean | null) => ({
+    v: 1 as const,
+    ok: true as const,
+    mode,
+    version: "1.2.0",
+    restarted: true,
+    hostId: null,
+    listen: null,
+    linger,
+  });
+
+  it("says nothing before a step has, and never makes a fact up", () => {
+    expect(flowFacts({}, {})).toEqual({
+      user: null,
+      os: null,
+      system: null,
+      arch: null,
+      memoryBytes: null,
+      version: null,
+      keepsRunning: null,
+      alreadyPaired: false,
+    });
+  });
+
+  it("reads each from the step that found it", () => {
+    expect(flowFacts({ probe }, {})).toMatchObject({
+      user: "deploy",
+      os: "linux",
+      system: "Debian GNU/Linux 12 (bookworm)",
+      arch: "arm64",
+      memoryBytes: 4_000_000_000,
+    });
+    // A system unit keeps running; a user unit only when it lingers.
+    expect(flowFacts({ probe, start: started("system", null) }, {}).keepsRunning).toBe(true);
+    expect(flowFacts({ probe, start: started("user", true) }, {}).keepsRunning).toBe(true);
+    expect(flowFacts({ probe, start: started("user", false) }, {}).keepsRunning).toBe(false);
+    expect(flowFacts({ probe, start: { skipped: true } }, {}).keepsRunning).toBeNull();
+    // The version: the install's, else the start's, else the enrollment's.
+    expect(flowFacts({ probe, start: started("system", null) }, {}).version).toBe("1.2.0");
+    const enroll = {
+      v: 1 as const,
+      ok: true as const,
+      hostId: "h",
+      deviceId: "d",
+      fingerprint: "SHA256:mac",
+      created: false,
+      version: "1.3.0",
+      listen: null,
+    };
+    expect(flowFacts({ probe, enroll }, {})).toMatchObject({
+      version: "1.3.0",
+      alreadyPaired: true,
+    });
+    expect(flowFacts({}, { alreadyPaired: true }).alreadyPaired).toBe(true);
+  });
+
+  it("leaves a Mac's start to its startup line, and blank OS text unsaid", () => {
+    const mac = {
+      ...probe,
+      kernel: "Darwin",
+      arch: "arm64",
+      os: { id: "macos", version: "", name: " " },
+      user: "",
+      launchd: true,
+    };
+    expect(flowFacts({ probe: mac, start: started("user", null) }, {})).toMatchObject({
+      os: "macos",
+      system: null,
+      user: null,
+      keepsRunning: null,
+    });
+  });
+
+  it("names architectures the way people read them", () => {
+    expect(archName("x86_64")).toBe("x86-64");
+    expect(archName("amd64")).toBe("x86-64");
+    expect(archName("aarch64")).toBe("arm64");
+    expect(archName("arm64")).toBe("arm64");
+    expect(archName("riscv64")).toBe("riscv64");
   });
 });

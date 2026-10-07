@@ -72,6 +72,17 @@ describe("adding a host end to end", () => {
       hostId: HOST_ID,
       // A Linux host starts at boot: nothing to say.
       startup: null,
+      // What each step found: the checklist's completed rows.
+      facts: {
+        user: "deploy",
+        os: "linux",
+        system: "Ubuntu 24.04.1 LTS",
+        arch: "x86-64",
+        memoryBytes: 8_167_236 * 1024,
+        version: "1.1.0",
+        keepsRunning: true,
+        alreadyPaired: false,
+      },
     });
     // Each step shows running, in order, each after the ones before it are done.
     const running = w
@@ -128,6 +139,9 @@ describe("adding a host end to end", () => {
           deviceId: DEVICE_ID,
           addedAt: new Date(NOW).toISOString(),
           liveSessions: null,
+          system: "Ubuntu 24.04.1 LTS",
+          arch: "x86-64",
+          hostKeys: [],
         },
       ],
       projects: {},
@@ -233,6 +247,8 @@ describe("questions", () => {
     await h.engine.answerAdd(flowId, questionOf(h.engine, flowId), { kind: "accept-host-key" });
     expect(h.accepted).toEqual([OFFER]);
     expect(h.engine.snapshot().hosts.map((host) => host.id)).toEqual([HOST_ID]);
+    // The key the person compared and trusted is kept with the host.
+    expect(h.engine.snapshot().hosts[0]?.hostKeys).toEqual(["SHA256:box"]);
   });
 
   it("takes a sudo password into the flow's memory only, and sends it only to sudo", async () => {

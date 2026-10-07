@@ -89,6 +89,7 @@ import {
 import {
   ADD_HOST_LOG_LIMIT,
   failureJson,
+  flowFacts,
   logLine,
   logTail,
   questionJson,
@@ -426,6 +427,8 @@ interface Flow {
   promoted: string | null;
   /** How many questions it has asked: each one's id. */
   questions: number;
+  /** The host key fingerprints the person compared and trusted in this flow, if it asked. */
+  trustedKeys: readonly string[] | null;
   queue: Promise<void>;
   view: AddHostView;
   sshClosed: Promise<void> | null;
@@ -600,6 +603,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       deviceId: entry.deviceId,
       addedAt: entry.addedAt,
       liveSessions: null,
+      system: entry.system,
+      arch: entry.arch,
+      hostKeys: entry.hostKeys,
     };
   }
 
@@ -986,6 +992,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       failure: status === "failed" ? failureJson(state, flow.name) : null,
       hostId: flow.hostId,
       startup: probe === undefined ? null : describeStartup(probe, flow.name),
+      facts: flowFacts(flow.results, state.decisions),
     };
     emit(flow, { kind: "view", view: flow.view });
   }
@@ -1094,6 +1101,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       // The person agreed the host's identity changed: the old one goes.
       const replaced = pinned !== null && pinned !== hostId ? (entries.get(pinned) ?? null) : null;
       const kept = entries.get(hostId);
+      const facts = flowFacts(state.results, state.decisions);
       const remote = flow.remote!;
       const entry: RegistryHost = {
         id: hostId,
@@ -1106,6 +1114,10 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         addedAt: kept?.addedAt ?? iso(),
         listen: remote.listen,
         workspaceIds: kept?.workspaceIds ?? [],
+        system: facts.system,
+        arch: facts.arch,
+        // The keys the person trusted in this add, or what an earlier add kept.
+        hostKeys: flow.trustedKeys ?? kept?.hostKeys ?? [],
       };
       const next = new Map(entries);
       if (replaced !== null) next.delete(replaced.id);
@@ -1323,6 +1335,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       remote: null,
       promoted: null,
       questions: 0,
+      trustedKeys: null,
       queue: Promise.resolve(),
       view: undefined as unknown as AddHostView,
       sshClosed: null,
@@ -1451,6 +1464,11 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         flowId,
         (flow) => asking(flow, questionId, (question) => answerFits(question, reply)),
         (flow) => {
+          const stop = flow.state.stop;
+          if (stop?.kind === "question" && stop.question.kind === "host-key") {
+            // Kept with the host once it is added: what the person compared.
+            flow.trustedKeys = stop.question.offer.fingerprints.map((key) => key.fingerprint);
+          }
           flow.state = answer(flow.state, reply);
         },
       );

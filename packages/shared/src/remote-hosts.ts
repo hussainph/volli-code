@@ -84,6 +84,15 @@ export interface RemoteHost {
   readonly addedAt: string;
   /** Sessions running there now, `null` while nothing reports it. */
   readonly liveSessions: number | null;
+  /** The OS as the host names itself ("Ubuntu 24.04.1 LTS", "macOS 15.1"), from its check; `null` when not known. */
+  readonly system: string | null;
+  /** Its architecture as people read it ("x86-64", "arm64"); `null` when not known. */
+  readonly arch: string | null;
+  /**
+   * The host key fingerprints (`SHA256:…`) the person compared and trusted
+   * when adding it; empty when its key was already known to their ssh.
+   */
+  readonly hostKeys: readonly string[];
 }
 
 /**
@@ -178,6 +187,27 @@ export interface AddHostView {
    * says nothing (a Linux host starts at boot).
    */
   readonly startup: string | null;
+  /** What the flow has found so far: the checklist's completed rows read these, never made up. */
+  readonly facts: AddHostFacts;
+}
+
+/** What an add has learned about the host, each `null` until a step has said it. */
+export interface AddHostFacts {
+  /** The login it connected as. */
+  readonly user: string | null;
+  /** `linux` or `macos`, from the check: the host's icon. */
+  readonly os: "linux" | "macos" | null;
+  /** The OS as the host names itself: "Ubuntu 24.04.1 LTS", "macOS 15.1". */
+  readonly system: string | null;
+  /** "x86-64", "arm64". */
+  readonly arch: string | null;
+  readonly memoryBytes: number | null;
+  /** The Volli host it installed, kept or found running. */
+  readonly version: string | null;
+  /** Whether it keeps running when the person logs out (a system unit, or lingering); `null` on a Mac, which says `startup`. */
+  readonly keepsRunning: boolean | null;
+  /** This Mac was already paired with it. */
+  readonly alreadyPaired: boolean;
 }
 
 /** One line of the flow's log (the log under Details): never a secret. */
