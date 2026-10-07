@@ -6,12 +6,13 @@
  *
  * Motion follows the kit's rules: entrances ease out on the app's curve, UI
  * motion stays under 300 ms, only transform / opacity / filter animate, and
- * every surface that mounts these respects reduced motion through its own
- * `MotionConfig reducedMotion="user"`.
+ * reduced motion lands every value at once ({@link useMotionTiming}),
+ * opacity and blur included: a surface's `MotionConfig reducedMotion="user"`
+ * stops only transforms.
  */
 import * as React from "react";
 import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion, type Transition } from "motion/react";
 import { AppleLogoIcon } from "@phosphor-icons/react/dist/csr/AppleLogo";
 import { DesktopTowerIcon } from "@phosphor-icons/react/dist/csr/DesktopTower";
 import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
@@ -25,6 +26,20 @@ import type { HostBadge } from "./host-surface-model";
 export const EASE_OUT = [0.23, 1, 0.32, 1] as const;
 /** The iOS sheet curve — fast start, long settle — for surfaces changing size. */
 export const EASE_SWIFT = [0.32, 0.72, 0, 1] as const;
+
+/** No motion: a value lands at once. */
+export const INSTANT: Transition = { duration: 0, delay: 0 };
+
+/**
+ * The person's reduced motion, for every animated value. Motion's
+ * `reducedMotion="user"` skips only transforms (opacity, blur and a drawn
+ * path still animate), so each transition here goes through this: under
+ * reduced motion it is {@link INSTANT}, otherwise its own timing, unchanged.
+ */
+export function useMotionTiming(): (transition: Transition) => Transition {
+  const reduce = useReducedMotion() === true;
+  return React.useCallback((transition) => (reduce ? INSTANT : transition), [reduce]);
+}
 
 /* ── Host tile ──────────────────────────────────────────────────────────── */
 
@@ -58,6 +73,7 @@ export function HostGlyph({
   size?: keyof typeof TILE;
   className?: string;
 }) {
+  const timed = useMotionTiming();
   const tile = TILE[size];
   const Icon = local
     ? DesktopTowerIcon
@@ -105,7 +121,7 @@ export function HostGlyph({
             initial={{ scale: 0.4, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.4, opacity: 0 }}
-            transition={{ type: "spring", duration: 0.35, bounce: 0.3 }}
+            transition={timed({ type: "spring", duration: 0.35, bounce: 0.3 })}
           >
             {badge === "ready" ? <CheckIcon weight="bold" className="size-[70%]" /> : null}
           </motion.span>
@@ -123,6 +139,7 @@ export function HostGlyph({
  * "2 Sessions running" is one gesture, not a cut.
  */
 export function SwapText({ children, className }: { children: string; className?: string }) {
+  const timed = useMotionTiming();
   return (
     <span className={cn("relative inline-grid", className)}>
       <AnimatePresence initial={false} mode="popLayout">
@@ -132,7 +149,7 @@ export function SwapText({ children, className }: { children: string; className?
           initial={{ opacity: 0, y: 5, filter: "blur(3px)" }}
           animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
           exit={{ opacity: 0, y: -5, filter: "blur(3px)" }}
-          transition={{ duration: 0.2, ease: EASE_OUT }}
+          transition={timed({ duration: 0.2, ease: EASE_OUT })}
         >
           {children}
         </motion.span>
@@ -149,6 +166,7 @@ export function SwapText({ children, className }: { children: string; className?
  * than snapping between heights.
  */
 export function AutoHeight({ children }: { children: React.ReactNode }) {
+  const timed = useMotionTiming();
   const inner = React.useRef<HTMLDivElement>(null);
   const [height, setHeight] = React.useState<number | "auto">("auto");
   React.useLayoutEffect(() => {
@@ -171,7 +189,7 @@ export function AutoHeight({ children }: { children: React.ReactNode }) {
       }}
       initial={false}
       animate={{ height }}
-      transition={{ duration: 0.32, ease: EASE_SWIFT }}
+      transition={timed({ duration: 0.32, ease: EASE_SWIFT })}
     >
       <div ref={inner}>{children}</div>
     </motion.div>
@@ -181,6 +199,7 @@ export function AutoHeight({ children }: { children: React.ReactNode }) {
 /* ── Progress ──────────────────────────────────────────────────────────── */
 
 export function ProgressLine({ value, label }: { value: number; label: string }) {
+  const timed = useMotionTiming();
   return (
     <div
       role="progressbar"
@@ -194,7 +213,7 @@ export function ProgressLine({ value, label }: { value: number; label: string })
         className="h-full origin-left rounded-full bg-foreground/80"
         initial={false}
         animate={{ scaleX: Math.max(0.02, Math.min(1, value)) }}
-        transition={{ duration: 0.2, ease: "linear" }}
+        transition={timed({ duration: 0.2, ease: "linear" })}
       />
     </div>
   );
@@ -206,7 +225,7 @@ export function ActiveStepMark() {
     <svg
       aria-hidden
       viewBox="0 0 16 16"
-      className="size-4 shrink-0 animate-spin text-foreground [animation-duration:900ms]"
+      className="size-4 shrink-0 animate-spin text-foreground [animation-duration:900ms] motion-reduce:animate-none"
     >
       <circle
         cx="8"
@@ -263,6 +282,7 @@ export type StepMarkStatus = "pending" | "active" | "done" | "failed" | "attenti
  * moving.
  */
 export function StepMark({ status }: { status: StepMarkStatus }) {
+  const timed = useMotionTiming();
   return (
     <span
       aria-hidden
@@ -278,7 +298,7 @@ export function StepMark({ status }: { status: StepMarkStatus }) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.12 }}
+            transition={timed({ duration: 0.12 })}
           />
         ) : status === "active" ? (
           <motion.span
@@ -286,7 +306,7 @@ export function StepMark({ status }: { status: StepMarkStatus }) {
             initial={{ opacity: 0, scale: 0.6 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.6 }}
-            transition={{ duration: 0.16, ease: EASE_OUT }}
+            transition={timed({ duration: 0.16, ease: EASE_OUT })}
           >
             <ActiveStepMark />
           </motion.span>
@@ -298,7 +318,7 @@ export function StepMark({ status }: { status: StepMarkStatus }) {
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ type: "spring", duration: 0.3, bounce: 0.35 }}
+            transition={timed({ type: "spring", duration: 0.3, bounce: 0.35 })}
           >
             <circle cx="8" cy="8" r="7" fill="currentColor" />
             <motion.path
@@ -310,7 +330,7 @@ export function StepMark({ status }: { status: StepMarkStatus }) {
               strokeLinejoin="round"
               initial={{ pathLength: 0 }}
               animate={{ pathLength: 1 }}
-              transition={{ duration: 0.22, delay: 0.08, ease: EASE_OUT }}
+              transition={timed({ duration: 0.22, delay: 0.08, ease: EASE_OUT })}
             />
           </motion.svg>
         ) : (
@@ -321,7 +341,7 @@ export function StepMark({ status }: { status: StepMarkStatus }) {
             initial={{ opacity: 0, scale: 0.5 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ type: "spring", duration: 0.3, bounce: 0.35 }}
+            transition={timed({ type: "spring", duration: 0.3, bounce: 0.35 })}
           >
             <circle cx="8" cy="8" r="7" fill="currentColor" />
             <path
