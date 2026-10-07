@@ -1,6 +1,7 @@
 import type { AnyRouter } from "@trpc/server";
 import {
   HOST_BASE_OPERATIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
   type HostFeature,
   type HostV1Feature,
@@ -38,6 +39,7 @@ export function assertHostFeatureReadiness(
   );
   for (const operation of [
     ...HOST_BASE_OPERATIONS,
+    ...HOST_SCOPE_BASE_OPERATIONS,
     ...Object.values(HOST_FEATURE_OPERATIONS).flat(),
   ]) {
     if (!publicHostApiKeys.has(operation)) {
@@ -50,6 +52,13 @@ export function assertHostFeatureReadiness(
   for (const operation of HOST_BASE_OPERATIONS) {
     if (!Object.hasOwn(procedures, operation)) {
       throw new Error(`Host router is missing bootstrap operation: ${operation}`);
+    }
+  }
+  if (offered.includes("host.workspaces")) {
+    for (const operation of HOST_SCOPE_BASE_OPERATIONS) {
+      if (!Object.hasOwn(procedures, operation)) {
+        throw new Error(`Host router is missing host-scope bootstrap operation: ${operation}`);
+      }
     }
   }
   for (const feature of offered) {

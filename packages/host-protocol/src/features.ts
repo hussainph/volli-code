@@ -15,6 +15,8 @@ import type { HostFeature } from "./handshake";
 
 /** Answered on every authenticated connection, whatever it negotiated: v1's bootstrap. */
 export const HOST_BASE_OPERATIONS = ["protocol.welcome"] as const;
+/** Additive host-scope bootstrap, separate from the frozen Workspace set. */
+export const HOST_SCOPE_BASE_OPERATIONS = ["protocol.hostWelcome"] as const;
 
 export const HOST_FEATURE_OPERATIONS = {
   /** The Session router's own commands and reads, by Session id (VC-663). */
@@ -133,14 +135,30 @@ export const HOST_FEATURE_OPERATIONS = {
    * `session.read` (the socket's short-id JSON) is frozen.
    */
   "sessions.listing": ["session.listing", "session.listingForTicket"],
+  /** Host-wide project discovery and creation, without a Workspace connection (VC-722). */
+  "host.workspaces": ["workspaces.list", "workspaces.create"],
 } as const satisfies Readonly<Record<HostFeature, readonly string[]>>;
 
 /** A feature this build can grant. */
 export type HostV1Feature = keyof typeof HOST_FEATURE_OPERATIONS;
 
+/** The only features a host-scoped device connection may receive. */
+export const HOST_SCOPE_FEATURES = [
+  "sign-ins",
+  "auth.callback",
+  "host.logs",
+  "host.workspaces",
+] as const satisfies readonly HostV1Feature[];
+
+/** Features reserved for a host connection, never granted to a Workspace connection. */
+export const HOST_CONNECTION_ONLY_FEATURES = [
+  "host.workspaces",
+] as const satisfies readonly HostV1Feature[];
+
 /** Every operation some v1 feature grants, or the base set. */
 export type HostOperation =
   | (typeof HOST_BASE_OPERATIONS)[number]
+  | (typeof HOST_SCOPE_BASE_OPERATIONS)[number]
   | (typeof HOST_FEATURE_OPERATIONS)[HostV1Feature][number];
 
 /** The v1 feature names, in the order a host offers them. */
@@ -150,8 +168,13 @@ export const HOST_V1_FEATURES = Object.keys(HOST_FEATURE_OPERATIONS) as readonly
  * The operations a connection may reach: the base set plus every operation of
  * each granted feature. A name this build does not know grants nothing.
  */
-export function operationsGrantedBy(features: readonly HostFeature[]): ReadonlySet<string> {
-  const granted = new Set<string>(HOST_BASE_OPERATIONS);
+export function operationsGrantedBy(
+  features: readonly HostFeature[],
+  scope: "workspace" | "host" = "workspace",
+): ReadonlySet<string> {
+  const granted = new Set<string>(
+    scope === "host" ? HOST_SCOPE_BASE_OPERATIONS : HOST_BASE_OPERATIONS,
+  );
   for (const feature of features) {
     if (!Object.hasOwn(HOST_FEATURE_OPERATIONS, feature)) continue;
     for (const operation of HOST_FEATURE_OPERATIONS[feature as HostV1Feature]) {

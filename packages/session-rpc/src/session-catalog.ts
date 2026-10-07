@@ -6,6 +6,8 @@
  */
 import {
   BOARD_ENTRIES,
+  HOST_WORKSPACE_ENTRIES,
+  type HostWorkspaceEntry,
   VERB_REGISTRY,
   type BoardEntry,
   type VerbRegistryEntry,
@@ -19,9 +21,11 @@ import type { SessionRouterContext } from "./index";
  * filtered so the family can build no other area's key, at the type or at
  * runtime (HP § Command catalog, "Adding a command").
  */
-export type SessionRouterEntry = Exclude<VerbRegistryEntry, BoardEntry>;
+export type SessionRouterEntry = Exclude<VerbRegistryEntry, BoardEntry | HostWorkspaceEntry>;
 
-const OTHER_AREAS: ReadonlySet<string> = new Set(BOARD_ENTRIES.map(({ key }) => key));
+const OTHER_AREAS: ReadonlySet<string> = new Set(
+  [...BOARD_ENTRIES, ...HOST_WORKSPACE_ENTRIES].map(({ key }) => key),
+);
 
 function isSessionRouterEntry(entry: VerbRegistryEntry): entry is SessionRouterEntry {
   return !OTHER_AREAS.has(entry.key);

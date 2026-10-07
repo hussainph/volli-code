@@ -1,5 +1,5 @@
 import { getTRPCErrorShape, initTRPC, TRPCError } from "@trpc/server";
-import type { HostActor } from "@volli/host-protocol";
+import type { HostConnectionActor } from "@volli/host-protocol";
 import {
   SessionRuntimeCommandConflictError,
   SessionRuntimeConflictError,
@@ -10,6 +10,7 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   QUEUE_REVISION_CONFLICT,
   type BoardEntry,
+  type HostWorkspaceEntry,
   type VerbEntry,
   type CatalogKeyOf,
 } from "@volli/shared";
@@ -103,7 +104,7 @@ function fixture(caller: RouterCaller) {
 }
 
 /** A network caller, whose door supplies the grant check every network caller must carry. */
-function as(actor: HostActor, current: () => boolean = () => true): RouterCaller {
+function as(actor: HostConnectionActor, current: () => boolean = () => true): RouterCaller {
   return { actor, current };
 }
 
@@ -343,7 +344,152 @@ describe("follow-up feature compatibility", () => {
   });
 });
 
+describe("host-connection-only catalog entries, before parsing", () => {
+  // The stream probe exercises the same admission chain as any future
+  // workspaces subscription; today's production feature has query/mutation only.
+  const entries = [
+    {
+      ...probeEntryForScope("workspaces.list"),
+      catalog: { actor: "user", scope: "host", idempotency: "read" },
+    },
+    {
+      ...probeEntryForScope("workspaces.create"),
+      catalog: { actor: "user", scope: "host", idempotency: "command-id" },
+    },
+    {
+      ...probeEntryForScope("workspaces.changes"),
+      catalog: { actor: "user", scope: "host", idempotency: "read" },
+    },
+  ] as const satisfies readonly VerbEntry[];
+
+  it("refuses a Workspace actor before parsing query, mutation and subscription, even when operations grant them", async () => {
+    const parse = vi.fn((input: unknown) => input);
+    const handler = vi.fn(() => "answer");
+    const streamHandler = vi.fn(async function* () {
+      yield "answer";
+    });
+    const builders = createCatalogBuilders<CatalogCallerContext, (typeof entries)[number]>({
+      entries,
+    });
+    const input = z.preprocess(parse, z.string().min(1));
+    const router = builders.catalogRouter({
+      workspaces: {
+        list: builders
+          .hostProcedure("workspaces.list")
+          .input(input)
+          .output(z.string())
+          .query(handler),
+        create: builders
+          .hostProcedure("workspaces.create")
+          .input(input)
+          .output(z.string())
+          .mutation(handler),
+        changes: builders
+          .hostProcedure("workspaces.changes")
+          .input(input)
+          .subscription(streamHandler),
+      },
+    });
+    const call = (caller: RouterCaller) =>
+      router.createCaller({
+        caller,
+        diagnostics: new RpcDiagnosticLog(),
+        operations: new Set(entries.map(({ key }) => key)),
+      });
+    for (const actor of [device, sessionActor, worker]) {
+      for (const value of ["valid", ""]) {
+        for (const result of [
+          call(actor).workspaces.list(value),
+          call(actor).workspaces.create(value),
+          call(actor).workspaces.changes(value),
+        ]) {
+          expect(hostErrorOf(await refusal(result))).toMatchObject({
+            code: "FORBIDDEN",
+            reason: "verb-refused",
+          });
+        }
+      }
+    }
+    expect(parse).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(streamHandler).not.toHaveBeenCalled();
+    // Scope gates must preserve the trusted desktop door and host device access.
+    for (const actor of [
+      LOCAL_DESKTOP_CALLER,
+      as({ kind: "device", deviceId: DEVICE, scope: "host" }),
+    ]) {
+      await expect(call(actor).workspaces.list("valid")).resolves.toBe("answer");
+      await expect(call(actor).workspaces.create("valid")).resolves.toBe("answer");
+      const stream = await call(actor).workspaces.changes("valid");
+      expect(await stream[Symbol.asyncIterator]().next()).toMatchObject({
+        value: "answer",
+        done: false,
+      });
+    }
+    expect(parse).toHaveBeenCalledTimes(6);
+    expect(handler).toHaveBeenCalledTimes(4);
+    expect(streamHandler).toHaveBeenCalledTimes(2);
+  });
+});
+
+function probeEntryForScope<Key extends string>(key: Key) {
+  return {
+    key,
+    accessModes: ["hostApi"],
+    actor: "any",
+    handler: { site: "main", id: key },
+    listed: false,
+    group: "Read",
+    summary: "Scope admission probe.",
+    options: [],
+  } as const;
+}
+
 describe("workspace scope, before any read", () => {
+  it("refuses a host device before Workspace input parsing, lookup, or the handler", async () => {
+    const parse = vi.fn((input: unknown) => input);
+    const lookup = vi.fn(() => WORKSPACE);
+    const handler = vi.fn(() => "answer");
+    const router = catalogRouter({
+      session: {
+        projection: workspaceProcedure(
+          "session.projection",
+          z.preprocess(parse, z.object({ sessionId: z.string().min(1) })),
+          ({ sessionId }) => ({ kind: "session", id: sessionId }),
+        )
+          .output(z.string())
+          .query(handler),
+      },
+    });
+    const call = (caller: RouterCaller) =>
+      router.createCaller(
+        sessionContext({
+          caller,
+          runtime: {},
+          diagnostics: new RpcDiagnosticLog(),
+          resourceWorkspace: lookup,
+        }),
+      );
+    const host = call(as({ kind: "device", deviceId: DEVICE, scope: "host" }));
+    for (const input of [{ sessionId: "session-1" }, { sessionId: "" }]) {
+      await expect(host.session.projection(input)).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        reason: "workspace-scope-required",
+      });
+    }
+    expect(parse).not.toHaveBeenCalled();
+    expect(lookup).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+
+    // The same procedure does parse, resolve, and dispatch for a Workspace device.
+    await expect(call(device).session.projection({ sessionId: "session-1" })).resolves.toBe(
+      "answer",
+    );
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("answers a Session in another Workspace exactly as an absent one, and reads neither", async () => {
     const { caller, runtime } = fixture(device);
     const foreign = await refusal(caller.session.snapshot({ sessionId: "foreign-session" }));
@@ -566,7 +712,7 @@ describe("binding procedures to the catalog (D2)", () => {
     // Alone, the Session router leaves the board's commands unserved; the union
     // over every router (host-router.ts) is the catalog exactly.
     expectTypeOf<CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>>>().toEqualTypeOf<
-      CatalogKeyOf<BoardEntry>
+      CatalogKeyOf<BoardEntry | HostWorkspaceEntry>
     >();
     expectTypeOf<HostRouterCatalogBinding>().toEqualTypeOf<never>();
     expectTypeOf<HostRouterPathsDisjoint>().toEqualTypeOf<never>();

@@ -52,7 +52,9 @@ import {
 const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */
-const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter((feature) => !feature.startsWith("board."));
+const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter(
+  (feature) => !feature.startsWith("board.") && feature !== "host.workspaces",
+);
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const HOST = "b7c1d2e3-4f50-4a6b-8c7d-9e0f1a2b3c4d";
 const DEVICE = "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b";

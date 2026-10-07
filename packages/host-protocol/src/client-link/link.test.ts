@@ -14,6 +14,7 @@ import type { HostActor } from "../actor";
 import { hostError, isResnapshotRequired, readHostError, type HostError } from "../errors";
 import {
   HOST_PROTOCOL_CLOSE_CODES,
+  isHostHello,
   negotiateFeatures,
   negotiateWelcome,
   readHostHello,
@@ -218,7 +219,8 @@ async function startHost(overrides: Partial<HostState> = {}) {
     wss: server,
     router,
     createContext: ({ res, info }): Ctx => {
-      const hello = readHostHello(info.connectionParams);
+      const parsed = readHostHello(info.connectionParams);
+      const hello = isHostHello(parsed) ? parsed : null;
       const connection: ServerConnection = { socket: res, hello, log: [], revoked: false };
       host.connections.push(connection);
       const refuse = (error: HostError): Ctx => {

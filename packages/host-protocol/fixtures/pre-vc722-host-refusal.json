@@ -1,0 +1,42 @@
+{
+  "sourceRevision": "2323b19dac96eea3a9d77e512c1fadbccdc8f34c",
+  "api": "apps/hostd/src/host-protocol.ts:startHostdProtocolListener",
+  "sent": [
+    {
+      "method": "connectionParams",
+      "data": {
+        "volli-hello": "{\"scope\":\"host\",\"protocol\":{\"min\":1,\"max\":1},\"client\":{\"kind\":\"desktop\",\"version\":\"1\"},\"features\":[\"host.workspaces\"],\"credential\":\"fixture-not-a-secret\",\"nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}"
+      }
+    },
+    {
+      "id": 1,
+      "method": "query",
+      "params": {
+        "path": "protocol.welcome"
+      }
+    }
+  ],
+  "received": [
+    {
+      "id": 1,
+      "error": {
+        "code": -32600,
+        "message": "This connection sent no valid hello.",
+        "data": {
+          "code": "BAD_REQUEST",
+          "httpStatus": 400,
+          "path": "protocol.welcome",
+          "hostError": {
+            "code": "BAD_REQUEST",
+            "message": "This connection sent no valid hello.",
+            "reason": "hello-invalid"
+          }
+        }
+      }
+    }
+  ],
+  "close": {
+    "code": 4400,
+    "reason": "hello-invalid"
+  }
+}

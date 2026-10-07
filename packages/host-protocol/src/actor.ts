@@ -7,6 +7,15 @@ export type HostActor =
   | { readonly kind: "session"; readonly sessionId: SessionId; readonly workspaceId: WorkspaceId }
   | { readonly kind: "worker"; readonly workerId: WorkerId; readonly workspaceId: WorkspaceId };
 
+/** A paired device addressing the host itself, before choosing any Workspace. */
+export interface HostScopeActor {
+  readonly kind: "device";
+  readonly deviceId: DeviceId;
+  readonly scope: "host";
+}
+
+export type HostConnectionActor = HostActor | HostScopeActor;
+
 export type HostActorKind = HostActor["kind"];
 export const HOST_ACTOR_KINDS = [
   "device",
@@ -50,8 +59,8 @@ export const LOCAL_DEVICE_ACTOR: LocalDeviceActor = Object.freeze({
   deviceId: LOCAL_DEVICE_ID,
 }) as LocalDeviceActor;
 
-/** Who a router call comes from: one Workspace's network actor, or the in-process desktop. */
-export type CallerActor = HostActor | LocalDeviceActor;
+/** Who a router call comes from: a scoped network actor, or the in-process desktop. */
+export type CallerActor = HostConnectionActor | LocalDeviceActor;
 
 /** Whether the caller is the in-process desktop, authorized for every Workspace. */
 export function isLocalDeviceActor(actor: CallerActor): actor is LocalDeviceActor {
@@ -60,10 +69,28 @@ export function isLocalDeviceActor(actor: CallerActor): actor is LocalDeviceActo
   return actor === LOCAL_DEVICE_ACTOR;
 }
 
+export function isHostScopeActor(value: unknown): value is HostScopeActor {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const actor = value as Record<string, unknown>;
+  return (
+    actor.scope === "host" &&
+    actor.kind === "device" &&
+    actor.deviceId !== LOCAL_DEVICE_ID &&
+    isUuidV4(actor.deviceId) &&
+    !("workspaceId" in actor) &&
+    !("sessionId" in actor) &&
+    !("workerId" in actor)
+  );
+}
+
+export function isHostConnectionActor(value: unknown): value is HostConnectionActor {
+  return isHostScopeActor(value) || isHostActor(value);
+}
+
 export function isHostActor(value: unknown): value is HostActor {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const actor = value as Record<string, unknown>;
-  if (!isUuidV4(actor.workspaceId)) return false;
+  if ("scope" in actor || !isUuidV4(actor.workspaceId)) return false;
   switch (actor.kind) {
     case "device":
       // Spelled out although "local" is no UUID: the reservation must survive

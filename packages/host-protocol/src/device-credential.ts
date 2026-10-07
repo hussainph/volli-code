@@ -4,8 +4,9 @@
  * into a device actor.
  *
  * A device proves its key, never a bearer secret (HI § Keys, F5). It signs a
- * short-lived statement naming the host, itself and the one Workspace this
- * connection is for, with a fresh `jti` the host remembers until `exp`, so a
+ * short-lived statement naming the host, itself and either the one Workspace
+ * this connection is for or explicit host scope, with a fresh `jti` the host
+ * remembers until `exp`, so a
  * recorded credential cannot be replayed:
  *
  *     vdc1.<base64url(JSON claims)>.<base64url(ECDSA P-256 SHA-256, IEEE P1363)>
@@ -43,8 +44,21 @@ export interface DeviceCredentialClaims {
   readonly jti: string;
 }
 
+export interface HostScopeDeviceCredentialClaims {
+  readonly scope: "host";
+  readonly hostId: HostId;
+  readonly deviceId: DeviceId;
+  readonly iat: number;
+  readonly exp: number;
+  readonly jti: string;
+}
+
+export type DeviceConnectionCredentialClaims =
+  | DeviceCredentialClaims
+  | HostScopeDeviceCredentialClaims;
+
 export interface ParsedDeviceCredential {
-  readonly claims: DeviceCredentialClaims;
+  readonly claims: DeviceConnectionCredentialClaims;
   /** The exact bytes the signature covers, as ASCII. */
   readonly signingInput: string;
   readonly signature: Uint8Array;
@@ -64,15 +78,26 @@ export function base64UrlToBytes(value: string): Uint8Array | null {
 }
 
 /** `vdc1.<claims>`: what the device signs. */
-export function deviceCredentialSigningInput(claims: DeviceCredentialClaims): string {
-  const json = JSON.stringify({
-    hostId: claims.hostId,
-    deviceId: claims.deviceId,
-    workspaceId: claims.workspaceId,
-    iat: claims.iat,
-    exp: claims.exp,
-    jti: claims.jti,
-  });
+export function deviceCredentialSigningInput(claims: DeviceConnectionCredentialClaims): string {
+  const json = JSON.stringify(
+    "scope" in claims
+      ? {
+          scope: "host",
+          hostId: claims.hostId,
+          deviceId: claims.deviceId,
+          iat: claims.iat,
+          exp: claims.exp,
+          jti: claims.jti,
+        }
+      : {
+          hostId: claims.hostId,
+          deviceId: claims.deviceId,
+          workspaceId: claims.workspaceId,
+          iat: claims.iat,
+          exp: claims.exp,
+          jti: claims.jti,
+        },
+  );
   return `${DEVICE_CREDENTIAL_SCHEME}.${bytesToBase64Url(new TextEncoder().encode(json))}`;
 }
 
@@ -84,11 +109,22 @@ export function assembleDeviceCredential(signingInput: string, signature: Uint8A
 export function isDeviceCredentialClaims(value: unknown): value is DeviceCredentialClaims {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const claims = value as Record<string, unknown>;
+  return !("scope" in claims) && isUuidV4(claims.workspaceId) && isClaimFields(claims);
+}
+
+export function isHostScopeDeviceCredentialClaims(
+  value: unknown,
+): value is HostScopeDeviceCredentialClaims {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const claims = value as Record<string, unknown>;
+  return claims.scope === "host" && !("workspaceId" in claims) && isClaimFields(claims);
+}
+
+function isClaimFields(claims: Record<string, unknown>): boolean {
   const { iat, exp } = claims;
   return (
     isUuidV4(claims.hostId) &&
     isUuidV4(claims.deviceId) &&
-    isUuidV4(claims.workspaceId) &&
     typeof claims.jti === "string" &&
     JTI.test(claims.jti) &&
     Number.isSafeInteger(iat) &&
@@ -116,10 +152,13 @@ export function parseDeviceCredential(credential: string): ParsedDeviceCredentia
   } catch {
     return null;
   }
-  if (!isDeviceCredentialClaims(claims)) return null;
-  const { hostId, deviceId, workspaceId, iat, exp, jti } = claims;
+  if (!isHostScopeDeviceCredentialClaims(claims) && !isDeviceCredentialClaims(claims)) return null;
+  const { hostId, deviceId, iat, exp, jti } = claims;
   return {
-    claims: { hostId, deviceId, workspaceId, iat, exp, jti },
+    claims:
+      "scope" in claims
+        ? { scope: "host", hostId, deviceId, iat, exp, jti }
+        : { hostId, deviceId, workspaceId: claims.workspaceId, iat, exp, jti },
     signingInput: `${parts[0]}.${parts[1]}`,
     signature,
   };

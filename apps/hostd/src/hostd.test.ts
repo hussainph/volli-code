@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -36,10 +37,15 @@ import type { HostRouter } from "@volli/session-rpc";
 
 import Database from "better-sqlite3";
 import type { AgentRequest, AgentResponse, Project } from "@volli/shared";
-import { insertProject, SCHEMA_HEAD, MIN_READER_VERSION_KEY } from "@volli/host-core/db";
+import {
+  insertProject,
+  listProjects,
+  SCHEMA_HEAD,
+  MIN_READER_VERSION_KEY,
+} from "@volli/host-core/db";
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
 import { isLiveHost, type HostCore, type HostCoreOptions } from "@volli/host-core";
-import type { DetachedWorkPort } from "@volli/host-core/board";
+import { BoardChangeFeed, type DetachedWorkPort } from "@volli/host-core/board";
 import { insertSession, resetRetentionWatcherForTest, testSession } from "@volli/host-core/testing";
 
 import { HostdBootError } from "./boot-error";
@@ -55,6 +61,7 @@ import { dataDirDeviceStore, enrollDevice, rootDeviceStore } from "./enrolled-de
 const faults = vi.hoisted(() => ({
   failStatusOn: null as string | null,
   runtimeReadyError: false,
+  fallbackHome: null as string | null,
   runtimeConstructError: false,
   runtimeCloseError: false,
   automationsUnavailable: false,
@@ -66,6 +73,7 @@ const faults = vi.hoisted(() => ({
   detachedWork: null as DetachedWorkPort | null,
   host: null as HostCore | null,
   hostOptions: null as HostCoreOptions | null,
+  projectOptions: null as { projectsRoot?: string | null; userInstall?: boolean } | null,
   /** When set, every command waits on it before it runs. */
   hold: null as Promise<void> | null,
   /** A path whose `statSync` answers as if another user owned it. */
@@ -77,6 +85,11 @@ const faults = vi.hoisted(() => ({
   /** The execute hostd handed the socket, to call without a connection. */
   execute: null as ((request: AgentRequest) => Promise<AgentResponse>) | null,
 }));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => faults.fallbackHome ?? actual.homedir() };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -209,6 +222,7 @@ vi.mock("./session-runtime", async (original) => {
       ...args: Parameters<typeof actual.createHeadlessSessionRuntime>
     ) => {
       if (faults.runtimeConstructError) throw new Error("runtime construction failed");
+      faults.projectOptions = args[0].options;
       const runtime = actual.createHeadlessSessionRuntime(...args);
       faults.runtimeOwned = true;
       return {
@@ -243,6 +257,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   faults.runtimeReadyError = false;
+  faults.fallbackHome = null;
   faults.runtimeConstructError = false;
   faults.runtimeCloseError = false;
   faults.automationsUnavailable = false;
@@ -260,6 +275,7 @@ afterEach(async () => {
   faults.detachedWork = null;
   faults.host = null;
   faults.hostOptions = null;
+  faults.projectOptions = null;
   await Promise.all(running.splice(0).map((host) => host.stop("test over")));
   // Those stops record too; the next test starts from an empty order.
   faults.order = [];
@@ -301,6 +317,7 @@ async function boot(
     devicesFile?: string;
     hostProtocolVerifier?: HostdOptions["hostProtocolVerifier"];
     logRing?: HostdOptions["logRing"];
+    runtime?: HostdOptions["runtime"];
   } = {},
   log = logger(),
 ): Promise<RunningHostd> {
@@ -322,6 +339,7 @@ async function boot(
       ? {}
       : { hostProtocolVerifier: options.hostProtocolVerifier }),
     ...(options.logRing === undefined ? {} : { logRing: options.logRing }),
+    ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
   });
   running.push(host);
   return host;
@@ -1218,6 +1236,7 @@ describe("the host protocol listener (VC-663)", () => {
     const log = logger();
     const host = await boot({ listen: LOOPBACK }, log);
     expect(host.status().hostProtocol).toBeNull();
+    expect(faults.projectOptions).toMatchObject({ projectsRoot: null });
     expect(readStatus(join(root, "data"))).toMatchObject({ hostProtocol: null });
     expect(log.warn).toHaveBeenCalledWith(
       "--listen is ignored: the host protocol needs VOLLI_EXPERIMENTAL=cloud",
@@ -1228,6 +1247,31 @@ describe("the host protocol listener (VC-663)", () => {
   it("serves nothing with the flag on and no address", async () => {
     const host = await boot({ env: CLOUD });
     expect(host.status().hostProtocol).toBeNull();
+    expect(faults.projectOptions).toMatchObject({
+      projectsRoot: join(root, "home", "volli"),
+      userInstall: true,
+    });
+    expect(existsSync(join(root, "home", "volli"))).toBe(false);
+  });
+
+  it("uses the user home fallback without creating the projects root at boot", async () => {
+    faults.fallbackHome = join(root, "fallback-home");
+    await boot({ env: { ...CLOUD, HOME: "" } });
+    expect(faults.projectOptions).toMatchObject({
+      projectsRoot: join(faults.fallbackHome, "volli"),
+      userInstall: true,
+    });
+    expect(existsSync(join(faults.fallbackHome, "volli"))).toBe(false);
+  });
+
+  it("preserves an explicitly composed projects root", async () => {
+    const projectsRoot = join(root, "custom-projects");
+    await boot({
+      env: CLOUD,
+      runtime: { binDir: root, projectsRoot, venue: { kind: "remote", id: "fixture" } },
+    });
+    expect(faults.projectOptions).toMatchObject({ projectsRoot, userInstall: true });
+    expect(existsSync(projectsRoot)).toBe(false);
   });
 
   it("listens on loopback with the flag on, names it in the status file, and refuses every credential", async () => {
@@ -1254,6 +1298,92 @@ describe("the host protocol listener (VC-663)", () => {
     expect(JSON.stringify(log.info.mock.calls)).not.toContain("device-token");
     await host.stop("test over");
     expect(readStatus(join(root, "data"))).toMatchObject({ state: "stopped", hostProtocol: null });
+  });
+
+  it("serves projects, sign-in status and logs from the production runtime before any Workspace exists", async () => {
+    const logRing = createLogRing();
+    const host = await boot({ env: CLOUD, listen: LOOPBACK, logRing });
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    const db = host.host.database.db;
+    expect(listProjects(db)).toEqual([]);
+    const { privateKey, spki } = deviceKey();
+    const enrolledDevice = enrollDevice(
+      dataDirDeviceStore(join(root, "data")),
+      { publicKey: spki, name: "Host-scope Mac", via: "ssh" },
+      { now: () => new Date(), newId: randomUUID },
+    ).device;
+    const iat = Math.floor(Date.now() / 1000);
+    const text = deviceCredentialSigningInput({
+      scope: "host",
+      hostId: host.status().hostId!,
+      deviceId: enrolledDevice.deviceId,
+      iat,
+      exp: iat + 60,
+      jti: randomUUID().replaceAll("-", ""),
+    });
+    const credential = assembleDeviceCredential(
+      text,
+      sign("sha256", Buffer.from(text), {
+        key: privateKey,
+        dsaEncoding: "ieee-p1363",
+      }),
+    );
+    const socket = createWSClient({
+      url: host.status().hostProtocol!.url,
+      connectionParams: encodeHostHello(
+        buildHostHello({
+          scope: "host",
+          client: { kind: "desktop", version: "production-host-scope" },
+          credential,
+          features: ["host.workspaces", "sign-ins", "host.logs"],
+        }),
+      ),
+    });
+    const remote = createTRPCClient<HostRouter>({ links: [wsLink({ client: socket })] });
+    try {
+      expect(await remote.protocol.hostWelcome.query()).toMatchObject({
+        scope: "host",
+        features: expect.arrayContaining(["host.workspaces", "sign-ins", "host.logs"]),
+      });
+      expect(await remote.workspaces.list.query()).toEqual({ workspaces: [], omitted: 0 });
+      expect(await remote.signIns.status.query()).toMatchObject({ git: [] });
+      expect(await remote.logs.tail.query({})).toMatchObject({ entries: [], gap: false });
+      const path = join(root, "first-project");
+      mkdirSync(path);
+      const input = { commandId: randomUUID(), source: { path }, name: "First" };
+      const stamp = vi.spyOn(BoardChangeFeed.prototype, "noteDataChanged");
+      const result = await remote.workspaces.create.mutate(input);
+      expect(result).toMatchObject({
+        ok: true,
+        workspace: { path: realpathSync(path), name: "First" },
+      });
+      expect(await remote.workspaces.create.mutate(input)).toEqual(result);
+      expect(await remote.workspaces.list.query()).toEqual({
+        workspaces: [result.ok ? result.workspace : null],
+        omitted: 0,
+      });
+      expect(listProjects(db)).toHaveLength(1);
+      if (!result.ok) throw new Error("registration failed");
+      expect(stamp).toHaveBeenCalledExactlyOnceWith({ projectId: result.workspace.id });
+      expect(stamp.mock.contexts[0]).toBeInstanceOf(BoardChangeFeed);
+      const feed = stamp.mock.contexts[0] as BoardChangeFeed;
+      const cursor = feed.cursor(result.workspace.id);
+      expect(cursor.split(":").at(-1)).toBe("1");
+      expect(await remote.workspaces.create.mutate({ ...input, commandId: randomUUID() })).toEqual(
+        result,
+      );
+      expect(stamp).toHaveBeenCalledOnce();
+      expect(feed.cursor(result.workspace.id)).toBe(cursor);
+      stamp.mockRestore();
+      expect(
+        await expectHostError(remote.board.snapshot.query({ projectId: WORKSPACE })),
+      ).toMatchObject({
+        code: "FORBIDDEN",
+        reason: "workspace-scope-required",
+      });
+    } finally {
+      await socket.close();
+    }
   });
 
   // VC-700's contract: a device enrolled over SSH (`volli-hostd enroll`) is
@@ -1716,6 +1846,7 @@ describe("the host protocol listener (VC-663)", () => {
     const devicesFile = join(etc, "volli-hostd-devices");
     const log = logger();
     const host = await boot({ env: CLOUD, listen: LOOPBACK, devicesFile }, log);
+    expect(faults.projectOptions).toMatchObject({ projectsRoot: "/srv/volli", userInstall: false });
     if (!isLiveHost(host.host)) throw new Error("database did not open");
     insertProject(host.host.database.db, { ...project(WORKSPACE), path: join(root, "workspace") });
     const hostId = host.status().hostId!;
