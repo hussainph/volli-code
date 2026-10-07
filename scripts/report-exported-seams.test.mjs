@@ -183,17 +183,24 @@ test("successful advisory prints the inventory and appends the identical CI summ
   }
 });
 
-test("CLI exits zero even when ripgrep is unavailable", () => {
+test("CLI scans successfully without a system ripgrep on PATH", () => {
   const run = spawnSync(
     process.execPath,
     [fileURLToPath(new URL("./report-exported-seams.mjs", import.meta.url))],
     {
-      env: { ...process.env, PATH: "/path/that/does/not/exist" },
+      env: { ...process.env, PATH: "/path/that/does/not/exist", GITHUB_STEP_SUMMARY: "" },
       encoding: "utf8",
     },
   );
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /advisory unavailable/);
+  assert.match(run.stdout, /Scanned \d+ source files/);
+  assert.doesNotMatch(run.stdout, /advisory unavailable/);
+});
+
+test("missing packaged ripgrep is also a non-failing advisory diagnostic", () => {
+  const messages = [];
+  runAdvisory({ rgPath: "/path/that/does/not/exist", print: (text) => messages.push(text) });
+  assert.match(messages[0], /advisory unavailable:.*No gate failed/);
 });
 
 test("CI bounds runtime and cannot fail the gate on an advisory error or timeout", () => {

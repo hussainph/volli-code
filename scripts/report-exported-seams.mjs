@@ -11,6 +11,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -135,10 +136,18 @@ export function runAdvisory({
   root = ROOT,
   summary = process.env.GITHUB_STEP_SUMMARY,
   print = console.log,
+  rgPath,
 } = {}) {
   try {
+    // CI does not promise a system rg. Reuse host-core's already-installed,
+    // platform-specific binary rather than installing tooling in the workflow.
+    const binary =
+      rgPath ??
+      createRequire(new URL("../packages/host-core/package.json", import.meta.url))(
+        "@vscode/ripgrep",
+      ).rgPath;
     const listing = spawnSync(
-      "rg",
+      binary,
       [
         "--files",
         "packages",
