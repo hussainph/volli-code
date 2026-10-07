@@ -46,7 +46,6 @@
  * No Electron import: every native effect is a port, so the whole mode is
  * tested under plain Node and `menu-bar-electron.ts` stays a thin adapter.
  */
-import { diagMark, diagSpan } from "./diag-stalls";
 import { hostLogger } from "@volli/host-core/log";
 import { hasLiveWork, NO_LIVE_WORK, type HostLiveWork } from "@volli/host-core/sessions";
 
@@ -492,24 +491,18 @@ export function createMenuBarHost(ports: MenuBarHostPorts): MenuBarHost {
     systemShuttingDown: () => systemShuttingDown,
     enter() {
       if (resident) return;
-      diagMark("enter.begin");
       resident = true;
-      const work = diagSpan("enter.liveWork", () => liveWork());
-      diagSpan("enter.log", () =>
-        log(`[menu-bar] entered menu-bar mode: ${liveWorkPhrase(work) || "no live work"}`),
-      );
+      const work = liveWork();
+      log(`[menu-bar] entered menu-bar mode: ${liveWorkPhrase(work) || "no live work"}`);
       // Before the windows: a turn's next Browser call is refused in words
       // rather than reaching for a tab (or a stage window) that is gone.
-      diagSpan("enter.browserTabs.closeForMenuBar", () => ports.browserTabs.closeForMenuBar());
-      diagSpan("enter.windows.closeAll", () => ports.windows.closeAll());
-      diagSpan("enter.dock.hide", () => ports.dock.hide());
-      diagSpan("enter.tray.show", () => ports.tray.show(trayModel(work, updateState())));
-      diagSpan("enter.subscribe", () => {
-        unsubscribe = ports.liveWork.subscribe((next) => reevaluate(next));
-      });
+      ports.browserTabs.closeForMenuBar();
+      ports.windows.closeAll();
+      ports.dock.hide();
+      ports.tray.show(trayModel(work, updateState()));
+      unsubscribe = ports.liveWork.subscribe((next) => reevaluate(next));
       poll = timers.setInterval(() => reevaluate(), pollMs);
-      diagSpan("enter.reevaluate", () => reevaluate(work));
-      diagMark("enter.end");
+      reevaluate(work);
     },
     isResident: () => resident,
     reveal(options) {

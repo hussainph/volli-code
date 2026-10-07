@@ -92,7 +92,6 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { isInternalNavigationTarget } from "./navigation";
-import { diagDump, diagMark, diagSpan, initDiag } from "./diag-stalls";
 import {
   applyQuietAppPolicy,
   hideDockForMenuBar,
@@ -381,8 +380,6 @@ const nativeWindowPolicy = quietWindowPolicy(process.env, process.platform);
 applyQuietAppPolicy(app, nativeWindowPolicy);
 
 const isDev = !app.isPackaged;
-initDiag(isDev);
-diagMark("main.module");
 const agentSocket = createHostAgentSocket();
 const shutdownAgentSocket = agentSocket.shutdown;
 
@@ -690,7 +687,6 @@ function createWindow(ptyManager: PtyManager, firstPaint: FirstPaintHint): Brows
 }
 
 const appStartup = app.whenReady().then(async () => {
-  diagMark("app.ready");
   if (!ownsAppProfile) return;
   // Started here, awaited nowhere near here: a Finder/Dock launch hands main
   // launchd's bare PATH, and the only fix is asking the user's own login
@@ -862,7 +858,6 @@ const appStartup = app.whenReady().then(async () => {
     // The same http(s)-only gate as the window's own links: a host names the page.
     openExternal: (url) => openExternal(url),
   });
-  diagMark("hostCore.create.begin");
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
@@ -898,7 +893,6 @@ const appStartup = app.whenReady().then(async () => {
       releaseAgentSites: (target) => releaseAgentSites(target),
     },
   });
-  diagMark("hostCore.create.end");
   const liveHost = isLiveHost(hostCore) ? hostCore : undefined;
   const dbHandle: DbHandle = hostCore.database;
   registerDatabaseRecoveryIpcHandlers({
@@ -2198,16 +2192,7 @@ const appStartup = app.whenReady().then(async () => {
     if (menuBarHost !== null) menuBarHost.reveal();
     else if (BrowserWindow.getAllWindows().length === 0) createOwnedWindow();
   });
-  diagMark("mainWindow.create.begin");
   const mainWindow = createOwnedWindow();
-  diagMark("mainWindow.create.end");
-  mainWindow.webContents.once("dom-ready", () => diagMark("mainWindow.dom-ready"));
-  mainWindow.webContents.once("did-finish-load", () => diagMark("mainWindow.did-finish-load"));
-  ipcMain.on("volli:client-state-flushed", () => diagMark("flush.ack"));
-  app.on("will-quit", () => {
-    diagMark("will-quit");
-    void diagDump("will-quit");
-  });
   const transcriptRepackAbort = new AbortController();
   abortRepack = () => transcriptRepackAbort.abort();
   mainWindow.webContents.once("did-finish-load", () => {
@@ -2434,27 +2419,17 @@ const appStartup = app.whenReady().then(async () => {
       // destroyed — past the overdue mark it is logged and stays hidden until
       // a reveal reuses it or a real quit tears it down.
       closeAll: () => {
-        const closing = diagSpan("closeAll.liveWindows", () => liveWindows());
+        const closing = liveWindows();
         for (const window of closing) {
           retiringWindows.add(window);
-          if (process.env["VOLLI_DIAG_SKIP_HIDE"] !== "1") {
-            diagSpan("closeAll.window.hide", () => window.hide());
-          }
+          window.hide();
         }
-        void diagSpan("closeAll.flushSend", () =>
-          flushWindowState(closing, MENU_BAR_FLUSH_OVERDUE_MS, (window) => {
-            diagMark("flush.onAcked");
-            // A reveal that reused this window took it back: keep it.
-            if (!retiringWindows.has(window) || window.isDestroyed()) return;
-            retiringWindows.delete(window);
-            if (process.env["VOLLI_DIAG_DESTROY_MODE"] === "crash-first") {
-              diagSpan("closeAll.window.crashRenderer", () =>
-                window.webContents.forcefullyCrashRenderer(),
-              );
-            }
-            diagSpan("closeAll.window.destroy", () => window.destroy());
-          }),
-        ).then(({ unanswered }) => {
+        void flushWindowState(closing, MENU_BAR_FLUSH_OVERDUE_MS, (window) => {
+          // A reveal that reused this window took it back: keep it.
+          if (!retiringWindows.has(window) || window.isDestroyed()) return;
+          retiringWindows.delete(window);
+          window.destroy();
+        }).then(({ unanswered }) => {
           if (unanswered > 0) {
             hostLogger("menu-bar").warn("windows still saving drafts; kept hidden, not destroyed", {
               unanswered,
@@ -3050,7 +3025,6 @@ const appStartup = app.whenReady().then(async () => {
     }
   });
 });
-void appStartup.then(() => diagMark("appStartup.resolved")).catch(() => {});
 void appStartup.catch((error: unknown) => {
   if (error instanceof SessionRuntimeClosingError) return;
   log.error("failed to finish app startup", { error });

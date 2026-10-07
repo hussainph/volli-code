@@ -11,7 +11,6 @@ import {
   Tray,
   type MenuItemConstructorOptions,
 } from "electron";
-import { diagSpan } from "./diag-stalls";
 import type { HostLiveWork } from "@volli/host-core/sessions";
 
 import {
@@ -48,20 +47,14 @@ export function trayMenuTemplate(
 export function electronMenuBarTray(onItem: (id: TrayItemId) => void): MenuBarTrayPort {
   let tray: Tray | null = null;
   const render = (model: TrayModel): void => {
-    const live = tray;
-    if (live === null || live.isDestroyed()) return;
-    diagSpan("tray.setTitle", () => live.setTitle(model.title));
-    diagSpan("tray.setToolTip", () => live.setToolTip(model.tooltip));
-    const menu = diagSpan("tray.buildMenu", () =>
-      Menu.buildFromTemplate(trayMenuTemplate(model, onItem)),
-    );
-    diagSpan("tray.setContextMenu", () => live.setContextMenu(menu));
+    if (tray === null || tray.isDestroyed()) return;
+    tray.setTitle(model.title);
+    tray.setToolTip(model.tooltip);
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(model, onItem)));
   };
   return {
     show(model) {
-      if (tray === null || tray.isDestroyed()) {
-        tray = diagSpan("tray.new", () => new Tray(nativeImage.createEmpty()));
-      }
+      if (tray === null || tray.isDestroyed()) tray = new Tray(nativeImage.createEmpty());
       render(model);
     },
     update: render,

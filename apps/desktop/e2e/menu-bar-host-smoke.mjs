@@ -79,15 +79,6 @@ const SETTLE_MS = 20_000;
 /** The settle window plus teardown, with room for a loaded runner. */
 const DRAIN_EXIT_TIMEOUT_MS = SETTLE_MS + 30_000;
 
-// DIAGNOSTIC (VC-716).
-const DIAG_DIR = process.env.VOLLI_DIAG_SMOKE_DIR || undefined;
-const DIAG_TAG = `shard-${Date.now()}`;
-const diagSide = { tag: DIAG_TAG };
-async function diagEval(app, fn, arg) {
-  if (DIAG_DIR === undefined) return null;
-  return app.evaluate(fn, arg).catch((error) => ({ error: String(error?.message ?? error) }));
-}
-
 async function identifies() {
   try {
     const response = await requestOverSocket(socketPath, identifyRequest(userDataDir));
@@ -105,10 +96,6 @@ async function main() {
       VOLLI_EXPERIMENTAL: "cloud",
       VOLLI_SMOKE_MENU_BAR_HOST: "1",
       VOLLI_SMOKE_MENU_BAR_SETTLE_MS: String(SETTLE_MS),
-      // DIAGNOSTIC (VC-716): this one app only, never its shard neighbours.
-      ...(DIAG_DIR === undefined
-        ? {}
-        : { VOLLI_DIAG_DIR: DIAG_DIR, VOLLI_DIAG_TAG: DIAG_TAG, VOLLI_DIAG_PROFILE: "1" }),
     },
   });
   const child = app.process();
@@ -138,17 +125,10 @@ async function main() {
         // pending drafts, and destroys each window only from its own ack
         // (`client-state-flush.ts`; overdue after FLUSH_OVERDUE_MS), so the
         // count is polled up to main's own bound.
-        diagSide.startupPhase = await diagEval(app, () => globalThis.volliDiag.phase("startup"));
-        diagSide.rendererAge = await page.evaluate(() => Math.round(performance.now()));
-        diagSide.homeRail = await page.getByTestId("home-rail").count();
         const entered = await app.evaluate(({ BrowserWindow }) => {
           const host = globalThis.volliMenuBarHost;
           const startedAt = Date.now();
-          const perfAt = globalThis.volliDiag?.now();
           host.enter();
-          if (perfAt !== undefined) {
-            globalThis.volliDiagEnter = { at: perfAt, syncMs: globalThis.volliDiag.now() - perfAt };
-          }
           globalThis.volliMenuBarEnteredAt = startedAt;
           return {
             visible: BrowserWindow.getAllWindows().filter((window) => window.isVisible()).length,
@@ -215,22 +195,6 @@ async function main() {
       );
       assertBuiltRendererLoaded(reopened);
       const socket = await identifies();
-      if (DIAG_DIR !== undefined) {
-        diagSide.enter = await diagEval(app, () => globalThis.volliDiagEnter);
-        diagSide.postEnterPhase = await diagEval(app, () =>
-          globalThis.volliDiag.phase("post-enter"),
-        );
-        diagSide.dump = await diagEval(app, () => globalThis.volliDiag.dump("end"));
-        diagSide.processStartOffset = await diagEval(
-          app,
-          () => Date.now() - globalThis.volliDiag.now(),
-        );
-        const { writeFile } = await import("node:fs/promises");
-        await writeFile(`${DIAG_DIR}/${DIAG_TAG}-smoke.json`, JSON.stringify(diagSide)).catch(
-          () => {},
-        );
-        console.log(`  [DIAG] ${JSON.stringify(diagSide)}`);
-      }
       return {
         ok: state.windows === 1 && state.resident === false && socket,
         detail:
