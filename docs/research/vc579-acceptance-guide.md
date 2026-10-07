@@ -40,6 +40,26 @@ or synthetic log is used. The doubles are the loopback sshd target and the
 loopback Responses model provider. Question tool calls traverse the real runtime,
 interaction ledger and Session transport.
 
+## Current production blockers (not acceptance waivers)
+
+The initial CI journey has not completed. The macOS SSH fixture gets through
+real install/start/pair and its enrolled-device proof, but two production
+boundaries prevent a full pass:
+
+- VC-710 deliberately refuses **creating projects on user installs**
+  (`remote-hosts.ts`'s `addProject`); macOS managed installs are launchd user
+  installs. The sheet says the host runs Volli as your login and this Mac
+  cannot add projects to it. The empty fixture has no existing project to open.
+  Resolving this requires an owner-approved deployment/scope decision, not
+  seeding an acceptance project or bypassing the operator boundary.
+- hostd's runtime composes `askUser: false`, so its production tool surface
+  never offers `ask_user`. The remote answer relay/UI alone is insufficient
+  for steps 6–7. The fake provider never manufactures an undeclared tool.
+
+Failures remain failures, with descendants reported BLOCKED. No complete:true
+or canary claim is made until these boundaries are resolved and all eight
+steps pass on the exact head.
+
 ## Deployment preconditions and limits
 
 The job builds a matching darwin-arm64 hostd archive/checksum before the desktop

@@ -160,6 +160,20 @@ async function journey() {
       await click("button", REMOTE_HOST, SWITCHER);
       await wait(`Open a project on ${REMOTE_HOST}`);
     }
+    let listing;
+    const refusal = `${REMOTE_HOST} runs Volli as your login, so this Mac can’t add projects to it.`;
+    await waitUntil(
+      "host project listing or its recovery",
+      async () => {
+        listing = await snap();
+        return (
+          controls(listing.text, "button", "New project…").length === 1 ||
+          listing.text.includes(refusal)
+        );
+      },
+      { timeout: 45_000, interval: 200 },
+    );
+    assert.ok(!listing.text.includes(refusal), `Production project creation refused: ${refusal}`);
     await click("button", "New project…");
     await type(`Git URL or folder on ${REMOTE_HOST}`, fixture.projectPath);
     await type("Name (optional)", REMOTE_PROJECT);
