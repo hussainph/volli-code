@@ -8,11 +8,28 @@ import {
   HOST_PROTOCOL_VERSION,
   HOST_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
+  HOST_TRACE_FIELD,
 } from "@volli/host-protocol";
 import { CATALOG_ENTRIES, DESKTOP_ENTRIES } from "@volli/shared";
 import { z } from "zod";
 
 import { sessionProcedureSchemas, type ProcedureSchema } from "./index";
+
+/**
+ * The optional fields a JSON-RPC frame may carry beside `id`, `method` and
+ * `params` (HP § Tracing and logs). Published so the gate holds them to the
+ * same rule as an input: a field may be added, never removed or narrowed.
+ */
+export const ENVELOPE_FIELD_SCHEMAS = {
+  [HOST_TRACE_FIELD]: z
+    .object({
+      traceId: z.string().regex(/^[0-9a-f]{32}$/u),
+      spanId: z.string().regex(/^[0-9a-f]{16}$/u),
+    })
+    .describe(
+      "Optional. The operation this request belongs to (traceId) and this request (spanId), W3C Trace Context shaped. The host echoes it in every log line it writes while serving the request; a malformed one is ignored.",
+    ),
+} as const;
 
 export interface ProtocolSchemaProvider {
   readonly tier: "public" | "desktop";
@@ -68,6 +85,12 @@ export function generateProtocolSchema(
     protocolVersion: HOST_PROTOCOL_VERSION,
     baseOperations: HOST_BASE_OPERATIONS,
     features: HOST_FEATURE_OPERATIONS,
+    envelope: Object.fromEntries(
+      Object.entries(ENVELOPE_FIELD_SCHEMAS).map(([field, schema]) => [
+        field,
+        z.toJSONSchema(schema, { io: "input" }),
+      ]),
+    ),
     tiers,
   };
 }

@@ -87,6 +87,7 @@ import {
   raiseMinReaderVersion,
 } from "./schema-compatibility";
 import { openRawDb } from "./test-helpers";
+import { captureHostLog } from "../testing/log";
 
 const PROBE = "database-file-probe";
 const COMPANIONS = ["blobs", "session-transcripts"] as const;
@@ -925,23 +926,32 @@ describe("publishRollbackPoint", () => {
         check.close();
       }
 
-      vi.mocked(console.info).mockClear();
-      vi.mocked(console.warn).mockClear();
-      // The boot goes on, as it would without the copy: quick_check passes.
-      const db = openVolliDb(dbPath);
-      db.close();
+      const hostLog = captureHostLog();
+      try {
+        // The boot goes on, as it would without the copy: quick_check passes.
+        const db = openVolliDb(dbPath);
+        db.close();
+      } finally {
+        hostLog.restore();
+      }
       // The copy survives byte-identical, and the warning names it.
       expect(readFileSync(pending).equals(pendingBytes)).toBe(true);
-      expect(vi.mocked(console.warn).mock.calls.flat().join(" ")).toContain(pending);
-      expect(vi.mocked(console.info).mock.calls).toContainEqual([
-        expect.any(String),
+      expect(hostLog.of("backup-retention")).toContainEqual(
         expect.objectContaining({
+          level: "warn",
+          action: "kept-abandoned",
+          names: expect.arrayContaining([pending]) as unknown,
+        }),
+      );
+      expect(hostLog.of("backup-retention")).toContainEqual(
+        expect.objectContaining({
+          level: "info",
           action: "checked-live",
           check: "integrity_check",
           clean: false,
           durationMs: expect.any(Number) as unknown,
         }),
-      ]);
+      );
       const copy = new Database(pending, { readonly: true });
       try {
         expect(copy.pragma("integrity_check", { simple: true })).toBe("ok");

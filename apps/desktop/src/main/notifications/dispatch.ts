@@ -53,6 +53,9 @@ import {
   type NotificationOutcome,
   type NotificationRequest,
 } from "@volli/shared";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("notifications");
 
 export type {
   NotificationOutcome,
@@ -103,7 +106,7 @@ export interface NotificationDispatchPorts {
    * retire a failure that is no longer current (round 5).
    */
   onDeliveryShown(input: { producer: NotificationProducer }): void;
-  /** Diagnostics seam. Defaults to `console.warn`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -117,8 +120,7 @@ export interface NotificationDispatcher {
 export function createNotificationDispatcher(
   ports: NotificationDispatchPorts,
 ): NotificationDispatcher {
-  const onError =
-    ports.onError ?? ((error: unknown) => console.warn("[volli] notification:", error));
+  const onError = ports.onError ?? ((error: unknown) => log.warn("notification failed", { error }));
   const live = new Set<NativeAlert>();
 
   return {

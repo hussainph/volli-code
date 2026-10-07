@@ -176,7 +176,7 @@ describe("scanHarnessManifests — a scan that could not see everything", () => 
 
     expect(scan.manifests).toHaveLength(MAX_SCANNED_HARNESS_DIRS);
     expect(scan.gap).toBe("too-many-manifests");
-    const logged = warn.mock.calls.flat().join(" ");
+    const logged = JSON.stringify(warn.mock.calls);
     for (const skipped of slugs.slice(MAX_SCANNED_HARNESS_DIRS)) {
       expect(logged).toContain(skipped);
     }
@@ -190,7 +190,7 @@ describe("scanHarnessManifests — a scan that could not see everything", () => 
     // Nothing here could not be measured: the file was seen and rejected, so a
     // caller reconciling wrappers is right to treat this harness as absent.
     expect(scan).toEqual({ manifests: [], gap: null });
-    expect(warn.mock.calls.flat().join(" ")).toContain("huge");
+    expect(JSON.stringify(warn.mock.calls)).toContain("huge");
   });
 });
 

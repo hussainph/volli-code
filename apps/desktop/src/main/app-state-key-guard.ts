@@ -1,5 +1,8 @@
 import { app } from "electron";
 import { isAppStateKey, type AppStateKey } from "@volli/shared";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("app-state");
 
 /**
  * Dynamic renderer input is the one unchecked writer boundary. Like the SQLite
@@ -9,7 +12,6 @@ import { isAppStateKey, type AppStateKey } from "@volli/shared";
  */
 export function assertRendererAppStateKey(key: string): asserts key is AppStateKey {
   if (isAppStateKey(key)) return;
-  const message = `[volli] Unregistered or retired app_state write: ${key}`;
-  if (app.isPackaged) console.warn(message);
-  else throw new Error(message);
+  if (app.isPackaged) log.warn("unregistered or retired app_state write", { appState: key });
+  else throw new Error(`[volli] Unregistered or retired app_state write: ${key}`);
 }

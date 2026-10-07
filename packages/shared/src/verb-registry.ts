@@ -3723,6 +3723,31 @@ export const VERB_REGISTRY = [
     options: [],
     catalog: { scope: "workspace", idempotency: "natural" },
   },
+  // The host's recent log (VC-699; HP § Tracing and logs): read-only, the
+  // person's (an operator or a paired device; never a Session or a worker),
+  // host-scoped so a fleet's control plane reads it through the same door.
+  {
+    key: "logs.tail",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "logs.tail" },
+    listed: false,
+    group: "App",
+    summary: "Read the host's most recent log lines, redacted and bounded.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "logs.follow",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "logs.follow" },
+    listed: false,
+    group: "App",
+    summary: "Follow the host's log from a cursor, as it is written.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
   {
     key: "labDiagnostics.list",
     accessModes: [],

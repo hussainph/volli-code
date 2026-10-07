@@ -17,6 +17,9 @@
 import { breatheShouldWake, isParkCandidate, treeIsCpuQuiet } from "@volli/shared";
 import type { TerminalIoResult } from "@volli/shared";
 import type { ParkConfig, ProcessInspector } from "./park";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("park");
 
 /** The park-relevant view of a live session. Structurally satisfied by the
  *  manager's Session (same mutable objects — the controller and manager share
@@ -355,7 +358,7 @@ export class ParkController {
       // Inspection is best-effort: a failed pgrep/ps/lsof degrades to "nothing
       // parks this sweep" (breathe already woke anything it couldn't judge) —
       // never an unhandled rejection, never a session left wrongly frozen.
-      console.error("[park] sweep failed; no sessions parked this sweep:", error);
+      log.error("sweep failed; no sessions parked this sweep", { error });
     } finally {
       this.sweeping = false;
     }

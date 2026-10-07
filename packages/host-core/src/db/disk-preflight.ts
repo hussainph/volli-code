@@ -40,12 +40,12 @@
  */
 import { statfsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("disk-preflight");
 
 /** Headroom beyond the two copies: WAL growth, journal pages, filesystem slack. */
 export const MIGRATION_DISK_HEADROOM_BYTES = 64 * 1024 * 1024;
-
-/** The warning a failed free-space measurement logs before the migration goes ahead. */
-export const DISK_PREFLIGHT_LOG_PREFIX = "[migration disk preflight]";
 
 /**
  * Why a migration did not start: the disk cannot hold it. Nothing was
@@ -131,10 +131,7 @@ export function assertMigrationDiskSpace(dbPath: string, probe: DiskProbe = node
     databaseBytes = probe.fileSize(dbPath) + probe.fileSize(`${dbPath}-wal`);
     freeBytes = probe.freeBytes(directory);
   } catch (error) {
-    console.warn(
-      `${DISK_PREFLIGHT_LOG_PREFIX} could not measure free disk space in ${directory}, ` +
-        `so the migration goes ahead unchecked: ${String(error)}`,
-    );
+    log.warn("could not measure free disk space; migrating unchecked", { directory, error });
     return;
   }
   const requiredBytes = migrationDiskRequirement(databaseBytes);

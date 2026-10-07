@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 
+import { guardWrite } from "@renderer/components/hosts/use-hosts";
 import { isNewTicketKeyEvent, isTextEntryTarget } from "@renderer/lib/new-ticket-shortcut";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
@@ -28,8 +29,10 @@ export function useNewTicketShortcut() {
       const { projects, selectedProjectId } = useProjectsStore.getState();
       const selectedProject = projects.find((project) => project.id === selectedProjectId);
       if (selectedProject === undefined) return;
-
       event.preventDefault();
+      // The project's host cannot serve (VC-576): its create controls stand
+      // down, and the key says why rather than doing nothing.
+      if (!guardWrite(selectedProject.id)) return;
       setNewTicketOpen(true);
     }
 

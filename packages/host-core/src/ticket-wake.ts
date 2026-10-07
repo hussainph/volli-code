@@ -41,6 +41,9 @@ import type { TicketEvent } from "@volli/shared";
 
 import { listTicketEventsAfter, ticketEventCursor } from "./db/events-repo";
 import { getTicketRow } from "./db/tickets-repo";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("ticket-wake");
 
 /** One committed planner fact, its project scope, and its opaque durable cursor. */
 export interface TicketWake {
@@ -67,7 +70,8 @@ export function subscribeTicketWake(listener: TicketWakeListener): () => void {
  */
 export function emitTicketWake(
   wake: TicketWake,
-  reportFailure: (error: unknown) => void = (error) => console.error(error),
+  reportFailure: (error: unknown) => void = (error) =>
+    log.error("ticket wake listener failed", { error }),
 ): void {
   // A snapshot, not the live Set: the listener a wake settles is the listener
   // that unsubscribes on it, and every waiter does exactly that.

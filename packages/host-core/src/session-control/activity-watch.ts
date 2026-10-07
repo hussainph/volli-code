@@ -50,6 +50,9 @@ import type {
 } from "@volli/shared";
 
 import { sessionListingRow } from "./listing-row";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("activity-watch");
 
 /**
  * How long writes are gathered before the dirty Sessions are re-folded.
@@ -151,7 +154,7 @@ export interface SessionActivityWatchPorts {
   observeBirth?: (sessionId: string) => void;
   /** Overridable for tests; defaults to {@link DEFAULT_COALESCE_MS}. */
   coalesceMs?: number;
-  /** Diagnostics seam. Defaults to `console.warn`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -184,7 +187,7 @@ export function watchSessionActivity(
 ): SessionActivityWatch {
   const coalesceMs = ports.coalesceMs ?? DEFAULT_COALESCE_MS;
   const onError =
-    ports.onError ?? ((error: unknown) => console.warn("[volli] session activity watch:", error));
+    ports.onError ?? ((error: unknown) => log.warn("session activity watch failed", { error }));
   const provenanceOf = ports.provenanceOf ?? (() => PERSON_STARTED);
   const readOf = ports.readOf ?? (() => SESSION_READ);
 

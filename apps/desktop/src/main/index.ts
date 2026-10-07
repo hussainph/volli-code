@@ -192,11 +192,13 @@ import {
   CREDENTIAL_INVENTORY_FILE_NAME,
   CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
   keychainCredentialKeyring,
+  SealedInventory,
   SecretStore,
   SecretService,
   retiresSessionSecrets,
 } from "@volli/host-core/secrets";
 import { observeKeychainUse, webSealingLifecycle } from "./web/sealing-lifecycle";
+import { createDesktopRemoteHosts, remoteHostsPort } from "./remote-hosts";
 import { keychainSecretCodec } from "./secrets/codec";
 import { installHarnessGuard } from "./harness/keychain-guard";
 import { harnessSecretPorts } from "./harness/secret-ports";
@@ -255,7 +257,12 @@ import {
 } from "@volli/host-core/worktree";
 import { registerHarnessIpcHandlers } from "./harness-ipc";
 import { ensureHarnessRuntime, harnessLaunchArgv } from "./harness-runtime";
-import { installSmokeBootCapture } from "./bare-path-boot-capture";
+import {
+  installSmokeBootCapture,
+  isSmokeBootCapture,
+  WRAPPER_FAILURE_MESSAGE,
+  WRAPPER_READY_MESSAGE,
+} from "./bare-path-boot-capture";
 import type { RefusedWrapper } from "./harness-runtime";
 import { ensureShellInit } from "./shell-init";
 import { registerAgentSocketWillQuit } from "./agent-socket-quit";
@@ -299,6 +306,9 @@ import {
   type CursorOverlay,
 } from "./browser/cursor-overlay";
 import { closeHeadlessTabsOnTicketArchive } from "./browser/lifecycle";
+import { hostLogger } from "@volli/host-core/log";
+import { exitAfterLogFlush, logPowerTransitions, startDesktopLog } from "./log/desktop-log";
+import { registerRendererLogForwarding } from "./log/renderer-log";
 import { parkBrowserPlanesOnRendererReset } from "./browser/plane-reset";
 
 // Harness mode (VC-703): inert unless VOLLI_HARNESS=1, which only
@@ -378,6 +388,24 @@ if (isDev && !app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", `${app.getPath("userData")}-dev`);
 }
 const ownsAppProfile = acquireVolliAppProfile(app);
+// One structured, correlated log for main, the in-process host and the
+// renderer (VC-699): rotating JSON lines in this profile's own log directory.
+// Only the instance that owns the profile writes there.
+const desktopLog = ownsAppProfile
+  ? startDesktopLog({
+      userData: app.getPath("userData"),
+      dev: isDev,
+      env: process.env,
+      // A smoke's captured boot reads main's lines off the terminal in any build.
+      terminal: isDev || isSmokeBootCapture(process.env),
+    })
+  : null;
+/** `app`, whose `exit` writes the log's tail first: every accepted quit ends in it. */
+const quittingApp = desktopLog === null ? app : exitAfterLogFlush(app, desktopLog);
+/** Electron main's own composition lines; the areas below log under their own names. */
+const log = hostLogger("desktop");
+const repackLog = hostLogger("transcript-repack");
+const worktreeLog = hostLogger("worktree");
 /**
  * Brings a window back for a launch that found none (VC-577). Bound once the
  * window factory exists; until then a second launch has nothing to open.
@@ -661,6 +689,8 @@ const appStartup = app.whenReady().then(async () => {
   // only after the first window loads, or by a Pi execution environment that
   // genuinely needs it first.
   const loginShellPathAttempt = probeLoginShellPath(ADOPTION_PROBE);
+  logPowerTransitions(powerMonitor);
+  registerRendererLogForwarding(ipcMain);
   const serveRendererAsset = (request: Request): Promise<Response> | Response => {
     const assetPath = resolvePackagedRendererAsset(request.url, PACKAGED_RENDERER_ROOT);
     if (assetPath === null) {
@@ -681,7 +711,7 @@ const appStartup = app.whenReady().then(async () => {
     // Dev smoke-check that vp pack bundled the workspace TS source (@volli/shared)
     // into main.cjs via deps.alwaysBundle rather than leaving an unresolved
     // runtime require(). Gated to dev so it never prints on a production boot.
-    console.log("[volli] shared wiring OK:", ticketBranchName("VC-0", "monorepo migration"));
+    log.debug("shared wiring ok", { branch: ticketBranchName("VC-0", "monorepo migration") });
   }
 
   // Dock icon for unpackaged boots. A packaged .app gets its icon from the
@@ -748,7 +778,11 @@ const appStartup = app.whenReady().then(async () => {
   // `Volli Code/volli.db`. Without this line an empty dev UI is
   // indistinguishable from a broken data pointer — surface which db is live.
   const dbSource = dbOverride === undefined ? "userData" : "VOLLI_DB_PATH";
-  console.info(`[volli] db: mode=${isDev ? "dev" : "packaged"} source=${dbSource} path=${dbPath}`);
+  log.info("database resolved", {
+    mode: isDev ? "dev" : "packaged",
+    source: dbSource,
+    path: dbPath,
+  });
   // The host's persistence comes out of host-core (VC-553): this file only
   // states the policy. Packaged builds log a transaction-ownership violation;
   // dev and tests throw (VC-551) — chosen from `app.isPackaged`, never NODE_ENV.
@@ -758,7 +792,7 @@ const appStartup = app.whenReady().then(async () => {
   // The Electron adapters for host-core's ports (VC-554). Code still composed
   // below reads power, connectivity and the client through them too.
   const hostPorts: HostCorePorts = {
-    log: console,
+    log: hostLogger("host-core"),
     events: windowEventBus,
     attention: {
       deliver: (request) => notifications.deliver(request),
@@ -772,6 +806,37 @@ const appStartup = app.whenReady().then(async () => {
   let ptyManagerRef: PtyManager | undefined;
   // Capture-only wrapper: successful keychain use is observed by all host-owned secrets.
   const keychainUse = observeKeychainUse(safeStorage);
+  // One keychain-wrapped key seals the host's credential inventory: the web
+  // search keys' family and remote hosts' device keys alike (VC-643, VC-700).
+  const credentialInventoryPath = join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME);
+  const credentialKeyring =
+    harnessPorts?.keyring ??
+    keychainCredentialKeyring({
+      path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
+      keychain: safeStorage,
+      inventoryPath: credentialInventoryPath,
+    });
+  // Hosts this Mac added over SSH (VC-700): every call refuses while `cloud` is off.
+  const remoteHosts = createDesktopRemoteHosts({
+    userData: app.getPath("userData"),
+    appVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    manifestPath: join(__dirname, "hostd-release-manifest.json"),
+    env: process.env,
+    inventory: new SealedInventory({
+      path: credentialInventoryPath,
+      keyring: credentialKeyring,
+      families: ["host-private"],
+    }),
+    unlockInventory: async () => {
+      await credentialKeyring.unlock?.();
+    },
+    enabled: () => isExperimentEnabled("cloud"),
+    // The app's structured log (VC-699): redacted, its fields never a secret.
+    logger: hostLogger("host-install"),
+    // Lid open, screen unlocked, network back: every tunnel and link tries now.
+    wake: { powerMonitor, net },
+  });
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),
     stopPolicy: "desktop-quit",
@@ -780,16 +845,11 @@ const appStartup = app.whenReady().then(async () => {
     devDiagnostics: isDev,
     secretKey: harnessPorts?.secretKey ?? keychainSecretCodec(keychainUse.keychain),
     webKeySealing: {
-      keyring:
-        harnessPorts?.keyring ??
-        keychainCredentialKeyring({
-          path: join(dirname(dbPath), CREDENTIAL_KEYCHAIN_KEY_FILE_NAME),
-          keychain: safeStorage,
-          inventoryPath: join(dirname(dbPath), CREDENTIAL_INVENTORY_FILE_NAME),
-        }),
+      keyring: credentialKeyring,
       // A key file never prompts, so harness mode may always unlock it.
       mayUnlockUnattended: harnessPorts === null ? keychainUse.used : () => true,
-      onResult: (result) => console.info(`[volli] web search keys: ${describeWebSealing(result)}`),
+      onResult: (result) =>
+        log.info("web search keys sealed", { outcome: describeWebSealing(result) }),
     },
     terminal: () => ({
       host: {
@@ -898,7 +958,7 @@ const appStartup = app.whenReady().then(async () => {
     // launch, so by the time the first window has loaded this is normally a
     // cache read rather than a spawn. Called only when `applyInteractive` runs.
     resolveInteractiveLoginPath: () => loginShellPath(),
-    log: (line) => console.info(line),
+    log: hostLogger("login-path").info,
   });
   /**
    * The same Session-environment measurement for agents, Settings, and project
@@ -966,10 +1026,11 @@ const appStartup = app.whenReady().then(async () => {
     const moved = migrateLegacySafeStorageSecrets(dbHandle.db);
     if (moved.carried > 0) keychainUse.markUsed();
     if (moved.carried + moved.dropped + moved.deferred > 0) {
-      console.info(
-        `[volli] web search keys out of the OS keychain: ${moved.carried} carried, ` +
-          `${moved.dropped} dropped, ${moved.deferred} left for a later launch`,
-      );
+      log.info("web search keys moved out of the os keychain", {
+        carried: moved.carried,
+        dropped: moved.dropped,
+        deferred: moved.deferred,
+      });
     }
   }
   // Per-Session control grants live beside VC-44's app-owned policy data. The
@@ -1009,7 +1070,7 @@ const appStartup = app.whenReady().then(async () => {
   const mcpDispatch = hostMcpDispatch({
     env: process.env,
     packaged: !isDev,
-    log: (message) => console.warn(`[volli] ${message}`),
+    log: hostLogger("mcp").warn,
   });
   // Code Mode (VC-471): the stored setting, read at each birth, which an
   // unpackaged build's environment can override like the parallel-read opt-in
@@ -1023,12 +1084,12 @@ const appStartup = app.whenReady().then(async () => {
     packaged: app.isPackaged,
     appPath: () => app.getAppPath(),
     resourcesPath: () => process.resourcesPath,
-    log: (message) => console.warn(`[volli] ${message}`),
+    log: hostLogger("codemode").warn,
   });
   const codeMode = hostCodeMode({
     env: process.env,
     packaged: !isDev,
-    log: (message) => console.warn(`[volli] ${message}`),
+    log: hostLogger("codemode").warn,
     policy: () => (dbHandle.ok ? readCodeModePolicy(dbHandle.db) : DEFAULT_CODE_MODE_POLICY),
     sandboxAvailable: codeModeSandbox.codeModeSandbox !== undefined,
   });
@@ -1289,7 +1350,7 @@ const appStartup = app.whenReady().then(async () => {
     events: hostPorts.events,
     piRuntimeHost,
     homeDir: fsDeps.homeDir,
-    log: console,
+    log: hostLogger("automations"),
   });
   const preparedSessionFacade = createRuntimeSessionFacade({
     host: hostCore,
@@ -1314,7 +1375,7 @@ const appStartup = app.whenReady().then(async () => {
     try {
       sessionIds = (await ptyManagerRef?.interruptTicketSessions(ticketId)) ?? [];
     } catch (error) {
-      console.error(`[volli] failed to interrupt ticket ${ticketId}:`, errorMessage(error));
+      log.error("failed to interrupt ticket", { ticketId, error });
     }
     if (sessionIds.length > 0) broadcastSessionsInterrupted(ticketId, sessionIds);
     return sessionIds;
@@ -1375,7 +1436,7 @@ const appStartup = app.whenReady().then(async () => {
     shells: backgroundShells,
     runtime: () => sessionRuntime,
     onUnreadable: (sessionId, error) => {
-      console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
+      log.warn("could not read session", { sessionId, error });
     },
   });
   /**
@@ -1405,6 +1466,9 @@ const appStartup = app.whenReady().then(async () => {
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
       ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
+      // This Mac's recent log (VC-699): main's, the in-process host's and the
+      // renderer's lines, which the dev log viewer reads through `host.logs`.
+      logs: desktopLog?.ring ?? null,
       boardFeed,
       ticketSignals:
         sessionEngine === null
@@ -1412,6 +1476,7 @@ const appStartup = app.whenReady().then(async () => {
           : (projectId) => sessionEngine.listLatestTicketSignals({ projectId }),
       // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
       piSessionsDirectory,
+      remoteHosts: remoteHostsPort(remoteHosts),
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */
@@ -1423,7 +1488,7 @@ const appStartup = app.whenReady().then(async () => {
     automations: runtimeAutomations,
     mcpSettings,
     events: hostPorts.events,
-    log: console,
+    log: hostLogger("session-agents"),
   });
   // No runtime, no bridge — but the channels are still claimed, answering
   // every request with the reason the runtime is down (in practice: the
@@ -1557,9 +1622,9 @@ const appStartup = app.whenReady().then(async () => {
     },
     installQuitHold: () =>
       registerAcceptedQuitCoordinator({
-        lifecycle: app,
+        lifecycle: quittingApp,
         shutdownNativeSessions: async () => {
-          await Promise.all([hostCore.stop("quit"), systemShutdownFlush]);
+          await Promise.all([hostCore.stop("quit"), systemShutdownFlush, remoteHosts.close()]);
         },
         shutdownAgentSocket: async () => {},
         prepareQuit: (event) => prepareHostQuit(event),
@@ -1568,8 +1633,7 @@ const appStartup = app.whenReady().then(async () => {
           hostCore.warnIfFollowUpCleanCloseSkipped(
             `quit: shutdown deadline expired after ${deadlineMs}ms`,
           ),
-        reportFailure: (error) =>
-          console.error("[volli] failed to coordinate app shutdown:", errorMessage(error)),
+        reportFailure: (error) => log.error("failed to coordinate app shutdown", { error }),
       }),
   });
   relayShellNotice = runtimeLifecycle.relayShellNotice;
@@ -1614,10 +1678,10 @@ const appStartup = app.whenReady().then(async () => {
         retained,
       );
       if (collected.length > 0) {
-        console.info(`[volli] collected ${collected.length} unreferenced attachment(s)`);
+        log.info("collected unreferenced attachments", { count: collected.length });
       }
     } catch (error) {
-      console.error("[volli] failed to collect unreferenced attachments:", errorMessage(error));
+      log.error("failed to collect unreferenced attachments", { error });
     }
   }
   // Read fresh per call rather than once at boot: `activate` can re-create the
@@ -1635,7 +1699,7 @@ const appStartup = app.whenReady().then(async () => {
       });
     } catch (error) {
       // Never fatal: a window with a slightly-wrong edge color beats no window.
-      console.warn("[volli] failed to read the stored canvas:", errorMessage(error));
+      log.warn("failed to read the stored canvas", { error });
       return resolveFirstPaint(blank);
     }
   };
@@ -1663,16 +1727,11 @@ const appStartup = app.whenReady().then(async () => {
     const report = await releaseWorktreeAgentSites(sessionRuntime, directory, {
       newCommandId: randomUUID,
       onError: (sessionId, error) => {
-        console.error(
-          `[volli] could not release Session ${sessionId} from ${directory}:`,
-          errorMessage(error),
-        );
+        log.error("could not release session from directory", { sessionId, directory, error });
       },
     });
     for (const sessionId of report.stillOpen) {
-      console.error(
-        `[volli] Session ${sessionId} is still bound to ${directory}, which is being deleted`,
-      );
+      log.error("session is still bound to a directory being deleted", { sessionId, directory });
     }
     return report;
   };
@@ -1976,7 +2035,7 @@ const appStartup = app.whenReady().then(async () => {
       });
       view.setBackgroundColor("#00000000");
       void view.webContents.loadURL(cursorPageUrl).catch((error: unknown) => {
-        console.error("[volli] could not load the Session cursor page:", errorMessage(error));
+        log.error("could not load the session cursor page", { error });
       });
       return view;
     },
@@ -2032,7 +2091,7 @@ const appStartup = app.whenReady().then(async () => {
           throw new Error(delivered.receipt?.detail ?? `delivery ${status ?? "unknown"}`);
         }
       },
-      log: (message) => console.error(message),
+      log: hostLogger("browser").error,
     });
   }
   // Menu-bar entry's flush-and-ack barrier (VC-577): windows it is about to
@@ -2094,7 +2153,7 @@ const appStartup = app.whenReady().then(async () => {
       host: browserTabs,
       window,
       contents: window.webContents,
-      log: (message) => console.error(message),
+      log: hostLogger("browser").error,
     });
     return window;
   };
@@ -2132,16 +2191,18 @@ const appStartup = app.whenReady().then(async () => {
           return false;
         },
         onError: (name, error) => {
-          console.error(`[transcript-repack] kept ${name}:`, errorMessage(error));
+          repackLog.error("transcript kept unpacked", { name, error });
         },
       })
         .then((report) => {
-          console.info(
-            `[transcript-repack] scanned=${report.scanned} repacked=${report.repacked} skipped=${report.skipped}`,
-          );
+          repackLog.info("transcript repack finished", {
+            scanned: report.scanned,
+            repacked: report.repacked,
+            skipped: report.skipped,
+          });
         })
         .catch((error) => {
-          console.error("[transcript-repack] scan failed:", errorMessage(error));
+          repackLog.error("transcript repack scan failed", { error });
         });
       liveHost?.detachedWork.track(repack);
     }, 5_000);
@@ -2151,7 +2212,7 @@ const appStartup = app.whenReady().then(async () => {
     // rejection handler here too so an unexpected mutation/logging failure
     // can never become an unhandled rejection from this fire-and-forget path.
     void loginPathBootstrap.apply().catch((error) => {
-      console.error("[volli] failed to apply login PATH:", errorMessage(error));
+      log.error("failed to apply login PATH", { error });
     });
     // The second, INTERACTIVE pass (VC-94's A3), which is what recovers the
     // directories a user's `.zshrc` exports — nvm, bun, rbenv, pyenv, mise.
@@ -2160,7 +2221,7 @@ const appStartup = app.whenReady().then(async () => {
     // than awaited because nothing may wait on it. If it wedges for its whole
     // timeout, the app is exactly as usable as it was before this existed.
     void loginPathBootstrap.applyInteractive().catch((error) => {
-      console.error("[volli] failed to apply interactive login PATH:", errorMessage(error));
+      log.error("failed to apply interactive login PATH", { error });
     });
     // Web search keys' sealed mirror (VC-643): rebuilt from the database on
     // every launch, deletes included. Like the repack above, it waits out
@@ -2197,23 +2258,28 @@ const appStartup = app.whenReady().then(async () => {
         .then((runs) => {
           for (const run of runs) {
             const done = run.items.filter((item) => item.state === "completed").length;
-            console.log(
-              `[worktree] cleanup ${run.id} was interrupted: ${done}/${run.items.length} items completed`,
-            );
+            worktreeLog.info("cleanup was interrupted", {
+              runId: run.id,
+              completed: done,
+              items: run.items.length,
+            });
           }
         })
         .catch((error) => {
-          console.error("[worktree] cleanup history unreadable:", errorMessage(error));
+          worktreeLog.error("cleanup history unreadable", { error });
         });
       liveHost.detachedWork.track(reconcile);
       const scan = startOrphanScan(liveHost.worktreeDeps, { busyWorktreeSites })
         .then((report) => {
-          console.log(
-            `[worktree] scan: prunable=${report.prunable.length} removable=${report.removable.length} keptRecent=${report.keptRecent.length} dirty=${report.dirty.length}`,
-          );
+          worktreeLog.info("orphan scan finished", {
+            prunable: report.prunable.length,
+            removable: report.removable.length,
+            keptRecent: report.keptRecent.length,
+            dirty: report.dirty.length,
+          });
         })
         .catch((error) => {
-          console.error("[worktree] scan failed:", errorMessage(error));
+          worktreeLog.error("orphan scan failed", { error });
         });
       liveHost.detachedWork.track(scan);
     });
@@ -2246,7 +2312,7 @@ const appStartup = app.whenReady().then(async () => {
     allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
     currentVersion: app.getVersion(),
     notify: (request) => notifications.deliver(request),
-    log: (line) => console.info(line),
+    log: hostLogger("auto-update").info,
     onStateChange: (state) => {
       broadcastUpdateState(state);
       // The Tray's "Install Update When Idle" follows the staged update.
@@ -2271,7 +2337,7 @@ const appStartup = app.whenReady().then(async () => {
       sessionRuntime === null
         ? Promise.resolve(0)
         : countOpenAgentTurns(sessionRuntime, (sessionId, error) => {
-            console.warn(`[volli] could not read Session ${sessionId}:`, errorMessage(error));
+            log.warn("could not read session", { sessionId, error });
           }),
     unsavedDrafts: unsavedDocumentNames,
     // Flag on (VC-577): the same synchronous read the Tray and the quit
@@ -2337,9 +2403,9 @@ const appStartup = app.whenReady().then(async () => {
           window.destroy();
         }).then(({ unanswered }) => {
           if (unanswered > 0) {
-            console.warn(
-              `[menu-bar] ${unanswered} window(s) still saving drafts; kept hidden, not destroyed`,
-            );
+            hostLogger("menu-bar").warn("windows still saving drafts; kept hidden, not destroyed", {
+              unanswered,
+            });
           }
         });
       },
@@ -2376,7 +2442,9 @@ const appStartup = app.whenReady().then(async () => {
           beginInstall: beginAcceptedUpdateInstall,
           abandonInstall: abandonAcceptedUpdateInstall,
         });
-        if (!started.ok) console.error("[menu-bar] update install failed:", started.error);
+        if (!started.ok) {
+          hostLogger("menu-bar").error("update install failed", { error: started.error });
+        }
         return started.ok;
       },
     },
@@ -2502,17 +2570,18 @@ const appStartup = app.whenReady().then(async () => {
     });
     if (link.state === "kept") {
       // Never clobber a name that is not ours; the CLI pane states this.
-      console.warn(
-        `[volli] ${userCliLinkPath(agentToolsHome)} is not Volli's (→ ${link.target ?? "a regular file"}); left alone`,
-      );
+      log.warn("cli link is not volli's; left alone", {
+        path: userCliLinkPath(agentToolsHome),
+        target: link.target ?? "a regular file",
+      });
     }
     const legacy = await cleanupLegacyGlobalCliLink({
       shimPath,
       managedTargets: managedSiblingShims,
     });
     if (legacy === "kept") {
-      console.info(
-        "[volli] legacy /usr/local/bin/volli link left in place (admin-owned; ~/.local/bin shadows it)",
+      log.info(
+        "legacy /usr/local/bin/volli link left in place (admin-owned; ~/.local/bin shadows it)",
       );
     }
     // The same set the wrappers are generated from, so a registered manifest's
@@ -2861,19 +2930,19 @@ const appStartup = app.whenReady().then(async () => {
       // claiming reporting that isn't happening.
       try {
         await regenerateHarnessRuntime();
-        console.info("[volli] harness runtime ready");
+        log.info(WRAPPER_READY_MESSAGE);
       } catch (error) {
-        console.error("[volli] failed to generate harness wrappers:", errorMessage(error));
+        log.error(WRAPPER_FAILURE_MESSAGE, { error });
       }
     } catch (error) {
-      console.error("[volli] failed to generate CLI shim:", errorMessage(error));
+      log.error("failed to generate CLI shim", { error });
     }
   } catch (error) {
     // The bundled `volli` CLI is entirely dead for this launch with no other
     // signal — a lightweight native Notification (the same mechanism already
     // used for lifecycle notices) surfaces it instead of only a console line
     // no one but a developer will ever see.
-    console.error("[volli] failed to start agent socket:", errorMessage(error));
+    log.error("failed to start agent socket", { error });
     // Operational (VC-295): a fault about Volli itself, whose only alternative
     // is a console line, so no preference is consulted and there is nothing to
     // open — the CLI is what is broken, not a screen.
@@ -2909,7 +2978,7 @@ const appStartup = app.whenReady().then(async () => {
   const skipAgentTools = process.env["VOLLI_SKIP_AGENT_TOOLS"] === "1";
   if (dbHandle.ok && !skipAgentTools && !agentToolsRemoved()) {
     void installAgentToolsQuietly().catch((error: unknown) => {
-      console.error("[volli] background agent-tools install failed:", errorMessage(error));
+      log.error("background agent-tools install failed", { error });
     });
   }
 
@@ -2930,7 +2999,7 @@ const appStartup = app.whenReady().then(async () => {
 });
 void appStartup.catch((error: unknown) => {
   if (error instanceof SessionRuntimeClosingError) return;
-  console.error("[volli] failed to finish app startup:", errorMessage(error));
+  log.error("failed to finish app startup", { error });
 });
 
 app.on("window-all-closed", () => {
@@ -2942,13 +3011,10 @@ app.on("window-all-closed", () => {
 });
 
 registerAgentSocketWillQuit({
-  lifecycle: app,
+  lifecycle: quittingApp,
   shutdownAgentSocket,
   reportFailure: (error) => {
-    console.error(
-      "[volli] failed to close the agent socket during app shutdown:",
-      errorMessage(error),
-    );
+    log.error("failed to close the agent socket during app shutdown", { error });
   },
 });
 

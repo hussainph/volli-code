@@ -20,6 +20,9 @@ import {
   type TicketSummary,
 } from "@volli/shared";
 import { prepared } from "./prepared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("db");
 
 export interface TicketRow {
   id: string;
@@ -57,7 +60,7 @@ export interface TicketRow {
  * this guard an unknown status reaches the renderer's `groupTicketsByStatus`,
  * which has no fallback bucket for it and throws on every board render —
  * so a row that fails this check is dropped rather than mapped, with one
- * `console.warn` identifying the ticket id and the bad status for
+ * warning identifying the ticket id and the bad status for
  * visibility at the dev level.
  *
  * Takes the two columns it reads rather than a whole {@link TicketRow}, so the
@@ -66,7 +69,7 @@ export interface TicketRow {
  */
 function hasKnownStatus(row: Pick<TicketRow, "id" | "status">): boolean {
   if (isTicketStatus(row.status)) return true;
-  console.warn(`[volli] dropping ticket ${row.id} with unknown status "${row.status}"`);
+  log.warn("dropping ticket with unknown status", { ticketId: row.id, status: row.status });
   return false;
 }
 

@@ -45,6 +45,9 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("mcp");
 
 /** pi-mcp's persisted OAuth state, minus the two fields that live only in memory. */
 export interface McpStoredOAuthState {
@@ -331,9 +334,10 @@ export class FileMcpCredentialStore extends RecordStore {
     } catch {
       // Nothing more to do: the next write replaces it.
     }
-    console.warn(
-      `[volli] MCP credential file ${this.#path} could not be read; moved aside to ${aside}. Sign in again or re-enter the stored values in Settings.`,
-    );
+    log.warn("mcp credential file could not be read; moved aside", {
+      path: this.#path,
+      aside,
+    });
     return {};
   }
 }

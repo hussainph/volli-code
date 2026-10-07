@@ -25,6 +25,7 @@ import {
 } from "@volli/shared";
 
 import { recordTicketEvent } from "../db/events-repo";
+import { hostLogger } from "../log/root";
 import { getProjectById } from "../db/projects-repo";
 import { getTicketRow, updateTicketFields } from "../db/tickets-repo";
 import { resolveBaseBranch } from "./base";
@@ -38,6 +39,8 @@ import {
   type GhFailure,
   type RunNet,
 } from "./net";
+
+const publishLog = hostLogger("publish");
 import { err, ok, type WorktreePorts, type WorktreeResult } from "./types";
 
 /**
@@ -131,6 +134,8 @@ function recordFailure(
   stage: "commit" | "push" | "pr",
   stderr: string,
 ): void {
+  // The stage only: stderr can name a remote, and it is on the ticket's history already.
+  publishLog.warn("publish failed", { ticketId, stage });
   recordTicketEvent(
     deps.db,
     ticketId,
@@ -188,6 +193,7 @@ function returnExisting(
   url: string,
 ): WorktreeResult<PublishOutcome> {
   persistPr(deps, ticketId, url, storedPrUrl === null || storedPrUrl.length === 0);
+  publishLog.info("pull request found", { ticketId, url });
   return ok({ url, existing: true });
 }
 
@@ -223,6 +229,7 @@ export async function publishTicketBranch(
     recordFailure(deps, ticketId, "push", pushed.error);
     return err(pushed.error);
   }
+  publishLog.info("branch pushed", { ticketId, branch: identity.branch });
 
   // (d) find existing — a re-entry (the branch already has a PR) short-circuits
   // to it rather than erroring. A find failure falls through to create, which
@@ -251,6 +258,7 @@ export async function publishTicketBranch(
   });
   if (created.ok) {
     persistPr(deps, ticketId, created.value.url, true);
+    publishLog.info("pull request opened", { ticketId, url: created.value.url });
     return ok({ url: created.value.url, existing: false });
   }
 

@@ -16,10 +16,11 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { LogRecord } from "@volli/shared";
+import { captureHostLog, type CapturedHostLog } from "../testing/log";
 import { openVolliDb } from "./database-file";
 import {
   assertMigrationDiskSpace,
-  DISK_PREFLIGHT_LOG_PREFIX,
   formatBytes,
   InsufficientDiskSpaceError,
   MIGRATION_DISK_HEADROOM_BYTES,
@@ -32,10 +33,13 @@ import { migrate, SCHEMA_HEAD } from "./migrations";
 const MIB = 1024 * 1024;
 
 let dir: string;
+let log: CapturedHostLog;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "volli-disk-preflight-"));
+  log = captureHostLog();
 });
 afterEach(() => {
+  log.restore();
   vi.restoreAllMocks();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -50,11 +54,9 @@ function statfsError(code: "ENOSYS" | "EIO", path: string): NodeJS.ErrnoExceptio
   });
 }
 
-/** Every warning the preflight logged, as one string each. */
-function preflightWarnings(warn: { mock: { calls: unknown[][] } }): string[] {
-  return warn.mock.calls
-    .map((call) => call.map(String).join(" "))
-    .filter((line) => line.startsWith(DISK_PREFLIGHT_LOG_PREFIX));
+/** Every warning the preflight logged. */
+function preflightWarnings(): LogRecord[] {
+  return log.of("disk-preflight").filter((record) => record.level === "warn");
 }
 
 function sha256(path: string): string | null {
@@ -135,7 +137,6 @@ describe("a free-space measurement that fails", () => {
   it.each(["ENOSYS", "EIO"] as const)(
     "fails open on %s from statfs: one warning naming the error, no refusal",
     (code) => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       const dbPath = join(dir, "volli.db");
       const failing: DiskProbe = {
         fileSize: () => 900 * MIB,
@@ -144,15 +145,21 @@ describe("a free-space measurement that fails", () => {
         },
       };
       expect(() => assertMigrationDiskSpace(dbPath, failing)).not.toThrow();
-      expect(preflightWarnings(warn)).toEqual([
-        `${DISK_PREFLIGHT_LOG_PREFIX} could not measure free disk space in ${dir}, so the migration ` +
-          `goes ahead unchecked: Error: ${code}: ${code === "ENOSYS" ? "function not implemented" : "i/o error"}, statfs '${dir}'`,
+      expect(preflightWarnings()).toEqual([
+        expect.objectContaining({
+          msg: "could not measure free disk space; migrating unchecked",
+          directory: dir,
+          error: expect.objectContaining({
+            name: "Error",
+            message: `${code}: ${code === "ENOSYS" ? "function not implemented" : "i/o error"}, statfs '${dir}'`,
+            code,
+          }),
+        }),
       ]);
     },
   );
 
   it("fails open when the database's size cannot be read either", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const freeBytes = vi.fn(() => 0);
     const failing: DiskProbe = {
       fileSize: (path) => {
@@ -161,8 +168,8 @@ describe("a free-space measurement that fails", () => {
       freeBytes,
     };
     expect(() => assertMigrationDiskSpace(join(dir, "volli.db"), failing)).not.toThrow();
-    expect(preflightWarnings(warn)).toHaveLength(1);
-    expect(preflightWarnings(warn)[0]).toContain("EIO: i/o error");
+    expect(preflightWarnings()).toHaveLength(1);
+    expect(JSON.stringify(preflightWarnings()[0])).toContain("EIO: i/o error");
     // A zero it never got to read is not a refusal either.
     expect(freeBytes).not.toHaveBeenCalled();
   });
@@ -170,7 +177,6 @@ describe("a free-space measurement that fails", () => {
   it.each(["ENOSYS", "EIO"] as const)(
     "lets openVolliDb upgrade when statfs throws %s, logging one warning",
     (code) => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
       vi.spyOn(console, "log").mockImplementation(() => undefined);
       const dbPath = join(dir, "volli.db");
       behindHead(dbPath);
@@ -185,9 +191,9 @@ describe("a free-space measurement that fails", () => {
       }
       // Measured once, before the writable open; the runner does not ask again.
       expect(statfs).toHaveBeenCalledTimes(1);
-      const warnings = preflightWarnings(warn);
+      const warnings = preflightWarnings();
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain(`${code}: `);
+      expect(JSON.stringify(warnings[0])).toContain(`${code}: `);
       // The upgrade went ahead as it always had: with its safety copy.
       expect(existsSync(`${dbPath}.backup-v${SCHEMA_HEAD - 1}`)).toBe(true);
     },

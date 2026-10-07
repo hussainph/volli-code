@@ -210,10 +210,10 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     });
     const owner = createSessionRuntimeLifecycle(f.options);
     await owner.ready();
-    expect(f.options.ports.log.error).toHaveBeenCalledWith(
-      "[volli] unreadable follow-up queue for session:",
-      "queue corrupt",
-    );
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("unreadable follow-up queue", {
+      sessionId: "session",
+      error: expect.objectContaining({ message: "queue corrupt" }),
+    });
     await owner.close();
   });
 
@@ -225,10 +225,10 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     );
     const owner = createSessionRuntimeLifecycle(f.options);
     await owner.ready();
-    expect(f.options.ports.log.error).toHaveBeenCalledWith(
-      "[volli] failed to explain held follow-ups:",
-      "attention unavailable",
-    );
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to explain held follow-ups", {
+      sessionId: "session",
+      error: expect.objectContaining({ message: "attention unavailable" }),
+    });
     await owner.close();
   });
 
@@ -322,7 +322,8 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     );
     expect(f.calls.indexOf("follow-ups.recover")).toBeLessThan(f.calls.indexOf("notices.recover"));
     expect(f.options.ports.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("queued follow-up recovery is still running after 5ms"),
+      expect.stringContaining("queued follow-up recovery is still running"),
+      { waitMs: 5 },
     );
     let closed = false;
     const closing = owner.close().then(() => {
@@ -342,10 +343,9 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     vi.mocked(f.runtime.recoverFollowUps).mockRejectedValue(new Error("ledger unavailable"));
     const owner = createSessionRuntimeLifecycle(f.options);
     await owner.ready();
-    expect(f.options.ports.log.error).toHaveBeenCalledWith(
-      "[volli] failed to recover queued follow-ups:",
-      "ledger unavailable",
-    );
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover queued follow-ups", {
+      error: expect.objectContaining({ message: "ledger unavailable" }),
+    });
     expect(f.options.ports.log.warn).not.toHaveBeenCalled();
     expect(f.services).toHaveBeenCalledTimes(1);
     expect(f.delivery.recover).toHaveBeenCalledTimes(1);
@@ -404,14 +404,12 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     f.delivery.recover.mockRejectedValueOnce(new Error("notice failed"));
     const owner = createSessionRuntimeLifecycle(f.options);
     await owner.ready();
-    expect(f.options.ports.log.error).toHaveBeenCalledWith(
-      "[volli] failed to recover stale attachments:",
-      "stale failed",
-    );
-    expect(f.options.ports.log.error).toHaveBeenCalledWith(
-      "[volli] failed to recover host notices:",
-      "notice failed",
-    );
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover stale attachments", {
+      error: expect.objectContaining({ message: "stale failed" }),
+    });
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover host notices", {
+      error: expect.objectContaining({ message: "notice failed" }),
+    });
     expect(f.calls).toContain("delegations.recover");
     expect(f.calls.slice(-2)).toEqual(["resume.start", "ready.services"]);
     await owner.close();
@@ -521,8 +519,12 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     expect(
       vi.mocked(control.createSuspendClock).mock.results[0]!.value.close,
     ).toHaveBeenCalledOnce();
-    expect(f.options.ports.log.error).toHaveBeenCalledWith("[volli] outbox failure");
-    expect(f.options.ports.log.error).toHaveBeenCalledWith("[volli] relay failure");
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("host notice delivery failed", {
+      detail: "outbox failure",
+    });
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("shell notice relay failed", {
+      detail: "relay failure",
+    });
   });
 
   it.each(["empty", "unavailable", "failed", "no-store"])(
@@ -543,10 +545,9 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
       await owner.ready();
       expect(f.calls.slice(-3)).toEqual(["notices.recover", "resume.start", "ready.services"]);
       if (mode === "failed")
-        expect(f.options.ports.log.error).toHaveBeenCalledWith(
-          "[volli] failed to recover delegations:",
-          "delegation failed",
-        );
+        expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to recover delegations", {
+          error: expect.objectContaining({ message: "delegation failed" }),
+        });
       await owner.close();
     },
   );
@@ -646,10 +647,9 @@ describe("Session lifecycle port ordering (replaces desktop source scans)", () =
     const owner = createSessionRuntimeLifecycle(f.options);
     owner.relayShellNotice({} as Parameters<typeof owner.relayShellNotice>[0]);
     await expect(owner.ready()).rejects.toThrow("service construction failed");
-    expect(f.options.ports.log.error).toHaveBeenCalledWith(
-      "[volli] failed to ready a shell notice:",
-      "service construction failed",
-    );
+    expect(f.options.ports.log.error).toHaveBeenCalledWith("failed to ready a shell notice", {
+      error: expect.objectContaining({ message: "service construction failed" }),
+    });
     await owner.close();
   });
 

@@ -13,7 +13,6 @@
  * constructed, which the Session runtime defers to the first tool call that
  * reads them, and expose `dispose`.
  */
-import { errorMessage } from "@volli/shared";
 import {
   createAgentCommandService,
   type AgentCommandService,
@@ -28,13 +27,16 @@ import { createAgentSocketLifecycle, startAgentSocket } from "./agent-socket";
 import { createWatches, type Watches, type WatchesPorts } from "./watches";
 import { subscribeTicketWake } from "./ticket-wake";
 import type { HostCorePorts } from "./index";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("agent-socket");
 
 /** Composed before database boot so early startup still owns and drains its socket. */
 export function createHostAgentSocket() {
   return createAgentSocketLifecycle({
     start: startAgentSocket,
     reportFailure: (error) => {
-      console.error("[volli] failed to close agent socket:", errorMessage(error));
+      log.error("failed to close agent socket", { error });
     },
   });
 }

@@ -25,6 +25,7 @@
  * No Electron import: the windows are a port, so the whole barrier is tested
  * under plain Node.
  */
+import { hostLogger } from "@volli/host-core/log";
 
 /** Menu-bar entry: past this with no ack, log and keep the window hidden (never destroyed). */
 export const MENU_BAR_FLUSH_OVERDUE_MS = 10_000;
@@ -74,7 +75,7 @@ const realTimers = {
 
 export function createClientStateFlush(ports: ClientStateFlushPorts): ClientStateFlush {
   const timers = ports.timers ?? realTimers;
-  const log = ports.log ?? ((line: string) => console.warn(line));
+  const log = ports.log ?? ((line: string) => hostLogger("client-state").warn(line));
   /** Request id → what its ack settles. Kept past the bound, so a late ack still lands. */
   const waiting = new Map<string, () => void>();
 

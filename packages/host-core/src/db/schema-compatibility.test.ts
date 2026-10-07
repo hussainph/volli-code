@@ -232,8 +232,9 @@ describe("openVolliDb against a database's schema version (VC-602)", () => {
     }
     // Logged once, with both versions; no migration ran, so no safety copy.
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toContain(
-      `schema ${newer} is newer than this build's ${SCHEMA_HEAD}`,
+    expect(warn).toHaveBeenCalledWith(
+      "[db] database schema is newer and declares itself compatible; not migrating",
+      { schemaVersion: newer, schemaHead: SCHEMA_HEAD },
     );
     expect(migrationCopies(dbPath)).toEqual([]);
     const reopened = new Database(dbPath, { readonly: true });

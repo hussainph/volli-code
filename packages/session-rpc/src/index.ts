@@ -26,6 +26,7 @@ import {
   CODE_MODE_MODES,
   CODE_MODE_POLICY_MODELS_MAX,
   EXPERIMENTS,
+  LOG_LEVELS,
   MODEL_PICKER_VIEWS,
   MODEL_PURPOSES,
   presentedScheduledResume,
@@ -42,6 +43,8 @@ import {
   type HandlerCall,
   type HiddenModelRef,
   type HostHandler,
+  type HostLogsBatch,
+  type HostLogsQuery,
   type CatalogKeyOf,
   type HostHandlerKeyOf,
   type ModelAccessDefaults,
@@ -170,8 +173,8 @@ export {
   type DesktopIpcRouters,
   type IpcExposureTable,
 } from "./desktop-ipc";
-export { sanitizeDiagnosticText } from "./diagnostic-text";
 export { AsyncQueue } from "./async-queue";
+export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
@@ -369,6 +372,14 @@ export interface SessionRouterHandlers extends SignInRouterHandlers {
     void
   >;
   readonly "session.reconcile": HostHandler<{ sessionId: string; attachmentId: string }, void>;
+  /** The host's recent log (VC-699): a page after a cursor. */
+  readonly "logs.tail": HostHandler<HostLogsQuery, HostLogsBatch>;
+  /** The host's log as it is written, after a cursor's backlog. */
+  readonly "logs.follow": (
+    input: HostLogsQuery,
+    call: HandlerCall,
+    sink: { emit(batch: HostLogsBatch): void | Promise<void>; fail(error: unknown): void },
+  ) => Promise<() => void>;
   /**
    * The socket's Session reads, Workspace-scoped (VC-663, D4): the map runs
    * the socket verb's own handler with its roster forced to `workspaceId`
@@ -433,6 +444,34 @@ const MAX_IDENTIFIER_LENGTH = 512;
  * later change to either must not silently move the other.
  */
 const MAX_DISPLAY_LABEL_LENGTH = 512;
+
+/** Where {@link logRpcDiagnostics} writes: a host's structured logger, by level. */
+export interface RpcDiagnosticLogger {
+  debug(msg: string, fields: Readonly<Record<string, unknown>>): void;
+  warn(msg: string, fields: Readonly<Record<string, unknown>>): void;
+}
+
+/**
+ * Forwards every route diagnostic from now on into a host's structured log
+ * (VC-699): a call's start and success at `debug`, its failure at `warn` with
+ * the code and the sanitized message. The diagnostic is recorded inside the
+ * call, so a host whose door opened a trace scope gets the call's trace on
+ * each line. Returns the unsubscribe.
+ */
+export function logRpcDiagnostics(
+  diagnostics: RpcDiagnosticLog,
+  logger: RpcDiagnosticLogger,
+): () => void {
+  const afterId = diagnostics.list({ limit: 1 }).at(-1)?.id ?? 0;
+  return diagnostics.subscribe({ afterId }, (entry) => {
+    const fields = { operation: entry.procedure, transport: entry.transport };
+    if (entry.phase === "error") {
+      logger.warn("rpc call failed", { ...fields, code: entry.code, reason: entry.message });
+    } else {
+      logger.debug(entry.phase === "start" ? "rpc call" : "rpc call answered", fields);
+    }
+  });
+}
 
 /**
  * Small in-process, lossless-within-capacity diagnostic log. It records route
@@ -890,6 +929,37 @@ const sessionSubscriptionSchema = z.object({
   afterSequence: nonNegativeSafeInteger.optional(),
   lastEventId: sseCursor.optional(),
 });
+
+/**
+ * `host.logs` (VC-699; HP § Tracing and logs). A cursor is the host's opaque
+ * `<instance>:<seq>`; a page holds at most 500 lines of at most 16 KiB each,
+ * so an answer stays well inside the frame bound.
+ */
+const logCursor = z.string().min(1).max(64);
+const logsQuerySchema = z.object({
+  after: logCursor.optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  minLevel: z.enum(LOG_LEVELS).optional(),
+});
+/** tRPC hands a resume's tracked id back as `lastEventId`: it wins over `after`. */
+const logsFollowSchema = logsQuerySchema.extend({ lastEventId: logCursor.optional() });
+const logRecordSchema = z
+  .object({
+    ts: z.string(),
+    level: z.enum(LOG_LEVELS),
+    component: z.string(),
+    msg: z.string(),
+  })
+  .catchall(z.json());
+const logsBatchSchema = z.object({
+  entries: z.array(z.object({ cursor: z.string(), record: logRecordSchema })),
+  gap: z.boolean(),
+  cursor: z.string(),
+});
+/** Batches one log stream may hold unsent before it ends `subscription-overflow`. */
+const LOGS_QUEUE_CAPACITY = 256;
+const LOGS_OVERFLOW_MESSAGE = "The log stream fell behind the host's log";
+const LOGS_SOURCE_FAILURE_MESSAGE = "The host's log stopped";
 
 /** `before` is an event sequence: the page holds frames strictly below it (VC-315). */
 const sessionHistorySchema = z.object({
@@ -1444,6 +1514,55 @@ export function createSessionRouter() {
         sessionResource,
       ).mutation(({ ctx, input }) => ctx.handlers["session.reconcile"](input, ctx.call)),
     },
+    logs: {
+      tail: hostProcedure("logs.tail")
+        .input(logsQuerySchema)
+        .output(logsBatchSchema)
+        .query(async ({ ctx, input }) => {
+          const page = await ctx.handlers["logs.tail"](input, ctx.call);
+          return { ...page, entries: [...page.entries] };
+        }),
+      follow: hostProcedure("logs.follow")
+        .input(logsFollowSchema)
+        .subscription(async function* ({ ctx, input, signal }) {
+          if (signal?.aborted) return;
+          const { lastEventId, ...query } = input;
+          const after = lastEventId ?? query.after;
+          const queue = new AsyncQueue<HostLogsBatch>(LOGS_QUEUE_CAPACITY);
+          const failure: { current: { error: unknown } | null } = { current: null };
+          const abort = (): void => queue.close();
+          signal?.addEventListener("abort", abort, { once: true });
+          const unsubscribe = await hostAnswer(() =>
+            ctx.handlers["logs.follow"](
+              { ...query, ...(after === undefined ? {} : { after }) },
+              ctx.call,
+              {
+                emit: (batch) => queue.push(batch),
+                fail: (error) => {
+                  failure.current = { error };
+                  queue.close(false);
+                },
+              },
+            ),
+          );
+          try {
+            // Each batch is tracked by its newest line: a resume asks for what follows it.
+            for await (const batch of queue) yield tracked(batch.cursor, batch);
+            if (queue.overflowed) throw subscriptionOverflowError(LOGS_OVERFLOW_MESSAGE);
+            // A source that died never reads as a log with nothing more to say.
+            if (failure.current !== null) {
+              throw new HostProcedureError(
+                "subscription-source-failed",
+                LOGS_SOURCE_FAILURE_MESSAGE,
+                failure.current.error,
+              );
+            }
+          } finally {
+            signal?.removeEventListener("abort", abort);
+            unsubscribe();
+          }
+        }),
+    },
     labDiagnostics: {
       list: hostProcedure("labDiagnostics.list")
         .input(
@@ -1680,6 +1799,7 @@ export function sessionProcedureSchemas(
     "labDiagnostics.list": z.array(diagnosticEntrySchema),
     "labDiagnostics.subscribe": diagnosticEntrySchema,
     ...signInSupplementalOutputs,
+    "logs.follow": logsBatchSchema,
   };
   return procedureSchemas(
     router,

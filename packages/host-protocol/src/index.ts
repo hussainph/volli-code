@@ -9,5 +9,6 @@ export * from "./features";
 export * from "./handshake";
 export * from "./identity";
 export * from "./subscriptions";
+export * from "./trace";
 export * from "./welcome";
 export type { IsJsonSafe, JsonUnsafeProcedures } from "./json-safe";

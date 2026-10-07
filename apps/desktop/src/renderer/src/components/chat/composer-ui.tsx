@@ -48,6 +48,7 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 
+import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
 import {
   PromptInput,
   PromptInputBody,
@@ -190,6 +191,12 @@ export interface SessionComposerProps {
   working: boolean;
   /** Something is attached and a model is chosen. False makes the box inert. */
   ready: boolean;
+  /**
+   * The project's host cannot serve (VC-576): Send greys and desaturates like
+   * every other write control, rather than reading as a quieter orange. Only
+   * this state; an empty draft keeps the ordinary disabled look.
+   */
+  hostReadOnly?: boolean;
   queued: readonly QueuedMessage[];
   /** `false` means the host refused the mutation; leave its UI untouched. */
   onQueuedChange: QueuedChange;
@@ -371,6 +378,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   modelChoiceDisabled = false,
   working,
   ready,
+  hostReadOnly = false,
   queued,
   onQueuedChange,
   onSteerQueued,
@@ -738,6 +746,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                 className="prompt-primary rounded-control"
                 size={COMPOSER_PRIMARY_SIZE}
                 disabled={!canSubmit}
+                {...readOnlyMark(!hostReadOnly)}
                 aria-label={working ? "Queue" : "Send"}
                 aria-keyshortcuts="Enter"
               >

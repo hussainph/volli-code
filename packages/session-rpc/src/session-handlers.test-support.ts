@@ -23,6 +23,8 @@ import {
   type ModelPurpose,
   type ModelSelection,
   type SessionReadVerb,
+  type HostLogsBatch,
+  type HostLogsQuery,
 } from "@volli/shared";
 
 import type { DesktopRouterHandlers } from "./desktop-router";
@@ -70,6 +72,13 @@ export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers
   ) => Promise<AgentResponse>;
   /** Sign-ins on a host (VC-702), handler by handler; an absent one answers unavailable. */
   signIns?: Partial<SignInRouterHandlers>;
+  /** The host's recent log (VC-699): host-core's ring. */
+  readLogs?: (query: HostLogsQuery) => HostLogsBatch;
+  followLogs?: (
+    query: HostLogsQuery,
+    listener: (batch: HostLogsBatch) => void,
+    fail: (error: unknown) => void,
+  ) => () => void;
   /** The desktop-only tier (VC-608), for the desktop's bridge: the host map's own bodies. */
   desktop?: Partial<DesktopRouterHandlers>;
 }
@@ -84,6 +93,7 @@ const EXPERIMENTS = "Experimental settings are unavailable on this transport";
 const MODEL_ACCESS = "Model Access is unavailable on this transport";
 const PREFERENCES = "Model Access preferences are unavailable on this transport";
 const RUNTIME = "The Session runtime is unavailable on this host";
+const LOGS = "This host keeps no log to read";
 const SESSION_READS = "Session reads are unavailable on this transport";
 const SIGN_INS = "Sign-ins are unavailable on this host";
 
@@ -106,6 +116,7 @@ function signInHandlersFrom(stated: Partial<SignInRouterHandlers> = {}): SignInR
   };
 }
 const BOARD = "The board is unavailable: the database did not open";
+const REMOTE_HOSTS = "Remote hosts are unavailable on this host";
 
 /** The handler map over legacy ports: each handler calls the port its key once read. */
 export function sessionHandlersFrom(
@@ -155,6 +166,13 @@ export function sessionHandlersFrom(
         (error) => sink.fail(error),
       ),
     "session.command": (request) => runtime("command")(request),
+    "logs.tail": (query) => need(ports.readLogs, LOGS)(query),
+    "logs.follow": async (query, _call, sink) =>
+      need(ports.followLogs, LOGS)(
+        query,
+        (batch) => void sink.emit(batch),
+        (error) => sink.fail(error),
+      ),
     "session.cancelQueued": ({ commandId, sessionId, messageId, expectedRevision }) =>
       runtime("command")({
         commandId,
@@ -188,11 +206,30 @@ export function sessionHandlersFrom(
     "session.answer": ({ workspaceId, args }) =>
       need(ports.readSessionVerb, SESSION_READS)("session.answer", workspaceId, args),
   };
+  /** A remote hosts key: the case's own handler, or unavailable, as on hostd. */
+  const remote = <Key extends keyof DesktopRouterHandlers>(key: Key): DesktopRouterHandlers[Key] =>
+    ((...args: unknown[]) =>
+      (need(ports.desktop?.[key], REMOTE_HOSTS) as (...args: unknown[]) => unknown)(
+        ...args,
+      )) as DesktopRouterHandlers[Key];
   const desktop: DesktopRouterHandlers = {
     "project.reorder": (input, call) =>
       need(ports.desktop?.["project.reorder"], BOARD)(input, call),
     "worktree.trimSettings": (input, call) =>
       need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
+    "hosts.snapshot": remote("hosts.snapshot"),
+    "hosts.subscribe": remote("hosts.subscribe"),
+    "hosts.retry": remote("hosts.retry"),
+    "hosts.updateHost": remote("hosts.updateHost"),
+    "hosts.cancelScheduledUpdate": remote("hosts.cancelScheduledUpdate"),
+    "hosts.signIn": remote("hosts.signIn"),
+    "hosts.forget": remote("hosts.forget"),
+    "hostAdd.start": remote("hostAdd.start"),
+    "hostAdd.subscribe": remote("hostAdd.subscribe"),
+    "hostAdd.answer": remote("hostAdd.answer"),
+    "hostAdd.sudoPassword": remote("hostAdd.sudoPassword"),
+    "hostAdd.retry": remote("hostAdd.retry"),
+    "hostAdd.cancel": remote("hostAdd.cancel"),
   };
   return { ...handlers, ...desktop };
 }

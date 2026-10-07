@@ -120,26 +120,43 @@ function FileMutationMenuItems({
 }) {
   return (
     <>
-      <ContextMenuItem icon={FilePlusIcon} onSelect={() => controls.startDraft("file")}>
+      <ContextMenuItem
+        icon={FilePlusIcon}
+        disabled={!controls.canWrite}
+        onSelect={() => controls.startDraft("file")}
+      >
         New File…
       </ContextMenuItem>
-      <ContextMenuItem icon={FolderPlusIcon} onSelect={() => controls.startDraft("directory")}>
+      <ContextMenuItem
+        icon={FolderPlusIcon}
+        disabled={!controls.canWrite}
+        onSelect={() => controls.startDraft("directory")}
+      >
         New Folder…
       </ContextMenuItem>
       <ContextMenuSeparator />
-      <ContextMenuItem icon={PencilSimpleIcon} onSelect={() => controls.startRename(relPath)}>
+      <ContextMenuItem
+        icon={PencilSimpleIcon}
+        disabled={!controls.canWrite}
+        onSelect={() => controls.startRename(relPath)}
+      >
         Rename…
       </ContextMenuItem>
       {/* Files only: main refuses a directory duplicate out loud, and an item
           that can only fail is worse than one that is not offered. */}
       {kind === "file" ? (
-        <ContextMenuItem icon={FilesIcon} onSelect={() => controls.duplicate(relPath)}>
+        <ContextMenuItem
+          icon={FilesIcon}
+          disabled={!controls.canWrite}
+          onSelect={() => controls.duplicate(relPath)}
+        >
           Duplicate
         </ContextMenuItem>
       ) : null}
       <ContextMenuItem
         icon={TrashIcon}
         variant="destructive"
+        disabled={!controls.canWrite}
         onSelect={() => controls.remove(relPath, kind)}
       >
         Delete
@@ -680,7 +697,10 @@ function TicketFilesScope({
         // checkout instead.
         actions={
           controls === undefined ? undefined : (
-            <NewFileRailAction onNewFile={() => controls.startDraft("file")} />
+            <NewFileRailAction
+              disabled={!controls.canWrite}
+              onNewFile={() => controls.startDraft("file")}
+            />
           )
         }
         attachmentMenu={attachmentMenu}

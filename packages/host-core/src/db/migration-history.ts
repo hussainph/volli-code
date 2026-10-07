@@ -39,9 +39,6 @@ import LOCK from "./migrations.lock.json" with { type: "json" };
 /** The migration that creates the history; files below it have none to check. */
 export const MIGRATION_HISTORY_VERSION = 60;
 
-/** The log prefix of a diverged history, stable for anyone grepping a support log. */
-export const MIGRATION_HISTORY_LOG_PREFIX = "[volli] migration history";
-
 /**
  * Migration 060. `IF NOT EXISTS` and `OR IGNORE`, so a lineage re-offered
  * version 60 converges instead of failing. Reads `user_version` through the

@@ -45,7 +45,7 @@ function labelOf(item: React.ReactElement<ItemProps>): string {
 describe("NewSessionControl", () => {
   it("puts chat on the press and the other kinds behind a separate caret half", () => {
     const html = renderToStaticMarkup(
-      <NewSessionControl disabled={false} onNewChat={noop} onNewTerminal={noop} />,
+      <NewSessionControl projectId="p1" disabled={false} onNewChat={noop} onNewTerminal={noop} />,
     );
 
     // Two buttons, not one: the label half commits, the caret half opens.
@@ -60,7 +60,7 @@ describe("NewSessionControl", () => {
 
   it("takes both halves out of reach while a Session of either kind is booting", () => {
     const html = renderToStaticMarkup(
-      <NewSessionControl disabled onNewChat={noop} onNewTerminal={noop} />,
+      <NewSessionControl projectId="p1" disabled onNewChat={noop} onNewTerminal={noop} />,
     );
 
     expect(buttonTag(html, "New chat")).toContain('disabled=""');
@@ -96,6 +96,7 @@ describe("NewSessionControl", () => {
   it("keeps Browser inside the menu rather than beside it as a second button", () => {
     const html = renderToStaticMarkup(
       <NewSessionControl
+        projectId="p1"
         disabled={false}
         onNewChat={noop}
         onNewBrowser={noop}
@@ -126,10 +127,16 @@ describe("NewSessionControl", () => {
 
   it("announces ⌘T only where the chord starts what the control starts", () => {
     const quiet = renderToStaticMarkup(
-      <NewSessionControl disabled={false} onNewChat={noop} onNewTerminal={noop} />,
+      <NewSessionControl projectId="p1" disabled={false} onNewChat={noop} onNewTerminal={noop} />,
     );
     const onTheSurface = renderToStaticMarkup(
-      <NewSessionControl disabled={false} shortcuts onNewChat={noop} onNewTerminal={noop} />,
+      <NewSessionControl
+        projectId="p1"
+        disabled={false}
+        shortcuts
+        onNewChat={noop}
+        onNewTerminal={noop}
+      />,
     );
 
     // ⌘T is CONTEXT-SENSITIVE (lib/new-session-shortcut.ts): it resolves against
@@ -149,6 +156,7 @@ describe("NewSessionControl", () => {
   it("says what it does where it is the only affordance on screen", () => {
     const strip = renderToStaticMarkup(
       <NewSessionControl
+        projectId="p1"
         disabled={false}
         placement="strip"
         onNewChat={noop}
@@ -157,6 +165,7 @@ describe("NewSessionControl", () => {
     );
     const empty = renderToStaticMarkup(
       <NewSessionControl
+        projectId="p1"
         disabled={false}
         placement="empty"
         onNewChat={noop}

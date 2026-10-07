@@ -23,6 +23,9 @@ import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import { CdpPipeConnection, type CdpPipeLimits } from "./chromium-pipe";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("chromium");
 
 export interface ChromiumLaunchOptions {
   /** The Chromium binary. Policy has no default: the host resolves it. */
@@ -199,7 +202,7 @@ export async function sweepStaleChromiumProfiles(
       await rm(dir, { recursive: true, force: true });
       removed.push(dir);
     } catch (error) {
-      console.warn(`[volli] A stale Chromium profile ${dir} was not removed:`, error);
+      log.warn("stale chromium profile was not removed", { profileDir: dir, error });
     }
   }
   return removed;
@@ -299,13 +302,13 @@ export async function launchChromium(
 ): Promise<ChromiumProcess> {
   const userDataDir = await makeProfile(options.profileRoot);
   if (options.noSandbox) {
-    console.warn(
-      "[volli] Chromium is starting WITHOUT its sandbox (noSandbox). Only a host that cannot provide user namespaces should do this; see the host-core README, Browser backend.",
+    log.warn(
+      "chromium is starting without its sandbox (noSandbox); only for a host without user namespaces, see the host-core README, Browser backend",
     );
   }
   const removeProfile = async (): Promise<void> => {
     await rm(userDataDir, { recursive: true, force: true }).catch((error: unknown) => {
-      console.warn(`[volli] Chromium profile ${userDataDir} was not removed:`, error);
+      log.warn("chromium profile was not removed", { profileDir: userDataDir, error });
     });
     liveProfiles.delete(userDataDir);
   };
@@ -371,7 +374,7 @@ export async function launchChromium(
         try {
           listener(description);
         } catch (error) {
-          console.error("[volli] A Chromium exit listener failed:", error);
+          log.error("chromium exit listener failed", { error });
         }
       }
       if (graceful && connection !== null && !connection.closed && exited === null) {
@@ -392,7 +395,7 @@ export async function launchChromium(
       for (const stream of [write, read, child.stderr]) stream?.destroy();
       await removeProfile();
     })()
-      .catch((error: unknown) => console.error("[volli] The Chromium shutdown failed:", error))
+      .catch((error: unknown) => log.error("chromium shutdown failed", { error }))
       .finally(finished);
     return finalizing;
   };

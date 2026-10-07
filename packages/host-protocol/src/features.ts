@@ -28,6 +28,11 @@ export const HOST_FEATURE_OPERATIONS = {
     "session.reconcile",
   ],
   "sessions.queue": ["session.cancelQueued", "session.editQueued", "session.subscribeQueue"],
+  /**
+   * The host's recent log, redacted and bounded (VC-699): read-only, and the
+   * person's alone (an operator or a paired device); never a Session's.
+   */
+  "host.logs": ["logs.tail", "logs.follow"],
   /** Following one Session's stream, resuming after a cursor (VC-663). */
   "sessions.subscribe": ["session.subscribe"],
   /**

@@ -7,6 +7,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExternalApp, ExternalAppId, Result } from "../ipc/contract";
 import { errorMessage } from "@volli/shared";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("external-apps");
 
 export type { ExternalApp, ExternalAppId, ExternalAppKind } from "../ipc/contract";
 
@@ -138,10 +141,10 @@ export function createExternalAppGateway(finder: ExternalAppRuntime): ExternalAp
       // failed lookup rather than only whichever one lost the race.
       const failures = inspected.filter((entry) => entry.failure !== null);
       if (failures.length > 0) {
-        console.error(
-          `[volli] external-app lookup failed for ${failures.map((entry) => entry.app.id).join(", ")}:`,
-          errorMessage(failures[0]?.failure),
-        );
+        log.error("external-app lookup failed", {
+          appIds: failures.map((entry) => entry.app.id),
+          error: failures[0]?.failure,
+        });
         throw new Error(EXTERNAL_APP_DISCOVERY_FAILED, { cause: failures[0]?.failure });
       }
       return inspected.filter((entry) => entry.installed).map((entry) => entry.app);

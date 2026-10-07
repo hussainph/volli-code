@@ -29,9 +29,9 @@ describe("renderer app_state key boundary", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       expect(() => assertRendererAppStateKey("volli:unclassified")).not.toThrow();
-      expect(warn).toHaveBeenCalledWith(
-        "[volli] Unregistered or retired app_state write: volli:unclassified",
-      );
+      expect(warn).toHaveBeenCalledWith("[app-state] unregistered or retired app_state write", {
+        appState: "volli:unclassified",
+      });
     } finally {
       warn.mockRestore();
     }

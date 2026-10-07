@@ -56,6 +56,9 @@
  * rejection in main rather than anything a person could act on.
  */
 import type { NotificationTarget } from "@volli/shared";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("notifications");
 
 /** The window facts a click needs — `BrowserWindow` satisfies it structurally. */
 export interface ActivationWindow {
@@ -77,7 +80,7 @@ export interface NotificationActivationPorts {
   focusApp(): void;
   /** Opens a window when none exists. */
   openWindow(): void;
-  /** Diagnostics seam. Defaults to `console.warn`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -111,7 +114,7 @@ export function createNotificationActivation(
   ports: NotificationActivationPorts,
 ): NotificationActivation {
   const onError =
-    ports.onError ?? ((error: unknown) => console.warn("[volli] notification click:", error));
+    ports.onError ?? ((error: unknown) => log.warn("notification click failed", { error }));
   let pending: NotificationTarget | null = null;
   /** The windows whose renderer has said it is listening. */
   const listening = new Set<number>();

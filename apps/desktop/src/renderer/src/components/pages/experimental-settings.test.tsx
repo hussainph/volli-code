@@ -18,6 +18,8 @@ vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
 }));
 
+import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
+
 import { ExperimentalSettings } from "./experimental-settings";
 
 let root: Root | null = null;
@@ -106,6 +108,26 @@ describe("Settings → Experimental", () => {
     expect(rpc.mutate).toHaveBeenCalledWith({ id: "cloud", enabled: true });
     expect(experimentSwitch().getAttribute("aria-checked")).toBe("true");
     expect(experimentSwitch().disabled).toBe(false);
+  });
+
+  it("hands the saved snapshot to the app's flag readers, so cloud surfaces follow it live", async () => {
+    useExperimentsStore.setState({ snapshot: null });
+    rpc.mutate.mockResolvedValueOnce(snapshot(true, "storage"));
+    await renderPane();
+
+    await click(experimentSwitch());
+
+    expect(isExperimentOn(useExperimentsStore.getState().snapshot, "cloud")).toBe(true);
+    useExperimentsStore.setState({ snapshot: null });
+  });
+
+  it("heals the app's flag readers from a load, even one this page cannot save", async () => {
+    useExperimentsStore.setState({ snapshot: null });
+    rpc.query.mockResolvedValueOnce(snapshot(true, "environment"));
+    await renderPane();
+
+    expect(isExperimentOn(useExperimentsStore.getState().snapshot, "cloud")).toBe(true);
+    useExperimentsStore.setState({ snapshot: null });
   });
 
   it("locks an environment-enabled flag and names its source", async () => {

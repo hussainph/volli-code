@@ -228,7 +228,9 @@ export function wireShikiToMonaco(
           .getLanguage(lang)
           .tokenizeLine2(line, tokenizerState.ruleStack, tokenizeTimeLimit);
         if (result.stoppedEarly) {
-          console.warn(`Time limit reached when tokenizing line: ${line.substring(0, 100)}`);
+          // The line's length, never its text: a console warning reaches the
+          // desktop's log (VC-699), and a file's contents never may.
+          console.warn(`[editor] tokenizer time limit reached on a ${line.length}-character line`);
         }
         const tokensLength = result.tokens.length / 2;
         const tokens: Array<{ startIndex: number; scopes: string }> = [];

@@ -46,12 +46,13 @@ describe("hostd's headless ports", () => {
   it("routes host-core's own log through the structured logger", () => {
     const log = logger();
     const ports = headlessPorts(log);
-    ports.log.error("[volli] failed to open database:", "EACCES");
-    ports.log.warn("careful %s", "now");
-    expect(log.error).toHaveBeenCalledWith("[volli] failed to open database: EACCES", {
+    ports.log.error("failed to open database", { detail: "EACCES" });
+    ports.log.warn("careful");
+    expect(log.error).toHaveBeenCalledWith("failed to open database", {
       source: "host-core",
+      detail: "EACCES",
     });
-    expect(log.warn).toHaveBeenCalledWith("careful now", { source: "host-core" });
+    expect(log.warn).toHaveBeenCalledWith("careful", { source: "host-core" });
   });
 
   it("never sleeps, is always online, and has no client, trash or runtime", () => {

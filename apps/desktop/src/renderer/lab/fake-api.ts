@@ -124,6 +124,29 @@ function node(
       if (typeof property !== "string" || NON_MEMBERS.has(property)) return undefined;
       return node(overrides, [...path, property], cache);
     },
+    // A namespace someone SPREADS (`{ ...window.api.sessionRpc }`, as the
+    // Session RPC client does) keeps the members its override names; without
+    // these two traps a proxy spreads to `{}` and every member goes missing.
+    ownKeys(target) {
+      const named = isNamespace(override) ? Object.keys(override as object) : [];
+      return [...new Set([...Reflect.ownKeys(target), ...named])];
+    },
+    getOwnPropertyDescriptor(target, property) {
+      const own = Reflect.getOwnPropertyDescriptor(target, property);
+      if (own !== undefined) return own;
+      if (
+        typeof property !== "string" ||
+        !isNamespace(override) ||
+        !Object.hasOwn(override as object, property)
+      ) {
+        return undefined;
+      }
+      return {
+        configurable: true,
+        enumerable: true,
+        value: node(overrides, [...path, property], cache),
+      };
+    },
     apply() {
       const method = path[path.length - 1] ?? "";
       // Subscriptions are synchronous and return their unsubscribe; callers

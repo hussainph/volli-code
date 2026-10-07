@@ -27,6 +27,7 @@ export {
   type TestHandlerEntries,
   type TestHandlerPorts,
 } from "./host-handlers";
+export { captureHostLog, type CapturedHostLog } from "./log";
 export { resetOrphanScanForTest } from "../orphan-scan";
 export { resetRetentionWatcherForTest } from "../retention-runtime";
 export { SecretStore as N1SecretStore } from "../secrets/test-support/n1/secrets/store";

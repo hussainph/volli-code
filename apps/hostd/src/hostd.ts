@@ -83,6 +83,7 @@ import {
 } from "./session-runtime";
 import { HostdBootError } from "./boot-error";
 import { acquireInstanceLock } from "./instance-lock";
+import type { LogRing } from "@volli/host-core/log";
 import type { HostdLogger } from "./log";
 import { openOperators } from "./operators";
 import { headlessPorts } from "./ports";
@@ -147,6 +148,11 @@ export interface HostdOptions {
    * every Session command's environment only with the `cloud` flag on.
    */
   readonly gitCredentialHelper?: string;
+  /**
+   * The host's recent log (VC-699): the ring `main.ts` tees beside stdout.
+   * Present, the handler map reads it and the listener offers `host.logs`.
+   */
+  readonly logRing?: LogRing;
   readonly now?: () => Date;
   /**
    * How long a stop waits, after the socket has closed, for requests still
@@ -348,6 +354,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
               ? (options.gitCredentialHelper ?? defaultGitCredentialHelper(dataDir))
               : null,
           },
+          logs: options.logRing ?? null,
         });
         const { handlers, automationsAvailable, serveSessionReads, ...sessionPorts } =
           await sessionRuntime.ready();
@@ -397,6 +404,7 @@ export async function startHostd(options: HostdOptions): Promise<RunningHostd> {
               handlers,
               sessionEngine: sessionPorts.sessionEngine,
               logger,
+              offerLogs: options.logRing !== undefined,
             });
           } catch (error) {
             throw new HostdBootError(

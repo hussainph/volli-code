@@ -239,3 +239,69 @@ describe("durable host follow-up storage", () => {
     expect(migrate(f.db, fixture!.dbPath)).toBe(false);
   });
 });
+
+function row(state: "queued" | "releasing", id: string) {
+  return { state, commandId: `c-${id}`, deliveryCommandId: `d-${id}` };
+}
+
+function entry(state: "queued" | "releasing", id: string) {
+  return {
+    id,
+    ...row(state, id),
+    message: { id, role: "user", parts: [{ type: "text", text: "private words" }] },
+  };
+}
+
+describe("queue transitions as log lines (VC-699)", () => {
+  it("says what happened to each message and why, by identifiers only", async () => {
+    const { installHostLog } = await import("../log/root");
+    const { logQueueChanges } = await import("./session-follow-up-repo");
+    const records: Record<string, unknown>[] = [];
+    const undo = installHostLog({
+      level: "info",
+      sink: { write: (record) => records.push(record) },
+    });
+    try {
+      logQueueChanges(
+        "s-1",
+        new Map([
+          ["claimed", row("queued", "claimed")],
+          ["returned", row("releasing", "returned")],
+          ["delivered", row("releasing", "delivered")],
+          ["withdrawn", row("queued", "withdrawn")],
+          ["unchanged", row("queued", "unchanged")],
+        ]),
+        {
+          version: 1,
+          revision: 7,
+          releasedBoundary: "idle:turn-1",
+          commands: {},
+          releases: { "d-delivered": { command: {}, receipt: { status: "accepted" } } },
+          entries: [
+            entry("queued", "new"),
+            entry("releasing", "claimed"),
+            entry("queued", "returned"),
+            entry("queued", "unchanged"),
+          ],
+        } as never,
+      );
+    } finally {
+      undo();
+    }
+    expect(records.map(({ msg, messageId, reason }) => [msg, messageId, reason])).toEqual([
+      ["follow-up queued", "new", undefined],
+      ["follow-up release claimed", "claimed", "idle-boundary"],
+      ["follow-up claim returned", "returned", "not-sent"],
+      ["follow-up delivered", "delivered", undefined],
+      ["follow-up withdrawn", "withdrawn", "cancelled"],
+    ]);
+    expect(records[1]).toMatchObject({
+      boundary: "idle:turn-1",
+      revision: 7,
+      pending: 4,
+      sessionId: "s-1",
+    });
+    expect(records[3]).toMatchObject({ status: "accepted", deliveryCommandId: "d-delivered" });
+    expect(JSON.stringify(records)).not.toContain("private words");
+  });
+});

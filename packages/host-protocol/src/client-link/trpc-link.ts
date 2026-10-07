@@ -18,6 +18,10 @@
  * the host already received may have taken effect, exactly as when the link
  * drops mid-call, so a caller that must know re-reads, or retries with the
  * same `commandId`.
+ *
+ * A call's trace (VC-699) rides in tRPC's operation context:
+ * `client.x.mutate(input, { context: { trace: { traceId } } })` sends it as
+ * that operation's trace; without one the link's own applies.
  */
 import { TRPCClientError, type TRPCLink } from "@trpc/client";
 import type { AnyRouter } from "@trpc/server";
@@ -25,7 +29,16 @@ import { observable } from "@trpc/server/observable";
 import { TRPC_ERROR_CODES_BY_KEY } from "@trpc/server/rpc";
 
 import { readHostError, type HostError } from "../errors";
-import { HostLinkError, type HostLink } from "./link";
+import { isTraceIdShaped } from "../trace";
+import { HostLinkError, type HostLink, type HostLinkCallOptions } from "./link";
+
+/** The trace an operation's context names, when it names one. */
+function callOptions(context: Readonly<Record<string, unknown>> | undefined): HostLinkCallOptions {
+  const trace = context?.["trace"];
+  if (typeof trace !== "object" || trace === null) return {};
+  const { traceId } = trace as { traceId?: unknown };
+  return isTraceIdShaped(traceId) ? { trace: { traceId } } : {};
+}
 
 export function hostLinkTrpcLink<Router extends AnyRouter>(link: HostLink): TRPCLink<Router> {
   return () =>
@@ -34,13 +47,18 @@ export function hostLinkTrpcLink<Router extends AnyRouter>(link: HostLink): TRPC
         const signal = op.signal ?? null;
         if (op.type === "subscription") {
           if (signal?.aborted === true) return undefined;
-          const subscription = link.subscribe(op.path, op.input, {
-            onStarted: () => observer.next({ result: { type: "started" } }),
-            onData: (data) => observer.next({ result: { type: "data", data } }),
-            onResnapshot: (error) => observer.error(clientError(new HostLinkError(error))),
-            onError: (error) => observer.error(clientError(error)),
-            onComplete: () => observer.complete(),
-          });
+          const subscription = link.subscribe(
+            op.path,
+            op.input,
+            {
+              onStarted: () => observer.next({ result: { type: "started" } }),
+              onData: (data) => observer.next({ result: { type: "data", data } }),
+              onResnapshot: (error) => observer.error(clientError(new HostLinkError(error))),
+              onError: (error) => observer.error(clientError(error)),
+              onComplete: () => observer.complete(),
+            },
+            callOptions(op.context),
+          );
           const stop = (): void => subscription.unsubscribe();
           signal?.addEventListener("abort", stop, { once: true });
           return () => {
@@ -56,8 +74,11 @@ export function hostLinkTrpcLink<Router extends AnyRouter>(link: HostLink): TRPC
         // an observer that is done; the call itself is never cancelled on the host.
         const abort = (): void => observer.error(clientError(aborted()));
         signal?.addEventListener("abort", abort, { once: true });
+        const options = callOptions(op.context);
         const call =
-          op.type === "query" ? link.query(op.path, op.input) : link.mutate(op.path, op.input);
+          op.type === "query"
+            ? link.query(op.path, op.input, options)
+            : link.mutate(op.path, op.input, options);
         call.then(
           (data) => {
             observer.next({ result: { type: "data", data } });

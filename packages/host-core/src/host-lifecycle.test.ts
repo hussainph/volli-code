@@ -241,8 +241,8 @@ describe("host lifecycle stop", () => {
     expect((await createHostLifecycle(ports).stop("quit")).clean).toBe(true);
     expect(calls.at(-1)).toBe("close-database");
     expect(consoleError).toHaveBeenCalledExactlyOnceWith(
-      "[host] failed to report a skipped clean-close watermark:",
-      "logger failed",
+      "[host] failed to report a skipped clean-close watermark",
+      { error: expect.objectContaining({ name: "Error", message: "logger failed" }) },
     );
   });
 
@@ -501,9 +501,9 @@ describe("host lifecycle stop", () => {
     const report = await createHostLifecycle(ports).stop("quit");
     expect(report.clean).toBe(false);
     expect(calls.at(-1)).toBe("close-database");
-    expect(consoleError).toHaveBeenCalledWith(
-      "[host] failed to report a close-runtime failure:",
-      "logger gone",
-    );
+    expect(consoleError).toHaveBeenCalledWith("[host] failed to report a shutdown step failure", {
+      step: "close-runtime",
+      error: expect.objectContaining({ name: "Error", message: "logger gone" }),
+    });
   });
 });

@@ -51,6 +51,9 @@ import type {
 } from "@volli/session-engine";
 
 import type { NotificationRequest } from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("scheduled-resume");
 
 /**
  * How long the timer sleeps at most. A minute, like the Automation schedule
@@ -75,7 +78,7 @@ export interface ScheduledResumeHostPorts {
   now?(): number;
   setTimer?(delayMs: number, fire: () => void): ReturnType<typeof setTimeout>;
   clearTimer?(handle: ReturnType<typeof setTimeout>): void;
-  /** Diagnostics seam. Defaults to `console.error`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?(error: unknown): void;
 }
 
@@ -114,7 +117,7 @@ export function createScheduledResumeHost(ports: ScheduledResumeHostPorts): Sche
   const setTimer = ports.setTimer ?? ((delayMs, fire) => setTimeout(fire, delayMs));
   const clearTimer = ports.clearTimer ?? ((handle) => clearTimeout(handle));
   const onError =
-    ports.onError ?? ((error: unknown) => console.error("[volli] scheduled resume:", error));
+    ports.onError ?? ((error: unknown) => log.error("scheduled resume failed", { error }));
   /** Session id → the schedule id last seen pending there (null: not yet read). */
   const candidates = new Map<string, string | null>();
   /** Schedule ids whose retry this process has issued and not yet settled. */

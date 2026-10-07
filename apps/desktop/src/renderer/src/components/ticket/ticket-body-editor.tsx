@@ -16,6 +16,8 @@ import type { DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { cn } from "@renderer/lib/utils";
+import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
+import { canWriteNow, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useBoardStore } from "@renderer/stores/board";
 
 /**
@@ -180,6 +182,9 @@ export function TicketBodyEditor({
       writing: false,
     });
     if (action !== "save") return;
+    // Read-only (VC-576): the draft stays pending — and the document dirty —
+    // until the project's host serves again; the note above says why.
+    if (!canWriteNow(identity.projectId)) return;
     lastSavedRef.current = next;
     // Keep the registry baseline in step with the store write so a later peek
     // does not see a permanently dirty ticket-body document.
@@ -188,6 +193,14 @@ export function TicketBodyEditor({
   }, [updateTicket, markBodySaved]);
 
   const debouncer = useDebouncedCallback(save, AUTOSAVE_IDLE_MS);
+
+  // A draft held while read-only goes the moment the host is back.
+  const canWrite = useCanWrite(ticket.projectId);
+  const couldWrite = React.useRef(canWrite);
+  React.useEffect(() => {
+    if (canWrite && !couldWrite.current) save();
+    couldWrite.current = canWrite;
+  }, [canWrite, save]);
 
   // The switch (VC-385). Settle the outgoing ticket before adopting the
   // incoming one: flush its pending draft — `save` reads `authoredForRef`,
@@ -226,6 +239,7 @@ export function TicketBodyEditor({
 
   return (
     <div className="flex flex-col gap-2">
+      <ReadOnlyNote projectId={ticket.projectId} />
       {conflict !== null && (
         <Notice
           title="Changed elsewhere. Autosave paused."

@@ -216,7 +216,9 @@ it("reports a socket close failure in words rather than throwing it", () => {
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
     lifecycle.reportFailure(new Error("EBUSY"));
-    expect(error).toHaveBeenCalledExactlyOnceWith("[volli] failed to close agent socket:", "EBUSY");
+    expect(error).toHaveBeenCalledExactlyOnceWith("[agent-socket] failed to close agent socket", {
+      error: expect.objectContaining({ name: "Error", message: "EBUSY" }),
+    });
   } finally {
     error.mockRestore();
   }

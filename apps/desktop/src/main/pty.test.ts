@@ -2367,7 +2367,8 @@ describe("worktree ticket sessions", () => {
     expect(() => pty.emitExit(1)).not.toThrow();
 
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("failed to record setup failure"),
+      "[worktree-setup] failed to record setup failure",
+      expect.objectContaining({ ticketId: "wt1" }),
     );
     expect(listTicketEvents(testDb.db, "wt1")).toEqual([]);
   });

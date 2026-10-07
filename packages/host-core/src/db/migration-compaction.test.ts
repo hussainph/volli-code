@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
-  MIGRATION_COMPACTION_LOG_PREFIX,
   compactMigrationDatabase,
   decideMigrationCompaction,
   logMigrationCompaction,
@@ -293,7 +292,7 @@ describe("compactMigrationDatabase", () => {
 });
 
 describe("migration compaction logging", () => {
-  it("uses one stable prefix and error severity for a failed checkpoint report", () => {
+  it("uses one stable message and error severity for a failed checkpoint report", () => {
     const logger = { info: vi.fn(), error: vi.fn() };
     const report = {
       ran: true,
@@ -305,9 +304,8 @@ describe("migration compaction logging", () => {
 
     logMigrationCompaction(report, logger);
 
-    expect(MIGRATION_COMPACTION_LOG_PREFIX).toBe("[migration compaction]");
     expect(logger.info).not.toHaveBeenCalled();
-    expect(logger.error).toHaveBeenCalledExactlyOnceWith(MIGRATION_COMPACTION_LOG_PREFIX, report);
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith("migration compaction failed", report);
   });
 });
 

@@ -61,6 +61,9 @@ import {
 } from "../session-control";
 import { resolveScope } from "./scope";
 import type { SessionScope } from "./scope";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("pty");
 
 // Structural subset of node-pty we depend on — declared here so nothing in
 // this module needs a value import of node-pty: the native module loads only
@@ -463,13 +466,15 @@ export class PtyManager {
         git: runGitCapturingAsync,
       });
       for (const refusal of result.refused) {
-        console.warn(
-          `[volli] ${refusal.harnessId} will not report events in ${worktreePath}: ` +
-            `${refusal.path} — ${refusal.reason}`,
-        );
+        log.warn("harness will not report events in this worktree", {
+          harnessId: refusal.harnessId,
+          worktreePath,
+          path: refusal.path,
+          reason: refusal.reason,
+        });
       }
     } catch (error) {
-      console.error(`[volli] failed to write harness workspace files: ${errorMessage(error)}`);
+      log.error("failed to write harness workspace files", { error });
     }
   }
 
@@ -601,9 +606,10 @@ export class PtyManager {
           },
         });
       } catch (recordError) {
-        console.error(
-          `[volli] failed to record terminal attachment failure for ${sessionId}: ${errorMessage(recordError)}`,
-        );
+        log.error("failed to record terminal attachment failure", {
+          sessionId,
+          error: recordError,
+        });
       }
     };
     let start: Awaited<ReturnType<SessionEngine["submit"]>>;
@@ -1091,9 +1097,10 @@ export class PtyManager {
         outcome: exitCode === 0 ? "completed" : "failed",
       });
     } catch (error) {
-      console.error(
-        `[volli] failed to close terminal attachment ${session.attachmentId}: ${errorMessage(error)}`,
-      );
+      log.error("failed to close terminal attachment", {
+        attachmentId: session.attachmentId,
+        error,
+      });
     }
   }
 
@@ -1135,9 +1142,10 @@ export class PtyManager {
         exitCode,
       });
     } catch (error) {
-      console.error(
-        `[volli] failed to record exit code for terminal attachment ${session.attachmentId}: ${errorMessage(error)}`,
-      );
+      log.error("failed to record terminal attachment exit code", {
+        attachmentId: session.attachmentId,
+        error,
+      });
     }
   }
 
@@ -1491,14 +1499,12 @@ export class PtyManager {
               },
             });
           } catch (receiptError) {
-            console.error(
-              `[volli] failed to record interrupt receipt for ${sessionId}: ${errorMessage(receiptError)}`,
-            );
+            log.error("failed to record interrupt receipt", { sessionId, error: receiptError });
           }
         }
         // One session's dead pty must never block interrupting the rest; it
         // simply isn't reported as interrupted.
-        console.error(`[volli] failed to interrupt session ${sessionId}: ${errorMessage(error)}`);
+        log.error("failed to interrupt session", { sessionId, error });
       }
     }
     return interrupted;

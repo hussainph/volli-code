@@ -83,10 +83,7 @@ describe("host shutdown", () => {
     expect(mcp).not.toHaveBeenCalled();
     runtime.resolve();
     await shutdown;
-    expect(error).toHaveBeenCalledWith(
-      "[volli] failed to close native Session RPC:",
-      failure.message,
-    );
+    expect(error).toHaveBeenCalledWith("failed to close native session rpc", { error: failure });
     expect(mcp).toHaveBeenCalledOnce();
   });
 
@@ -127,8 +124,14 @@ describe("host shutdown", () => {
       log: { error },
     });
     expect(error.mock.calls).toEqual([
-      ["[volli] failed to close native Session RPC:", "rpc"],
-      ["[volli] failed to close native Session RPC:", "runtime"],
+      [
+        "failed to close native session rpc",
+        { error: expect.objectContaining({ message: "rpc" }) },
+      ],
+      [
+        "failed to close native session rpc",
+        { error: expect.objectContaining({ message: "runtime" }) },
+      ],
     ]);
     expect(calls).toEqual(["mcp", "flush"]);
   });

@@ -12,6 +12,7 @@
  */
 import * as React from "react";
 
+import { useLogViewerEnabled } from "@renderer/components/logs/log-viewer";
 import { PrefShell } from "@renderer/components/settings/kit";
 import {
   resolveSettingsCategory,
@@ -22,9 +23,10 @@ export function SettingsPage({
   initialCategoryKey,
   initialSignInProviderId,
 }: { initialCategoryKey?: string; initialSignInProviderId?: string } = {}) {
+  const logs = useLogViewerEnabled();
   const groups = React.useMemo(
-    () => settingsGroups(initialSignInProviderId),
-    [initialSignInProviderId],
+    () => settingsGroups(initialSignInProviderId, { logs }),
+    [initialSignInProviderId, logs],
   );
 
   // Resolved once, from the deep link. `resolveSettingsCategory` maps the

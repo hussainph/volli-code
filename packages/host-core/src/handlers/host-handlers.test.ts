@@ -8,9 +8,13 @@ import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
   HOST_HANDLER_KEYS,
   isOperationUnavailable,
+  OperationUnavailableError,
+  REMOTE_HOST_UPDATE_UNAVAILABLE,
+  type AddHostEvent,
   type DataChangedEvent,
   type HandlerCall,
   type ModelAccessSnapshot,
+  type RemoteHostsSnapshot,
   type TicketEventActor,
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vite-plus/test";
@@ -29,6 +33,7 @@ import {
   type HostHandlerOptions,
   type HostHandlers,
 } from "./host-handlers";
+import type { RemoteHostsPort } from "./remote-hosts-port";
 
 vi.mock("../session-runtime/model-access-preferences", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-runtime/model-access-preferences")>()),
@@ -167,6 +172,10 @@ describe("the map", () => {
     expect(
       await unavailable(() => empty["session.list"]({ workspaceId: PROJECT, args: {} }, USER)),
     ).toBe("Session reads are unavailable on this transport");
+    // A host that keeps no recent log says so (VC-699).
+    expect(await unavailable(() => empty["logs.tail"]({}, USER))).toBe(
+      "This host keeps no log to read",
+    );
     // A default needs Model Access as well as the database.
     expect(
       await unavailable(() =>
@@ -470,6 +479,198 @@ describe("desktop-only commands", () => {
   });
 });
 
+/** A subscription's sink that records what it is fed. */
+function sink() {
+  return { emit: vi.fn(), fail: vi.fn() };
+}
+
+// Remote hosts (VC-700 PR 2): desktop main's registry, through its port;
+// absent everywhere else.
+describe("remote hosts commands", () => {
+  const HOST = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+  const FLOW = "flow-1";
+  const SNAPSHOT: RemoteHostsSnapshot = { v: 1, hosts: [], projects: {}, readOnly: null };
+  const EVENT: AddHostEvent = {
+    kind: "log",
+    flowId: FLOW,
+    line: { at: "2026-10-06T00:00:00.000Z", level: "info", message: "probe", fields: {} },
+  };
+  const PASSWORD = "hunter2-sudo";
+
+  function port(overrides: Partial<RemoteHostsPort> = {}) {
+    const unsubscribe = vi.fn();
+    const remote = {
+      snapshot: vi.fn(() => SNAPSHOT),
+      subscribe: vi.fn(async (listener: (snapshot: RemoteHostsSnapshot) => unknown) => {
+        await listener(SNAPSHOT);
+        return unsubscribe;
+      }),
+      retry: vi.fn(),
+      updateHost: vi.fn(async () => {}),
+      cancelScheduledUpdate: vi.fn(),
+      signIn: vi.fn(),
+      forget: vi.fn(),
+      startAdd: vi.fn(async () => ({ flowId: FLOW, extra: "not on the wire" })),
+      subscribeAdd: vi.fn((_flowId: string, listener: (event: AddHostEvent) => unknown) => {
+        void listener(EVENT);
+        return unsubscribe;
+      }),
+      answerAdd: vi.fn(),
+      sudoPassword: vi.fn(),
+      retryAdd: vi.fn(),
+      cancelAdd: vi.fn(),
+      ...overrides,
+    } satisfies RemoteHostsPort;
+    return { remote, unsubscribe };
+  }
+
+  it("answers unavailable for every key on a host with no registry (hostd)", async () => {
+    for (const map of [handlers(), handlers({ remoteHosts: null })]) {
+      const calls: (() => unknown)[] = [
+        () => map["hosts.snapshot"](undefined, WINDOW),
+        () => map["hosts.subscribe"](undefined, WINDOW, sink()),
+        () => map["hosts.retry"]({ hostId: HOST }, WINDOW),
+        () => map["hosts.updateHost"]({ hostId: HOST, when: "now" }, WINDOW),
+        () => map["hosts.cancelScheduledUpdate"]({ hostId: HOST }, WINDOW),
+        () => map["hosts.signIn"]({ hostId: HOST, providerId: "anthropic" }, WINDOW),
+        () => map["hosts.forget"]({ hostId: HOST }, WINDOW),
+        () => map["hostAdd.start"]({ target: "you@box" }, WINDOW),
+        () => map["hostAdd.subscribe"]({ flowId: FLOW }, WINDOW, sink()),
+        () =>
+          map["hostAdd.answer"](
+            { flowId: FLOW, questionId: "q1", answer: { kind: "adopt" } },
+            WINDOW,
+          ),
+        () =>
+          map["hostAdd.sudoPassword"](
+            { flowId: FLOW, questionId: "q1", password: PASSWORD },
+            WINDOW,
+          ),
+        () => map["hostAdd.retry"]({ flowId: FLOW }, WINDOW),
+        () => map["hostAdd.cancel"]({ flowId: FLOW }, WINDOW),
+      ];
+      for (const call of calls) {
+        expect(await unavailable(call)).toBe("Remote hosts are unavailable on this host");
+      }
+    }
+  });
+
+  it("passes each command to the registry, answering null for an effect", async () => {
+    const { remote } = port();
+    const map = handlers({ remoteHosts: remote });
+    expect(await map["hosts.snapshot"](undefined, WINDOW)).toBe(SNAPSHOT);
+    expect(await map["hosts.retry"]({ hostId: HOST }, WINDOW)).toBeNull();
+    expect(await map["hosts.updateHost"]({ hostId: HOST, when: "when-idle" }, WINDOW)).toBeNull();
+    expect(await map["hosts.cancelScheduledUpdate"]({ hostId: HOST }, WINDOW)).toBeNull();
+    expect(await map["hosts.signIn"]({ hostId: HOST, providerId: "anthropic" }, WINDOW)).toBeNull();
+    expect(await map["hosts.forget"]({ hostId: HOST }, WINDOW)).toBeNull();
+    // Only the flow's id crosses: nothing else the registry answered.
+    expect(await map["hostAdd.start"]({ target: "you@box", name: "Box" }, WINDOW)).toEqual({
+      flowId: FLOW,
+    });
+    expect(
+      await map["hostAdd.answer"](
+        { flowId: FLOW, questionId: "q1", answer: { kind: "accept-host-key" } },
+        WINDOW,
+      ),
+    ).toBeNull();
+    expect(
+      await map["hostAdd.sudoPassword"](
+        { flowId: FLOW, questionId: "q1", password: PASSWORD },
+        WINDOW,
+      ),
+    ).toBeNull();
+    expect(await map["hostAdd.retry"]({ flowId: FLOW, from: "install" }, WINDOW)).toBeNull();
+    expect(await map["hostAdd.retry"]({ flowId: FLOW }, WINDOW)).toBeNull();
+    expect(await map["hostAdd.cancel"]({ flowId: FLOW }, WINDOW)).toBeNull();
+
+    expect(remote.retry).toHaveBeenCalledWith(HOST);
+    expect(remote.updateHost).toHaveBeenCalledWith(HOST, "when-idle");
+    expect(remote.cancelScheduledUpdate).toHaveBeenCalledWith(HOST);
+    expect(remote.signIn).toHaveBeenCalledWith(HOST, "anthropic");
+    expect(remote.forget).toHaveBeenCalledWith(HOST);
+    expect(remote.startAdd).toHaveBeenCalledWith({ target: "you@box", name: "Box" });
+    expect(remote.answerAdd).toHaveBeenCalledWith(FLOW, "q1", { kind: "accept-host-key" });
+    expect(remote.sudoPassword).toHaveBeenCalledWith(FLOW, "q1", PASSWORD);
+    expect(remote.retryAdd).toHaveBeenNthCalledWith(1, FLOW, "install");
+    expect(remote.retryAdd).toHaveBeenNthCalledWith(2, FLOW, undefined);
+    expect(remote.cancelAdd).toHaveBeenCalledWith(FLOW);
+  });
+
+  it("feeds each subscription's sink, and answers the registry's unsubscribe", async () => {
+    const { remote, unsubscribe } = port();
+    const map = handlers({ remoteHosts: remote });
+    const hosts = sink();
+    expect(await map["hosts.subscribe"](undefined, WINDOW, hosts)).toBe(unsubscribe);
+    expect(hosts.emit).toHaveBeenCalledWith(SNAPSHOT);
+    const flow = sink();
+    expect(await map["hostAdd.subscribe"]({ flowId: FLOW }, WINDOW, flow)).toBe(unsubscribe);
+    expect(remote.subscribeAdd).toHaveBeenCalledWith(FLOW, expect.any(Function));
+    expect(flow.emit).toHaveBeenCalledWith(EVENT);
+  });
+
+  // v1 refuses an update and a sign-in: the port throws the shared brand, and
+  // every door says `operation-unavailable` with its text.
+  it("keeps the registry's own unavailable answer, message and all", async () => {
+    const { remote } = port({
+      updateHost: () => {
+        throw new OperationUnavailableError(REMOTE_HOST_UPDATE_UNAVAILABLE);
+      },
+    });
+    expect(
+      await unavailable(() =>
+        handlers({ remoteHosts: remote })["hosts.updateHost"](
+          { hostId: HOST, when: "now" },
+          WINDOW,
+        ),
+      ),
+    ).toBe(REMOTE_HOST_UPDATE_UNAVAILABLE);
+  });
+
+  // The sudo password is write-only: an error that names it never leaves the
+  // map with it, whichever kind of error it was.
+  it("scrubs the sudo password from any error the registry answers", async () => {
+    const failing = (error: unknown) =>
+      handlers({
+        remoteHosts: port({
+          sudoPassword: () => {
+            throw error;
+          },
+        }).remote,
+      })["hostAdd.sudoPassword"]({ flowId: FLOW, questionId: "q1", password: PASSWORD }, WINDOW);
+
+    const plain = await Promise.resolve(failing(new Error(`sudo refused ${PASSWORD}!`))).catch(
+      (error: unknown) => error,
+    );
+    expect(plain).toBeInstanceOf(Error);
+    expect(isOperationUnavailable(plain)).toBe(false);
+    expect((plain as Error).message).toBe("sudo refused [redacted]!");
+    expect(JSON.stringify(plain) + String((plain as Error).stack)).not.toContain(PASSWORD);
+
+    expect(
+      await unavailable(() =>
+        failing(new OperationUnavailableError(`${PASSWORD} no cloud ${PASSWORD}`)),
+      ),
+    ).toBe("[redacted] no cloud [redacted]");
+
+    // An error that does not carry it, or is no Error at all, passes as thrown.
+    const clean = new Error("The flow has ended.");
+    await expect(failing(clean)).rejects.toBe(clean);
+    await expect(failing("string failure")).rejects.toBe("string failure");
+    // An empty password names nothing to scrub.
+    const empty = handlers({
+      remoteHosts: port({
+        sudoPassword: () => {
+          throw clean;
+        },
+      }).remote,
+    });
+    await expect(
+      empty["hostAdd.sudoPassword"]({ flowId: FLOW, questionId: "q1", password: "" }, WINDOW),
+    ).rejects.toBe(clean);
+  });
+});
+
 describe("ticket.move, the whole command", () => {
   const SESSION: TicketEventActor = { kind: "session", sessionId: "s-1", ticketId: null };
 
@@ -530,5 +731,33 @@ describe("ticket.move, the whole command", () => {
     const map = handlers({ interruptTicketSessions, worktree: undefined, now: undefined });
     await map["ticket.move"]({ projectId: PROJECT, ticketId: "t-1", toStatus: "todo" }, USER);
     expect(interruptTicketSessions).toHaveBeenCalledWith("t-1");
+  });
+});
+
+describe("the host's log (VC-699)", () => {
+  it("reads a page and follows the ring a host keeps", async () => {
+    const { createLogRing } = await import("../log/ring");
+    const ring = createLogRing();
+    const record = {
+      ts: "2026-10-07T00:00:00.000Z",
+      level: "info",
+      component: "c",
+      msg: "m",
+    } as const;
+    ring.write(record, JSON.stringify(record));
+    const map = handlers({ logs: ring });
+    const page = await map["logs.tail"]({ limit: 5 }, USER);
+    expect(page.entries.map(({ record: { msg } }) => msg)).toEqual(["m"]);
+    const emitted: unknown[] = [];
+    const stop = await map["logs.follow"]({ after: page.cursor }, USER, {
+      emit: (batch) => {
+        emitted.push(batch);
+      },
+      fail: () => undefined,
+    });
+    ring.write({ ...record, msg: "next" }, "{}");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(emitted).toMatchObject([{ entries: [{ record: { msg: "next" } }], gap: false }]);
+    stop();
   });
 });

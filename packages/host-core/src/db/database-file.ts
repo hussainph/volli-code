@@ -51,13 +51,8 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { verifyMigrationBackup } from "./backup-integrity";
-import { BACKUP_RETENTION_LOG_PREFIX } from "./backup-retention";
 import { assertMigrationDiskSpace } from "./disk-preflight";
-import {
-  checkMigrationHistory,
-  describeMigrationHistory,
-  MIGRATION_HISTORY_LOG_PREFIX,
-} from "./migration-history";
+import { checkMigrationHistory, describeMigrationHistory } from "./migration-history";
 import { migrate, SCHEMA_HEAD } from "./migrations";
 import { acquireDatabaseOpenLock } from "./open-lock";
 import {
@@ -73,9 +68,14 @@ import { checkSchemaCompatibility, DatabaseFromNewerVersionError } from "./schem
 import type { SchemaCompatibility } from "./schema-compatibility";
 import { guardTransactionOwnership, logTransactionViolation } from "./transaction-gate";
 import type { TransactionViolationHandler } from "./transaction-gate";
+import { hostLogger } from "../log/root";
 
 // Read-only questions about the fence, for recovery's listing.
 export { hasPendingDatabaseRecovery, recoveryPendingPath };
+
+const log = hostLogger("db");
+/** Rollback-point lines share the retention pass's component: one vocabulary for the copies. */
+const retentionLog = hostLogger("backup-retention");
 
 /** A named point, just before a change to the disk, where a test may stop the operation. */
 export type DatabaseFileStep =
@@ -210,7 +210,7 @@ function checksFullyClean(db: Database.Database, dbPath: string): boolean {
   } catch (caught) {
     error = caught;
   }
-  console.info(BACKUP_RETENTION_LOG_PREFIX, {
+  retentionLog.info("live database integrity checked", {
     action: "checked-live",
     check: "integrity_check",
     name: basename(dbPath),
@@ -306,9 +306,10 @@ function warnOnDivergedHistory(db: Database.Database): void {
     if (report.consistent) return;
     summary = describeMigrationHistory(report);
   } catch (error) {
-    summary = `could not be read: ${String(error)}`;
+    log.warn("migration history could not be read", { error });
+    return;
   }
-  console.warn(`${MIGRATION_HISTORY_LOG_PREFIX}: ${summary}`);
+  log.warn("migration history diverged", { summary });
 }
 
 /**
@@ -393,8 +394,9 @@ export function openVolliDb(
     } else if (abandoned.length > 0) {
       // Usable enough to open, as on any boot, but not proven whole: a
       // pending copy may be the only intact database. Leave it for a person.
-      console.warn(
-        `${BACKUP_RETENTION_LOG_PREFIX} The local database did not pass a full integrity check, so the unpublished safety copies beside it were kept: ${abandoned.join(", ")}. Recover from them if data is missing.`,
+      retentionLog.warn(
+        "live database failed its full integrity check; unpublished safety copies kept",
+        { action: "kept-abandoned", names: abandoned },
       );
     }
     // The free-space preflight (VC-633), while nothing holds the file open for
@@ -424,9 +426,10 @@ export function openVolliDb(
       // or two per commit.
       db.pragma("wal_autocheckpoint = 400");
       if (compatibility?.newer === true) {
-        console.warn(
-          `[volli] database schema ${compatibility.schemaVersion} is newer than this build's ${SCHEMA_HEAD} and declares it compatible; opening without migrating.`,
-        );
+        log.warn("database schema is newer and declares itself compatible; not migrating", {
+          schemaVersion: compatibility.schemaVersion,
+          schemaHead: SCHEMA_HEAD,
+        });
       }
       const migrated = migrate(db, dbPath, { diskChecked: true });
       warnOnDivergedHistory(db);
@@ -596,7 +599,7 @@ function undoPreservation(backupPath: string, family: PreservedFamily): void {
     }
     syncRecoveryPath(dirname(backupPath));
   } catch (error) {
-    console.error(BACKUP_RETENTION_LOG_PREFIX, {
+    retentionLog.error("rollback family preservation failed", {
       action: "failed",
       operation: "preserve",
       name: path,
@@ -642,12 +645,12 @@ function removeAbandonedRollbackCopies(paths: readonly string[]): void {
   for (const path of paths) {
     try {
       unlinkSync(path);
-      console.info(BACKUP_RETENTION_LOG_PREFIX, {
+      retentionLog.info("abandoned rollback copy removed", {
         action: "removed-abandoned",
         name: basename(path),
       });
     } catch (error) {
-      console.error(BACKUP_RETENTION_LOG_PREFIX, {
+      retentionLog.error("abandoned rollback copy removal failed", {
         action: "failed",
         operation: "remove-abandoned",
         name: basename(path),
@@ -710,9 +713,12 @@ export function publishRollbackPoint(
     const quarantinePath = `${stagedPath}.corrupt`;
     try {
       renameSync(stagedPath, quarantinePath);
-      console.error(BACKUP_RETENTION_LOG_PREFIX, { action: "quarantined", name: quarantinePath });
+      retentionLog.error("safety copy failed verification and was quarantined", {
+        action: "quarantined",
+        name: quarantinePath,
+      });
     } catch (quarantineError) {
-      console.error(BACKUP_RETENTION_LOG_PREFIX, {
+      retentionLog.error("safety copy quarantine failed", {
         action: "failed",
         operation: "quarantine",
         name: stagedPath,
@@ -755,7 +761,10 @@ export function publishRollbackPoint(
     });
   }
   if (preserved?.path !== undefined)
-    console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "preserved", name: preserved.path });
+    retentionLog.info("previous rollback family preserved", {
+      action: "preserved",
+      name: preserved.path,
+    });
   return backupPath;
 }
 
@@ -879,7 +888,7 @@ export function restoreDatabaseFile(request: DatabaseFileRestore): DatabaseFileR
     try {
       rmSync(staging, { recursive: true, force: true });
     } catch (error) {
-      console.error("[database file] staging cleanup failed", { staging, error });
+      log.error("staging cleanup failed", { staging, error });
     }
   }
 }
@@ -1082,7 +1091,7 @@ class Swap {
       rmSync(this.request.asideDirectory, { recursive: true, force: true });
       this.createdAside = false;
     } catch (error) {
-      console.error("[database file] set-aside cleanup failed", {
+      log.error("set-aside cleanup failed", {
         asideDirectory: this.request.asideDirectory,
         error,
       });
@@ -1232,7 +1241,7 @@ class Swap {
       try {
         rmSync(asideDirectory, { recursive: true, force: true });
       } catch (error) {
-        console.error("[database file] set-aside cleanup failed", { asideDirectory, error });
+        log.error("set-aside cleanup failed", { asideDirectory, error });
       }
     }
   }

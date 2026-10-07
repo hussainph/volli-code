@@ -342,12 +342,14 @@ describe("createHostCore", () => {
       // No Client is attached: the idle Session releases on its own, and the
       // executor refuses the attach.
       await vi.waitFor(() =>
-        expect(ports.log.error).toHaveBeenCalledWith(
-          "[volli] follow-up queue release failed:",
-          expect.any(String),
-        ),
+        expect(ports.log.error).toHaveBeenCalledWith("follow-up queue release failed", {
+          error: expect.any(Error),
+        }),
       );
-      expect(console).not.toHaveBeenCalledWith("[volli] follow-up queue:", expect.anything());
+      expect(console).not.toHaveBeenCalledWith(
+        expect.stringContaining("follow-up queue"),
+        expect.anything(),
+      );
     } finally {
       await runtime.close();
       console.mockRestore();
@@ -514,10 +516,9 @@ describe("createHostCore", () => {
     }
     // Nothing that needs a database was constructed for it.
     expect(createHostMaintenance).not.toHaveBeenCalled();
-    expect(log.error).toHaveBeenCalledWith(
-      "[volli] failed to open database:",
-      expect.stringContaining("damaged header"),
-    );
+    expect(log.error).toHaveBeenCalledWith("failed to open database", {
+      detail: expect.stringContaining("damaged header"),
+    });
   });
 
   it("refuses client capabilities readably without a client, and hands a client's through", async () => {
@@ -568,10 +569,9 @@ describe("createHostCore", () => {
       supportedVersion: SCHEMA_HEAD,
       minReaderVersion: SCHEMA_HEAD + 1,
     });
-    expect(log.error).toHaveBeenCalledWith(
-      "[volli] failed to open database:",
-      expect.stringContaining(`Database schema ${SCHEMA_HEAD + 1} is newer`),
-    );
+    expect(log.error).toHaveBeenCalledWith("failed to open database", {
+      detail: expect.stringContaining(`Database schema ${SCHEMA_HEAD + 1} is newer`),
+    });
     expect(hash()).toBe(before);
   });
 });
@@ -670,7 +670,8 @@ describe("createHostCore lifecycle", () => {
     close.reject(new Error("late close failure"));
     expect((await stopped).clean).toBe(false);
     expect(log.warn).toHaveBeenCalledExactlyOnceWith(
-      "[volli] follow-up clean-close watermark was not stamped: quit: shutdown deadline expired after 15000ms",
+      "follow-up clean-close watermark was not stamped",
+      { reason: "quit: shutdown deadline expired after 15000ms" },
     );
   });
 
@@ -687,7 +688,8 @@ describe("createHostCore lifecycle", () => {
     expect((await core.stop("SIGTERM")).clean).toBe(false);
     core.warnIfFollowUpCleanCloseSkipped("late deadline");
     expect(log.warn).toHaveBeenCalledExactlyOnceWith(
-      "[volli] follow-up clean-close watermark was not stamped: SIGTERM: close-runtime failed: runtime refused close",
+      "follow-up clean-close watermark was not stamped",
+      { reason: "SIGTERM: close-runtime failed: runtime refused close" },
     );
   });
 
@@ -811,10 +813,10 @@ describe("createHostCore lifecycle", () => {
     trim.resolve();
     expect(await stopping).toEqual({ reason: "quit", clean: false });
     expect(calls.indexOf("trim settled")).toBeLessThan(calls.indexOf("close database"));
-    expect(log.error).toHaveBeenCalledWith(
-      "[volli] host shutdown failed at drain-detached:",
-      expect.any(Error),
-    );
+    expect(log.error).toHaveBeenCalledWith("host shutdown step failed", {
+      step: "drain-detached",
+      error: expect.any(Error),
+    });
   });
 
   it("adopts only the first runtime, and a runtime without socket or request drains", async () => {
@@ -871,12 +873,12 @@ describe("createHostCore lifecycle", () => {
     );
 
     await expect(core.stop("quit")).resolves.toEqual({ reason: "quit", clean: false });
-    expect(log.error).toHaveBeenCalledWith(
-      "[volli] host shutdown failed at close-runtime:",
-      closeFailed,
-    );
+    expect(log.error).toHaveBeenCalledWith("host shutdown step failed", {
+      step: "close-runtime",
+      error: closeFailed,
+    });
     // Detached work's own failure is reported, and never fails the drain.
-    expect(log.error).toHaveBeenCalledWith("[volli] detached work failed:", lost);
+    expect(log.error).toHaveBeenCalledWith("detached work failed", { error: lost });
     expect(log.error).toHaveBeenCalledTimes(2);
     expect(calls.slice(-2)).toEqual(["stop activity", "close database"]);
     expect(core.database.db.open).toBe(false);

@@ -15,7 +15,11 @@ import {
   type DragOverEvent,
   type DragStartEvent,
   type MeasuringConfiguration,
+  KeyboardCode,
+  type KeyboardSensorOptions,
+  type PointerSensorOptions,
 } from "@dnd-kit/core";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { motion } from "motion/react";
 import {
@@ -394,6 +398,22 @@ function DragOverlayBody({
  * (see `TicketDialogHost`); the context menu each card must keep is the rest.
  * This is a cheap correct boundary, not the fix for either.
  */
+const POINTER_DRAG: PointerSensorOptions = { activationConstraint: { distance: 4 } };
+/** A pointer that never travels far enough: a read-only board lifts nothing. */
+const POINTER_NEVER: PointerSensorOptions = {
+  activationConstraint: { distance: Number.POSITIVE_INFINITY },
+};
+const KEYBOARD_DRAG: KeyboardSensorOptions = { coordinateGetter: sortableKeyboardCoordinates };
+/** No key starts a keyboard drag on a read-only board. */
+const KEYBOARD_NEVER: KeyboardSensorOptions = {
+  coordinateGetter: sortableKeyboardCoordinates,
+  keyboardCodes: {
+    start: [],
+    cancel: [KeyboardCode.Esc],
+    end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab],
+  },
+};
+
 export const Board = React.memo(function Board({
   projectId,
   ticketPrefix,
@@ -678,9 +698,15 @@ export const Board = React.memo(function Board({
   // distance: 4 keeps plain clicks (selection, context menu) working — the
   // drag only activates after pointer travel through the browser event
   // pipeline. Keyboard drags come free with the sortable coordinate getter.
+  //
+  // Read-only (VC-576): a move is a write, so no drag can start while the
+  // project's host cannot serve — the same two sensors, set never to
+  // activate (dnd-kit wants the sensor list's size fixed). Cards still open
+  // and select.
+  const canWrite = useCanWrite(projectId);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(PointerSensor, canWrite ? POINTER_DRAG : POINTER_NEVER),
+    useSensor(KeyboardSensor, canWrite ? KEYBOARD_DRAG : KEYBOARD_NEVER),
   );
 
   const tickets = drag?.preview ?? storeTickets;
@@ -1005,6 +1031,9 @@ export const Board = React.memo(function Board({
     frozen.current = null;
     setDrag(null);
     if (drop === null) return;
+    // A drag that began before the host went away lands nowhere; the card
+    // goes back and the reason shows.
+    if (!guardWrite(projectId)) return;
 
     if (completed.ticketIds.length === 1) {
       void useBoardStore
@@ -1140,7 +1169,9 @@ export const Board = React.memo(function Board({
                   panning ? "cursor-grabbing select-none" : "cursor-grab",
                 )}
               >
-                {boardBare ? <BoardEmpty className="min-h-0 flex-1 self-stretch" /> : null}
+                {boardBare ? (
+                  <BoardEmpty projectId={projectId} className="min-h-0 flex-1 self-stretch" />
+                ) : null}
                 {shown.map((status) => (
                   <BoardColumn
                     key={status}

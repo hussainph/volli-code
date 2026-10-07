@@ -17,6 +17,7 @@ import type { TicketSelectionGesture } from "@renderer/components/board/board-se
 import { PriorityIndicator } from "@renderer/components/board/priority-indicator";
 import { TagChip } from "@renderer/components/board/tag-chip";
 import { SortableTicketShell } from "@renderer/components/board/ticket-card";
+import { readOnlyControl } from "@renderer/components/hosts/use-hosts";
 import { useTicketComposer } from "@renderer/components/board/use-ticket-composer";
 import { Badge } from "@renderer/components/ui/badge";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
@@ -256,6 +257,7 @@ function SectionComposer({ projectId, status }: { projectId: string; status: Tic
     return (
       <button
         type="button"
+        {...readOnlyControl(composer.canWrite)}
         onClick={composer.openComposer}
         className="flex h-8 w-full items-center gap-1 px-gutter text-ui text-muted-foreground transition-colors duration-150 ease-out hover:text-foreground"
       >
@@ -359,7 +361,7 @@ export function BoardListView({
     // filter that matched nothing is a report, while a board with no tickets is
     // an invitation (VC-42 audit F6). The columns view draws the same pair.
     return boardEmpty ? (
-      <BoardEmpty className="min-h-0 flex-1" />
+      <BoardEmpty projectId={projectId} className="min-h-0 flex-1" />
     ) : (
       <div className={cn("min-h-0 flex-1", EMPTY_PAGE)}>
         <p className="text-sm text-muted-foreground">No tickets match</p>

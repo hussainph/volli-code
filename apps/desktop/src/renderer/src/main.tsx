@@ -22,11 +22,15 @@ import { desktopNotificationSurface } from "./lib/notification-surface";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import { boot, refreshPlanningData, startBoardProtocolIfEnabled } from "./lib/boot";
+import { installRendererLogForwarding } from "./lib/renderer-log";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
 import { useThemeStore } from "./stores/theme";
+import { useExperimentsStore } from "./stores/experiments";
+import { attachThisMacWhileCloud } from "./stores/host-sources";
+import { attachRemoteHostsWhileCloud } from "./stores/remote-host-source";
 import { useUpdateStore } from "./stores/update";
 import { useWorkspaceStore } from "./stores/workspace";
 import { watchSystemAppearance } from "./theme/canvas-paint";
@@ -37,6 +41,8 @@ import { initTerminalAppearance } from "./terminal/appearance";
 const INTERRUPT_TOAST_DURATION_MS = 8000;
 
 async function main() {
+  // This window's warnings and errors join main's log (VC-699).
+  installRendererLogForwarding();
   const root = createRoot(document.getElementById("root")!);
 
   // Kick off the Ghostty-config fetch immediately, CONCURRENT with boot() —
@@ -196,6 +202,15 @@ async function main() {
     .catch(() => {
       // A failed boot read leaves the icon unrendered; the next push heals it.
     });
+
+  // The host's experiment flags (VC-576): what flagged surfaces such as the
+  // title bar's host chip read. Off until the answer lands; a failure stays off.
+  void useExperimentsStore.getState().ensure();
+  // This Mac, the in-process host, feeds the host-connection store while
+  // `cloud` is on, and nothing is attached while it is off; VC-700's registry
+  // attaches remote hosts beside it. Only flagged surfaces read it.
+  attachThisMacWhileCloud();
+  attachRemoteHostsWhileCloud();
 
   // Main owns one durable armed-column countdown per move (VC-226). Subscribe
   // before priming so a window opened mid-countdown cannot miss a replacement

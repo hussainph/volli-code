@@ -104,14 +104,20 @@ afterEach(() => {
 describe("createSessionRpcClient", () => {
   // The link itself is `@volli/host-protocol/ipc`'s, tested there; this is the
   // renderer's typing of it over the preload door.
-  it("routes a typed call over the bridge as a path, a type and its input", async () => {
+  it("routes a typed call over the bridge as a path, a type, its input and its trace", async () => {
     const bridge = fakeBridge();
     const client = createSessionRpcClient(bridge);
 
     const answer = client.session.projection.query({ sessionId: "session-1" });
     await flush();
     expect(bridge.requests).toEqual([
-      { path: "session.projection", type: "query", input: { sessionId: "session-1" } },
+      {
+        path: "session.projection",
+        type: "query",
+        input: { sessionId: "session-1" },
+        // A fresh trace when the caller names none (VC-699).
+        trace: { traceId: expect.stringMatching(/^[0-9a-f]{32}$/u), spanId: expect.any(String) },
+      },
     ]);
     bridge.reply({ ok: true, data: { projection: {}, throughSequence: 4 } });
     await expect(answer).resolves.toEqual({ projection: {}, throughSequence: 4 });

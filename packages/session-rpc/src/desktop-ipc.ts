@@ -82,6 +82,10 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "session.editQueued": "ipc",
   "session.cancelInteraction": "ipc",
   "session.reconcile": "ipc",
+  // This Mac's own log (VC-699): the dev log viewer's local stream, the same
+  // `host.logs` operations a remote host serves over the WebSocket.
+  "logs.tail": "ipc",
+  "logs.follow": "ipc",
   "session.list": "websocket-only",
   "session.show": "websocket-only",
   "session.peek": "websocket-only",
@@ -133,6 +137,19 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // The desktop-only tier: the window's by definition (`DESKTOP_ENTRIES`).
   "project.reorder": "ipc",
   "worktree.trimSettings": "ipc",
+  "hosts.snapshot": "ipc",
+  "hosts.subscribe": "ipc",
+  "hosts.retry": "ipc",
+  "hosts.updateHost": "ipc",
+  "hosts.cancelScheduledUpdate": "ipc",
+  "hosts.signIn": "ipc",
+  "hosts.forget": "ipc",
+  "hostAdd.start": "ipc",
+  "hostAdd.subscribe": "ipc",
+  "hostAdd.answer": "ipc",
+  "hostAdd.sudoPassword": "ipc",
+  "hostAdd.retry": "ipc",
+  "hostAdd.cancel": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

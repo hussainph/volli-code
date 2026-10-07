@@ -10,7 +10,9 @@
  */
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { displayTicketId, errorMessage } from "@volli/shared";
+import { displayTicketId } from "@volli/shared";
+import type { Logger } from "./log/logger";
+import { hostLogger } from "./log/root";
 import { getProjectById } from "./db/projects-repo";
 import { getTicket, getTicketRow } from "./db/tickets-repo";
 import {
@@ -62,12 +64,15 @@ import {
 } from "./automations/schedule-cursor";
 import type { HostEventBus } from "./ports/events";
 
+/** Armed countdowns run detached; their failures are written here, never surfaced. */
+const armedLog = hostLogger("armed-runs");
+
 /** What the module is built from: a live database and the host's own ports. */
 export interface HostAutomationsInput {
   readonly db: Database.Database;
   readonly events: HostEventBus;
   /** Where a failed recovery or scheduler start is reported; neither is surfaced. */
-  readonly log: Pick<Console, "error">;
+  readonly log: Pick<Logger, "error">;
   /** Present only when a model host booted; the service checks runtime pins with it. */
   readonly inspectModelAccess?: AutomationServicePorts["inspectModelAccess"];
 }
@@ -232,7 +237,7 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
       onPendingChanged: (armed) => events.publish("pending-armed-runs-changed", armed),
       onSettled: (notice) => events.publish("pending-armed-run-settled", notice),
-      log: (message) => console.error(message),
+      log: armedLog.error,
     });
   }
 
@@ -301,15 +306,11 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       if (armedRunner === null) return;
       recovery = armedRunner
         .recover()
-        .catch((error: unknown) =>
-          log.error(`[volli] automation recovery failed: ${errorMessage(error)}`),
-        );
+        .catch((error: unknown) => log.error("automation recovery failed", { error }));
       scheduler = createScheduler(armedRunner);
       void scheduler
         .start()
-        .catch((error: unknown) =>
-          log.error(`[volli] automation scheduler could not start: ${errorMessage(error)}`),
-        );
+        .catch((error: unknown) => log.error("automation scheduler could not start", { error }));
     },
     stop() {
       stopped = true;

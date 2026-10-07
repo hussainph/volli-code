@@ -393,11 +393,13 @@ describe("headless runtime ownership", () => {
     expect(runtime).toBe(f.runtime);
     expect(directory).toBe("/tree");
     expect(deps.newCommandId()).toMatch(/^[0-9a-f-]{36}$/);
-    deps.onError("s", new Error("refused"));
-    expect(f.log.error).toHaveBeenCalledWith(
-      "[volli] could not release Session s from /tree:",
-      "refused",
-    );
+    const refused = new Error("refused");
+    deps.onError("s", refused);
+    expect(f.log.error).toHaveBeenCalledWith("could not release session from directory", {
+      sessionId: "s",
+      directory: "/tree",
+      error: refused,
+    });
   });
   it("supplies busy Sessions and background shells, and fails closed on unreadable activity", async () => {
     const f = fixture();

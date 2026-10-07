@@ -2,9 +2,11 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync, readdirSync, renameSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import type { Logger } from "../log/logger";
+import { hostLogger } from "../log/root";
 import { verifyMigrationBackup } from "./backup-integrity";
 
-export const BACKUP_RETENTION_LOG_PREFIX = "[migration backup retention]";
+const log = hostLogger("backup-retention");
 
 export type BackupSizeBytes = number | "unknown";
 
@@ -287,18 +289,18 @@ export function pruneMigrationBackups(
 
 export function logMigrationBackupRetention(
   report: BackupRetentionReport,
-  logger: Pick<Console, "info" | "error"> = console,
+  logger: Pick<Logger, "info" | "error"> = log,
 ): void {
   for (const entry of report.kept) {
-    logger.info(BACKUP_RETENTION_LOG_PREFIX, { action: "kept", ...entry });
+    logger.info("migration backup kept", { action: "kept", ...entry });
   }
   for (const entry of report.removed) {
-    logger.info(BACKUP_RETENTION_LOG_PREFIX, { action: "removed", ...entry });
+    logger.info("migration backup removed", { action: "removed", ...entry });
   }
   for (const entry of report.quarantined) {
-    logger.error(BACKUP_RETENTION_LOG_PREFIX, { action: "quarantined", ...entry });
+    logger.error("migration backup quarantined", { action: "quarantined", ...entry });
   }
   for (const failure of report.failed) {
-    logger.error(BACKUP_RETENTION_LOG_PREFIX, { action: "failed", ...failure });
+    logger.error("migration backup retention failed", { action: "failed", ...failure });
   }
 }

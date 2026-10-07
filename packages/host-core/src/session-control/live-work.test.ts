@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { captureHostLog } from "../testing/log";
 
 import { createHostLiveWork, hasLiveWork, NO_LIVE_WORK, turnActiveAfter } from "./live-work";
 
@@ -106,15 +107,21 @@ describe("host live work (VC-577)", () => {
     expect(heard).not.toHaveBeenCalled();
   });
 
-  it("defaults its diagnostics to console.warn", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("defaults its diagnostics to the host log", () => {
+    const captured = captureHostLog();
     const live = createHostLiveWork({ openSessionIds: () => new Set(["a"]) });
     live.subscribe(() => {
       throw new Error("loud");
     });
     live.observeSession(fold("a", true));
-    expect(warn).toHaveBeenCalledWith("[volli] live work:", expect.any(Error));
-    warn.mockRestore();
+    expect(captured.of("live-work")).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        msg: "live work listener failed",
+        error: expect.objectContaining({ message: "loud" }),
+      }),
+    ]);
+    captured.restore();
   });
 
   describe("committed facts (VC-577)", () => {

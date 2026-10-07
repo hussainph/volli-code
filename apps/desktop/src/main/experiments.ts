@@ -11,6 +11,9 @@ import {
 } from "@volli/shared";
 
 import { getAppState, setAppState, withTransaction } from "@volli/host-core/db";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("experiments");
 
 /** Host-level settings, not workspace data; classification lives beside the registry. */
 export const EXPERIMENTS_APP_STATE_KEY = "volli:experimental-flags";
@@ -32,9 +35,7 @@ export class ExperimentalSettings {
     const parsed = parseExperimentEnvironment(environment);
     this.#environment = parsed.ids;
     if (parsed.unknownIds.length > 0) {
-      console.warn(
-        `[volli] Ignoring unknown VOLLI_EXPERIMENTAL ids: ${parsed.unknownIds.join(", ")}`,
-      );
+      log.warn("ignoring unknown VOLLI_EXPERIMENTAL ids", { ids: parsed.unknownIds });
     }
     this.#stored = readStoredExperiments(
       db === null ? undefined : getAppState(db, EXPERIMENTS_APP_STATE_KEY),

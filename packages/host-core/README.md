@@ -63,6 +63,7 @@ Everything else is an implementation detail.
 | `@volli/host-core/sessions`        | `session-control/`, `sessions/`, `session-concurrency.ts`, `session-tokens.ts`                                                                                                                                                                                                                                                                                                                                              | Listing rows, peek content, the concurrency env reader, Session tokens. Never a Session writer ([Session composition](#session-composition))                     |
 | `@volli/host-core/session-runtime` | `session-runtime/`, `shell/`, `model-access/`, `host-sign-ins/`, `decision/`, `session-env.ts`, `pi-session-orphans.ts`, `pi-tool-output.ts`, `verb-input.ts`                                                                                                                                                                                                                                                               | The staged runtime: assembly, facade, agents, Automations adapter, lifecycle; model access preferences; sign-ins on a host; background shells                    |
 | `@volli/host-core/integrations`    | `mcp/`, `codemode/`, `web/`, `observability/`                                                                                                                                                                                                                                                                                                                                                                               | MCP settings and dispatch, Code Mode config and sandbox assets, Web Access, the observability sink and exporters                                                 |
+| `@volli/host-core/log`             | `log/`                                                                                                                                                                                                                                                                                                                                                                                                                      | The structured log: `hostLogger`, `installHostLog`, the trace context (`withTrace`, `withLogContext`) and the sinks ([The log](#the-log))                        |
 | `@volli/host-core/files`           | `volli-fs.ts`, `file-search.ts`, `file-services.ts`, `blob-*.ts`, `turn-attachments.ts`, `prompt-templates.ts`, `skills.ts`                                                                                                                                                                                                                                                                                                 | File reads/writes/watches, search, blobs, templates, skills. Their result types are `@volli/shared` wire types                                                   |
 | `@volli/host-core/worktree`        | `worktree/`, `worktree-runtime.ts`, `credential-helper-diagnostics.ts`                                                                                                                                                                                                                                                                                                                                                      | Git, ensure/trim/remove, snapshots, activity, the cleanup engine and leases                                                                                      |
 | `@volli/host-core/board`           | `board/`, `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                                                 | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes, [the Board module](#the-board-module)'s feed and receipts                 |
@@ -252,6 +253,46 @@ IPC doors and their integration tests (`main/volli-fs-ipc.ts`,
 protocol registration, native external-app launch, pickers and dialogs, and
 Web Access's legacy `safeStorage` migration. A desktop test that still composes
 desktop modules stays in desktop and imports host-core's entries.
+
+## The log
+
+One structured, correlated log (VC-699; HP § Tracing and logs). A module
+takes a logger for its component at module scope and writes identifiers and
+counts:
+
+```ts
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("publish");
+log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or a secret
+```
+
+- **The host installs the destination, once** (`installHostLog({ level, sink })`):
+  hostd's JSON lines on stdout, the desktop's rotating files. Before any
+  install (tests, benches, scripts) lines go to the console at `warn`, or
+  `VOLLI_LOG_LEVEL`.
+- **Every line is redacted** (`redactLogFields`, `@volli/shared`): credential-named
+  fields lose any value but a count, and strings lose credential-shaped text.
+- **Correlation is ambient, for a request's own chain.** A door opens
+  `withTrace(peerTrace, { door, … }, handle)` per request; code deeper in adds
+  what it knows with `withLogContext({ sessionId })`. Lines carry both without a
+  parameter threaded through.
+- **Background work never inherits it.** Anything long-lived a request starts
+  (an executor's attachment, a listener, an interval) starts detached with
+  `withRootLogContext({ sessionId, … })`, and joins a trace only by identifier
+  (`log/correlation`: a command's trace, a turn's trace). The Session runtime's
+  executor is wrapped so (`correlatedExecutor`). A line with no such join
+  carries its ids and no trace.
+- **Generic doors log error summaries** (`logErrorSummary`: class name and
+  code), never an error's message.
+- **Cheap, and never fatal.** The level check runs before anything is built;
+  the file sink only queues on the caller's stack, and a disk failure disables
+  it with one warning.
+- **No bare console.** Production code in host-core and Electron main logs only
+  through a host logger; `src/log/no-console.test.ts` (and its twin in
+  `apps/desktop/src/main/log/`) fails on a `console.*` call outside tests and
+  the log module itself. A seam that takes a log function takes the logger's
+  `(msg, fields)` shape, never `Pick<Console, …>`.
 
 ## Ports
 
@@ -789,6 +830,11 @@ any legacy IPC channel that still serves a catalog command. `HostHandlers` is
 total over both tiers' keys, so a missing handler fails `pnpm typecheck`; a
 service a host lacks makes its handlers throw `OperationUnavailableError`
 rather than leaving a hole.
+
+Desktop main also passes `remoteHosts` (`RemoteHostsPort`,
+`handlers/remote-hosts-port.ts`, VC-700): its registry of hosts added over
+SSH, behind the desktop-only `hosts.*` and `hostAdd.*` keys. hostd passes
+none, so those answer unavailable there.
 
 The map it returns is sealed (`HostHandlerMap`, `handlers/handler-map.ts`):
 no entry is callable. A door reaches one only through

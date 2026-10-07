@@ -7,7 +7,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { HostedSessionRuntime } from "@volli/session-engine";
-import { errorMessage, type SessionProjection, type SessionExecutionVenue } from "@volli/shared";
+import type { SessionProjection, SessionExecutionVenue } from "@volli/shared";
 import { isLiveHost, type HostCore, type HostCorePorts } from "../index";
 import { shutdownNativeSessions } from "../host-shutdown";
 import { wireSessionRuntime } from "../session-services";
@@ -30,6 +30,9 @@ import { createHostNoticeDelivery } from "./durable-host-notice-delivery";
 import { catchUpSessionResumptions } from "./session-resumptions";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { Delegations } from "./delegate-session";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-lifecycle");
 
 /**
  * How long host readiness waits for the startup follow-up release sweep
@@ -124,7 +127,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
                 subscribeEvents: (listener) =>
                   sessionWakeBus.subscribe(({ event }) => listener(event)),
               }),
-          report: (message) => ports.log.error(`[volli] ${message}`),
+          report: (message) => ports.log.error("host notice delivery failed", { detail: message }),
         });
   const relay =
     runtime === null || notices === null
@@ -132,7 +135,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       : relayShellNotices({
           runtime,
           delivery: notices,
-          report: (message) => ports.log.error(`[volli] ${message}`),
+          report: (message) => ports.log.error("shell notice relay failed", { detail: message }),
         });
   const suspendClock =
     runtime !== null && sessionEngine !== null ? createSuspendClock(ports.power) : null;
@@ -203,10 +206,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       // Compare before recovery itself can append events. A present watermark
       // is consumed in the same transaction that refuses any stale queued rows.
       held = consumeFollowUpCleanClose(database.db, (sessionId, error) =>
-        ports.log.error(
-          `[volli] unreadable follow-up queue for ${sessionId}:`,
-          errorMessage(error),
-        ),
+        ports.log.error("unreadable follow-up queue", { sessionId, error }),
       );
       try {
         await closeStaleAttachments({
@@ -226,13 +226,10 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           newId: randomUUID,
           now: Date.now,
           onError: (attachmentId, error) =>
-            ports.log.error(
-              `[volli] failed to recover attachment ${attachmentId}:`,
-              errorMessage(error),
-            ),
+            ports.log.error("failed to recover attachment", { attachmentId, error }),
         });
       } catch (error) {
-        ports.log.error("[volli] failed to recover stale attachments:", errorMessage(error));
+        ports.log.error("failed to recover stale attachments", { error });
       }
       if (delegation !== null && !closing) {
         try {
@@ -242,13 +239,16 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           if (unanswered.length > 0) {
             const recovered = await delegateHost?.recover(unanswered);
             if (recovered !== undefined) {
-              console.log(
-                `[volli] recovered ${unanswered.length} delegation(s): ${recovered.answered} answered, ${recovered.reported} reported, ${recovered.skipped} skipped`,
-              );
+              log.info("delegations recovered", {
+                unanswered: unanswered.length,
+                answered: recovered.answered,
+                reported: recovered.reported,
+                skipped: recovered.skipped,
+              });
             }
           }
         } catch (error) {
-          ports.log.error("[volli] failed to recover delegations:", errorMessage(error));
+          ports.log.error("failed to recover delegations", { error });
         }
       }
     }
@@ -264,7 +264,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
           detail: FOLLOW_UP_DOWNGRADE_HOLD_DETAIL,
         });
       } catch (error) {
-        ports.log.error("[volli] failed to explain held follow-ups:", errorMessage(error));
+        ports.log.error("failed to explain held follow-ups", { sessionId, error });
       }
     }
     if (runtime !== null) await recoverFollowUps(runtime);
@@ -273,7 +273,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
     try {
       await notices?.recover();
     } catch (error) {
-      ports.log.error("[volli] failed to recover host notices:", errorMessage(error));
+      ports.log.error("failed to recover host notices", { error });
     }
     if (closing)
       throw new SessionRuntimeClosingError("The Session runtime closed during recovery.");
@@ -282,8 +282,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         if (closing) return;
         const work = catchUpSessionResumptions(database.db, sessionEngine, {
           publish: (change) => ports.events.publish("data-changed", change),
-          report: (error) =>
-            ports.log.error("[volli] failed to catch up Session resumptions:", errorMessage(error)),
+          report: (error) => ports.log.error("failed to catch up session resumptions", { error }),
         });
         liveHost?.detachedWork.track(work);
       });
@@ -316,7 +315,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
   async function recoverFollowUps(hosted: HostedSessionRuntime): Promise<void> {
     const waitMs = options.followUpRecoveryWaitMs ?? FOLLOW_UP_RECOVERY_READY_WAIT_MS;
     const sweep = hosted.recoverFollowUps().catch((error: unknown) => {
-      ports.log.error("[volli] failed to recover queued follow-ups:", errorMessage(error));
+      ports.log.error("failed to recover queued follow-ups", { error });
     });
     followUpRecovery = sweep;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -327,7 +326,8 @@ export function createSessionRuntimeLifecycle<Services>(options: {
       const finished = await Promise.race([sweep.then(() => true), bound, closed.promise]);
       if (!finished && !closing) {
         ports.log.warn(
-          `[volli] queued follow-up recovery is still running after ${waitMs}ms; the host is ready and release continues in the background.`,
+          "queued follow-up recovery is still running; the host is ready and release continues in the background",
+          { waitMs },
         );
       }
     } finally {
@@ -359,7 +359,7 @@ export function createSessionRuntimeLifecycle<Services>(options: {
         },
         (error: unknown) => {
           if (error instanceof SessionRuntimeClosingError) return;
-          ports.log.error("[volli] failed to ready a shell notice:", errorMessage(error));
+          ports.log.error("failed to ready a shell notice", { error });
         },
       );
     },

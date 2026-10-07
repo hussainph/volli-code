@@ -14,6 +14,9 @@ import {
 } from "./index";
 import { CREDENTIAL_LOCK_ASYNC_TIMEOUT_MS } from "./credential-lock";
 import { waitForCredentialRead } from "./credential-wait";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("secrets");
 export type { CredentialStatus, SecretWaitPublisher } from "./index";
 /** The credential door's answers are client wire vocabulary (`@volli/shared`, VC-632). */
 export type { CredentialsResult, SecretsResult } from "@volli/shared";
@@ -206,7 +209,7 @@ export class SecretService {
     );
     if (!synced) {
       // The move happened; only its durability across a power cut is unknown.
-      console.warn("[volli] saved secrets were set aside, but the directory could not be synced");
+      log.warn("saved secrets were set aside, but the directory could not be synced");
     }
     return { ok: true, credentials: status };
   }

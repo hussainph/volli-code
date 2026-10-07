@@ -17,7 +17,15 @@ import { runCredentialsReset } from "./credentials";
 import { readAll, runGitCredential } from "./git-credential";
 import { runDatabaseRestore } from "./database";
 import { lookupSystemUser, runOperatorToken, writeTokenAsUser } from "./operator-token";
-import { createJsonLogger, logLevelFrom, routeConsole, type HostdLogger } from "./log";
+import {
+  createLogRing,
+  hostLogger,
+  installHostLog,
+  jsonLineSink,
+  teeSinks,
+} from "@volli/host-core/log";
+
+import { logLevelFrom, routeConsole, type HostdLogger } from "./log";
 import { startHostd, type RunningHostd } from "./hostd";
 import { checkStatus, LIVE_PROBES, statusExitCode } from "./status";
 import { headlessRuntimePaths } from "./runtime-paths";
@@ -55,11 +63,22 @@ const LIVE_RUN_TOOL: RunTool = (tool, args) => {
 /** Past this, a stop that has not finished is abandoned and the process exits 1. */
 const SHUTDOWN_DEADLINE_MS = 30_000;
 
+/** The host's recent log (VC-699): what `host.logs` reads. */
+const logRing = createLogRing();
+
 async function main(): Promise<number> {
-  const logger = createJsonLogger({
+  // One destination for every line this process writes: hostd's own and
+  // every host-core module's, JSON on stdout for the journal (VC-699).
+  // The recent lines stay in memory too, bounded, for `host.logs`: an
+  // operator's desktop reads them over the host protocol without SSH.
+  installHostLog({
     level: logLevelFrom(process.env["VOLLI_HOSTD_LOG_LEVEL"]),
-    write: (line) => process.stdout.write(line),
+    sink: teeSinks(
+      jsonLineSink((line) => process.stdout.write(line)),
+      logRing,
+    ),
   });
+  const logger = hostLogger("hostd");
   let command;
   try {
     command = parseHostdArgs(process.argv.slice(2), process.cwd());
@@ -284,6 +303,7 @@ async function serve(
       version: HOSTD_VERSION,
       env: process.env,
       logger,
+      logRing,
       runtime: headlessRuntimePaths(__dirname, socketPath),
     });
   } catch (error) {

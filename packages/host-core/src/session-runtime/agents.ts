@@ -1,6 +1,6 @@
 /** Private recovery staging; public tools and watches require recovered services. */
-import { errorMessage } from "@volli/shared";
 import { isLiveHost, type HostCore } from "../index";
+import type { Logger } from "../log/logger";
 import type { HostEventBus } from "../ports/events";
 import { getProjectAuthorityPolicy, listProjects } from "../db/projects-repo";
 import { listAutomationsForProject } from "../db/automations-repo";
@@ -24,7 +24,7 @@ export interface RuntimeSessionAgentOptions {
   automations: ReturnType<typeof createRuntimeAutomations>;
   mcpSettings: McpSettingsService | null;
   events: HostEventBus;
-  log: Pick<Console, "error">;
+  log: Pick<Logger, "error">;
 }
 
 export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) {
@@ -79,10 +79,10 @@ export function createRuntimeSessionAgents(options: RuntimeSessionAgentOptions) 
         const work = created
           .rearm(entry, { turnId: payload.turnId, afterSequence: wake.event.sequence })
           .catch((error: unknown) => {
-            options.log.error(
-              `[volli] could not re-arm the notice for resumed subagent ${entry.childSessionId}:`,
-              errorMessage(error),
-            );
+            options.log.error("could not re-arm the notice for a resumed subagent", {
+              childSessionId: entry.childSessionId,
+              error,
+            });
           });
         liveHost?.detachedWork.track(work);
       });

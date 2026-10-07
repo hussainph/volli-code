@@ -132,10 +132,10 @@ describe("host Session composition", () => {
     vi.spyOn(engine, "getSession").mockRejectedValue(failure);
     services.sessionReadWatch!.observeFocused(new Set([sessionId]));
     await vi.waitFor(() =>
-      expect(sinks.log.warn).toHaveBeenCalledWith(
-        `[volli] could not publish the read row of ${sessionId}:`,
-        failure,
-      ),
+      expect(sinks.log.warn).toHaveBeenCalledWith("could not publish the session's read row", {
+        sessionId,
+        error: failure,
+      }),
     );
   });
 
@@ -232,7 +232,7 @@ describe("host Session composition", () => {
       throw failure;
     });
     services.liveWork.observeShell({ shellId: "shell", state: "running" });
-    expect(sinks.log.warn).toHaveBeenCalledWith("[volli] live work:", failure);
+    expect(sinks.log.warn).toHaveBeenCalledWith("live work listener failed", { error: failure });
   });
 
   it("folds with nothing open and nothing scheduled until the runtime wires each in", async () => {

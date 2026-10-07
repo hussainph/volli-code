@@ -52,6 +52,7 @@ import {
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import { hostLogger } from "../log/root";
 import { deleteComment, getComment, listComments, updateComment } from "../db/comments-repo";
 import { listTicketEvents, listTicketStatusEntries } from "../db/events-repo";
 import { getLabel, listLabelsByProject, listTicketLabels, setLabelColor } from "../db/labels-repo";
@@ -96,6 +97,8 @@ import { getWorktreeSnapshots } from "../worktree/snapshot";
 import type { WorktreePorts } from "../worktree/types";
 import type { BoardChangeFeed, BoardFeedBatch } from "./change-feed";
 import { recordBoardCommand, replayBoardCommand, replayOrphanedBoardCommand } from "./receipts";
+
+const boardLog = hostLogger("board");
 
 /** A write's optional idempotency key: the board router always sends one, legacy IPC never. */
 export interface BoardCommandId {
@@ -534,7 +537,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     try {
       removeTicketToolOutput(db, options.piSessionsDirectory, ticketId);
     } catch (error) {
-      console.warn(`[volli] Could not remove ticket ${ticketId}'s saved tool output:`, error);
+      boardLog.warn("could not remove a ticket's saved tool output", { ticketId, error });
     }
   };
 

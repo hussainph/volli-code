@@ -807,10 +807,10 @@ describe("ticket writes", () => {
       WINDOW,
     );
     expect(answer).toEqual({ receipt: null, throughCursor: expect.any(String) });
-    expect(warn).toHaveBeenCalledWith(
-      "[volli] Could not remove ticket t-1's saved tool output:",
-      failure,
-    );
+    expect(warn).toHaveBeenCalledWith("[board] could not remove a ticket's saved tool output", {
+      ticketId: "t-1",
+      error: expect.objectContaining({ name: "Error", message: "disk gone" }),
+    });
     expect(getTicketRow(ctx.db, "t-1")?.archived_at).toBe(50);
     expect(published()).toEqual([]);
   });

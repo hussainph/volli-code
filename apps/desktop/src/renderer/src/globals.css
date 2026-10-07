@@ -1932,3 +1932,17 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-size: 24px 24px;
   mask-image: radial-gradient(ellipse 76% 62% at 50% 48%, black 0%, transparent 78%);
 }
+
+/* A write control standing down while its project's host cannot serve
+ * (VC-576; the lab's #host-health read-only staging): greyed AND desaturated,
+ * so a primary orange "New ticket" reads as off, not as a quieter orange.
+ * Unlayered so it outranks a component's own `disabled:opacity-*`. The
+ * control is also `disabled`; the submission behind it re-checks. */
+[data-host-read-only] {
+  opacity: 0.4;
+  filter: saturate(0);
+  pointer-events: none;
+  transition:
+    opacity 200ms var(--ease-out),
+    filter 200ms var(--ease-out);
+}

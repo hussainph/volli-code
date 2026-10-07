@@ -2,6 +2,9 @@ import type { DatabaseOpenFault } from "../ipc/contract";
 import { DatabaseRecovery, NO_CLEAN_BACKUP, RecoveryFailure } from "@volli/host-core/maintenance";
 import { DATABASE_RECOVERY_IPC } from "./ipc-descriptors";
 import { registerGuardedIpcHandlers } from "./ipc-registry";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("database-recovery");
 
 export function registerDatabaseRecoveryIpcHandlers(options: {
   recovery: DatabaseRecovery;
@@ -40,7 +43,7 @@ export function registerDatabaseRecoveryIpcHandlers(options: {
       try {
         return { ok: true, backups: recovery.list() };
       } catch (error) {
-        console.error("[database recovery] could not list safety copies", error);
+        log.error("could not list safety copies", { error });
         return {
           ok: false,
           error:
@@ -54,7 +57,7 @@ export function registerDatabaseRecoveryIpcHandlers(options: {
       try {
         restoredBackup = recovery.restore();
       } catch (error) {
-        console.error("[database recovery] restore unavailable", error);
+        log.error("restore unavailable", { error });
         return {
           ok: false,
           error:

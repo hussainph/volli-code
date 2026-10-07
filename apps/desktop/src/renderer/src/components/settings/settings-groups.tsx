@@ -18,11 +18,13 @@ import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
+import { ListMagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/ListMagnifyingGlass";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
 import { EXPERIMENTS, MODEL_TIER_ROWS } from "@volli/shared";
 
+import { LogViewer } from "@renderer/components/logs/log-viewer";
 import { AgentObservabilitySettings } from "@renderer/components/pages/agent-observability-settings";
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import { ExperimentalSettings } from "@renderer/components/pages/experimental-settings";
@@ -61,7 +63,18 @@ export function resolveSettingsCategory(key: string | undefined): string | undef
   return key;
 }
 
-export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] {
+export interface SettingsGroupsOptions {
+  /**
+   * Shows System → Logs, the end-to-end log viewer (VC-699): dev builds, and
+   * product builds with the `cloud` experiment on (`useLogViewerEnabled`).
+   */
+  readonly logs?: boolean;
+}
+
+export function settingsGroups(
+  signInProviderId?: string,
+  options: SettingsGroupsOptions = {},
+): readonly PrefGroup[] {
   return [
     {
       key: "preferences",
@@ -326,6 +339,29 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
           ],
           content: <AgentObservabilitySettings />,
         },
+        ...(options.logs === true
+          ? [
+              {
+                key: "logs",
+                label: "Logs",
+                icon: ListMagnifyingGlassIcon,
+                // One stream wants the whole width.
+                fill: true,
+                keywords: [
+                  "log",
+                  "logs",
+                  "trace",
+                  "trace id",
+                  "debug",
+                  "host",
+                  "hosts",
+                  "jsonl",
+                  "export",
+                ],
+                content: <LogViewer />,
+              },
+            ]
+          : []),
         {
           key: "experimental",
           label: "Experimental",

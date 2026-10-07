@@ -202,7 +202,7 @@ describe("person-only secret request service", () => {
     try {
       expect(await service.reset()).toEqual({ ok: true, credentials: status });
       expect(warn).toHaveBeenCalledWith(
-        "[volli] saved secrets were set aside, but the directory could not be synced",
+        "[secrets] saved secrets were set aside, but the directory could not be synced",
       );
     } finally {
       warn.mockRestore();

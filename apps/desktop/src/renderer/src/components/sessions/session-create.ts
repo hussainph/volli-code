@@ -11,6 +11,7 @@
  */
 import { errorMessage, type HarnessId, type ModelSelection, type Project } from "@volli/shared";
 
+import { guardWrite } from "@renderer/components/hosts/use-hosts";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
@@ -178,6 +179,8 @@ async function bootSession(
   kickoff?: SessionKickoff,
   resume?: SessionResume,
 ): Promise<string | null> {
+  // Terminals too: a new or resumed Session is a write to the project's host.
+  if (!guardWrite(scope.projectId)) return null;
   return underOwnerGuard(scope, terminalStarting, async (project) => {
     try {
       const result = await window.api.terminal.create(
@@ -531,6 +534,9 @@ export async function bootChatSession(
   scope: SessionScope,
   { skills, title, model, land, createsSessionNow = false, autoSelect }: ChatBoot,
 ): Promise<string | null> {
+  // Every chat door — the strips, an empty pane, ⌘T, a kickoff — comes through
+  // here. A project whose host cannot serve (VC-576) starts none, and says why.
+  if (!guardWrite(scope.projectId)) return null;
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
       if (!createsSessionNow) {

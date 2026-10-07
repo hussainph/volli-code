@@ -18,9 +18,9 @@ describe("the desktop's IPC exposure", () => {
   });
 
   // Unchanged by VC-608: the window reaches what it reached before the bridge
-  // became router-generic, the board router VC-565 serves beside it, and the
-  // desktop-only tier.
-  it("serves the window its Session, settings, Model Access and board procedures, and the desktop-only tier", () => {
+  // became router-generic, the board router VC-565 serves beside it, this
+  // Mac's own log (VC-699), and the desktop-only tier.
+  it("serves the window its Session, settings, Model Access, own-log and board procedures, and the desktop-only tier", () => {
     expect(Object.isFrozen(DESKTOP_IPC_PATHS)).toBe(true);
     expect(DESKTOP_IPC_PATHS).toEqual([
       "settings.experiments",
@@ -47,6 +47,8 @@ describe("the desktop's IPC exposure", () => {
       "session.editQueued",
       "session.cancelInteraction",
       "session.reconcile",
+      "logs.tail",
+      "logs.follow",
       // The board (VC-565): what the window reads and writes with `cloud` on.
       "board.snapshot",
       "board.roster",
@@ -76,6 +78,19 @@ describe("the desktop's IPC exposure", () => {
       "board.setLabelColor",
       "project.reorder",
       "worktree.trimSettings",
+      "hosts.snapshot",
+      "hosts.subscribe",
+      "hosts.retry",
+      "hosts.updateHost",
+      "hosts.cancelScheduledUpdate",
+      "hosts.signIn",
+      "hosts.forget",
+      "hostAdd.start",
+      "hostAdd.subscribe",
+      "hostAdd.answer",
+      "hostAdd.sudoPassword",
+      "hostAdd.retry",
+      "hostAdd.cancel",
     ]);
   });
 

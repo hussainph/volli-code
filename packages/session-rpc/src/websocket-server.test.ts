@@ -25,6 +25,9 @@ import type {
   SessionStreamFrame,
 } from "@volli/session-engine";
 import { createSessionProjectionCheckpoint } from "@volli/shared";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import { HOST_TRACE_FIELD } from "@volli/host-protocol";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { WebSocket } from "ws";
 
@@ -43,8 +46,11 @@ import {
   startHostProtocolListener,
   validateListenerLimits,
   type BoundedSocket,
+  readRequests,
   type HostProtocolListenerEvent,
   type HostProtocolListenerLimits,
+  type HostProtocolRequest,
+  type HostProtocolRequestScope,
 } from "./websocket-server";
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */
@@ -192,6 +198,9 @@ async function serve(
     };
     /** A source that keeps replaying after it was cancelled. */
     ignoresCancel?: boolean;
+    requestScope?: HostProtocolRequestScope;
+    /** The host's recent log (VC-699). */
+    logs?: Pick<Parameters<typeof sessionHandlersFrom>[0], "readLogs" | "followLogs">;
   } = {},
 ) {
   // The production refusal window (1 s) unless a test asks otherwise. The
@@ -218,7 +227,10 @@ async function serve(
       const changed = options.context?.(source);
       return {
         // The map over the ledger, as a root hands its router (VC-668).
-        handlers: sessionHandlersFrom({ runtime: changed?.runtime ?? source.runtime }),
+        handlers: sessionHandlersFrom({
+          runtime: changed?.runtime ?? source.runtime,
+          ...options.logs,
+        }),
         diagnostics: new RpcDiagnosticLog(),
         resourceWorkspace:
           changed?.resourceWorkspace ?? (({ id }) => (id === SESSION ? WORKSPACE : null)),
@@ -226,6 +238,7 @@ async function serve(
     },
     limits,
     log: (event) => events.push(event),
+    ...(options.requestScope === undefined ? {} : { requestScope: options.requestScope }),
   });
   cleanups.push(() => listener.close());
   return { listener, events, ...source };
@@ -1388,5 +1401,179 @@ describe("features advertise; actor policy enforces (security N1)", () => {
       await expectHostError(client.session.list.query({ projectId: WORKSPACE })),
     ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
     expect(reads).toStrictEqual([]);
+  });
+});
+
+describe("every request in its own trace (VC-699)", () => {
+  const HELLO_TRACE = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7" };
+  const CALL_TRACE = { traceId: "a3ce929d0e0e47364bf92f3577b34da6", spanId: "0ba902b700f067aa" };
+
+  it("handles each request inside the root's scope, with the trace its frame carried", async () => {
+    const scope = new AsyncLocalStorage<HostProtocolRequest>();
+    const scoped: HostProtocolRequest[] = [];
+    const seen: (HostProtocolRequest | undefined)[] = [];
+    const { listener, events } = await serve({
+      requestScope: (inbound, handle) => {
+        scoped.push(inbound);
+        scope.run(inbound, handle);
+      },
+      context: (source) => ({
+        runtime: {
+          ...source.runtime,
+          projection: async (input) => {
+            // After an await: the scope follows the promise chain.
+            await Promise.resolve();
+            seen.push(scope.getStore());
+            return source.runtime.projection(input);
+          },
+        },
+      }),
+    });
+    const peer = await raw(listener.url, null);
+    peer.socket.send(
+      JSON.stringify({
+        method: "connectionParams",
+        data: encodeHostHello(buildHostHello(HELLO)),
+        [HOST_TRACE_FIELD]: HELLO_TRACE,
+      }),
+    );
+    const call = (id: number, trace?: unknown) => ({
+      id,
+      method: "query",
+      params: { path: "session.projection", input: { sessionId: SESSION } },
+      ...(trace === undefined ? {} : { [HOST_TRACE_FIELD]: trace }),
+    });
+    // A batch: each request keeps its own trace; a malformed one is none.
+    peer.socket.send(JSON.stringify([call(1, CALL_TRACE), call(2, { traceId: "nope" }), call(3)]));
+    peer.socket.send(JSON.stringify(call(4, HELLO_TRACE)));
+    await until(() => peer.messages.length === 4, "four answers");
+    expect(
+      scoped.map(({ method, path, trace }) => [method, path, trace?.traceId ?? null]),
+    ).toStrictEqual([
+      ["connectionParams", null, HELLO_TRACE.traceId],
+      ["query", "session.projection", CALL_TRACE.traceId],
+      ["query", "session.projection", null],
+      ["query", "session.projection", null],
+      ["query", "session.projection", HELLO_TRACE.traceId],
+    ]);
+    expect(new Set(scoped.map(({ connection }) => connection)).size).toBe(1);
+    expect(seen.map((inbound) => inbound?.trace?.traceId ?? null)).toStrictEqual([
+      CALL_TRACE.traceId,
+      null,
+      null,
+      HELLO_TRACE.traceId,
+    ]);
+    expect(events).toContainEqual(
+      expect.objectContaining({ kind: "connected", traceId: HELLO_TRACE.traceId }),
+    );
+    peer.socket.close();
+    await until(() => events.some(({ kind }) => kind === "closed"), "the close");
+    expect(events.find(({ kind }) => kind === "closed")).toMatchObject({
+      traceId: HELLO_TRACE.traceId,
+    });
+  });
+
+  it("names a connection without a traced hello by its id alone, and handles requests unscoped when the root gives no scope", async () => {
+    const { listener, events } = await serve();
+    const { client } = connect(listener.url);
+    await client.protocol.welcome.query();
+    const connected = events.find(({ kind }) => kind === "connected");
+    expect(connected).not.toHaveProperty("traceId");
+  });
+
+  it("reads only identifiers from a frame, and nothing from what is not a request", () => {
+    expect(readRequests("text")).toBeNull();
+    expect(readRequests(Buffer.from("PING"))).toBeNull();
+    expect(readRequests(Buffer.from("{not json"))).toBeNull();
+    expect(readRequests(Buffer.from("[]"))).toStrictEqual([]);
+    expect(
+      readRequests(Buffer.from('[1, {"method": 2, "params": null}, {"params": {"path": 3}}]')),
+    ).toStrictEqual([
+      { request: { trace: null, method: null, path: null }, method: null, trace: null, frame: 1 },
+      {
+        request: { trace: null, method: null, path: null },
+        method: null,
+        trace: null,
+        frame: { method: 2, params: null },
+      },
+      {
+        request: { trace: null, method: null, path: null },
+        method: null,
+        trace: null,
+        frame: { params: { path: 3 } },
+      },
+    ]);
+  });
+});
+
+describe("host.logs: the person's, never a Session's (VC-699)", () => {
+  const page = {
+    entries: [
+      {
+        cursor: "ring:1",
+        record: {
+          ts: "2026-10-07T00:00:00.000Z",
+          level: "info" as const,
+          component: "c",
+          msg: "m",
+        },
+      },
+    ],
+    gap: false,
+    cursor: "ring:1",
+  };
+  const sessionActor: HostActor = { kind: "session", sessionId: SESSION, workspaceId: WORKSPACE };
+
+  it("answers a paired device, and refuses a Session's credential with verb-refused", async () => {
+    const reads: unknown[] = [];
+    const { listener } = await serve({
+      grants: {
+        "device-token": credential(device).grant,
+        "session-token": credential(sessionActor).grant,
+      },
+      logs: {
+        readLogs: (query) => {
+          reads.push(query);
+          return page;
+        },
+      },
+    });
+    const person = connect(listener.url, { features: ["host.logs"] });
+    expect(await person.client.logs.tail.query({ limit: 5 })).toStrictEqual(page);
+    const agent = connect(listener.url, { credential: "session-token", features: ["host.logs"] });
+    expect(await expectHostError(agent.client.logs.tail.query({}))).toMatchObject({
+      code: "FORBIDDEN",
+      reason: "verb-refused",
+    });
+    // A connection that did not negotiate the feature reaches neither operation.
+    const ungranted = connect(listener.url, { features: ["sessions"] });
+    expect(await expectHostError(ungranted.client.logs.tail.query({}))).toMatchObject({
+      code: "FORBIDDEN",
+      reason: "verb-refused",
+    });
+    expect(reads).toStrictEqual([{ limit: 5 }]);
+  });
+
+  it("follows the log over the wire, tracked by its newest line, and resumes after it", async () => {
+    let emit!: (batch: typeof page) => void;
+    const follows: unknown[] = [];
+    const { listener } = await serve({
+      logs: {
+        followLogs: (query, onBatch) => {
+          follows.push(query);
+          emit = onBatch as (batch: typeof page) => void;
+          return () => undefined;
+        },
+      },
+    });
+    const { client } = connect(listener.url, { features: ["host.logs"] });
+    const stream = recordSubscription((handlers) =>
+      client.logs.follow.subscribe({ minLevel: "info", lastEventId: "ring:0" }, handlers),
+    );
+    await stream.started;
+    emit(page);
+    expect(await stream.received(1)).toStrictEqual([{ id: "ring:1", data: page }]);
+    stream.unsubscribe();
+    expect(follows).toStrictEqual([{ minLevel: "info", after: "ring:0" }]);
   });
 });

@@ -514,3 +514,28 @@ test("published receipt statuses and attention kinds remain closed at every outp
     assert.ok(sites > 0, `${discriminator} regression must exercise actual published sites`);
   }
 });
+
+test("envelope fields beside a frame's id may be added, never removed or narrowed (VC-699)", () => {
+  const trace = {
+    type: "object",
+    properties: { traceId: { type: "string", pattern: "^[0-9a-f]{32}$" }, spanId: text },
+    required: ["traceId", "spanId"],
+  };
+  const before = { ...protocol(), envelope: { volliTrace: trace } };
+  // A baseline with no envelope, and a new field beside an old one, are additive.
+  assert.deepEqual(protocolChanges(protocol(), before), []);
+  assert.deepEqual(
+    protocolChanges(before, { ...before, envelope: { volliTrace: trace, volliOther: text } }),
+    [],
+  );
+  assert.deepEqual(protocolChanges(before, { ...before, envelope: {} }), [
+    { path: "/envelope/volliTrace", reason: "envelope field removed" },
+  ]);
+  assert.deepEqual(protocolChanges(before, protocol()), [
+    { path: "/envelope/volliTrace", reason: "envelope field removed" },
+  ]);
+  const narrowed = { ...trace, required: ["traceId", "spanId", "flags"] };
+  assert.deepEqual(protocolChanges(before, { ...before, envelope: { volliTrace: narrowed } }), [
+    { path: "/envelope/volliTrace/required", reason: "optional input field made required" },
+  ]);
+});

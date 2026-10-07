@@ -356,6 +356,14 @@ export function protocolChanges(before, after) {
   ) {
     changes.push({ path: "/baseOperations", reason: "frozen bootstrap membership changed" });
   }
+  // Envelope fields beside a frame's id (VC-699) are read by a host like an
+  // input: one may be added, never removed or narrowed.
+  for (const [field, schema] of Object.entries(before.envelope ?? {})) {
+    const path = `/envelope/${escape(field)}`;
+    const next = after.envelope?.[field];
+    if (next === undefined) changes.push({ path, reason: "envelope field removed" });
+    else changes.push(...schemaChanges(schema, next, path, "input"));
+  }
   for (const [feature, operations] of Object.entries(before.features ?? {})) {
     if (!isDeepStrictEqual(list(operations).toSorted(), list(after.features?.[feature]).toSorted()))
       changes.push({

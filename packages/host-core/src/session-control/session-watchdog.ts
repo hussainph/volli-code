@@ -49,6 +49,9 @@ import type { SessionInFlightTool, SessionProjection, SessionExecutionVenue } fr
 import type { SessionEngine } from "@volli/session-engine";
 
 import type { NotificationRequest } from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-watchdog");
 
 /** How often the scan runs. Coarse on purpose: the verdict is minutes-grained. */
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
@@ -90,7 +93,7 @@ export interface SessionWatchdogPorts {
   thresholdMs?: number;
   intervalMs?: number;
   now?: () => number;
-  /** Diagnostics seam. Defaults to `console.error`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -106,7 +109,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
   const intervalMs = ports.intervalMs ?? DEFAULT_SCAN_INTERVAL_MS;
   const now = ports.now ?? (() => Date.now());
   const onError =
-    ports.onError ?? ((error: unknown) => console.error("[volli] session watchdog:", error));
+    ports.onError ?? ((error: unknown) => log.error("session watchdog failed", { error }));
   /** The episode each Session last tripped on: the live progress instant it was silent from. */
   const tripped = new Map<string, number>();
   let timer: ReturnType<typeof setInterval> | null = null;

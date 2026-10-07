@@ -905,11 +905,24 @@ export function RailPanelSkeleton({ label, testId }: { label: string; testId: st
  * the row menu carries the rest, and two adjacent plus-glyphs read as one
  * control that someone drew twice.
  */
-export function NewFileRailAction({ onNewFile }: { onNewFile(): void }) {
+export function NewFileRailAction({
+  disabled = false,
+  onNewFile,
+}: {
+  /** Read-only (VC-576): the project's host cannot take a new file. */
+  disabled?: boolean;
+  onNewFile(): void;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button size="icon-sm" variant="ghost" aria-label="New file" onClick={onNewFile}>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="New file"
+          disabled={disabled}
+          onClick={onNewFile}
+        >
           <FilePlusIcon />
         </Button>
       </TooltipTrigger>

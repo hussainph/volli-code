@@ -72,6 +72,9 @@ import {
   decodeSessionEventCursor,
   listSessionEventsAfter,
 } from "../db/session-events-cursor-repo";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-wake");
 
 /** One committed Session fact and its opaque durable cursor. */
 export interface SessionWake {
@@ -87,7 +90,7 @@ export type SubscribeSessionWake = (listener: SessionWakeListener) => () => void
 export interface SessionWakePorts {
   /** The one handle the Session ledger writes through; the drain reads its sidecar. */
   db: Database.Database;
-  /** Diagnostics seam. Defaults to `console.error`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -114,7 +117,8 @@ export function createSessionWakeBus(
   engine: SessionEngine,
   ports: SessionWakePorts,
 ): SessionWakeBus {
-  const onError = ports.onError ?? ((error: unknown) => console.error(error));
+  const onError =
+    ports.onError ?? ((error: unknown) => log.error("session wake listener failed", { error }));
   const listeners = new Set<SessionWakeListener>();
   // Where this process has already announced up to. Seeded at construction so
   // a launch never replays the whole ledger as fresh wakes.

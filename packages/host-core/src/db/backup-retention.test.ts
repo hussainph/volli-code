@@ -1,7 +1,6 @@
 import { basename } from "node:path";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
-  BACKUP_RETENTION_LOG_PREFIX,
   logMigrationBackupRetention,
   migrationBackupCandidatePattern,
   pruneMigrationBackups,
@@ -216,12 +215,12 @@ describe("pruneMigrationBackups", () => {
     const logger = { info: vi.fn(), error: vi.fn() };
     logMigrationBackupRetention(report, logger);
 
-    expect(logger.info).toHaveBeenCalledWith(BACKUP_RETENTION_LOG_PREFIX, {
+    expect(logger.info).toHaveBeenCalledWith("migration backup removed", {
       action: "removed",
       name: "volli.db.backup-v1-wal",
       sizeBytes: 11,
     });
-    expect(logger.error).toHaveBeenCalledWith(BACKUP_RETENTION_LOG_PREFIX, {
+    expect(logger.error).toHaveBeenCalledWith("migration backup retention failed", {
       action: "failed",
       operation: "remove",
       name: "volli.db.backup-v1",
@@ -250,7 +249,7 @@ describe("pruneMigrationBackups", () => {
     const logger = { info: vi.fn(), error: vi.fn() };
     logMigrationBackupRetention(report, logger);
     expect(logger.error).toHaveBeenCalledWith(
-      BACKUP_RETENTION_LOG_PREFIX,
+      "migration backup quarantined",
       expect.objectContaining({ action: "quarantined" }),
     );
   });

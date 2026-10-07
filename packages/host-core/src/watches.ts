@@ -110,6 +110,9 @@ import {
   deliverHostNotice,
   errorText,
 } from "./session-runtime/host-notice-delivery";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("watches");
 
 /** How long one watcher's changes are gathered before they are delivered as one notice. */
 export const WATCH_COALESCE_MS = 1_500;
@@ -246,7 +249,8 @@ function ticketActor(event: TicketEvent, watcherSessionId: string): string {
 }
 
 export function createWatches(ports: WatchesPorts): Watches {
-  const report = ports.report ?? ((message) => console.error(`[volli] ${message}`));
+  const report =
+    ports.report ?? ((message) => log.error("watch notice failed", { detail: message }));
   const newId = ports.newId ?? randomUUID;
   const coalesceMs = ports.coalesceMs ?? WATCH_COALESCE_MS;
   const setTimer = ports.setTimeout ?? ((callback, ms) => setTimeout(callback, ms));

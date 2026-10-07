@@ -58,6 +58,7 @@ import {
 import type { IpcResponse } from "@volli/host-protocol/ipc";
 
 import { LOCAL_DESKTOP_CALLER } from "@volli/session-rpc";
+import { captureHostLog } from "@volli/host-core/testing";
 
 import { sessionHandlersFrom, type LegacySessionPorts } from "@volli/session-rpc/testing";
 
@@ -316,6 +317,41 @@ describe("registerSessionRpcIpcHandlers", () => {
     await registration.close();
   });
 
+  it("handles each request inside the renderer's trace, and mints one for a malformed trace (VC-699)", async () => {
+    const fixture = runtimeFixture();
+    const registration = registerSessionRpcIpcHandlers({ runtime: fixture.runtime });
+    const log = captureHostLog();
+    try {
+      const trace = { traceId: "4bf92f3577b34da6a3ce929d0e0e4736", spanId: "00f067aa0ba902b7" };
+      await invoke(sender(), {
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: "session-1" },
+        trace,
+      });
+      await invoke(sender(), {
+        path: "session.snapshot",
+        type: "query",
+        input: { sessionId: "session-1" },
+        trace: { traceId: "nope", spanId: "nope" },
+      });
+      const rpc = log.of("rpc");
+      expect(rpc.length).toBeGreaterThanOrEqual(2);
+      expect(rpc[0]).toMatchObject({
+        traceId: trace.traceId,
+        spanId: trace.spanId,
+        door: "ipc",
+        operation: "session.snapshot",
+      });
+      const minted = rpc.at(-1)!;
+      expect(minted["traceId"]).toMatch(/^[0-9a-f]{32}$/u);
+      expect(minted["traceId"]).not.toBe(trace.traceId);
+    } finally {
+      log.restore();
+      await registration.close();
+    }
+  });
+
   it("forwards payload-free router timing to the benchmark observer", async () => {
     const fixture = runtimeFixture();
     const samples: unknown[] = [];
@@ -570,6 +606,55 @@ describe("registerSessionRpcIpcHandlers", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(owner.send).toHaveBeenCalledTimes(1);
+    await registration.close();
+  });
+
+  it("reads and follows this Mac's log over the same bridge (VC-699)", async () => {
+    const batch = {
+      entries: [
+        {
+          cursor: "ring:2",
+          record: {
+            ts: "2026-10-07T00:00:00.000Z",
+            level: "info" as const,
+            component: "c",
+            msg: "m",
+          },
+        },
+      ],
+      gap: false,
+      cursor: "ring:2",
+    };
+    let push!: (next: typeof batch) => void;
+    const registration = registerSessionRpcIpcHandlers({
+      runtime: runtimeFixture().runtime,
+      readLogs: () => batch,
+      followLogs: (_query, listener) => {
+        push = listener as (next: typeof batch) => void;
+        return () => undefined;
+      },
+    });
+    const owner = sender();
+    expect(await invoke(owner, { path: "logs.tail", type: "query", input: { limit: 5 } })).toEqual({
+      ok: true,
+      data: batch,
+    });
+    const response = await invoke(owner, {
+      path: "logs.follow",
+      type: "subscription",
+      input: { after: "ring:1" },
+    });
+    if (!(response.ok && "subscriptionId" in response)) throw new Error("Expected subscription id");
+    await vi.waitFor(() => expect(push).toBeDefined());
+    push(batch);
+    await vi.waitFor(() =>
+      expect(owner.send).toHaveBeenCalledWith(SESSION_RPC_EVENT_CHANNEL, {
+        kind: "data",
+        subscriptionId: response.subscriptionId,
+        eventId: "ring:2",
+        data: batch,
+      }),
+    );
     await registration.close();
   });
 

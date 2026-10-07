@@ -37,8 +37,10 @@ import { getProjectById, getTicketRow, listProjects, prepared } from "@volli/hos
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
 import { type HostCredentialVerifier, type HostV1Feature } from "@volli/host-protocol";
 import type { SessionEngine } from "@volli/session-engine";
+import { hostLogger, withTrace } from "@volli/host-core/log";
 import {
   createHostRouter,
+  logRpcDiagnostics,
   RpcDiagnosticLog,
   SESSION_RESOURCE,
   type WorkspaceResource,
@@ -218,6 +220,8 @@ export interface HostdProtocolPorts {
   readonly handlers: HostHandlerMap;
   readonly sessionEngine: SessionEngine;
   readonly logger: HostdLogger;
+  /** Whether this host keeps a recent log for `host.logs` (VC-699) to read. */
+  readonly offerLogs?: boolean;
   /** A test seam only: `HOSTD_LISTENER_LIMITS` otherwise. */
   readonly limits?: HostProtocolListenerLimits;
 }
@@ -235,12 +239,14 @@ export function startHostdProtocolListener(
     );
   }
   const diagnostics = new RpcDiagnosticLog();
+  // Every call's start and outcome, inside the trace its frame carried (VC-699).
+  logRpcDiagnostics(diagnostics, hostLogger("rpc"));
   const handlers = admittedHandlers(ports.handlers, ROUTER_POLICY);
   return startHostProtocolListener({
     router: createHostRouter(),
     bind: ports.bind,
     host: { id: ports.hostId, version: ports.version },
-    features: HOSTD_FEATURES,
+    features: ports.offerLogs === true ? [...HOSTD_FEATURES, "host.logs"] : HOSTD_FEATURES,
     workspace: (workspaceId) => servedWorkspace(db, workspaceId),
     verifier: ports.verifier,
     limits: ports.limits ?? HOSTD_LISTENER_LIMITS,
@@ -250,6 +256,18 @@ export function startHostdProtocolListener(
       resourceWorkspace: hostResourceWorkspace(db, sessionEngine),
     }),
     log: (event) => logListenerEvent(logger, event),
+    // Each request is handled inside its trace: the Client's, or one minted
+    // here. Every line the host writes while serving it carries it (VC-699).
+    requestScope: (request, handle) =>
+      withTrace(
+        request.trace,
+        {
+          door: "websocket",
+          connection: request.connection,
+          ...(request.path === null ? {} : { operation: request.path }),
+        },
+        handle,
+      ),
   });
 }
 

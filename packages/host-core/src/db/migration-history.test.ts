@@ -13,7 +13,6 @@ import {
   checkMigrationHistory,
   describeMigrationHistory,
   LOCKED_FINGERPRINTS,
-  MIGRATION_HISTORY_LOG_PREFIX,
   MIGRATION_HISTORY_MIGRATION,
   MIGRATION_HISTORY_VERSION,
   recordAppliedMigrations,
@@ -255,11 +254,9 @@ describe("openVolliDb and the history", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const opened = openVolliDb(dbPath);
     opened.close();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringMatching(
-        new RegExp(`^\\${MIGRATION_HISTORY_LOG_PREFIX}: diverged: .* at 60\\.`),
-      ),
-    );
+    expect(warn).toHaveBeenCalledWith("[db] migration history diverged", {
+      summary: expect.stringMatching(/^diverged: .* at 60\./),
+    });
   });
 
   it("says nothing about a consistent file, and reports a history it cannot read", () => {
@@ -273,8 +270,8 @@ describe("openVolliDb and the history", () => {
     db.exec("DROP TABLE migration_history; CREATE TABLE migration_history (version INTEGER)");
     db.close();
     openVolliDb(dbPath).close();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringMatching(new RegExp(`^\\${MIGRATION_HISTORY_LOG_PREFIX}: could not be read: `)),
-    );
+    expect(warn).toHaveBeenCalledWith("[db] migration history could not be read", {
+      error: expect.objectContaining({ message: expect.any(String) }),
+    });
   });
 });

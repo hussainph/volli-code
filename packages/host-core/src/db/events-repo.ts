@@ -27,6 +27,9 @@ import {
   currentSqliteSequence,
   firstMatchingSequencedRow,
 } from "./sequence-cursor";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("db");
 
 interface TicketEventRow {
   id: string;
@@ -369,7 +372,10 @@ export function listTicketStatusEntries(
   const entries: TicketStatusEntry[] = [];
   for (const row of rows) {
     if (!isTicketStatus(row.status)) {
-      console.warn(`[volli] dropping ticket ${row.ticket_id} with unknown status "${row.status}"`);
+      log.warn("dropping ticket with unknown status", {
+        ticketId: row.ticket_id,
+        status: row.status,
+      });
       continue;
     }
     entries.push({

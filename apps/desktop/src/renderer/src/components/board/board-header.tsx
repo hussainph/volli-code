@@ -29,6 +29,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@renderer/components/ui/dropdown-menu";
+import { readOnlyControl, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 import {
@@ -151,6 +152,8 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
   // state lives here (not in the ui store — no hotkey or second surface needs
   // it, unlike the New-ticket dialog's app-wide "c" shortcut).
   const [archiveOpen, setArchiveOpen] = React.useState(false);
+  // The project's host cannot serve (VC-576): create stands down, reading stays.
+  const canWrite = useCanWrite(projectId);
 
   return (
     <PageHeader
@@ -184,6 +187,7 @@ export function BoardHeader({ projectId, ticketCount, tickets, filter }: BoardHe
               "New" and the e2e smoke matches both with exact:true. */}
           <Button
             className="gap-1 px-2 text-ui"
+            {...readOnlyControl(canWrite)}
             onClick={() => useUiStore.getState().setNewTicketOpen(true)}
           >
             <PlusIcon className="size-3.5" />

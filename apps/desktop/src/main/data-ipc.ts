@@ -232,6 +232,9 @@ import type { HandlerCall } from "@volli/shared";
 const DESKTOP_WINDOW_CALL: HandlerCall = { actor: { kind: "user" }, origin: "desktop-window" };
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
+import { hostLogger } from "@volli/host-core/log";
+
+const log = hostLogger("data-ipc");
 
 /** The result of the host's open+migrate attempt (`createHostCore`), fed into {@link registerDataIpcHandlers}. */
 export type { DbHandle };
@@ -486,7 +489,7 @@ export function registerDataIpcHandlers(
     try {
       removeTicketToolOutput(db, options.piSessionsDirectory, ticketId);
     } catch (error) {
-      console.warn(`[volli] Could not remove ticket ${ticketId}'s saved tool output:`, error);
+      log.warn("could not remove the ticket's saved tool output", { ticketId, error });
     }
   };
 
