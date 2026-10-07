@@ -4,6 +4,7 @@ import {
   type ChatSessionRecord,
   type SessionListingRow,
   type SessionRecord,
+  type Ticket,
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
@@ -15,7 +16,9 @@ import {
   useTicketSessionRecordsStore,
 } from "./ticket-session-records";
 import type { SessionActivityNotice, SessionsResult } from "../../../ipc/contract";
+import { rememberRemoteProject, resetRemoteOwnersForTest } from "@renderer/lib/remote-owners";
 import { setRemoteSessionListing } from "@renderer/lib/session-listing-reader";
+import { useBoardStore } from "@renderer/stores/board";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -611,15 +614,18 @@ describe("a remote ticket's listing (VC-713)", () => {
   afterEach(() => {
     unregister?.();
     unregister = null;
+    resetRemoteOwnersForTest();
+    useBoardStore.setState({ ticketsByProject: {} });
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
 
   function remote(listForTicket: (input: { ticketId: string }) => Promise<SessionsResult>) {
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
+    useBoardStore.setState({ ticketsByProject: { remote: [{ id: "remote-ticket" } as Ticket] } });
     const reader = { list: () => Promise.reject(new Error("unused")), listForTicket };
     unregister = setRemoteSessionListing({
-      forProject: () => null,
-      forTicket: (ticketId) => (ticketId === "remote-ticket" ? reader : null),
+      forProject: (projectId) => (projectId === "remote" ? reader : null),
     });
   }
 
@@ -668,5 +674,16 @@ describe("a remote ticket's listing (VC-713)", () => {
     await store.getState().refresh("remote-ticket", { quiet: true });
     expect(ticketSessionListingStateOf(store.getState(), "remote-ticket")).toBe("failed");
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("never falls to This Mac's IPC for a ticket on a project known remote (B1)", async () => {
+    const local = vi.fn(async () => ({ ok: true as const, sessions: [] }));
+    vi.stubGlobal("window", { api: { sessions: { listForTicket: local } } });
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
+    useBoardStore.setState({ ticketsByProject: { remote: [{ id: "remote-ticket" } as Ticket] } });
+    const store = createTicketSessionRecordsStore();
+    await store.getState().refresh("remote-ticket");
+    expect(local).not.toHaveBeenCalled();
+    expect(store.getState().listingError["remote-ticket"]).toBe("hetzner-1 isn’t connected");
   });
 });

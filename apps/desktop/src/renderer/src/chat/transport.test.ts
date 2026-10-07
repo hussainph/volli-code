@@ -3,11 +3,18 @@
  * test that legitimately wants a `window`, because the module under test is
  * the one place the chat core touches it.
  */
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { ChatSessionTransport } from "@volli/session-presentation";
 
-import { browserChatTransport, chatTransportFor, setRemoteChatTransports } from "./transport";
+import { rememberRemoteProject, resetRemoteOwnersForTest } from "@renderer/lib/remote-owners";
+
+import {
+  browserChatTransport,
+  chatTransportFor,
+  sessionCommandFor,
+  setRemoteChatTransports,
+} from "./transport";
 
 describe("browserChatTransport", () => {
   it("routes product starts and retries without renderer runtime identity", async () => {
@@ -143,32 +150,64 @@ describe("browserChatTransport", () => {
   });
 });
 
+/** A window with the Session RPC bridge and frame pacing a transport reads. */
+function stubWindow() {
+  vi.stubGlobal("window", {
+    api: { sessionRpc: { request: vi.fn(), onEvent: () => () => undefined, cancel: vi.fn() } },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => undefined,
+    setTimeout: () => 1,
+    clearTimeout: () => undefined,
+  });
+}
+
 describe("chatTransportFor (VC-713)", () => {
-  it("answers a remote project's registered transport, and IPC for every other", () => {
-    vi.stubGlobal("window", {
-      api: { sessionRpc: { request: vi.fn(), onEvent: () => () => undefined, cancel: vi.fn() } },
-      requestAnimationFrame: () => 1,
-      cancelAnimationFrame: () => undefined,
-      setTimeout: () => 1,
-      clearTimeout: () => undefined,
-    });
+  afterEach(() => {
+    resetRemoteOwnersForTest();
+    vi.unstubAllGlobals();
+  });
+
+  it("answers a remote project's registered transport, and IPC for This Mac's", () => {
+    stubWindow();
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
     const remote = { streamRecovery: "host-link" } as ChatSessionTransport;
     const unregister = setRemoteChatTransports({
       forProject: (projectId) => (projectId === "remote" ? remote : null),
+      clientFor: () => null,
     });
-    const stale = setRemoteChatTransports({ forProject: () => null });
+    const stale = setRemoteChatTransports({ forProject: () => null, clientFor: () => null });
     stale();
     // Removing a registration that was replaced leaves the newer one alone.
     expect(chatTransportFor("remote")).not.toBe(remote);
     const again = setRemoteChatTransports({
       forProject: (projectId) => (projectId === "remote" ? remote : null),
+      clientFor: () => null,
     });
     unregister();
     expect(chatTransportFor("remote")).toBe(remote);
     expect(chatTransportFor("local").streamRecovery).toBeUndefined();
     expect(chatTransportFor(null).streamRecovery).toBeUndefined();
     again();
-    expect(chatTransportFor("remote")).not.toBe(remote);
-    vi.unstubAllGlobals();
+  });
+
+  it("fails a project known remote closed in the host's name, never over IPC (B1)", async () => {
+    stubWindow();
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
+    const closed = chatTransportFor("remote");
+    expect(closed.streamRecovery).toBe("host-link");
+    await expect(closed.rpc.session.snapshot.query({ sessionId: "s" })).rejects.toThrow(
+      "hetzner-1 isn’t connected",
+    );
+    await expect(
+      closed.createSession({ operationId: "o", projectId: "remote", ticketId: null, title: null }),
+    ).rejects.toThrow("hetzner-1 isn’t connected");
+    expect(window.api.sessionRpc.request).not.toHaveBeenCalled();
+    await expect(
+      sessionCommandFor("remote")({
+        commandId: "c",
+        sessionId: "s",
+        command: { kind: "session.stop" },
+      }),
+    ).rejects.toThrow("hetzner-1 isn’t connected");
   });
 });

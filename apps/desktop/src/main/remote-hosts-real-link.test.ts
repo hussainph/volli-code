@@ -49,6 +49,7 @@ const TODAYS_HOST: readonly HostFeature[] = [
   "sessions.subscribe",
   "sessions.history",
   "sessions.queue",
+  "sessions.listing",
   "session.read",
   "board.read",
   "board.write",

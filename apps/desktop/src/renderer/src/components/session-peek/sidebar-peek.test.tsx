@@ -15,6 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { SessionOrderMember } from "@volli/shared";
 import { getChatClient, type InteractionSubmission } from "@volli/session-presentation";
 
+import { forgetSessionProject, rememberSessionProject } from "@renderer/lib/session-project";
+import { rememberRemoteProject, resetRemoteOwnersForTest } from "@renderer/lib/remote-owners";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useHeldSessionOrder, useSessionOrderStore } from "@renderer/stores/session-order";
 
@@ -105,6 +107,20 @@ describe("createSidebarPeekPorts · readContent", () => {
     expect(adoptChatSession).not.toHaveBeenCalled();
     // A peek never reads (D6).
     expect(surfaces.setRead).not.toHaveBeenCalled();
+  });
+
+  it("refuses a remote Session's peek with the host's words, reading nothing here (VC-713)", async () => {
+    rememberSessionProject("remote-session", "remote");
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
+    try {
+      await expect(createSidebarPeekPorts(surface()).readContent("remote-session")).rejects.toThrow(
+        "Not available on hetzner-1 yet",
+      );
+      expect(peekContent).not.toHaveBeenCalled();
+    } finally {
+      forgetSessionProject("remote-session");
+      resetRemoteOwnersForTest();
+    }
   });
 
   it("forwards utility refinement only when explicitly requested", async () => {

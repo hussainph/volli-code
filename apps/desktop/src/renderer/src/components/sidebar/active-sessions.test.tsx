@@ -34,6 +34,7 @@ import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { useRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
 import { projectScope, useSessionsStore, type SessionLaunch } from "@renderer/stores/sessions";
 import { useSessionOrderStore } from "@renderer/stores/session-order";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
@@ -330,6 +331,20 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(bandText("previous")).not.toContain("Nothing yet");
     expect(bandText("active")).toContain("Couldn't load sessions.");
     expect(bandText("previous")).toContain("Couldn't load sessions.");
+  });
+
+  it("names a host that grants no Sessions, once, instead of either empty (VC-713, B3)", async () => {
+    const reason = "Sessions aren’t available on box — update it to use them here";
+    useRemoteSessionAvailabilityStore.setState({ unavailable: { [PROJECT.id]: reason } });
+    try {
+      await mount();
+      expect(bandText("active")).toContain(reason);
+      expect(bandText("active")).not.toContain("No active sessions");
+      expect(bandText("previous")).not.toContain(reason);
+      expect(bandText("previous")).not.toContain("Nothing yet");
+    } finally {
+      useRemoteSessionAvailabilityStore.setState({ unavailable: {} });
+    }
   });
 });
 

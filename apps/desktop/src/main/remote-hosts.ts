@@ -188,23 +188,34 @@ export interface DesktopRemoteHostsOptions {
 }
 
 /**
- * What every Workspace link to a remote host asks for: its sign-ins and the
- * relay this Mac performs for a browser sign-in (VC-702), and (VC-710) its
- * board and its Sessions, which the relay tickets use; and its log, for the
- * one log viewer (`host.logs`, VC-712). Granted
- * is asked ∩ offered, so a host from before any of them grants less.
+/**
+ * A remote project's Sessions (VC-713): create, attach and command them, follow
+ * the one on screen, page its history, and list the Workspace's rows. Hosts
+ * that predate a feature simply do not grant it, and the relay refuses its
+ * operations typed (N−1).
+ */
+export const REMOTE_SESSION_LINK_FEATURES = [
+  "sessions",
+  "sessions.subscribe",
+  "sessions.queue",
+  "sessions.history",
+  "sessions.listing",
+] as const;
+
+/**
+ * What every Workspace link to a remote host asks for: sign-ins (VC-702), the
+ * host's log for the one log viewer (`host.logs`, VC-712), its board and its
+ * Session reads (VC-710, for the board relay), and its Sessions (VC-713).
+ * Granted is asked ∩ offered, so a host from before any of them grants less.
  */
 export const REMOTE_HOST_LINK_FEATURES = [
   "sign-ins",
   "auth.callback",
+  "host.logs",
   "board.read",
   "board.write",
-  "sessions",
-  "sessions.subscribe",
-  "sessions.history",
-  "sessions.queue",
   "session.read",
-  "host.logs",
+  ...REMOTE_SESSION_LINK_FEATURES,
 ] as const satisfies readonly HostFeature[];
 
 /** The engine, composed with this app's ports. */

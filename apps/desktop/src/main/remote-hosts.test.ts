@@ -254,19 +254,22 @@ describe("the remote hosts port's sign-in (VC-702)", () => {
     const preflight = vi.fn(async () => {});
     await remoteHostsPort(engine, preflight).signIn("h", "claude");
     expect(preflight).toHaveBeenCalledWith("h", "claude");
-    // Every Workspace link asks for the host's sign-ins and the relay, and
-    // (VC-710) its board, Sessions and log.
+    // Every Workspace link asks for the host's sign-ins and the relay.
     expect(REMOTE_HOST_LINK_FEATURES).toEqual([
       "sign-ins",
       "auth.callback",
+      // The host's log (VC-712).
+      "host.logs",
+      // Its board and Session reads (VC-710).
       "board.read",
       "board.write",
+      "session.read",
+      // A remote project's Sessions (VC-713).
       "sessions",
       "sessions.subscribe",
-      "sessions.history",
       "sessions.queue",
-      "session.read",
-      "host.logs",
+      "sessions.history",
+      "sessions.listing",
     ]);
   });
 });
