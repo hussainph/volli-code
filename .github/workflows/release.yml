@@ -268,6 +268,106 @@ jobs:
           RELEASE_REF: ${{ needs.prepare.outputs.tag || github.sha }}
         run: echo "ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
 
+  # VC-727: advisory capture, never a dependency of packaging/publication.
+  # A broken recorder leaves a visible failed step, not a broken release.
+  canary-peer:
+    name: Record public release peer (advisory)
+    needs: [prepare, hostd-ref]
+    if: always() && !cancelled() && needs.hostd-ref.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions:
+      contents: read
+    outputs:
+      captured: ${{ steps.upload.outputs.artifact-id != '' && 'true' || '' }}
+      tag: ${{ steps.scope.outputs.tag }}
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve peer provenance
+        id: scope
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            tag="dry-run-$(git rev-parse HEAD)"
+          elif [[ "$RELEASE_TAG" == v*-* ]]; then
+            tag="$RELEASE_TAG"
+          else
+            echo "Stable release: no prerelease peer capture"
+            exit 0
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Setup Vite+
+        if: steps.scope.outputs.tag != ''
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Capture public peer through real adapters
+        id: capture
+        if: steps.scope.outputs.tag != ''
+        env:
+          PEER_TAG: ${{ steps.scope.outputs.tag }}
+          VOLLI_CONCURRENCY_HINT: "2"
+        run: |
+          set -euo pipefail
+          node scripts/record-canary-peer.mjs --tag "$PEER_TAG" --commit "$(git rev-parse HEAD)" --out "$RUNNER_TEMP/canary-peer.json"
+          echo "captured=true" >> "$GITHUB_OUTPUT"
+      - name: Upload public peer bundle
+        id: upload
+        if: steps.capture.outputs.captured == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canary-peer-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-peer.json
+          if-no-files-found: error
+          retention-days: 90
+
+  # Attach only AFTER desktop publishing, whose cleanup owns other assets.
+  # Neither this job nor capture can block the release; dry runs only upload
+  # an Actions artifact and have no release-write job enabled.
+  canary-peer-asset:
+    name: Attach public peer release asset (advisory)
+    needs: [canary-peer, release]
+    if: >-
+      always() && !cancelled() && needs.release.result == 'success' &&
+      needs.canary-peer.outputs.captured == 'true' &&
+      (github.event_name != 'workflow_dispatch' || !inputs.dry_run)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - name: Download public peer bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: canary-peer-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-peer
+      - name: Attach without changing the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PEER_TAG: ${{ needs.canary-peer.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Immutable release peer: never delete a previous asset to replace it.
+          # In particular, --clobber can lose it if the replacement upload fails.
+          existing=$(gh release view "$PEER_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[] | select(.name == "canary-peer.json") | .name')
+          if [ -n "$existing" ]; then
+            echo "Keeping the peer already captured for $PEER_TAG"
+            exit 0
+          fi
+          gh release upload "$PEER_TAG" "$RUNNER_TEMP/canary-peer/canary-peer.json" --repo "$GITHUB_REPOSITORY"
+
   hostd:
     name: Package hostd (linux-${{ matrix.arch }})
     needs: [prepare, hostd-ref]
@@ -774,6 +874,9 @@ jobs:
         # electron-builder from the install's bin dirs regardless of hoisting.
         run: vp exec electron-builder --publish never
 
+      - name: "Gate: no e2e files in packaged app"
+        run: node apps/desktop/scripts/check-packaged-e2e.mjs --app "apps/desktop/release/mac-arm64/Volli Code.app"
+
       # mac.notarize and the staple hook both degrade to a skip when
       # credentials are absent or wrong-shaped, so trust nothing: prove the
       # artifacts and required notices exist and that Gatekeeper accepts them
@@ -885,6 +988,9 @@ jobs:
           # colliding with them.
           while read -r name; do
             [ -n "$name" ] || continue
+            # VC-727's advisory job attaches this after publication. Preserve
+            # a prior capture if that job fails on a re-run.
+            [ "$name" != canary-peer.json ] || continue
             keep=false
             for f in "${files[@]}"; do
               if [ "$name" = "$f" ]; then keep=true; break; fi

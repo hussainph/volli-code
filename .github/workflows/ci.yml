@@ -261,7 +261,9 @@ jobs:
         run: >-
           node --test scripts/release-workflow.test.mjs
           scripts/hostd-release-manifest.test.mjs
+          scripts/record-canary-peer.test.mjs
           apps/desktop/scripts/copy-hostd-manifest.test.mjs
+          apps/desktop/scripts/check-packaged-e2e.test.mjs
 
       - name: Check host Electron boundary and CI gate policy
         run: |

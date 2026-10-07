@@ -46,7 +46,15 @@ import {
   HOST_V1_FEATURES,
   type HostErrorReason,
 } from "@volli/host-protocol";
-import { expectHostError, recordSubscription } from "@volli/host-protocol/testing";
+import { expectHostError, ipcContractLink, recordSubscription } from "@volli/host-protocol/testing";
+import {
+  captureCanaryRecording,
+  checkNextHost,
+  loadCanaryPeer,
+  recordingExchanges,
+  replayCanaryPeer,
+} from "./canary-peer.test-support";
+const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { boardProcedureSchemas } from "./board-router";
@@ -144,8 +152,25 @@ afterEach(async () => {
 /** The production listener over a fake board, and one client that said `requested`. */
 async function connect(
   board: FakeBoard,
-  options: { offered?: readonly string[]; requested?: readonly string[] } = {},
+  options: { offered?: readonly string[]; requested?: readonly string[]; ipc?: boolean } = {},
 ) {
+  if (options.ipc) {
+    const connection = await ipcContractLink({
+      router: createHostRouter(),
+      createContext: () => ({
+        caller: {
+          actor: { kind: "device" as const, deviceId: BOARD_DEVICE, workspaceId: BOARD_WORKSPACE },
+          current: () => true,
+        },
+        handlers: { ...sessionHandlersFrom({ runtime: {} }), ...board.handlers },
+        diagnostics: new RpcDiagnosticLog(),
+        resourceWorkspace: (resource) => board.resourceWorkspace(resource),
+        transport: "electron-ipc" as const,
+      }),
+    }).open(null);
+    cleanups.push(connection.close);
+    return connection.client;
+  }
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
     bind: { host: "127.0.0.1", port: 0 },
@@ -191,9 +216,9 @@ function readRecording(): Recording {
 type Frame = { id: string; data: unknown };
 
 /** Runs the recorded exchange against today's router; answers what it observed. */
-async function observe(recorded: Recording | null): Promise<Recording> {
+async function observe(recorded: Recording | null, ipc = false): Promise<Recording> {
   const board = fakeBoard();
-  const client = await connect(board);
+  const client = await connect(board, { ipc });
   const raw = getUntypedClient(client);
   const snapshotInput = recorded?.snapshot.input ?? REQUESTS.snapshot;
   const snapshot = (await raw.query("board.snapshot", snapshotInput)) as { cursor: string };
@@ -349,26 +374,45 @@ async function expectEveryBoardOperationRefused(
   expect(board.reached).toEqual([]);
 }
 
-describe("version skew", () => {
-  it("new client × old host: a host offering only the pre-VC-565 features grants no board feature", async () => {
-    const board = fakeBoard();
-    const client = await connect(board, {
-      offered: PRE_BOARD_FEATURES,
-      requested: HOST_V1_FEATURES,
-    });
-    const { features } = await client.protocol.welcome.query();
-    expect(features).toEqual(PRE_BOARD_FEATURES);
-    expect(features.filter((feature) => feature.startsWith("board."))).toEqual([]);
-    await expectEveryBoardOperationRefused(client, board);
+for (const transport of ["ipc", "websocket"] as const) {
+  it(`captures the board over ${transport} and replays the recorded canary in both directions`, async () => {
+    const name = `board-${transport}`;
+    const recorded = canary?.recordings[name]?.recording as Recording | undefined;
+    const observed = await observe(recorded ?? null, transport === "ipc");
+    captureCanaryRecording(name, transport, observed, recordingExchanges(observed));
+    if (canary) {
+      checkNextHost(canary, name, observed);
+      await replayCanaryPeer(canary, name, boardProcedureSchemas());
+    }
   });
+}
 
-  it("old client × new host: a client that requests no board feature is granted none", async () => {
-    const board = fakeBoard();
-    const client = await connect(board, {
-      offered: HOST_V1_FEATURES,
-      requested: PRE_BOARD_FEATURES,
-    });
-    expect((await client.protocol.welcome.query()).features).toEqual(PRE_BOARD_FEATURES);
-    await expectEveryBoardOperationRefused(client, board);
-  });
+describe("version skew", () => {
+  it.runIf(!canary)(
+    "new client × old host: a host offering only the pre-VC-565 features grants no board feature",
+    async () => {
+      const board = fakeBoard();
+      const client = await connect(board, {
+        offered: PRE_BOARD_FEATURES,
+        requested: HOST_V1_FEATURES,
+      });
+      const { features } = await client.protocol.welcome.query();
+      expect(features).toEqual(PRE_BOARD_FEATURES);
+      expect(features.filter((feature) => feature.startsWith("board."))).toEqual([]);
+      await expectEveryBoardOperationRefused(client, board);
+    },
+  );
+
+  it.runIf(!canary)(
+    "old client × new host: a client that requests no board feature is granted none",
+    async () => {
+      const board = fakeBoard();
+      const client = await connect(board, {
+        offered: HOST_V1_FEATURES,
+        requested: PRE_BOARD_FEATURES,
+      });
+      expect((await client.protocol.welcome.query()).features).toEqual(PRE_BOARD_FEATURES);
+      await expectEveryBoardOperationRefused(client, board);
+    },
+  );
 });

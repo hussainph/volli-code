@@ -1,7 +1,13 @@
 // The host-owned follow-up queue (VC-675) through the production WebSocket
 // listener and the real Session runtime: a queued row and its revision must
 // survive every VC-669 network output schema, end to end over loopback.
-import { createTRPCClient, createWSClient, wsLink, type TRPCClient } from "@trpc/client";
+import {
+  getUntypedClient,
+  createTRPCClient,
+  createWSClient,
+  wsLink,
+  type TRPCClient,
+} from "@trpc/client";
 import {
   buildHostHello,
   encodeHostHello,
@@ -9,7 +15,7 @@ import {
   type HostActor,
   type HostHelloInput,
 } from "@volli/host-protocol";
-import { expectHostError, recordSubscription } from "@volli/host-protocol/testing";
+import { expectHostError, ipcContractLink, recordSubscription } from "@volli/host-protocol/testing";
 import {
   createInMemorySessionFollowUpLedger,
   createInMemorySessionLedger,
@@ -19,7 +25,12 @@ import {
 } from "@volli/session-engine";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { createSessionRouter, RpcDiagnosticLog, type AppRouter } from "./index";
+import {
+  createSessionRouter,
+  sessionProcedureSchemas,
+  RpcDiagnosticLog,
+  type AppRouter,
+} from "./index";
 import {
   legacyStreamEmissionSchema,
   sessionProjectionOutputSchema,
@@ -28,6 +39,17 @@ import {
 } from "./output-schema";
 import { sessionHandlersFrom } from "./session-handlers.test-support";
 import { startHostProtocolListener } from "./websocket-server";
+
+import {
+  captureCanaryRecording,
+  checkNextHost,
+  loadCanaryPeer,
+  recordingExchanges,
+  replayCanaryPeer,
+  peerInput,
+  type PeerExchange,
+} from "./canary-peer.test-support";
+const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */
 const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter((feature) => !feature.startsWith("board."));
@@ -132,7 +154,7 @@ const HELLO: HostHelloInput = {
   client: { kind: "cli", version: "test" },
   workspaceId: WORKSPACE,
   credential: "device-token",
-  features: ["sessions", "sessions.queue", "sessions.subscribe"],
+  features: ["sessions", "sessions.queue", "sessions.subscribe", "sessions.history"],
   lastSeen: null,
 };
 
@@ -154,6 +176,7 @@ describe("the host follow-up queue over the production WebSocket listener", () =
   it("keeps a queued row and its revision through snapshot, projection and the queue stream", async () => {
     const { listener, sessionId } = await serve();
     const client = connect(listener.url);
+    const exchanges: PeerExchange[] = [];
     const queueStream = recordSubscription<Emission>((handlers) =>
       client.session.subscribeQueue.subscribe({ sessionId }, handlers),
     );
@@ -162,14 +185,26 @@ describe("the host follow-up queue over the production WebSocket listener", () =
     );
     await Promise.all([queueStream.started, legacyStream.started]);
 
-    const submitted = await client.session.command.mutate({
+    const submitInput = peerInput(canary, "queue-websocket", "session.command", {
       commandId: "submit-queued",
       sessionId,
-      command: { kind: "message.submit", delivery: "queue", message: message("original") },
+      command: {
+        kind: "message.submit" as const,
+        delivery: "queue" as const,
+        message: message("original"),
+      },
     });
+    const submitted = await client.session.command.mutate(submitInput);
     expect(submitted.receipt?.status).toBe("accepted");
+    exchanges.push({
+      procedure: "session.command",
+      input: submitInput,
+      output: submitted,
+    });
 
-    const read = await client.session.projection.query({ sessionId });
+    const readInput = peerInput(canary, "queue-websocket", "session.projection", { sessionId });
+    const read = await client.session.projection.query(readInput);
+    exchanges.push({ procedure: "session.projection", input: { sessionId }, output: read });
     const revision = read.projection.queueRevision!;
     expect(Number.isSafeInteger(revision) && revision >= 0).toBe(true);
     const row = {
@@ -182,6 +217,16 @@ describe("the host follow-up queue over the production WebSocket listener", () =
     expect(sessionProjectionOutputSchema.parse(read)).toEqual(read);
 
     const snapshot = await client.session.snapshot.query({ sessionId });
+    exchanges.push({ procedure: "session.snapshot", input: { sessionId }, output: snapshot });
+    const historyInput = peerInput(canary, "queue-websocket", "session.history", {
+      sessionId,
+      before: snapshot.throughSequence + 1,
+    });
+    exchanges.push({
+      procedure: "session.history",
+      input: historyInput,
+      output: await client.session.history.query(historyInput),
+    });
     expect(snapshot.projection).toMatchObject({ queue: [row], queueRevision: revision });
     expect(sessionSnapshotOutputSchema.parse(snapshot)).toEqual(snapshot);
 
@@ -198,6 +243,11 @@ describe("the host follow-up queue over the production WebSocket listener", () =
       revision,
       queue: [row],
     });
+    exchanges.push({
+      procedure: "session.subscribeQueue",
+      input: { sessionId },
+      frames: [queueStream.frames.find(({ data }) => isQueue(data) && data.revision === revision)!],
+    });
     for (const { data } of queueStream.frames)
       expect(streamEmissionSchema.parse(data)).toEqual(data);
     // The frozen VC-669 stream never carries an arm its published union lacks.
@@ -209,38 +259,53 @@ describe("the host follow-up queue over the production WebSocket listener", () =
     // A stale revision through the network's queue operations is a typed
     // conflict, and leaves the row and its revision exactly as they were.
     const stale = revision + 1;
-    for (const call of [
-      client.session.cancelQueued.mutate({
-        commandId: "stale-cancel",
-        sessionId,
-        messageId: "queued",
-        expectedRevision: stale,
-      }),
-      client.session.editQueued.mutate({
-        commandId: "stale-edit",
-        sessionId,
-        messageId: "queued",
-        message: message("stale"),
-        expectedRevision: stale,
-      }),
-    ]) {
-      expect(await expectHostError(call)).toMatchObject({
-        code: "CONFLICT",
-        reason: "queue-revision-conflict",
-      });
+    for (const [procedure, input] of [
+      [
+        "session.cancelQueued",
+        { commandId: "stale-cancel", sessionId, messageId: "queued", expectedRevision: stale },
+      ],
+      [
+        "session.editQueued",
+        {
+          commandId: "stale-edit",
+          sessionId,
+          messageId: "queued",
+          message: message("stale"),
+          expectedRevision: stale,
+        },
+      ],
+    ] as const) {
+      const recordedInput = peerInput(canary, "queue-websocket", procedure, input);
+      const error = await expectHostError(
+        getUntypedClient(client).mutation(procedure, recordedInput),
+      );
+      expect(error).toMatchObject({ code: "CONFLICT", reason: "queue-revision-conflict" });
+      exchanges.push({ procedure, input: recordedInput, error });
     }
     const after = await client.session.projection.query({ sessionId });
     expect(after.projection).toMatchObject({ queue: [row], queueRevision: revision });
 
     // The current revision is accepted, and its new queue reaches the stream.
-    const edited = await client.session.editQueued.mutate({
-      commandId: "edit",
-      sessionId,
-      messageId: "queued",
-      message: message("edited"),
-      expectedRevision: revision,
-    });
+    const editInput = peerInput(
+      canary,
+      "queue-websocket",
+      "session.editQueued",
+      {
+        commandId: "edit",
+        sessionId,
+        messageId: "queued",
+        message: message("edited"),
+        expectedRevision: revision,
+      },
+      1,
+    );
+    const edited = await client.session.editQueued.mutate(editInput);
     expect(edited.receipt?.status).toBe("accepted");
+    exchanges.push({
+      procedure: "session.editQueued",
+      input: editInput,
+      output: edited,
+    });
     await until(
       () => queueStream.frames.some(({ data }) => isQueue(data) && data.revision === revision + 1),
       "the edited queue emission",
@@ -252,6 +317,16 @@ describe("the host follow-up queue over the production WebSocket listener", () =
     expect(legacyStream.frames.some(({ data }) => isQueue(data))).toBe(false);
     queueStream.unsubscribe();
     legacyStream.unsubscribe();
+    captureCanaryRecording(
+      "queue-websocket",
+      "websocket",
+      exchanges,
+      recordingExchanges(exchanges),
+    );
+    if (canary) {
+      checkNextHost(canary, "queue-websocket", exchanges);
+      await replayCanaryPeer(canary, "queue-websocket", sessionProcedureSchemas());
+    }
   });
 });
 
@@ -262,3 +337,85 @@ async function until(condition: () => boolean, what: string): Promise<void> {
   }
   throw new Error(`Timed out waiting for ${what}`);
 }
+
+it("records the real runtime's queue mutation/retry/conflict and history through IPC in both skew directions", async () => {
+  const { runtime, sessionId } = await heldRuntime();
+  const connection = await ipcContractLink({
+    router: createSessionRouter(),
+    createContext: () => ({
+      caller: {
+        actor: { kind: "device" as const, deviceId: DEVICE, workspaceId: WORKSPACE },
+        current: () => true,
+      },
+      handlers: sessionHandlersFrom({ runtime }),
+      diagnostics: new RpcDiagnosticLog(),
+      resourceWorkspace: ({ id }) => (id === sessionId ? WORKSPACE : null),
+      transport: "electron-ipc" as const,
+    }),
+  }).open(null);
+  const raw = getUntypedClient(connection.client);
+  const exchanges: PeerExchange[] = [];
+  const submit = {
+    commandId: "submit-queued",
+    sessionId,
+    command: { kind: "message.submit", delivery: "queue", message: message("original") },
+  };
+  const mutate = async (procedure: string, fallback: unknown, occurrence = 0) => {
+    const input = peerInput(canary, "queue-ipc", procedure, fallback, occurrence);
+    const output = await raw.mutation(procedure, input);
+    exchanges.push({ procedure, input, output });
+    return output;
+  };
+  try {
+    await mutate("session.command", submit);
+    await mutate("session.command", submit, 1);
+    const read = await connection.client.session.projection.query({ sessionId });
+    exchanges.push({ procedure: "session.projection", input: { sessionId }, output: read });
+    expect(read.projection.queue).toHaveLength(1);
+    const revision = read.projection.queueRevision!;
+    const edit = {
+      commandId: "edit",
+      sessionId,
+      messageId: "queued",
+      message: message("edited"),
+      expectedRevision: revision,
+    };
+    await mutate("session.editQueued", edit);
+    const stale = {
+      commandId: "stale-cancel",
+      sessionId,
+      messageId: "queued",
+      expectedRevision: revision,
+    };
+    const staleInput = peerInput(canary, "queue-ipc", "session.cancelQueued", stale);
+    const error = await expectHostError(raw.mutation("session.cancelQueued", staleInput));
+    expect(error).toMatchObject({ reason: "queue-revision-conflict" });
+    exchanges.push({ procedure: "session.cancelQueued", input: staleInput, error });
+    await mutate(
+      "session.cancelQueued",
+      {
+        commandId: "cancel",
+        sessionId,
+        messageId: "queued",
+        expectedRevision: revision + 1,
+      },
+      1,
+    );
+    const snapshot = await connection.client.session.snapshot.query({ sessionId });
+    exchanges.push({ procedure: "session.snapshot", input: { sessionId }, output: snapshot });
+    expect(snapshot.projection.queue).toEqual([]);
+    const history = { sessionId, before: snapshot.throughSequence + 1 };
+    exchanges.push({
+      procedure: "session.history",
+      input: history,
+      output: await connection.client.session.history.query(history),
+    });
+  } finally {
+    await connection.close();
+  }
+  captureCanaryRecording("queue-ipc", "ipc", exchanges, recordingExchanges(exchanges));
+  if (canary) {
+    checkNextHost(canary, "queue-ipc", exchanges);
+    await replayCanaryPeer(canary, "queue-ipc", sessionProcedureSchemas());
+  }
+});
