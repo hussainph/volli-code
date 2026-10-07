@@ -250,6 +250,7 @@ jobs:
           apps/desktop/e2e/volli-drive/lib/stop.test.mjs
           apps/desktop/e2e/volli-drive/lib/fake-provider.test.mjs
           apps/desktop/e2e/volli-drive/lib/remote-acceptance.test.mjs
+          apps/desktop/e2e/volli-drive/lib/native-window-lifecycle.test.mjs
           apps/desktop/e2e/volli-drive/lib/sshd-fixture.test.mjs
 
       # Every workspace manifest must declare the license the root declares
