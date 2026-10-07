@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { captureHostLog } from "@volli/host-core/testing";
 import type { HostLiveWork } from "@volli/host-core/sessions";
 
 import {
@@ -507,9 +508,10 @@ describe("createMenuBarHost (VC-577)", () => {
     expect(h.ports.quit).not.toHaveBeenCalled();
   });
 
-  it("defaults to real timers and console logging", () => {
+  it("defaults to real timers and the host log", () => {
     vi.useFakeTimers();
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const captured = captureHostLog();
+    const info = (line: string) => captured.of("menu-bar").some((record) => record.msg === line);
     try {
       const quit = vi.fn();
       let work = ONE_TURN;
@@ -532,16 +534,16 @@ describe("createMenuBarHost (VC-577)", () => {
         focusApp: () => {},
       });
       host.enter();
-      expect(info).toHaveBeenCalledWith("[menu-bar] entered menu-bar mode: 1 turn");
+      expect(info("[menu-bar] entered menu-bar mode: 1 turn")).toBe(true);
       work = IDLE;
       vi.advanceTimersByTime(MENU_BAR_POLL_MS + MENU_BAR_SETTLE_MS);
       expect(quit).toHaveBeenCalledOnce();
       host.reveal();
       host.enter();
-      expect(info).toHaveBeenCalledWith("[menu-bar] entered menu-bar mode: no live work");
+      expect(info("[menu-bar] entered menu-bar mode: no live work")).toBe(true);
       host.reveal();
     } finally {
-      info.mockRestore();
+      captured.restore();
       vi.useRealTimers();
     }
   });

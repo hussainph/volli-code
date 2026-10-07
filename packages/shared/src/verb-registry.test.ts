@@ -250,6 +250,8 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "sessions.attach": "coordination",
   "settings.experiments": "coordination",
   "settings.setExperiment": "coordination",
+  "logs.tail": "coordination",
+  "logs.follow": "coordination",
   "modelAccess.inspect": "coordination",
   "modelAccess.defaults": "coordination",
   "modelAccess.setDefault": "coordination",
@@ -1340,6 +1342,8 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "session.editQueued": ["workspace", "command-id"],
     "session.cancelInteraction": ["workspace", "natural"],
     "session.reconcile": ["workspace", "natural"],
+    "logs.tail": ["host", "read"],
+    "logs.follow": ["host", "read"],
     "labDiagnostics.list": ["host", "read"],
     "labDiagnostics.subscribe": ["host", "read"],
   } as const satisfies Record<

@@ -44,6 +44,10 @@ import {
 
 import type { AutomationSkipIntent } from "./engine";
 import type { ScheduleCursors } from "./schedule-cursor";
+import type { LogFields } from "../log/logger";
+import { hostLogger } from "../log/root";
+
+const schedulerLog = hostLogger("automation-scheduler");
 
 /**
  * How long the timer sleeps at most, however far away the next occurrence is.
@@ -118,7 +122,7 @@ export interface AutomationSchedulerPorts {
   }): Promise<ScheduledRunOutcome>;
   setTimer(delayMs: number, fire: () => void): NodeJS.Timeout;
   clearTimer(handle: NodeJS.Timeout): void;
-  log?(message: string): void;
+  log?(msg: string, fields?: LogFields): void;
 }
 
 export interface AutomationScheduler {
@@ -203,7 +207,7 @@ export function scheduleSkipCommandId(automationId: string, dueAt: number): stri
 }
 
 export function createAutomationScheduler(ports: AutomationSchedulerPorts): AutomationScheduler {
-  const log = ports.log ?? ((message: string) => console.error(message));
+  const log = ports.log ?? schedulerLog.error;
   let timer: NodeJS.Timeout | null = null;
   let stopped = false;
   /**
@@ -331,9 +335,10 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
         // One schedule's failure must not stop the others: this is the process
         // that decides whether ANY unattended work happens, so it fails per
         // schedule rather than per host. The next pass retries it.
-        log(
-          `[volli] automation schedule ${automation.id} could not be evaluated: ${errorText(error)}`,
-        );
+        log("automation schedule could not be evaluated", {
+          automationId: automation.id,
+          error,
+        });
       }
     }
     if (earliest === null) {
@@ -351,7 +356,7 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
     pass = pass
       .then(() => (stopped ? undefined : sweep()))
       .catch((error: unknown) => {
-        log(`[volli] automation scheduler pass failed: ${errorText(error)}`);
+        log("automation scheduler pass failed", { error });
         // AND LOOK AGAIN. A pass can fail whole — a locked database at launch,
         // an unreadable projection — and a scheduler that only logged that
         // would stay disarmed for as long as the app stays open: no Runs, no
@@ -382,8 +387,4 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
       return pass;
     },
   };
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

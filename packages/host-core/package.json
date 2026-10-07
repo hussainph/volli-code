@@ -41,6 +41,10 @@
       "types": "./src/entries/integrations.ts",
       "import": "./src/entries/integrations.ts"
     },
+    "./log": {
+      "types": "./src/entries/log.ts",
+      "import": "./src/entries/log.ts"
+    },
     "./maintenance": {
       "types": "./src/entries/maintenance.ts",
       "import": "./src/entries/maintenance.ts"

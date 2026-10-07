@@ -45,6 +45,9 @@ import {
   resolveScopedDecisionModel,
   writeGlobalDecisionModel,
 } from "./settings";
+import { hostLogger } from "../log/root";
+
+const decisionLog = hostLogger("decision");
 
 /** How long the Settings catalog's sign-in sweep may take before it reports what it has. */
 const CATALOG_TIMEOUT_MS = 5_000;
@@ -93,7 +96,7 @@ function deadline(ms: number): AbortSignal {
 export function createHostDecisions(options: HostDecisionsOptions): HostDecisions {
   const { db, models } = options;
   const now = options.now ?? Date.now;
-  const log = options.log ?? ((message, error) => console.warn(message, error));
+  const log = options.log ?? ((message, error) => decisionLog.warn(message, { error }));
   /**
    * The persisted catalog, restored — or Pi's built-in one when restoring
    * failed. Only a cloud model is looked up in it, and the built-in catalog
@@ -101,7 +104,7 @@ export function createHostDecisions(options: HostDecisionsOptions): HostDecision
    * a decision, and nothing local waits on it at all.
    */
   const restored = options.catalogReady.catch((error: unknown) => {
-    log("[decision] the model catalog did not restore; using the built-in one", error);
+    log("the model catalog did not restore; using the built-in one", error);
   });
   const catalog = (): Promise<void> => restored;
   const base = options.classifier ?? piDecisionClassifier(models);
@@ -119,7 +122,7 @@ export function createHostDecisions(options: HostDecisionsOptions): HostDecision
     recordUsage: ({ sessionId, purpose, usage }) => options.recordUsage(sessionId, usage, purpose),
     // Metering is work nobody asked for; a failed write is logged and the
     // decision the caller already holds stands (CLAUDE.md's one exception).
-    onRecordFailure: (error) => log("[decision] could not record usage", error),
+    onRecordFailure: (error) => log("could not record usage", error),
     now,
   });
 
@@ -265,7 +268,7 @@ export function createHostDecisions(options: HostDecisionsOptions): HostDecision
             message: "The decision model did not answer in time.",
           };
         }
-        log("[decision] the connection test failed unexpectedly", error);
+        log("the connection test failed unexpectedly", error);
         return {
           ok: false,
           elapsedMs: 0,

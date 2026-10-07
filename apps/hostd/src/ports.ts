@@ -12,7 +12,6 @@
  * - **client** and **trash**: absent. host-core refuses those requests with
  *   its typed "needs the desktop app" errors, and never deletes instead.
  */
-import { format } from "node:util";
 
 import { ALWAYS_ONLINE } from "@volli/agent-runtime";
 import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "@volli/host-core/ports";
@@ -32,8 +31,8 @@ export function headlessPorts(
 ): HostCorePorts {
   return {
     log: {
-      error: (...args: unknown[]) => logger.error(format(...args), { source: "host-core" }),
-      warn: (...args: unknown[]) => logger.warn(format(...args), { source: "host-core" }),
+      error: (msg, fields) => logger.error(msg, { source: "host-core", ...fields }),
+      warn: (msg, fields) => logger.warn(msg, { source: "host-core", ...fields }),
     },
     events: {
       publish: (topic, payload) => {

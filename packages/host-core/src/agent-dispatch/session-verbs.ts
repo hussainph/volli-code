@@ -17,7 +17,6 @@ import {
   displayTicketId,
   effectiveHarnessId,
   EMPTY_SESSION_USAGE_SUMMARY,
-  errorMessage,
   pendingSubagentIds,
   isSessionListState,
   SESSION_LIST_STATES,
@@ -57,6 +56,9 @@ import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
 import { positiveIntOr, projectForCreate, ticketForDisplayId } from "./resolution";
 import { publicSessionOrigin } from "./wire";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-verbs");
 
 /**
  * How many transcript messages a chat `session peek` shows when the caller
@@ -856,7 +858,7 @@ async function postFinalTodoList(
       { sessionId },
     );
   } catch (error) {
-    console.error(`[volli] failed to read ${sessionId}'s todo list: ${errorMessage(error)}`);
+    log.error("failed to read the session's todo list", { sessionId, error });
     return;
   }
   if (list === null || list.length === 0) return;
@@ -870,7 +872,7 @@ async function postFinalTodoList(
       ),
     );
   } catch (error) {
-    console.error(`[volli] failed to comment ${sessionId}'s todo list: ${errorMessage(error)}`);
+    log.error("failed to comment the session's todo list", { sessionId, ticketId, error });
     return;
   }
   options.onMutation?.({ ticketId, projectId: session.projectId, kind: "comment" });

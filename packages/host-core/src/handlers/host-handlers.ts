@@ -50,6 +50,8 @@ import {
   type HandlerCall,
   type HiddenModelRef,
   type HostHandler,
+  type HostLogsBatch,
+  type HostLogsQuery,
   type HostHandlerKey,
   type ModelAccessDefaults,
   type ModelAccessSnapshot,
@@ -63,6 +65,8 @@ import {
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import { withLogContext } from "../log/context";
+import type { LogRing } from "../log/ring";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
@@ -198,6 +202,10 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "session.show": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.peek": HostHandler<SessionReadHandlerInput, AgentResponse>;
   readonly "session.answer": HostHandler<SessionReadHandlerInput, AgentResponse>;
+  /** The host's recent log, redacted and bounded (VC-699): a page after a cursor. */
+  readonly "logs.tail": HostHandler<HostLogsQuery, HostLogsBatch>;
+  /** The host's log as it is written, after a cursor's backlog. */
+  readonly "logs.follow": HostSubscriptionHandler<HostLogsQuery, HostLogsBatch>;
   /**
    * The desktop-only tier (`DESKTOP_ENTRIES`, VC-608): the same map, under
    * placement-derived policy (both host-placed: device-as-user).
@@ -279,6 +287,8 @@ export interface HostHandlerOptions {
    * passes a forwarder.
    */
   readonly sessionReads?: SessionReadPort | null;
+  /** The host's in-memory recent log (VC-699), or null where this host keeps none. */
+  readonly logs?: LogRing | null;
   /**
    * The host's board change feeds (VC-565): every board command stamps its
    * rows here, and the root's event bus feeds it every other writer's
@@ -300,6 +310,20 @@ const MODEL_ACCESS_UNAVAILABLE = "Model Access is unavailable on this transport"
 const PREFERENCES_UNAVAILABLE = "Model Access preferences are unavailable on this transport";
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
 const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
+const LOGS_UNAVAILABLE = "This host keeps no log to read";
+
+/**
+ * Runs a handler with the ids its input names joined to the operation's log
+ * context (VC-699): every line the command writes, the Session runtime's and
+ * the turn's included, names the Session, ticket and command it serves.
+ */
+function joined<Result>(
+  ids: Readonly<Record<string, string | undefined>>,
+  run: () => Result,
+): Result {
+  // An absent id stays absent: the logger leaves undefined fields out.
+  return withLogContext(ids, run);
+}
 
 function present<Service>(service: Service | null, message: string): Service {
   if (service === null) throw new OperationUnavailableError(message);
@@ -336,6 +360,7 @@ function hostHandlerEntries(
   const preferences = () => present(db, PREFERENCES_UNAVAILABLE);
   const board = () => present(db, BOARD_UNAVAILABLE);
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
+  const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
 
   const worktree = (database: Database.Database) =>
     options.worktree ?? worktreeDeps(database, ports, { dataDir: options.dataDir });
@@ -347,31 +372,36 @@ function hostHandlerEntries(
     seam?: TicketMoveSeam,
   ): Ticket[] | Promise<Ticket[]> => {
     const database = board();
-    return executeTicketMove(
-      {
-        worktree: worktree(database),
-        now,
-        busySites: options.busyWorktreeSites,
-        interruptTicketSessions: options.interruptTicketSessions,
-        // An explicit move is the Deliberate-move door: it reaches the one
-        // host-owned pending arrival, whichever door the person used.
-        onDeliberateMove: (notice) => {
-          if (automations.kind !== "live") return;
-          const execution = automations.execution;
-          if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
-        },
-        notify: (request) => ports.attention.deliver(request),
-        // The desktop window holds the committed board in its reply, so
-        // only the detached trim's worktree change is pushed back to it.
-        onMutation: (change) => {
-          if (call.origin === "desktop-window" && change.kind !== "worktree") return;
-          ports.events.publish("data-changed", change);
-        },
-        detachedWork: options.detachedWork,
-      },
-      input,
-      { now: now(), actor: call.actor },
-      seam,
+    // Joined to the move's ticket and project (VC-699): every line it writes carries both.
+    return joined(
+      { ticketId: (input as { ticketId?: string }).ticketId, projectId: input.projectId },
+      () =>
+        executeTicketMove(
+          {
+            worktree: worktree(database),
+            now,
+            busySites: options.busyWorktreeSites,
+            interruptTicketSessions: options.interruptTicketSessions,
+            // An explicit move is the Deliberate-move door: it reaches the one
+            // host-owned pending arrival, whichever door the person used.
+            onDeliberateMove: (notice) => {
+              if (automations.kind !== "live") return;
+              const execution = automations.execution;
+              if (execution.kind !== "idle") execution.pendingArmedRuns.noteDeliberateMove(notice);
+            },
+            notify: (request) => ports.attention.deliver(request),
+            // The desktop window holds the committed board in its reply, so
+            // only the detached trim's worktree change is pushed back to it.
+            onMutation: (change) => {
+              if (call.origin === "desktop-window" && change.kind !== "worktree") return;
+              ports.events.publish("data-changed", change);
+            },
+            detachedWork: options.detachedWork,
+          },
+          input,
+          { now: now(), actor: call.actor },
+          seam,
+        ),
     );
   };
 
@@ -393,16 +423,17 @@ function hostHandlerEntries(
     // Every Retry rides this. A ready attachment is the recovery point for an
     // Automation's durable first-message intent; the runner's fixed Session
     // command id reconciles rather than duplicates after a crash.
-    "sessions.attach": async (input) => {
-      const attached = await sessions().attach(input);
-      if (attached.state === "ready" && automations.kind === "live") {
-        const execution = automations.execution;
-        if (execution.kind === "ready") {
-          await execution.runner.resumeDeliveryForSession(input.sessionId);
+    "sessions.attach": (input) =>
+      joined({ sessionId: input.sessionId }, async () => {
+        const attached = await sessions().attach(input);
+        if (attached.state === "ready" && automations.kind === "live") {
+          const execution = automations.execution;
+          if (execution.kind === "ready") {
+            await execution.runner.resumeDeliveryForSession(input.sessionId);
+          }
         }
-      }
-      return attached;
-    },
+        return attached;
+      }),
     "settings.experiments": () => experiments().snapshot(),
     "settings.setExperiment": ({ id, enabled }) => experiments().set(id, enabled),
     "modelAccess.inspect": async (input) => {
@@ -451,30 +482,38 @@ function hostHandlerEntries(
         (emission) => sink.emit(emission),
         (error) => sink.fail(error),
       ),
-    "session.command": (request) => runtime().command(request),
+    "session.command": (request) =>
+      joined(
+        { sessionId: (request as { sessionId?: string }).sessionId, commandId: request.commandId },
+        () => runtime().command(request),
+      ),
     // An absent revision stays absent: the command's idempotency signature is
     // unchanged for a Client that does not send one.
     "session.cancelQueued": ({ commandId, sessionId, messageId, expectedRevision }) =>
-      runtime().command({
-        commandId,
-        sessionId,
-        command: {
-          kind: "message.cancel",
-          messageId,
-          ...(expectedRevision === undefined ? {} : { expectedRevision }),
-        },
-      }),
+      joined({ sessionId, commandId }, () =>
+        runtime().command({
+          commandId,
+          sessionId,
+          command: {
+            kind: "message.cancel",
+            messageId,
+            ...(expectedRevision === undefined ? {} : { expectedRevision }),
+          },
+        }),
+      ),
     "session.editQueued": ({ commandId, sessionId, messageId, message, expectedRevision }) =>
-      runtime().command({
-        commandId,
-        sessionId,
-        command: {
-          kind: "message.edit",
-          messageId,
-          message,
-          ...(expectedRevision === undefined ? {} : { expectedRevision }),
-        },
-      }),
+      joined({ sessionId, commandId }, () =>
+        runtime().command({
+          commandId,
+          sessionId,
+          command: {
+            kind: "message.edit",
+            messageId,
+            message,
+            ...(expectedRevision === undefined ? {} : { expectedRevision }),
+          },
+        }),
+      ),
     // A person walked away from a pending interaction: the only reason a
     // person's door can honestly report is that they left it undecided.
     "session.cancelInteraction": (input) =>
@@ -485,6 +524,9 @@ function hostHandlerEntries(
     "session.peek": ({ workspaceId, args }) => sessionReads()("session.peek", workspaceId, args),
     "session.answer": ({ workspaceId, args }) =>
       sessionReads()("session.answer", workspaceId, args),
+    "logs.tail": (query) => logs().read(query),
+    "logs.follow": async (query, _call, sink) =>
+      logs().follow(query, (batch) => void sink.emit(batch)),
     // The desktop-only tier: the bodies `volli:project-reorder` and
     // `volli:worktree-trim-settings-get` had in `data-ipc.ts`, moved, not copied.
     "project.reorder": ({ orderedIds }) => {

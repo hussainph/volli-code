@@ -42,6 +42,10 @@ import {
   type SessionModelOverride,
   type Sessions,
 } from "../session-runtime/sessions";
+import type { LogFields } from "../log/logger";
+import { hostLogger } from "../log/root";
+
+const automationLog = hostLogger("automations");
 
 /** The composer's `/` supply for one project — templates and ruled skills, one read. */
 export interface AutomationPromptSupply {
@@ -147,8 +151,8 @@ export interface AutomationRunnerPorts {
   refineAutoTitle?(input: AutoTitleRequest): void;
   /** Fired after the complete Run projection exists. */
   onRunStarted?(event: { run: AutomationRun; projectId: string }): void;
-  /** Detached-half diagnostics; defaults to `console.error`. */
-  log?(message: string): void;
+  /** Detached-half diagnostics; defaults to the host log at `error`. */
+  log?(msg: string, fields?: LogFields): void;
 }
 
 export type RunAutomationOutcome =
@@ -332,7 +336,7 @@ function runRefusalCode(value: string | undefined): AutomationRunRefusalCode | n
 }
 
 export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationRunner {
-  const log = deps.log ?? ((message: string) => console.error(message));
+  const log = deps.log ?? automationLog.error;
   /**
    * A local fast-path latch keeps two clicks in one host from interleaving
    * before SQLite's accepted-command projection sees the first. The ledger is
@@ -393,9 +397,10 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
         detail,
       });
     } catch (error) {
-      log(
-        `[volli] automation Run ${delivery.runId} could not record its first-message failure: ${errorMessage(error)}`,
-      );
+      log("automation run could not record its first-message failure", {
+        runId: delivery.runId,
+        error,
+      });
     }
   }
 
@@ -404,9 +409,9 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
     try {
       const run = deps.findRun(delivery.runId);
       if (run === undefined) {
-        log(
-          `[volli] automation Run ${delivery.runId} could not refine its Session title: the Run was not found`,
-        );
+        log("automation run could not refine its session title: the run was not found", {
+          runId: delivery.runId,
+        });
         return;
       }
       deps.refineAutoTitle({
@@ -419,9 +424,7 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
       // Like every failure inside auto-titling, this is detached background
       // work: the launch fallback already stands, so delivery continues and
       // the diagnostic stays out of the person's mutation surfaces.
-      log(
-        `[volli] automation Run ${delivery.runId} could not refine its Session title: ${errorMessage(error)}`,
-      );
+      log("automation run could not refine its session title", { runId: delivery.runId, error });
     }
   }
 
@@ -451,9 +454,7 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
       // next ready attach reconciles/replays safely after a crash or recovery.
       const detail = `The Automation Run's first message could not be delivered: ${errorMessage(error)}`;
       await reportDeliveryFailure(delivery, detail);
-      log(
-        `[volli] automation Run ${delivery.runId} could not deliver its Instructions: ${errorMessage(error)}`,
-      );
+      log("automation run could not deliver its instructions", { runId: delivery.runId, error });
       return;
     }
 
@@ -463,9 +464,10 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
     const failure = instructionDeliveryFailure(result);
     if (failure !== null) {
       await reportDeliveryFailure(delivery, failure.detail);
-      log(
-        `[volli] automation Run ${delivery.runId} first-message receipt is ${failure.status}; retaining its delivery intent`,
-      );
+      log("automation run first-message receipt not accepted; retaining its delivery intent", {
+        runId: delivery.runId,
+        status: failure.status,
+      });
       return;
     }
 
@@ -474,9 +476,10 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
     } catch (error) {
       // The turn itself succeeded. Keep the intent recoverable, but do not turn
       // a bookkeeping failure after delivery into a false Session Attention.
-      log(
-        `[volli] automation Run ${delivery.runId} could not mark its Instructions delivered: ${errorMessage(error)}`,
-      );
+      log("automation run could not mark its instructions delivered", {
+        runId: delivery.runId,
+        error,
+      });
     }
   }
 
@@ -506,14 +509,15 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
         // said here, and the Session itself carries the failure Attention that
         // makes it `error` for VC-133's notification rule
         // (`session-runtime.ts`'s `#failAttach`).
-        log(
-          `[volli] automation Run ${run.id} could not attach its Session: ${attachRefusal(attached.receipt)}`,
-        );
+        log("automation run could not attach its session", {
+          runId: run.id,
+          reason: attachRefusal(attached.receipt),
+        });
         return;
       }
       await resumeDeliveryForSession(run.sessionId);
     } catch (error) {
-      log(`[volli] automation Run ${run.id} could not attach its Session: ${errorMessage(error)}`);
+      log("automation run could not attach its session", { runId: run.id, error });
     }
   }
 
@@ -791,7 +795,7 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
       } catch (error) {
         // Composer behavior: an unreadable supply leaves the literal text in
         // place instead of changing the saved Instructions or refusing work.
-        log(`[volli] automation Run could not read the prompt supply: ${errorMessage(error)}`);
+        log("automation run could not read the prompt supply", { error });
       }
       const expanded = expandCommandInvocation(instructions, supply.templates, supply.skills);
       const accepted = await deps.engine.acceptRun({
@@ -875,7 +879,7 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
       for (const plan of plans) {
         const outcome = await executePlan(plan);
         if (!outcome.ok) {
-          log(`[volli] automation Run ${plan.runId} could not recover: ${outcome.error}`);
+          log("automation run could not recover", { runId: plan.runId, error: outcome.error });
           continue;
         }
         // The intent was committed before the original caller got success;
@@ -899,9 +903,7 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
           });
           if (attached.state === "ready") await resumeDeliveryForSession(sessionId);
         } catch (error) {
-          log(
-            `[volli] automation delivery for Session ${sessionId} could not recover: ${errorMessage(error)}`,
-          );
+          log("automation delivery could not recover", { sessionId, error });
         }
       }
     },

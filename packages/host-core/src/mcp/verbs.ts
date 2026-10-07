@@ -67,6 +67,9 @@ import {
 } from "../db/mcp-operations-repo";
 import { optionalVerbText, requiredVerbText } from "../verb-input";
 import type { McpSettingsService } from "./settings";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("mcp");
 
 /**
  * Which MCP verbs ask before they act, and why the rest do not.
@@ -592,10 +595,11 @@ function record(
     // news would report the wrong outcome. Logged rather than silent: nobody is
     // waiting on this comment, so there is no toast to raise, but a missing
     // comment with no trace is the kind of thing that is debugged twice.
-    console.warn(
-      `MCP ${entry.operation} recorded, but its ticket comment failed for ${session.ticketId}:`,
+    log.warn("mcp change recorded, but its ticket comment failed", {
+      operation: entry.operation,
+      ticketId: session.ticketId,
       error,
-    );
+    });
   }
 }
 

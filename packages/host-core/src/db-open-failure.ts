@@ -199,8 +199,8 @@ export function describeDbOpenFailure(
  * report of the plain-language message can still be diagnosed from the log they
  * attach.
  *
- * Unframed: the one call site's `console.error` prefix already says a database
- * open failed, and repeating it in the payload is the doubling this module's
+ * Unframed: the one call site's log message already says a database open
+ * failed, and repeating it in the payload is the doubling this module's
  * CONTRACT exists to prevent.
  */
 export function dbOpenFailureLogLine(error: unknown): string {

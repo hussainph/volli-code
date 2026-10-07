@@ -68,6 +68,18 @@ export default defineConfig({
         // what a headless host answers with: a refusal that reads wrong is
         // what a person on a server sees instead of their link opening.
         "src/ports/*.ts",
+        // The structured log (VC-699): its redaction is a merge gate, and a
+        // branch nobody drove is a field that reaches a line unredacted or a
+        // line that loses its trace. The file sink's disk-failure callbacks
+        // stay out, for the reason `worktree/git.ts` does.
+        "src/log/logger.ts",
+        "src/log/context.ts",
+        "src/log/root.ts",
+        "src/log/sinks.ts",
+        "src/log/ring.ts",
+        "src/log/steps.ts",
+        "src/log/correlation.ts",
+        "src/session-runtime/correlated-executor.ts",
         // The Session concurrency budget (VC-339). In the gate because every
         // branch of it is a rule about a machine nobody watches: a miscount
         // hands one Session the whole box while three others build, and a
