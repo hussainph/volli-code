@@ -84,6 +84,15 @@ describe("every failure's line and recovery", () => {
     });
   });
 
+  it("says this Mac could not keep the host, and runs the link again", () => {
+    expect(
+      describeFailure({ code: "save-failed", step: "link", detail: "disk full" }, "box"),
+    ).toEqual({
+      line: "Couldn’t save box on this Mac",
+      recovery: { action: "retry", label: "Try again", from: "link" },
+    });
+  });
+
   it("maps the lab's five rows onto the steps, each step once", () => {
     expect(Object.values(CHECKLIST_ROWS).flat()).toEqual([...STEP_ORDER]);
   });

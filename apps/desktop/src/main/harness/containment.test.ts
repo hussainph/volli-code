@@ -167,6 +167,9 @@ describe("home-derived paths main uses", () => {
       // Electron's home ignores $HOME on macOS: only reached outside harness
       // mode, where the contained VOLLI_AGENT_HOME is authoritative instead.
       'index.ts: : ((isDev ? process.env["VOLLI_AGENT_HOME"] : undefined) ?? app.getPath("home"));',
+      // Contained by HOME too: accepting a remote host's key writes the
+      // known_hosts ssh itself reads (VC-700).
+      "remote-hosts.ts: await acceptHostKeys({ target, offer, home: homedir(), logger });",
     ]);
   });
 

@@ -162,3 +162,4 @@ export type {
   PrCheck,
   TicketRetentionState,
 } from "./worktree-host";
+export * from "./remote-hosts";

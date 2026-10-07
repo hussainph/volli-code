@@ -45,6 +45,7 @@ they are listed so the index accounts for every module in the bundle.
   @volli/cli
   @volli/desktop
   @volli/host-core
+  @volli/host-install
   @volli/host-protocol
   @volli/session-engine
   @volli/session-presentation
@@ -249,7 +250,7 @@ they are listed so the index accounts for every module in the bundle.
   @streamdown/cjk@1.0.3  Apache-2.0  [bundled into a chunk]
   @streamdown/code@1.1.1  Apache-2.0  [bundled into a chunk]
   @streamdown/mermaid@1.0.2  Apache-2.0  [bundled into a chunk]
-  @trpc/client@11.18.0  MIT  [bundled into a chunk]
+  @trpc/client@11.18.0  MIT  [node_modules tree]
   @trpc/server@11.18.0  MIT  [node_modules tree]
   @types/d3@7.4.3  MIT  [bundled into a chunk]
   @types/d3-array@3.2.2  MIT  [bundled into a chunk]

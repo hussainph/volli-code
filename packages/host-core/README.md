@@ -831,6 +831,11 @@ total over both tiers' keys, so a missing handler fails `pnpm typecheck`; a
 service a host lacks makes its handlers throw `OperationUnavailableError`
 rather than leaving a hole.
 
+Desktop main also passes `remoteHosts` (`RemoteHostsPort`,
+`handlers/remote-hosts-port.ts`, VC-700): its registry of hosts added over
+SSH, behind the desktop-only `hosts.*` and `hostAdd.*` keys. hostd passes
+none, so those answer unavailable there.
+
 The map it returns is sealed (`HostHandlerMap`, `handlers/handler-map.ts`):
 no entry is callable. A door reaches one only through
 `invokeHandler(map, policy, …)` or the `admittedHandlers(map, policy)` view,

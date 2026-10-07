@@ -173,8 +173,8 @@ export {
   type DesktopIpcRouters,
   type IpcExposureTable,
 } from "./desktop-ipc";
-export { sanitizeDiagnosticText } from "./diagnostic-text";
 export { AsyncQueue } from "./async-queue";
+export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];

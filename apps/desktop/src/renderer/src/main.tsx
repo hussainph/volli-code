@@ -30,6 +30,7 @@ import { useProjectsStore } from "./stores/projects";
 import { useThemeStore } from "./stores/theme";
 import { useExperimentsStore } from "./stores/experiments";
 import { attachThisMacWhileCloud } from "./stores/host-sources";
+import { attachRemoteHostsWhileCloud } from "./stores/remote-host-source";
 import { useUpdateStore } from "./stores/update";
 import { useWorkspaceStore } from "./stores/workspace";
 import { watchSystemAppearance } from "./theme/canvas-paint";
@@ -209,6 +210,7 @@ async function main() {
   // `cloud` is on, and nothing is attached while it is off; VC-700's registry
   // attaches remote hosts beside it. Only flagged surfaces read it.
   attachThisMacWhileCloud();
+  attachRemoteHostsWhileCloud();
 
   // Main owns one durable armed-column countdown per move (VC-226). Subscribe
   // before priming so a window opened mid-countdown cannot miss a replacement
