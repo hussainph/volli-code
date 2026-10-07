@@ -216,6 +216,8 @@ export function ComposerForm({
   } = useAttachments({
     owner: { unowned: true },
     refRoot: target.path,
+    // A remote target's draft takes no attachment of this Mac's (VC-711).
+    projectId: target.id,
     onRefInsert: (relPath) => editorRef.current?.insertAtCursor(`@${relPath}`),
     onError: (message) => toast.error(message),
   });

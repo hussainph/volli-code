@@ -13,7 +13,6 @@ import {
   canWriteProject,
   hostOfProject,
   isBlocking,
-  isRemoteProject,
   OPEN_LINK,
   projectLinkOf,
   useHostConnectionStore,
@@ -75,28 +74,12 @@ export function useProjectHostView(projectId: string | null): HostRecord {
   return React.useMemo(() => (host.link === link ? host : { ...host, link }), [host, link]);
 }
 
-/**
- * The remote host serving a project (VC-711), or `null` for one of This
- * Mac's, and always with the flag off (no host-store subscription then). A
- * local-only surface (files, terminals, worktrees, automations, MCP,
- * attachments) reads this and stands down for a remote project rather than
- * ask this Mac's `window.api` about an id it does not hold.
- */
-export function useRemoteProjectHost(projectId: string | null): HostRecord | null {
-  const cloud = useCloudEnabled();
-  return useHostRead(
-    cloud,
-    (state) => (isRemoteProject(state, projectId) ? hostOfProject(state, projectId) : null),
-    null,
-  );
-}
-
-/** Whether a remote host serves the project: {@link useRemoteProjectHost} as a yes or no. */
-export function useIsRemoteProject(projectId: string | null): boolean {
-  return useRemoteProjectHost(projectId) !== null;
-}
-
-export { notAvailableOn, refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
+export {
+  notAvailableOn,
+  refuseRemote,
+  remoteHostNow,
+  useRemoteProjectHost,
+} from "@renderer/stores/remote-project";
 
 /** The project in front of the person. */
 export function useCurrentProjectId(): string | null {

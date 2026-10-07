@@ -12,7 +12,7 @@ import type * as React from "react";
 
 import { cn } from "@renderer/lib/utils";
 
-import { notAvailableOn, useRemoteProjectHost } from "./use-hosts";
+import { notAvailableOn, useRemoteProjectHost } from "@renderer/stores/remote-project";
 
 /** The one line a local-only surface says for a remote project. */
 export function NotAvailableOnHost({

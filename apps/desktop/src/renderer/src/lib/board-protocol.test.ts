@@ -713,6 +713,7 @@ describe("boardApi with the protocol on", () => {
     const { client } = fakeBoard({});
     // An engine whose every command is proved by the feed, its row in hand.
     const proving = {
+      workspaceOf: () => undefined,
       command: async (spec: { fromFeed: (row: unknown, commandId: string) => unknown }) => ({
         ok: true,
         answer: spec.fromFeed({ id: "fed" }, "cmd-fed"),
@@ -853,5 +854,45 @@ describe("each project's board client", () => {
     tickets.note("a", "t1");
     tickets.note("c", "t3");
     expect([tickets.get("a"), tickets.get("b"), tickets.get("c")]).toEqual(["t1", undefined, "t3"]);
+  });
+});
+
+// VC-711 PR 2 review B1: where a write goes is decided when it is made.
+describe("a facade write's host", () => {
+  it("is fixed when the write is made, and owned by the Workspace it was made for", async () => {
+    const first = fakeBoard();
+    const second = fakeBoard();
+    let current = first.client;
+    const clientFor = vi.fn((_projectId: string | undefined) => current);
+    const specs: { owner?: string; send(commandId: string): Promise<unknown> }[] = [];
+    const sync = {
+      workspaceOf: (ticketId: string) => (ticketId === "rt" ? "r1" : undefined),
+      command: (spec: { owner?: string; send(commandId: string): Promise<unknown> }) => {
+        specs.push(spec);
+        return Promise.resolve({ ok: false, error: "held" });
+      },
+    } as unknown as BoardSync;
+    const comments = commentTickets();
+    comments.note("rc", "rt");
+    const api = protocolBoardApi(clientFor, sync, comments);
+    await api.comments.create({ ticketId: "rt", body: "b" });
+    await api.comments.update({ commentId: "rc", body: "b" });
+    await api.comments.remove({ commentId: "unseen" });
+    await api.projects.update({ id: "r1", baseBranch: null });
+    await api.projects.setSkillModes({ id: "r1", modes: {} });
+    await api.projects.setSessionDefaults({ id: "r1", model: null });
+    expect(specs.map(({ owner }) => owner)).toEqual(["r1", "r1", undefined, "r1", "r1", "r1"]);
+    // The resolver moves on (the claim went): a retry still goes where the write was made.
+    current = second.client;
+    await Promise.allSettled(specs.map((spec) => spec.send("cmd")));
+    expect(second.calls).toEqual([]);
+    expect(first.calls.map(({ path }) => path)).toEqual([
+      "board.createComment",
+      "board.updateComment",
+      "board.removeComment",
+      "board.updateProject",
+      "board.setSkillModes",
+      "board.setSessionDefaults",
+    ]);
   });
 });

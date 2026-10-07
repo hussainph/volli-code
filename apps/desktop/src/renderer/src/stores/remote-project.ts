@@ -9,6 +9,7 @@
  * Always `null` with the `cloud` flag off, without reading the host store,
  * so the flag-off app behaves exactly as before.
  */
+import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { boardProtocol } from "@renderer/lib/board-protocol";
@@ -45,6 +46,26 @@ export function refuseRemoteTicket(ticketId: string | null | undefined): boolean
   if (host === null) return false;
   toast(notAvailableOn(host), { id: "host-local-only" });
   return true;
+}
+
+const NO_SUBSCRIPTION = () => () => {};
+
+/**
+ * {@link remoteHostNow} for a component: the remote host serving the project,
+ * or `null`. With the `cloud` flag off it holds no host-store subscription at
+ * all, so the flag-off app pays nothing. Light on purpose (no projects or
+ * theme store behind it): every local-only surface, down to a file tab,
+ * mounts behind it.
+ */
+export function useRemoteProjectHost(projectId: string | null): HostRecord | null {
+  const readCloud = () => isExperimentOn(useExperimentsStore.getState().snapshot, "cloud");
+  const cloud = useSyncExternalStore(useExperimentsStore.subscribe, readCloud, readCloud);
+  const read = () => (cloud ? remoteHostNow(projectId) : null);
+  return useSyncExternalStore(
+    cloud ? useHostConnectionStore.subscribe : NO_SUBSCRIPTION,
+    read,
+    read,
+  );
 }
 
 /** What a local-only surface says for a remote project. */

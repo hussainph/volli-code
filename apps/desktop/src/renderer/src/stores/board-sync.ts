@@ -50,7 +50,10 @@
  *   touches the new generation's queued work.
  * - **Followed means subscribed.** A Workspace this window follows is opened
  *   until its snapshot lands and its feed is followed: a failed open, a
- *   resnapshot or a feed that ended are retried with backoff, never left.
+ *   resnapshot or a feed that ended are retried with backoff, never left. The
+ *   one exception is a host whose board is not this window's at all
+ *   ({@link isBoardUnavailable}): that open stops, and the Workspace is no
+ *   longer followed, until its owner opens it again.
  * - **A project change refreshes the project.** A project change without its
  *   row reads the board's snapshot, which carries the project.
  *
@@ -232,6 +235,11 @@ interface Pending {
   readonly commandId: string;
   /** The Workspace it paints over; undefined for a per-surface command (it paints nothing). */
   readonly projectId: string | undefined;
+  /**
+   * The Workspace a per-surface command was made for, which owns it: closing
+   * that Workspace ends it (VC-711), and it is never sent anywhere else.
+   */
+  readonly owner: string | undefined;
   /** What it sets, as `<kind>:<id>:<aspect>`: a newer write setting all of them supersedes it. */
   readonly aspects: ReadonlySet<string>;
   /** An archive, unarchive or delete: never superseded, only waited for. */
@@ -334,6 +342,23 @@ export function isAmbiguousBoardFailure(error: unknown): boolean {
   );
 }
 
+/**
+ * Whether a host answered that its board is not this window's to read at all:
+ * the Workspace's link was not granted the board (an older host,
+ * `verb-refused`), the host has no board (`operation-unavailable`), or it does
+ * not know the Workspace (`workspace-unknown`). Asking again changes nothing
+ * until the host or the link does, so an open stops retrying on it (VC-711).
+ */
+export function isBoardUnavailable(error: unknown): boolean {
+  const reason = (error as { data?: { hostError?: { reason?: unknown } } } | null)?.data?.hostError
+    ?.reason;
+  return (
+    reason === "verb-refused" ||
+    reason === "operation-unavailable" ||
+    reason === "workspace-unknown"
+  );
+}
+
 /** Whether a host answered that the resource does not exist (in this Workspace). */
 export function isNotFound(error: unknown): boolean {
   const hostError = (error as { data?: { hostError?: { code?: unknown } } } | null)?.data
@@ -370,6 +395,8 @@ function reaches(a: string | null, b: string | null): boolean {
 /** How one write is made: what it paints, what it sets, and how it is sent. */
 interface WriteSpec<Answer> {
   readonly projectId: string | undefined;
+  /** A per-surface command's Workspace: closing it ends the command (VC-711). */
+  readonly owner?: string;
   readonly verb: string;
   readonly aspects: readonly string[];
   readonly lifecycle?: boolean;
@@ -489,7 +516,13 @@ export class BoardSync {
     try {
       snapshot = await this.#transportFor(projectId).snapshot(projectId);
     } catch (error) {
-      if (!workspace.closed && workspace.generation === generation) this.#reopenLater(workspace);
+      if (!workspace.closed && workspace.generation === generation) {
+        // A host whose board is not this window's at all is not followed: it
+        // stops here, and its owner opens it again when the host or the link
+        // changes (VC-711). Anything else is retried, with backoff.
+        if (isBoardUnavailable(error)) this.close(projectId);
+        else this.#reopenLater(workspace);
+      }
       throw error;
     }
     // Closed, or opened again since: a newer snapshot owns the base.
@@ -527,8 +560,10 @@ export class BoardSync {
       if (timer !== undefined) this.#clearTimer(timer);
     }
     this.#workspaces.delete(projectId);
+    // Its board writes and its per-surface commands alike: a command made for
+    // a Workspace is that Workspace's host's, and goes nowhere once it closes.
     for (const pending of Array.from(this.#pending.values())) {
-      if (pending.projectId === projectId) this.#drop(pending, "closed");
+      if (pending.owner === projectId) this.#drop(pending, "closed");
     }
   }
 
@@ -760,6 +795,12 @@ export class BoardSync {
    */
   async command<Answer>(spec: {
     verb: string;
+    /**
+     * The Workspace the command was made for, when it was made for one: it
+     * ends with that Workspace (`close`), and its `send` must go to that
+     * Workspace's host only (VC-711).
+     */
+    owner?: string;
     send: (commandId: string) => Promise<Answer>;
     fromFeed: (row: unknown, commandId: string) => Answer;
     goneMeansDone?: boolean;
@@ -767,6 +808,7 @@ export class BoardSync {
     let refusal = "";
     const outcome = await this.#write<Answer>({
       projectId: undefined,
+      ...(spec.owner === undefined ? {} : { owner: spec.owner }),
       verb: spec.verb,
       aspects: [],
       send: spec.send,
@@ -825,6 +867,7 @@ export class BoardSync {
     const pending: Pending = {
       commandId,
       projectId: spec.projectId,
+      owner: spec.owner ?? spec.projectId,
       aspects: new Set(spec.aspects),
       lifecycle: spec.lifecycle === true,
       seq: ++this.#writes,

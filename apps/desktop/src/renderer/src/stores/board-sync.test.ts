@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   BoardSync,
   isAmbiguousBoardFailure,
+  isBoardUnavailable,
   placeholderTicketId,
   READ_LOG_ENTITIES,
   type BoardFeedBatch,
@@ -2872,5 +2873,65 @@ describe("routing each Workspace to its own host", () => {
       ]),
     );
     expect(local.calls.map(({ method }) => method)).toEqual(["snapshot", "setPriority"]);
+  });
+});
+
+// ---- what a closed Workspace owns, and a host with no board (VC-711) ----------------------
+
+const failure = (reason?: string) => ({ data: { hostError: { code: "X", message: "m", reason } } });
+
+describe("a Workspace's own commands, and a host that offers no board", () => {
+  it("ends a per-surface command made for a Workspace when that Workspace closes", async () => {
+    const { host, sync } = harness();
+    await go(sync.open("p1"));
+    const send = vi.fn(() => Promise.reject(unreachable));
+    const owned = sync.command({
+      verb: "add comment",
+      owner: "p1",
+      send,
+      fromFeed: () => "fed",
+    });
+    const unowned = sync.command({
+      verb: "add comment",
+      send: () => Promise.reject(unreachable),
+      fromFeed: () => "fed",
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    sync.close("p1");
+    expect(await owned).toEqual({ ok: false, error: "The board closed before the host answered" });
+    const attempts = send.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(send).toHaveBeenCalledTimes(attempts);
+    // A command no Workspace owns is not this close's.
+    sync.closeAll();
+    expect(await unowned).toMatchObject({ ok: false });
+    expect(host.calls.map(({ method }) => method)).toEqual(["snapshot"]);
+  });
+
+  it("stops opening a Workspace whose host refuses its board, and follows it no more", async () => {
+    const { host, sync } = harness();
+    for (const reason of ["verb-refused", "operation-unavailable", "workspace-unknown"]) {
+      host.fail("snapshot", { data: { hostError: { code: "FORBIDDEN", message: "no", reason } } });
+      await expect(go(sync.open("p1"))).rejects.toBeDefined();
+      expect(sync.follows("p1")).toBe(false);
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(host.callsTo("snapshot")).toHaveLength(3);
+    // An outage is still retried, with backoff, until it lands.
+    host.fail("snapshot", unreachable);
+    await expect(go(sync.open("p1"))).rejects.toBeDefined();
+    expect(sync.follows("p1")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(host.callsTo("snapshot")).toHaveLength(5);
+  });
+
+  it("names only a refusal of the board itself as one it cannot get past", () => {
+    expect(isBoardUnavailable(failure("verb-refused"))).toBe(true);
+    expect(isBoardUnavailable(failure("operation-unavailable"))).toBe(true);
+    expect(isBoardUnavailable(failure("workspace-unknown"))).toBe(true);
+    expect(isBoardUnavailable(failure("host-unreachable"))).toBe(false);
+    expect(isBoardUnavailable(failure())).toBe(false);
+    expect(isBoardUnavailable(new Error("x"))).toBe(false);
+    expect(isBoardUnavailable(null)).toBe(false);
   });
 });

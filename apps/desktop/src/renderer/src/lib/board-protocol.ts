@@ -310,12 +310,34 @@ export function protocolBoardApi(
   sync: BoardSync,
   comments: CommentTickets = commentTickets(),
 ): BoardApi {
-  const forProject = (projectId: string) => clientFor(projectId).board;
-  const forTicket = (ticketId: string) => clientFor(sync.workspaceOf(ticketId)).board;
+  /**
+   * Where one call goes, decided ONCE, when it is made (VC-711 review B1):
+   * the Workspace it was made for (its owner) and that Workspace's client. A
+   * write keeps both for every retry, so it never changes hosts: a remote
+   * write whose Workspace closes ends with it (`BoardSync.close`) rather than
+   * being sent to This Mac. `undefined` is a call no followed board places:
+   * This Mac's, as every call was before.
+   */
+  const place = (owner: string | undefined) => ({ owner, board: clientFor(owner).board });
+  const forProject = (projectId: string) => place(projectId);
+  const forTicket = (ticketId: string) => place(sync.workspaceOf(ticketId));
   const forComment = (commentId: string) => {
     const ticketId = comments.get(commentId);
-    return clientFor(ticketId === undefined ? undefined : sync.workspaceOf(ticketId)).board;
+    return place(ticketId === undefined ? undefined : sync.workspaceOf(ticketId));
   };
+  /** A per-surface command, fenced to the Workspace it was made for. */
+  const command = <Answer>(
+    at: ReturnType<typeof place>,
+    spec: Omit<Parameters<BoardSync["command"]>[0], "owner" | "send"> & {
+      send: (board: BoardClient["board"], commandId: string) => Promise<Answer>;
+      fromFeed: (row: unknown, commandId: string) => Answer;
+    },
+  ) =>
+    sync.command<Answer>({
+      ...spec,
+      ...(at.owner === undefined ? {} : { owner: at.owner }),
+      send: (commandId) => spec.send(at.board, commandId),
+    });
   const noted = <Row extends { id: string; ticketId: string }>(row: Row): Row => {
     comments.note(row.id, row.ticketId);
     return row;
@@ -323,51 +345,52 @@ export function protocolBoardApi(
   return {
     tickets: {
       events: async ({ ticketId }) => {
-        const result = await read(() => forTicket(ticketId).ticketEvents.query({ ticketId }));
+        const result = await read(() => forTicket(ticketId).board.ticketEvents.query({ ticketId }));
         return result.ok ? { ok: true, events: result.answer as never } : result;
       },
       body: async ({ ticketId }) => {
-        const result = await read(() => forTicket(ticketId).ticketBody.query({ ticketId }));
+        const result = await read(() => forTicket(ticketId).board.ticketBody.query({ ticketId }));
         return result.ok ? { ok: true, body: result.answer.body } : result;
       },
       latestSignals: async ({ projectId }) => {
-        const result = await read(() => forProject(projectId).latestSignals.query({ projectId }));
+        const result = await read(() =>
+          forProject(projectId).board.latestSignals.query({ projectId }),
+        );
         return result.ok ? { ok: true, signals: result.answer } : result;
       },
       statusEntries: async ({ projectId }) => {
-        const result = await read(() => forProject(projectId).statusEntries.query({ projectId }));
+        const result = await read(() =>
+          forProject(projectId).board.statusEntries.query({ projectId }),
+        );
         return result.ok ? { ok: true, entries: result.answer } : result;
       },
     },
     comments: {
       list: async ({ ticketId }) => {
-        const result = await read(() => forTicket(ticketId).comments.query({ ticketId }));
+        const result = await read(() => forTicket(ticketId).board.comments.query({ ticketId }));
         return result.ok ? { ok: true, comments: result.answer.map(noted) } : result;
       },
       create: async (input) => {
-        const result = await sync.command({
+        const result = await command(forTicket(input.ticketId), {
           verb: "add comment",
-          send: (commandId) =>
-            forTicket(input.ticketId).createComment.mutate({ commandId, ...input }),
+          send: (board, commandId) => board.createComment.mutate({ commandId, ...input }),
           fromFeed: (row, commandId) => ({ ...receiptOf(commandId), comment: row as never }),
         });
         return result.ok ? { ok: true, comment: noted(result.answer.comment) } : result;
       },
       update: async (input) => {
-        const result = await sync.command({
+        const result = await command(forComment(input.commentId), {
           verb: "edit comment",
-          send: (commandId) =>
-            forComment(input.commentId).updateComment.mutate({ commandId, ...input }),
+          send: (board, commandId) => board.updateComment.mutate({ commandId, ...input }),
           fromFeed: (row, commandId) => ({ ...receiptOf(commandId), comment: row as never }),
         });
         return result.ok ? { ok: true, comment: result.answer.comment } : result;
       },
       remove: async (input) => {
         // A retried removal that finds its comment gone was the removal itself.
-        const result = await sync.command({
+        const result = await command(forComment(input.commentId), {
           verb: "delete comment",
-          send: (commandId) =>
-            forComment(input.commentId).removeComment.mutate({ commandId, ...input }),
+          send: (board, commandId) => board.removeComment.mutate({ commandId, ...input }),
           fromFeed: (_row, commandId) => receiptOf(commandId),
           goneMeansDone: true,
         });
@@ -376,10 +399,10 @@ export function protocolBoardApi(
     },
     projects: {
       update: async ({ id, baseBranch, setupCommand }) => {
-        const result = await sync.command({
+        const result = await command(forProject(id), {
           verb: "update project",
-          send: (commandId) =>
-            forProject(id).updateProject.mutate({
+          send: (board, commandId) =>
+            board.updateProject.mutate({
               commandId,
               projectId: id,
               baseBranch,
@@ -390,10 +413,10 @@ export function protocolBoardApi(
         return result.ok ? { ok: true, project: result.answer.project as never } : result;
       },
       setSkillModes: async ({ id, modes }) => {
-        const result = await sync.command({
+        const result = await command(forProject(id), {
           verb: "update skills",
-          send: (commandId) =>
-            forProject(id).setSkillModes.mutate({
+          send: (board, commandId) =>
+            board.setSkillModes.mutate({
               commandId,
               projectId: id,
               modes: modes as never,
@@ -403,16 +426,18 @@ export function protocolBoardApi(
         return result.ok ? { ok: true, project: result.answer.project as never } : result;
       },
       setSessionDefaults: async ({ id, model }) => {
-        const result = await sync.command({
+        const result = await command(forProject(id), {
           verb: "update session defaults",
-          send: (commandId) =>
-            forProject(id).setSessionDefaults.mutate({ commandId, projectId: id, model }),
+          send: (board, commandId) =>
+            board.setSessionDefaults.mutate({ commandId, projectId: id, model }),
           fromFeed: (row, commandId) => ({ ...receiptOf(commandId), project: row as never }),
         });
         return result.ok ? { ok: true, project: result.answer.project as never } : result;
       },
       checkFolder: async (projectId) => {
-        const result = await read(() => forProject(projectId).projectFolder.query({ projectId }));
+        const result = await read(() =>
+          forProject(projectId).board.projectFolder.query({ projectId }),
+        );
         return result.ok ? { ok: true, ...result.answer } : result;
       },
     },

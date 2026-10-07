@@ -29,6 +29,8 @@ import {
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
 import { isRemoteProject, useHostConnectionStore } from "@renderer/stores/host-connection";
+import { useRemoteBoardAvailabilityStore } from "@renderer/stores/remote-board-availability";
+import { followRemoteClaims, type FollowedHostStore } from "@renderer/lib/follow-remote-projects";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useThemeStore } from "@renderer/stores/theme";
@@ -219,47 +221,25 @@ async function refreshWorkspaceList(
 }
 
 /**
- * Follows every remote project the host-connection store claims (VC-711):
- * opens its board (whose snapshot puts its row in the project list, through
- * `adoptProject`), and when its claim goes (the host was forgotten, the
- * project closed there) closes it and drops its board and its row. Answers
- * the unsubscribe. An open that fails is retried by the board itself, with
- * backoff; the project's link state is what says why. It follows while
- * `alive` holds (the protocol path it serves is still the running one), and
- * lets go of the store at the first change after.
+ * Follows every remote project the host-connection store claims
+ * (`./follow-remote-projects`), dropping a project's board and row when its
+ * claim goes.
  */
 export function followRemoteProjects(
   sync: { open(projectId: string): Promise<void>; close(projectId: string): void },
-  store: Pick<typeof useHostConnectionStore, "getState" | "subscribe"> = useHostConnectionStore,
+  store: FollowedHostStore = useHostConnectionStore,
   alive: () => boolean = () => true,
 ): () => void {
-  const followed = new Set<string>();
-  let unsubscribe: (() => void) | null = null;
-  const reconcile = (state: ReturnType<typeof useHostConnectionStore.getState>): void => {
-    if (!alive()) {
-      unsubscribe?.();
-      return;
-    }
-    const claimed = new Set(Object.keys(state.projects).filter((id) => isRemoteProject(state, id)));
-    for (const projectId of claimed) {
-      if (followed.has(projectId)) continue;
-      followed.add(projectId);
-      void sync.open(projectId).catch(() => {
-        // Retried by `open` itself; the project's link says why it waits.
-      });
-    }
-    for (const projectId of followed) {
-      if (claimed.has(projectId)) continue;
-      followed.delete(projectId);
-      sync.close(projectId);
+  return followRemoteClaims({
+    sync,
+    store,
+    alive,
+    availability: useRemoteBoardAvailabilityStore.getState(),
+    drop: (projectId) => {
       useBoardStore.getState().forget(projectId);
       useProjectsStore.getState().dropRemoteProject(projectId);
-    }
-  };
-  reconcile(store.getState());
-  const stop = store.subscribe(reconcile);
-  unsubscribe = stop;
-  return stop;
+    },
+  });
 }
 
 /** Whether the host has the `cloud` flag on: the Session router's experiments read. */

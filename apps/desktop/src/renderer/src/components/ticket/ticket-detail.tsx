@@ -124,7 +124,6 @@ import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/se
 import { getEngine } from "@renderer/terminal/registry";
 import {
   notAvailableOn,
-  refuseRemote,
   remoteHostNow,
   remoteHostOfTicketNow,
 } from "@renderer/stores/remote-project";
@@ -1182,11 +1181,8 @@ export function TicketDetail({
   // twin. The `window.prompt` this replaces throws in Electron by definition,
   // and threw from outside the try, so the press was swallowed whole.
   const createBrowser = React.useCallback(
-    () =>
-      // Browser Tabs live on this Mac: a remote project's ticket has none yet (VC-711).
-      refuseRemote(projectId)
-        ? undefined
-        : openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, setActiveTab),
+    // The shared door refuses a remote project's (VC-711).
+    () => openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, setActiveTab),
     [browserApi, projectId, setActiveTab, ticket.id],
   );
 

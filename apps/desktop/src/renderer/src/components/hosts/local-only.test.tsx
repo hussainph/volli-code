@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { hostWorld, type HostWorld } from "./hosts.test-support";
 import { LocalOnly, NotAvailableOnHost } from "./local-only";
-import { useIsRemoteProject, useRemoteProjectHost } from "./use-hosts";
+import { useRemoteProjectHost } from "./use-hosts";
 
 let world: HostWorld | null = null;
 
@@ -27,8 +27,9 @@ function LocalSurface({ projectId }: { projectId: string }) {
 
 function Probe({ projectId }: { projectId: string | null }) {
   const host = useRemoteProjectHost(projectId);
-  const remote = useIsRemoteProject(projectId);
-  return <output data-testid="probe">{`${host?.name ?? "this mac"}:${String(remote)}`}</output>;
+  return (
+    <output data-testid="probe">{`${host?.name ?? "this mac"}:${String(host !== null)}`}</output>
+  );
 }
 
 describe("LocalOnly", () => {

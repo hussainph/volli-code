@@ -16,7 +16,11 @@
 import * as React from "react";
 import type { BlobLinkView } from "@volli/shared";
 import type { BlobAttachInput } from "../../../ipc/contract";
-import { notAvailableOn, remoteHostOfTicketNow } from "@renderer/stores/remote-project";
+import {
+  notAvailableOn,
+  remoteHostNow,
+  remoteHostOfTicketNow,
+} from "@renderer/stores/remote-project";
 
 export interface UseAttachmentsOptions {
   /**
@@ -27,6 +31,12 @@ export interface UseAttachmentsOptions {
   owner: BlobAttachInput["owner"] | (() => BlobAttachInput["owner"]);
   /** Absolute workspace root an `@` ref would resolve against; without it every file snapshots. */
   refRoot?: string | undefined;
+  /**
+   * The project the attachments are for, when the owner does not name it (an
+   * unowned draft): a remote project's attachments are on its host (VC-711),
+   * so this Mac imports none for it.
+   */
+  projectId?: string | undefined;
   /** A repository file was named live instead of copied — insert `@relPath` into the text. */
   onRefInsert?: (relPath: string) => void;
   /** A refusal a person can act on: too big, or a chat at its image budget. */
@@ -52,7 +62,7 @@ export interface AttachmentsHandle {
 }
 
 export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandle {
-  const { owner, refRoot, onRefInsert, onError, onChange } = options;
+  const { owner, refRoot, projectId, onRefInsert, onError, onChange } = options;
   const [attachments, setAttachments] = React.useState<readonly BlobLinkView[]>([]);
   // The strip as of the LAST MUTATION, not the last render — every mutator
   // below writes it through `commit` before (or instead of) awaiting anything,
@@ -64,8 +74,8 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandl
   // — it is handed to drag/paste handlers that would otherwise re-bind on every
   // keystroke in the composer beside them. `onChange` rides along for the same
   // reason: `commit` must stay stable too, and it is the one that calls it.
-  const latest = React.useRef({ owner, refRoot, onRefInsert, onError, onChange });
-  latest.current = { owner, refRoot, onRefInsert, onError, onChange };
+  const latest = React.useRef({ owner, refRoot, projectId, onRefInsert, onError, onChange });
+  latest.current = { owner, refRoot, projectId, onRefInsert, onError, onChange };
 
   // Write the strip everywhere it must be, in one place: the ref above, React
   // state, and the caller's `onChange` when one was given. Stable for the
@@ -81,12 +91,15 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandl
       const {
         owner: suppliedOwner,
         refRoot: root,
+        projectId: forProject,
         onRefInsert: insert,
         onError: fail,
       } = latest.current;
       const current = typeof suppliedOwner === "function" ? suppliedOwner() : suppliedOwner;
       // A remote project's ticket keeps its attachments on its host (VC-711).
-      const host = "ticketId" in current ? remoteHostOfTicketNow(current.ticketId) : null;
+      const host =
+        ("ticketId" in current ? remoteHostOfTicketNow(current.ticketId) : null) ??
+        remoteHostNow(forProject);
       if (host !== null) {
         fail?.(notAvailableOn(host));
         return;
