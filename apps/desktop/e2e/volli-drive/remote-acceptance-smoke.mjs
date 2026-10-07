@@ -129,9 +129,9 @@ async function stopLocalKeepalive() {
     nativeQuitAttempted = false;
   }
   await selectHost("This Mac");
-  // Both the rail and sidebar may name the same synthetic Session. Either
-  // opens it; never interrupt a remote Session or a different local turn.
-  await click("button", "local-menu-bar-keepalive", { contains: true, first: true });
+  // The sidebar's No ticket row names this synthetic Session. A title-only
+  // match also hits its Close tab button, which does not interrupt the turn.
+  await click("button", "local-menu-bar-keepalive No ticket", { contains: true });
   await wait(LOCAL_KEEPALIVE);
   await click("button", "Stop turn");
   await call("wait", { text: "Stop turn", gone: true });

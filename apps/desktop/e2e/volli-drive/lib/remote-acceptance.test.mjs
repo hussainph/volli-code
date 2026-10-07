@@ -437,7 +437,7 @@ test("keepalive retirement reopens normally and stops only the named local synth
   assert.deepEqual(calls, [
     ["call", "native-reopen"],
     ["selectHost", "This Mac"],
-    ["click", "button", "local-menu-bar-keepalive", { contains: true, first: true }],
+    ["click", "button", "local-menu-bar-keepalive No ticket", { contains: true }],
     ["wait", "[slow:120000] local-menu-bar-keepalive"],
     ["click", "button", "Stop turn"],
     ["call", "wait", { text: "Stop turn", gone: true }],
@@ -455,6 +455,49 @@ test("failed local interruption remains pending for cleanup retry, never claims 
   });
   await assert.rejects(active.run(), /turn still stopping/u);
   assert.equal(active.active(), true);
+});
+
+test("native Quit dispatches the real macOS action instead of no-op JS role.click", () => {
+  const supervisor = read("../supervisor.mjs");
+  const native = supervisor.slice(
+    supervisor.indexOf('case "native-quit":'),
+    supervisor.indexOf('case "native-reopen":'),
+  );
+  const begin = "app.evaluate(({ Menu }) => {";
+  const body = native.slice(native.indexOf(begin) + begin.length, native.indexOf("});"));
+  const actions = [];
+  const result = new Function("Menu", body)({
+    getApplicationMenu: () => ({
+      items: [
+        {
+          submenu: {
+            items: [
+              {
+                role: "quit",
+                label: "Quit Volli",
+                click: () => {
+                  throw new Error("native macOS role.click is not a Quit");
+                },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    sendActionToFirstResponder: (action) => actions.push(action),
+  });
+  assert.deepEqual(result, { label: "Quit Volli" });
+  assert.deepEqual(actions, ["terminate:"]);
+});
+test("keepalive target cannot select its Close tab control", () => {
+  const tree = `- button "Close [slow:120000] local-menu-bar-keepalive" [ref=e1]
+- button "Chat [slow:120000] local-menu-bar-keepalive Working · now" [ref=e2]
+- button "azure-openai-responses · Working [slow:120000] local-menu-bar-keepalive No ticket · just now" [ref=e3]`;
+  const targets = visibleControls(tree, "button", "local-menu-bar-keepalive No ticket", {
+    contains: true,
+  });
+  assert.equal(targets.length, 1);
+  assert.ok(targets[0].includes("[ref=e3]"));
 });
 
 test("journey arranges only benign Git state and runs all eight real assertions without waivers", () => {
@@ -555,7 +598,7 @@ test("journey arranges only benign Git state and runs all eight real assertions 
     smoke.indexOf("async function step("),
   );
   assert.match(retirement, /await selectHost\("This Mac"\)/u);
-  assert.match(retirement, /click\("button", "local-menu-bar-keepalive"/u);
+  assert.match(retirement, /click\("button", "local-menu-bar-keepalive No ticket"/u);
   assert.match(retirement, /await click\("button", "Stop turn"\)/u);
   assert.match(retirement, /text: "Stop turn", gone: true/u);
   assert.doesNotMatch(retirement, /REMOTE_HOST|session\.command|invoke|window\.api/u);

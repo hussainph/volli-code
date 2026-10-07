@@ -701,7 +701,10 @@ async function handle(cmd, args) {
         const quit = walk(Menu.getApplicationMenu()).find((item) => item.role === "quit");
         if (!quit) throw new Error("Native Quit menu item missing");
         const label = quit.label;
-        quit.click();
+        // Electron 44's role.execute declines native macOS roles: calling
+        // MenuItem.click() in JS is a no-op for Quit. Dispatch the same Cocoa
+        // action as the real menu, through the production before-quit gates.
+        Menu.sendActionToFirstResponder("terminate:");
         return { label };
       });
       // Production may retain an unacknowledged renderer hidden to protect
