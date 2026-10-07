@@ -1629,3 +1629,129 @@ describe("createProjectsStore() with the default gateway", () => {
     );
   });
 });
+
+/** A store whose remote claims the case sets (VC-711). */
+function withClaims(claims: string[], gateway: ProjectsGateway = fakeGateway()) {
+  const remote = new Set(claims);
+  const onSelectedProjectChange = vi.fn<(projectId: string | null) => void>();
+  const store = createProjectsStore(gateway, onSelectedProjectChange, (id) => remote.has(id));
+  return { store, gateway, remote, onSelectedProjectChange };
+}
+
+describe("remote projects (VC-711)", () => {
+  const LOCAL = project({ id: "local", path: "/Users/me/local", name: "Local" });
+  const REMOTE = project({ id: "remote", path: "/srv/remote", name: "Remote" });
+
+  it("takes a claimed remote project's first snapshot row into the list, after this Mac's", () => {
+    const { store } = withClaims(["remote"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local", "remote"]);
+    // Its next row replaces it in place.
+    store.getState().adoptProject({ ...REMOTE, name: "Renamed on the box" });
+    expect(store.getState().projects.at(-1)?.name).toBe("Renamed on the box");
+    // An unclaimed unknown row is still refused: a removed project stays gone.
+    store.getState().adoptProject(project({ id: "stranger", path: "/x" }));
+    expect(store.getState().projects).toHaveLength(2);
+  });
+
+  it("keeps remote rows, and a remote selection, across this Mac's wholesale hydrate", () => {
+    const { store, onSelectedProjectChange } = withClaims(["remote"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    store.getState().select("remote");
+    onSelectedProjectChange.mockClear();
+    const second = project({ id: "second", path: "/Users/me/second" });
+    // The bootstrap's own fallback would pick its first row: the remote selection stands.
+    store.getState().hydrate([LOCAL, second], "local");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local", "second", "remote"]);
+    expect(store.getState().selectedProjectId).toBe("remote");
+    expect(onSelectedProjectChange).not.toHaveBeenCalled();
+    // A local selection hydrates as before.
+    store.getState().select("local");
+    store.getState().hydrate([second], "second");
+    expect(store.getState().selectedProjectId).toBe("second");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["second", "remote"]);
+  });
+
+  it("lets a row go when its claim does, before the next hydrate", () => {
+    const { store, remote } = withClaims(["remote"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    remote.delete("remote");
+    store.getState().hydrate([LOCAL], "local");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local"]);
+  });
+
+  it("drops a remote row and falls back to a neighbour, writing nothing but the selection", async () => {
+    const { store, gateway, onSelectedProjectChange } = withClaims(["remote", "other"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    store.getState().adoptProject(project({ id: "other", path: "/srv/other" }));
+    store.getState().dropRemoteProject("other");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local", "remote"]);
+    store.getState().select("remote");
+    vi.mocked(gateway.setSelection).mockClear();
+    store.getState().dropRemoteProject("remote");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local"]);
+    expect(store.getState().selectedProjectId).toBe("local");
+    expect(onSelectedProjectChange).toHaveBeenLastCalledWith("local");
+    await flush();
+    expect(gateway.setSelection).toHaveBeenCalledWith("local");
+    expect(gateway.remove).not.toHaveBeenCalled();
+    // Unknown: nothing happens.
+    store.getState().dropRemoteProject("remote");
+    expect(store.getState().projects).toHaveLength(1);
+  });
+
+  it("selects nothing when the only project, a remote one, goes", () => {
+    const { store } = withClaims(["remote"]);
+    store.getState().hydrate([], null);
+    store.getState().adoptProject(REMOTE);
+    store.getState().select("remote");
+    store.getState().dropRemoteProject("remote");
+    expect(store.getState().selectedProjectId).toBeNull();
+  });
+
+  it("never asks this Mac's database to remove or relink a remote project", async () => {
+    const { store, gateway } = withClaims(["remote"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    await store.getState().removeProject("remote");
+    expect(await store.getState().relink("remote", "/elsewhere")).toEqual({
+      ok: false,
+      refusal: null,
+    });
+    expect(gateway.remove).not.toHaveBeenCalled();
+    expect(gateway.relink).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't remove project: That isn’t available for a project on a remote host yet.",
+      expect.anything(),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't relink project: That isn’t available for a project on a remote host yet.",
+      expect.anything(),
+    );
+    expect(store.getState().projects).toHaveLength(2);
+  });
+
+  it("persists this Mac's own rail order only", async () => {
+    const { store, gateway } = withClaims(["remote"]);
+    const second = project({ id: "second", path: "/Users/me/second" });
+    store.getState().hydrate([LOCAL, second], "local");
+    store.getState().adoptProject(REMOTE);
+    const before = store.getState().projects;
+    store.getState().reorder("remote", "local");
+    await store.getState().commitReorder(before);
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["remote", "local", "second"]);
+    expect(gateway.reorder).toHaveBeenCalledWith(["local", "second"]);
+  });
+
+  it("asks the host-connection store which projects are remote by default", () => {
+    const store = createProjectsStore(fakeGateway(), vi.fn());
+    store.getState().hydrate([LOCAL], "local");
+    // Nothing claims it: a stranger's row stays out.
+    store.getState().adoptProject(REMOTE);
+    expect(store.getState().projects).toHaveLength(1);
+  });
+});

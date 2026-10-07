@@ -595,6 +595,9 @@ export default defineConfig(({ mode }) => ({
         // screen to say so.
         "src/components/logs/log-sources.ts",
         "src/components/logs/remote-log-sources.ts",
+        // Which remote boards a window opens, when it says a host offers none,
+        // and when it asks again (VC-711): a loop or a silence no screenshot shows.
+        "src/lib/follow-remote-projects.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",

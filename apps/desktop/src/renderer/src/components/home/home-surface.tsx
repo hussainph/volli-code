@@ -139,6 +139,7 @@ import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTerminalSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
+import { useRemoteProjectHost } from "@renderer/components/hosts/use-hosts";
 
 const NO_TERMINAL_TABS: readonly SessionTab[] = [];
 const NO_OPEN_CHATS: readonly string[] = [];
@@ -152,8 +153,10 @@ export function HomeSurface({ visible }: { visible: boolean }) {
   // always-mounted workspace owner, so it owns the one subscription too; a
   // Ticket detail can come and go without losing title/loading updates.
   React.useEffect(() => subscribeBrowserTabs(browserApi), [browserApi]);
+  // A remote project has no Browser Tabs on this Mac (VC-711): none read.
+  const remoteHost = useRemoteProjectHost(selectedId);
   React.useEffect(() => {
-    if (selectedId === null) return;
+    if (selectedId === null || remoteHost !== null) return;
     void hydrateBrowserTabs(browserApi, selectedId)
       .then((result) => {
         if (!result.ok) toastError(`Could not load Browser Tabs: ${result.error}`);
@@ -161,7 +164,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
       .catch((reason: unknown) => {
         toastError(`Could not load Browser Tabs: ${errorMessage(reason)}`);
       });
-  }, [browserApi, selectedId]);
+  }, [browserApi, selectedId, remoteHost]);
   // Only what the strip draws (VC-238): a person's tabs and the agent tabs a
   // person promoted here. A Session's headless and previewed tabs live in
   // its chat, never in this strip or the tab order.

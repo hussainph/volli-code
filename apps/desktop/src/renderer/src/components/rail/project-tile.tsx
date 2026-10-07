@@ -3,6 +3,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowsLeftRightIcon } from "@phosphor-icons/react/dist/csr/ArrowsLeftRight";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { HardDrivesIcon } from "@phosphor-icons/react/dist/csr/HardDrives";
 import { MinusCircleIcon } from "@phosphor-icons/react/dist/csr/MinusCircle";
 import { errorMessage, monogram, projectColor, type Project } from "@volli/shared";
 
@@ -14,6 +15,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
+import { notAvailableOn, useRemoteProjectHost } from "@renderer/components/hosts/use-hosts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@renderer/components/ui/tooltip";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
@@ -30,6 +32,9 @@ interface ProjectTileProps {
 export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
   const select = useProjectsStore((state) => state.select);
   const isSelected = useProjectsStore((state) => state.selectedProjectId === project.id);
+  // A remote project's host (VC-711): its tile says where it runs, and this
+  // Mac's folder actions stand down for it. Null for This Mac's, flag off too.
+  const remoteHost = useRemoteProjectHost(project.id);
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [relinkOpen, setRelinkOpen] = React.useState(false);
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
@@ -79,6 +84,15 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                   )}
                 >
                   {monogram(project.name)}
+                  {remoteHost === null ? null : (
+                    <span
+                      aria-hidden
+                      data-slot="project-tile-host"
+                      className="pointer-events-none absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full border border-border bg-card text-foreground"
+                    >
+                      <HardDrivesIcon weight="bold" className="size-2.5" />
+                    </span>
+                  )}
                   <span
                     aria-hidden
                     className="pointer-events-none absolute inset-0 rounded-control bg-foreground/10 opacity-0 group-hover/tile:opacity-100"
@@ -95,30 +109,60 @@ export function ProjectTile({ project, index, dimmed }: ProjectTileProps) {
                   </kbd>
                 )}
               </div>
+              {remoteHost === null ? null : (
+                <div className="text-background/70">On {remoteHost.name}</div>
+              )}
               <div className="text-background/70">{project.path}</div>
             </TooltipContent>
           </Tooltip>
           <ContextMenuContent>
-            <ContextMenuItem icon={FolderOpenIcon} onSelect={() => void revealInFinder()}>
-              Reveal in Finder
-            </ContextMenuItem>
-            <ContextMenuItem icon={ArrowsLeftRightIcon} onSelect={() => setRelinkOpen(true)}>
-              Relink folder…
-            </ContextMenuItem>
-            <ContextMenuItem
-              icon={MinusCircleIcon}
-              variant="destructive"
-              onSelect={() => setRemoveOpen(true)}
-            >
-              Remove from Volli…
-            </ContextMenuItem>
+            {remoteHost === null ? (
+              <LocalProjectActions
+                onReveal={() => void revealInFinder()}
+                onRelink={() => setRelinkOpen(true)}
+                onRemove={() => setRemoveOpen(true)}
+              />
+            ) : (
+              <ContextMenuItem icon={HardDrivesIcon} disabled>
+                {notAvailableOn(remoteHost)}
+              </ContextMenuItem>
+            )}
           </ContextMenuContent>
         </ContextMenu>
       </div>
       {/* Sibling of the ContextMenu, not a child of its content: the dialog
           must survive the menu unmounting on item select. */}
-      <RelinkProjectDialog project={project} open={relinkOpen} onOpenChange={setRelinkOpen} />
-      <RemoveProjectDialog project={project} open={removeOpen} onOpenChange={setRemoveOpen} />
+      {remoteHost === null ? (
+        <>
+          <RelinkProjectDialog project={project} open={relinkOpen} onOpenChange={setRelinkOpen} />
+          <RemoveProjectDialog project={project} open={removeOpen} onOpenChange={setRemoveOpen} />
+        </>
+      ) : null}
+    </>
+  );
+}
+
+/** This Mac's folder actions on one of its own projects. */
+function LocalProjectActions({
+  onReveal,
+  onRelink,
+  onRemove,
+}: {
+  onReveal: () => void;
+  onRelink: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <>
+      <ContextMenuItem icon={FolderOpenIcon} onSelect={onReveal}>
+        Reveal in Finder
+      </ContextMenuItem>
+      <ContextMenuItem icon={ArrowsLeftRightIcon} onSelect={onRelink}>
+        Relink folder…
+      </ContextMenuItem>
+      <ContextMenuItem icon={MinusCircleIcon} variant="destructive" onSelect={onRemove}>
+        Remove from Volli…
+      </ContextMenuItem>
     </>
   );
 }

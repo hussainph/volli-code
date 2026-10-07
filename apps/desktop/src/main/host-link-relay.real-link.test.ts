@@ -61,13 +61,21 @@ import { createTRPCClient } from "@trpc/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  boardApi,
+  boardProtocol,
   boardSyncTransport,
   createBoardClient,
   protocolBoardApi,
+  remoteAwareBoardClients,
+  startBoardProtocol,
+  stopBoardProtocol,
+  type BoardClient,
 } from "../renderer/src/lib/board-protocol";
 import { relayHostLink, type RelayLinkStateSource } from "../renderer/src/lib/relay-host-link";
 import { BoardSync, type BoardSyncView } from "../renderer/src/stores/board-sync";
 import type { HostLinkView } from "../renderer/src/stores/host-connection";
+import { followRemoteClaims } from "../renderer/src/lib/follow-remote-projects";
+import { createRemoteBoardAvailabilityStore } from "../renderer/src/stores/remote-board-availability";
 import { createHostLinkRelay, RELAY_LINK_FULL, RELAY_YIELDED } from "./host-link-relay";
 
 const electron = vi.hoisted(() => ({
@@ -216,8 +224,8 @@ async function box(features: readonly string[] = EVERY_FEATURE): Promise<Box> {
 }
 
 /** A loopback TCP route in front of the box that this test can cut and block (the tunnel). */
-async function cuttableRoute(target: string) {
-  const { hostname, port } = new URL(target);
+async function cuttableRoute(initial: string) {
+  let target = new URL(initial);
   const sockets = new Set<Socket>();
   let blocked = false;
   const server: Server = createServer((client) => {
@@ -225,7 +233,7 @@ async function cuttableRoute(target: string) {
       client.destroy();
       return;
     }
-    const upstream = connect(Number(port), hostname);
+    const upstream = connect(Number(target.port), target.hostname);
     for (const socket of [client, upstream]) {
       sockets.add(socket);
       socket.on("close", () => sockets.delete(socket));
@@ -247,6 +255,10 @@ async function cuttableRoute(target: string) {
     },
     unblock(): void {
       blocked = false;
+    },
+    /** New connections reach another listener: the box restarted on a newer hostd. */
+    retarget(url: string): void {
+      target = new URL(url);
     },
   };
 }
@@ -467,7 +479,7 @@ describe("a remote project's board through the relay, over a real link", () => {
     await vi.waitFor(() => expect(getTicketRow(host.db, created!.id)?.status).toBe("doing"));
     await vi.waitFor(() => expect(titleOf(record, created!.id)?.status).toBe("doing"));
 
-    const api = protocolBoardApi(board, sync);
+    const api = protocolBoardApi(() => board, sync);
     expect(
       await api.comments.create({ ticketId: created!.id, body: "From this Mac" }),
     ).toMatchObject({ ok: true, comment: { body: "From this Mac" } });
@@ -690,5 +702,227 @@ describe("a remote project's board through the relay, over a real link", () => {
     ]);
     expect(host.streams()).toBe(3);
     for (const subscription of first) subscription.unsubscribe();
+  });
+
+  // VC-711 PR 2: the app's own routing. One sync engine, this Mac's projects
+  // on the local client, the remote project on its Workspace link: created,
+  // moved and commented through `boardApi()` and the engine, as the board
+  // store and the ticket view do.
+  it("routes a remote project's board through the app's per-project clients", async () => {
+    const { host, win, link } = await remoteProject();
+    const local = new Proxy({} as BoardClient, {
+      get: () => {
+        throw new Error("this Mac's client was asked about the remote project");
+      },
+    });
+    const adopted: Project[] = [];
+    const painted = new Map<string, Ticket[]>();
+    const clientFor = remoteAwareBoardClients(local, {
+      isRemote: (projectId) => projectId === PROJECT,
+      remote: (projectId) =>
+        createBoardClient(
+          hostLinkTrpcLink(relayHostLink(projectId, { rpc: win.client, state: storeState(link) })),
+        ),
+    });
+    const { sync } = startBoardProtocol({
+      client: local,
+      clientFor,
+      view: {
+        paint: (projectId, tickets) => void painted.set(projectId, tickets),
+        adoptProject: (project) => void adopted.push(project),
+        notePlanningChange: () => {},
+        checkoutMoved: () => {},
+        failed: (message) => {
+          throw new Error(message);
+        },
+      },
+      sync: { readCoalesceMs: 1, retryDelaysMs: [5], feedRetryDelaysMs: [5, 20] },
+    });
+    cleanups.push(() => stopBoardProtocol());
+    await sync.open(PROJECT);
+    expect(adopted.map(({ id, name }) => [id, name])).toEqual([[PROJECT, "On the box"]]);
+    const made = await sync.createTicket(PROJECT, { status: "todo", title: "Routed to the box" });
+    await sync.moveTickets(PROJECT, [made!.id], "done", 0);
+    await vi.waitFor(() => expect(getTicketRow(host.db, made!.id)?.status).toBe("done"));
+    expect(boardProtocol()?.sync).toBe(sync);
+    expect(await boardApi().comments.create({ ticketId: made!.id, body: "Routed" })).toMatchObject({
+      ok: true,
+    });
+    const listed = await boardApi().comments.list({ ticketId: made!.id });
+    expect(listed).toMatchObject({ ok: true, comments: [{ body: "Routed" }] });
+    const commentId = listed.ok ? listed.comments[0]!.id : "";
+    expect(await boardApi().comments.update({ commentId, body: "Edited" })).toMatchObject({
+      ok: true,
+    });
+    expect(listComments(host.db, made!.id).map(({ body }) => body)).toEqual(["Edited"]);
+    await vi.waitFor(() =>
+      expect(painted.get(PROJECT)?.find(({ id }) => id === made!.id)?.status).toBe("done"),
+    );
+  });
+
+  // VC-711 PR 2 review B1: a write made for a remote Workspace keeps that
+  // Workspace's host for every retry and ends with the Workspace. Once it
+  // closes (its claim gone), nothing pending is ever sent to This Mac.
+  it("never sends a pending remote write to This Mac after its Workspace closes", async () => {
+    const { route, link, board } = await remoteProject();
+    let claimed = true;
+    const localCalls: string[] = [];
+    const local = new Proxy({} as BoardClient, {
+      get: (_target, area) =>
+        new Proxy(
+          {},
+          {
+            get: (_inner, procedure) => ({
+              mutate: async () => {
+                localCalls.push(`${String(area)}.${String(procedure)}`);
+                throw { data: { hostError: { code: "NOT_FOUND", message: "Not this Mac's" } } };
+              },
+              query: async () => {
+                localCalls.push(`${String(area)}.${String(procedure)}`);
+                throw { data: { hostError: { code: "NOT_FOUND", message: "Not this Mac's" } } };
+              },
+            }),
+          },
+        ),
+    });
+    const { sync } = startBoardProtocol({
+      client: local,
+      clientFor: remoteAwareBoardClients(local, {
+        isRemote: () => claimed,
+        remote: () => board,
+      }),
+      view: {
+        paint() {},
+        adoptProject() {},
+        notePlanningChange() {},
+        checkoutMoved() {},
+        failed() {},
+      },
+      sync: { retryDelaysMs: [20] },
+    });
+    cleanups.push(() => stopBoardProtocol());
+    await sync.open(PROJECT);
+    // A comment the facade has seen, so an edit and a removal can be placed.
+    const seen = await boardApi().comments.create({ ticketId: "ticket-1", body: "Seen" });
+    expect(seen.ok).toBe(true);
+    const commentId = seen.ok ? seen.comment.id : "";
+    route.cut();
+    await untilState(link, "unreachable");
+    const api = boardApi();
+    const pending = [
+      api.comments.create({ ticketId: "ticket-1", body: "Must stay remote" }),
+      api.comments.update({ commentId, body: "Must stay remote" }),
+      api.comments.remove({ commentId }),
+      api.projects.update({ id: PROJECT, baseBranch: "main" }),
+      api.projects.setSkillModes({ id: PROJECT, modes: {} }),
+      api.projects.setSessionDefaults({ id: PROJECT, model: null }),
+    ];
+    // Retrying against the box, which is away.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    claimed = false;
+    sync.close(PROJECT);
+    const settled = await Promise.all(pending);
+    for (const outcome of settled) expect(outcome.ok).toBe(false);
+    // Past several retry delays: nothing reached This Mac, and nothing retries.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    route.unblock();
+    await untilState(link, "ready");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(localCalls).toEqual([]);
+  });
+
+  // VC-711 PR 2 review B2: an older host grants no `board.read`. Its board
+  // is asked once, said once in the host's name, and opened again only when
+  // the host changes (here: restarted on a newer hostd that offers it).
+  it("says once that an older host offers no board, and opens it once the host does", async () => {
+    const older = await box([]);
+    const route = await cuttableRoute(older.url);
+    const link = workspaceLink(route.url, EVERY_FEATURE);
+    await untilState(link, "ready");
+    const main = await desktopMain(link);
+    const win = window(main);
+    const relayed = relayHostLink(PROJECT, { rpc: win.client, state: storeState(link) });
+    let snapshots = 0;
+    const counted = {
+      ...relayed,
+      query: (path: string, input?: unknown, options?: never) => {
+        if (path === "board.snapshot") snapshots += 1;
+        return relayed.query(path, input, options);
+      },
+    };
+    const board = createBoardClient(hostLinkTrpcLink(counted));
+    const adopted: Project[] = [];
+    const { sync } = startBoardProtocol({
+      client: board,
+      clientFor: () => board,
+      view: {
+        paint() {},
+        adoptProject: (project) => void adopted.push(project),
+        notePlanningChange() {},
+        checkoutMoved() {},
+        failed() {},
+      },
+      sync: { feedRetryDelaysMs: [5] },
+    });
+    cleanups.push(() => stopBoardProtocol());
+    // The host-connection store as the remote source feeds it: the project's
+    // link, a new view object on every change.
+    const listeners = new Set<(state: never) => void>();
+    let hostState = {
+      hosts: [{ id: HOST, name: "old-host", local: false }],
+      projects: { [PROJECT]: { hostId: HOST, link: viewOf(link.getState()) } },
+    };
+    cleanups.push(
+      link.subscribeState((state) => {
+        hostState = {
+          ...hostState,
+          projects: { [PROJECT]: { hostId: HOST, link: viewOf(state) } },
+        };
+        for (const listener of listeners) listener(hostState as never);
+      }),
+    );
+    const availability = createRemoteBoardAvailabilityStore();
+    const stop = followRemoteClaims({
+      sync,
+      store: {
+        getState: () => hostState as never,
+        subscribe: (listener) => {
+          listeners.add(listener as (state: never) => void);
+          return () => void listeners.delete(listener as (state: never) => void);
+        },
+      },
+      alive: () => true,
+      availability: availability.getState(),
+      drop: () => {},
+    });
+    cleanups.push(stop);
+
+    await vi.waitFor(() =>
+      expect(availability.getState().unavailable[PROJECT]).toBe(
+        "The board isn’t available on old-host — update it to use it here",
+      ),
+    );
+    // Asked once, and not again while nothing changed.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(snapshots).toBe(1);
+    expect(adopted).toEqual([]);
+    expect(sync.follows(PROJECT)).toBe(false);
+    // Try again, by hand: asked once more, refused once more, still bounded.
+    availability.getState().retry!(PROJECT);
+    await vi.waitFor(() => expect(snapshots).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(snapshots).toBe(2);
+
+    // The box is updated: hostd restarts with the board, and the link
+    // reconnects to it with a new welcome.
+    const newer = await box();
+    route.retarget(newer.url);
+    route.cut();
+    await untilState(link, "unreachable");
+    route.unblock();
+    await untilState(link, "ready");
+    await vi.waitFor(() => expect(adopted.map(({ id }) => id)).toEqual([PROJECT]));
+    expect(availability.getState().unavailable[PROJECT]).toBeUndefined();
+    expect(sync.follows(PROJECT)).toBe(true);
   });
 });

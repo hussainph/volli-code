@@ -13,6 +13,7 @@ import * as React from "react";
 import { errorMessage, type IndexedFile } from "@volli/shared";
 
 import { toastError } from "@renderer/lib/toast";
+import { remoteHostNow } from "@renderer/stores/remote-project";
 
 /** How long a fetched index is served without re-hitting main on a picker open. */
 const INDEX_CACHE_MS = 10_000;
@@ -51,6 +52,8 @@ export function useFileIndex(projectId: string): FileIndexHandle {
   const fetchIndexRef = React.useRef<(() => Promise<void>) | null>(null);
   const fetchIndex = React.useCallback(async () => {
     if (inflightRef.current) return;
+    // A remote project's files are on its host (VC-711): its index here is empty.
+    if (remoteHostNow(projectId) !== null) return;
     inflightRef.current = true;
     try {
       const result = await window.api.files.index({ projectId });

@@ -50,7 +50,10 @@
  *   touches the new generation's queued work.
  * - **Followed means subscribed.** A Workspace this window follows is opened
  *   until its snapshot lands and its feed is followed: a failed open, a
- *   resnapshot or a feed that ended are retried with backoff, never left.
+ *   resnapshot or a feed that ended are retried with backoff, never left. The
+ *   one exception is a host whose board is not this window's at all
+ *   ({@link isBoardUnavailable}): that open stops, and the Workspace is no
+ *   longer followed, until its owner opens it again.
  * - **A project change refreshes the project.** A project change without its
  *   row reads the board's snapshot, which carries the project.
  *
@@ -195,7 +198,13 @@ export interface BoardSyncView {
 }
 
 export interface BoardSyncOptions {
-  readonly transport: BoardSyncTransport;
+  /**
+   * The host each Workspace's calls go to: one transport for every
+   * Workspace, or one per Workspace (VC-711: a remote project's board goes
+   * over its Workspace link, this Mac's over the IPC bridge). Every call
+   * names its Workspace, so routing needs nothing else.
+   */
+  readonly transport: BoardSyncTransport | ((projectId: string) => BoardSyncTransport);
   readonly view: BoardSyncView;
   readonly mintCommandId?: () => string;
   readonly now?: () => number;
@@ -226,6 +235,11 @@ interface Pending {
   readonly commandId: string;
   /** The Workspace it paints over; undefined for a per-surface command (it paints nothing). */
   readonly projectId: string | undefined;
+  /**
+   * The Workspace a per-surface command was made for, which owns it: closing
+   * that Workspace ends it (VC-711), and it is never sent anywhere else.
+   */
+  readonly owner: string | undefined;
   /** What it sets, as `<kind>:<id>:<aspect>`: a newer write setting all of them supersedes it. */
   readonly aspects: ReadonlySet<string>;
   /** An archive, unarchive or delete: never superseded, only waited for. */
@@ -328,6 +342,23 @@ export function isAmbiguousBoardFailure(error: unknown): boolean {
   );
 }
 
+/**
+ * Whether a host answered that its board is not this window's to read at all:
+ * the Workspace's link was not granted the board (an older host,
+ * `verb-refused`), the host has no board (`operation-unavailable`), or it does
+ * not know the Workspace (`workspace-unknown`). Asking again changes nothing
+ * until the host or the link does, so an open stops retrying on it (VC-711).
+ */
+export function isBoardUnavailable(error: unknown): boolean {
+  const reason = (error as { data?: { hostError?: { reason?: unknown } } } | null)?.data?.hostError
+    ?.reason;
+  return (
+    reason === "verb-refused" ||
+    reason === "operation-unavailable" ||
+    reason === "workspace-unknown"
+  );
+}
+
 /** Whether a host answered that the resource does not exist (in this Workspace). */
 export function isNotFound(error: unknown): boolean {
   const hostError = (error as { data?: { hostError?: { code?: unknown } } } | null)?.data
@@ -364,6 +395,8 @@ function reaches(a: string | null, b: string | null): boolean {
 /** How one write is made: what it paints, what it sets, and how it is sent. */
 interface WriteSpec<Answer> {
   readonly projectId: string | undefined;
+  /** A per-surface command's Workspace: closing it ends the command (VC-711). */
+  readonly owner?: string;
   readonly verb: string;
   readonly aspects: readonly string[];
   readonly lifecycle?: boolean;
@@ -388,7 +421,7 @@ interface WriteSpec<Answer> {
 
 /** The board's sync engine for every Workspace this window follows. */
 export class BoardSync {
-  readonly #transport: BoardSyncTransport;
+  readonly #transportFor: (projectId: string) => BoardSyncTransport;
   readonly #view: BoardSyncView;
   readonly #mint: () => string;
   readonly #now: () => number;
@@ -409,7 +442,8 @@ export class BoardSync {
   #adoptions = 0;
 
   constructor(options: BoardSyncOptions) {
-    this.#transport = options.transport;
+    const { transport } = options;
+    this.#transportFor = typeof transport === "function" ? transport : () => transport;
     this.#view = options.view;
     this.#mint = options.mintCommandId ?? (() => crypto.randomUUID());
     this.#now = options.now ?? Date.now;
@@ -480,9 +514,15 @@ export class BoardSync {
     const readAt = this.#adoptions;
     let snapshot: Awaited<ReturnType<BoardSyncTransport["snapshot"]>>;
     try {
-      snapshot = await this.#transport.snapshot(projectId);
+      snapshot = await this.#transportFor(projectId).snapshot(projectId);
     } catch (error) {
-      if (!workspace.closed && workspace.generation === generation) this.#reopenLater(workspace);
+      if (!workspace.closed && workspace.generation === generation) {
+        // A host whose board is not this window's at all is not followed: it
+        // stops here, and its owner opens it again when the host or the link
+        // changes (VC-711). Anything else is retried, with backoff.
+        if (isBoardUnavailable(error)) this.close(projectId);
+        else this.#reopenLater(workspace);
+      }
       throw error;
     }
     // Closed, or opened again since: a newer snapshot owns the base.
@@ -520,8 +560,10 @@ export class BoardSync {
       if (timer !== undefined) this.#clearTimer(timer);
     }
     this.#workspaces.delete(projectId);
+    // Its board writes and its per-surface commands alike: a command made for
+    // a Workspace is that Workspace's host's, and goes nowhere once it closes.
     for (const pending of Array.from(this.#pending.values())) {
-      if (pending.projectId === projectId) this.#drop(pending, "closed");
+      if (pending.owner === projectId) this.#drop(pending, "closed");
     }
   }
 
@@ -586,7 +628,8 @@ export class BoardSync {
       }),
       bodies: new Map([[CREATED, fields.body ?? ""]]),
       revives: true,
-      send: (commandId) => this.#transport.createTicket({ commandId, projectId, ...fields }),
+      send: (commandId) =>
+        this.#transportFor(projectId).createTicket({ commandId, projectId, ...fields }),
       proved: (pending) => ({
         ...this.#provedAnswer(pending),
         // Proved by the feed, whose row named the new ticket's id.
@@ -619,7 +662,7 @@ export class BoardSync {
             : moveTicketsOp(view, ticketIds, toStatus, toIndex, now),
       }),
       send: (commandId) =>
-        this.#transport.moveTickets({
+        this.#transportFor(projectId).moveTickets({
           commandId,
           projectId,
           ticketIds,
@@ -636,7 +679,8 @@ export class BoardSync {
       verb: "update priority",
       aspects: [`ticket:${ticketId}:priority`],
       edit: () => ({ tickets: patchTicket(ticketId, { priority }) }),
-      send: (commandId) => this.#transport.setPriority({ commandId, ticketId, priority }),
+      send: (commandId) =>
+        this.#transportFor(projectId).setPriority({ commandId, ticketId, priority }),
     });
   }
 
@@ -655,7 +699,7 @@ export class BoardSync {
       aspects: defined.map((field) => `ticket:${ticketId}:${field}`),
       edit: () => ({ tickets: patchTicket(ticketId, fields) }),
       bodies: fields.body === undefined ? undefined : new Map([[ticketId, fields.body]]),
-      send: (commandId) => this.#transport.updateTicket({ commandId, ...input }),
+      send: (commandId) => this.#transportFor(projectId).updateTicket({ commandId, ...input }),
       proved: (pending) => ({
         ...this.#provedAnswer(pending),
         ticket: this.#row(projectId, ticketId),
@@ -670,7 +714,7 @@ export class BoardSync {
       verb: "update labels",
       aspects: [`ticket:${ticketId}:labels`],
       edit: () => ({ tickets: patchTicket(ticketId, { labels }) }),
-      send: (commandId) => this.#transport.setLabels({ commandId, ticketId, labels }),
+      send: (commandId) => this.#transportFor(projectId).setLabels({ commandId, ticketId, labels }),
     });
   }
 
@@ -682,7 +726,8 @@ export class BoardSync {
       edit: () => ({
         labels: (view) => view.map((label) => (label.id === labelId ? { ...label, color } : label)),
       }),
-      send: (commandId) => this.#transport.setLabelColor({ commandId, labelId, color }),
+      send: (commandId) =>
+        this.#transportFor(projectId).setLabelColor({ commandId, labelId, color }),
     });
   }
 
@@ -694,7 +739,7 @@ export class BoardSync {
       aspects: [`ticket:${ticketId}:lifecycle`],
       lifecycle: true,
       edit: () => ({ tickets: (view) => view.filter((ticket) => ticket.id !== ticketId) }),
-      send: (commandId) => this.#transport.archiveTicket({ commandId, ticketId }),
+      send: (commandId) => this.#transportFor(projectId).archiveTicket({ commandId, ticketId }),
     });
     return outcome.kind === "accepted";
   }
@@ -718,7 +763,8 @@ export class BoardSync {
       // The archived row carries the host's body: it is the confirmed one.
       bodies: new Map([[archived.id, archived.body]]),
       revives: true,
-      send: (commandId) => this.#transport.unarchiveTicket({ commandId, ticketId: archived.id }),
+      send: (commandId) =>
+        this.#transportFor(projectId).unarchiveTicket({ commandId, ticketId: archived.id }),
       proved: (pending) => ({
         ...this.#provedAnswer(pending),
         ticket: this.#row(projectId, archived.id),
@@ -733,7 +779,7 @@ export class BoardSync {
       verb: "delete ticket",
       aspects: [`ticket:${ticketId}:lifecycle`],
       lifecycle: true,
-      send: (commandId) => this.#transport.deleteTicket({ commandId, ticketId }),
+      send: (commandId) => this.#transportFor(projectId).deleteTicket({ commandId, ticketId }),
       goneMeansDone: true,
     });
     return outcome.kind === "accepted";
@@ -749,6 +795,12 @@ export class BoardSync {
    */
   async command<Answer>(spec: {
     verb: string;
+    /**
+     * The Workspace the command was made for, when it was made for one: it
+     * ends with that Workspace (`close`), and its `send` must go to that
+     * Workspace's host only (VC-711).
+     */
+    owner?: string;
     send: (commandId: string) => Promise<Answer>;
     fromFeed: (row: unknown, commandId: string) => Answer;
     goneMeansDone?: boolean;
@@ -756,6 +808,7 @@ export class BoardSync {
     let refusal = "";
     const outcome = await this.#write<Answer>({
       projectId: undefined,
+      ...(spec.owner === undefined ? {} : { owner: spec.owner }),
       verb: spec.verb,
       aspects: [],
       send: spec.send,
@@ -774,7 +827,7 @@ export class BoardSync {
   /** The Workspace's archived tickets, newest first, or null when the read failed (said). */
   async archivedTickets(projectId: string): Promise<ArchivedTicket[] | null> {
     try {
-      return await this.#transport.archivedTickets(projectId);
+      return await this.#transportFor(projectId).archivedTickets(projectId);
     } catch (error) {
       this.#view.failed(`Couldn't load archive: ${failureMessage(error)}`);
       return null;
@@ -814,6 +867,7 @@ export class BoardSync {
     const pending: Pending = {
       commandId,
       projectId: spec.projectId,
+      owner: spec.owner ?? spec.projectId,
       aspects: new Set(spec.aspects),
       lifecycle: spec.lifecycle === true,
       seq: ++this.#writes,
@@ -1024,7 +1078,7 @@ export class BoardSync {
   // ---- the feed ---------------------------------------------------------------
 
   #follow(workspace: Workspace, cursor: string): void {
-    workspace.stop = this.#transport.changes(workspace.projectId, cursor, {
+    workspace.stop = this.#transportFor(workspace.projectId).changes(workspace.projectId, cursor, {
       onBatch: (batch) => {
         if (workspace.closed) return;
         workspace.feedFailures = 0;
@@ -1269,8 +1323,8 @@ export class BoardSync {
     let failed = false;
     try {
       const answer = withProject
-        ? await this.#transport.snapshot(projectId)
-        : await this.#transport.roster(projectId);
+        ? await this.#transportFor(projectId).snapshot(projectId)
+        : await this.#transportFor(projectId).roster(projectId);
       if (workspace.closed || workspace.generation !== generation || workspace.cursor === null) {
         return;
       }
