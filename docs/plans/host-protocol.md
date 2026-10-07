@@ -160,6 +160,8 @@ VC-575 owns pairing, token format/storage/rotation/revocation. Device credential
 
 ### Enrollment over SSH (VC-700)
 
+The user-facing [Cloud threat model](../../SECURITY.md#cloud-threat-model) describes the trust boundaries for a compromised box, a compromised renderer, and an agent on the box.
+
 The first accepting verifier. A host added over SSH (VC-615 flow 1) is paired over the same SSH channel the desktop installed it through: no code is shown. Pairing by code (VC-575) stays the path for hosts installed another way and for phones; a hosted control plane's account-issued key is a third. All three write the same fact (a device's public key, trusted by this host) and are read by verifiers behind the one port (guardrail 1).
 
 - **Enrollment.** The desktop runs `volli-hostd enroll --system|--user --public-key <P-256 SPKI, base64url> --name <label>` on the box: `--system` **as root** (sudo), `--user` as the login hostd runs as. It adds the key to the host's enrolled-devices store under a host-allocated UUIDv4 `deviceId` (public keys only, host-level, never in a backup, every update under a lock beside the store) and answers `{hostId, deviceId, fingerprint}`. Idempotent per key; a revoked key enrolled again is a new device. `volli-hostd devices list` shows the store without keys; `devices revoke <deviceId>` sets `revokedAt` (as root on a system install). VC-575 may fold the store into the `devices` table; the verifier port is the seam.
