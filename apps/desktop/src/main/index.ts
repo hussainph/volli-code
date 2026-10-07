@@ -218,7 +218,12 @@ import {
   readExperiments,
   setExperiment,
 } from "./experiments";
-import { BROWSER_CLOSED_FOR_MENU_BAR, createMenuBarHost, type MenuBarHost } from "./menu-bar-host";
+import {
+  BROWSER_CLOSED_FOR_MENU_BAR,
+  createMenuBarHost,
+  menuBarSmokeSettleMs,
+  type MenuBarHost,
+} from "./menu-bar-host";
 import {
   confirmCloseAgentTabs,
   confirmMenuBarQuit,
@@ -2385,7 +2390,10 @@ const appStartup = app.whenReady().then(async () => {
   // Dock-less, with a Tray. Built for every launch so reopening goes through
   // one door; with the flag off nothing ever enters the mode, and its reveal
   // is exactly "open a window if none exists".
+  const smokeSettleMs = menuBarSmokeSettleMs(isDev, process.env);
   const menuBar = createMenuBarHost({
+    // The mechanics smoke's longer settle (VC-709); a release never has one.
+    ...(smokeSettleMs === undefined ? {} : { settleMs: smokeSettleMs }),
     // Read from the host, never a renderer. A degraded host runs nothing.
     liveWork: liveHost?.liveWork ?? {
       current: () => NO_LIVE_WORK,

@@ -15,10 +15,6 @@ import { click, HETZNER_ID, hostWorld, MINI_ID, type HostWorld } from "./hosts.t
 
 const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn() }));
 vi.mock("sonner", () => ({ toast, Toaster: () => null }));
-// The sheet itself is tested over a fake source in sign-ins/; here only what opens it.
-vi.mock("@renderer/components/hosts/sign-ins/host-sign-in-sheet", () => ({
-  HostSignInSheet: () => null,
-}));
 
 let world: HostWorld | null = null;
 
@@ -120,6 +116,21 @@ describe("host chip", () => {
     expect(rows[2]).toContain("Offline · since");
     expect(rows.slice(3)).toEqual(["Sign-ins on hetzner-1…", "Add a host…", "Manage hosts…"]);
     expect(list.querySelector('[aria-current="true"]')?.textContent).toContain("hetzner-1");
+  });
+
+  it("withholds Add a host… once VC-700 registered and a read-only hosts file withheld it", async () => {
+    world = hostWorld();
+    await world.render(<HostChip />);
+    await act(async () =>
+      useHostConnectionStore.getState().setEntryPoints({ addHost: null, manageHosts: () => {} }),
+    );
+    const list = await openSwitcher();
+    const rows = [...list.querySelectorAll("button")].map((row) => row.textContent?.trim());
+    expect(rows).not.toContain("Add a host…");
+    expect(rows).toContain("Manage hosts…");
+    await act(async () =>
+      useHostConnectionStore.getState().setEntryPoints({ addHost: null, manageHosts: null }),
+    );
   });
 
   it("opens another host's first project, in rail order", async () => {

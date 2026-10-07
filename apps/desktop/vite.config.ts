@@ -336,6 +336,11 @@ export default defineConfig(({ mode }) => ({
         // A state that silently says nothing is a read-only board with no
         // explanation, and no screenshot of one state shows another's words.
         "src/components/hosts/host-surface-model.ts",
+        // Adding and managing a host (VC-700): which question asks what, which
+        // answer it offers, how a failure reads and recovers, and how a host's
+        // health and facts read in Settings: wording rules no screenshot pins.
+        "src/components/hosts/add-host-model.ts",
+        "src/components/settings/panes/hosts-pane-model.ts",
         // Whether a project can be written to (VC-576): the per-project link
         // merge, the host aggregate, and the outage mapping that must keep an
         // offline host offline through every retry. A branch missed here is a

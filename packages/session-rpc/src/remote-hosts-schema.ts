@@ -8,16 +8,23 @@
  * wire types exactly and publish with `z.toJSONSchema`, so no transforms and
  * no custom parsers. A question's own fields are open JSON (`z.json()`).
  */
-import type {
-  AddHostEvent,
-  AddHostFailure,
-  AddHostLogLine,
-  AddHostStepId,
-  AddHostStepStatus,
-  AddHostView,
-  RemoteHost,
-  RemoteProjectLink,
-  RemoteHostsSnapshot,
+import {
+  REMOTE_HOST_DEVICE_TEXT_MAX,
+  REMOTE_HOST_DEVICES_MAX,
+  REMOTE_HOST_NAME_MAX,
+  type AddHostEvent,
+  type AddHostFacts,
+  type AddHostFailure,
+  type AddHostLogLine,
+  type AddHostStepId,
+  type AddHostStepStatus,
+  type AddHostView,
+  type RemoteHost,
+  type RemoteHostDevice,
+  type RemoteHostDevices,
+  type RemoteProjectLink,
+  type RemoteHostsSnapshot,
+  type RenameRemoteHostInput,
 } from "@volli/shared";
 import { z } from "zod";
 
@@ -100,6 +107,14 @@ export const sudoPasswordInputSchema = z.strictObject({
   password: z.string().min(1).max(MAX_SUDO_PASSWORD_LENGTH),
 });
 export const hostAddRetryInputSchema = z.strictObject({ flowId, from: stepId.optional() });
+/**
+ * `RenameRemoteHostInput`: the label, trimmed, then bounded. A control
+ * character is the registry's to refuse (`bad-name`).
+ */
+export const renameHostInputSchema = z.strictObject({
+  hostId,
+  name: z.string().trim().min(1).max(REMOTE_HOST_NAME_MAX),
+});
 
 /* ── Outputs ────────────────────────────────────────────────────────────── */
 
@@ -134,6 +149,9 @@ const remoteHost = z.object({
   deviceId: z.string(),
   addedAt: z.string(),
   liveSessions: z.number().int().nonnegative().nullable(),
+  system: z.string().nullable(),
+  arch: z.string().nullable(),
+  hostKeys: z.array(z.string()).readonly(),
 });
 const remoteProjectLink = z.object({ hostId: z.string(), link: linkState });
 /** `RemoteHostsSnapshot`. Its arrays are read-only, as the registry hands them over. */
@@ -144,6 +162,23 @@ export const remoteHostsSnapshotSchema = z.object({
   projects: z.record(z.string(), remoteProjectLink),
   /** Why this Mac's hosts cannot change now, or `null`. */
   readOnly: z.string().nullable(),
+});
+
+/** A device's text field: bounded as the registry bounds what a host answers. */
+const deviceText = z.string().max(REMOTE_HOST_DEVICE_TEXT_MAX);
+const remoteHostDevice = z.strictObject({
+  deviceId: deviceText,
+  name: deviceText,
+  fingerprint: deviceText,
+  enrolledAt: deviceText,
+  via: deviceText,
+  revokedAt: deviceText.nullable(),
+  thisMac: z.boolean(),
+});
+/** `RemoteHostDevices`: what `hosts.devices` answers, read from the host when asked. */
+export const remoteHostDevicesSchema = z.strictObject({
+  hostId: z.string(),
+  devices: z.array(remoteHostDevice).max(REMOTE_HOST_DEVICES_MAX).readonly(),
 });
 
 /** A question's `kind` and `step`, and its own fields as open JSON. */
@@ -171,6 +206,17 @@ const addHostView = z.object({
   hostId: z.string().nullable(),
   startup: z.string().nullable(),
 });
+/** `AddHostFacts`: what `hostAdd.facts` answers. A plain object, so it may gain fields. */
+export const addHostFactsSchema = z.object({
+  user: z.string().nullable(),
+  os: z.enum(["linux", "macos"]).nullable(),
+  system: z.string().nullable(),
+  arch: z.string().nullable(),
+  memoryBytes: z.number().nonnegative().nullable(),
+  version: z.string().nullable(),
+  keepsRunning: z.boolean().nullable(),
+  alreadyPaired: z.boolean(),
+});
 const addHostLogLine = z.object({
   at: z.string(),
   level: z.enum(["debug", "info", "warn", "error"]),
@@ -195,6 +241,17 @@ export type RemoteHostsOutputSchemasMatch = AssertNever<
       ? never
       : "remoteHostsSnapshotSchema")
   | (z.output<typeof addHostEventSchema> extends AddHostEvent ? never : "addHostEventSchema")
+  | (z.output<typeof addHostFactsSchema> extends AddHostFacts ? never : "addHostFactsSchema")
+  | (z.output<typeof remoteHostDevicesSchema> extends RemoteHostDevices
+      ? never
+      : "remoteHostDevicesSchema")
+>;
+
+/** Each input schema yields its wire type. */
+export type RemoteHostsInputSchemasMatch = AssertNever<
+  z.output<typeof renameHostInputSchema> extends RenameRemoteHostInput
+    ? never
+    : "renameHostInputSchema"
 >;
 
 type MissingKeys<Wire, Schema> = Exclude<keyof Wire, keyof Schema>;
@@ -205,6 +262,10 @@ export type RemoteHostsSchemaKeysCoverage = AssertNever<
   | MissingKeys<RemoteHost, z.output<typeof remoteHost>>
   | MissingKeys<RemoteProjectLink, z.output<typeof remoteProjectLink>>
   | MissingKeys<AddHostView, z.output<typeof addHostView>>
+  | MissingKeys<AddHostFacts, z.output<typeof addHostFactsSchema>>
   | MissingKeys<AddHostFailure, z.output<typeof addHostFailure>>
   | MissingKeys<AddHostLogLine, z.output<typeof addHostLogLine>>
+  | MissingKeys<RemoteHostDevices, z.output<typeof remoteHostDevicesSchema>>
+  | MissingKeys<RemoteHostDevice, z.output<typeof remoteHostDevice>>
+  | MissingKeys<RenameRemoteHostInput, z.output<typeof renameHostInputSchema>>
 >;

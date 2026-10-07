@@ -493,6 +493,10 @@ export const hostEntry = (overrides: Partial<RegistryHost> = {}): RegistryHost =
   addedAt: "2025-12-01T00:00:00.000Z",
   listen: LISTEN,
   workspaceIds: [],
+  // What the harness's probe reports, as an add would keep it.
+  system: "Ubuntu 24.04.1 LTS",
+  arch: "x86-64",
+  hostKeys: [],
   ...overrides,
 });
 

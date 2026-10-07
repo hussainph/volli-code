@@ -6,6 +6,7 @@
  * `ProvisionSecrets` only.
  */
 import type {
+  AddHostFacts,
   AddHostFailure,
   AddHostLogLine,
   AddHostQuestion,
@@ -15,7 +16,13 @@ import type {
 
 import { describeFailure, STEP_ORDER, type StepId } from "./failures";
 import type { LogFields } from "./logger";
-import { nextStep, type ProvisionResults, type ProvisionState } from "./provision";
+import {
+  nextStep,
+  type ProvisionDecisions,
+  type ProvisionResults,
+  type ProvisionState,
+} from "./provision";
+import type { SshStepResults } from "./ssh-provider";
 
 /** How many log lines a flow keeps for Details. */
 export const ADD_HOST_LOG_LIMIT = 500;
@@ -120,4 +127,44 @@ export function logLine(
         : JSON.stringify(value);
   }
   return { at, level, message, fields: flat };
+}
+
+/** `uname -m` as people read it. */
+export function archName(arch: string): string {
+  if (arch === "x86_64" || arch === "amd64") return "x86-64";
+  if (arch === "aarch64" || arch === "arm64") return "arm64";
+  return arch;
+}
+
+const textOrNull = (value: string | undefined): string | null =>
+  value === undefined || value.trim() === "" ? null : value.trim();
+
+/** A step's result that carries a version, if it ran (a skipped one has none). */
+const versionOf = (result: unknown): string | null => {
+  const version = (result as { version?: unknown } | undefined)?.version;
+  return typeof version === "string" && version !== "" ? version : null;
+};
+
+/**
+ * What the steps so far have found, for the checklist's completed rows. Each
+ * fact comes from a step's own result; one not yet said is `null`.
+ */
+export function flowFacts(results: SshStepResults, decisions: ProvisionDecisions): AddHostFacts {
+  const { probe, install, start, enroll } = results;
+  const os = probe === undefined ? null : probe.kernel === "Darwin" ? "macos" : "linux";
+  const started = start === undefined || "skipped" in start ? null : start;
+  let keepsRunning: boolean | null = null;
+  if (started !== null && os !== "macos") {
+    keepsRunning = started.mode === "system" ? true : started.linger;
+  }
+  return {
+    user: textOrNull(probe?.user),
+    os,
+    system: textOrNull(probe?.os.name),
+    arch: probe === undefined ? null : textOrNull(archName(probe.arch)),
+    memoryBytes: probe?.memoryBytes ?? null,
+    version: versionOf(install) ?? versionOf(started ?? undefined) ?? versionOf(enroll),
+    keepsRunning,
+    alreadyPaired: decisions.alreadyPaired === true || enroll?.created === false,
+  };
 }

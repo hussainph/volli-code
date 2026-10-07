@@ -238,6 +238,9 @@ export function sessionHandlersFrom(
     "hostSignIns.run": remote("hostSignIns.run"),
     "hostSignIns.answer": remote("hostSignIns.answer"),
     "hostSignIns.cancel": remote("hostSignIns.cancel"),
+    "hosts.rename": remote("hosts.rename"),
+    "hosts.devices": remote("hosts.devices"),
+    "hostAdd.facts": remote("hostAdd.facts"),
   };
   return { ...handlers, ...desktop };
 }

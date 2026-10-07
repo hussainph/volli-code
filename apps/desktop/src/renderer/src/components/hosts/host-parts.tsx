@@ -10,6 +10,7 @@
  * `MotionConfig reducedMotion="user"`.
  */
 import * as React from "react";
+import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { AnimatePresence, motion } from "motion/react";
 import { AppleLogoIcon } from "@phosphor-icons/react/dist/csr/AppleLogo";
 import { DesktopTowerIcon } from "@phosphor-icons/react/dist/csr/DesktopTower";
@@ -28,7 +29,14 @@ export const EASE_SWIFT = [0.32, 0.72, 0, 1] as const;
 /* ── Host tile ──────────────────────────────────────────────────────────── */
 
 const TILE = {
-  sm: { box: "size-6 rounded-sm", icon: "size-3.5", badge: "size-2.5 -right-0.5 -bottom-0.5" },
+  sm: {
+    box: "size-6",
+    radius: "rounded-sm",
+    icon: "size-3.5",
+    badge: "size-2.5 -right-0.5 -bottom-0.5",
+  },
+  /** The Add-a-host sheet's and a host page's header. */
+  md: { box: "size-10", radius: "rounded-md", icon: "size-5", badge: "size-4 -right-1 -bottom-1" },
 } as const;
 
 /**
@@ -40,14 +48,17 @@ export function HostGlyph({
   os,
   local = false,
   badge = null,
+  size = "sm",
   className,
 }: {
   os: HostOs | null;
   local?: boolean;
-  badge?: HostBadge;
+  /** A host's state, or `ready`: a green check, the add just finished. */
+  badge?: HostBadge | "ready";
+  size?: keyof typeof TILE;
   className?: string;
 }) {
-  const tile = TILE.sm;
+  const tile = TILE[size];
   const Icon = local
     ? DesktopTowerIcon
     : os === "linux"
@@ -62,12 +73,16 @@ export function HostGlyph({
       className={cn(
         "relative inline-grid shrink-0 place-items-center border border-border bg-gradient-to-b from-card to-muted text-foreground shadow-raised",
         tile.box,
+        tile.radius,
         className,
       )}
     >
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-1/2 rounded-sm bg-gradient-to-b from-background/40 to-transparent"
+        className={cn(
+          "pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-background/40 to-transparent",
+          tile.radius,
+        )}
       />
       <Icon
         aria-hidden
@@ -82,6 +97,7 @@ export function HostGlyph({
             className={cn(
               "absolute grid place-items-center rounded-full ring-2 ring-background",
               tile.badge,
+              badge === "ready" && "bg-positive text-positive-foreground",
               badge === "fail" && "bg-destructive",
               badge === "attention" && "bg-attention",
               badge === "offline" && "bg-muted-foreground/50",
@@ -90,7 +106,9 @@ export function HostGlyph({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.4, opacity: 0 }}
             transition={{ type: "spring", duration: 0.35, bounce: 0.3 }}
-          />
+          >
+            {badge === "ready" ? <CheckIcon weight="bold" className="size-[70%]" /> : null}
+          </motion.span>
         )}
       </AnimatePresence>
     </span>
@@ -229,6 +247,106 @@ export function ProviderMark({ id, name }: { id: string; name: string }) {
       )}
     >
       {name.slice(0, 1)}
+    </span>
+  );
+}
+
+/* ── A checklist step's mark ───────────────────────────────────────────── */
+
+/** Each status a checklist row can be in; `attention` waits on the person. */
+export type StepMarkStatus = "pending" | "active" | "done" | "failed" | "attention";
+
+/**
+ * A step's state as a mark (the lab's `StepMark`): a hollow dot waiting, the
+ * running ring, a check drawn in, or a filled "!" — red for a failure, amber
+ * for a question. The marks swap in place, so a row changes state without
+ * moving.
+ */
+export function StepMark({ status }: { status: StepMarkStatus }) {
+  return (
+    <span
+      aria-hidden
+      data-slot="step-mark"
+      data-status={status}
+      className="relative grid size-4 shrink-0 place-items-center"
+    >
+      <AnimatePresence initial={false} mode="popLayout">
+        {status === "pending" ? (
+          <motion.span
+            key="pending"
+            className="size-2 rounded-full border border-muted-foreground/50"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.12 }}
+          />
+        ) : status === "active" ? (
+          <motion.span
+            key="active"
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.6 }}
+            transition={{ duration: 0.16, ease: EASE_OUT }}
+          >
+            <ActiveStepMark />
+          </motion.span>
+        ) : status === "done" ? (
+          <motion.svg
+            key="done"
+            viewBox="0 0 16 16"
+            className="size-4 text-positive"
+            initial={{ opacity: 0, scale: 0.5 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ type: "spring", duration: 0.3, bounce: 0.35 }}
+          >
+            <circle cx="8" cy="8" r="7" fill="currentColor" />
+            <motion.path
+              d="M4.9 8.3 L7.1 10.4 L11.2 5.9"
+              fill="none"
+              stroke="var(--positive-foreground)"
+              strokeWidth="1.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              initial={{ pathLength: 0 }}
+              animate={{ pathLength: 1 }}
+              transition={{ duration: 0.22, delay: 0.08, ease: EASE_OUT }}
+            />
+          </motion.svg>
+        ) : (
+          <motion.svg
+            key={status}
+            viewBox="0 0 16 16"
+            className={cn("size-4", status === "failed" ? "text-destructive" : "text-attention")}
+            initial={{ opacity: 0, scale: 0.5 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ type: "spring", duration: 0.3, bounce: 0.35 }}
+          >
+            <circle cx="8" cy="8" r="7" fill="currentColor" />
+            <path
+              d="M8 4.6 V8.6"
+              stroke={
+                status === "failed"
+                  ? "var(--destructive-foreground)"
+                  : "var(--attention-foreground)"
+              }
+              strokeWidth="1.75"
+              strokeLinecap="round"
+            />
+            <circle
+              cx="8"
+              cy="11.1"
+              r="1"
+              fill={
+                status === "failed"
+                  ? "var(--destructive-foreground)"
+                  : "var(--attention-foreground)"
+              }
+            />
+          </motion.svg>
+        )}
+      </AnimatePresence>
     </span>
   );
 }

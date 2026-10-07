@@ -31,6 +31,7 @@ import { ExperimentalSettings } from "@renderer/components/pages/experimental-se
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import { WebAccessSettings } from "@renderer/components/pages/web-access-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
+import { hostsCategory } from "./hosts-category";
 import { AboutPane } from "./panes/about-pane";
 import { DisplaySection } from "./panes/display-section";
 import { GeneralPane } from "./panes/general-pane";
@@ -69,6 +70,11 @@ export interface SettingsGroupsOptions {
    * product builds with the `cloud` experiment on (`useLogViewerEnabled`).
    */
   readonly logs?: boolean;
+  /**
+   * Shows Services → Hosts, the hosts this Mac added over SSH (VC-700): only
+   * with the `cloud` experiment on.
+   */
+  readonly hosts?: boolean;
 }
 
 export function settingsGroups(
@@ -170,6 +176,7 @@ export function settingsGroups(
       key: "services",
       label: "Services",
       categories: [
+        ...(options.hosts === true ? [hostsCategory()] : []),
         {
           key: MODELS_CATEGORY_KEY,
           label: "Models",

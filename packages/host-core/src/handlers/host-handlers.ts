@@ -45,6 +45,7 @@ import {
   roleImpliedByTicket,
   type AddHostAnswer,
   type AddHostEvent,
+  type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
   type AgentResponse,
@@ -75,7 +76,9 @@ import {
   type ModelPurpose,
   type ModelSelection,
   type LatestSessionSignal,
+  type RemoteHostDevices,
   type RemoteHostsSnapshot,
+  type RenameRemoteHostInput,
   type SessionReadVerb,
   type Ticket,
   type WorktreeTrimSettings,
@@ -295,6 +298,10 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
     null
   >;
   readonly "hostSignIns.cancel": HostHandler<{ hostId: string; providerId: string }, null>;
+  /** Managing a host (VC-700 PR 3): this Mac's label, and the host's devices over SSH. */
+  readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
+  readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
+  readonly "hostAdd.facts": HostHandler<{ flowId: string }, AddHostFacts>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -733,5 +740,8 @@ function hostHandlerEntries(
     },
     "hostSignIns.cancel": ({ hostId, providerId }) =>
       done(() => remoteSignIns().cancel(hostId, providerId)),
+    "hosts.rename": ({ hostId, name }) => done(() => remoteHosts().rename(hostId, name)),
+    "hosts.devices": ({ hostId }) => remoteHosts().devices(hostId),
+    "hostAdd.facts": ({ flowId }) => remoteHosts().addFacts(flowId),
   };
 }

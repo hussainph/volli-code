@@ -26,7 +26,6 @@ import { KeyIcon } from "@phosphor-icons/react/dist/csr/Key";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { WifiSlashIcon } from "@phosphor-icons/react/dist/csr/WifiSlash";
 
-import { HostSignInSheet } from "@renderer/components/hosts/sign-ins/host-sign-in-sheet";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -59,6 +58,7 @@ import {
   openAddHost,
   openManageHosts,
   runHostAction,
+  useAddHostOffered,
   useCloudEnabled,
   useCurrentHost,
   useCurrentProjectId,
@@ -117,8 +117,6 @@ function EnabledHostChip() {
           <HostSwitcher current={host} view={view} onDone={() => setOpen(false)} />
         </PopoverContent>
       </Popover>
-      {/* A remote host's sign-ins (VC-702): opened from the switcher below. */}
-      <HostSignInSheet />
     </MotionConfig>
   );
 }
@@ -137,6 +135,7 @@ export function HostSwitcher({
 }) {
   const hosts = useHostConnectionStore((state) => state.hosts);
   const claims = useHostConnectionStore((state) => state.projects);
+  const addHostOffered = useAddHostOffered();
   const counts = projectCounts({ hosts, projects: claims });
   const offline = hosts.some((host) => host.link.status === "offline");
   const now = useNow(offline, 30_000);
@@ -187,14 +186,16 @@ export function HostSwitcher({
           }}
         />
       )}
-      <MenuAction
-        icon={PlusIcon}
-        label="Add a host…"
-        onAct={() => {
-          onDone();
-          openAddHost();
-        }}
-      />
+      {addHostOffered ? (
+        <MenuAction
+          icon={PlusIcon}
+          label="Add a host…"
+          onAct={() => {
+            onDone();
+            openAddHost();
+          }}
+        />
+      ) : null}
       <MenuAction
         icon={GearSixIcon}
         label="Manage hosts…"

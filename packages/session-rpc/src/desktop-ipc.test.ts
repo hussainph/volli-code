@@ -99,6 +99,9 @@ describe("the desktop's IPC exposure", () => {
       "hostSignIns.run",
       "hostSignIns.answer",
       "hostSignIns.cancel",
+      "hosts.rename",
+      "hosts.devices",
+      "hostAdd.facts",
     ]);
   });
 

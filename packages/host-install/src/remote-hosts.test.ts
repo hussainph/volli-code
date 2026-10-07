@@ -3,6 +3,9 @@ import { createPublicKey, generateKeyPairSync, verify } from "node:crypto";
 import { base64UrlToBytes, parseDeviceCredential } from "@volli/host-protocol";
 import type { HostLinkState } from "@volli/host-protocol/client-link";
 import {
+  REMOTE_HOST_DEVICE_TEXT_MAX,
+  REMOTE_HOST_DEVICES_MAX,
+  REMOTE_HOST_NAME_MAX,
   REMOTE_HOST_SIGN_IN_UNAVAILABLE,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   type RemoteHostsSnapshot,
@@ -10,8 +13,9 @@ import {
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { PROBE_SCRIPT } from "./probe";
-import { RemoteHostsError, RemoteHostsUnavailableError } from "./remote-hosts";
+import { devicesListScript, RemoteHostsError, RemoteHostsUnavailableError } from "./remote-hosts";
 import type { RegistryFile } from "./remote-hosts-registry";
+import type { SshExecResult } from "./ssh";
 import {
   CURRENT,
   DEVICE_ID,
@@ -36,6 +40,7 @@ import {
   WS1,
   WS2,
   type FakeLink,
+  type Handler,
 } from "./testing/remote-hosts-harness";
 
 afterEach(() => {
@@ -67,6 +72,17 @@ describe("adding a host end to end", () => {
       hostId: HOST_ID,
       // A Linux host starts at boot: nothing to say.
       startup: null,
+    });
+    // What each step found: the checklist's completed rows, read beside the view.
+    expect(h.engine.addFacts(flowId)).toEqual({
+      user: "deploy",
+      os: "linux",
+      system: "Ubuntu 24.04.1 LTS",
+      arch: "x86-64",
+      memoryBytes: 8_167_236 * 1024,
+      version: "1.1.0",
+      keepsRunning: true,
+      alreadyPaired: false,
     });
     // Each step shows running, in order, each after the ones before it are done.
     const running = w
@@ -123,6 +139,9 @@ describe("adding a host end to end", () => {
           deviceId: DEVICE_ID,
           addedAt: new Date(NOW).toISOString(),
           liveSessions: null,
+          system: "Ubuntu 24.04.1 LTS",
+          arch: "x86-64",
+          hostKeys: [],
         },
       ],
       projects: {},
@@ -228,6 +247,8 @@ describe("questions", () => {
     await h.engine.answerAdd(flowId, questionOf(h.engine, flowId), { kind: "accept-host-key" });
     expect(h.accepted).toEqual([OFFER]);
     expect(h.engine.snapshot().hosts.map((host) => host.id)).toEqual([HOST_ID]);
+    // The key the person compared and trusted is kept with the host.
+    expect(h.engine.snapshot().hosts[0]?.hostKeys).toEqual(["SHA256:box"]);
   });
 
   it("takes a sudo password into the flow's memory only, and sends it only to sudo", async () => {
@@ -918,6 +939,274 @@ describe("a host's lifecycle", () => {
   });
 });
 
+describe("renaming a host", () => {
+  it("keeps the trimmed label, saves it and publishes it; the box is untouched", () => {
+    const h = harness({
+      registry: registry(hostEntry(), hostEntry({ id: OTHER_ID, name: "two" })),
+    });
+    const snapshots: RemoteHostsSnapshot[] = [];
+    h.engine.subscribe((snapshot) => snapshots.push(snapshot));
+    h.engine.rename(HOST_ID, "  Hetzner box \t");
+    expect(h.store.saves.at(-1)).toEqual(
+      registry(hostEntry({ name: "Hetzner box" }), hostEntry({ id: OTHER_ID, name: "two" })),
+    );
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]!.hosts.map((host) => host.name)).toEqual(["Hetzner box", "two"]);
+    expect(h.engine.snapshot()).toBe(snapshots[0]);
+    expect(h.log.lines).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        msg: "remote host renamed",
+        fields: { hostId: HOST_ID, component: "host-install" },
+      }),
+    );
+    // A label on this Mac only: nothing ran on the box, the tunnel was left alone.
+    expect(h.box.scripts).toEqual([]);
+    expect(h.tunnels.made.every((tunnel) => !tunnel.closed)).toBe(true);
+    // The longest label is allowed, and so is any printable text.
+    const longest = "é".repeat(REMOTE_HOST_NAME_MAX);
+    h.engine.rename(HOST_ID, longest);
+    expect(h.engine.snapshot().hosts[0]!.name).toBe(longest);
+  });
+
+  it("changes nothing when the name is the same, once trimmed", () => {
+    const h = harness({ registry: registry(hostEntry({ name: "box" })) });
+    const snapshots: RemoteHostsSnapshot[] = [];
+    h.engine.subscribe((snapshot) => snapshots.push(snapshot));
+    h.engine.rename(HOST_ID, " box ");
+    expect(snapshots).toEqual([]);
+    expect(h.store.saves).toEqual([]);
+  });
+
+  it("refuses an empty, over-long or control-character name, changing nothing", () => {
+    const h = harness({ registry: registry(hostEntry()) });
+    for (const name of [
+      "",
+      "   ",
+      "x".repeat(REMOTE_HOST_NAME_MAX + 1),
+      "two\nlines",
+      "bell\u0007",
+      "del\u007f",
+      "c1\u0085here",
+    ]) {
+      expect(() => h.engine.rename(HOST_ID, name), JSON.stringify(name)).toThrow(
+        expect.objectContaining({ name: "RemoteHostsError", code: "bad-name" }),
+      );
+    }
+    expect(h.store.saves).toEqual([]);
+    expect(h.engine.snapshot().hosts[0]!.name).toBe("box");
+  });
+
+  it("names an unknown host", () => {
+    const h = harness({ registry: registry(hostEntry()) });
+    expect(() => h.engine.rename(OTHER_ID, "Elsewhere")).toThrow(
+      expect.objectContaining({ code: "unknown-host" }),
+    );
+    expect(h.store.saves).toEqual([]);
+  });
+});
+
+/** A box whose `devices list` answers `answer`. */
+const listing =
+  (answer: Partial<SshExecResult> | (() => Partial<SshExecResult>)): Handler =>
+  (script) =>
+    script.includes(" devices list --")
+      ? typeof answer === "function"
+        ? answer()
+        : answer
+      : undefined;
+const listed = (devices: unknown) => listing(json({ v: 1, ok: true, devices }));
+
+describe("a host's devices", () => {
+  const OTHER_DEVICE = "5f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
+  const MINE = {
+    deviceId: DEVICE_ID,
+    name: "Alice's Mac",
+    fingerprint: "SHA256:mac",
+    enrolledAt: "2025-12-01T00:00:00.000Z",
+    via: "ssh",
+    revokedAt: null,
+  };
+  const REVOKED = {
+    deviceId: OTHER_DEVICE,
+    name: "Old laptop",
+    fingerprint: "SHA256:old",
+    enrolledAt: "2025-11-01T00:00:00.000Z",
+    via: "ssh",
+    revokedAt: "2025-11-15T00:00:00.000Z",
+  };
+  const SYSTEM_SCRIPT = [
+    "b='/opt/volli-hostd/current/bin/volli-hostd'",
+    `[ -x "$b" ] || b='/opt/volli-hostd/bin/volli-hostd'`,
+    'exec "$b" devices list --system </dev/null',
+  ].join("\n");
+  const USER_SCRIPT = [
+    'b="${XDG_DATA_HOME:-$HOME/.local/share}/volli-hostd/current/bin/volli-hostd"',
+    'exec "$b" devices list --user </dev/null',
+  ].join("\n");
+
+  it("lists a system host's devices over SSH, this Mac's marked, a revoked one as it is", async () => {
+    const h = harness({ registry: registry(hostEntry()), overrides: [listed([MINE, REVOKED])] });
+    expect(await h.engine.devices(HOST_ID)).toEqual({
+      hostId: HOST_ID,
+      devices: [
+        { ...MINE, thisMac: true },
+        { ...REVOKED, thisMac: false },
+      ],
+    });
+    expect(devicesListScript("system")).toBe(SYSTEM_SCRIPT);
+    // As the login, no sudo, nothing on stdin: one script on its own connection, closed.
+    expect(h.box.scripts).toEqual([{ script: SYSTEM_SCRIPT, stdin: null }]);
+    expect(h.box.transports).toEqual([
+      { target: { destination: "deploy@box", port: null, label: "box" }, closed: true },
+    ]);
+    expect(h.log.lines).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        msg: "listed devices",
+        fields: { devices: 2, host: "box", hostId: HOST_ID, component: "host-install" },
+      }),
+    );
+  });
+
+  it("lists a user host's devices from the user install, every time it is asked", async () => {
+    let devices: unknown[] = [];
+    const h = harness({
+      registry: registry(hostEntry({ mode: "user", target: "me@mac:2222", os: "macos" })),
+      overrides: [listing(() => json({ v: 1, ok: true, devices }))],
+    });
+    expect(await h.engine.devices(HOST_ID)).toEqual({ hostId: HOST_ID, devices: [] });
+    devices = [REVOKED];
+    // Never cached: the second ask reads the box again.
+    expect((await h.engine.devices(HOST_ID)).devices).toEqual([{ ...REVOKED, thisMac: false }]);
+    expect(devicesListScript("user")).toBe(USER_SCRIPT);
+    expect(h.box.ran()).toEqual([USER_SCRIPT, USER_SCRIPT]);
+    expect(h.box.transports).toEqual([
+      { target: { destination: "me@mac", port: 2222, label: "mac" }, closed: true },
+      { target: { destination: "me@mac", port: 2222, label: "mac" }, closed: true },
+    ]);
+  });
+
+  it("says the host is unreachable when SSH is, and closes the connection", async () => {
+    const h = harness({
+      registry: registry(hostEntry()),
+      overrides: [
+        listing({ code: 255, stderr: "ssh: connect to host box port 22: Connection refused\n" }),
+      ],
+    });
+    await expect(h.engine.devices(HOST_ID)).rejects.toMatchObject({
+      name: "RemoteHostsError",
+      code: "host-unreachable",
+      message: "Couldn't reach box.",
+    });
+    expect(h.box.transports.every((transport) => transport.closed)).toBe(true);
+    expect(h.log.lines).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        msg: "listing devices: host unreachable",
+        fields: expect.objectContaining({ failure: "unreachable", hostId: HOST_ID }),
+      }),
+    );
+  });
+
+  it("says the host is unreachable when the transport itself fails, and still closes it", async () => {
+    const h = harness({
+      registry: registry(hostEntry()),
+      overrides: [
+        listing(() => {
+          throw new Error("spawn ssh EMFILE");
+        }),
+      ],
+    });
+    h.box.closeFails = 1;
+    await expect(h.engine.devices(HOST_ID)).rejects.toMatchObject({ code: "host-unreachable" });
+    expect(h.box.transports.every((transport) => transport.closed)).toBe(true);
+    expect(h.log.lines.map((line) => line.msg)).toEqual(
+      expect.arrayContaining([
+        "listing devices: ssh failed",
+        "listing devices: ssh did not close cleanly",
+      ]),
+    );
+  });
+
+  it("keeps an answer whose connection would not close cleanly", async () => {
+    const h = harness({ registry: registry(hostEntry()), overrides: [listed([MINE])] });
+    h.box.closeFails = 1;
+    expect((await h.engine.devices(HOST_ID)).devices).toEqual([{ ...MINE, thisMac: true }]);
+  });
+
+  it("says the host listed nothing usable for no answer, a refusal or a malformed list", async () => {
+    const tooLong = "x".repeat(REMOTE_HOST_DEVICE_TEXT_MAX + 1);
+    const answers: [string, Partial<SshExecResult>][] = [
+      ["no answer", { code: 127, stderr: "sh: 3: exec: volli-hostd: not found\n" }],
+      ["garbage", { stdout: "usage: volli-hostd <command>\n{not json\n" }],
+      [
+        "refused",
+        json({
+          v: 1,
+          ok: false,
+          code: "store-untrusted",
+          message: "The device store is not root's alone.",
+        }),
+      ],
+      ["not ok", json({ v: 1, ok: "yes", devices: [] })],
+      ["no list", json({ v: 1, ok: true, devices: {} })],
+      ["not a device", json({ v: 1, ok: true, devices: [MINE, null] })],
+      ["a field missing", json({ v: 1, ok: true, devices: [{ ...MINE, via: undefined }] })],
+      ["a field too long", json({ v: 1, ok: true, devices: [{ ...MINE, name: tooLong }] })],
+      [
+        "a bad revocation",
+        json({ v: 1, ok: true, devices: [{ ...MINE, revokedAt: 1_700_000_000 }] }),
+      ],
+      [
+        "too many",
+        json({
+          v: 1,
+          ok: true,
+          devices: Array.from({ length: REMOTE_HOST_DEVICES_MAX + 1 }, () => MINE),
+        }),
+      ],
+    ];
+    for (const [what, answer] of answers) {
+      const h = harness({ registry: registry(hostEntry()), overrides: [listing(answer)] });
+      await expect(h.engine.devices(HOST_ID), what).rejects.toMatchObject({
+        name: "RemoteHostsError",
+        code: "devices-unavailable",
+        message: "box didn't list its devices.",
+      });
+      expect(h.box.transports, what).toEqual([expect.objectContaining({ closed: true })]);
+    }
+    const refused = harness({
+      registry: registry(hostEntry()),
+      overrides: [listing(answers[2]![1])],
+    });
+    await expect(refused.engine.devices(HOST_ID)).rejects.toBeInstanceOf(RemoteHostsError);
+    expect(refused.log.lines).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        msg: "listing devices: no device list believed",
+        fields: expect.objectContaining({ hostd: "store-untrusted", code: 0 }),
+      }),
+    );
+  });
+
+  it("accepts the most devices and the longest fields a host may answer", async () => {
+    const longest = "x".repeat(REMOTE_HOST_DEVICE_TEXT_MAX);
+    const many = Array.from({ length: REMOTE_HOST_DEVICES_MAX }, () => ({
+      ...REVOKED,
+      name: longest,
+    }));
+    const h = harness({ registry: registry(hostEntry()), overrides: [listed(many)] });
+    expect((await h.engine.devices(HOST_ID)).devices).toHaveLength(REMOTE_HOST_DEVICES_MAX);
+  });
+
+  it("names an unknown host without reaching for any box", async () => {
+    const h = harness({ registry: registry(hostEntry()) });
+    await expect(h.engine.devices(OTHER_ID)).rejects.toMatchObject({ code: "unknown-host" });
+    expect(h.box.transports).toEqual([]);
+  });
+});
+
 describe("refusals", () => {
   it("refuses everything while remote hosts are off, and starts once they are on", async () => {
     let on = false;
@@ -931,19 +1220,26 @@ describe("refusals", () => {
       () => h.engine.cancelScheduledUpdate(HOST_ID),
       () => h.engine.signIn(HOST_ID, "claude"),
       () => h.engine.openWorkspace(HOST_ID, WS1),
+      () => h.engine.rename(HOST_ID, "Renamed"),
       () => h.engine.subscribeAdd("flow-1", () => {}),
     ];
     for (const call of calls) expect(call).toThrow(RemoteHostsUnavailableError);
     for (const call of [
       () => h.engine.forget(HOST_ID),
+      () => h.engine.devices(HOST_ID),
       () => h.engine.startAdd({ target: "box" }),
       () => h.engine.answerAdd("flow-1", "q1", { kind: "open" }),
       () => h.engine.sudoPassword("flow-1", "q1", PASSWORD),
       () => h.engine.retryAdd("flow-1"),
-      () => h.engine.cancelAdd("flow-1"),
     ]) {
       await expect(call()).rejects.toBeInstanceOf(RemoteHostsUnavailableError);
     }
+    // Cancel stays open with the flag off, for flows already under way: none here.
+    await expect(h.engine.cancelAdd("flow-1")).rejects.toMatchObject({ code: "unknown-flow" });
+    // Nothing ran on the box, nothing was saved.
+    expect(h.box.scripts).toEqual([]);
+    expect(h.box.transports).toEqual([]);
+    expect(h.store.saves).toEqual([]);
     on = true;
     expect(h.engine.snapshot().hosts.map((host) => host.id)).toEqual([HOST_ID]);
     expect(h.store.state.loads).toBe(1);
@@ -993,6 +1289,9 @@ describe("refusals", () => {
       code: "unknown-flow",
     });
     await expect(h.engine.cancelAdd("nope")).rejects.toMatchObject({ code: "unknown-flow" });
+    expect(() => h.engine.addFacts("nope")).toThrow(
+      expect.objectContaining({ code: "unknown-flow" }),
+    );
   });
 });
 

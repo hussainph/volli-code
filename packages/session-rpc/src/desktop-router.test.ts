@@ -12,9 +12,14 @@ import {
 } from "@volli/host-protocol/testing";
 import {
   OperationUnavailableError,
+  REMOTE_HOST_DEVICE_TEXT_MAX,
+  REMOTE_HOST_DEVICES_MAX,
+  REMOTE_HOST_NAME_MAX,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   type AddHostEvent,
+  type AddHostFacts,
   type HandlerCall,
+  type RemoteHostDevices,
   type RemoteHostsSnapshot,
   type WorktreeTrimSettings,
 } from "@volli/shared";
@@ -34,7 +39,12 @@ import {
   type DesktopStreamSink,
 } from "./desktop-router";
 import { RpcDiagnosticLog } from "./index";
-import { addHostEventSchema, remoteHostsSnapshotSchema } from "./remote-hosts-schema";
+import {
+  addHostEventSchema,
+  addHostFactsSchema,
+  remoteHostDevicesSchema,
+  remoteHostsSnapshotSchema,
+} from "./remote-hosts-schema";
 
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const SIGN_IN_STATUS = {
@@ -64,6 +74,9 @@ const SNAPSHOT: RemoteHostsSnapshot = {
       deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
       addedAt: "2026-10-06T00:00:00.000Z",
       liveSessions: null,
+      system: "Ubuntu 24.04.1 LTS",
+      arch: "x86-64",
+      hostKeys: ["SHA256:abc"],
     },
   ],
   projects: {
@@ -87,6 +100,30 @@ const NEXT: RemoteHostsSnapshot = {
   projects: {},
   readOnly: "This Mac’s hosts file is from a newer Volli.",
 };
+
+const DEVICES: RemoteHostDevices = {
+  hostId: HOST,
+  devices: [
+    {
+      deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
+      name: "Alice's Mac",
+      fingerprint: "SHA256:mac",
+      enrolledAt: "2026-10-06T00:00:00.000Z",
+      via: "ssh",
+      revokedAt: null,
+      thisMac: true,
+    },
+    {
+      deviceId: "8e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
+      name: "Old laptop",
+      fingerprint: "SHA256:old",
+      enrolledAt: "2026-09-01T00:00:00.000Z",
+      via: "ssh",
+      revokedAt: "2026-09-02T00:00:00.000Z",
+      thisMac: false,
+    },
+  ],
+};
 const VIEW: Extract<AddHostEvent, { kind: "view" }> = {
   kind: "view",
   view: {
@@ -109,6 +146,16 @@ const VIEW: Extract<AddHostEvent, { kind: "view" }> = {
     hostId: null,
     startup: null,
   },
+};
+const FACTS: AddHostFacts = {
+  user: "you",
+  os: "linux",
+  system: "Ubuntu 24.04.1 LTS",
+  arch: "x86-64",
+  memoryBytes: 8 * 1024 ** 3,
+  version: null,
+  keepsRunning: null,
+  alreadyPaired: false,
 };
 const FAILED: AddHostEvent = {
   kind: "view",
@@ -202,6 +249,9 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hostSignIns.run": stream("hostSignIns.run", { kind: "progress", message: "Starting" }),
     "hostSignIns.answer": record("hostSignIns.answer", null),
     "hostSignIns.cancel": record("hostSignIns.cancel", null),
+    "hosts.rename": record("hosts.rename", null),
+    "hosts.devices": record("hosts.devices", DEVICES),
+    "hostAdd.facts": record("hostAdd.facts", FACTS),
     ...fixture.overrides,
   };
 }
@@ -270,6 +320,9 @@ function everyRemoteCall(client: TRPCClient<DesktopRouter>) {
       client.hosts.cancelScheduledUpdate.mutate({ hostId: HOST }),
     "hosts.signIn": () => client.hosts.signIn.mutate({ hostId: HOST, providerId: "anthropic" }),
     "hosts.forget": () => client.hosts.forget.mutate({ hostId: HOST }),
+    "hosts.rename": () => client.hosts.rename.mutate({ hostId: HOST, name: "Build box" }),
+    "hosts.devices": () => client.hosts.devices.query({ hostId: HOST }),
+    "hostAdd.facts": () => client.hostAdd.facts.query({ flowId: FLOW }),
     "hostAdd.start": () => client.hostAdd.start.mutate({ target: "you@box" }),
     "hostAdd.subscribe": () =>
       collect((handlers) => client.hostAdd.subscribe.subscribe({ flowId: FLOW }, handlers)).failed,
@@ -434,6 +487,10 @@ describeContract<Host, DesktopRouter>(
         await client.hosts.signIn.mutate({ hostId: HOST, providerId: "anthropic" }),
       ).toBeNull();
       expect(await client.hosts.forget.mutate({ hostId: HOST })).toBeNull();
+      // A label is trimmed before it is bounded: the longest passes, padded or not.
+      const label = "l".repeat(REMOTE_HOST_NAME_MAX);
+      expect(await client.hosts.rename.mutate({ hostId: HOST, name: ` ${label}\t` })).toBeNull();
+      expect(await client.hosts.devices.query({ hostId: HOST })).toEqual(DEVICES);
       // Each bound is inclusive: the longest target, name and password pass.
       const target = "t".repeat(255);
       const name = "n".repeat(120);
@@ -457,6 +514,7 @@ describeContract<Host, DesktopRouter>(
       expect(await client.hostAdd.retry.mutate({ flowId: FLOW, from: "deliver" })).toBeNull();
       expect(await client.hostAdd.retry.mutate({ flowId: FLOW })).toBeNull();
       expect(await client.hostAdd.cancel.mutate({ flowId: FLOW })).toBeNull();
+      expect(await client.hostAdd.facts.query({ flowId: FLOW })).toEqual(FACTS);
       expect(fixture.calls.map(({ key, input }) => [key, input])).toEqual([
         ["hosts.snapshot", undefined],
         ["hosts.retry", { hostId: HOST }],
@@ -464,6 +522,8 @@ describeContract<Host, DesktopRouter>(
         ["hosts.cancelScheduledUpdate", { hostId: HOST }],
         ["hosts.signIn", { hostId: HOST, providerId: "anthropic" }],
         ["hosts.forget", { hostId: HOST }],
+        ["hosts.rename", { hostId: HOST, name: label }],
+        ["hosts.devices", { hostId: HOST }],
         ["hostAdd.start", { target, name }],
         ["hostAdd.start", { target: "you@box" }],
         ["hostAdd.answer", { flowId: FLOW, questionId: "q1", answer: { kind: "user-install" } }],
@@ -471,6 +531,7 @@ describeContract<Host, DesktopRouter>(
         ["hostAdd.retry", { flowId: FLOW, from: "deliver" }],
         ["hostAdd.retry", { flowId: FLOW }],
         ["hostAdd.cancel", { flowId: FLOW }],
+        ["hostAdd.facts", { flowId: FLOW }],
       ]);
       for (const { call } of fixture.calls) expect(call).toEqual(WINDOW_CALL);
     });
@@ -505,6 +566,27 @@ describeContract<Host, DesktopRouter>(
           () => client.hosts.signIn.mutate({ hostId: HOST, providerId: "p".repeat(129) }),
         ],
         ["empty provider id", () => client.hosts.signIn.mutate({ hostId: HOST, providerId: "" })],
+        ["empty label", () => client.hosts.rename.mutate({ hostId: HOST, name: "" })],
+        ["blank label", () => client.hosts.rename.mutate({ hostId: HOST, name: "   " })],
+        [
+          "label too long",
+          () =>
+            client.hosts.rename.mutate({
+              hostId: HOST,
+              name: "l".repeat(REMOTE_HOST_NAME_MAX + 1),
+            }),
+        ],
+        ["rename without a host", () => client.hosts.rename.mutate({ name: "Box" } as never)],
+        [
+          "rename with an unknown key",
+          () => client.hosts.rename.mutate({ hostId: HOST, name: "Box", label: "x" } as never),
+        ],
+        ["devices of no host", () => client.hosts.devices.query({ hostId: "box" })],
+        [
+          "devices with an unknown key",
+          () => client.hosts.devices.query({ hostId: HOST, all: true } as never),
+        ],
+        ["facts of no flow", () => client.hostAdd.facts.query({} as never)],
         ["target too long", () => client.hostAdd.start.mutate({ target: "t".repeat(256) })],
         ["empty target", () => client.hostAdd.start.mutate({ target: "" })],
         [
@@ -840,6 +922,9 @@ describe("the desktop router's grammar", () => {
         "hostSignIns.run",
         "hostSignIns.answer",
         "hostSignIns.cancel",
+        "hosts.rename",
+        "hosts.devices",
+        "hostAdd.facts",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({
@@ -851,6 +936,14 @@ describe("the desktop router's grammar", () => {
       type: "mutation",
       outputValidation: "network-and-tests",
     });
+    expect(schemas["hosts.rename"]).toMatchObject({ type: "mutation" });
+    expect(schemas["hosts.devices"]).toMatchObject({
+      type: "query",
+      outputValidation: "network-and-tests",
+    });
+    expect(schemas["hosts.devices"]!.output).toBe(remoteHostDevicesSchema);
+    expect(schemas["hostAdd.facts"]).toMatchObject({ type: "query" });
+    expect(schemas["hostAdd.facts"]!.output).toBe(addHostFactsSchema);
     for (const key of ["hosts.subscribe", "hostAdd.subscribe", "hostSignIns.run"]) {
       expect(schemas[key], key).toMatchObject({
         type: "subscription",
@@ -878,8 +971,36 @@ describe("the desktop router's grammar", () => {
       expect(addHostEventSchema.parse(event)).toEqual(event);
     }
     expect(() => addHostEventSchema.parse({ ...REPLAY, omitted: -1 })).toThrow();
+    expect(addHostFactsSchema.parse(FACTS)).toEqual(FACTS);
+    expect(() => addHostFactsSchema.parse({ ...FACTS, memoryBytes: -1 })).toThrow();
     expect(() =>
       addHostEventSchema.parse({ ...VIEW, view: { ...VIEW.view, status: "paused" } }),
     ).toThrow();
+  });
+
+  it("describes a host's devices strictly and boundedly: never a key, never unbounded", () => {
+    expect(remoteHostDevicesSchema.parse(DEVICES)).toEqual(DEVICES);
+    const mine = DEVICES.devices[0]!;
+    for (const [what, value] of [
+      ["a key", { ...DEVICES, devices: [{ ...mine, publicKey: "MFkw" }] }],
+      ["an extra field", { ...DEVICES, cachedAt: 1 }],
+      [
+        "a long name",
+        { ...DEVICES, devices: [{ ...mine, name: "n".repeat(REMOTE_HOST_DEVICE_TEXT_MAX + 1) }] },
+      ],
+      [
+        "too many",
+        { ...DEVICES, devices: Array.from({ length: REMOTE_HOST_DEVICES_MAX + 1 }, () => mine) },
+      ],
+      ["no thisMac", { ...DEVICES, devices: [{ ...mine, thisMac: undefined }] }],
+    ] as const) {
+      expect(() => remoteHostDevicesSchema.parse(value), what).toThrow();
+    }
+    expect(
+      remoteHostDevicesSchema.parse({
+        ...DEVICES,
+        devices: Array.from({ length: REMOTE_HOST_DEVICES_MAX }, () => mine),
+      }).devices,
+    ).toHaveLength(REMOTE_HOST_DEVICES_MAX);
   });
 });

@@ -26,6 +26,12 @@ export interface RegistryHost {
   readonly listen: ListenAddress;
   /** The Workspaces on this host this desktop opened, each with its own link. */
   readonly workspaceIds: readonly string[];
+  /** The OS as the host names itself, from its check at add time; `null` in older files. */
+  readonly system: string | null;
+  /** Its architecture as people read it ("x86-64"); `null` in older files. */
+  readonly arch: string | null;
+  /** The host key fingerprints the person trusted when adding it; empty in older files. */
+  readonly hostKeys: readonly string[];
 }
 
 export interface RegistryFile {
@@ -68,6 +74,7 @@ function isListen(value: unknown): value is ListenAddress {
 export function readRegistryHost(value: unknown): RegistryHost | null {
   if (!isRecord(value)) return null;
   const { id, name, target, os, mode, version, deviceId, addedAt, listen, workspaceIds } = value;
+  const { system, arch, hostKeys } = value;
   const valid =
     isUuidV4(id) &&
     isText(name) &&
@@ -80,7 +87,10 @@ export function readRegistryHost(value: unknown): RegistryHost | null {
     isText(addedAt) &&
     isListen(listen) &&
     Array.isArray(workspaceIds) &&
-    workspaceIds.every((workspace) => isUuidV4(workspace));
+    workspaceIds.every((workspace) => isUuidV4(workspace)) &&
+    (system === undefined || system === null || isText(system)) &&
+    (arch === undefined || arch === null || isText(arch)) &&
+    (hostKeys === undefined || (Array.isArray(hostKeys) && hostKeys.every(isText)));
   if (!valid) return null;
   return {
     id,
@@ -93,6 +103,9 @@ export function readRegistryHost(value: unknown): RegistryHost | null {
     addedAt,
     listen: { host: listen.host, port: listen.port },
     workspaceIds: [...new Set(workspaceIds as string[])],
+    system: (system as string | null | undefined) ?? null,
+    arch: (arch as string | null | undefined) ?? null,
+    hostKeys: [...((hostKeys as string[] | undefined) ?? [])],
   };
 }
 

@@ -33,6 +33,9 @@ function remote(overrides: Partial<RemoteHost> = {}): RemoteHost {
     deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
     addedAt: "2026-10-07T00:00:00.000Z",
     liveSessions: null,
+    system: null,
+    arch: null,
+    hostKeys: [],
     ...overrides,
   };
 }
