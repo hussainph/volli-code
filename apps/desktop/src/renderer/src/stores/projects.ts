@@ -334,7 +334,7 @@ export function createProjectsStore(
     const state = useHostConnectionStore.getState();
     if (!isRemoteProject(state, id)) return null;
     const host = hostOfProject(state, id);
-    return { hostId: host.id, hostName: host.name, projectId: id };
+    return { hostId: host.id, projectId: id, hostName: host.name };
   },
 ) {
   /**
@@ -471,7 +471,10 @@ export function createProjectsStore(
       },
       settleRemoteRestore(selection, restored) {
         if (get().pendingRemoteSelection !== selection) return;
-        const id = restored ? selection.projectId : localSelection;
+        const local = get().projects.filter(({ id }) => !isRemote(id));
+        const id = restored
+          ? selection.projectId
+          : (local.find((project) => project.id === localSelection)?.id ?? local[0]?.id ?? null);
         set({ pendingRemoteSelection: null, selectedProjectId: id });
         // Boot restored intent already persisted. A fallback retires it.
         if (!restored) persistSelection(id);

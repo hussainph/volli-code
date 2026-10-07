@@ -619,6 +619,8 @@ export default defineConfig(({ mode }) => ({
         // Which remote boards a window opens, when it says a host offers none,
         // and when it asks again (VC-711): a loop or a silence no screenshot shows.
         "src/lib/follow-remote-projects.ts",
+        // Reopen restores remote intent only while its bounded boot owner is current.
+        "src/lib/restore-remote-selection.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",

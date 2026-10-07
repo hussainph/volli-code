@@ -22,6 +22,9 @@ vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
   sessionRpcClient: () => ({ project: { reorder: { mutate: rpc.reorder } } }),
 }));
 
+import { useExperimentsStore } from "./experiments";
+import { THIS_MAC_HOST, useHostConnectionStore } from "./host-connection";
+
 import { useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
 
@@ -48,6 +51,8 @@ beforeEach(() => {
       appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
     },
   });
+  useExperimentsStore.setState({ snapshot: null });
+  useHostConnectionStore.setState({ hosts: [], projects: {} });
   useBoardStore.setState({ ticketsByProject: {}, labelsByProject: {} });
   useWorkspaceStore.setState({ byProject: {} });
   useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
@@ -1762,6 +1767,28 @@ describe("remote selection intent", () => {
   const local = project({ id: "local", path: "/local" });
   const row = project({ id: "remote", path: "/box" });
 
+  it("the production gateway writes remote intent only with cloud on, leaving local IPC untouched", () => {
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
+    useHostConnectionStore.setState({
+      hosts: [{ ...THIS_MAC_HOST, id: remote.hostId, name: remote.hostName, local: false }],
+      projects: { remote: { hostId: remote.hostId, link: { status: "open" } } },
+    });
+    useProjectsStore.getState().hydrate([local], local.id);
+    useProjectsStore.getState().adoptProject(row);
+    useProjectsStore.getState().select(local.id);
+    useProjectsStore.getState().select(remote.projectId);
+    expect(window.api.appState.set).toHaveBeenLastCalledWith(
+      PROJECTS_UI_APP_STATE_KEY,
+      encodeProjectsUiState(local.id, remote),
+    );
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: false, source: "storage" } } });
+    useProjectsStore.getState().select(local.id);
+    expect(window.api.appState.set).toHaveBeenLastCalledWith(
+      PROJECTS_UI_APP_STATE_KEY,
+      JSON.stringify({ selectedProjectId: local.id }),
+    );
+  });
+
   it("persists remote identity additively beside the last local selection", () => {
     const gateway = fakeGateway();
     const store = createProjectsStore(
@@ -1822,9 +1849,22 @@ describe("remote selection intent", () => {
     store.getState().hydrate([local], local.id);
     store.getState().beginRemoteRestore(remote);
     store.getState().cancelRemoteRestore();
+    store.getState().cancelRemoteRestore();
     expect(store.getState().selectedProjectId).toBe(local.id);
     expect(gateway.setSelection).toHaveBeenLastCalledWith(local.id);
   });
+
+  it.each([false, true])(
+    "fallback resolves fresh local membership, including an empty Mac (%s)",
+    (empty) => {
+      const { store } = freshStore();
+      store.getState().hydrate([local], local.id);
+      store.getState().beginRemoteRestore(remote);
+      store.setState({ projects: empty ? [] : [project({ id: "neighbor", path: "/neighbor" })] });
+      store.getState().settleRemoteRestore(remote, false);
+      expect(store.getState().selectedProjectId).toBe(empty ? null : "neighbor");
+    },
+  );
 
   it("adding a local project wins over restore", async () => {
     const { store } = freshStore();

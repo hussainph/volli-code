@@ -249,10 +249,30 @@ export function followRemoteProjects(
 }
 
 /** Whether the host has the `cloud` flag on: the Session router's experiments read. */
-async function readCloudFlag(): Promise<boolean> {
-  const experiments = await sessionRpcClient().settings.experiments.query();
-  useExperimentsStore.getState().receive(experiments);
+async function readCloudFlag(signal?: AbortSignal): Promise<boolean> {
+  const experiments = await sessionRpcClient().settings.experiments.query(undefined, { signal });
   return experiments.cloud.enabled;
+}
+
+/** A stalled flag read must not strand a fresh window before its first paint. */
+async function readBootCloudFlag(
+  read: (signal: AbortSignal) => Promise<boolean>,
+): Promise<boolean> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(() => read(controller.signal))
+        .catch(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
 }
 
 /**
@@ -432,7 +452,7 @@ async function notifyOrphanedWorktrees(): Promise<void> {
 export async function boot(
   gateway: BootGateway = defaultGateway,
   storage: BootStorage = localStorage,
-  readCloud: () => Promise<boolean> = readCloudFlag,
+  readCloud: (signal: AbortSignal) => Promise<boolean> = readCloudFlag,
 ): Promise<BootResult> {
   stopSelectionRestore?.();
   stopSelectionRestore = null;
@@ -494,7 +514,7 @@ export async function boot(
   // Resolved BEFORE hydrate (rather than hydrating with `null` and calling
   // `select` afterward) so boot never fires a redundant appState.set — the
   // value already came FROM app_state, there's nothing new to persist.
-  const cloud = await readCloud().catch(() => false);
+  const cloud = await readBootCloudFlag(readCloud);
   const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
   useProjectsStore.setState({ pendingRemoteSelection: null });

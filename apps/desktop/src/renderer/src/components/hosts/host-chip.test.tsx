@@ -10,6 +10,7 @@ import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useRemoteHostsStore, setRemoteHostsApi } from "@renderer/stores/remote-hosts";
 import { createFakeRemoteHostsApi, registryHost } from "@renderer/stores/remote-hosts.test-support";
+import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
 
 import { HostChip } from "./host-chip";
@@ -28,6 +29,7 @@ afterEach(async () => {
   toast.error.mockClear();
   setRemoteHostsApi(null);
   vi.restoreAllMocks();
+  useProjectsStore.setState({ pendingRemoteSelection: null });
   useRemoteHostsStore.setState({
     addHostActivity: null,
     hosts: [],
@@ -510,3 +512,45 @@ function findDetailAction(list: HTMLElement): string {
   button.setAttribute("aria-label", "detail-action");
   return "detail-action";
 }
+
+describe("pending reopen host", () => {
+  it("names the saved box before any registry record, without claiming the project", async () => {
+    world = hostWorld({ selected: "local" });
+    vi.stubGlobal(
+      "window",
+      Object.assign(window, { api: { appState: { set: vi.fn(async () => ({ ok: true })) } } }),
+    );
+    vi.spyOn(useThemeStore.getState(), "hydrate").mockResolvedValue();
+    act(() => useProjectsStore.getState().hydrate(useProjectsStore.getState().projects, "local"));
+    act(() =>
+      useProjectsStore.getState().beginRemoteRestore({
+        hostId: "unseen-box",
+        projectId: "unclaimed",
+        hostName: "saved-box",
+      }),
+    );
+    await world.render(<HostChip />);
+    expect(chip().getAttribute("aria-label")).toBe("Host: saved-box");
+    expect(useProjectsStore.getState().selectedProjectId).toBeNull();
+    expect(useHostConnectionStore.getState().projects.unclaimed).toBeUndefined();
+    const popover = await openSwitcher();
+    const local = [...popover.querySelectorAll("button")].find((button) =>
+      button.textContent?.startsWith("This Mac"),
+    );
+    expect(local).toBeDefined();
+    await act(async () => local!.click());
+    expect(useProjectsStore.getState().selectedProjectId).toBe("local");
+    expect(useProjectsStore.getState().pendingRemoteSelection).toBeNull();
+  });
+
+  it("cloud off hides pending host presentation", async () => {
+    world = hostWorld({ cloud: false, selected: "local" });
+    act(() =>
+      useProjectsStore
+        .getState()
+        .beginRemoteRestore({ hostId: HETZNER_ID, projectId: "remote", hostName: "hetzner-1" }),
+    );
+    const container = await world.render(<HostChip />);
+    expect(container.innerHTML).toBe("");
+  });
+});

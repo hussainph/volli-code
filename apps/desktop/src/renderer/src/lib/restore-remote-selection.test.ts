@@ -155,4 +155,37 @@ describe("one bounded remote selection restore", () => {
     expect(f.projectStop).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
+  it("queued source and timer callbacks are harmless after disposal or a silent identity change", () => {
+    vi.useFakeTimers();
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const pending = {
+      projects: [],
+      pendingRemoteSelection: selection as typeof selection | null,
+      settleRemoteRestore: vi.fn(),
+    };
+    const callbacks: (() => void)[] = [];
+    const failed = vi.fn();
+    const subscribe = (listener: () => void) => {
+      callbacks.push(listener);
+      return vi.fn();
+    };
+    const args = {
+      selection,
+      projects: { getState: () => pending, subscribe },
+      hosts: { getState: () => ({ hosts: [], projects: {} }), subscribe },
+      failed,
+    };
+    const stop = restoreRemoteSelection(args);
+    const timer = timers.mock.calls.at(-1)![0] as () => void;
+    stop();
+    callbacks[0]!();
+    timer();
+    const stopNext = restoreRemoteSelection(args);
+    pending.pendingRemoteSelection = null;
+    (timers.mock.calls.at(-1)![0] as () => void)();
+    expect(pending.settleRemoteRestore).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
+    stopNext();
+    timers.mockRestore();
+  });
 });
