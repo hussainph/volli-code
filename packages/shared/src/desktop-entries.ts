@@ -155,6 +155,61 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Cancel an add flow.",
   },
+  // Sign-ins on a remote host, from this desktop (VC-702 PR 2): desktop main
+  // calls the host's `sign-ins` operations over its link, reads this Mac's
+  // own key for "Send from this Mac", and relays a browser sign-in's redirect.
+  {
+    key: "hostSignIns.status",
+    placement: "host",
+    idempotency: "read",
+    summary: "A remote host's sign-ins: availability only, never a value.",
+  },
+  {
+    key: "hostSignIns.macKeys",
+    placement: "host",
+    idempotency: "read",
+    summary: "The providers this Mac holds an API key for: availability only, never a value.",
+  },
+  {
+    // The key is read in main, at the person's request after the confirm,
+    // and goes straight onto the host link: it never reaches the window.
+    key: "hostSignIns.sendFromThisMac",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Send this Mac's API key for one provider to a remote host, after the confirm.",
+  },
+  {
+    key: "hostSignIns.setApiKey",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Store a pasted API key on a remote host; never echoed.",
+  },
+  {
+    key: "hostSignIns.setGitCredential",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Store a pasted git push token on a remote host; never echoed.",
+  },
+  {
+    // The sign-in lives as long as this stream: ending it cancels the
+    // sign-in on the host.
+    key: "hostSignIns.run",
+    placement: "host",
+    idempotency: "read",
+    summary: "Sign a remote host in to a provider, and follow it to its end.",
+  },
+  {
+    key: "hostSignIns.answer",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Answer the step a remote host's sign-in waits on, the pasted redirect included.",
+  },
+  {
+    key: "hostSignIns.cancel",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Cancel a remote host's sign-in.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

@@ -230,6 +230,14 @@ export function sessionHandlersFrom(
     "hostAdd.sudoPassword": remote("hostAdd.sudoPassword"),
     "hostAdd.retry": remote("hostAdd.retry"),
     "hostAdd.cancel": remote("hostAdd.cancel"),
+    "hostSignIns.status": remote("hostSignIns.status"),
+    "hostSignIns.macKeys": remote("hostSignIns.macKeys"),
+    "hostSignIns.sendFromThisMac": remote("hostSignIns.sendFromThisMac"),
+    "hostSignIns.setApiKey": remote("hostSignIns.setApiKey"),
+    "hostSignIns.setGitCredential": remote("hostSignIns.setGitCredential"),
+    "hostSignIns.run": remote("hostSignIns.run"),
+    "hostSignIns.answer": remote("hostSignIns.answer"),
+    "hostSignIns.cancel": remote("hostSignIns.cancel"),
   };
   return { ...handlers, ...desktop };
 }

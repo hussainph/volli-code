@@ -62,6 +62,8 @@ import {
   type HostSignInAnswerInput,
   type HostSignInFlow,
   type HostSignInStartInput,
+  type HostSignInRunEvent,
+  type HostSignInSendResult,
   type HostSignInStatus,
   type HostSignInUpdate,
   type HostLogsBatch,
@@ -85,6 +87,7 @@ import { withLogContext } from "../log/context";
 import type { LogRing } from "../log/ring";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { RemoteHostsPort, RemoteHostUpdateWhen } from "./remote-hosts-port";
+import type { RemoteSignInsPort } from "./remote-sign-ins-port";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import {
@@ -268,6 +271,30 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   >;
   readonly "hostAdd.retry": HostHandler<{ flowId: string; from?: AddHostStepId }, null>;
   readonly "hostAdd.cancel": HostHandler<{ flowId: string }, null>;
+  /** Sign-ins on a remote host, from this desktop (VC-702 PR 2): its port, or unavailable. */
+  readonly "hostSignIns.status": HostHandler<{ hostId: string }, HostSignInStatus>;
+  readonly "hostSignIns.macKeys": HostHandler<void, readonly string[]>;
+  readonly "hostSignIns.sendFromThisMac": HostHandler<
+    { hostId: string; providerId: string; confirmed: true },
+    HostSignInSendResult
+  >;
+  readonly "hostSignIns.setApiKey": HostHandler<
+    { hostId: string; providerId: string; key: string },
+    HostSignInStatus
+  >;
+  readonly "hostSignIns.setGitCredential": HostHandler<
+    { hostId: string } & HostSetGitCredentialInput,
+    HostSignInStatus
+  >;
+  readonly "hostSignIns.run": HostSubscriptionHandler<
+    { hostId: string; providerId: string },
+    HostSignInRunEvent
+  >;
+  readonly "hostSignIns.answer": HostHandler<
+    { hostId: string; providerId: string; promptId: string; value: string },
+    null
+  >;
+  readonly "hostSignIns.cancel": HostHandler<{ hostId: string; providerId: string }, null>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -370,6 +397,11 @@ export interface HostHandlerOptions {
    * itself (`./remote-hosts-port`).
    */
   readonly remoteHosts?: RemoteHostsPort | null;
+  /**
+   * Sign-ins on a remote host, from this desktop (VC-702 PR 2), or null on a
+   * host that adds none (hostd): `hostSignIns.*` answer unavailable.
+   */
+  readonly remoteSignIns?: RemoteSignInsPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -382,6 +414,7 @@ const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
 const SESSION_READS_UNAVAILABLE = "Session reads are unavailable on this transport";
 const SIGN_INS_UNAVAILABLE = "Sign-ins are unavailable on this host";
 const REMOTE_HOSTS_UNAVAILABLE = "Remote hosts are unavailable on this host";
+const REMOTE_SIGN_INS_UNAVAILABLE = "Remote host sign-ins are unavailable on this host";
 const LOGS_UNAVAILABLE = "This host keeps no log to read";
 
 /**
@@ -456,6 +489,8 @@ function hostHandlerEntries(
   const sessionReads = () => present(options.sessionReads ?? null, SESSION_READS_UNAVAILABLE);
   const signIns = () => present(options.signIns ?? null, SIGN_INS_UNAVAILABLE);
   const remoteHosts = () => present(options.remoteHosts ?? null, REMOTE_HOSTS_UNAVAILABLE);
+  const remoteSignIns = () =>
+    present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
   const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
 
   const worktree = (database: Database.Database) =>
@@ -668,5 +703,36 @@ function hostHandlerEntries(
     },
     "hostAdd.retry": ({ flowId, from }) => done(() => remoteHosts().retryAdd(flowId, from)),
     "hostAdd.cancel": ({ flowId }) => done(() => remoteHosts().cancelAdd(flowId)),
+    // Sign-ins on a remote host (VC-702 PR 2): desktop main's, through its port.
+    // A value going in is never echoed by a failure (`withoutSecret`).
+    "hostSignIns.status": ({ hostId }) => remoteSignIns().status(hostId),
+    "hostSignIns.macKeys": () => remoteSignIns().macKeys(),
+    "hostSignIns.sendFromThisMac": ({ hostId, providerId }) =>
+      remoteSignIns().sendFromThisMac(hostId, providerId),
+    "hostSignIns.setApiKey": async ({ hostId, providerId, key }) => {
+      try {
+        return await remoteSignIns().setApiKey(hostId, providerId, key);
+      } catch (error) {
+        throw withoutSecret(error, key);
+      }
+    },
+    "hostSignIns.setGitCredential": async ({ hostId, ...credential }) => {
+      try {
+        return await remoteSignIns().setGitCredential(hostId, credential);
+      } catch (error) {
+        throw withoutSecret(error, credential.password);
+      }
+    },
+    "hostSignIns.run": async ({ hostId, providerId }, _call, sink) =>
+      remoteSignIns().run(hostId, providerId, (event) => sink.emit(event)),
+    "hostSignIns.answer": async ({ hostId, providerId, promptId, value }) => {
+      try {
+        return await done(() => remoteSignIns().answer(hostId, providerId, promptId, value));
+      } catch (error) {
+        throw withoutSecret(error, value);
+      }
+    },
+    "hostSignIns.cancel": ({ hostId, providerId }) =>
+      done(() => remoteSignIns().cancel(hostId, providerId)),
   };
 }

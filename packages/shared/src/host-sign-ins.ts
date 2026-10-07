@@ -157,6 +157,14 @@ export type HostSignInRunEvent =
   | { readonly kind: "relay"; readonly state: HostSignInRelayState }
   | { readonly kind: "lost" };
 
+/** Why "Send from this Mac" sent nothing: no stored key, a subscription (never sent), or the send failed. */
+export type HostSignInSendRefusal = "no-key" | "subscription" | "send-failed";
+
+/** What "Send from this Mac" answers: the host's status, or why nothing was sent. Never the key. */
+export type HostSignInSendResult =
+  | { readonly ok: true; readonly status: HostSignInStatus }
+  | { readonly ok: false; readonly reason: HostSignInSendRefusal };
+
 /** Whether an update ends its flow's stream. */
 export function hostSignInUpdateIsFinal(update: { kind: string }): boolean {
   return update.kind === "done" || update.kind === "failed" || update.kind === "cancelled";

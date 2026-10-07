@@ -30,6 +30,7 @@ export type {
   RemoteHostsUnsubscribe,
   RemoteHostUpdateWhen,
 } from "../handlers/remote-hosts-port";
+export type { RemoteSignInsPort } from "../handlers/remote-sign-ins-port";
 export {
   ADMITTED,
   admittedHandlers,

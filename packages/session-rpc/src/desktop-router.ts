@@ -39,6 +39,10 @@ import {
   type DesktopKey,
   type HandlerCall,
   type HostHandler,
+  type HostSetGitCredentialInput,
+  type HostSignInRunEvent,
+  type HostSignInSendResult,
+  type HostSignInStatus,
   type RemoteHostsSnapshot,
   type WorktreeTrimSettings,
 } from "@volli/shared";
@@ -68,6 +72,13 @@ import {
   sudoPasswordInputSchema,
   updateHostInputSchema,
 } from "./remote-hosts-schema";
+import {
+  hostSignInStatusSchema,
+  hostSignInUpdateSchema,
+  identifier,
+  promptAnswer,
+  secretValue,
+} from "./sign-ins";
 
 /** A desktop-only stream's sink, as the host's map feeds it (`HandlerSink`, host-core). */
 export interface DesktopStreamSink<Emission> {
@@ -106,6 +117,30 @@ export interface DesktopRouterHandlers {
   >;
   readonly "hostAdd.retry": HostHandler<{ flowId: string; from?: AddHostStepId }, null>;
   readonly "hostAdd.cancel": HostHandler<{ flowId: string }, null>;
+  /** Sign-ins on a remote host, from this desktop (VC-702 PR 2): desktop main's, over its link. */
+  readonly "hostSignIns.status": HostHandler<{ hostId: string }, HostSignInStatus>;
+  readonly "hostSignIns.macKeys": HostHandler<void, readonly string[]>;
+  readonly "hostSignIns.sendFromThisMac": HostHandler<
+    { hostId: string; providerId: string; confirmed: true },
+    HostSignInSendResult
+  >;
+  readonly "hostSignIns.setApiKey": HostHandler<
+    { hostId: string; providerId: string; key: string },
+    HostSignInStatus
+  >;
+  readonly "hostSignIns.setGitCredential": HostHandler<
+    { hostId: string } & HostSetGitCredentialInput,
+    HostSignInStatus
+  >;
+  readonly "hostSignIns.run": DesktopSubscriptionHandler<
+    { hostId: string; providerId: string },
+    HostSignInRunEvent
+  >;
+  readonly "hostSignIns.answer": HostHandler<
+    { hostId: string; providerId: string; promptId: string; value: string },
+    null
+  >;
+  readonly "hostSignIns.cancel": HostHandler<{ hostId: string; providerId: string }, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -126,6 +161,44 @@ const { hostProcedure, catalogRouter } = createCatalogBuilders<
   DesktopRouterContext,
   DesktopCatalogEntry
 >({ entries: DESKTOP_CATALOG_ENTRIES });
+
+const hostId = z.uuid();
+const providerId = z.string().min(1).max(256);
+const hostSignInInputSchema = z.strictObject({ hostId, providerId });
+
+/**
+ * What a remote host's sign-in says on this desktop: the host's own updates,
+ * less the relay grant desktop main consumes, plus the relay's state and
+ * `lost` when the host went away before the end. Open on `kind`, like the
+ * updates it carries.
+ */
+export const hostSignInRunEventSchema = z
+  .discriminatedUnion("kind", [
+    ...hostSignInUpdateSchema.options.filter(
+      (option) => option.shape.kind.value !== "auth-callback",
+    ),
+    z.object({
+      kind: z.literal("relay"),
+      state: z.enum(["listening", "paste", "delivered", "failed"]),
+    }),
+    z.object({ kind: z.literal("lost") }),
+  ] as unknown as [z.ZodObject, ...z.ZodObject[]])
+  .meta({ "x-volli-open-union": "kind" });
+
+const hostSignInSendResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), status: hostSignInStatusSchema }),
+  z.object({ ok: z.literal(false), reason: z.enum(["no-key", "subscription", "send-failed"]) }),
+]);
+
+/** Where a sign-in run ends: `done`, `failed`, `cancelled`, or the host lost. */
+function runEnds(event: HostSignInRunEvent): boolean {
+  return (
+    event.kind === "done" ||
+    event.kind === "failed" ||
+    event.kind === "cancelled" ||
+    event.kind === "lost"
+  );
+}
 
 const trimSettingsSchema = z.object({
   keepPatterns: z.array(z.string()),
@@ -154,6 +227,8 @@ async function* desktopStream<Emission>(
   procedure: DesktopKey,
   signal: AbortSignal | undefined,
   open: (sink: DesktopStreamSink<Emission>) => Promise<() => void>,
+  /** A stream with an end (a sign-in): it completes after the emission this answers true for. */
+  ends?: (emission: Emission) => boolean,
 ): AsyncGenerator<Emission, void, unknown> {
   if (signal?.aborted) return;
   const queue = new AsyncQueue<Emission>(DESKTOP_STREAM_CAPACITY);
@@ -164,7 +239,11 @@ async function* desktopStream<Emission>(
   try {
     unsubscribe = await hostAnswer(() =>
       open({
-        emit: (emission) => queue.push(emission),
+        emit: (emission) => {
+          queue.push(emission);
+          // Closed after the end, keeping what is held: the end is a frame.
+          if (ends?.(emission) === true) queue.close(false);
+        },
         // Buffered emissions still drain; then the stream ends in error.
         fail: (error) => {
           failure.current = { error };
@@ -294,6 +373,77 @@ export function createDesktopRouter() {
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["hostAdd.cancel"](input, ctx.call)),
     },
+    /**
+     * Sign-ins on a remote host, from this desktop (VC-702 PR 2). Values go in
+     * and onto the host link; nothing here answers one. The router records a
+     * call's route and its error's message, never its input.
+     */
+    hostSignIns: {
+      status: hostProcedure("hostSignIns.status")
+        .input(hostInputSchema)
+        .output(hostSignInStatusSchema)
+        .query(async ({ ctx, input }) =>
+          hostSignInStatusSchema.parse(await ctx.handlers["hostSignIns.status"](input, ctx.call)),
+        ),
+      macKeys: hostProcedure("hostSignIns.macKeys")
+        .output(z.array(z.string()))
+        .query(async ({ ctx }) => [
+          ...(await ctx.handlers["hostSignIns.macKeys"](undefined, ctx.call)),
+        ]),
+      sendFromThisMac: hostProcedure("hostSignIns.sendFromThisMac")
+        .input(z.strictObject({ hostId, providerId, confirmed: z.literal(true) }))
+        .output(hostSignInSendResultSchema)
+        .mutation(async ({ ctx, input }) =>
+          hostSignInSendResultSchema.parse(
+            await ctx.handlers["hostSignIns.sendFromThisMac"](input, ctx.call),
+          ),
+        ),
+      setApiKey: hostProcedure("hostSignIns.setApiKey")
+        .input(z.strictObject({ hostId, providerId, key: secretValue }))
+        .output(hostSignInStatusSchema)
+        .mutation(async ({ ctx, input }) =>
+          hostSignInStatusSchema.parse(
+            await ctx.handlers["hostSignIns.setApiKey"](input, ctx.call),
+          ),
+        ),
+      setGitCredential: hostProcedure("hostSignIns.setGitCredential")
+        .input(
+          z.strictObject({
+            hostId,
+            host: z.string().trim().min(1).max(260),
+            username: z.string().min(1).max(256),
+            password: secretValue,
+          }),
+        )
+        .output(hostSignInStatusSchema)
+        .mutation(async ({ ctx, input }) =>
+          hostSignInStatusSchema.parse(
+            await ctx.handlers["hostSignIns.setGitCredential"](input, ctx.call),
+          ),
+        ),
+      /** The sign-in, to its end; ending the stream cancels it on the host. */
+      run: hostProcedure("hostSignIns.run")
+        .input(hostSignInInputSchema)
+        .subscription(async function* ({ ctx, input, signal }) {
+          yield* desktopStream<HostSignInRunEvent>(
+            ctx,
+            "hostSignIns.run",
+            signal,
+            (sink) => ctx.handlers["hostSignIns.run"](input, ctx.call, sink),
+            runEnds,
+          );
+        }),
+      answer: hostProcedure("hostSignIns.answer")
+        .input(
+          z.strictObject({ hostId, providerId, promptId: identifier, value: promptAnswer }),
+        )
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["hostSignIns.answer"](input, ctx.call)),
+      cancel: hostProcedure("hostSignIns.cancel")
+        .input(hostSignInInputSchema)
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["hostSignIns.cancel"](input, ctx.call)),
+    },
   });
 }
 
@@ -314,5 +464,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
   return procedureSchemas(router, {
     "hosts.subscribe": remoteHostsSnapshotSchema,
     "hostAdd.subscribe": addHostEventSchema,
+    "hostSignIns.run": hostSignInRunEventSchema,
   });
 }

@@ -247,6 +247,92 @@ describe("sign-ins on a host (VC-702)", () => {
   });
 });
 
+describe("sign-ins on a remote host, from this desktop (VC-702 PR 2)", () => {
+  it("answers unavailable without the port, and passes each key through it once", async () => {
+    const empty = handlers();
+    expect(await unavailable(() => empty["hostSignIns.status"]({ hostId: "h" }, USER))).toBe(
+      "Remote host sign-ins are unavailable on this host",
+    );
+    const reached: string[] = [];
+    const port = {
+      status: vi.fn(() => (reached.push("status"), "status")),
+      macKeys: vi.fn(() => (reached.push("macKeys"), ["openrouter"])),
+      sendFromThisMac: vi.fn(() => (reached.push("send"), { ok: true })),
+      setApiKey: vi.fn(() => (reached.push("setApiKey"), "status")),
+      setGitCredential: vi.fn(() => (reached.push("setGit"), "status")),
+      run: vi.fn(async (_host: string, _provider: string, listener: (event: unknown) => void) => {
+        reached.push("run");
+        await listener({ kind: "done" });
+        return () => {};
+      }),
+      answer: vi.fn(() => void reached.push("answer")),
+      cancel: vi.fn(() => void reached.push("cancel")),
+    };
+    const map = handlers({ remoteSignIns: port as never });
+    expect(await map["hostSignIns.status"]({ hostId: "h" }, USER)).toBe("status");
+    expect(await map["hostSignIns.macKeys"](undefined, USER)).toEqual(["openrouter"]);
+    await map["hostSignIns.sendFromThisMac"](
+      { hostId: "h", providerId: "p", confirmed: true },
+      USER,
+    );
+    await map["hostSignIns.setApiKey"]({ hostId: "h", providerId: "p", key: "k" }, USER);
+    await map["hostSignIns.setGitCredential"](
+      { hostId: "h", host: "github.com", username: "u", password: "t" },
+      USER,
+    );
+    const emitted: unknown[] = [];
+    await map["hostSignIns.run"]({ hostId: "h", providerId: "p" }, USER, {
+      emit: (event) => void emitted.push(event),
+      fail() {},
+    });
+    expect(emitted).toEqual([{ kind: "done" }]);
+    expect(
+      await map["hostSignIns.answer"]({ hostId: "h", providerId: "p", promptId: "q", value: "" }, USER),
+    ).toBeNull();
+    expect(await map["hostSignIns.cancel"]({ hostId: "h", providerId: "p" }, USER)).toBeNull();
+    expect(reached).toEqual([
+      "status",
+      "macKeys",
+      "send",
+      "setApiKey",
+      "setGit",
+      "run",
+      "answer",
+      "cancel",
+    ]);
+    expect(port.setGitCredential).toHaveBeenCalledWith("h", {
+      host: "github.com",
+      username: "u",
+      password: "t",
+    });
+  });
+
+  it("never lets a failure echo the key, token or answer it was given", async () => {
+    const secret = "sk-THE-SECRET-VALUE-0123456789";
+    const echo = () => {
+      throw new Error(`rejected ${secret}`);
+    };
+    const map = handlers({
+      remoteSignIns: { setApiKey: echo, setGitCredential: echo, answer: echo } as never,
+    });
+    for (const call of [
+      () => map["hostSignIns.setApiKey"]({ hostId: "h", providerId: "p", key: secret }, USER),
+      () =>
+        map["hostSignIns.setGitCredential"](
+          { hostId: "h", host: "github.com", username: "u", password: secret },
+          USER,
+        ),
+      () =>
+        map["hostSignIns.answer"](
+          { hostId: "h", providerId: "p", promptId: "q", value: secret },
+          USER,
+        ),
+    ]) {
+      await expect(Promise.resolve().then(call)).rejects.toThrow("rejected [redacted]");
+    }
+  });
+});
+
 describe("Session commands", () => {
   it("passes each runtime command through, fixing what a person's door may say", async () => {
     const runtime = {

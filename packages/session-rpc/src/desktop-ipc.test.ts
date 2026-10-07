@@ -91,6 +91,14 @@ describe("the desktop's IPC exposure", () => {
       "hostAdd.sudoPassword",
       "hostAdd.retry",
       "hostAdd.cancel",
+      "hostSignIns.status",
+      "hostSignIns.macKeys",
+      "hostSignIns.sendFromThisMac",
+      "hostSignIns.setApiKey",
+      "hostSignIns.setGitCredential",
+      "hostSignIns.run",
+      "hostSignIns.answer",
+      "hostSignIns.cancel",
     ]);
   });
 

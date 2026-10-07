@@ -150,6 +150,15 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hostAdd.sudoPassword": "ipc",
   "hostAdd.retry": "ipc",
   "hostAdd.cancel": "ipc",
+  // Sign-ins on a remote host, from this desktop (VC-702 PR 2).
+  "hostSignIns.status": "ipc",
+  "hostSignIns.macKeys": "ipc",
+  "hostSignIns.sendFromThisMac": "ipc",
+  "hostSignIns.setApiKey": "ipc",
+  "hostSignIns.setGitCredential": "ipc",
+  "hostSignIns.run": "ipc",
+  "hostSignIns.answer": "ipc",
+  "hostSignIns.cancel": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

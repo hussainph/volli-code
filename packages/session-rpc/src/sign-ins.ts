@@ -53,14 +53,14 @@ export interface SignInRouterHandlers {
 }
 
 /** An identifier a flow or a provider is named by. */
-const identifier = z.string().trim().min(1).max(256);
+export const identifier = z.string().trim().min(1).max(256);
 
 /**
  * A secret's input bound: generous for a key or a token, small enough that a
  * frame carrying one is never mistaken for a payload. No pattern: a value is
  * never described, only bounded.
  */
-const secretValue = z.string().min(1).max(16_384);
+export const secretValue = z.string().min(1).max(16_384);
 
 /**
  * A step's answer: a pasted redirect, a choice, a value. May be empty: some
@@ -68,7 +68,7 @@ const secretValue = z.string().min(1).max(16_384);
  * Enterprise URL/domain (blank for github.com)"). Bounded like a secret,
  * because a pasted API key is an answer too.
  */
-const promptAnswer = z.string().max(16_384);
+export const promptAnswer = z.string().max(16_384);
 
 const stateSchema = z.enum(["signed-in", "expired", "missing"]);
 
