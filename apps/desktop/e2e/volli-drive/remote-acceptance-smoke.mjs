@@ -391,10 +391,9 @@ async function journey() {
       assert.equal(quit.nativeWindows.visible, 0);
       await call("native-reopen");
       nativeQuitAttempted = false;
-      // A new renderer boots from This Mac's project list; remote selection
-      // is not restored by local bootstrap. Navigate through the real host
-      // switcher, then prove the SAME durable Session and pending question.
-      await selectHost(REMOTE_HOST);
+      // Reopen restores the box project itself: no host-switcher navigation
+      // before proving the SAME durable Session and pending question.
+      await wait(`Host: ${REMOTE_HOST}`);
       const reopened = await wait("Waiting for you");
       const recovered = controls(reopened.text, "button", "Waiting for you", {
         contains: true,

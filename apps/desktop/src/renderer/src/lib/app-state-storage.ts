@@ -25,7 +25,10 @@ const cache = new Map<string, string>();
  */
 export function seedAppStateCache(entries: Record<string, string>): void {
   for (const [key, value] of Object.entries(entries)) {
-    if (value !== "") cache.set(key, value);
+    if (value !== "") {
+      cache.set(key, value);
+      acknowledgedValues.delete(key);
+    }
   }
 }
 
@@ -58,25 +61,31 @@ interface PendingWrite {
 }
 const pendingWrites = new Map<string, PendingWrite>();
 const writesInFlight = new Map<string, Promise<boolean>>();
+/** Last bridge-acknowledged value per key, invalidated as soon as newer intent is scheduled. */
+const acknowledgedValues = new Map<string, string>();
 
 /**
  * Serializes writes to one key, so an older bridge call can never settle after
  * and overwrite a value whose durability a caller already observed.
  */
 function persistInOrder(key: string, value: string, failureVerb: string): Promise<boolean> {
+  acknowledgedValues.delete(key);
   const previous = writesInFlight.get(key);
   const write =
     previous === undefined
       ? persist(key, value, failureVerb)
       : previous.then(() => persist(key, value, failureVerb));
   writesInFlight.set(key, write);
-  void write.then(() => {
-    if (writesInFlight.get(key) === write) writesInFlight.delete(key);
+  void write.then((ok) => {
+    if (writesInFlight.get(key) !== write) return;
+    writesInFlight.delete(key);
+    if (ok && !pendingWrites.has(key)) acknowledgedValues.set(key, value);
   });
   return write;
 }
 
 function persistDebounced(key: string, value: string, failureVerb: string): void {
+  acknowledgedValues.delete(key);
   const existing = pendingWrites.get(key);
   if (existing !== undefined) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
@@ -106,7 +115,8 @@ export function flushPendingAppState(): void {
  * Flushes one key and resolves only when main has acknowledged every write to
  * it that was scheduled before this call. This is the durability barrier for
  * user intent that must survive before its renderer-only source is released;
- * a key with no scheduled write returns `false` rather than inventing an ack.
+ * A completed bridge acknowledgement remains valid for the unchanged value;
+ * a key never written (or with a newer failed value) still returns `false`.
  */
 export function flushPendingAppStateKey(key: string): Promise<boolean> {
   const pending = pendingWrites.get(key);
@@ -115,7 +125,10 @@ export function flushPendingAppStateKey(key: string): Promise<boolean> {
     pendingWrites.delete(key);
     return persistInOrder(key, pending.value, pending.failureVerb);
   }
-  return writesInFlight.get(key) ?? Promise.resolve(false);
+  return (
+    writesInFlight.get(key) ??
+    Promise.resolve(acknowledgedValues.get(key) === (cache.get(key) ?? ""))
+  );
 }
 
 /**

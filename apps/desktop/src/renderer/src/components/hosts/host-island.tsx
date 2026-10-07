@@ -27,10 +27,9 @@ import { hostSurface, type HostSurface, type HostSurfaceTone } from "./host-surf
 import {
   runHostAction,
   useCloudEnabled,
-  useCurrentProjectId,
   useGrace,
   useNow,
-  useProjectHostView,
+  useCurrentProjectHostView,
 } from "./use-hosts";
 
 const TONE: Record<HostSurfaceTone, string> = {
@@ -54,7 +53,7 @@ export function HostIsland() {
 function EnabledHostIsland() {
   // The current PROJECT's link, not the host's aggregate: a fence on another
   // project of the same box never takes this board's controls away.
-  const host = useProjectHostView(useCurrentProjectId());
+  const host = useCurrentProjectHostView();
   const now = useNow(host.link.status === "offline");
   const shown = useGrace(hostSurface(host, now));
   const lane = React.useRef<HTMLDivElement>(null);
