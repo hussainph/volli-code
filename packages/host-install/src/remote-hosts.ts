@@ -526,9 +526,22 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   let started = false;
   let closed = false;
   let closing: Promise<void> | null = null;
+  /**
+   * Every tunnel it made, closed or not: quit SIGKILLs whatever ssh any of
+   * them still owns (a replaced host's, a cancelled link step's).
+   */
+  const tunnelsMade = new Set<SshTunnel>();
+  /** Epoch ms by which quit is done, once it has begun. */
+  let quitDeadline: number | null = null;
   let unsubscribeWake: (() => void) | undefined;
 
   const iso = (): string => new Date(ports.now()).toISOString();
+
+  function makeTunnel(options: RemoteHostsTunnelOptions): SshTunnel {
+    const tunnel = ports.tunnel(options);
+    tunnelsMade.add(tunnel);
+    return tunnel;
+  }
 
   function track<T>(work: Promise<T>): Promise<T> {
     pending.add(work);
@@ -810,7 +823,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     holder.listen = entry.listen;
     const hostTunnel =
       tunnel ??
-      ports.tunnel({
+      makeTunnel({
         target: parseSshTarget(entry.target) as SshTarget,
         resolveRemote: () => Promise.resolve(holder.listen),
         logger: componentLogger(logger, { host: entry.name, hostId: entry.id }),
@@ -1000,7 +1013,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     flow.tunnel?.close();
     flow.tunnel = null;
     const remote = { listen };
-    const tunnel = ports.tunnel({
+    const tunnel = makeTunnel({
       target: flow.target,
       resolveRemote: () => Promise.resolve(remote.listen),
       logger: componentLogger(flow.logger, { host: flow.name }),
@@ -1176,7 +1189,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
 
   /** Ends the flow's SSH connection and every command on it, once. */
   function closeSsh(flow: Flow): Promise<void> {
-    flow.sshClosed ??= flow.ssh.close().catch((error: unknown) => {
+    // At quit, ending the connection gets only what is left of quit's grace.
+    const options = quitDeadline === null ? undefined : { deadline: quitDeadline };
+    flow.sshClosed ??= flow.ssh.close(options).catch((error: unknown) => {
       logger.warn("an add flow's ssh connection did not close cleanly", {
         flowId: flow.id,
         error: messageOf(error),
@@ -1471,6 +1486,11 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     close() {
       closing ??= (async () => {
         closed = true;
+        // One deadline for all of quit: what is left of it bounds every wait below.
+        const grace = ports.quitGraceMs ?? DEFAULT_QUIT_GRACE_MS;
+        const deadline = Date.now() + grace;
+        quitDeadline = deadline;
+        const left = (): number => Math.max(0, deadline - Date.now());
         unsubscribeWake?.();
         // Nothing registers a host from here on: every finalization checks first.
         for (const hostId of runtimes.keys()) stopHost(hostId);
@@ -1481,16 +1501,45 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         // Whatever is in flight finishes, or finds itself cancelled at its next await.
         const settled = await settleWithin(
           [...pending, ...leases.values(), ...[...flows.values()].map((flow) => flow.queue)],
-          ports.quitGraceMs ?? DEFAULT_QUIT_GRACE_MS,
+          left(),
         );
-        if (!settled) logger.warn("remote hosts quit before everything in flight settled");
         listeners.clear();
-        const results = await Promise.allSettled(open.map((flow) => discard(flow)));
-        for (const result of results) {
-          if (result.status === "rejected") {
-            logger.warn("an add flow did not close cleanly", { error: messageOf(result.reason) });
-          }
+        // Each cancelled flow's SSH and unused keys, in what is left.
+        const cleanups = open.map((flow) => {
+          const cleanup = { flowId: flow.id, done: false, work: discard(flow) };
+          cleanup.work.then(
+            () => {
+              cleanup.done = true;
+            },
+            (error: unknown) => {
+              cleanup.done = true;
+              logger.warn("an add flow did not close cleanly", {
+                flowId: flow.id,
+                error: messageOf(error),
+              });
+            },
+          );
+          return cleanup;
+        });
+        const cleaned = await settleWithin(
+          cleanups.map((cleanup) => cleanup.work),
+          left(),
+        );
+        if (!settled || !cleaned) {
+          // A key removal still running is abandoned: when it lands, nothing reads it.
+          logger.warn("remote hosts quit at its deadline; ending what is left", {
+            graceMs: grace,
+            abandoned: cleanups
+              .filter((cleanup) => !cleanup.done)
+              .map((cleanup) => cleanup.flowId)
+              .join(", "),
+          });
         }
+        // Every ssh process still owned is SIGKILLed now, and briefly awaited.
+        await Promise.allSettled([
+          ...[...flows.values()].map((flow) => flow.ssh.kill?.()),
+          ...[...tunnelsMade].map((tunnel) => tunnel.kill?.()),
+        ]);
         for (const flow of flows.values()) dispose(flow);
       })();
       return closing;
