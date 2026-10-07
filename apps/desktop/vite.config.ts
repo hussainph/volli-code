@@ -574,6 +574,10 @@ export default defineConfig(({ mode }) => ({
         // or a failure no screenshot shows. (Its engine, `stores/board-sync.ts`,
         // is gated by `src/stores/**` above.)
         "src/lib/board-protocol.ts",
+        // When a remote project's Session listing is read again (VC-713): a
+        // missed branch is a question nobody sees on reopen, or a poll that
+        // never stops.
+        "src/lib/remote-listing-refresh.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
