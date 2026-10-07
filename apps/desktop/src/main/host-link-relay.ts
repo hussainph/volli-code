@@ -395,6 +395,20 @@ function createRelay(
       : error;
   }
 
+  /** Transport envelopes never choose a public HOST procedure's kind. */
+  function admitProcedure(
+    path: string,
+    input: unknown,
+    kind: "query" | "mutate" | "subscribe",
+  ): void {
+    if (scope !== "host") return;
+    // Check every route, even an attempted subscription to this mutation.
+    if (path === "workspaces.create") admitHostCreateSource(input);
+    const expected = { query: "query", mutate: "mutation", subscribe: "subscription" } as const;
+    if (hostOutputs[path]?.type !== expected[kind])
+      throw refusal(hostError("verb-refused", "That HOST procedure cannot use this request kind."));
+  }
+
   async function call(
     id: string,
     path: string,
@@ -403,7 +417,7 @@ function createRelay(
   ): Promise<unknown> {
     const link = linkFor(id, path);
     try {
-      if (scope === "host" && path === "workspaces.create") admitHostCreateSource(input);
+      admitProcedure(path, input, kind);
       const value = await link[kind](path, input, callOptions());
       return scope === "host" ? hostOutput(link as HostScopeLink, path, value) : value;
     } catch (error) {
@@ -456,6 +470,7 @@ function createRelay(
       let link: RelayLink;
       try {
         link = linkFor(workspaceId, path);
+        admitProcedure(path, input, "subscribe");
       } catch (error) {
         // Main's own typed refusals end the stream as events; anything else
         // (the engine off: unavailable) is the router's to say.

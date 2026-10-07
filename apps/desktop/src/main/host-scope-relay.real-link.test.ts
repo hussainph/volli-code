@@ -309,6 +309,35 @@ describe("signed HOST peer output before real renderer IPC", () => {
     await until(() => received.length === 1);
     assertSafe(received[0]);
     stream.unsubscribe();
+    for (const password of ["ab'cd", 'ab"cd']) {
+      const message = `failed: https://user:${password}@host/repo.git`;
+      answer = { ok: false, failure: { code: "clone-failed", message } };
+      expect(JSON.stringify(await view.mutate("workspaces.create", command))).not.toContain(
+        password,
+      );
+      catalog = new TRPCError({ code: "BAD_GATEWAY", message });
+      await expect(view.query("workspaces.list")).rejects.toMatchObject({
+        message: "failed: https://[redacted]@host/repo.git",
+      });
+      batch.entries[0]!.record.msg = message;
+      expect(JSON.stringify(await view.query("logs.tail", {}))).not.toContain(password);
+      const quotedLogs: unknown[] = [];
+      const quotedStream = view.subscribe(
+        "logs.follow",
+        {},
+        {
+          onData: (data) => quotedLogs.push(data),
+          onError: (error) => {
+            throw error;
+          },
+          onResnapshot: () => {},
+        },
+      );
+      await until(() => quotedLogs.length === 1);
+      expect(JSON.stringify(quotedLogs[0])).not.toContain(password);
+      expect(JSON.stringify(quotedLogs[0])).toContain("[redacted]@host");
+      quotedStream.unsubscribe();
+    }
     const trackingError = vi.fn();
     const unsafeTrackingData = vi.fn();
     trackingId = credential;

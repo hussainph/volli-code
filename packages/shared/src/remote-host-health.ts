@@ -16,8 +16,10 @@ export const REMOTE_HOST_HEALTH_LIMITS = {
   signInExpiry: 128,
 } as const;
 
+// Run after userinfo redaction: its quotes and ?/# must not split the URL tail.
 const URL_SECRETS = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/@'"]*@)?([^\s?#'"]*)[?#][^\s'"]*/giu;
-const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]*@/giu;
+// Start at a fixed delimiter, bound to one authority; quotes can be userinfo.
+const URL_USERINFO = /(:\/\/)[^\s/]*@/gu;
 
 /** The existing host-project oneLine policy, also usable before renderer-local publication. */
 export function remoteHostDiagnostic(
@@ -27,8 +29,8 @@ export function remoteHostDiagnostic(
   const scrubbed = redactLogText(
     text
       .replace(/\bvdc1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/gu, "[redacted]")
-      .replace(URL_SECRETS, "$1$2?[redacted]")
-      .replace(URL_USERINFO, "$1[redacted]@"),
+      .replace(URL_USERINFO, "$1[redacted]@")
+      .replace(URL_SECRETS, "$1$2?[redacted]"),
     Number.MAX_SAFE_INTEGER,
   );
   const line = scrubbed

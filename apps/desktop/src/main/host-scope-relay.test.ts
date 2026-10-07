@@ -335,6 +335,35 @@ describe("HOST output trust boundary", () => {
       expect(f.relay.open()).toBe(0);
     },
   );
+  it("refuses incorrect HOST procedure kinds before the link receives any input", async () => {
+    const f = fixture();
+    const command = { commandId: DEVICE, source: { path: "/srv/app" } };
+    for (const request of [
+      f.relay.query(HOST, "workspaces.create", command),
+      f.relay.mutate(HOST, "workspaces.list", undefined),
+      f.relay.query(HOST, "logs.follow", {}),
+      f.relay.mutate(HOST, "logs.tail", {}),
+    ])
+      expect(await failure(request)).toMatchObject({
+        reason: "verb-refused",
+        message: "That HOST procedure cannot use this request kind.",
+      });
+    const seen: HostLinkRelayEvent[] = [];
+    for (const input of [
+      command,
+      { ...command, source: { gitUrl: "https://TOKEN@host/repo.git" } },
+    ])
+      f.relay.subscribe(HOST, "workspaces.create", input, undefined, (event) => {
+        seen.push(event);
+      });
+    expect(seen).toHaveLength(2);
+    for (const event of seen)
+      expect(event).toMatchObject({ kind: "error", error: { reason: "verb-refused" } });
+    expect(f.link.query).not.toHaveBeenCalled();
+    expect(f.link.mutate).not.toHaveBeenCalled();
+    expect(f.link.subscribe).not.toHaveBeenCalled();
+    expect(f.relay.open()).toBe(0);
+  });
   it("refuses secret-bearing bootstrap proofs without rewriting valid proof identity", async () => {
     const f = fixture();
     const welcome = (f.link.getState() as Extract<HostScopeLinkState, { status: "ready" }>).welcome;

@@ -1,7 +1,8 @@
 // @vitest-environment node
 /** Direct renderer IPC cannot send prohibited repository credentials to a host. */
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
-import { HOST_SCOPE_FEATURES } from "@volli/host-protocol";
+import { HOST_SCOPE_FEATURES, type HostConnectionWelcome } from "@volli/host-protocol";
+import { initTRPC } from "@trpc/server";
 import { createHostScopeLink } from "@volli/host-protocol/client-link";
 import { createIpcServer } from "@volli/host-protocol/ipc-server";
 import { servedIpcContractLink } from "@volli/host-protocol/testing";
@@ -66,6 +67,106 @@ describe("HOST create Mac-side admission", () => {
     ])
       expect(() => admitHostCreateSource(input)).toThrow();
     expect(() => admitHostCreateSource({ source: { path: "/srv/app" } })).not.toThrow();
+  });
+  it("blocks direct subscription IPC to a hostile peer's create subscription before transport", async () => {
+    const received: unknown[] = [];
+    const t = initTRPC.context<{ welcome?: HostConnectionWelcome }>().create();
+    const router = t.router({
+      protocol: t.router({
+        welcome: t.procedure.query(({ ctx }) => ctx.welcome),
+        hostWelcome: t.procedure.query(({ ctx }) => ctx.welcome),
+      }),
+      workspaces: t.router({
+        list: t.procedure.query(() => ({ workspaces: [], omitted: 0 })),
+        // A compromised peer accepts the wrong kind; main must never ask it.
+        create: t.procedure
+          .input((input: unknown) => input)
+          .subscription(async function* ({ input }) {
+            received.push(input);
+            yield { ok: false, failure: { code: "clone-failed", message: "wrong kind" } };
+          }),
+      }),
+    });
+    const listener = await startHostProtocolListener({
+      router,
+      bind: { host: "127.0.0.1", port: 5387 },
+      host: { id: HOST, version: "1.2.0" },
+      workspace: () => null,
+      features: ["host.workspaces"],
+      verifier: {
+        verify: (presentation) =>
+          "scope" in presentation
+            ? { actor: { scope: "host", kind: "device", deviceId: DEVICE }, current: () => true }
+            : null,
+      },
+      context: () => ({}),
+    });
+    cleanups.push(() => listener.close());
+    const link = createHostScopeLink({
+      url: listener.url,
+      hostId: HOST,
+      client: { kind: "desktop", version: "1.2.0" },
+      features: ["host.workspaces"],
+      credential: () => "fixture-only",
+    });
+    cleanups.push(() => link.close());
+    await until(() => link.getState().status === "ready");
+    const relay = createHostScopeRelay(
+      engineHostScopeLinks({
+        snapshot: () => ({ hosts: [{ id: HOST }] }),
+        hostScopeLink: () => link,
+      }),
+    );
+    const map = handlers({ ...base, hostScopeRelay: relay });
+    const connection = await servedIpcContractLink<undefined, DesktopIpcRouter>({
+      serve: async () =>
+        createIpcServer({
+          routers: [createDesktopRouter()],
+          served: ["hostScope.query", "hostScope.mutate", "hostScope.subscribe"],
+          createContext: () => ({
+            caller: LOCAL_DESKTOP_CALLER,
+            diagnostics: new RpcDiagnosticLog(),
+            handlers: map,
+          }),
+        }),
+    }).open(undefined);
+    cleanups.push(() => connection.close());
+    for (const gitUrl of [
+      "https://TOKEN@host/repo.git",
+      "https://user:pass@host/repo.git",
+      "https://host/repo.git",
+    ]) {
+      const events: unknown[] = [];
+      const request = {
+        hostId: HOST,
+        path: "workspaces.create",
+        input: { commandId: DEVICE, source: { gitUrl } },
+      };
+      const subscription = connection.client.hostScope.subscribe.subscribe(request, {
+        onData: (event) => events.push(event),
+        onError: (error) => {
+          throw error;
+        },
+      });
+      await until(() => events.length > 0);
+      expect(events[0]).toMatchObject({
+        kind: "error",
+        error: { reason: "verb-refused", code: "FORBIDDEN" },
+      });
+      subscription.unsubscribe();
+      await expect(connection.client.hostScope.query.query(request)).rejects.toMatchObject({
+        data: { hostError: { reason: "verb-refused" } },
+      });
+    }
+    await expect(
+      connection.client.hostScope.mutate.mutate({
+        hostId: HOST,
+        path: "workspaces.list",
+        input: null,
+      }),
+    ).rejects.toMatchObject({ data: { hostError: { reason: "verb-refused" } } });
+    expect(received).toEqual([]);
+    expect(relay.open()).toBe(0);
   });
   it("rejects the full shared Git URL policy before the remote handler, while preserving SSH usernames", async () => {
     const create = vi.fn(async () => ({
