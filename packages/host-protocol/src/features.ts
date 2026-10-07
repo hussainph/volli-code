@@ -103,6 +103,29 @@ export const HOST_FEATURE_OPERATIONS = {
     "modelAccess.pickerView",
     "modelAccess.setPickerView",
   ],
+  /**
+   * Sign-ins on a host (VC-702): status, API keys and git push credentials
+   * sent from a Client, and subscription logins run on the host. Person-only;
+   * values travel in, never out.
+   */
+  "sign-ins": [
+    "signIns.status",
+    "signIns.setApiKey",
+    "signIns.signOut",
+    "signIns.start",
+    "signIns.subscribe",
+    "signIns.answer",
+    "signIns.cancel",
+    "signIns.setGitCredential",
+    "signIns.clearGitCredential",
+  ],
+  /**
+   * The auth-callback relay (HP § Auth-callback relay, VC-702). Requesting it
+   * declares that this Client can bind a loopback port for one request and
+   * deliver what arrives, so the host sends it `auth-callback` grants; a
+   * Client that cannot (a phone, a web page) leaves it out and pastes.
+   */
+  "auth.callback": ["auth.callback.deliver"],
 } as const satisfies Readonly<Record<HostFeature, readonly string[]>>;
 
 /** A feature this build can grant. */
@@ -129,4 +152,13 @@ export function operationsGrantedBy(features: readonly HostFeature[]): ReadonlyS
     }
   }
   return granted;
+}
+
+/**
+ * Whether a host offers sign-ins to this connection: its welcome granted
+ * `sign-ins`. An older host never offers it, so a Client hides its sign-in
+ * rows for that host rather than calling and being refused (N−1 skew).
+ */
+export function hostOffersSignIns(welcome: { readonly features: readonly string[] }): boolean {
+  return welcome.features.includes("sign-ins");
 }

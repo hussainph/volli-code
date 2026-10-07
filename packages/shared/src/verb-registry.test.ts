@@ -273,6 +273,17 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "session.editQueued": "coordination",
   "session.cancelInteraction": "coordination",
   "session.reconcile": "coordination",
+  // Sign-ins on a host (VC-702): the person's, on the WebSocket only.
+  "signIns.status": "coordination",
+  "signIns.setApiKey": "coordination",
+  "signIns.signOut": "coordination",
+  "signIns.start": "coordination",
+  "signIns.subscribe": "coordination",
+  "signIns.answer": "coordination",
+  "signIns.cancel": "coordination",
+  "signIns.setGitCredential": "coordination",
+  "signIns.clearGitCredential": "coordination",
+  "auth.callback.deliver": "coordination",
   // The board router's own operations (VC-565): the person's, on no agent
   // surface, so coordination by the same rule.
   "board.snapshot": "coordination",
@@ -655,8 +666,9 @@ describe("the registry table", () => {
 
   // A router-only entry is keyed by its tRPC path (VC-564), which no CLI spells.
   it("keys a router-only catalog entry by its procedure path", () => {
+    // A path may nest (`auth.callback.deliver`, HP § Auth-callback relay).
     for (const entry of VERB_REGISTRY.filter(routerOnly)) {
-      expect(entry.key).toMatch(/^[a-z][A-Za-z]*\.[a-z][A-Za-z]*$/);
+      expect(entry.key).toMatch(/^[a-z][A-Za-z]*(?:\.[a-z][A-Za-z]*)+$/);
     }
   });
 
@@ -1346,6 +1358,16 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "logs.follow": ["host", "read"],
     "labDiagnostics.list": ["host", "read"],
     "labDiagnostics.subscribe": ["host", "read"],
+    "signIns.status": ["host", "read"],
+    "signIns.setApiKey": ["host", "natural"],
+    "signIns.signOut": ["host", "natural"],
+    "signIns.start": ["host", "natural"],
+    "signIns.subscribe": ["host", "read"],
+    "signIns.answer": ["host", "natural"],
+    "signIns.cancel": ["host", "natural"],
+    "signIns.setGitCredential": ["host", "natural"],
+    "signIns.clearGitCredential": ["host", "natural"],
+    "auth.callback.deliver": ["host", "natural"],
   } as const satisfies Record<
     Exclude<CatalogKey, CatalogKeyOf<(typeof BOARD_ENTRIES)[number]>>,
     readonly [string, string]

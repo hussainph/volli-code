@@ -35,6 +35,7 @@ export * from "./structured-log";
 export * from "./model-auto-select";
 export * from "./model-mark-color";
 export * from "./model-access-sign-in";
+export * from "./host-sign-ins";
 export * from "./usage-limits";
 export * from "./compaction-policy";
 export * from "./authority";
