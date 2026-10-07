@@ -217,6 +217,35 @@ describe("HOST models across real loopback and renderer IPC", () => {
     f.link.close();
     await expect(f.view.query("hostModels.defaults")).rejects.toThrow("can’t be reached");
   });
+  it.each([
+    { method: "codeModePolicy", kind: "query" },
+    { method: "setCodeModePolicy", kind: "mutate" },
+  ] as const)(
+    "refuses unsafe record keys in $method before renderer IPC",
+    async ({ method, kind }) => {
+      const f = await fixture();
+      const path = `hostModels.${method}`;
+      const input = kind === "mutate" ? { enabled: true, models: {} } : undefined;
+      const safe = { enabled: true, models: { "fixture/model": "only" } };
+      f.answer(safe);
+      expect(await f.view[kind](path, input)).toEqual(safe);
+      const heldKey = "fixture/test-only-device";
+      expect(f.link.redactDiagnostic(heldKey)).not.toBe(heldKey);
+      for (const key of [heldKey, "fixture/vdc1.fixture.signature", "fixture/model\u0007"]) {
+        f.answer({ enabled: true, models: { [key]: "only" } });
+        await expect(f.view[kind](path, input)).rejects.toMatchObject({
+          data: {
+            hostError: {
+              code: "BAD_GATEWAY",
+              reason: "response-invalid",
+              message: "The host returned an invalid response.",
+            },
+          },
+        });
+        expect(f.calls.at(-1)).toBe(method);
+      }
+    },
+  );
   it("an older host's missing grant refuses without invoking any model handler", async () => {
     const f = await fixture([]);
     await expect(f.view.query("hostModels.defaults")).rejects.toMatchObject({

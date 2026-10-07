@@ -299,14 +299,16 @@ function hostOutput(link: HostScopeLink, path: string, answer: unknown): unknown
       })),
     };
   }
-  // Bootstrap fields (including reserved proofs) are identities, not diagnostic
-  // prose. Keep valid long proofs intact; refuse secret-bearing strings whole.
+  // Remaining HOST fields (including proofs and preference record keys) are
+  // identities, not diagnostic prose. Refuse unsafe strings without rewriting them.
   const safeBootstrap = (value: unknown): boolean => {
     if (typeof value === "string")
       return remoteHostDiagnostic(link.redactDiagnostic(value), Number.MAX_SAFE_INTEGER) === value;
     if (Array.isArray(value)) return value.every(safeBootstrap);
     if (value !== null && typeof value === "object")
-      return Object.values(value).every(safeBootstrap);
+      return Object.entries(value).every(
+        ([key, field]) => safeBootstrap(key) && safeBootstrap(field),
+      );
     return true;
   };
   if (!safeBootstrap(parsed.data)) throw invalidHostOutput();
