@@ -20,6 +20,9 @@ const HOST: RegistryHost = {
   addedAt: "2026-01-01T00:00:00.000Z",
   listen: { host: "127.0.0.1", port: 7420 },
   workspaceIds: ["2f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f"],
+  system: "Ubuntu 24.04.1 LTS",
+  arch: "x86-64",
+  hostKeys: ["SHA256:abc"],
 };
 
 describe("a registry host", () => {
@@ -33,6 +36,15 @@ describe("a registry host", () => {
       mode: "user",
     });
     expect(readRegistryHost({ ...HOST, os: "macos" })?.os).toBe("macos");
+  });
+
+  it("reads an older entry with no system, arch or host keys as none known", () => {
+    const { system: _s, arch: _a, hostKeys: _k, ...older } = HOST;
+    expect(readRegistryHost(older)).toEqual({ ...HOST, system: null, arch: null, hostKeys: [] });
+    expect(readRegistryHost({ ...HOST, system: null, arch: null })).toMatchObject({
+      system: null,
+      arch: null,
+    });
   });
 
   it("keeps each Workspace once", () => {
@@ -61,6 +73,10 @@ describe("a registry host", () => {
     ["a port past 65535", { ...HOST, listen: { host: "127.0.0.1", port: 70_000 } }],
     ["workspaces that are not a list", { ...HOST, workspaceIds: "ws" }],
     ["a workspace that is not a UUID", { ...HOST, workspaceIds: ["ws"] }],
+    ["an empty system", { ...HOST, system: "" }],
+    ["an arch that is not text", { ...HOST, arch: 64 }],
+    ["host keys that are not a list", { ...HOST, hostKeys: "SHA256:abc" }],
+    ["a host key that is not text", { ...HOST, hostKeys: [7] }],
   ])("refuses %s", (_, value) => {
     expect(readRegistryHost(value)).toBeNull();
   });

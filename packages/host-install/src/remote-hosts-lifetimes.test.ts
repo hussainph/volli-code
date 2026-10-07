@@ -579,6 +579,8 @@ describe("finished flows are let go (note 3)", () => {
       expect.objectContaining({ code: "unknown-flow" }),
     );
     expect(() => h.engine.subscribeAdd(flows[2]!, () => {})).not.toThrow();
+    // A finished flow's facts are there to read until it is let go.
+    expect(h.engine.addFacts(flows[2]!)).toMatchObject({ version: "1.1.0" });
     await new Promise((resolve) => setTimeout(resolve, 80));
     for (const flowId of flows) {
       expect(() => h.engine.subscribeAdd(flowId, () => {})).toThrow(
@@ -649,6 +651,25 @@ describe("answers must fit the question asked now (note 4)", () => {
     await expect(
       odd.engine.answerAdd(asked.flowId, "q1", { kind: "repair" }),
     ).rejects.toMatchObject({ code: "flow-not-waiting" });
+  });
+});
+
+describe("cloud turning off with a flow under way (PR 3)", () => {
+  it("refuses everything but cancel, which still stops the flow and removes its key", async () => {
+    let on = true;
+    const h = harness({ enabled: () => on });
+    h.box.trusted = false;
+    const { flowId, w } = await startAdd(h);
+    on = false;
+    expect(() => h.engine.subscribeAdd(flowId, () => {})).toThrow(RemoteHostsUnavailableError);
+    expect(() => h.engine.addFacts(flowId)).toThrow(RemoteHostsUnavailableError);
+    await expect(h.engine.retryAdd(flowId)).rejects.toBeInstanceOf(RemoteHostsUnavailableError);
+    await h.engine.cancelAdd(flowId);
+    expect(w.views().at(-1)?.status).toBe("cancelled");
+    expect(h.keys.keys.size).toBe(0);
+    expect(h.box.transports.every((transport) => transport.closed)).toBe(true);
+    await h.engine.close();
+    await expect(h.engine.cancelAdd(flowId)).rejects.toBeInstanceOf(RemoteHostsUnavailableError);
   });
 });
 
@@ -844,6 +865,26 @@ describe("the B5 probe, ported: a registry write that fails is never success", (
       code: "registry-read-only",
     });
     expect(h.store.state.file).toBe(file);
+    expect(h.store.saves).toEqual([]);
+  });
+});
+
+describe("renaming is a registry change like any other (PR 3)", () => {
+  it("refuses when the hosts file would not save, keeping the old name", () => {
+    const h = harness({ registry: registry(hostEntry()) });
+    h.store.state.saveFails = true;
+    expect(() => h.engine.rename(HOST_ID, "Build box")).toThrow(
+      expect.objectContaining({ code: "registry-unwritable" }),
+    );
+    expect(h.engine.snapshot().hosts[0]?.name).toBe("box");
+  });
+
+  it("refuses on a hosts file from a newer Volli, writing nothing", () => {
+    const file = { v: 2, hosts: [] };
+    const h = harness({ registry: file });
+    expect(() => h.engine.rename(HOST_ID, "Build box")).toThrow(
+      expect.objectContaining({ code: "registry-read-only" }),
+    );
     expect(h.store.saves).toEqual([]);
   });
 });

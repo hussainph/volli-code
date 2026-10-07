@@ -84,6 +84,15 @@ export interface RemoteHost {
   readonly addedAt: string;
   /** Sessions running there now, `null` while nothing reports it. */
   readonly liveSessions: number | null;
+  /** The OS as the host names itself ("Ubuntu 24.04.1 LTS", "macOS 15.1"), from its check; `null` when not known. */
+  readonly system: string | null;
+  /** Its architecture as people read it ("x86-64", "arm64"); `null` when not known. */
+  readonly arch: string | null;
+  /**
+   * The host key fingerprints (`SHA256:…`) the person compared and trusted
+   * when adding it; empty when its key was already known to their ssh.
+   */
+  readonly hostKeys: readonly string[];
 }
 
 /**
@@ -180,6 +189,31 @@ export interface AddHostView {
   readonly startup: string | null;
 }
 
+/**
+ * `hostAdd.facts`: what an add has learned about the host so far, each `null`
+ * until a step has said it. The checklist's completed rows read these, never
+ * made up. A read of its own beside the view: `hostAdd.subscribe`'s event
+ * union is closed to change (the protocol-schema gate), and this object may
+ * gain fields where that union cannot.
+ */
+export interface AddHostFacts {
+  /** The login it connected as. */
+  readonly user: string | null;
+  /** `linux` or `macos`, from the check: the host's icon. */
+  readonly os: "linux" | "macos" | null;
+  /** The OS as the host names itself: "Ubuntu 24.04.1 LTS", "macOS 15.1". */
+  readonly system: string | null;
+  /** "x86-64", "arm64". */
+  readonly arch: string | null;
+  readonly memoryBytes: number | null;
+  /** The Volli host it installed, kept or found running. */
+  readonly version: string | null;
+  /** Whether it keeps running when the person logs out (a system unit, or lingering); `null` on a Mac, which says `startup`. */
+  readonly keepsRunning: boolean | null;
+  /** This Mac was already paired with it. */
+  readonly alreadyPaired: boolean;
+}
+
 /** One line of the flow's log (the log under Details): never a secret. */
 export interface AddHostLogLine {
   readonly at: string;
@@ -226,6 +260,49 @@ export const REMOTE_HOST_LINK_CAP = 24;
 
 /** The reason a project past {@link REMOTE_HOST_LINK_CAP} reads, refused by this Mac (never by the host). */
 export const REMOTE_HOST_TOO_MANY_PROJECTS = "too-many-projects";
+
+/* ── Managing a host (VC-700 PR 3) ───────────────────────────────────── */
+
+/** The longest label a host may be given (as `hostAdd.start`'s `name`). */
+export const REMOTE_HOST_NAME_MAX = 120;
+
+/** `hosts.rename`: this Mac's label for a host. The host's own name never changes. */
+export interface RenameRemoteHostInput {
+  readonly hostId: string;
+  /** Trimmed; 1 to {@link REMOTE_HOST_NAME_MAX} characters, no control characters. */
+  readonly name: string;
+}
+
+/** One device enrolled with a host (`volli-hostd devices list`): never a key. */
+export interface RemoteHostDevice {
+  readonly deviceId: string;
+  /** What it called itself when it enrolled ("Hussain's MacBook Pro"). */
+  readonly name: string;
+  /** The enrolled key's fingerprint. */
+  readonly fingerprint: string;
+  /** ISO 8601. */
+  readonly enrolledAt: string;
+  /** How it enrolled (`ssh`). */
+  readonly via: string;
+  /** ISO 8601 once revoked, else `null`. */
+  readonly revokedAt: string | null;
+  /** This Mac's own enrollment (its `deviceId` is the registry's). */
+  readonly thisMac: boolean;
+}
+
+/**
+ * The most devices `hosts.devices` answers, and the longest text any of a
+ * device's fields may be: bounds, not policy. A host's answer past either is
+ * not believed (the engine says the host did not list its devices).
+ */
+export const REMOTE_HOST_DEVICES_MAX = 1000;
+export const REMOTE_HOST_DEVICE_TEXT_MAX = 256;
+
+/** `hosts.devices`: the devices a host has enrolled, read over SSH when asked. */
+export interface RemoteHostDevices {
+  readonly hostId: string;
+  readonly devices: readonly RemoteHostDevice[];
+}
 
 /** The text a refusal of an action v1 does not do yet carries. */
 export const REMOTE_HOST_UPDATE_UNAVAILABLE =

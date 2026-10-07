@@ -11,9 +11,11 @@ import {
   OperationUnavailableError,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   type AddHostEvent,
+  type AddHostFacts,
   type DataChangedEvent,
   type HandlerCall,
   type ModelAccessSnapshot,
+  type RemoteHostDevices,
   type RemoteHostsSnapshot,
   type TicketEventActor,
 } from "@volli/shared";
@@ -496,6 +498,31 @@ describe("remote hosts commands", () => {
     line: { at: "2026-10-06T00:00:00.000Z", level: "info", message: "probe", fields: {} },
   };
   const PASSWORD = "hunter2-sudo";
+  const DEVICES: RemoteHostDevices = {
+    hostId: HOST,
+    devices: [
+      {
+        deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
+        name: "Alice's Mac",
+        fingerprint: "SHA256:mac",
+        enrolledAt: "2026-10-06T00:00:00.000Z",
+        via: "ssh",
+        revokedAt: null,
+        thisMac: true,
+      },
+    ],
+  };
+
+  const FACTS: AddHostFacts = {
+    user: "you",
+    os: "linux",
+    system: "Ubuntu 24.04.1 LTS",
+    arch: "x86-64",
+    memoryBytes: null,
+    version: null,
+    keepsRunning: null,
+    alreadyPaired: false,
+  };
 
   function port(overrides: Partial<RemoteHostsPort> = {}) {
     const unsubscribe = vi.fn();
@@ -519,6 +546,9 @@ describe("remote hosts commands", () => {
       sudoPassword: vi.fn(),
       retryAdd: vi.fn(),
       cancelAdd: vi.fn(),
+      rename: vi.fn(),
+      devices: vi.fn(async () => DEVICES),
+      addFacts: vi.fn(() => FACTS),
       ...overrides,
     } satisfies RemoteHostsPort;
     return { remote, unsubscribe };
@@ -548,6 +578,9 @@ describe("remote hosts commands", () => {
           ),
         () => map["hostAdd.retry"]({ flowId: FLOW }, WINDOW),
         () => map["hostAdd.cancel"]({ flowId: FLOW }, WINDOW),
+        () => map["hosts.rename"]({ hostId: HOST, name: "Box" }, WINDOW),
+        () => map["hosts.devices"]({ hostId: HOST }, WINDOW),
+        () => map["hostAdd.facts"]({ flowId: FLOW }, WINDOW),
       ];
       for (const call of calls) {
         expect(await unavailable(call)).toBe("Remote hosts are unavailable on this host");
@@ -583,6 +616,9 @@ describe("remote hosts commands", () => {
     expect(await map["hostAdd.retry"]({ flowId: FLOW, from: "install" }, WINDOW)).toBeNull();
     expect(await map["hostAdd.retry"]({ flowId: FLOW }, WINDOW)).toBeNull();
     expect(await map["hostAdd.cancel"]({ flowId: FLOW }, WINDOW)).toBeNull();
+    expect(await map["hosts.rename"]({ hostId: HOST, name: "Build box" }, WINDOW)).toBeNull();
+    expect(await map["hosts.devices"]({ hostId: HOST }, WINDOW)).toBe(DEVICES);
+    expect(await map["hostAdd.facts"]({ flowId: FLOW }, WINDOW)).toBe(FACTS);
 
     expect(remote.retry).toHaveBeenCalledWith(HOST);
     expect(remote.updateHost).toHaveBeenCalledWith(HOST, "when-idle");
@@ -595,6 +631,29 @@ describe("remote hosts commands", () => {
     expect(remote.retryAdd).toHaveBeenNthCalledWith(1, FLOW, "install");
     expect(remote.retryAdd).toHaveBeenNthCalledWith(2, FLOW, undefined);
     expect(remote.cancelAdd).toHaveBeenCalledWith(FLOW);
+    expect(remote.rename).toHaveBeenCalledWith(HOST, "Build box");
+    expect(remote.devices).toHaveBeenCalledWith(HOST);
+    expect(remote.addFacts).toHaveBeenCalledWith(FLOW);
+  });
+
+  // The registry's own refusals (an unknown host, a bad label, a host it could
+  // not reach) travel as it threw them, exactly as `hosts.forget`'s do.
+  it("passes a rename's or a device list's failure on as the registry threw it", async () => {
+    const refusal = Object.assign(new Error("box didn't list its devices."), {
+      code: "devices-unavailable",
+    });
+    const map = handlers({
+      remoteHosts: port({
+        rename: () => {
+          throw refusal;
+        },
+        devices: async () => {
+          throw refusal;
+        },
+      }).remote,
+    });
+    await expect(map["hosts.rename"]({ hostId: HOST, name: "Box" }, WINDOW)).rejects.toBe(refusal);
+    await expect(map["hosts.devices"]({ hostId: HOST }, WINDOW)).rejects.toBe(refusal);
   });
 
   it("feeds each subscription's sink, and answers the registry's unsubscribe", async () => {

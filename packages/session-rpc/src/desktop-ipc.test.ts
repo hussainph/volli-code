@@ -91,6 +91,9 @@ describe("the desktop's IPC exposure", () => {
       "hostAdd.sudoPassword",
       "hostAdd.retry",
       "hostAdd.cancel",
+      "hosts.rename",
+      "hosts.devices",
+      "hostAdd.facts",
     ]);
   });
 

@@ -12,6 +12,7 @@
  */
 import * as React from "react";
 
+import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
 import { useLogViewerEnabled } from "@renderer/components/logs/log-viewer";
 import { PrefShell } from "@renderer/components/settings/kit";
 import {
@@ -24,9 +25,10 @@ export function SettingsPage({
   initialSignInProviderId,
 }: { initialCategoryKey?: string; initialSignInProviderId?: string } = {}) {
   const logs = useLogViewerEnabled();
+  const hosts = useCloudEnabled();
   const groups = React.useMemo(
-    () => settingsGroups(initialSignInProviderId, { logs }),
-    [initialSignInProviderId, logs],
+    () => settingsGroups(initialSignInProviderId, { logs, hosts }),
+    [initialSignInProviderId, logs, hosts],
   );
 
   // Resolved once, from the deep link. `resolveSettingsCategory` maps the

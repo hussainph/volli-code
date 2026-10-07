@@ -220,6 +220,17 @@ export function useHostRecoveryToasts(enabled: boolean): void {
   }, [enabled]);
 }
 
+/**
+ * Whether the switcher offers "Add a host…": always, except when VC-700 has
+ * registered its entry points and withheld Add (this Mac's hosts file is
+ * read-only). Before anything registers, Add stays and says it is coming.
+ */
+export function useAddHostOffered(): boolean {
+  return useHostConnectionStore(
+    (state) => state.entryPoints.addHost !== null || state.entryPoints.manageHosts === null,
+  );
+}
+
 /** "Add a host…": VC-700's sheet once it registers, a note until then. */
 export function openAddHost(): void {
   const open = useHostConnectionStore.getState().entryPoints.addHost;

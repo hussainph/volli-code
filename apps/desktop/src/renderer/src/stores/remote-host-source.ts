@@ -23,6 +23,7 @@ import { toast } from "sonner";
 
 import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
 import { isExperimentOn, useExperimentsStore } from "./experiments";
+import { useRemoteHostsStore } from "./remote-hosts";
 import {
   createHostLinkTracker,
   useHostConnectionStore,
@@ -52,6 +53,11 @@ export interface RemoteHostSourceOptions {
   readonly setTimer?: (run: () => void, ms: number) => () => void;
   /** Where a failed action is said; a toast by default. */
   readonly onActionError?: (message: string) => void;
+  /**
+   * The registry's hosts on every snapshot, and none once the stream ends or
+   * the source closes: what Settings → Hosts reads (`remote-hosts.ts`).
+   */
+  readonly onHosts?: (hosts: readonly RemoteHost[], readOnly: string | null) => void;
 }
 
 /** The source, and its end: it stops the subscription and any pending re-word. */
@@ -107,6 +113,7 @@ export function createRemoteHostSource(
   const now = options.now ?? Date.now;
   const setTimer = options.setTimer ?? defaultTimer;
   const onActionError = options.onActionError ?? ((message: string) => void toast.error(message));
+  const onHosts = options.onHosts ?? (() => {});
   const listeners = new Set<() => void>();
   /** One tracker per project, kept while main keeps naming the project. */
   const trackers = new Map<string, HostLinkTracker>();
@@ -178,12 +185,14 @@ export function createRemoteHostSource(
       if (closed) return;
       wire = next;
       publish();
+      onHosts(next.hosts, next.readOnly);
     },
     onError() {
       // Flag off, or main has no registry this launch: no remote hosts.
       if (closed) return;
       wire = null;
       publish();
+      onHosts([], null);
     },
   });
 
@@ -208,6 +217,7 @@ export function createRemoteHostSource(
       cancelTimer?.();
       cancelTimer = null;
       unsubscribe();
+      onHosts([], null);
     },
   };
 }
@@ -266,7 +276,10 @@ export interface RemoteHostsBinding {
 export function attachRemoteHostsWhileCloud({
   experiments = useExperimentsStore,
   hosts = useHostConnectionStore,
-  createSource = () => createRemoteHostSource(remoteHostsClient(sessionRpcClient())),
+  createSource = () =>
+    createRemoteHostSource(remoteHostsClient(sessionRpcClient()), {
+      onHosts: (list, readOnly) => useRemoteHostsStore.getState().setHosts(list, readOnly),
+    }),
 }: Partial<RemoteHostsBinding> = {}): () => void {
   let attached: { source: RemoteHostSource; detach: () => void } | null = null;
   const stop = () => {

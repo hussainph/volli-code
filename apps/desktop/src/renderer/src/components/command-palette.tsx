@@ -3,7 +3,9 @@ import { useShallow } from "zustand/react/shallow";
 import type { Icon } from "@phosphor-icons/react";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
+import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { ListNumbersIcon } from "@phosphor-icons/react/dist/csr/ListNumbers";
+import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGlass";
 import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
@@ -16,6 +18,7 @@ import {
   buildAutomationRunItems,
   buildCommandPaletteItems,
   buildEditorCommandItems,
+  buildHostCommandItems,
   paletteRunContext,
   type CommandPaletteItems,
 } from "@renderer/components/command-palette-model";
@@ -34,6 +37,8 @@ import {
   type PaletteScopeId,
 } from "@renderer/components/command-palette-search";
 import { canGoToLine, runGoToLine } from "@renderer/editor/go-to-line";
+import { openAddHostSheet, openHostsSettings } from "@renderer/components/hosts/host-entry";
+import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
@@ -50,6 +55,7 @@ import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useHostsWritable } from "@renderer/stores/remote-hosts";
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
@@ -236,6 +242,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // Read at render rather than subscribed to: which editor is live is answered
   // at the moment a row runs, and the palette re-renders whenever it opens.
   const editorCommands = buildEditorCommandItems(open && canGoToLine());
+  // Adding and managing hosts (VC-700): only with `cloud` on.
+  const hostCommands = buildHostCommandItems(useCloudEnabled() && open, useHostsWritable());
 
   // Closed and invisible: every board/session mutation would otherwise
   // re-run this projects×tickets×sessions rebuild for nothing. Gating on
@@ -647,6 +655,37 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 <span className="shrink-0 text-label text-muted-foreground">⌃G</span>
               </Command.Item>
             ))}
+          </Command.Group>
+        ) : null}
+        {scope === null && hostCommands.length > 0 ? (
+          <Command.Group heading="Hosts" className={MENU_LABEL_CMDK}>
+            {hostCommands.map((item) => {
+              const RowIcon = item.id === "add-host" ? PlusIcon : GearSixIcon;
+              return (
+                <Command.Item
+                  key={`host:${item.id}`}
+                  value={`${item.title} ${item.hint}`}
+                  keywords={item.keywords}
+                  onSelect={() => {
+                    onOpenChange(false);
+                    if (item.id === "manage-hosts") {
+                      openHostsSettings();
+                      return;
+                    }
+                    // After this dialog lets go of the focus: the sheet is a
+                    // dialog of its own and takes it next.
+                    requestAnimationFrame(openAddHostSheet);
+                  }}
+                  className={PALETTE_ROW}
+                >
+                  <RowIcon aria-hidden className={PALETTE_ROW_ICON} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-ui font-medium">{item.title}</span>
+                    <span className="truncate text-label text-muted-foreground">{item.hint}</span>
+                  </span>
+                </Command.Item>
+              );
+            })}
           </Command.Group>
         ) : null}
       </Command.List>

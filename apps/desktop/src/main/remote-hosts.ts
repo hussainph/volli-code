@@ -236,6 +236,8 @@ export function remoteHostsPort(hosts: RemoteHosts): RemoteHostsPort {
     cancelScheduledUpdate: (hostId) => hosts.cancelScheduledUpdate(hostId),
     signIn: (hostId, providerId) => hosts.signIn(hostId, providerId),
     forget: (hostId) => hosts.forget(hostId),
+    rename: (hostId, name) => hosts.rename(hostId, name),
+    devices: (hostId) => hosts.devices(hostId),
     startAdd: (input) => hosts.startAdd(input),
     subscribeAdd: (flowId, listener) => hosts.subscribeAdd(flowId, (event) => void listener(event)),
     answerAdd: (flowId, questionId, answer) => hosts.answerAdd(flowId, questionId, answer),
@@ -243,5 +245,6 @@ export function remoteHostsPort(hosts: RemoteHosts): RemoteHostsPort {
       hosts.sudoPassword(flowId, questionId, password),
     retryAdd: (flowId, from) => hosts.retryAdd(flowId, from),
     cancelAdd: (flowId) => hosts.cancelAdd(flowId),
+    addFacts: (flowId) => hosts.addFacts(flowId),
   };
 }

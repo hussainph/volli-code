@@ -56,6 +56,7 @@ import {
   openAddHost,
   openManageHosts,
   runHostAction,
+  useAddHostOffered,
   useCloudEnabled,
   useCurrentHost,
   useCurrentProjectId,
@@ -132,6 +133,7 @@ export function HostSwitcher({
 }) {
   const hosts = useHostConnectionStore((state) => state.hosts);
   const claims = useHostConnectionStore((state) => state.projects);
+  const addHostOffered = useAddHostOffered();
   const counts = projectCounts({ hosts, projects: claims });
   const offline = hosts.some((host) => host.link.status === "offline");
   const now = useNow(offline, 30_000);
@@ -170,14 +172,16 @@ export function HostSwitcher({
         );
       })}
       <div className="my-1 h-px bg-border/60" />
-      <MenuAction
-        icon={PlusIcon}
-        label="Add a host…"
-        onAct={() => {
-          onDone();
-          openAddHost();
-        }}
-      />
+      {addHostOffered ? (
+        <MenuAction
+          icon={PlusIcon}
+          label="Add a host…"
+          onAct={() => {
+            onDone();
+            openAddHost();
+          }}
+        />
+      ) : null}
       <MenuAction
         icon={GearSixIcon}
         label="Manage hosts…"
