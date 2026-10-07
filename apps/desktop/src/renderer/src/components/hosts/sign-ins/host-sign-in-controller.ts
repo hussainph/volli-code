@@ -10,10 +10,11 @@
  * login, and calls the host. Tests and the lab use a fake. Nothing here holds
  * a credential: a pasted key passes straight through to the source.
  */
-import type { HostSignInRunEvent, HostSignInStatus } from "@volli/shared";
+import { normalizeGitHost, type HostSignInRunEvent, type HostSignInStatus } from "@volli/shared";
 
 import {
   IDLE,
+  gitRowKey,
   providerRowKey,
   reduceSignIn,
   signInRowsOf,
@@ -88,6 +89,8 @@ export class HostSignInController {
   readonly #runs = new Map<string, HostSignInRunHandle>();
   #status: HostSignInStatus | null = null;
   #macKeys: ReadonlySet<string> = new Set();
+  /** Hosts added on this surface only; storing a token makes the host's status own its row. */
+  readonly #gitHosts = new Set<string>();
   #flows: Record<string, RowFlow> = {};
   #unreachable = false;
   /**
@@ -149,6 +152,15 @@ export class HostSignInController {
     } else {
       this.#setFlow(key, { kind: "failed", message: SEND_REFUSED[sent.reason] });
     }
+  }
+
+  /** Adds a git host on this surface and opens its token field; an invalid name changes nothing. */
+  addGitHost(value: string): boolean {
+    const host = normalizeGitHost(value);
+    if (host === null) return false;
+    this.#gitHosts.add(host);
+    this.beginKeyEntry(gitRowKey(host));
+    return true;
   }
 
   /** Paste instead: open the key field. */
@@ -252,7 +264,10 @@ export class HostSignInController {
 
   #publish(): void {
     this.#snapshot = {
-      rows: this.#status === null ? null : signInRowsOf(this.#status, this.#macKeys),
+      rows:
+        this.#status === null
+          ? null
+          : signInRowsOf(this.#status, this.#macKeys, [...this.#gitHosts]),
       flows: this.#flows,
       unreachable: this.#unreachable,
     };

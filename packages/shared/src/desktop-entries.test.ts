@@ -74,6 +74,10 @@ describe("the desktop-only tier", () => {
       "hosts.rename",
       "hosts.devices",
       "hostAdd.facts",
+      "hosts.projects",
+      "hosts.createProject",
+      "hosts.openWorkspace",
+      "hosts.closeWorkspace",
     ]);
     for (const entry of remote) expect(entry.placement, entry.key).toBe("host");
     expect(
@@ -84,6 +88,7 @@ describe("the desktop-only tier", () => {
       "hostAdd.subscribe",
       "hosts.devices",
       "hostAdd.facts",
+      "hosts.projects",
     ]);
     expect(new Set(DESKTOP_ENTRIES.map(({ key }) => key)).size).toBe(DESKTOP_ENTRIES.length);
   });

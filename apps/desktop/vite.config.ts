@@ -349,6 +349,9 @@ export default defineConfig(({ mode }) => ({
         // health and facts read in Settings: wording rules no screenshot pins.
         "src/components/hosts/add-host-model.ts",
         "src/components/settings/panes/hosts-pane-model.ts",
+        // Opening a project on a host (VC-710): what each empty, error and
+        // can't-add state says and offers, and how the one field is read.
+        "src/components/hosts/open-project-model.ts",
         // Whether a project can be written to (VC-576): the per-project link
         // merge, the host aggregate, and the outage mapping that must keep an
         // offline host offline through every retry. A branch missed here is a

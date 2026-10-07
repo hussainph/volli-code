@@ -58,6 +58,8 @@ import {
   REMOTE_HOST_NAME_MAX,
   REMOTE_HOST_SIGN_IN_UNAVAILABLE,
   REMOTE_HOST_TOO_MANY_PROJECTS,
+  REMOTE_HOST_NAME_MAX as PROJECT_NAME_MAX,
+  REMOTE_HOST_PROJECT_TEXT_MAX,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   type AddHostAnswer,
   type AddHostEvent,
@@ -67,11 +69,15 @@ import {
   type AddHostStartInput,
   type AddHostStepId,
   type AddHostView,
+  type CreateRemoteProjectInput,
+  type CreateRemoteProjectResult,
   type RemoteHost,
   type RemoteHostDevice,
   type RemoteHostDevices,
   type RemoteHostLink,
   type RemoteHostLinkState,
+  type RemoteHostProjects,
+  type RemoteProjectFailure,
   type RemoteProjectLink,
   type RemoteHostsSnapshot,
 } from "@volli/shared";
@@ -100,6 +106,20 @@ import {
 import { generateDeviceKey, mintDeviceCredential } from "./remote-hosts-device-key";
 import { nextRemoteHostLink, remoteHostLinkState, versionFacts } from "./remote-hosts-link";
 import {
+  cliError,
+  createFailure,
+  createProjectScript,
+  gitUrlProblem,
+  lastJsonObject,
+  operatorTokenCommand,
+  projectsListScript,
+  readProject,
+  readProjectList,
+  repositoryName,
+  scriptFacts,
+  SYSTEM_PROJECTS_DIR,
+} from "./remote-hosts-projects";
+import {
   deviceKeyName,
   flowKeyName,
   readRegistry,
@@ -109,6 +129,7 @@ import {
 import {
   modeOf,
   sshProvider,
+  withoutHeldSecret,
   type SshProviderPorts,
   type SshProvisionState,
   type SshStepResults,
@@ -153,7 +174,9 @@ export type RemoteHostsErrorCode =
   /** SSH could not reach the host (or ran nothing there): nothing was asked of it. */
   | "host-unreachable"
   /** The host was reached, but its hostd answered no device list this Mac believes, or refused. */
-  | "devices-unavailable";
+  | "devices-unavailable"
+  /** The host was reached, but answered no project list this Mac believes (VC-710). */
+  | "projects-unavailable";
 
 export class RemoteHostsError extends Error {
   readonly code: RemoteHostsErrorCode;
@@ -287,6 +310,24 @@ export interface RemoteHosts {
   devices(hostId: string): Promise<RemoteHostDevices>;
   /** Opens a Workspace on the host: remembered, and linked whenever the tunnel is up. */
   openWorkspace(hostId: string, workspaceId: string): void;
+  /* ── A host's projects (VC-710) ── */
+  /**
+   * The projects the host has, read now over SSH as its login (`volli project
+   * list`, no sudo), never cached; and whether this Mac can add one there.
+   */
+  projects(hostId: string): Promise<RemoteHostProjects>;
+  /**
+   * Makes a folder on the host a project, through its own `volli project
+   * add` over SSH; with a git URL, cloned first. Answers the project, or the
+   * one line (and command) that says why not. Opening it is
+   * {@link RemoteHosts.openWorkspace}'s.
+   */
+  createProject(input: CreateRemoteProjectInput): Promise<CreateRemoteProjectResult>;
+  /**
+   * Forgets a Workspace on this Mac: its link closes and it leaves the
+   * registry. The project on the host is untouched. One not open is a no-op.
+   */
+  closeWorkspace(hostId: string, workspaceId: string): void;
   /**
    * Starts adding a host; follow it with {@link RemoteHosts.subscribeAdd}.
    * A target with a flow still under way answers that flow, so a retried
@@ -387,6 +428,16 @@ function readDeviceList(
   return read;
 }
 
+/** A create refused before anything ran on the host. */
+const refusedHere = (
+  code: RemoteProjectFailure["code"],
+  message: string,
+): CreateRemoteProjectResult => ({ ok: false, failure: { code, message, command: null } });
+
+/** How long a host's project list may take, and a create (a clone included). */
+const PROJECTS_TIMEOUT_MS = 30_000;
+const CREATE_PROJECT_TIMEOUT_MS = 10 * 60_000;
+
 /** Backoff for a tunnel's first open, which the tunnel leaves to its owner to retry. */
 const OPEN_BACKOFF_MIN_MS = 1_000;
 const OPEN_BACKOFF_MAX_MS = 30_000;
@@ -480,6 +531,20 @@ function tooManyProjects(name: string): RemoteHostLinkState {
   };
 }
 
+/** `value` (plain JSON) with a held secret scrubbed from every string, however deep. */
+function scrubDeep<T>(value: T, secret: string | null): T {
+  if (secret === null || secret === "") return value;
+  const scrub = (inner: unknown): unknown =>
+    typeof inner === "string"
+      ? withoutHeldSecret(inner, secret)
+      : Array.isArray(inner)
+        ? inner.map(scrub)
+        : typeof inner === "object" && inner !== null
+          ? Object.fromEntries(Object.entries(inner).map(([key, item]) => [key, scrub(item)]))
+          : inner;
+  return scrub(value) as T;
+}
+
 /** `job` after every call on the flow before it: one at a time, whatever each one did. */
 function enqueue(flow: Flow, job: () => Promise<void>): Promise<void> {
   const run = flow.queue.then(job);
@@ -558,6 +623,8 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
    * them still owns (a replaced host's, a cancelled link step's).
    */
   const tunnelsMade = new Set<SshTunnel>();
+  /** Each project script's SSH connection while it runs (VC-710): quit SIGKILLs what is left. */
+  const projectSsh = new Set<SshTransport>();
   /** Epoch ms by which quit is done, once it has begun. */
   let quitDeadline: number | null = null;
   let unsubscribeWake: (() => void) | undefined;
@@ -963,6 +1030,196 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     return { hostId: entry.id, devices };
   }
 
+  /* ── A host's projects over SSH (VC-710) ─────────────────────────────── */
+
+  /**
+   * Runs one project script on the host over its own short-lived SSH
+   * connection, always closed. `null`: SSH could not reach it (logged).
+   */
+  async function runProjectScript(
+    entry: RegistryHost,
+    script: string,
+    label: "projects" | "create-project",
+    timeoutMs: number,
+    /** The login's sudo password, for the script's stdin only: never logged or kept. */
+    sudoPassword: string | null = null,
+  ): Promise<SshExecResult | null> {
+    const log = componentLogger(logger, { host: entry.name, hostId: entry.id });
+    const ssh = ports.ssh(parseSshTarget(entry.target) as SshTarget);
+    const said = (error: unknown): string => withoutHeldSecret(messageOf(error), sudoPassword);
+    // Quit's until it has closed: its final sweep kills whatever close is still running.
+    projectSsh.add(ssh);
+    let result: SshExecResult;
+    try {
+      try {
+        result = await ssh.exec(script, {
+          label,
+          timeoutMs,
+          ...(sudoPassword === null ? {} : { stdin: `${sudoPassword}\n` }),
+        });
+      } catch (error) {
+        log.warn(`${label}: ssh failed`, { error: said(error) });
+        return null;
+      } finally {
+        try {
+          // At quit, closing gets only what is left of quit's grace.
+          await ssh.close(quitDeadline === null ? undefined : { deadline: quitDeadline });
+        } catch (error) {
+          log.warn(`${label}: ssh did not close cleanly`, { error: said(error) });
+        }
+      }
+    } finally {
+      projectSsh.delete(ssh);
+    }
+    const failure = classifySshFailure(result);
+    if (failure !== null) {
+      log.warn(`${label}: host unreachable`, { failure: failure.kind, detail: failure.detail });
+      return null;
+    }
+    return result;
+  }
+
+  async function listProjects(entry: RegistryHost): Promise<RemoteHostProjects> {
+    const log = componentLogger(logger, { host: entry.name, hostId: entry.id });
+    const result = await runProjectScript(
+      entry,
+      projectsListScript(entry.mode),
+      "projects",
+      PROJECTS_TIMEOUT_MS,
+    );
+    if (result === null) {
+      throw new RemoteHostsError("host-unreachable", `Couldn't reach ${entry.name}.`);
+    }
+    const facts = scriptFacts(result.stdout);
+    const projects = readProjectList(lastJsonObject(result.stdout));
+    if (projects === "outdated") {
+      log.warn("listing projects: the host's volli lists no ids");
+      throw new RemoteHostsError(
+        "projects-unavailable",
+        `${entry.name}'s Volli is too old to list its projects here: add it again to update it.`,
+      );
+    }
+    if (projects === null) {
+      const error = cliError(result.stderr);
+      log.warn("listing projects: no project list believed", {
+        code: result.code,
+        ...(error === null
+          ? { stderr: result.stderr.trim().split("\n").slice(-3).join(" ") }
+          : { cli: error.code, reason: error.reason }),
+      });
+      throw new RemoteHostsError(
+        "projects-unavailable",
+        error?.code === "APP_UNREACHABLE"
+          ? `Volli isn't answering on ${entry.name}.`
+          : `${entry.name} didn't list its projects.`,
+      );
+    }
+    log.info("listed projects", { projects: projects.length, operator: facts.token });
+    return {
+      hostId: entry.id,
+      projects,
+      adds:
+        entry.mode === "user"
+          ? { kind: "user-install" }
+          : facts.token
+            ? { kind: "ready" }
+            : {
+                kind: "needs-operator",
+                command: operatorTokenCommand(facts.login ?? "<your login>"),
+              },
+    };
+  }
+
+  async function addProject(
+    entry: RegistryHost,
+    input: CreateRemoteProjectInput,
+  ): Promise<CreateRemoteProjectResult> {
+    const log = componentLogger(logger, { host: entry.name, hostId: entry.id });
+    if (entry.mode === "user") {
+      return refusedHere(
+        "user-install",
+        `${entry.name} runs Volli as your login, so this Mac can't add projects to it.`,
+      );
+    }
+    const gitUrl = input.gitUrl?.trim() || null;
+    const urlProblem = gitUrl === null ? null : gitUrlProblem(gitUrl);
+    if (urlProblem === "credentials" || urlProblem === "query") {
+      return refusedHere(
+        "bad-url",
+        `Use the repository's plain URL: a token goes in Sign-ins on ${entry.name}, not in the URL.`,
+      );
+    }
+    if (urlProblem !== null) {
+      return refusedHere("bad-url", "That isn't a git URL this Mac can clone: use https or ssh.");
+    }
+    const named = input.path?.trim() || null;
+    const cloneName = gitUrl === null ? null : repositoryName(gitUrl);
+    const path = named ?? (cloneName === null ? null : `${SYSTEM_PROJECTS_DIR}/${cloneName}`);
+    if (path === null) {
+      return gitUrl === null
+        ? refusedHere("refused", `Name a folder on ${entry.name}.`)
+        : refusedHere("bad-url", "Name the folder to clone it into: the URL names none.");
+    }
+    if (
+      !(path.startsWith("/") || path.startsWith("~/")) ||
+      path.length > REMOTE_HOST_PROJECT_TEXT_MAX ||
+      CONTROL_CHARACTER.test(path)
+    ) {
+      return refusedHere(
+        "refused",
+        `A folder on ${entry.name} is a full path, like /srv/volli/app.`,
+      );
+    }
+    // Only a clone runs as hostd's account; a password for anything else is dropped here.
+    const sudoPassword = gitUrl !== null && input.sudoPassword ? input.sudoPassword : null;
+    const name = input.name?.trim() || null;
+    if (name !== null && (name.length > PROJECT_NAME_MAX || CONTROL_CHARACTER.test(name))) {
+      return refusedHere(
+        "refused",
+        `A project's name is 1 to ${PROJECT_NAME_MAX} characters, with no control characters.`,
+      );
+    }
+    log.info("adding a project", { clone: gitUrl !== null });
+    const result = await runProjectScript(
+      entry,
+      createProjectScript({
+        mode: entry.mode,
+        path,
+        name,
+        gitUrl,
+        sudoPassword: sudoPassword !== null,
+      }),
+      "create-project",
+      CREATE_PROJECT_TIMEOUT_MS,
+      sudoPassword,
+    );
+    if (result === null) {
+      return refusedHere("host-unreachable", `Couldn't reach ${entry.name}.`);
+    }
+    const facts = scriptFacts(result.stdout);
+    const said = lastJsonObject(result.stdout);
+    // The host's words, scrubbed of the sudo password by value before anything reads them.
+    const stderr = withoutHeldSecret(result.stderr, sudoPassword);
+    const project =
+      facts.fail === null && typeof said?.["project"] === "object"
+        ? readProject({ tickets: 0, ...(said["project"] as Record<string, unknown>) })
+        : null;
+    if (project !== null) {
+      const created = said?.["created"] === true;
+      log.info(created ? "added a project" : "the folder was already a project", {
+        workspaceId: project.id,
+      });
+      return { ok: true, created, project };
+    }
+    const failure = createFailure(entry.name, facts, cliError(stderr), stderr, {
+      path,
+      gitUrl,
+    });
+    // Never the password: not in a failure's words, nor in the log below.
+    log.warn("adding a project failed", { failure: failure.code, code: result.code });
+    return { ok: false, failure };
+  }
+
   /* ── Adding a host ───────────────────────────────────────────────────── */
 
   function flowOf(flowId: string): Flow {
@@ -1025,8 +1282,13 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   function flowLogger(flow: () => Flow): InstallLogger {
     const at =
       (level: AddHostLogLine["level"]) =>
-      (message: string, fields: LogFields = {}): void => {
+      (said: string, given: LogFields = {}): void => {
         const self = flow();
+        // The held sudo password, scrubbed by value from every line before it
+        // reaches the app's log or the transcript: a host may echo it anywhere.
+        const secret = self.secrets.sudoPassword;
+        const message = withoutHeldSecret(said, secret);
+        const fields = scrubDeep(given, secret);
         logger[level](message, { ...fields, flowId: self.id });
         if (self.status === "done") return;
         const line = logLine(iso(), level, message, fields);
@@ -1081,7 +1343,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         flow.active = step;
         flow.results = context.state.results;
         emitView(flow);
-        const outcome = await inner.run(step, context);
+        // Whatever a step brings back (a failure's detail, a result) is the
+        // host's words: scrubbed of the held sudo password by value.
+        const outcome = scrubDeep(await inner.run(step, context), flow.secrets.sudoPassword);
         if (!alive(flow)) {
           // Discarded, and nothing after it runs.
           return {
@@ -1474,6 +1738,43 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       }
       recompute(runtime);
     },
+    async projects(hostId) {
+      guard();
+      return track(listProjects(hostOf(hostId)));
+    },
+    async createProject(input) {
+      guard();
+      return track(addProject(hostOf(input.hostId), input));
+    },
+    closeWorkspace(hostId, workspaceId) {
+      guard();
+      writable();
+      const entry = hostOf(hostId);
+      if (!entry.workspaceIds.includes(workspaceId)) return;
+      const next = {
+        ...entry,
+        workspaceIds: entry.workspaceIds.filter((other) => other !== workspaceId),
+      };
+      save([...entries.values()].map((other) => (other.id === hostId ? next : other)));
+      entries.set(hostId, next);
+      const runtime = runtimes.get(hostId)!;
+      const held = runtime.links.get(workspaceId);
+      if (held !== undefined) {
+        held.unsubscribe();
+        held.link.close();
+        runtime.links.delete(workspaceId);
+      }
+      runtime.projectLinks.delete(workspaceId);
+      // One past the cap moves under it: linked now, if the tunnel is up.
+      const tunnel = runtime.tunnel.state;
+      if (tunnel.status === "up") {
+        for (const linkedId of linked(next)) {
+          if (!runtime.links.has(linkedId)) openLink(runtime, linkedId, tunnel.url);
+        }
+      }
+      recompute(runtime);
+      componentLogger(logger, { hostId }).info("closed a workspace", { workspaceId });
+    },
     async startAdd(input) {
       guard();
       writable();
@@ -1609,6 +1910,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         // Every ssh process still owned is SIGKILLed now, and briefly awaited.
         await Promise.allSettled([
           ...[...flows.values()].map((flow) => flow.ssh.kill?.()),
+          ...[...projectSsh].map((ssh) => ssh.kill?.()),
           ...[...tunnelsMade].map((tunnel) => tunnel.kill?.()),
         ]);
         for (const flow of flows.values()) dispose(flow);

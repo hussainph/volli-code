@@ -11,9 +11,10 @@
  * through the Island (`host-island.tsx`).
  *
  * The switcher lists This Mac and every added host, the current one holding
- * the one thing it has to say (an update, a retry, a sign-in), then "Add a
- * host…" and "Manage hosts…". Choosing another host opens its first project
- * in rail order.
+ * the one thing it has to say (an update, a retry, a sign-in), then "Sign-ins
+ * on <host>…" for each remote host it can reach, "Add a host…" and "Manage
+ * hosts…". Choosing another host opens its first project in rail order; a
+ * remote host with none open here opens "Open a project on <host>…" (VC-710).
  *
  * Renders nothing with the `cloud` flag off.
  */
@@ -37,6 +38,7 @@ import {
   type HostRecord,
 } from "@renderer/stores/host-connection";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import {
   ActiveStepMark,
@@ -140,6 +142,10 @@ export function HostSwitcher({
   const offline = hosts.some((host) => host.link.status === "offline");
   const now = useNow(offline, 30_000);
   const list = hosts.some((host) => host.id === current.id) ? hosts : [current, ...hosts];
+  // Sign-ins on any remote host this Mac can reach, the current one first (AM2).
+  const signInHosts = [current, ...list.filter((host) => host.id !== current.id)].filter(
+    (host) => !host.local && host.link.status !== "offline",
+  );
   return (
     <div role="group" aria-label="Hosts">
       {list.map((host) => {
@@ -160,32 +166,35 @@ export function HostSwitcher({
             key={host.id}
             host={host}
             meta={meta}
-            disabled={projects === 0}
+            disabled={host.local && projects === 0}
             onSelect={() => {
               const target = useProjectsStore
                 .getState()
                 .projects.find(
                   (project) => (claims[project.id]?.hostId ?? THIS_MAC_HOST_ID) === host.id,
                 );
-              if (target !== undefined) useProjectsStore.getState().select(target.id);
               onDone();
+              if (target !== undefined) useProjectsStore.getState().select(target.id);
+              // A remote host with no project open here (VC-710): open one on it.
+              else if (!host.local) useRemoteHostsStore.getState().openProjectSheet(host.id);
             }}
           />
         );
       })}
       <div className="my-1 h-px bg-border/60" />
-      {!current.local && (
+      {signInHosts.map((host) => (
         <MenuAction
+          key={`sign-ins:${host.id}`}
           icon={KeyIcon}
-          label={`Sign-ins on ${current.name}…`}
+          label={`Sign-ins on ${host.name}…`}
           onAct={() => {
             onDone();
             useHostSignInSheet
               .getState()
-              .open({ hostId: current.id, hostName: current.name, providerId: null });
+              .open({ hostId: host.id, hostName: host.name, providerId: null });
           }}
         />
-      )}
+      ))}
       {addHostOffered ? (
         <MenuAction
           icon={PlusIcon}
