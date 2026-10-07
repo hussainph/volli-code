@@ -621,6 +621,8 @@ export default defineConfig(({ mode }) => ({
         "src/lib/follow-remote-projects.ts",
         // Reopen restores remote intent only while its bounded boot owner is current.
         "src/lib/restore-remote-selection.ts",
+        // An acknowledged draft must remain durable after its debounce/write completes.
+        "src/lib/app-state-storage.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",

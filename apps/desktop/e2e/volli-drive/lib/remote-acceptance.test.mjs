@@ -587,8 +587,20 @@ test("journey arranges only benign Git state and runs all eight real assertions 
   assert.match(smoke, /assert\.equal\(quit\.nativeWindows\.visible, 0\)/u);
   assert.match(
     smoke,
-    /await call\("native-reopen"\);\s*nativeQuitAttempted = false;[\s\S]*?await selectHost\(REMOTE_HOST\);[\s\S]*?stableWaitingLabel\(line\) === rowLabel/u,
-    "a fresh renderer navigates back through the host switcher before proving the same Session row",
+    /await call\("native-reopen"\);\s*nativeQuitAttempted = false;[\s\S]*?await wait\(`Host: \$\{REMOTE_HOST\}`\);[\s\S]*?stableWaitingLabel\(line\) === rowLabel/u,
+    "a fresh renderer restores the box before proving the same Session row",
+  );
+  const restored = smoke.slice(
+    smoke.indexOf('await call("native-reopen");', smoke.indexOf('"Quit/reopen:')),
+    smoke.indexOf(
+      "await wait(REOPEN_QUESTION);",
+      smoke.indexOf('await call("native-reopen");', smoke.indexOf('"Quit/reopen:')),
+    ),
+  );
+  assert.doesNotMatch(
+    restored,
+    /selectHost\(/u,
+    "no host navigation can paper over reopen restoration",
   );
   assert.match(smoke, /await stopLocalKeepalive\(\);\s*await selectHost\(REMOTE_HOST\)/u);
   assert.match(

@@ -134,6 +134,41 @@ describe("flushPendingAppStateKey", () => {
     expect(setMock).not.toHaveBeenCalled();
   });
 
+  it("remembers a completed acknowledgement for the unchanged current value", async () => {
+    appStateStorage.setItem("volli:chat-drafts", '{"held":["q1"]}');
+    await settle();
+    expect(setMock).toHaveBeenCalledOnce();
+    await expect(flushPendingAppStateKey("volli:chat-drafts")).resolves.toBe(true);
+    await expect(flushPendingAppStateKey("volli:chat-drafts")).resolves.toBe(true);
+    expect(setMock).toHaveBeenCalledOnce();
+  });
+
+  it("never reuses an old acknowledgement for newer intent, even identical bytes that fail", async () => {
+    appStateStorage.setItem("volli:chat-drafts", '{"held":["q1"]}');
+    await settle();
+    setMock.mockResolvedValue({ ok: false, error: "disk full" });
+    appStateStorage.setItem("volli:chat-drafts", '{"held":["q1"]}');
+    await expect(flushPendingAppStateKey("volli:chat-drafts")).resolves.toBe(false);
+    await expect(flushPendingAppStateKey("volli:chat-drafts")).resolves.toBe(false);
+  });
+
+  it("a seeded cache value is not a bridge acknowledgement", async () => {
+    appStateStorage.setItem("volli:chat-drafts", '{"held":["q1"]}');
+    await settle();
+    seedAppStateCache({ "volli:chat-drafts": '{"held":["q1"]}' });
+    await expect(flushPendingAppStateKey("volli:chat-drafts")).resolves.toBe(false);
+  });
+
+  it("remembers an acknowledged removal, but not a failed removal", async () => {
+    appStateStorage.removeItem("volli:chat-drafts");
+    await settle();
+    await expect(flushPendingAppStateKey("volli:chat-drafts")).resolves.toBe(true);
+    setMock.mockResolvedValue({ ok: false, error: "locked" });
+    appStateStorage.removeItem("volli:chat-drafts");
+    await settle();
+    await expect(flushPendingAppStateKey("volli:chat-drafts")).resolves.toBe(false);
+  });
+
   it("acknowledges the latest value only after main has durably accepted it", async () => {
     let acknowledge!: (result: { ok: true }) => void;
     setMock.mockImplementation(
@@ -305,4 +340,30 @@ describe("VC577 forced-destroy draft durability", () => {
     await expect(flushed).resolves.toBe(true);
     expect(setMock).toHaveBeenCalledWith("volli:workspace", '{"b":2}');
   });
+});
+
+it("boot ignores empty rows and does not turn seeded values into acknowledgements", async () => {
+  seedAppStateCache({ "volli:ui": "" });
+  expect(appStateStorage.getItem("volli:ui")).toBeNull();
+  await expect(flushPendingAppStateKey("volli:not-scheduled")).resolves.toBe(false);
+});
+
+it("the storage adapter's flush sends pending intent immediately", async () => {
+  appStateStorage.setItem("volli:ui", '{"sidebarWidth":400}');
+  appStateStorage.flush?.("volli:ui");
+  await expect(flushPendingAppStateKey("volli:ui")).resolves.toBe(true);
+  expect(setMock).toHaveBeenCalledOnce();
+});
+
+it("a browser module owns its unload flush and main's acknowledged flush responder", async () => {
+  vi.resetModules();
+  const addEventListener = vi.fn();
+  const onFlushRequest = vi.fn();
+  vi.stubGlobal("window", {
+    addEventListener,
+    api: { appState: { set: setMock, onFlushRequest } },
+  });
+  const browser = await import("./app-state-storage");
+  expect(addEventListener).toHaveBeenCalledWith("beforeunload", browser.flushPendingAppState);
+  expect(onFlushRequest).toHaveBeenCalledWith(browser.flushAllPendingAppState);
 });
