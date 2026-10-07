@@ -152,7 +152,8 @@ describe("Settings → Hosts", () => {
     expect(root.querySelector('[role="status"]')?.textContent).toBe(
       "This Mac’s hosts file is from a newer Volli. Its hosts can’t be added or changed here.",
     );
-    expect(root.textContent).not.toContain("Add a host…");
+    // The empty row closes up (its exit animation), and the section offers no action.
+    await vi.waitFor(() => expect(root.textContent).not.toContain("Add a host…"));
   });
 
   it("lists a host's projects", async () => {
