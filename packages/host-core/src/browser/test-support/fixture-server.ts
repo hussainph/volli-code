@@ -74,6 +74,18 @@ const PAGES: Record<string, string> = {
     <a href="/linked" target="_blank">Open in a new window</a>`,
   "/blob": `<!doctype html><title>Blob opener</title>
     <button onclick="location.href = window.URL.createObjectURL(new Blob(['<title>Blob page</title>'], { type: 'text/html' }))">Go to blob</button>`,
+  // A page cannot replace primitives in the backend's isolated policy world.
+  "/blob-tampered": `<!doctype html><title>Blob opener</title>
+    <script>
+      console.error = () => {};
+      navigation.addEventListener = () => {};
+      if (typeof globalThis.__volliNavigationBlocked !== 'undefined') {
+        document.title = 'Exposed policy binding';
+      }
+    </script>
+    <button onclick="location.href = window.URL.createObjectURL(new Blob(['<title>Blob page</title>'], { type: 'text/html' }))">Go to blob</button>`,
+  "/long-hash": `<!doctype html><title>Long hash</title>
+    <button onclick="history.pushState(null, '', '#' + 'x'.repeat(9000)); document.title = 'hash-length:' + location.hash.length">Long fragment</button>`,
   "/cookie-set": `<!doctype html><title>cookie set</title><script>
     document.cookie = "volli_fixture=present; path=/";
     document.title = "cookie:" + document.cookie;
