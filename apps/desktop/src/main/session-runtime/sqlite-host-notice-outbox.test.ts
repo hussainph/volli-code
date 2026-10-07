@@ -104,15 +104,52 @@ function launch(
   });
   runtimes.push(runtime);
   const reports: string[] = [];
+  const started = performance.now();
+  const trace: { event: string; ms: number }[] = [];
+  const mark = (event: string) => trace.push({ event, ms: performance.now() - started });
   const outbox = createSqliteHostNoticeOutbox(handle, writer);
   const delivery = createHostNoticeDelivery({
-    runtime,
-    outbox: outboxOverride?.(outbox) ?? outbox,
+    runtime: {
+      projection: async (input) => {
+        mark("projection:start");
+        const result = await runtime.projection(input);
+        mark(`projection:end:live=${result.projection.liveExecutor?.id}`);
+        return result;
+      },
+      subscribe: async (...args) => {
+        mark("subscribe:start");
+        const result = await runtime.subscribe(...args);
+        mark("subscribe:end");
+        return result;
+      },
+      command: async (input) => {
+        mark("command:start");
+        try {
+          const result = await runtime.command(input);
+          mark(`command:end:${result.receipt?.status}`);
+          return result;
+        } catch (error) {
+          mark(`command:error:${String(error)}`);
+          throw error;
+        }
+      },
+    },
+    outbox: outboxOverride?.(outbox) ?? {
+      ...outbox,
+      settle: async (...args) => {
+        mark("settle:start");
+        await outbox.settle(...args);
+        mark("settle:end");
+      },
+    },
     subscribeEvents: (listener) => wakeBus.subscribe(({ event }) => listener(event)),
-    report: (message) => reports.push(message),
+    report: (message) => {
+      mark(`report:${message}`);
+      reports.push(message);
+    },
   });
   deliveries.push(delivery);
-  return { writer, engine, runtime, delivery, outbox, reports, script };
+  return { writer, engine, runtime, delivery, outbox, reports, script, trace, mark };
 }
 async function create(f: ReturnType<typeof launch>) {
   return (
@@ -274,39 +311,51 @@ describe("SQLite host notice outbox", () => {
     expect(second.script.requests).toHaveLength(1);
   });
 
-  it("recovers the same payload after failed live delivery with a genuinely rebuilt runtime", async () => {
-    const paths = setup();
-    const first = launch(db!.db, paths.directory);
-    const sessionId = await create(first);
-    await attach(first, sessionId);
-    const value = notice(sessionId);
-    const broken = createHostNoticeDelivery({
-      runtime: {
-        projection: (input) => first.runtime.projection(input),
-        subscribe: (...args) => first.runtime.subscribe(...args),
-        command: async () => {
-          throw new Error("host disconnected");
+  it.each(Array.from({ length: Number(process.env.VC723_MEASURE ?? 1) }, (_, i) => i))(
+    "recovers the same payload after failed live delivery with a genuinely rebuilt runtime (%i)",
+    async () => {
+      const paths = setup();
+      const first = launch(db!.db, paths.directory);
+      const sessionId = await create(first);
+      await attach(first, sessionId);
+      const value = notice(sessionId);
+      const broken = createHostNoticeDelivery({
+        runtime: {
+          projection: (input) => first.runtime.projection(input),
+          subscribe: (...args) => first.runtime.subscribe(...args),
+          command: async () => {
+            throw new Error("host disconnected");
+          },
         },
-      },
-      outbox: first.outbox,
-      report: (message) => first.reports.push(message),
-    });
-    deliveries.push(broken);
-    await broken.deliver(value);
-    await vi.waitFor(() =>
-      expect(first.reports).toEqual([expect.stringContaining("host disconnected")]),
-    );
-    broken.close();
-    expect(await first.outbox.pending()).toEqual([value]);
-    const second = await reconstruct(first, paths);
-    await second.delivery.recover();
-    await vi.waitFor(async () => expect(await second.outbox.pending()).toEqual([]));
-    const snapshot = await second.runtime.snapshot({ sessionId });
-    const submitted = snapshot.transcript.filter(({ message }) => readHostNotice(message) !== null);
-    expect(submitted).toHaveLength(1);
-    expect(submitted[0]!.message.parts).toEqual([{ type: "text", text: value.text }]);
-    expect(second.script.requests).toHaveLength(1);
-  });
+        outbox: first.outbox,
+        report: (message) => first.reports.push(message),
+      });
+      deliveries.push(broken);
+      await broken.deliver(value);
+      await vi.waitFor(() =>
+        expect(first.reports).toEqual([expect.stringContaining("host disconnected")]),
+      );
+      broken.close();
+      expect(await first.outbox.pending()).toEqual([value]);
+      const second = await reconstruct(first, paths);
+      second.mark("recover:start");
+      await second.delivery.recover();
+      second.mark("recover:return");
+      try {
+        await vi.waitFor(async () => expect(await second.outbox.pending()).toEqual([]));
+        second.mark("assertion:passed");
+      } finally {
+        if (process.env.VC723_MEASURE) console.log("VC723", JSON.stringify(second.trace));
+      }
+      const snapshot = await second.runtime.snapshot({ sessionId });
+      const submitted = snapshot.transcript.filter(
+        ({ message }) => readHostNotice(message) !== null,
+      );
+      expect(submitted).toHaveLength(1);
+      expect(submitted[0]!.message.parts).toEqual([{ type: "text", text: value.text }]);
+      expect(second.script.requests).toHaveLength(1);
+    },
+  );
 
   it("recovery cleans up a previously accepted command without issuing a second provider request", async () => {
     const paths = setup();
