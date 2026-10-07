@@ -130,7 +130,8 @@ async function journey() {
     // AM2 replaces the transient pairing checklist with a stable ready view.
     // Prove the saved pairing in Settings, where the host reads its real
     // enrolled devices over SSH and marks this device as This Mac.
-    await press("Meta+,");
+    await click("button", "Settings");
+    await wait("Settings categories");
     await click("button", "Hosts");
     await click("button", REMOTE_HOST, { contains: true, first: true });
     await wait("Paired devices");
@@ -262,7 +263,8 @@ async function journey() {
     8,
     "Logs: This Mac and box source buttons, real hostd serving line labelled with box",
     async () => {
-      await press("Meta+,");
+      await click("button", "Settings");
+      await wait("Settings categories");
       await click("button", "Logs", { contains: true, first: true });
       await wait("Sources");
       await click("button", REMOTE_HOST);
