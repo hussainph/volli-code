@@ -15,6 +15,8 @@ export const REOPEN_QUESTION = "Did this question survive reopening Volli?";
 export const ANSWER_REPLY = "REMOTE: answer received on the host";
 export const REOPEN_REPLY = "REMOTE: reopened question answered on the host";
 export const STREAM_REPLY = "REMOTE: scripted turn streamed from the host";
+export const missingQuestionReply = (request) =>
+  `VC-721: hostd has not offered ask_user (${request.includes("remote-reopen-question") ? "reopen" : "answer"})`;
 
 export function assertAcceptanceRunner(env = process.env, platform = process.platform) {
   if (platform !== "darwin" || env.GITHUB_ACTIONS !== "true" || env.RUNNER_OS !== "macOS") {
@@ -79,7 +81,11 @@ export function acceptanceScript(turn) {
   if (!turn.body.tools?.length) return undefined;
   if (turn.text.includes("remote-stream-turn")) return { text: STREAM_REPLY, delayMs: 1500 };
   // Never manufacture a tool the production host did not offer.
-  if (!turn.body.tools.some((tool) => tool.name === "ask_user")) return undefined;
+  if (!turn.body.tools.some((tool) => tool.name === "ask_user"))
+    return turn.text.includes("remote-answer-question") ||
+      turn.text.includes("remote-reopen-question")
+      ? missingQuestionReply(turn.text)
+      : undefined;
   const input = turn.body.input ?? [];
   const last = input.at(-1);
   if (last?.type === "function_call_output") {
@@ -126,6 +132,7 @@ export function acceptanceDaemonPid(status, home) {
   return pid;
 }
 
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 const quote = (s) => `"${String(s).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 
 /** Escape only a fixture-created absolute path, never a person's SSH config. */
@@ -226,6 +233,38 @@ export async function prepareRemoteAcceptance(layout, provider) {
       ...fixture,
       home,
       projectPath: repo.dir,
+      async arrangeProject() {
+        assertAcceptanceRunner();
+        // Arrange, outside the app: the box's CLI. Owner-approved fixture
+        // setup through the installed production binary, never DB writes or
+        // an injected link. The UI must still list/open the resulting project.
+        const command = [
+          "set -eu",
+          `export VOLLI_SOCKET=${shellQuote(join(home, "Library/Application Support/volli-hostd/volli.sock"))}`,
+          "unset VOLLI_SESSION VOLLI_SESSION_TOKEN VOLLI_TICKET VOLLI_OPERATOR_TOKEN",
+          `git -C ${shellQuote(repo.dir)} init`,
+          `${shellQuote(join(home, ".local/share/volli-hostd/current/bin/volli"))} project add ${shellQuote(repo.dir)} --name ${shellQuote(REMOTE_PROJECT)} --json`,
+        ].join("\n");
+        try {
+          const result = await exec("/usr/bin/ssh", [...fixture.sshArgs, command], {
+            env: scratchSshEnv(),
+            timeout: 30_000,
+          });
+          await fs.writeFile(
+            join(layout.logsDir, "arrange-project.log"),
+            `Arrange, outside the app: the box's CLI\n${result.stdout}\n${result.stderr}`,
+          );
+        } catch (error) {
+          await fs.writeFile(
+            join(layout.logsDir, "arrange-project.log"),
+            `Arrange, outside the app: the box's CLI\nexit: ${error.code}\n${error.stdout ?? ""}\n${error.stderr ?? ""}`,
+          );
+          throw new Error(
+            `Arrange via box CLI failed: ${error.stderr || error.stdout || error.message}`,
+            { cause: error },
+          );
+        }
+      },
       async stop() {
         try {
           await fs.writeFile(join(layout.logsDir, "sshd.log"), fixture.diagnostics());

@@ -20,6 +20,7 @@ import {
   stableWaitingLabel,
   visibleServingRow,
   snapshotSubtree,
+  missingQuestionReply,
 } from "./remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -165,7 +166,11 @@ test("script has real ask_user calls, answered continuation and a separate reope
   );
   assert.equal(
     acceptanceScript({ text: "remote-answer-question", body: { tools: [{ name: "read" }] } }),
-    undefined,
+    missingQuestionReply("remote-answer-question"),
+  );
+  assert.notEqual(
+    missingQuestionReply("remote-answer-question"),
+    missingQuestionReply("remote-reopen-question"),
   );
   assert.equal(acceptanceScript({ text: "remote-stream-turn", body: {} }), undefined);
   const question = acceptanceScript(turn("remote-answer-question"));
@@ -194,7 +199,7 @@ test("script has real ask_user calls, answered continuation and a separate reope
   );
   assert.equal(acceptanceScript(turn("ordinary turn")), undefined);
 });
-test("journey never seeds its acceptance actions or injects product links", () => {
+test("journey uses owner-approved box CLI arrange, never fake links or app state injection", () => {
   const smoke = read("../remote-acceptance-smoke.mjs");
   assert.doesNotMatch(smoke, /window\.api|createHostLink|page\.evaluate|setState|lab\//);
   for (const label of [
@@ -210,11 +215,13 @@ test("journey never seeds its acceptance actions or injects product links", () =
     "Search",
   ])
     assert.ok(smoke.includes(label), label);
-  assert.doesNotMatch(
-    smoke,
-    /XFAIL|XPASS|EXPECTED_FAILURE/u,
-    "All four glue tickets are merged: no acceptance waivers remain",
-  );
+  assert.match(smoke, /ticket: "VC-721", steps: \[6, 7\]/u);
+  assert.doesNotMatch(smoke, /VC-710.*XFAIL|XFAIL.*VC-710/u);
+  const fixture = read("./remote-acceptance.mjs");
+  assert.match(fixture, /project add.*--name/u);
+  assert.ok(fixture.includes("Arrange, outside the app: the box's CLI"));
+  assert.ok(smoke.includes('call("acceptance-arrange-project")'));
+  assert.ok(smoke.includes("can't add projects to it."));
   assert.ok(
     smoke.includes('row.status === "PASS"'),
     "canary completion is all-PASS, not process exit zero",
