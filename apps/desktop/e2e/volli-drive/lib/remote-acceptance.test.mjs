@@ -392,6 +392,24 @@ test("journey arranges only benign Git state and runs all eight real assertions 
     "a visually hidden native radio is selected by genuine keyboard activation",
   );
   assert.doesNotMatch(smoke, /click\("radio"|force:\s*true/u);
+  assert.match(
+    smoke,
+    /click\("button", "Submit", \{ scope: \{ role: "form", name: question \} \}\)/u,
+    "the declared-stop card submits through its own real form control",
+  );
+  for (const receiptAssertion of [
+    'line.endsWith(": You answered")',
+    "lines[index + 1]?.endsWith(`: ${question}`)",
+    'lines[index + 2]?.endsWith(": Proceed")',
+    "await submitProceed(ANSWER_QUESTION)",
+    "await submitProceed(REOPEN_QUESTION)",
+  ])
+    assert.ok(smoke.includes(receiptAssertion), receiptAssertion);
+  assert.doesNotMatch(
+    smoke,
+    /Send answer|Sent: Proceed/u,
+    "the verdict card has a durable receipt rather than an ask-user transient receipt",
+  );
   assert.equal(
     (smoke.match(/await selectProceed\(\);/gu) ?? []).length,
     2,

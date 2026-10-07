@@ -67,6 +67,24 @@ async function selectProceed() {
   const selected = await action("press", "radio", "Proceed", { key: "Space" });
   assert.match(controls(selected.text, "radio", "Proceed")[0] ?? "", /\[checked\]/u);
 }
+async function submitProceed(question) {
+  await click("button", "Submit", { scope: { role: "form", name: question } });
+  // This fixture's declared Stop draws a verdict card. Its receipt is the
+  // durable transcript row, not the ask-user card's transient Sent line.
+  await waitUntil(
+    `durable Proceed receipt for ${question}`,
+    async () => {
+      const lines = (await snap()).text.split("\n");
+      return lines.some(
+        (line, index) =>
+          line.endsWith(": You answered") &&
+          lines[index + 1]?.endsWith(`: ${question}`) &&
+          lines[index + 2]?.endsWith(": Proceed"),
+      );
+    },
+    { timeout: 10_000, interval: 100 },
+  );
+}
 async function press(key) {
   const current = await snap();
   return (await call("act", { gen: current.generation, kind: "press", key })).snapshot;
@@ -295,8 +313,7 @@ async function journey() {
     await send("remote-answer-question");
     await wait(ANSWER_QUESTION);
     await selectProceed();
-    await click("button", "Send answer");
-    await wait("Sent: Proceed");
+    await submitProceed(ANSWER_QUESTION);
     await wait(ANSWER_REPLY);
   });
   await step(
@@ -334,8 +351,7 @@ async function journey() {
       });
       await wait(REOPEN_QUESTION);
       await selectProceed();
-      await click("button", "Send answer");
-      await wait("Sent: Proceed");
+      await submitProceed(REOPEN_QUESTION);
       await wait(REOPEN_REPLY);
     },
   );
