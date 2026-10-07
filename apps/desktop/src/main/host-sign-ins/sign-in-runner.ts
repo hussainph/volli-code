@@ -73,6 +73,27 @@ export interface RunHostSignInOptions {
   readonly bind?: typeof bindOneCallback | undefined;
 }
 
+/** What a row says when the host's sign-in link is not one Volli opens. */
+export const REFUSED_SIGN_IN_LINK = "The host sent a sign-in link Volli won’t open";
+
+/** The longest sign-in link Volli opens. */
+export const MAX_SIGN_IN_URL_LENGTH = 8192;
+
+/**
+ * Whether a link the host sent is one this Mac opens: an `http:` or `https:`
+ * page, of bounded length. A host is not trusted to name anything else
+ * (`file:`, an app's own scheme, `ssh:`) to this Mac's browser.
+ */
+export function isOpenableSignInUrl(url: string): boolean {
+  if (url.length > MAX_SIGN_IN_URL_LENGTH) return false;
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
   const { link, onEvent } = options;
   const bind = options.bind ?? bindOneCallback;
@@ -96,6 +117,13 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
     endWith(end);
   };
 
+  // A link this Mac will not open ends the sign-in, here and on the host.
+  const refuseLink = (flowId: string): void => {
+    onEvent({ kind: "failed", message: REFUSED_SIGN_IN_LINK });
+    finish("failed");
+    void link.cancel({ flowId }).catch(() => undefined);
+  };
+
   const handle = async (flowId: string, update: HostSignInUpdate): Promise<void> => {
     if (finished) return;
     switch (update.kind) {
@@ -114,14 +142,30 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
         onEvent({ kind: "relay", state: "listening" });
         void bound.outcome.then((outcome) => {
           if (finished || outcome.kind === "closed") return;
+          if (outcome.kind === "timed-out") {
+            onEvent({ kind: "relay", state: "paste" });
+            return;
+          }
           const ok = outcome.kind === "delivered" && outcome.status >= 200 && outcome.status < 300;
           onEvent({ kind: "relay", state: ok ? "delivered" : "failed" });
         });
         return;
       }
       case "auth-url":
+        // The host names the page; only a plain web page is ever opened.
+        if (!isOpenableSignInUrl(update.url)) {
+          refuseLink(flowId);
+          return;
+        }
         onEvent(update);
         await options.openExternal(update.url);
+        return;
+      case "device-code":
+        if (!isOpenableSignInUrl(update.verificationUri)) {
+          refuseLink(flowId);
+          return;
+        }
+        onEvent(update);
         return;
       case "done":
         onEvent(update);

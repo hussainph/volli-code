@@ -8,7 +8,14 @@ import type { HostSignInUpdate } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { RelayBinding, RelayOutcome } from "./relay-client";
-import { runHostSignIn, type HostSignInLink, type HostSignInRunEvent } from "./sign-in-runner";
+import {
+  isOpenableSignInUrl,
+  MAX_SIGN_IN_URL_LENGTH,
+  REFUSED_SIGN_IN_LINK,
+  runHostSignIn,
+  type HostSignInLink,
+  type HostSignInRunEvent,
+} from "./sign-in-runner";
 
 function fakeLink(options: { startFails?: boolean } = {}) {
   let observer: Parameters<HostSignInLink["subscribe"]>[1] | null = null;
@@ -193,6 +200,78 @@ describe("runHostSignIn", () => {
     await run.cancel();
     expect(host.link.cancel).toHaveBeenCalledOnce();
     expect(events.at(-1)).toEqual({ kind: "cancelled" });
+  });
+
+  it("opens only a plain web page the host names; anything else ends the sign-in, here and there", async () => {
+    for (const url of [
+      "file:///System/Applications/Calculator.app",
+      "shortcuts://run-shortcut?name=x",
+      "ssh://attacker@example.com",
+      "not a url",
+      `https://example.com/${"a".repeat(MAX_SIGN_IN_URL_LENGTH)}`,
+    ]) {
+      const host = fakeLink();
+      // The host may refuse the cancel too; the row's end stands.
+      host.link.cancel.mockRejectedValueOnce(new Error("gone"));
+      const events: HostSignInRunEvent[] = [];
+      const openExternal = vi.fn();
+      const run = runHostSignIn({
+        link: host.link,
+        providerId: "anthropic",
+        openExternal,
+        onEvent: (event) => events.push(event),
+        bind: fakeBind("bound").bind,
+      });
+      await run.flowId;
+      host.emit({ kind: "auth-url", url, instructions: null });
+      expect(await run.ended).toBe("failed");
+      expect(openExternal).not.toHaveBeenCalled();
+      expect(host.link.cancel).toHaveBeenCalledWith({ flowId: "flow-1" });
+      expect(events).toEqual([{ kind: "failed", message: REFUSED_SIGN_IN_LINK }]);
+    }
+    const host = fakeLink();
+    const events: HostSignInRunEvent[] = [];
+    const run = runHostSignIn({
+      link: host.link,
+      providerId: "xai",
+      openExternal: vi.fn(),
+      onEvent: (event) => events.push(event),
+      bind: fakeBind("bound").bind,
+    });
+    await run.flowId;
+    host.emit({
+      kind: "device-code",
+      userCode: "WXYZ-1234",
+      verificationUri: "shortcuts://run-shortcut",
+      intervalSeconds: null,
+      expiresInSeconds: null,
+    });
+    expect(await run.ended).toBe("failed");
+    expect(events).toEqual([{ kind: "failed", message: REFUSED_SIGN_IN_LINK }]);
+    expect(isOpenableSignInUrl("https://claude.ai/oauth/authorize?code=true")).toBe(true);
+    expect(isOpenableSignInUrl("http://localhost:1455/start")).toBe(true);
+  });
+
+  it("falls back to paste when the relay waited long enough", async () => {
+    const host = fakeLink();
+    const relay = fakeBind("bound");
+    const events: HostSignInRunEvent[] = [];
+    const run = runHostSignIn({
+      link: host.link,
+      providerId: "anthropic",
+      openExternal: vi.fn(),
+      onEvent: (event) => events.push(event),
+      bind: relay.bind,
+    });
+    await run.flowId;
+    host.emit({ kind: "auth-callback", flowId: "flow-1", redirectUri: "http://localhost:1/cb" });
+    await settle();
+    relay.outcome.resolve({ kind: "timed-out" });
+    await settle();
+    expect(events).toEqual([
+      { kind: "relay", state: "listening" },
+      { kind: "relay", state: "paste" },
+    ]);
   });
 
   it("says the flow was lost when the host goes away mid-flow", async () => {

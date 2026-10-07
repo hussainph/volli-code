@@ -137,4 +137,17 @@ describe("bindOneCallback", () => {
     expect(await binding.outcome).toEqual({ kind: "closed" });
     await expect(fetch(`http://127.0.0.1:${port}/cb?code=late`)).rejects.toThrow();
   });
+
+  it("gives up after a bounded wait, so a host cannot keep this Mac's port bound", async () => {
+    const port = await freePort();
+    const binding = await bindOneCallback(
+      `http://localhost:${port}/cb`,
+      async () => ({ status: 200 }),
+      { idleMs: 10 },
+    );
+    if (binding.kind !== "bound") throw new Error("expected to bind");
+    expect(await binding.outcome).toEqual({ kind: "timed-out" });
+    await expect(fetch(`http://127.0.0.1:${port}/cb?code=late`)).rejects.toThrow();
+    binding.close();
+  });
 });

@@ -855,7 +855,8 @@ const appStartup = app.whenReady().then(async () => {
       list: async () => (await macCredentials?.list()) ?? [],
       read: async (providerId) => macCredentials?.read(providerId),
     },
-    openExternal: (url) => shell.openExternal(url),
+    // The same http(s)-only gate as the window's own links: a host names the page.
+    openExternal: (url) => openExternal(url),
   });
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),

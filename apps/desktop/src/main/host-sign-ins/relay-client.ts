@@ -63,7 +63,9 @@ export type RelayOutcome =
   /** Delivering failed; the person can still paste the redirect. */
   | { readonly kind: "failed" }
   /** Closed before a redirect arrived: the flow ended, or it was cancelled. */
-  | { readonly kind: "closed" };
+  | { readonly kind: "closed" }
+  /** No redirect came in time; the listener closed, and the person pastes instead. */
+  | { readonly kind: "timed-out" };
 
 /** A bound one-shot listener, or why there is none and the person pastes instead. */
 export type RelayBinding =
@@ -79,9 +81,14 @@ export type RelayBinding =
 /** Sends the redirect's path and query to the host (`auth.callback.deliver`). */
 export type DeliverCallback = (pathAndQuery: string) => Promise<{ status: number }>;
 
+/** How long a listener waits for the browser's redirect before it gives up. */
+export const RELAY_IDLE_MS = 10 * 60_000;
+
 export interface BindOptions {
   /** Test seam: the server factory. */
   readonly createServer?: typeof createServer;
+  /** Test seam: how long the listener waits; {@link RELAY_IDLE_MS} by default. */
+  readonly idleMs?: number;
 }
 
 /**
@@ -102,11 +109,17 @@ export function bindOneCallback(
   const server: Server = (options.createServer ?? createServer)((request, response) => {
     void answer(request, response);
   });
-  const close = (): void => {
-    settle({ kind: "closed" });
+  // A host cannot keep this Mac's port bound: with no redirect in time, the
+  // listener closes and the person pastes the redirect instead.
+  let idle: NodeJS.Timeout | null = null;
+  const stopListening = (end: RelayOutcome): void => {
+    if (idle !== null) clearTimeout(idle);
+    idle = null;
+    settle(end);
     server.close();
     server.closeAllConnections();
   };
+  const close = (): void => stopListening({ kind: "closed" });
 
   async function answer(request: IncomingMessage, response: ServerResponse): Promise<void> {
     // Node always sets a server request's target.
@@ -119,6 +132,9 @@ export function bindOneCallback(
     }
     // One request, ever: a second redirect (a reload, a stray tab) is not delivered.
     taken = true;
+    // Listening started the wait, and a request can only follow that.
+    clearTimeout(idle!);
+    idle = null;
     server.close();
     let result: RelayOutcome;
     try {
@@ -144,9 +160,14 @@ export function bindOneCallback(
         reason: error.code === "EADDRINUSE" ? "port-taken" : "bind-failed",
       });
     });
-    server.listen({ host: address.host, port: address.port, exclusive: true }, () =>
-      resolve({ kind: "bound", outcome, close }),
-    );
+    server.listen({ host: address.host, port: address.port, exclusive: true }, () => {
+      idle = setTimeout(
+        () => stopListening({ kind: "timed-out" }),
+        options.idleMs ?? RELAY_IDLE_MS,
+      );
+      idle.unref();
+      resolve({ kind: "bound", outcome, close });
+    });
   });
 }
 

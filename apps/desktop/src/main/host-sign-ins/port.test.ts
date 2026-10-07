@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { engineSignInLinks, hostLinkSignIns, remoteSignInsPort, signInPreflight } from "./port";
 import type { HostSignInService } from "./service";
-import type { HostSignInRun } from "./sign-in-runner";
+import { REFUSED_SIGN_IN_LINK, type HostSignInRun } from "./sign-in-runner";
 
 const STATUS = { providers: [], git: [{ host: "github.com", state: "signed-in", kind: "git" }] };
 
@@ -25,6 +25,7 @@ function fakeLink(answers: Record<string, unknown>) {
     }),
     mutate: vi.fn(async (path: string, input?: unknown) => {
       calls.push(["mutate", path, input]);
+      if (answers[path] instanceof Error) throw answers[path];
       return answers[path];
     }),
     subscribe: vi.fn((path: string, input: unknown, next: HostLinkSubscriptionHandlers) => {
@@ -81,7 +82,7 @@ describe("hostLinkSignIns", () => {
     await expect(bad.status()).rejects.toThrow();
     await expect(bad.start({ providerId: "xai" })).rejects.toThrow("started no sign-in");
     await expect(bad.deliver({ flowId: "f", pathAndQuery: "/cb" })).rejects.toThrow("did not say");
-    const host = fakeLink({});
+    const host = fakeLink({ "signIns.cancel": new Error("gone") });
     const seen: unknown[] = [];
     const errors: unknown[] = [];
     let completed = 0;
@@ -96,10 +97,42 @@ describe("hostLinkSignIns", () => {
     const handlers = host.handlers();
     handlers.onData({ kind: "progress", message: "Waiting" });
     handlers.onData({ kind: "a-kind-from-tomorrow" });
+    // A known update that breaks its schema ends the sign-in, here and on the host.
+    handlers.onData({
+      kind: "auth-url",
+      url: "file:///System/Applications/Calculator.app",
+      instructions: null,
+    });
+    handlers.onData({
+      kind: "device-code",
+      userCode: "WXYZ",
+      verificationUri: `https://example.com/${"a".repeat(8192)}`,
+      intervalSeconds: null,
+      expiresInSeconds: null,
+    });
+    handlers.onData({
+      kind: "device-code",
+      userCode: "WXYZ",
+      verificationUri: "https://accounts.x.ai/device",
+      intervalSeconds: null,
+      expiresInSeconds: null,
+    });
+    handlers.onData({ kind: "progress" });
+    handlers.onData(null);
     handlers.onResnapshot({ code: "PRECONDITION_FAILED", message: "gone" });
     handlers.onError(new Error("host-unreachable"));
     handlers.onComplete!();
-    expect(seen).toEqual([{ kind: "progress", message: "Waiting" }]);
+    expect(seen).toEqual([
+      { kind: "progress", message: "Waiting" },
+      { kind: "failed", message: REFUSED_SIGN_IN_LINK },
+      { kind: "failed", message: REFUSED_SIGN_IN_LINK },
+      expect.objectContaining({
+        kind: "device-code",
+        verificationUri: "https://accounts.x.ai/device",
+      }),
+      { kind: "failed", message: "The host sent a sign-in step Volli can’t read" },
+    ]);
+    expect(host.calls.filter(([, path]) => path === "signIns.cancel")).toHaveLength(3);
     expect(errors).toHaveLength(2);
     expect(completed).toBe(1);
   });

@@ -21,7 +21,23 @@ import { hostSignInStatusSchema, hostSignInUpdateSchema } from "@volli/session-r
 import type { HostSignInStatus, HostSignInUpdate } from "@volli/shared";
 
 import { HostUnreachableError, type HostSignInHostLink, type HostSignInService } from "./service";
-import type { HostSignInRun } from "./sign-in-runner";
+import { isOpenableSignInUrl, REFUSED_SIGN_IN_LINK, type HostSignInRun } from "./sign-in-runner";
+
+/** The update kinds this build reads; any other is a newer host's, and skipped. */
+const KNOWN_UPDATE_KINDS: ReadonlySet<string> = new Set(
+  hostSignInUpdateSchema.options.map((option) => option.shape.kind.value),
+);
+
+/**
+ * Whether an update's page, if it names one, is one this Mac opens: an
+ * http(s) page of bounded length. The published schema stays as it is (a
+ * narrower output is a protocol break); the bound is this Client's own.
+ */
+function opensOnlyAWebPage(update: HostSignInUpdate): boolean {
+  if (update.kind === "auth-url") return isOpenableSignInUrl(update.url);
+  if (update.kind === "device-code") return isOpenableSignInUrl(update.verificationUri);
+  return true;
+}
 
 /** The status a host answered, checked: a malformed answer is the host's failure. */
 function status(value: unknown): HostSignInStatus {
@@ -42,9 +58,24 @@ export function hostLinkSignIns(link: HostLink): HostSignInHostLink {
     subscribe: (flow, observer) =>
       link.subscribe("signIns.subscribe", flow, {
         onData: (data) => {
-          // An update this build does not know (the union is open) is skipped.
           const parsed = hostSignInUpdateSchema.safeParse(data);
-          if (parsed.success) observer.onData(parsed.data as HostSignInUpdate);
+          if (parsed.success && opensOnlyAWebPage(parsed.data as HostSignInUpdate)) {
+            observer.onData(parsed.data as HostSignInUpdate);
+            return;
+          }
+          // An update this build does not know (the union is open) is skipped;
+          // a known one that breaks its schema ends the sign-in, here and on
+          // the host. A page this Mac won't open is the one said by name.
+          const kind = (data as { kind?: unknown } | null)?.kind;
+          if (typeof kind !== "string" || !KNOWN_UPDATE_KINDS.has(kind)) return;
+          void link.mutate("signIns.cancel", flow).catch(() => undefined);
+          observer.onData({
+            kind: "failed",
+            message:
+              kind === "auth-url" || kind === "device-code"
+                ? REFUSED_SIGN_IN_LINK
+                : "The host sent a sign-in step Volli can’t read",
+          });
         },
         onResnapshot: (error) => observer.onError(error),
         onError: (error) => observer.onError(error),
