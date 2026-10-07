@@ -130,6 +130,13 @@ export interface RemoteSessions {
   stop(): void;
 }
 
+/** A listing a host never granted: answered empty at once, never asked of it again (B3). */
+const quietListing = async (): Promise<SessionsResult> => ({ ok: true, sessions: [] });
+const NOT_GRANTED_LISTING: SessionListingReader = {
+  list: quietListing,
+  listForTicket: quietListing,
+};
+
 /** The remote projects the host-connection store names: claimed by a host that is not This Mac. */
 function remoteProjectIds(state: Pick<HostConnectionState, "hosts" | "projects">): string[] {
   return Object.keys(state.projects).filter((projectId) => !hostOfProject(state, projectId).local);
@@ -201,9 +208,7 @@ export function bindRemoteSessions(deps: RemoteSessionsDeps): RemoteSessions {
   const listingOf = (projectId: string): SessionListingReader | null => {
     const workspace = workspaceOf(projectId);
     if (workspace === null) return null;
-    if (!notGrantedNow(projectId)) return workspace.listing;
-    const quiet = async (): Promise<SessionsResult> => ({ ok: true, sessions: [] });
-    return { list: quiet, listForTicket: quiet };
+    return notGrantedNow(projectId) ? NOT_GRANTED_LISTING : workspace.listing;
   };
 
   const unregisterTransports = setRemoteChatTransports({

@@ -150,21 +150,22 @@ describe("browserChatTransport", () => {
   });
 });
 
+/** A window with the Session RPC bridge and frame pacing a transport reads. */
+function stubWindow() {
+  vi.stubGlobal("window", {
+    api: { sessionRpc: { request: vi.fn(), onEvent: () => () => undefined, cancel: vi.fn() } },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => undefined,
+    setTimeout: () => 1,
+    clearTimeout: () => undefined,
+  });
+}
+
 describe("chatTransportFor (VC-713)", () => {
   afterEach(() => {
     resetRemoteOwnersForTest();
     vi.unstubAllGlobals();
   });
-
-  function stubWindow() {
-    vi.stubGlobal("window", {
-      api: { sessionRpc: { request: vi.fn(), onEvent: () => () => undefined, cancel: vi.fn() } },
-      requestAnimationFrame: () => 1,
-      cancelAnimationFrame: () => undefined,
-      setTimeout: () => 1,
-      clearTimeout: () => undefined,
-    });
-  }
 
   it("answers a remote project's registered transport, and IPC for This Mac's", () => {
     stubWindow();
