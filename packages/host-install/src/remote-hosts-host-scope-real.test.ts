@@ -1,4 +1,6 @@
 import { createPublicKey } from "node:crypto";
+import { once } from "node:events";
+import { connect, createServer, type Socket } from "node:net";
 import { base64UrlToBytes, HOST_SCOPE_FEATURES } from "@volli/host-protocol";
 import {
   createHostLink,
@@ -39,7 +41,51 @@ async function until(check: () => boolean): Promise<void> {
   }
 }
 
-async function fixture(add = false, workspaceIds: string[] = []) {
+async function stalledProxy(targetPort: number) {
+  const pairs: { client: Socket; upstream: Socket }[] = [];
+  const server = createServer((client) => {
+    const upstream = connect(targetPort, "127.0.0.1");
+    pairs.push({ client, upstream });
+    client.pipe(upstream);
+    upstream.pipe(client);
+    const end = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    for (const socket of [client, upstream]) {
+      socket.on("error", end);
+      socket.on("close", end);
+    }
+  });
+  server.listen(5394, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    url: "ws://127.0.0.1:5394",
+    pause(index: number) {
+      const { client, upstream } = pairs[index]!;
+      client.unpipe(upstream);
+      upstream.unpipe(client);
+      client.pause();
+      upstream.pause();
+    },
+    resume(index: number) {
+      const { client, upstream } = pairs[index]!;
+      client.pipe(upstream);
+      upstream.pipe(client);
+      client.resume();
+      upstream.resume();
+    },
+    async close() {
+      for (const { client, upstream } of pairs) {
+        client.destroy();
+        upstream.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+async function fixture(add = false, workspaceIds: string[] = [], port = 0) {
   const h = harness({
     enabled: () => false,
     registry: add ? null : registry(hostEntry({ workspaceIds })),
@@ -53,7 +99,7 @@ async function fixture(add = false, workspaceIds: string[] = []) {
   const page = { entries: [], gap: false, cursor: "ring:0" };
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
-    bind: { host: "127.0.0.1", port: 0 },
+    bind: { host: "127.0.0.1", port },
     host,
     workspace,
     features: [...HOST_SCOPE_FEATURES, "sessions"],
@@ -77,7 +123,13 @@ async function fixture(add = false, workspaceIds: string[] = []) {
     }),
   });
   cleanups.push(() => listener.close());
-  const state = { status: "up" as const, url: listener.url, localPort: listener.address.port };
+  const proxy = port === 0 ? null : await stalledProxy(listener.address.port);
+  if (proxy !== null) cleanups.push(() => proxy.close());
+  const state = {
+    status: "up" as const,
+    url: proxy?.url ?? listener.url,
+    localPort: listener.address.port,
+  };
   const tunnel: SshTunnel = {
     state,
     start: async () => state.url,
@@ -87,6 +139,23 @@ async function fixture(add = false, workspaceIds: string[] = []) {
   };
   const scopes: HostScopeLink[] = [];
   const workspaces: HostLink[] = [];
+  const NativeSocket = globalThis.WebSocket;
+  const actual = new Set<WebSocket>();
+  const created: WebSocket[] = [];
+  let peak = 0;
+  class Counted extends NativeSocket {
+    constructor(url: string) {
+      super(url);
+      actual.add(this);
+      created.push(this);
+      peak = Math.max(peak, actual.size);
+      this.addEventListener("close", () => actual.delete(this), { once: true });
+    }
+  }
+  const WebSocket = Counted as unknown as typeof globalThis.WebSocket;
+  cleanups.push(() => {
+    for (const socket of actual) socket.close();
+  });
   // The fake SSH enrollment actually records the public SPKI sent by the install engine.
   const ssh = h.ports.ssh;
   const timing = {
@@ -119,18 +188,32 @@ async function fixture(add = false, workspaceIds: string[] = []) {
       };
     },
     hostScopeLink: (options) => {
-      const link = createHostScopeLink({ ...options, timing });
+      const link = createHostScopeLink({ ...options, timing, WebSocket });
       scopes.push(link);
       return link;
     },
     link: (options) => {
-      const link = createHostLink({ ...options, timing });
+      const link = createHostLink({ ...options, timing, WebSocket });
       workspaces.push(link);
       return link;
     },
   });
   cleanups.push(() => engine.close());
-  return { h, auth, host, workspace, listener, scopes, workspaces, engine, page };
+  return {
+    h,
+    auth,
+    host,
+    workspace,
+    listener,
+    scopes,
+    workspaces,
+    engine,
+    page,
+    actual,
+    created,
+    proxy,
+    peak: () => peak,
+  };
 }
 
 describe("real signed enrolled host-scope connection, no Workspace required", () => {
@@ -230,6 +313,43 @@ describe("real signed enrolled host-scope connection, no Workspace required", ()
     expect((await w.until()).status).toBe("failed");
     expect(f.scopes).toHaveLength(1);
     expect(f.listener.connections).toBe(24);
+  });
+
+  it("keeps the physical 24-socket ceiling during engine replacement and heartbeat retry, including stalled close handshakes", async () => {
+    const ids = Array.from(
+      { length: 23 },
+      (_, i) => `00000000-0000-4000-8000-${i.toString().padStart(12, "0")}`,
+    );
+    const f = await fixture(false, ids, 5393);
+    await until(() => ids.every((id) => f.engine.workspaceLink(id) !== null));
+    expect(f.actual.size).toBe(24);
+    // Pause reads: both sockets can send close, but cannot finish the
+    // handshake until their real loopback peer's close response is read.
+    const replaced = f.created[1]!;
+    const retrying = f.created[2]!;
+    f.proxy!.pause(1);
+    f.proxy!.pause(2);
+    f.engine.closeWorkspace(HOST_ID, ids[0]!);
+    f.engine.openWorkspace(HOST_ID, WS1);
+    await until(() => f.workspaces[1]!.getState().status === "connecting");
+    expect(replaced.readyState).toBe(globalThis.WebSocket.CLOSING);
+    expect(retrying.readyState).toBe(globalThis.WebSocket.CLOSING);
+    expect(f.actual.size).toBe(24);
+    expect(f.created).toHaveLength(24);
+    expect(f.peak()).toBe(24);
+    // Add also uses the logical/physical budget and cannot open a 25th.
+    f.h.box.enrollDeviceId = OTHER_ID;
+    const { flowId } = await f.engine.startAdd({ target: "another-box" });
+    expect((await watch(f.engine, flowId).until()).status).toBe("failed");
+    expect(f.created).toHaveLength(24);
+    f.proxy!.resume(1);
+    f.proxy!.resume(2);
+    await until(
+      () => f.engine.workspaceLink(WS1) !== null && f.engine.workspaceLink(ids[1]!) !== null,
+    );
+    expect(f.actual.size).toBe(24);
+    expect(f.created).toHaveLength(26);
+    expect(f.peak()).toBe(24);
   });
 
   it("Add waits on authenticated welcome and hands the same connection to the runtime", async () => {

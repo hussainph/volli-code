@@ -60,8 +60,8 @@ function deferred<T>() {
 describe("host-scope compatibility is explicit and closed", () => {
   it.each([
     ["hello-invalid", "BAD_REQUEST", 4400, true],
-    [undefined, "NOT_FOUND", null, true],
-    ["operation-unavailable", "NOT_IMPLEMENTED", null, true],
+    [undefined, "NOT_FOUND", null, false],
+    ["operation-unavailable", "NOT_IMPLEMENTED", null, false],
     ["credential-invalid", "UNAUTHORIZED", 4401, false],
     ["credential-invalid", "NOT_FOUND", null, false],
     ["protocol-version-unsupported", "BAD_REQUEST", 4400, false],
@@ -73,6 +73,7 @@ describe("host-scope compatibility is explicit and closed", () => {
       status: "refused",
       error: { code, message: "Refused", ...(reason === undefined ? {} : { reason }) },
       closeCode,
+      ...(expected ? { compatibility: "host-scope-unsupported" } : {}),
     } as HostScopeLinkState;
     expect(isOlderHostScope(state)).toBe(expected);
     const h = modern();
@@ -81,6 +82,15 @@ describe("host-scope compatibility is explicit and closed", () => {
       expected ? "older" : "unavailable",
     );
     expect(h.box.statusScripts).toHaveLength(expected ? 1 : 0);
+  });
+  it("never treats an unclassified raw hello-invalid error as compatibility evidence", () => {
+    expect(
+      isOlderHostScope({
+        status: "refused",
+        closeCode: 4400,
+        error: { code: "BAD_REQUEST", reason: "hello-invalid", message: "raw" },
+      }),
+    ).toBe(false);
   });
   it("never classifies transient or terminal transport states as old", () => {
     for (const state of [connecting, scopeReady(), { status: "closed" } as const])
@@ -256,7 +266,10 @@ describe("one process-owned host-scope link per box", () => {
   });
 
   it("absent client composition is unavailable, never implicit legacy mode", async () => {
-    const h = modern({ enabled: () => false });
+    const h = modern({
+      enabled: () => false,
+      registry: registry(hostEntry({ workspaceIds: [WS1] })),
+    });
     const engine = createRemoteHosts({ ...h.ports, enabled: () => true, hostScopeLink: undefined });
     try {
       expect(engine.snapshot().hosts[0]!.hostScope).toEqual({ status: "unavailable", granted: [] });
@@ -278,6 +291,211 @@ const ids = (count: number) =>
   );
 
 describe("24 total host + Workspace + add-flow sockets", () => {
+  it("reserves a pending box's HOST slot when another tunnel resolves first", async () => {
+    const workspaces = ids(23);
+    const h = modern({
+      tunnelMode: "hold",
+      registry: registry(
+        hostEntry({ workspaceIds: workspaces }),
+        hostEntry({ id: OTHER_ID, target: "other" }),
+      ),
+    });
+    const [a, b] = h.tunnels.made;
+    a!.set({ status: "up", url: a!.url, localPort: 55_000 });
+    a!.pending!.resolve(a!.url);
+    expect(h.hostScopes.made).toHaveLength(1);
+    expect(h.links.made).toHaveLength(22);
+    // New and remembered Workspace claims both respect the pending HOST.
+    h.engine.openWorkspace(HOST_ID, WS1);
+    expect(h.links.made).toHaveLength(22);
+    // Add cannot spend the enrolled box's reserved slot either.
+    h.tunnels.control.mode = "up";
+    const { flowId } = await h.engine.startAdd({ target: "third-box" });
+    expect((await watch(h.engine, flowId).until()).status).toBe("failed");
+    expect(h.hostScopes.made).toHaveLength(1);
+    b!.set({ status: "up", url: b!.url, localPort: 55_001 });
+    b!.pending!.resolve(b!.url);
+    expect(h.hostScopes.made.map((link) => link.hostId)).toEqual([HOST_ID, OTHER_ID]);
+    expect(h.links.made).toHaveLength(22);
+    for (const host of h.hostScopes.made)
+      host.set({
+        ...scopeReady(),
+        welcome: {
+          ...(scopeReady() as Extract<HostScopeLinkState, { status: "ready" }>).welcome,
+          host: { id: host.hostId, version: "1.2.0" },
+        },
+      } as HostScopeLinkState);
+    expect(h.engine.hostScopeLink(HOST_ID)).not.toBeNull();
+    expect(h.engine.hostScopeLink(OTHER_ID)).not.toBeNull();
+    expect(h.engine.snapshot().projects[workspaces[22]!]!.link.status).toBe("refused");
+    // Late ready hosts don't evict already-opened work.
+    expect(h.links.made.every((link) => !link.closed)).toBe(true);
+    await h.engine.forget(OTHER_ID);
+    expect(h.links.made).toHaveLength(23);
+  });
+
+  it("disabled tunnel completion admits neither HOST nor Workspace links; enabling recovers", () => {
+    let enabled = true;
+    const h = modern({
+      enabled: () => enabled,
+      tunnelMode: "hold",
+      registry: registry(hostEntry({ workspaceIds: [WS1] })),
+    });
+    const tunnel = h.tunnels.made[0]!;
+    const up = { status: "up" as const, url: tunnel.url, localPort: 55_000 };
+    enabled = false;
+    tunnel.set(up);
+    tunnel.pending!.resolve(tunnel.url);
+    expect(h.hostScopes.made).toHaveLength(0);
+    expect(h.links.made).toHaveLength(0);
+    enabled = true;
+    tunnel.set(up);
+    expect(h.hostScopes.made).toHaveLength(1);
+    expect(h.links.made).toHaveLength(1);
+  });
+
+  it.each(["down", "closed"] as const)(
+    "releases a pending host reservation when its tunnel becomes %s",
+    (status) => {
+      const h = modern({
+        tunnelMode: "hold",
+        registry: registry(
+          hostEntry({ workspaceIds: ids(23) }),
+          hostEntry({ id: OTHER_ID, target: "other" }),
+        ),
+      });
+      const [a, b] = h.tunnels.made;
+      a!.set({ status: "up", url: a!.url, localPort: 55_000 });
+      a!.pending!.resolve(a!.url);
+      expect(h.links.made).toHaveLength(22);
+      b!.set(
+        status === "down" ? { status, error: "failed startup", retryInMs: 1_000 } : { status },
+      );
+      expect(h.links.made).toHaveLength(23);
+      expect(h.links.made.every((link) => !link.closed)).toBe(true);
+    },
+  );
+
+  it("precise asynchronous old-peer refusal replenishes the 24th remembered Workspace once", async () => {
+    const workspaces = ids(24);
+    const h = modern({ registry: registry(hostEntry({ workspaceIds: workspaces })) });
+    expect(h.links.made).toHaveLength(23);
+    const host = h.hostScopes.made[0]!;
+    host.set({
+      status: "refused",
+      error: { code: "BAD_REQUEST", reason: "hello-invalid", message: "N-1" },
+      closeCode: 4400,
+      compatibility: "host-scope-unsupported",
+    });
+    await flush();
+    expect(host.closed).toBe(true);
+    expect(host.listeners.size).toBe(0);
+    expect(h.links.made).toHaveLength(24);
+    expect(h.links.made.at(-1)!.workspaceId).toBe(workspaces[23]);
+    h.links.made.at(-1)!.set(ready());
+    expect(h.engine.snapshot().projects[workspaces[23]!]!.link.status).toBe("ready");
+    h.engine.retry(HOST_ID);
+    await flush();
+    expect(h.hostScopes.made).toHaveLength(1);
+    expect(h.links.made).toHaveLength(24);
+    expect(h.links.made.every((link) => link.reconnects === 1)).toBe(true);
+  });
+
+  it("refill retains the old closing socket's physical permit until its close handshake ends", async () => {
+    const workspaces = ids(24);
+    const h = modern({
+      enabled: () => false,
+      registry: registry(hostEntry({ workspaceIds: workspaces })),
+    });
+    let releaseHost!: () => void;
+    let physical = 0;
+    let peak = 0;
+    const admitted: string[] = [];
+    const engine = createRemoteHosts({
+      ...h.ports,
+      enabled: () => true,
+      hostScopeLink: (options) => {
+        void options.socketPool!.acquire(new AbortController().signal).then((release) => {
+          releaseHost = () => {
+            physical -= 1;
+            release!();
+          };
+          physical += 1;
+          peak = Math.max(peak, physical);
+        });
+        // Logical close deliberately doesn't finish this socket's handshake.
+        return h.hostScopes.factory(options);
+      },
+      link: (options) => {
+        const link = h.links.factory(options);
+        let releaseSocket: (() => void) | undefined;
+        const abort = new AbortController();
+        void options.socketPool!.acquire(abort.signal).then((release) => {
+          if (release === null) return;
+          physical += 1;
+          peak = Math.max(peak, physical);
+          admitted.push(options.workspaceId);
+          releaseSocket = () => {
+            physical -= 1;
+            release();
+          };
+        });
+        return {
+          ...link,
+          close() {
+            link.close();
+            abort.abort();
+            releaseSocket?.();
+          },
+        };
+      },
+    });
+    try {
+      await flush();
+      expect(physical).toBe(24);
+      h.hostScopes.made[0]!.set({
+        status: "refused",
+        error: { code: "BAD_REQUEST", reason: "hello-invalid", message: "N-1" },
+        closeCode: 4400,
+        compatibility: "host-scope-unsupported",
+      });
+      await flush();
+      expect(h.links.made).toHaveLength(24);
+      expect(admitted).toHaveLength(23);
+      expect(physical).toBe(24);
+      expect(peak).toBe(24);
+      releaseHost();
+      await flush();
+      expect(admitted).toEqual(workspaces);
+      expect(physical).toBe(24);
+      expect(peak).toBe(24);
+    } finally {
+      await engine.close();
+    }
+    expect(physical).toBe(0);
+  });
+
+  it.each(["disabled", "quit"] as const)(
+    "a queued compatibility refill creates no links after %s",
+    async (stop) => {
+      let enabled = true;
+      const h = modern({
+        enabled: () => enabled,
+        registry: registry(hostEntry({ workspaceIds: ids(24) })),
+      });
+      h.hostScopes.made[0]!.set({
+        status: "refused",
+        error: { code: "BAD_REQUEST", reason: "hello-invalid", message: "N-1" },
+        closeCode: 4400,
+        compatibility: "host-scope-unsupported",
+      });
+      if (stop === "disabled") enabled = false;
+      else await h.engine.close();
+      await flush();
+      expect(h.links.made).toHaveLength(23);
+    },
+  );
+
   it("two boxes share the exact cap, and closing or forgetting replenishes free slots", async () => {
     const workspaces = ids(40);
     const h = modern({
@@ -437,6 +655,7 @@ describe("Add authenticates before registration and preserves VC-720 ownership",
         status: "refused",
         closeCode: 4400,
         error: { code: "BAD_REQUEST", reason: "hello-invalid", message: "old" },
+        compatibility: "host-scope-unsupported",
       },
       overrides: [
         (_script, options) =>

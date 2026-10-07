@@ -48,6 +48,7 @@ import {
   isUuidV4,
   type HostFeature,
 } from "@volli/host-protocol";
+import { createClientSocketPool } from "@volli/host-protocol/client-link";
 import type {
   HostLink,
   HostScopeLink,
@@ -700,6 +701,10 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   const projectSsh = new Set<SshTransport>();
   /** H host links + W Workspace links + add-flow links share one process-wide budget. */
   const sockets = new Set<HostLink | HostScopeLink>();
+  // Logical link slots and actual socket lifetime differ during replacement.
+  // All factories receive this same pool; retirement holds admission through
+  // the close handshake, so H + W + Add (including closing sockets) <= 24.
+  const socketPool = createClientSocketPool(REMOTE_HOST_LINK_CAP);
 
   function releaseLink(link: HostLink | HostScopeLink): void {
     sockets.delete(link);
@@ -958,7 +963,26 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     };
   }
 
+  /** Reserve admission for enrolled hosts whose first tunnel is still pending.
+   * Failed/closed tunnels, explicit old peers and missing composition reserve
+   * nothing; existing Workspace links are never evicted to make room.
+   */
+  function pendingHostSlots(): number {
+    if (ports.hostScopeLink === undefined) return 0;
+    let slots = 0;
+    for (const runtime of runtimes.values()) {
+      if (
+        runtime.scope === null &&
+        !runtime.older &&
+        (runtime.tunnel.state.status === "starting" || runtime.tunnel.state.status === "up")
+      )
+        slots += 1;
+    }
+    return slots;
+  }
+
   function openLink(runtime: HostRuntime, workspaceId: string, url: string): void {
+    if (!ports.enabled()) return;
     const held = runtime.links.get(workspaceId);
     if (held !== undefined) {
       if (held.url === url) {
@@ -970,9 +994,10 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       releaseLink(held.link);
       runtime.links.delete(workspaceId);
     }
-    if (sockets.size >= REMOTE_HOST_LINK_CAP) return;
+    if (sockets.size + pendingHostSlots() >= REMOTE_HOST_LINK_CAP) return;
     const link = ports.link({
       url,
+      socketPool,
       workspaceId,
       client: { kind: "desktop", version: ports.appVersion },
       features: ports.linkFeatures ?? [],
@@ -1037,6 +1062,15 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         releaseLink(link);
         runtime.older = true;
         probeStatus(runtime);
+        // A precise old-peer refusal frees a logical slot. Defer to avoid
+        // reentering link creation on an already-refused initial state; a
+        // replacement/Forget/quit must invalidate this queued observation.
+        // The shared physical pool still holds the retired socket until close.
+        queueMicrotask(() => {
+          if (runtimes.get(runtime.id) !== runtime || !runtime.older) return;
+          refillLinks();
+          publish();
+        });
       } else {
         runtime.older = false;
         runtime.health = remoteHostLinkState({
@@ -1064,6 +1098,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   }
 
   function openHostScope(runtime: HostRuntime, url: string): void {
+    if (!ports.enabled()) return;
     const held = runtime.scope;
     if (held !== null) {
       if (held.url === url && held.active) {
@@ -1089,6 +1124,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     }
     const link = ports.hostScopeLink({
       url,
+      socketPool,
       hostId: runtime.id,
       client: { kind: "desktop", version: ports.appVersion },
       features: HOST_SCOPE_FEATURES,
@@ -1109,7 +1145,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
 
   /** Hosts take free slots before remembered Workspaces. Never create a 25th client link. */
   function refillLinks(): void {
-    if (closed) return;
+    if (closed || !ports.enabled()) return;
     for (const runtime of runtimes.values()) {
       const tunnel = runtime.tunnel.state;
       if (tunnel.status === "up" && runtime.scope === null && !runtime.older)
@@ -1158,6 +1194,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         runtime.retryAt = ports.now() + state.retryInMs;
       }
     }
+    if (!startingHosts) refillLinks();
     recompute(runtime);
   }
 
@@ -1721,10 +1758,11 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     const enroll = flow.results.enroll!;
     if (ports.hostScopeLink === undefined)
       throw new Error("The host connection is unavailable on this Mac.");
-    if (sockets.size >= REMOTE_HOST_LINK_CAP)
+    if (sockets.size + pendingHostSlots() >= REMOTE_HOST_LINK_CAP)
       throw new Error("Too many host connections open on this Mac.");
     const link = ports.hostScopeLink({
       url,
+      socketPool,
       hostId: enroll.hostId,
       client: { kind: "desktop", version: ports.appVersion },
       features: HOST_SCOPE_FEATURES,

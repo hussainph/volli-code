@@ -343,6 +343,7 @@ export function fakeHostScopeLinks(
     status: "refused",
     closeCode: 4400,
     error: { code: "BAD_REQUEST", reason: "hello-invalid", message: "N-1 hello" },
+    compatibility: "host-scope-unsupported",
   },
 ) {
   const made: FakeHostScopeLink[] = [];

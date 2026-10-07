@@ -15,13 +15,7 @@ type LinkState = HostLinkState | HostScopeLinkState;
 
 /** Only an attempted host handshake can establish N-1 compatibility. Never downgrade auth failures. */
 export function isOlderHostScope(state: HostScopeLinkState): boolean {
-  return (
-    state.status === "refused" &&
-    (state.error.reason === "hello-invalid" ||
-      (state.closeCode === null &&
-        (state.error.reason === "operation-unavailable" ||
-          (state.error.code === "NOT_FOUND" && state.error.reason === undefined))))
-  );
+  return state.status === "refused" && state.compatibility === "host-scope-unsupported";
 }
 import {
   remoteHostDiagnostic,
