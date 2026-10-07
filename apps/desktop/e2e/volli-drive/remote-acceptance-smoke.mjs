@@ -231,6 +231,13 @@ async function journey() {
   await wait(`Host: ${REMOTE_HOST}`);
   await step(3, "Create/move ticket: Backlog then Todo, persisted after UI reopen", async () => {
     await click("button", "Home");
+    // Operator configuration restarts hostd. The host chip keeps its name
+    // throughout that outage; only the enabled write control proves rejoin.
+    await waitUntil(
+      "Workspace rejoins after model deployment and New ticket is actionable",
+      async () => hasActionableControl((await snap()).text, "button", "New ticket"),
+      { timeout: 10_000, interval: 100 },
+    );
     await click("button", "New ticket");
     await type("Ticket title", TITLE);
     await click("button", "Create ticket");

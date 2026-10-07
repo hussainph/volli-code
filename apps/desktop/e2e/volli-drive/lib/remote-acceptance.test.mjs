@@ -343,6 +343,16 @@ test("missing guard fields, keychain violations, leftovers and remote cleanup er
         /manifest failed/u,
       );
 });
+test("an unchanged host chip is not writable readiness after a daemon restart", () => {
+  const outage =
+    '- button "Host: volli-acceptance" [ref=e1]\n- button "New ticket" [disabled]\n- generic: Reconnecting to volli-acceptance';
+  assert.equal(hasActionableControl(outage, "button", "New ticket"), false);
+  assert.equal(
+    hasActionableControl(outage.replace("[disabled]", "[ref=e2]"), "button", "New ticket"),
+    true,
+  );
+});
+
 test("journey arranges only benign Git state and runs all eight real assertions without waivers", () => {
   const smoke = read("../remote-acceptance-smoke.mjs");
   assert.doesNotMatch(smoke, /window\.api|createHostLink|page\.evaluate|setState|lab\//);
@@ -382,6 +392,11 @@ test("journey arranges only benign Git state and runs all eight real assertions 
   assert.ok(fixture.includes("git init --bare --initial-branch=main"));
   assert.ok(fixture.includes("Arrange benign Git state over fixture SSH"));
   assert.ok(smoke.includes('call("acceptance-arrange-box")'));
+  assert.match(
+    smoke,
+    /hasActionableControl\(\(await snap\(\)\)\.text, "button", "New ticket"\)/u,
+    "the daemon's operator restart must rejoin before the first ticket write, not just keep its chip name",
+  );
   assert.ok(smoke.includes("can't add projects to it."));
   assert.match(smoke, /assertAcceptanceCleanup\(manifest\);\s*cleanupVerified = true;/u);
   assert.match(
