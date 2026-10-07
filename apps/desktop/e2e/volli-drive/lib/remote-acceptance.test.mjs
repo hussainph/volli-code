@@ -190,6 +190,8 @@ test("journey never seeds its acceptance actions or injects product links", () =
   assert.doesNotMatch(smoke, /window\.api|createHostLink|page\.evaluate|setState|lab\//);
   for (const label of [
     "SSH destination",
+    "Paired devices",
+    "This Mac",
     "Create and open",
     "Status: Backlog",
     "Status: Todo",

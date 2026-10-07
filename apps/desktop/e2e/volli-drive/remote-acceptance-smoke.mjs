@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createRegistry, findInSnapshot, instanceLayout, REPO } from "./lib/core.mjs";
 import { request } from "./lib/protocol.mjs";
+import { waitUntil } from "../lib/smoke-kit.mjs";
 import {
   ANSWER_QUESTION,
   ANSWER_REPLY,
@@ -122,10 +123,27 @@ async function journey() {
     // known_hosts is the fixture's independently generated key. No ambient
     // trust/keys/agent or network destination can enter the system SSH client.
     const ready = await wait(`${REMOTE_HOST} is ready`, 120_000);
-    assert.match(ready.text, /Paired with this Mac/);
     assert.match(ready.text, /Volli host/);
-    await shot("step-1-ready-checklist");
+    assert.ok(ready.text.includes(`Starts when you log in to ${REMOTE_HOST}`));
+    await shot("step-1-ready");
     await click("button", "Done");
+    // AM2 replaces the transient pairing checklist with a stable ready view.
+    // Prove the saved pairing in Settings, where the host reads its real
+    // enrolled devices over SSH and marks this device as This Mac.
+    await press("Meta+,");
+    await click("button", "Hosts");
+    await click("button", REMOTE_HOST, { contains: true, first: true });
+    await wait("Paired devices");
+    await waitUntil(
+      "This Mac's enrolled-device row",
+      async () => {
+        const devices = (await snap()).text.split("Paired devices").at(-1);
+        return devices.includes("This Mac") && /Paired [^\n]*\d/u.test(devices);
+      },
+      { timeout: 30_000, interval: 200 },
+    );
+    await shot("step-1-paired-device");
+    await press("Escape");
   });
 
   // VC-710 is on main: every production project action now has to pass.

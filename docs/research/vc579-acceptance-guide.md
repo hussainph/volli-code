@@ -25,7 +25,7 @@ is not permission to tag a canary.
 
 | Step | Person's action and visible assertion | Exit criterion |
 | --- | --- | --- |
-| 1 | Add the SSH host; `<host> is ready`, `Volli host …`, `Paired with this Mac` | 1 |
+| 1 | Add the SSH host; `<host> is ready`, `Volli host …`, startup fact; Settings → Hosts → host shows an enrolled row marked `This Mac` and its `Paired …` date | 1 |
 | 2 | Create/open a project from the host's sheet; project label and `Host: <host>` | 1, prerequisite for 2–4, 6 |
 | 3 | Create a ticket in Backlog, move to Todo, reopen it; title, `Status: Todo`, `Running on <host>` | 3 (board) |
 | 4 | Paste only the fake API key; `Signed in on <host> · API key` | 2 |
