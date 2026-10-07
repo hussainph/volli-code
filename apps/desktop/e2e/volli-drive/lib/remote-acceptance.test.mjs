@@ -16,9 +16,11 @@ import {
   REOPEN_QUESTION,
   STREAM_REPLY,
   REOPEN_REPLY,
+  REMOTE_HOST,
   controlLabel,
   visibleControls,
   hasActionableControl,
+  boardDefaultControl,
   stableWaitingLabel,
   visibleServingRow,
   visibleAnswerReceipt,
@@ -75,6 +77,59 @@ test("the box default is chosen through UI after key storage, never through a SQ
   const session = smoke.indexOf('await send("remote-stream-turn")');
   assert.ok(key > 0 && picker > key && select > picker && session > select);
   assert.match(smoke, /await shot\("step-4-model-default"\)/u);
+});
+test("the native model sheet binds the Board combobox by visible heading and child text", () => {
+  // Exact dialog/Board-row shape from d47b6ba4f, cloud gen0204. Neither
+  // dialog nor combobox has the accessible name the old locator invented.
+  const sheet = `  - dialog [ref=f2e2049]:
+    - heading "Models on volli-acceptance" [level=2] [ref=f2e2051]
+    - generic [ref=f2e2054]:
+      - generic [ref=f2e2061]:
+        - generic [ref=f2e2062]:
+          - generic [ref=f2e2063]: Board chats
+          - combobox [ref=f2e2069]:
+            - generic: Choose a model
+        - generic [ref=f2e2070]:
+          - generic: Utility
+          - combobox [ref=f2e2080]:
+            - generic: Choose a model`;
+  const expected = "          - combobox [ref=f2e2069]:";
+  assert.equal(boardDefaultControl(sheet, REMOTE_HOST, "Choose a model"), expected);
+  const selected = sheet.replace("- generic: Choose a model", '- generic "GPT-4.1 mini" [ref=e1]');
+  assert.equal(boardDefaultControl(selected, REMOTE_HOST, "GPT-4.1 mini"), expected);
+  assert.equal(boardDefaultControl(selected, REMOTE_HOST, "Choose a model"), null);
+  assert.equal(boardDefaultControl(sheet, "another-host", "Choose a model"), null);
+  assert.equal(boardDefaultControl(sheet, REMOTE_HOST, "GPT-4.1 mini"), null);
+  for (const invalid of [
+    sheet.replace("[ref=f2e2069]", "[disabled]"),
+    sheet.replace("[ref=f2e2069]", ""),
+    sheet.replace("[ref=f2e2069]", "[ref=f2e2069] [disabled]"),
+    sheet.replace("Board chats", "Ticket Sessions"),
+    sheet.replace('heading "Models on volli-acceptance"', 'heading "Other sheet"'),
+    `${sheet}\n${sheet.replaceAll("f2e", "f3e")}`,
+    sheet.replace(
+      "        - generic [ref=f2e2070]:",
+      "          - combobox [ref=e99]:\n            - generic: Choose a model\n        - generic [ref=f2e2070]:",
+    ),
+  ])
+    assert.equal(boardDefaultControl(invalid, REMOTE_HOST, "Choose a model"), null);
+  const background =
+    '- combobox "Choose a model" [ref=e2]\n- heading "Models on volli-acceptance" [ref=e3]';
+  assert.equal(boardDefaultControl(background, REMOTE_HOST, "Choose a model"), null);
+  assert.equal(
+    boardDefaultControl(`${background}\n${sheet}`, REMOTE_HOST, "Choose a model"),
+    expected,
+  );
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  assert.match(
+    smoke,
+    /boardDefaultControl\(\(await snap\(\)\)\.text, REMOTE_HOST, "Choose a model"\)/u,
+  );
+  assert.match(smoke, /gen: modelSnapshot\.generation/u);
+  assert.match(
+    smoke,
+    /boardDefaultControl\(\(await snap\(\)\)\.text, REMOTE_HOST, "GPT-4\.1 mini"\)/u,
+  );
 });
 test("project success toast cannot make navigation actionable during dialog exit", () => {
   const exiting = [

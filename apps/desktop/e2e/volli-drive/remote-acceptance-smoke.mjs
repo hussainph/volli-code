@@ -20,6 +20,7 @@ import {
   snapshotSubtree,
   visibleControls as controls,
   hasActionableControl,
+  boardDefaultControl,
   stableWaitingLabel,
   visibleServingRow,
   visibleAnswerReceipt,
@@ -318,32 +319,23 @@ async function journey() {
       );
       await hostChip();
       await click("button", `Models on ${REMOTE_HOST}…`);
-      const modelScope = { scope: { role: "dialog", name: `Models on ${REMOTE_HOST}` } };
       await waitUntil(
         "the box catalog offers its unconfigured Board default",
-        async () => {
-          const tree = (await snap()).text;
-          return (
-            controls(tree, "dialog", `Models on ${REMOTE_HOST}`).length === 1 &&
-            hasActionableControl(
-              snapshotSubtree(tree, "dialog", `Models on ${REMOTE_HOST}`),
-              "combobox",
-              "Choose a model",
-            )
-          );
-        },
+        async () => boardDefaultControl((await snap()).text, REMOTE_HOST, "Choose a model"),
         { timeout: 10_000, interval: 100 },
       );
-      await click("combobox", "Choose a model", modelScope);
+      const modelSnapshot = await snap();
+      const boardDefault = boardDefaultControl(modelSnapshot.text, REMOTE_HOST, "Choose a model");
+      assert.ok(boardDefault, "Expected the box's enabled Board model control once");
+      await call("act", {
+        gen: modelSnapshot.generation,
+        ref: boardDefault.match(/\[ref=([^\]]+)\]/)[1],
+        kind: "click",
+      });
       await click("option", "GPT-4.1 mini");
       await waitUntil(
         "the box saved its selected default",
-        async () =>
-          hasActionableControl(
-            snapshotSubtree((await snap()).text, "dialog", `Models on ${REMOTE_HOST}`),
-            "combobox",
-            "GPT-4.1 mini",
-          ),
+        async () => boardDefaultControl((await snap()).text, REMOTE_HOST, "GPT-4.1 mini"),
         { timeout: 10_000, interval: 100 },
       );
       await shot("step-4-model-default");
