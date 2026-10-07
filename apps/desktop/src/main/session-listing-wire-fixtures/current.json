@@ -1,7 +1,7 @@
 {
   "provenance": {
     "revision": "VC-713 branch, first captured on top of 119235167",
-    "peer": "VC-713 public Session listing client (sessions.listing)",
+    "peer": "A representative test client requesting today's hostd offer (sessions.listing included), not the production desktop's request; recorded through the production listener over host-core's real handler map",
     "producer": "createHostRouter() through startHostProtocolListener, over host-core's createHostHandlers with sessionListing sources on a test database (session-listing-wire-compatibility.test.ts)",
     "sources": [
       "packages/session-rpc/src/session-listing-schema.ts",

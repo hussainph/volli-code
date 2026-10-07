@@ -43,6 +43,11 @@ afterEach(() => {
 });
 
 function start(holdReads = false): RemoteListingRefresh {
+  return startWithTimers(holdReads, []);
+}
+
+/** {@link start}, recording every delay the scheduler asks a timer for. */
+function startWithTimers(holdReads: boolean, delays: number[]): RemoteListingRefresh {
   const ports: RemoteListingRefreshPorts = {
     workspaces: () => state.workspaces,
     visible: () => state.visible,
@@ -63,7 +68,10 @@ function start(holdReads = false): RemoteListingRefresh {
     },
     clock: {
       now: () => Date.now(),
-      setTimeout: (run, ms) => setTimeout(run, ms),
+      setTimeout: (run, ms) => {
+        delays.push(ms);
+        return setTimeout(run, ms);
+      },
       clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     },
   };
@@ -131,6 +139,99 @@ describe("re-reading remote listings (VC-713)", () => {
     state.hold.get("a")!();
     await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS);
     expect(reads).toEqual(["a", "a"]);
+  });
+
+  it("never polls a slow read: no zero-delay timer, no second read in flight, one read after it (B1)", async () => {
+    state.workspaces = ["a"];
+    const delays: number[] = [];
+    const refresh = startWithTimers(true, delays);
+    focus!();
+    // The read hangs well past the debounce window, and triggers keep coming.
+    await vi.advanceTimersByTimeAsync(3 * REMOTE_LISTING_DEBOUNCE_MS);
+    focus!();
+    reconnect!("a");
+    refresh.refreshAll();
+    for (let step = 0; step < 20; step += 1) await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_POLL_MS);
+    expect(reads).toEqual(["a"]);
+    expect(delays.filter((ms) => ms <= 0)).toEqual([]);
+    // Settled: exactly one more read, then quiet.
+    state.hold.get("a")!();
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS);
+    expect(reads).toEqual(["a", "a"]);
+    state.hold.get("a")!();
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS);
+    expect(reads).toEqual(["a", "a"]);
+    expect(delays.filter((ms) => ms <= 0)).toEqual([]);
+    refresh.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("waits out the window after a settled read rather than reading again at once", async () => {
+    state.workspaces = ["a"];
+    start(true);
+    focus!();
+    focus!();
+    state.hold.get("a")!();
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS - 1);
+    expect(reads).toEqual(["a"]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reads).toEqual(["a", "a"]);
+  });
+
+  it("lets go of a Workspace that is no longer opened: its trailing read is cancelled", async () => {
+    const refresh = start();
+    focus!();
+    await vi.advanceTimersByTimeAsync(0);
+    focus!();
+    expect(vi.getTimerCount()).toBe(3);
+    state.workspaces = ["b"];
+    refresh.prune();
+    expect(vi.getTimerCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS);
+    expect(reads).toEqual(["a", "b", "b"]);
+    // A trigger for it, or its pending read, starts nothing either.
+    reconnect!("a");
+    state.workspaces = ["a"];
+    refresh.prune();
+    expect(reads).toEqual(["a", "b", "b"]);
+  });
+
+  it("lets go of a Workspace whose trailing read finds it no longer opened, unpruned", async () => {
+    const refresh = start();
+    focus!();
+    await vi.advanceTimersByTimeAsync(0);
+    focus!();
+    // Two more inside the window ride the one trailing read already set.
+    focus!();
+    reconnect!("a");
+    state.workspaces = ["b"];
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS);
+    expect(reads).toEqual(["a", "b", "b"]);
+    expect(vi.getTimerCount()).toBe(1);
+    refresh.stop();
+  });
+
+  it("reads nothing after a read settles for a Workspace let go of, or after stop", async () => {
+    state.workspaces = ["a"];
+    const refresh = start(true);
+    focus!();
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS);
+    focus!();
+    state.workspaces = [];
+    focus!();
+    refresh.prune();
+    state.hold.get("a")!();
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS);
+    expect(reads).toEqual(["a"]);
+    state.workspaces = ["a"];
+    focus!();
+    focus!();
+    refresh.stop();
+    state.hold.get("a")!();
+    await vi.advanceTimersByTimeAsync(REMOTE_LISTING_DEBOUNCE_MS);
+    expect(reads).toEqual(["a", "a"]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("drops a trailing read whose link went away meanwhile", async () => {

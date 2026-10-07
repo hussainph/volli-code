@@ -301,8 +301,12 @@ export interface SessionListingPage {
  * feature: the wire schema publishes them and the host clips to them before it
  * answers, so a long title shortens a row rather than failing the listing.
  *
- * - `rows`: at most this many rows. A row is about 1 KiB of JSON and hostd
- *   refuses an answer past 2 MiB whole (`response-too-large`).
+ * - `rows`: at most this many rows.
+ * - `bytes`: at most this much UTF-8 JSON across the rows. hostd refuses an
+ *   answer past its 2 MiB frame whole (`response-too-large`); a row's bounded
+ *   strings can still reach tens of KiB once escaped, so the row count alone
+ *   cannot keep a page inside the frame. 1.5 MiB leaves the envelope and the
+ *   frame's own allowance room.
  * - `id`: any id a row carries (Session, project, ticket, attachment, run,
  *   harness Session). Never clipped: ids this host mints are far shorter.
  * - `text`: a display string (a title, an Automation's or a parent's name),
@@ -312,6 +316,7 @@ export interface SessionListingPage {
  */
 export const SESSION_LISTING_BOUNDS = Object.freeze({
   rows: 500,
+  bytes: 1_572_864,
   id: 1024,
   text: 512,
   path: 4096,

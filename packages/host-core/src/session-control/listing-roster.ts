@@ -166,28 +166,44 @@ function clippedRow(row: SessionListingRow): SessionListingRow {
   };
 }
 
+/** A row's size on the wire: its UTF-8 JSON, escapes included. */
+function wireBytes(row: SessionListingRow): number {
+  return Buffer.byteLength(JSON.stringify(row), "utf8");
+}
+
 /**
- * A listing bounded for the wire, order kept. The rows a person must act on
- * (`waiting`) or that are running (`working`) come first, since those are what
- * a reopened app must show, then the rest by newest activity; what does not
- * fit is counted in `omitted`, never silently dropped. Display strings are
- * clipped to the wire's bounds.
+ * A listing bounded for the wire, in rows and in bytes, order kept. The rows a
+ * person must act on (`waiting`) or that are running (`working`) are taken
+ * first, since those are what a reopened app must show, then the rest by
+ * newest activity, each clipped to the wire's string bounds, until the next
+ * would pass {@link SESSION_LISTING_LIMIT} rows or `byteBudget` bytes of JSON.
+ * Everything not taken is counted in `omitted`, never silently dropped, and
+ * what is taken keeps the listing's own order.
  */
 export function boundedSessionListing(
   rows: readonly SessionListingRow[],
   limit: number = SESSION_LISTING_LIMIT,
+  byteBudget: number = SESSION_LISTING_BOUNDS.bytes,
 ): SessionListingPage {
-  if (rows.length <= limit) return { sessions: rows.map(clippedRow), omitted: 0 };
-  const kept = new Set(
-    rows
-      .toSorted(
-        (a, b) =>
-          Number(urgent(b)) - Number(urgent(a)) ||
-          b.record.lastActivityAt - a.record.lastActivityAt,
-      )
-      .slice(0, limit),
+  const ranked = rows.toSorted(
+    (a, b) =>
+      Number(urgent(b)) - Number(urgent(a)) || b.record.lastActivityAt - a.record.lastActivityAt,
   );
-  const sessions = rows.filter((row) => kept.has(row)).map(clippedRow);
+  const kept = new Map<SessionListingRow, SessionListingRow>();
+  // The array's brackets; each row after the first adds its comma.
+  let bytes = 2;
+  for (const row of ranked) {
+    if (kept.size >= limit) break;
+    const clipped = clippedRow(row);
+    const size = wireBytes(clipped) + (kept.size === 0 ? 0 : 1);
+    if (bytes + size > byteBudget) break;
+    bytes += size;
+    kept.set(row, clipped);
+  }
+  const sessions = rows.flatMap((row) => {
+    const clipped = kept.get(row);
+    return clipped === undefined ? [] : [clipped];
+  });
   return { sessions, omitted: rows.length - sessions.length };
 }
 

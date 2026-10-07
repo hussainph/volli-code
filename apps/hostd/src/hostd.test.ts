@@ -40,7 +40,7 @@ import { insertProject, SCHEMA_HEAD, MIN_READER_VERSION_KEY } from "@volli/host-
 import { SECRET_KEY_FILE_ENV } from "@volli/host-core/secrets";
 import { isLiveHost, type HostCore, type HostCoreOptions } from "@volli/host-core";
 import type { DetachedWorkPort } from "@volli/host-core/board";
-import { resetRetentionWatcherForTest } from "@volli/host-core/testing";
+import { insertSession, resetRetentionWatcherForTest, testSession } from "@volli/host-core/testing";
 
 import { HostdBootError } from "./boot-error";
 import { runOperatorToken, writeTokenAsUser } from "./operator-token";
@@ -1045,6 +1045,12 @@ describe("the host lifecycle hostd composes (VC-627)", () => {
   });
 });
 
+/**
+ * Text at its heaviest on the wire: quotes, backslashes, control characters
+ * and astral characters, which escape and encode to two to six bytes each.
+ */
+const heavy = (length: number) => '"\\\u0001😀'.repeat(Math.ceil(length / 5)).slice(0, length);
+
 describe("the host protocol listener (VC-663)", () => {
   const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
   const OTHER_WORKSPACE = "7a2e3d4c-5b6f-4071-9b8c-0d1e2f3a4b5c";
@@ -1450,6 +1456,64 @@ describe("the host protocol listener (VC-663)", () => {
       expect(reached.every(({ admitted }) => admitted)).toBe(true);
     } finally {
       await close();
+    }
+  });
+
+  it("answers a listing of the largest rows the wire allows inside its frame, over a real link (VC-713)", async () => {
+    const lever = device();
+    const host = await boot(
+      { env: CLOUD, listen: LOOPBACK, hostProtocolVerifier: lever.verifier },
+      logger(),
+    );
+    if (!isLiveHost(host.host)) throw new Error("database did not open");
+    const { db } = host.host.database;
+    insertProject(db, { ...project(WORKSPACE), path: join(root, "workspace") });
+    // 500 terminal rows (and one more), each at the wire's longest title and
+    // working directory, in text that escapes and encodes to its heaviest.
+    for (let index = 0; index <= 500; index += 1) {
+      insertSession(
+        db,
+        testSession(WORKSPACE, null, {
+          id: `terminal-${String(index).padStart(3, "0")}`,
+          title: heavy(512),
+          cwd: `/${heavy(4_095)}`,
+          createdAt: index,
+        }),
+      );
+    }
+    const link = createHostLink({
+      url: host.status().hostProtocol!.url,
+      workspaceId: WORKSPACE,
+      client: { kind: "desktop", version: "test" },
+      features: ["sessions.listing"],
+      credential: () => "device-token",
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        const stop = link.subscribeState((state) => {
+          if (state.status === "ready") {
+            stop();
+            resolve();
+          }
+        });
+      });
+      const page = (await link.query("session.listing", { projectId: WORKSPACE })) as {
+        sessions: { record: { id: string; title: string } }[];
+        omitted: number;
+      };
+      // A usable page, not a whole-answer refusal: inside hostd's frame, with
+      // everything it could not carry counted.
+      expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeLessThan(
+        HOSTD_LISTENER_LIMITS.maxFrameBytes,
+      );
+      expect(page.sessions.length).toBeGreaterThan(0);
+      expect(page.omitted).toBeGreaterThan(0);
+      expect(page.sessions.length + page.omitted).toBe(501);
+      // The newest rows are the ones carried, their text intact up to the bound.
+      expect(page.sessions.map((row) => row.record.id)).toContain("terminal-500");
+      expect(page.sessions[0]!.record.title).toBe(heavy(512));
+    } finally {
+      link.close();
     }
   });
 
