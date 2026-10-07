@@ -16,6 +16,7 @@
 import * as React from "react";
 import type { BlobLinkView } from "@volli/shared";
 import type { BlobAttachInput } from "../../../ipc/contract";
+import { notAvailableOn, remoteHostOfTicketNow } from "@renderer/stores/remote-project";
 
 export interface UseAttachmentsOptions {
   /**
@@ -84,6 +85,12 @@ export function useAttachments(options: UseAttachmentsOptions): AttachmentsHandl
         onError: fail,
       } = latest.current;
       const current = typeof suppliedOwner === "function" ? suppliedOwner() : suppliedOwner;
+      // A remote project's ticket keeps its attachments on its host (VC-711).
+      const host = "ticketId" in current ? remoteHostOfTicketNow(current.ticketId) : null;
+      if (host !== null) {
+        fail?.(notAvailableOn(host));
+        return;
+      }
       for (const file of files) {
         // "" when the drag did not come from the filesystem — a pasted
         // screenshot, or a drag out of another app's canvas.

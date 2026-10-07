@@ -16,12 +16,15 @@ import {
   boardApi,
   boardProtocol,
   boardSyncTransport,
+  commentTickets,
   createBoardClient,
+  remoteAwareBoardClients,
   protocolBoardApi,
   startBoardProtocol,
   stopBoardProtocol,
 } from "./board-protocol";
 import { BoardSync, type BoardSyncView } from "@renderer/stores/board-sync";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
 
 vi.mock("./session-rpc-ipc-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-rpc-ipc-link")>();
@@ -466,7 +469,7 @@ describe("boardApi with the protocol on", () => {
       "board.comments": () => ["comment"],
       "board.projectFolder": () => ({ exists: true }),
     });
-    const door = protocolBoardApi(client, syncOver(client));
+    const door = protocolBoardApi(() => client, syncOver(client));
 
     expect(
       await Promise.all([
@@ -517,7 +520,7 @@ describe("boardApi with the protocol on", () => {
         throw hostError("NOT_FOUND", "no folder");
       },
     });
-    const door = protocolBoardApi(client, syncOver(client));
+    const door = protocolBoardApi(() => client, syncOver(client));
 
     expect(
       await Promise.all([
@@ -547,7 +550,7 @@ describe("boardApi with the protocol on", () => {
       "board.setSkillModes": () => ({ project: { id: "p1", skillModes: {} } }),
       "board.setSessionDefaults": () => ({ project: { id: "p1", sessionModel: null } }),
     });
-    const door = protocolBoardApi(client, syncOver(client));
+    const door = protocolBoardApi(() => client, syncOver(client));
 
     const answers = [
       await door.comments.create({ ticketId: "a", body: "hi", sessionId: null }),
@@ -598,7 +601,7 @@ describe("boardApi with the protocol on", () => {
       },
     });
 
-    const creating = protocolBoardApi(client, syncOver(client)).comments.create({
+    const creating = protocolBoardApi(() => client, syncOver(client)).comments.create({
       ticketId: "a",
       body: "hi",
     });
@@ -626,7 +629,7 @@ describe("boardApi with the protocol on", () => {
         throw hostError("FORBIDDEN", "not yours");
       },
     });
-    const door = protocolBoardApi(client, syncOver(client));
+    const door = protocolBoardApi(() => client, syncOver(client));
 
     let settled = false;
     const updating = door.comments.update({ commentId: "c1", body: "edit" });
@@ -660,7 +663,7 @@ describe("boardApi with the protocol on", () => {
         throw attempts === 1 ? unavailable() : hostError("NOT_FOUND", "Not found");
       },
     });
-    const removing = protocolBoardApi(client, syncOver(client)).comments.remove({
+    const removing = protocolBoardApi(() => client, syncOver(client)).comments.remove({
       commentId: "c1",
     });
     await vi.advanceTimersByTimeAsync(250);
@@ -672,10 +675,10 @@ describe("boardApi with the protocol on", () => {
     // A structural client: a real one wraps every throw in a TRPCClientError.
     const client = {
       board: { ticketBody: { query: () => Promise.reject("not an error") } },
-    } as unknown as Parameters<typeof protocolBoardApi>[0];
+    } as unknown as Parameters<typeof boardSyncTransport>[0];
 
     expect(
-      await protocolBoardApi(client, syncOver(client)).tickets.body({ ticketId: "a" }),
+      await protocolBoardApi(() => client, syncOver(client)).tickets.body({ ticketId: "a" }),
     ).toEqual({
       ok: false,
       error: "not an error",
@@ -693,7 +696,7 @@ describe("boardApi with the protocol on", () => {
       "board.setSkillModes": refuse,
       "board.setSessionDefaults": refuse,
     });
-    const door = protocolBoardApi(client, syncOver(client));
+    const door = protocolBoardApi(() => client, syncOver(client));
 
     expect(
       await Promise.all([
@@ -715,7 +718,7 @@ describe("boardApi with the protocol on", () => {
         answer: spec.fromFeed({ id: "fed" }, "cmd-fed"),
       }),
     } as unknown as BoardSync;
-    const door = protocolBoardApi(client, proving);
+    const door = protocolBoardApi(() => client, proving);
 
     expect(
       await Promise.all([
@@ -734,5 +737,121 @@ describe("boardApi with the protocol on", () => {
       { ok: true, project: { id: "fed" } },
       { ok: true, project: { id: "fed" } },
     ]);
+  });
+});
+
+// ---- routing by project (VC-711) ---------------------------------------------------------
+
+const comment = (id: string, ticketId: string) => ({ id, ticketId, body: "b" });
+const paths = (calls: { path: string }[]) => calls.map(({ path }) => path);
+
+describe("each project's board client", () => {
+  const remoteSnapshot = {
+    project: { id: "r1" },
+    tickets: [{ id: "rt", projectId: "r1", status: "todo", order: 0, body: "" }],
+    labels: [],
+    cursor: "0:r:0",
+  };
+  const localSnapshot = { project: { id: "p1" }, tickets: [], labels: [], cursor: "0:i:0" };
+
+  it("routes the engine and every surface by project, ticket or comment", async () => {
+    const receipt = { receipt: { commandId: "c", status: "completed", replayed: false } };
+    const answers = (snapshot: unknown) => ({
+      "board.snapshot": () => snapshot,
+      "board.comments": () => [comment("rc", "rt")],
+      "board.updateComment": () => ({ ...receipt, comment: comment("rc", "rt") }),
+      "board.createComment": () => ({ ...receipt, comment: comment("rc2", "rt") }),
+      "board.removeComment": () => receipt,
+      "board.latestSignals": () => [],
+      "board.projectFolder": () => ({ path: "/srv", state: "present" }),
+      "board.ticketBody": () => ({ body: "remote body" }),
+    });
+    const local = fakeBoard(answers(localSnapshot));
+    const remote = fakeBoard(answers(remoteSnapshot));
+    const clientFor = vi.fn((projectId: string | undefined) =>
+      projectId === "r1" ? remote.client : local.client,
+    );
+    const { sync } = startBoardProtocol({ view: silentView(), client: local.client, clientFor });
+    await sync.open("p1");
+    await sync.open("r1");
+    expect(local.feeds.map(({ input }) => input)).toEqual([
+      { projectId: "p1", lastEventId: "0:i:0" },
+    ]);
+    expect(remote.feeds.map(({ input }) => input)).toEqual([
+      { projectId: "r1", lastEventId: "0:r:0" },
+    ]);
+
+    const api = boardApi();
+    expect(await api.tickets.body({ ticketId: "rt" })).toEqual({ ok: true, body: "remote body" });
+    expect(await api.comments.list({ ticketId: "rt" })).toMatchObject({ ok: true });
+    // A comment the facade has seen goes to its ticket's host, through any later facade.
+    expect(await boardApi().comments.update({ commentId: "rc", body: "x" })).toMatchObject({
+      ok: true,
+    });
+    expect(await boardApi().comments.create({ ticketId: "rt", body: "y" })).toMatchObject({
+      ok: true,
+    });
+    expect(await boardApi().comments.remove({ commentId: "rc2" })).toEqual({ ok: true });
+    expect(await api.tickets.latestSignals({ projectId: "r1" })).toEqual({ ok: true, signals: [] });
+    expect(await api.projects.checkFolder("r1")).toMatchObject({ ok: true, state: "present" });
+    // A comment it has never seen is this Mac's, as every call was before.
+    await boardApi().comments.remove({ commentId: "unknown" });
+
+    expect(paths(remote.calls)).toEqual([
+      "board.snapshot",
+      "board.changes",
+      "board.ticketBody",
+      "board.comments",
+      "board.updateComment",
+      "board.createComment",
+      "board.removeComment",
+      "board.latestSignals",
+      "board.projectFolder",
+    ]);
+    expect(paths(local.calls)).toEqual(["board.snapshot", "board.changes", "board.removeComment"]);
+  });
+
+  it("gives a remote project its own client, once, and every other project this Mac's", () => {
+    const local = fakeBoard().client;
+    const made: string[] = [];
+    const resolve = remoteAwareBoardClients(local, {
+      isRemote: (projectId) => projectId.startsWith("r"),
+      remote: (projectId) => {
+        made.push(projectId);
+        return fakeBoard().client;
+      },
+    });
+    expect(resolve(undefined)).toBe(local);
+    expect(resolve("p1")).toBe(local);
+    const remote = resolve("r1");
+    expect(remote).not.toBe(local);
+    expect(resolve("r1")).toBe(remote);
+    expect(made).toEqual(["r1"]);
+  });
+
+  it("asks the host-connection store which projects are remote, and reaches them over the relay", () => {
+    const local = fakeBoard().client;
+    const resolve = remoteAwareBoardClients(local);
+    expect(resolve("r1")).toBe(local);
+    useHostConnectionStore.setState({
+      hosts: [],
+      projects: { r1: { hostId: "box", link: { status: "open" } } },
+    });
+    try {
+      const remote = resolve("r1");
+      expect(remote).not.toBe(local);
+      expect(typeof remote.board.snapshot.query).toBe("function");
+    } finally {
+      useHostConnectionStore.setState({ hosts: [], projects: {} });
+    }
+  });
+
+  it("remembers a bounded number of comments' tickets, the oldest first out", () => {
+    const tickets = commentTickets(2);
+    tickets.note("a", "t1");
+    tickets.note("b", "t2");
+    tickets.note("a", "t1");
+    tickets.note("c", "t3");
+    expect([tickets.get("a"), tickets.get("b"), tickets.get("c")]).toEqual(["t1", undefined, "t3"]);
   });
 });

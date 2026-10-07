@@ -35,6 +35,7 @@ import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useBoardStore } from "@renderer/stores/board";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { notAvailableOn, refuseRemoteTicket, remoteHostNow } from "@renderer/stores/remote-project";
 
 /**
  * The New-ticket composer's stateful body: field state, the description editor
@@ -150,6 +151,8 @@ export function ComposerForm({
       indexVersion: fileIndex.version,
       onOpenFile: () => toast.info("Files open after the ticket is created"),
       createArtifact: async (name) => {
+        const host = remoteHostNow(target.id);
+        if (host !== null) return { ok: false, error: notAvailableOn(host) };
         try {
           const result = await window.api.files.createArtifact({ projectId: target.id, name });
           if (result.ok) fileIndex.forceRefresh();
@@ -259,6 +262,8 @@ export function ComposerForm({
       linkAttachments: async (ticketId) => {
         const pending = attachmentsRef.current;
         if (pending.length === 0) return;
+        // A remote project's ticket keeps its attachments on its host (VC-711).
+        if (refuseRemoteTicket(ticketId)) return;
         const result = await window.api.attachments.linkDrafts({
           ticketId,
           blobs: pending.map((entry) => ({ blobHash: entry.blobHash, label: entry.label })),

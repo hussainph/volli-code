@@ -15,10 +15,22 @@
  * The client is the board router's procedures over either link: the desktop's
  * generic IPC bridge for this Mac's in-process host (`sessionRpcClient()`,
  * which serves the board router beside the Session router, VC-608), or
- * `hostLinkTrpcLink(link)` for a remote host ({@link createBoardClient}).
+ * `hostLinkTrpcLink(relayHostLink(id))` for a remote project, over the
+ * Workspace link desktop main holds (VC-711, {@link createBoardClient}).
  * Nothing above the client knows which.
+ *
+ * **Routing is per project (VC-711).** One {@link BoardSync} follows every
+ * Workspace this window holds, local and remote alike: it already keys every
+ * call, base and pending write by Workspace, so it takes a transport per
+ * project ({@link BoardClientResolver}) rather than one engine per host,
+ * which would split its one pending layer, `workspaceOf` and the facade's
+ * commands across engines for nothing. A project the host-connection store
+ * claims for a remote host gets that host's client; every other one, this
+ * Mac's. The per-surface facade routes the same way: by the project, the
+ * ticket's Workspace, or a comment's ticket.
  */
 import { createTRPCClient, type TRPCClient, type TRPCLink } from "@trpc/client";
+import { hostLinkTrpcLink } from "@volli/host-protocol/client-link";
 import type { BoardRouter } from "@volli/session-rpc";
 import type { ModelSelection } from "@volli/shared";
 
@@ -33,6 +45,8 @@ import type {
   TicketLatestSignalsResult,
   TicketStatusEntriesResult,
 } from "../../../ipc/contract";
+import { isRemoteProject, useHostConnectionStore } from "../stores/host-connection";
+import { relayHostLink } from "./relay-host-link";
 import { sessionRpcClient } from "./session-rpc-ipc-link";
 import {
   BoardSync,
@@ -52,6 +66,42 @@ export function desktopBoardClient(): BoardClient {
 /** A board client over any terminating link: a host link's, in particular. */
 export function createBoardClient(link: TRPCLink<BoardRouter>): BoardClient {
   return createTRPCClient<BoardRouter>({ links: [link] });
+}
+
+/**
+ * Which board client one project's calls go to; `undefined` is a call that
+ * names no project this window can place (this Mac's, as it always was).
+ */
+export type BoardClientResolver = (projectId: string | undefined) => BoardClient;
+
+/**
+ * Each project's board client: a remote project's over its Workspace link
+ * (one client per project, kept for the protocol path's life; a client holds
+ * nothing until it is called), every other project's the local one.
+ */
+export function remoteAwareBoardClients(
+  local: BoardClient,
+  options: {
+    isRemote?: (projectId: string) => boolean;
+    remote?: (projectId: string) => BoardClient;
+  } = {},
+): BoardClientResolver {
+  const isRemote =
+    options.isRemote ??
+    ((projectId) => isRemoteProject(useHostConnectionStore.getState(), projectId));
+  const remote =
+    options.remote ??
+    ((projectId) => createBoardClient(hostLinkTrpcLink(relayHostLink(projectId))));
+  const remotes = new Map<string, BoardClient>();
+  return (projectId) => {
+    if (projectId === undefined || !isRemote(projectId)) return local;
+    let client = remotes.get(projectId);
+    if (client === undefined) {
+      client = remote(projectId);
+      remotes.set(projectId, client);
+    }
+    return client;
+  };
 }
 
 /** The sync engine's calls, over one board client. */
@@ -90,8 +140,13 @@ export function boardSyncTransport(client: BoardClient): BoardSyncTransport {
 }
 
 interface ActiveProtocol {
+  /** This Mac's board client. */
   readonly client: BoardClient;
+  /** Each project's board client. */
+  readonly clientFor: BoardClientResolver;
   readonly sync: BoardSync;
+  /** Which ticket each comment the facade has seen is on: how an edit finds its host. */
+  readonly commentTickets: CommentTickets;
 }
 
 let active: ActiveProtocol | null = null;
@@ -107,17 +162,31 @@ export function boardProtocol(): ActiveProtocol | null {
  */
 export function startBoardProtocol(options: {
   view: BoardSyncView;
+  /** This Mac's board client. */
   client?: BoardClient;
+  /** Each project's; by default a remote project's over its Workspace link, else {@link client}. */
+  clientFor?: BoardClientResolver;
   sync?: Partial<ConstructorParameters<typeof BoardSync>[0]>;
 }): ActiveProtocol {
   active?.sync.closeAll();
   const client = options.client ?? desktopBoardClient();
+  const clientFor = options.clientFor ?? remoteAwareBoardClients(client);
+  const transports = new WeakMap<BoardClient, BoardSyncTransport>();
+  const transportOf = (projectId: string): BoardSyncTransport => {
+    const routed = clientFor(projectId);
+    let transport = transports.get(routed);
+    if (transport === undefined) {
+      transport = boardSyncTransport(routed);
+      transports.set(routed, transport);
+    }
+    return transport;
+  };
   const sync = new BoardSync({
     ...options.sync,
-    transport: options.sync?.transport ?? boardSyncTransport(client),
+    transport: options.sync?.transport ?? transportOf,
     view: options.view,
   });
-  active = { client, sync };
+  active = { client, clientFor, sync, commentTickets: commentTickets() };
   return active;
 }
 
@@ -128,6 +197,27 @@ export function stopBoardProtocol(): void {
 }
 
 // ---- the per-surface facade ------------------------------------------------
+
+/** How many comments' tickets the facade remembers: oldest first out. */
+export const COMMENT_TICKETS_MAX = 10_000;
+
+/** Which ticket each comment is on, bounded. */
+export interface CommentTickets {
+  get(commentId: string): string | undefined;
+  note(commentId: string, ticketId: string): void;
+}
+
+export function commentTickets(max: number = COMMENT_TICKETS_MAX): CommentTickets {
+  const tickets = new Map<string, string>();
+  return {
+    get: (commentId) => tickets.get(commentId),
+    note(commentId, ticketId) {
+      tickets.delete(commentId);
+      tickets.set(commentId, ticketId);
+      if (tickets.size > max) tickets.delete(tickets.keys().next().value!);
+    },
+  };
+}
 
 async function read<Answer>(
   run: () => Promise<Answer>,
@@ -215,44 +305,59 @@ function receiptOf(commandId: string) {
  * long as it takes, the first proof (a reply, or the feed's row naming it)
  * settles it, and only a refusal fails it.
  */
-export function protocolBoardApi(client: BoardClient, sync: BoardSync): BoardApi {
-  const { board } = client;
+export function protocolBoardApi(
+  clientFor: BoardClientResolver,
+  sync: BoardSync,
+  comments: CommentTickets = commentTickets(),
+): BoardApi {
+  const forProject = (projectId: string) => clientFor(projectId).board;
+  const forTicket = (ticketId: string) => clientFor(sync.workspaceOf(ticketId)).board;
+  const forComment = (commentId: string) => {
+    const ticketId = comments.get(commentId);
+    return clientFor(ticketId === undefined ? undefined : sync.workspaceOf(ticketId)).board;
+  };
+  const noted = <Row extends { id: string; ticketId: string }>(row: Row): Row => {
+    comments.note(row.id, row.ticketId);
+    return row;
+  };
   return {
     tickets: {
       events: async ({ ticketId }) => {
-        const result = await read(() => board.ticketEvents.query({ ticketId }));
+        const result = await read(() => forTicket(ticketId).ticketEvents.query({ ticketId }));
         return result.ok ? { ok: true, events: result.answer as never } : result;
       },
       body: async ({ ticketId }) => {
-        const result = await read(() => board.ticketBody.query({ ticketId }));
+        const result = await read(() => forTicket(ticketId).ticketBody.query({ ticketId }));
         return result.ok ? { ok: true, body: result.answer.body } : result;
       },
       latestSignals: async ({ projectId }) => {
-        const result = await read(() => board.latestSignals.query({ projectId }));
+        const result = await read(() => forProject(projectId).latestSignals.query({ projectId }));
         return result.ok ? { ok: true, signals: result.answer } : result;
       },
       statusEntries: async ({ projectId }) => {
-        const result = await read(() => board.statusEntries.query({ projectId }));
+        const result = await read(() => forProject(projectId).statusEntries.query({ projectId }));
         return result.ok ? { ok: true, entries: result.answer } : result;
       },
     },
     comments: {
       list: async ({ ticketId }) => {
-        const result = await read(() => board.comments.query({ ticketId }));
-        return result.ok ? { ok: true, comments: result.answer } : result;
+        const result = await read(() => forTicket(ticketId).comments.query({ ticketId }));
+        return result.ok ? { ok: true, comments: result.answer.map(noted) } : result;
       },
       create: async (input) => {
         const result = await sync.command({
           verb: "add comment",
-          send: (commandId) => board.createComment.mutate({ commandId, ...input }),
+          send: (commandId) =>
+            forTicket(input.ticketId).createComment.mutate({ commandId, ...input }),
           fromFeed: (row, commandId) => ({ ...receiptOf(commandId), comment: row as never }),
         });
-        return result.ok ? { ok: true, comment: result.answer.comment } : result;
+        return result.ok ? { ok: true, comment: noted(result.answer.comment) } : result;
       },
       update: async (input) => {
         const result = await sync.command({
           verb: "edit comment",
-          send: (commandId) => board.updateComment.mutate({ commandId, ...input }),
+          send: (commandId) =>
+            forComment(input.commentId).updateComment.mutate({ commandId, ...input }),
           fromFeed: (row, commandId) => ({ ...receiptOf(commandId), comment: row as never }),
         });
         return result.ok ? { ok: true, comment: result.answer.comment } : result;
@@ -261,7 +366,8 @@ export function protocolBoardApi(client: BoardClient, sync: BoardSync): BoardApi
         // A retried removal that finds its comment gone was the removal itself.
         const result = await sync.command({
           verb: "delete comment",
-          send: (commandId) => board.removeComment.mutate({ commandId, ...input }),
+          send: (commandId) =>
+            forComment(input.commentId).removeComment.mutate({ commandId, ...input }),
           fromFeed: (_row, commandId) => receiptOf(commandId),
           goneMeansDone: true,
         });
@@ -273,7 +379,7 @@ export function protocolBoardApi(client: BoardClient, sync: BoardSync): BoardApi
         const result = await sync.command({
           verb: "update project",
           send: (commandId) =>
-            board.updateProject.mutate({
+            forProject(id).updateProject.mutate({
               commandId,
               projectId: id,
               baseBranch,
@@ -287,7 +393,11 @@ export function protocolBoardApi(client: BoardClient, sync: BoardSync): BoardApi
         const result = await sync.command({
           verb: "update skills",
           send: (commandId) =>
-            board.setSkillModes.mutate({ commandId, projectId: id, modes: modes as never }),
+            forProject(id).setSkillModes.mutate({
+              commandId,
+              projectId: id,
+              modes: modes as never,
+            }),
           fromFeed: (row, commandId) => ({ ...receiptOf(commandId), project: row as never }),
         });
         return result.ok ? { ok: true, project: result.answer.project as never } : result;
@@ -295,13 +405,14 @@ export function protocolBoardApi(client: BoardClient, sync: BoardSync): BoardApi
       setSessionDefaults: async ({ id, model }) => {
         const result = await sync.command({
           verb: "update session defaults",
-          send: (commandId) => board.setSessionDefaults.mutate({ commandId, projectId: id, model }),
+          send: (commandId) =>
+            forProject(id).setSessionDefaults.mutate({ commandId, projectId: id, model }),
           fromFeed: (row, commandId) => ({ ...receiptOf(commandId), project: row as never }),
         });
         return result.ok ? { ok: true, project: result.answer.project as never } : result;
       },
       checkFolder: async (projectId) => {
-        const result = await read(() => board.projectFolder.query({ projectId }));
+        const result = await read(() => forProject(projectId).projectFolder.query({ projectId }));
         return result.ok ? { ok: true, ...result.answer } : result;
       },
     },
@@ -310,5 +421,7 @@ export function protocolBoardApi(client: BoardClient, sync: BoardSync): BoardApi
 
 /** The board surfaces' door: the protocol facade with `cloud` on, `window.api` otherwise. */
 export function boardApi(): BoardApi {
-  return active === null ? legacyBoardApi() : protocolBoardApi(active.client, active.sync);
+  return active === null
+    ? legacyBoardApi()
+    : protocolBoardApi(active.clientFor, active.sync, active.commentTickets);
 }

@@ -195,7 +195,13 @@ export interface BoardSyncView {
 }
 
 export interface BoardSyncOptions {
-  readonly transport: BoardSyncTransport;
+  /**
+   * The host each Workspace's calls go to: one transport for every
+   * Workspace, or one per Workspace (VC-711: a remote project's board goes
+   * over its Workspace link, this Mac's over the IPC bridge). Every call
+   * names its Workspace, so routing needs nothing else.
+   */
+  readonly transport: BoardSyncTransport | ((projectId: string) => BoardSyncTransport);
   readonly view: BoardSyncView;
   readonly mintCommandId?: () => string;
   readonly now?: () => number;
@@ -388,7 +394,7 @@ interface WriteSpec<Answer> {
 
 /** The board's sync engine for every Workspace this window follows. */
 export class BoardSync {
-  readonly #transport: BoardSyncTransport;
+  readonly #transportFor: (projectId: string) => BoardSyncTransport;
   readonly #view: BoardSyncView;
   readonly #mint: () => string;
   readonly #now: () => number;
@@ -409,7 +415,8 @@ export class BoardSync {
   #adoptions = 0;
 
   constructor(options: BoardSyncOptions) {
-    this.#transport = options.transport;
+    const { transport } = options;
+    this.#transportFor = typeof transport === "function" ? transport : () => transport;
     this.#view = options.view;
     this.#mint = options.mintCommandId ?? (() => crypto.randomUUID());
     this.#now = options.now ?? Date.now;
@@ -480,7 +487,7 @@ export class BoardSync {
     const readAt = this.#adoptions;
     let snapshot: Awaited<ReturnType<BoardSyncTransport["snapshot"]>>;
     try {
-      snapshot = await this.#transport.snapshot(projectId);
+      snapshot = await this.#transportFor(projectId).snapshot(projectId);
     } catch (error) {
       if (!workspace.closed && workspace.generation === generation) this.#reopenLater(workspace);
       throw error;
@@ -586,7 +593,8 @@ export class BoardSync {
       }),
       bodies: new Map([[CREATED, fields.body ?? ""]]),
       revives: true,
-      send: (commandId) => this.#transport.createTicket({ commandId, projectId, ...fields }),
+      send: (commandId) =>
+        this.#transportFor(projectId).createTicket({ commandId, projectId, ...fields }),
       proved: (pending) => ({
         ...this.#provedAnswer(pending),
         // Proved by the feed, whose row named the new ticket's id.
@@ -619,7 +627,7 @@ export class BoardSync {
             : moveTicketsOp(view, ticketIds, toStatus, toIndex, now),
       }),
       send: (commandId) =>
-        this.#transport.moveTickets({
+        this.#transportFor(projectId).moveTickets({
           commandId,
           projectId,
           ticketIds,
@@ -636,7 +644,8 @@ export class BoardSync {
       verb: "update priority",
       aspects: [`ticket:${ticketId}:priority`],
       edit: () => ({ tickets: patchTicket(ticketId, { priority }) }),
-      send: (commandId) => this.#transport.setPriority({ commandId, ticketId, priority }),
+      send: (commandId) =>
+        this.#transportFor(projectId).setPriority({ commandId, ticketId, priority }),
     });
   }
 
@@ -655,7 +664,7 @@ export class BoardSync {
       aspects: defined.map((field) => `ticket:${ticketId}:${field}`),
       edit: () => ({ tickets: patchTicket(ticketId, fields) }),
       bodies: fields.body === undefined ? undefined : new Map([[ticketId, fields.body]]),
-      send: (commandId) => this.#transport.updateTicket({ commandId, ...input }),
+      send: (commandId) => this.#transportFor(projectId).updateTicket({ commandId, ...input }),
       proved: (pending) => ({
         ...this.#provedAnswer(pending),
         ticket: this.#row(projectId, ticketId),
@@ -670,7 +679,7 @@ export class BoardSync {
       verb: "update labels",
       aspects: [`ticket:${ticketId}:labels`],
       edit: () => ({ tickets: patchTicket(ticketId, { labels }) }),
-      send: (commandId) => this.#transport.setLabels({ commandId, ticketId, labels }),
+      send: (commandId) => this.#transportFor(projectId).setLabels({ commandId, ticketId, labels }),
     });
   }
 
@@ -682,7 +691,8 @@ export class BoardSync {
       edit: () => ({
         labels: (view) => view.map((label) => (label.id === labelId ? { ...label, color } : label)),
       }),
-      send: (commandId) => this.#transport.setLabelColor({ commandId, labelId, color }),
+      send: (commandId) =>
+        this.#transportFor(projectId).setLabelColor({ commandId, labelId, color }),
     });
   }
 
@@ -694,7 +704,7 @@ export class BoardSync {
       aspects: [`ticket:${ticketId}:lifecycle`],
       lifecycle: true,
       edit: () => ({ tickets: (view) => view.filter((ticket) => ticket.id !== ticketId) }),
-      send: (commandId) => this.#transport.archiveTicket({ commandId, ticketId }),
+      send: (commandId) => this.#transportFor(projectId).archiveTicket({ commandId, ticketId }),
     });
     return outcome.kind === "accepted";
   }
@@ -718,7 +728,8 @@ export class BoardSync {
       // The archived row carries the host's body: it is the confirmed one.
       bodies: new Map([[archived.id, archived.body]]),
       revives: true,
-      send: (commandId) => this.#transport.unarchiveTicket({ commandId, ticketId: archived.id }),
+      send: (commandId) =>
+        this.#transportFor(projectId).unarchiveTicket({ commandId, ticketId: archived.id }),
       proved: (pending) => ({
         ...this.#provedAnswer(pending),
         ticket: this.#row(projectId, archived.id),
@@ -733,7 +744,7 @@ export class BoardSync {
       verb: "delete ticket",
       aspects: [`ticket:${ticketId}:lifecycle`],
       lifecycle: true,
-      send: (commandId) => this.#transport.deleteTicket({ commandId, ticketId }),
+      send: (commandId) => this.#transportFor(projectId).deleteTicket({ commandId, ticketId }),
       goneMeansDone: true,
     });
     return outcome.kind === "accepted";
@@ -774,7 +785,7 @@ export class BoardSync {
   /** The Workspace's archived tickets, newest first, or null when the read failed (said). */
   async archivedTickets(projectId: string): Promise<ArchivedTicket[] | null> {
     try {
-      return await this.#transport.archivedTickets(projectId);
+      return await this.#transportFor(projectId).archivedTickets(projectId);
     } catch (error) {
       this.#view.failed(`Couldn't load archive: ${failureMessage(error)}`);
       return null;
@@ -1024,7 +1035,7 @@ export class BoardSync {
   // ---- the feed ---------------------------------------------------------------
 
   #follow(workspace: Workspace, cursor: string): void {
-    workspace.stop = this.#transport.changes(workspace.projectId, cursor, {
+    workspace.stop = this.#transportFor(workspace.projectId).changes(workspace.projectId, cursor, {
       onBatch: (batch) => {
         if (workspace.closed) return;
         workspace.feedFailures = 0;
@@ -1269,8 +1280,8 @@ export class BoardSync {
     let failed = false;
     try {
       const answer = withProject
-        ? await this.#transport.snapshot(projectId)
-        : await this.#transport.roster(projectId);
+        ? await this.#transportFor(projectId).snapshot(projectId)
+        : await this.#transportFor(projectId).roster(projectId);
       if (workspace.closed || workspace.generation !== generation || workspace.cursor === null) {
         return;
       }

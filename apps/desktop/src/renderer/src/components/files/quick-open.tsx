@@ -40,6 +40,7 @@ import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { remoteHostNow } from "@renderer/stores/remote-project";
 
 /**
  * One file row. Single line, not the palette's stacked title-over-context: a
@@ -93,7 +94,13 @@ export function QuickOpen({
   const scopeProjectId = scope?.projectId ?? null;
   const scopeTicketId = scope?.kind === "ticket" ? scope.ticketId : null;
   React.useEffect(() => {
-    if (!open || scopeKind === null || scopeProjectId === null) {
+    // A remote project's files are on its host (VC-711): nothing to open here.
+    if (
+      !open ||
+      scopeKind === null ||
+      scopeProjectId === null ||
+      remoteHostNow(scopeProjectId) !== null
+    ) {
       setIndex([]);
       setTruncated(false);
       return;

@@ -501,7 +501,7 @@ for (const door of DOORS) {
       await converged(host, record);
       expect(getTicketRow(host.ctx.db, created!.id)?.status).toBe("doing");
 
-      const api = protocolBoardApi(client, sync);
+      const api = protocolBoardApi(() => client, sync);
       const comment = await api.comments.create({ ticketId: created!.id, body: "From the facade" });
       expect(comment).toMatchObject({ ok: true, comment: { body: "From the facade" } });
       expect(listComments(host.ctx.db, created!.id).map(({ body }) => body)).toEqual([

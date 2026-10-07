@@ -22,6 +22,7 @@ import {
   type ProjectSessionRows,
 } from "./project-sessions";
 import type { SessionActivityNotice } from "../../../ipc/contract";
+import { remoteProject } from "./remote-project.test-support";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
@@ -802,5 +803,28 @@ describe("the unread axis", () => {
     );
 
     expect(merged.read).toEqual({ c1: { unreadSince: 1 } });
+  });
+});
+
+// VC-711: a remote project's Sessions are its host's; this Mac's listing has none.
+describe("a remote project", () => {
+  it("lists no Sessions, asking this Mac nothing", async () => {
+    vi.stubGlobal("window", { api: { sessions: { list: vi.fn() } } });
+    const undo = remoteProject("r1");
+    try {
+      const store = createProjectSessionsStore();
+      await store.getState().ensure("r1");
+      expect(store.getState().byProject.r1).toEqual({
+        terminal: [],
+        chat: [],
+        provenance: {},
+        read: {},
+      });
+      expect(store.getState().listingState.r1).toBe("loaded");
+      expect(window.api.sessions.list).not.toHaveBeenCalled();
+    } finally {
+      undo();
+      vi.unstubAllGlobals();
+    }
   });
 });

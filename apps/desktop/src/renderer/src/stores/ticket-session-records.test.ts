@@ -15,7 +15,14 @@ import {
   useTicketSessionRecordsStore,
 } from "./ticket-session-records";
 import type { SessionActivityNotice } from "../../../ipc/contract";
+import { remoteProject } from "./remote-project.test-support";
 
+const protocol = vi.hoisted(() => ({
+  workspaceOf: (_ticketId: string): string | undefined => undefined,
+}));
+vi.mock("@renderer/lib/board-protocol", () => ({
+  boardProtocol: () => ({ sync: { workspaceOf: (id: string) => protocol.workspaceOf(id) } }),
+}));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
@@ -602,5 +609,24 @@ describe("setSessionRead", () => {
 
     expect(store.getState().byTicket["t1"]?.[1]).toEqual(terminalRow({ id: "s1" }));
     expect(store.getState().byTicket["t-unknown"]).toBeUndefined();
+  });
+});
+
+// VC-711: a remote project's ticket's Sessions are its host's.
+describe("a remote project's ticket", () => {
+  it("lists no Sessions, asking this Mac nothing", async () => {
+    const listForTicket = stubListForTicket(() => Promise.resolve({ ok: true, sessions: [] }));
+    const undo = remoteProject("r1");
+    protocol.workspaceOf = (id) => (id === "rt" ? "r1" : undefined);
+    try {
+      const store = createTicketSessionRecordsStore();
+      await store.getState().ensure("rt");
+      expect(store.getState().byTicket.rt).toEqual([]);
+      expect(store.getState().listingState.rt).toBe("loaded");
+      expect(listForTicket).not.toHaveBeenCalled();
+    } finally {
+      undo();
+      protocol.workspaceOf = () => undefined;
+    }
   });
 });

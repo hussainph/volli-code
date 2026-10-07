@@ -47,6 +47,7 @@ import {
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
 import { markSessionRead } from "./session-read-mark";
+import { remoteHostNow } from "./remote-project";
 
 /** One project's rows, split into the two shapes every consumer wants them in. */
 export interface ProjectSessionRows {
@@ -306,6 +307,18 @@ export function createProjectSessionsStore() {
     listingState: {},
 
     async refresh(projectId) {
+      // A remote project's Sessions are its host's (VC-711): this Mac's
+      // listing has none, and is not asked about an id it does not hold.
+      if (remoteHostNow(projectId) !== null) {
+        set((state) => ({
+          byProject: {
+            ...state.byProject,
+            [projectId]: { terminal: [], chat: [], provenance: {}, read: {} },
+          },
+          listingState: { ...state.listingState, [projectId]: "loaded" },
+        }));
+        return;
+      }
       set((state) => ({
         listingState: { ...state.listingState, [projectId]: "loading" },
       }));

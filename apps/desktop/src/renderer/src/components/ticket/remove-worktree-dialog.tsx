@@ -18,6 +18,7 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { toastError } from "@renderer/lib/toast";
+import { refuseRemote } from "@renderer/stores/remote-project";
 
 /**
  * The "Remove worktree…" escape hatch (ticket-context-menu.tsx's non-destructive
@@ -69,7 +70,7 @@ export function RemoveWorktreeDialog({
   }, [open]);
 
   async function removeClean() {
-    if (!guardWrite(projectId)) return;
+    if (!guardWrite(projectId) || refuseRemote(projectId)) return;
     setPending(true);
     try {
       const result = await window.api.worktree.remove(ticketId, false);
@@ -99,7 +100,7 @@ export function RemoveWorktreeDialog({
   }
 
   async function removeForced() {
-    if (!guardWrite(projectId)) return;
+    if (!guardWrite(projectId) || refuseRemote(projectId)) return;
     setPending(true);
     try {
       const result = await window.api.worktree.remove(ticketId, true);

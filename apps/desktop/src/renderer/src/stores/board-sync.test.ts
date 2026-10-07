@@ -2811,3 +2811,66 @@ describe("re-check: per-aspect order, body freshness, generation-scoped reads", 
     expect(last().tickets.find((t) => t.id === "A")?.body).toBe("# Read since");
   });
 });
+
+// ---- routing by Workspace (VC-711) ----------------------------------------------------------
+
+/** Lets the fake hosts answer: they answer on a timer, even at no latency. */
+async function go<Answer>(call: Promise<Answer>): Promise<Answer> {
+  const state = { settled: false };
+  void call.finally(() => (state.settled = true)).catch(() => {});
+  for (let tick = 0; tick < 400; tick++) {
+    if (state.settled) return call;
+    await vi.advanceTimersByTimeAsync(25);
+  }
+  throw new Error("never settled");
+}
+
+describe("routing each Workspace to its own host", () => {
+  it("sends every read, feed and write of a Workspace to that Workspace's transport", async () => {
+    const local = new FakeHost();
+    local.tickets = [ticket("A", "todo", 0)];
+    const remote = new FakeHost();
+    remote.projects.set("r1", project("r1"));
+    remote.tickets = [ticket("R", "todo", 0, { projectId: "r1" })];
+    remote.labels = [label("box", "r1")];
+    const { view, last } = recorder();
+    let minted = 0;
+    const sync = new BoardSync({
+      transport: (projectId) => (projectId === "r1" ? remote : local),
+      view,
+      mintCommandId: () => `cmd-${++minted}`,
+    });
+    await go(sync.open("p1"));
+    await go(sync.open("r1"));
+    expect(last("r1").tickets.map(({ id }) => id)).toEqual(["R"]);
+    expect(remote.subscriptions.map(({ projectId }) => projectId)).toEqual(["r1"]);
+    expect(local.subscriptions.map(({ projectId }) => projectId)).toEqual(["p1"]);
+
+    const made = await go(sync.createTicket("r1", { status: "todo", title: "On the box" }));
+    await go(sync.setPriority("r1", "R", "high"));
+    await go(sync.updateTicket("r1", { ticketId: "R", title: "Renamed" }));
+    await go(sync.setLabels("r1", "R", ["box"]));
+    await go(sync.setLabelColor("r1", remote.labels[0]!.id, "#ff0000"));
+    await go(sync.moveTickets("r1", ["R"], "doing", 0));
+    await go(sync.archiveTicket("r1", made!.id));
+    const archived = await go(sync.archivedTickets("r1"));
+    await go(sync.unarchiveTicket("r1", archived![0]!));
+    await go(sync.setPriority("p1", "A", "low"));
+
+    expect(remote.calls.map(({ method }) => method)).toEqual(
+      expect.arrayContaining([
+        "snapshot",
+        "createTicket",
+        "setPriority",
+        "updateTicket",
+        "setLabels",
+        "setLabelColor",
+        "moveTickets",
+        "archiveTicket",
+        "archivedTickets",
+        "unarchiveTicket",
+      ]),
+    );
+    expect(local.calls.map(({ method }) => method)).toEqual(["snapshot", "setPriority"]);
+  });
+});

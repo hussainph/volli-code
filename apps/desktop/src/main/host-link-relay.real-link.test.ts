@@ -61,9 +61,15 @@ import { createTRPCClient } from "@trpc/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  boardApi,
+  boardProtocol,
   boardSyncTransport,
   createBoardClient,
   protocolBoardApi,
+  remoteAwareBoardClients,
+  startBoardProtocol,
+  stopBoardProtocol,
+  type BoardClient,
 } from "../renderer/src/lib/board-protocol";
 import { relayHostLink, type RelayLinkStateSource } from "../renderer/src/lib/relay-host-link";
 import { BoardSync, type BoardSyncView } from "../renderer/src/stores/board-sync";
@@ -467,7 +473,7 @@ describe("a remote project's board through the relay, over a real link", () => {
     await vi.waitFor(() => expect(getTicketRow(host.db, created!.id)?.status).toBe("doing"));
     await vi.waitFor(() => expect(titleOf(record, created!.id)?.status).toBe("doing"));
 
-    const api = protocolBoardApi(board, sync);
+    const api = protocolBoardApi(() => board, sync);
     expect(
       await api.comments.create({ ticketId: created!.id, body: "From this Mac" }),
     ).toMatchObject({ ok: true, comment: { body: "From this Mac" } });
@@ -690,5 +696,61 @@ describe("a remote project's board through the relay, over a real link", () => {
     ]);
     expect(host.streams()).toBe(3);
     for (const subscription of first) subscription.unsubscribe();
+  });
+
+  // VC-711 PR 2: the app's own routing. One sync engine, this Mac's projects
+  // on the local client, the remote project on its Workspace link: created,
+  // moved and commented through `boardApi()` and the engine, as the board
+  // store and the ticket view do.
+  it("routes a remote project's board through the app's per-project clients", async () => {
+    const { host, win, link } = await remoteProject();
+    const local = new Proxy({} as BoardClient, {
+      get: () => {
+        throw new Error("this Mac's client was asked about the remote project");
+      },
+    });
+    const adopted: Project[] = [];
+    const painted = new Map<string, Ticket[]>();
+    const clientFor = remoteAwareBoardClients(local, {
+      isRemote: (projectId) => projectId === PROJECT,
+      remote: (projectId) =>
+        createBoardClient(
+          hostLinkTrpcLink(relayHostLink(projectId, { rpc: win.client, state: storeState(link) })),
+        ),
+    });
+    const { sync } = startBoardProtocol({
+      client: local,
+      clientFor,
+      view: {
+        paint: (projectId, tickets) => void painted.set(projectId, tickets),
+        adoptProject: (project) => void adopted.push(project),
+        notePlanningChange: () => {},
+        checkoutMoved: () => {},
+        failed: (message) => {
+          throw new Error(message);
+        },
+      },
+      sync: { readCoalesceMs: 1, retryDelaysMs: [5], feedRetryDelaysMs: [5, 20] },
+    });
+    cleanups.push(() => stopBoardProtocol());
+    await sync.open(PROJECT);
+    expect(adopted.map(({ id, name }) => [id, name])).toEqual([[PROJECT, "On the box"]]);
+    const made = await sync.createTicket(PROJECT, { status: "todo", title: "Routed to the box" });
+    await sync.moveTickets(PROJECT, [made!.id], "done", 0);
+    await vi.waitFor(() => expect(getTicketRow(host.db, made!.id)?.status).toBe("done"));
+    expect(boardProtocol()?.sync).toBe(sync);
+    expect(await boardApi().comments.create({ ticketId: made!.id, body: "Routed" })).toMatchObject({
+      ok: true,
+    });
+    const listed = await boardApi().comments.list({ ticketId: made!.id });
+    expect(listed).toMatchObject({ ok: true, comments: [{ body: "Routed" }] });
+    const commentId = listed.ok ? listed.comments[0]!.id : "";
+    expect(await boardApi().comments.update({ commentId, body: "Edited" })).toMatchObject({
+      ok: true,
+    });
+    expect(listComments(host.db, made!.id).map(({ body }) => body)).toEqual(["Edited"]);
+    await vi.waitFor(() =>
+      expect(painted.get(PROJECT)?.find(({ id }) => id === made!.id)?.status).toBe("done"),
+    );
   });
 });

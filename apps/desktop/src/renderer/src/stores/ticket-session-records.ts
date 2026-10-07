@@ -34,6 +34,7 @@ import {
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
 import { markSessionRead } from "./session-read-mark";
+import { remoteHostOfTicketNow } from "./remote-project";
 
 /** The Session id a listing row answers to, whichever shape it arrived in. */
 function rowSessionId(row: SessionListingRow): string {
@@ -162,6 +163,15 @@ export function createTicketSessionRecordsStore() {
       // earns an empty sentence, and `failed` must stand the skeleton down.
       // Keeping this beside the rows makes the distinction reusable by another
       // client instead of re-derived by every JSX consumer.
+      // A remote project's ticket's Sessions are its host's (VC-711).
+      if (remoteHostOfTicketNow(ticketId) !== null) {
+        set((state) => ({
+          byTicket: { ...state.byTicket, [ticketId]: [] },
+          listingState: { ...state.listingState, [ticketId]: "loaded" },
+          listingError: { ...state.listingError, [ticketId]: null },
+        }));
+        return Promise.resolve();
+      }
       set((state) => ({
         listingState: { ...state.listingState, [ticketId]: "loading" },
         listingError: { ...state.listingError, [ticketId]: null },
