@@ -56,7 +56,11 @@ import {
   useChatDraftsStore,
   type ChatDraft,
 } from "@renderer/stores/chat-drafts";
-import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import {
+  forgetSessionProject,
+  projectOfSession,
+  rememberSessionProject,
+} from "@renderer/lib/session-project";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -239,24 +243,6 @@ function blobLinkDrafts(
 }
 
 /**
- * The project of a Session this store did not start, from the listings it was
- * opened from (VC-713). `null` when none names it, which reads as This Mac's.
- * (A Draft never reaches here: it attaches only once promoted, and promotion
- * records its project.)
- */
-function knownProjectOf(sessionId: string): string | null {
-  for (const [projectId, rows] of Object.entries(useProjectSessionsStore.getState().byProject)) {
-    if (rows.chat.some((row) => row.sessionId === sessionId)) return projectId;
-  }
-  for (const rows of Object.values(useTicketSessionRecordsStore.getState().byTicket)) {
-    for (const row of rows) {
-      if (row.kind === "chat" && row.record.sessionId === sessionId) return row.record.projectId;
-    }
-  }
-  return null;
-}
-
-/**
  * Factory so tests get isolated instances (sessions.ts's convention).
  *
  * `transport` answers per project (VC-713): a Session on a remote host goes
@@ -266,14 +252,10 @@ export function createChatSessionsStore(
   transport: (projectId: string | null) => ChatSessionTransport = chatTransportFor,
 ) {
   return create<ChatSessionsState>()((set, get, api) => {
-    /**
-     * Which project each Session this store started or adopted belongs to, so
-     * its client — created once, kept in the registry — gets that project's
-     * transport (VC-713). Forgotten when the Session is closed.
-     */
-    const projectOfSession = new Map<string, string>();
-    const projectOf = (sessionId: string): string | null =>
-      projectOfSession.get(sessionId) ?? knownProjectOf(sessionId);
+    // Which project each Session belongs to, so its client — created once,
+    // kept in the registry — gets that project's transport (VC-713). The
+    // Sessions this store starts or adopts are recorded; any other is found
+    // in the listings it was opened from (`lib/session-project`).
     // A close after create but before Blob transfer finishes cannot delete the
     // durable row, but it must stop that in-flight promotion from attaching a
     // resident runtime behind the closed tab.
@@ -296,7 +278,7 @@ export function createChatSessionsStore(
 
     const attach = (sessionId: string) =>
       getOrCreateChatClient(sessionId, {
-        ...transport(projectOf(sessionId)),
+        ...transport(projectOfSession(sessionId)),
         store: api,
         // The two desktop-owned effects the core names but never imports
         // (VC-169): an event failure surfaces as an error toast, and the
@@ -399,7 +381,7 @@ export function createChatSessionsStore(
         toastError("Could not start Session. Try sending again.");
         return null;
       }
-      projectOfSession.set(created.sessionId, input.projectId);
+      rememberSessionProject(created.sessionId, input.projectId);
       if (makeClient) makeResident(created.sessionId, input.ticketId);
       return created.sessionId;
     };
@@ -560,7 +542,7 @@ export function createChatSessionsStore(
       // name, and the composer is gated by whether an executor is live — which
       // the arriving snapshot answers — and never by this.
       adoptChatSession(sessionId, projectId) {
-        if (projectId !== undefined) projectOfSession.set(sessionId, projectId);
+        if (projectId !== undefined) rememberSessionProject(sessionId, projectId);
         // A Draft tab can travel through the same sidebar/split doors as a
         // durable chat. Opening that view must not manufacture a resident
         // client (and therefore an attach) before its first message promotes it.
@@ -573,7 +555,7 @@ export function createChatSessionsStore(
 
       closeChatSession(sessionId) {
         disposeChatClient(sessionId);
-        projectOfSession.delete(sessionId);
+        forgetSessionProject(sessionId);
         set((state) => {
           if (state.sessions[sessionId] === undefined) return state;
           const sessions = { ...state.sessions };

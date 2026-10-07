@@ -23,6 +23,7 @@ import { sessionStartToastModel } from "./components/sessions/session-start-toas
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
 import { boot, refreshPlanningData, startBoardProtocolIfEnabled } from "./lib/boot";
 import { installRendererLogForwarding } from "./lib/renderer-log";
+import { bindRemoteSessionsWhileCloud } from "@renderer/lib/remote-sessions";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
@@ -211,6 +212,10 @@ async function main() {
   // attaches remote hosts beside it. Only flagged surfaces read it.
   attachThisMacWhileCloud();
   attachRemoteHostsWhileCloud();
+  // Sessions on a remote host (VC-713): their chat, listing and re-reads go
+  // over each project's Workspace link while `cloud` is on; off, nothing is
+  // registered and every Session is This Mac's.
+  bindRemoteSessionsWhileCloud();
 
   // Main owns one durable armed-column countdown per move (VC-226). Subscribe
   // before priming so a window opened mid-countdown cannot miss a replacement
