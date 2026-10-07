@@ -185,6 +185,18 @@ jobs:
           cache: true
           run-install: true
 
+      # VC-728: information, not a gate. Both the process and shell fallback
+      # tolerate errors; timeout keeps the advisory below a minute even on drift.
+      - name: Report exported seams (advisory)
+        id: exported-seams
+        continue-on-error: true
+        run: >-
+          timeout 55s node scripts/report-exported-seams.mjs
+          || echo 'Exported seams advisory unavailable or timed out; inspect callers manually.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test exported-seam advisory
+        run: vp test run scripts/report-exported-seams.test.mjs --maxWorkers=$(nproc)
+
       - name: Check
         run: vp check
 

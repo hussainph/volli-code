@@ -65,6 +65,22 @@ Re-open one only if the friction is real, and then flag it clearly:
 - a per-project theme follows the project to every device;
 - the agent CLI path never changes.
 
+## Wiring evidence (every review)
+
+**No exported seam without a production caller.** For every new export, name the production caller (file and call path), or the exact checklist line in the receiving ticket that will call it. Tests and lab scenarios are not production callers. A comment saying “the next ticket wires it” is not a handoff unless that receiving ticket has the checklist line.
+
+Record decisions that cross tickets (for example, where a Workspace link lives) in the relevant plan **before a second ticket builds on them**. Review both sides of the handoff against that recorded decision.
+
+A milestone is **code-complete** only after a per-exit-criterion wiring table has every row **wired**, before the acceptance run. Use this shape, following the integration-gap analysis; code existing or tests passing is only **pieces only**, not wired:
+
+| Exit criterion | Link in the production chain | Status | Caller / evidence |
+|---|---|---|---|
+| <criterion> | <each UI → transport → host → result hop> | wired / pieces only / missing | <file:line and call path> |
+
+Trace each criterion end to end, including ownership, reconnect and flag-off behavior. A ticket line naming future wiring permits an explicit unfinished handoff, not a milestone code-complete claim.
+
+Run `node scripts/report-exported-seams.mjs` for an **advisory** inventory and attach its first output to the PR body. It uses a conservative ripgrep/name pass because the repository's TypeScript 7 has no stable compiler/parser API; it reads source once instead of typechecking the whole monorepo. It ignores forwarding exports as caller evidence and follows named aliases by spelling. Comments, strings, same-named symbols and unused imports can hide gaps; default, namespace or dynamic access and same-file calls require manual inspection. It is not a reachability proof or a blocking gate. Lab scratches that simulate live boundaries must visibly say **Simulated wiring**; a lab result is not acceptance evidence.
+
 ## Rules
 - **Read-only.** Don't modify, commit or push anything, anywhere. No installs or builds; read the code.
 - The only place you may write is `<repo>/.scratch/arch-review-<milestone>/notes/`.
