@@ -9,6 +9,7 @@ import { HOME_BOARD_TAB_ID } from "./home-tabs";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { useRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
 import { useSessionsStore, type SessionLayout, type SessionTab } from "@renderer/stores/sessions";
 import {
   DEFAULT_RAIL_FOLDS,
@@ -516,5 +517,25 @@ describe("HomeRail", () => {
     expect(markup).toContain('data-testid="home-sessions-error"');
     expect(markup).toContain("Sessions failed to read");
     expect(markup).toContain("Retry");
+  });
+
+  it("names a host that grants no Sessions instead of a failure with a Retry (VC-713, B3)", () => {
+    useProjectSessionsStore.getInitialState().byProject = {
+      p1: { terminal: [], chat: [], provenance: {}, read: {} },
+    };
+    useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
+    // Server rendering reads the initial state; its field is read-only to callers.
+    Object.assign(useRemoteSessionAvailabilityStore.getInitialState(), {
+      unavailable: { p1: "Sessions aren’t available on box — update it to use them here" },
+    });
+    try {
+      const markup = draw(HOME_BOARD_TAB_ID);
+      expect(markup).toContain('data-testid="home-sessions-unavailable"');
+      expect(markup).toContain("Sessions aren’t available on box — update it to use them here");
+      expect(markup).not.toContain("No sessions yet");
+      expect(markup).not.toContain("Retry");
+    } finally {
+      Object.assign(useRemoteSessionAvailabilityStore.getInitialState(), { unavailable: {} });
+    }
   });
 });

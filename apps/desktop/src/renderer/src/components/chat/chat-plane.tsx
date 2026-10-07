@@ -148,6 +148,7 @@ import { HostNoticeRow } from "@renderer/components/chat/host-notice-ui";
 import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { notAvailableOn, useRemoteHostName } from "@renderer/components/hosts/use-remote-project";
+import { useRemoteSessionOnScreen } from "@renderer/lib/remote-sessions";
 import { ChatEmptyState } from "@renderer/components/chat/empty/chat-empty-state";
 import { TranscriptSkeleton } from "@renderer/components/chat/transcript-skeleton";
 import { ContentColumn } from "@renderer/components/layout/content-column";
@@ -281,6 +282,10 @@ export function ChatPlane({
   constrainComposer = false,
 }: ChatPlaneProps) {
   const controller = useSessionController(sessionId, store);
+  // A remote Session's stream opens only while it is on screen (VC-713, AM1):
+  // the Workspace link carries a handful of streams, and a chat off screen
+  // keeps what it shows while the listing says whether it waits on anyone.
+  useRemoteSessionOnScreen(surfaceVisible ? projectId : null, sessionId);
   const browser = useChatBrowserTabs(sessionId, projectId);
   // Where a background shell's tail opens (VC-270's hand-off): a modal over
   // this chat, mounted only while open — see `ShellOutputDialog`. The shells

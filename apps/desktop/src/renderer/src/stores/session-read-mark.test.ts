@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import type { SessionReadState } from "@volli/shared";
 
+import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { markSessionRead } from "./session-read-mark";
 import type { SessionReadSetResult } from "../../../ipc/contract";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@renderer/lib/session-project", () => ({ remoteHostOfSession: vi.fn(() => null) }));
 
 /** A one-row cache: what the two stores' ports do, without either store. */
 function row(initial: SessionReadState = { unreadSince: null }) {
@@ -117,5 +119,20 @@ describe("markSessionRead", () => {
     await markSessionRead({ sessionId: "s1", unread: true }, cache.ports);
 
     expect(cache.current()).toEqual({ unreadSince: null });
+  });
+});
+
+describe("a remote Session's read mark (VC-713)", () => {
+  it("says it is not available on the host, and marks nothing", async () => {
+    vi.mocked(remoteHostOfSession).mockReturnValueOnce("hetzner-1");
+    const setRead = stubSetRead(async () => ({ ok: true }) as SessionReadSetResult);
+    const cache = row();
+    await markSessionRead({ sessionId: "remote-session", unread: true }, cache.ports);
+    expect(setRead).not.toHaveBeenCalled();
+    expect(cache.written).toEqual([]);
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't mark the session: Not available on hetzner-1 yet",
+      expect.anything(),
+    );
   });
 });

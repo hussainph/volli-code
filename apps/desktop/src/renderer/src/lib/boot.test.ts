@@ -21,7 +21,7 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { BoardSync, type BoardSyncTransport } from "@renderer/stores/board-sync";
 
 import { boardProtocol, startBoardProtocol, stopBoardProtocol } from "./board-protocol";
-import { sessionListingReaderForProject } from "./session-listing-reader";
+import { remoteSessionListingRegistrations } from "./session-listing-reader";
 import { sessionRpcClient } from "./session-rpc-ipc-link";
 import {
   boot,
@@ -1136,21 +1136,11 @@ describe("startBoardProtocolIfEnabled", () => {
     });
   });
 
-  // VC-711 with VC-713: a remote project's listing rides its Workspace link.
-  it("reads a remote project's Session listing over the relay, never this Mac's bridge", async () => {
-    const { request } = stubBoardBridge({ p1: [], p2: [] });
+  // VC-713: the remote-Sessions binding is the one owner of the remote listing.
+  it("registers no remote Session listing of its own", async () => {
+    stubBoardBridge({ p1: [], p2: [] });
     expect(await startBoardProtocolIfEnabled(async () => true)).toBe(true);
-    claim("r1");
-    try {
-      const answer = await sessionListingReaderForProject("r1").list({ projectId: "r1" });
-      expect(answer.ok).toBe(false);
-      expect(request.mock.calls.map(([call]) => [call.path, call.input])).toContainEqual([
-        "hostLink.query",
-        { workspaceId: "r1", path: "session.listing", input: { projectId: "r1" } },
-      ]);
-    } finally {
-      claim();
-    }
+    expect(remoteSessionListingRegistrations()).toBe(0);
   });
 
   it("says which Workspace it could not open, and opens the rest", async () => {

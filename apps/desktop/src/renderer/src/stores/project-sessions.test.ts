@@ -22,6 +22,7 @@ import {
   type ProjectSessionRows,
 } from "./project-sessions";
 import type { SessionActivityNotice, SessionsResult } from "../../../ipc/contract";
+import { rememberRemoteProject, resetRemoteOwnersForTest } from "@renderer/lib/remote-owners";
 import { setRemoteSessionListing } from "@renderer/lib/session-listing-reader";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -94,17 +95,18 @@ describe("a remote project's listing (VC-713)", () => {
   afterEach(() => {
     unregister?.();
     unregister = null;
+    resetRemoteOwnersForTest();
     Reflect.deleteProperty(globalThis, "window");
     vi.clearAllMocks();
   });
 
   function remote(list: (input: { projectId: string }) => Promise<SessionsResult>) {
+    rememberRemoteProject("remote", { hostId: "box", hostName: "hetzner-1" });
     unregister = setRemoteSessionListing({
       forProject: (projectId) =>
         projectId === "remote"
           ? { list, listForTicket: () => Promise.reject(new Error("unused")) }
           : null,
-      forTicket: () => null,
     });
   }
 
@@ -180,16 +182,22 @@ describe("a remote project's listing (VC-713)", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("removes only its own registration", async () => {
+  it("never falls to This Mac's IPC for a project known remote, registered or not (B1)", async () => {
     const list = vi.fn(async () => ({ ok: true as const, sessions: [] }));
     remote(list);
-    const stale = setRemoteSessionListing({ forProject: () => null, forTicket: () => null });
+    const stale = setRemoteSessionListing({ forProject: () => null });
     unregister!();
     unregister = stale;
     const local = stubList([]);
-    await createProjectSessionsStore().getState().refresh("remote");
-    expect(local).toHaveBeenCalledWith({ projectId: "remote" });
+    const store = createProjectSessionsStore();
+    await store.getState().refresh("remote");
+    expect(local).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();
+    expect(store.getState().listingState.remote).toBe("failed");
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load sessions: hetzner-1 isn’t connected",
+      expect.anything(),
+    );
   });
 });
 
