@@ -243,7 +243,14 @@ describe("HOST output trust boundary", () => {
       const output = await f.relay.query(HOST, "workspaces.list", undefined);
       expect(output).toEqual({
         workspaces: [
-          { ...row, gitRemoteUrl: url === null || url.includes("github.com") ? url : null },
+          {
+            ...row,
+            gitRemoteUrl:
+              url === "https://github.com/owner/repo.git" ||
+              url === "ssh://git@github.com/owner/repo.git"
+                ? url
+                : null,
+          },
         ],
         omitted: 2,
       });

@@ -183,3 +183,10 @@ catalog names/paths fail whole rather than being clipped into different identiti
 unsafe remote URLs become null. Main-owned sign-in/callback routing is unchanged.
 The renderer catalog adapter has no runtime test/lab setter; lab fixtures go
 through its production IPC route.
+
+Project/ticket chat creation is opened only by that project's ready Workspace
+`sessions` grant, not HOST readiness. Draft promotion and immediate chat creation
+reuse VC-713's remote transport: the box owns Session creation, attachment and
+commands, with its own default model and `host-link` recovery. A missing/unknown
+grant keeps the named “Not available on <host> yet” state. Terminal, automation,
+browser and worktree-removal limits remain unchanged.
