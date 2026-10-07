@@ -80,6 +80,11 @@ async function emit(event: Parameters<FakeRemoteHostsApi["emit"]>[1]): Promise<v
   await act(async () => api.emit("flow-1", event));
 }
 
+/** One plain log line, as main would stream it. */
+function line(message: string) {
+  return { at: "t", level: "info" as const, message, fields: {} };
+}
+
 function rows(): string[] {
   return [...sheet().querySelectorAll("li[data-step]")].map(
     (row) =>
@@ -182,12 +187,6 @@ describe("Add a host", () => {
 
   it("opens on main's replay: the view, the newest log, and how much came before", async () => {
     await startFlow();
-    const line = (message: string) => ({
-      at: "t",
-      level: "info" as const,
-      message,
-      fields: {},
-    });
     await emit({
       kind: "replay",
       view: flowView({ done: 6, at: "link" }),
