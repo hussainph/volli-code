@@ -281,6 +281,28 @@ export interface AddHostStartInput {
   readonly name?: string;
 }
 
+/**
+ * One add flow desktop main still owns (VC-720): a reference a reopened or
+ * reloaded window reads to find an install that outlived the one that started
+ * it, and to subscribe to it again by `flowId`. Not a view: the steps, the
+ * question and the failure travel whole only through `hostAdd.subscribe`'s
+ * replay. Nothing here is a secret — the same target and name `hostAdd.start`
+ * took, and the status the checklist's headline shows.
+ */
+export interface ActiveAddHost {
+  /** The flow's id: what `hostAdd.subscribe` and `hostAdd.cancel` take. */
+  readonly flowId: string;
+  /** The SSH target the flow is adding: `you@box`, or a `~/.ssh/config` alias. */
+  readonly target: string;
+  /** What the flow calls it; the target when none was given. */
+  readonly name: string;
+  /** Still under way: never `done` or `cancelled`, which leave the list. */
+  readonly status: "running" | "question" | "failed";
+}
+
+/** The most flows `hostAdd.active` answers: bounds the list, not the installs. */
+export const MAX_ACTIVE_ADD_HOSTS = 20;
+
 /** Every link to one host this Mac opens at most: other Macs and reconnects keep the rest of hostd's 32. */
 export const REMOTE_HOST_LINK_CAP = 24;
 

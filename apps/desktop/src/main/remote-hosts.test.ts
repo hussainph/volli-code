@@ -4,7 +4,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { RemoteHostsUnavailableError, SILENT_LOGGER, type RemoteHosts } from "@volli/host-install";
-import type { RemoteHostDevices } from "@volli/shared";
+import type { ActiveAddHost, RemoteHostDevices } from "@volli/shared";
 
 import {
   createDesktopRemoteHosts,
@@ -279,10 +279,14 @@ describe("the engine as the handler map's port", () => {
     const HOST = "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
     const devices: RemoteHostDevices = { hostId: HOST, devices: [] };
     const facts = { user: "deploy" };
+    const active: readonly ActiveAddHost[] = [
+      { flowId: "flow-1", target: "you@box", name: "you@box", status: "question" },
+    ];
     const engine = {
       rename: vi.fn(),
       devices: vi.fn(async () => devices),
       addFacts: vi.fn(() => facts),
+      activeAdds: vi.fn(() => active),
     };
     const port = remoteHostsPort(engine as unknown as RemoteHosts);
     expect(port.rename(HOST, "Build box")).toBeUndefined();
@@ -291,6 +295,9 @@ describe("the engine as the handler map's port", () => {
     expect(engine.devices).toHaveBeenCalledWith(HOST);
     expect(port.addFacts("flow-1")).toBe(facts);
     expect(engine.addFacts).toHaveBeenCalledWith("flow-1");
+    // The discovery read (VC-720) forwards whole, and takes nothing.
+    expect(port.activeAdds()).toBe(active);
+    expect(engine.activeAdds).toHaveBeenCalledWith();
   });
 
   it("passes a host's projects, a create, an open and a close straight to the engine (VC-710)", async () => {

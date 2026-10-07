@@ -171,6 +171,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hosts.openWorkspace": "ipc",
   "hosts.closeWorkspace": "ipc",
   "hostAdd.facts": "ipc",
+  "hostAdd.active": "ipc",
   // The Workspace link relay (VC-711).
   "hostLink.query": "ipc",
   "hostLink.mutate": "ipc",

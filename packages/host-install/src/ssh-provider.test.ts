@@ -22,6 +22,7 @@ import {
   type HostdArtifact,
 } from "./artifact";
 import type { HostdManagedStatus } from "./contract";
+import { describeFailure } from "./failures";
 import { parseProbe, PROBE_SCRIPT } from "./probe";
 import {
   advance,
@@ -1054,16 +1055,60 @@ describe("install, start and enroll on the box", () => {
     });
   });
 
-  it("reports a command that printed no answer, and one whose connection dropped", async () => {
-    const box = fakeBox((script) =>
+  it("reports a command that printed no answer, naming the likely cause and the next step, and one whose connection dropped", async () => {
+    const missing = fakeBox((script) =>
       script.includes(" enroll --") ? { code: 127, stderr: "volli-hostd: not found\n" } : undefined,
     );
-    expect(stoppedWith(await advanceWith(start(), ports(box)))).toEqual({
+    expect(stoppedWith(await advanceWith(start(), ports(missing)))).toEqual({
       code: "hostd-refused",
       step: "enroll",
       hostd: "no-answer",
-      message: "volli-hostd enroll gave no answer",
+      message: "Volli host is missing on box. Try again to put it back.",
       detail: ["volli-hostd: not found"],
+    });
+    const unrunnable = fakeBox((script) =>
+      script.includes(" enroll --")
+        ? {
+            code: 126,
+            stderr: "sh: 1: /opt/volli-hostd/current/bin/volli-hostd: Permission denied",
+          }
+        : undefined,
+    );
+    expect(stoppedWith(await advanceWith(start(), ports(unrunnable)))).toMatchObject({
+      message:
+        "Volli host on box can’t run; its permissions or runtime may be wrong. Fix the error in Details, then try again.",
+    });
+    // The probe believed sudo needed no password; it does.
+    const sudoed = fakeBox((script) =>
+      script.includes(" install --")
+        ? { code: 1, stderr: "sudo: a password is required" }
+        : undefined,
+    );
+    expect(stoppedWith(await advanceWith(start(), ports(sudoed)))).toMatchObject({
+      message: "sudo on box wants a password after all. Check the box’s sudo, then try again.",
+    });
+    const quiet = fakeBox((script) =>
+      script.includes(" start --") ? { stdout: "volli-hostd: starting\n" } : undefined,
+    );
+    expect(stoppedWith(await advanceWith(start(), ports(quiet)))).toMatchObject({
+      message:
+        "Volli host on box may have crashed or returned an incompatible start answer. Try again to re-check it and install a matching copy.",
+    });
+    const diagnostic = fakeBox((script) =>
+      script.includes(" start --") ? { code: 1, stderr: "hostd crashed" } : undefined,
+    );
+    expect(stoppedWith(await advanceWith(start(), ports(diagnostic)))).toMatchObject({
+      message:
+        "Volli host on box may have crashed or returned an incompatible start answer. Fix the error in Details, then try again.",
+      detail: ["hostd crashed"],
+    });
+    const silentUnrunnable = fakeBox((script) =>
+      script.includes(" enroll --") ? { code: 126 } : undefined,
+    );
+    expect(stoppedWith(await advanceWith(start(), ports(silentUnrunnable)))).toMatchObject({
+      message:
+        "Volli host on box can’t run; its permissions or runtime may be wrong. Try again to re-check it and install a matching copy.",
+      detail: [],
     });
     const dropped = fakeBox((script) =>
       script.includes(" install --")
@@ -1074,6 +1119,91 @@ describe("install, start and enroll on the box", () => {
       code: "connection-lost",
       step: "install",
     });
+  });
+
+  it("puts a missing Volli host back: its silence is retried from a fresh probe, never into the same wall", async () => {
+    let missing = true;
+    const box = fakeBox((script) =>
+      script.includes(" install --") && missing
+        ? {
+            code: 127,
+            stderr:
+              "sh: 1: /home/deploy/.cache/volli-hostd/stage.Ab12Cd/bin/volli-hostd: not found",
+          }
+        : undefined,
+    );
+    const p = ports(box);
+    const stopped = await advanceWith(start(), p);
+    const failure = stoppedWith(stopped);
+    expect(failure).toMatchObject({
+      code: "hostd-refused",
+      step: "install",
+      hostd: "no-answer",
+      message: "Volli host is missing on box. Try again to put it back.",
+    });
+    // The recovery the person is shown, and the step it retries from.
+    if (!("code" in failure)) throw new Error("expected a failure");
+    expect(describeFailure(failure, "box").recovery).toEqual({
+      action: "retry",
+      label: "Try again",
+      from: "probe",
+    });
+    missing = false;
+    expect((await advanceWith(retry(stopped, "probe"), p)).status).toBe("done");
+  });
+
+  it("re-probes changed sudo rights rather than repeating an outdated passwordless install", async () => {
+    let needsPassword = false;
+    const box = fakeBox((script) => {
+      if (script === PROBE_SCRIPT)
+        return { stdout: probeOutput({ sudo: needsPassword ? "password" : "nopasswd" }) };
+      if (script.includes(" install --")) {
+        needsPassword = true;
+        return { code: 1, stderr: "sudo: a password is required" };
+      }
+      return undefined;
+    });
+    const p = ports(box);
+    const stopped = await advanceWith(start(), p);
+    const failure = stoppedWith(stopped);
+    if (!("code" in failure)) throw new Error("expected a failure");
+    const recovery = describeFailure(failure, "box").recovery;
+    if (recovery.action !== "retry") throw new Error("expected a retry");
+    const asked = await advanceWith(retry(stopped, recovery.from), p);
+    expect(stoppedWith(asked)).toMatchObject({ kind: "sudo-password", step: "install" });
+    expect(box.ran().filter((script) => script.includes(" install --"))).toHaveLength(1);
+  });
+
+  it("a fresh probe drops an adopt decision when the adopted binary stops answering", async () => {
+    let broken = false;
+    const box = fakeBox((script) => {
+      if (script === PROBE_SCRIPT)
+        return {
+          stdout: probeOutput(
+            {},
+            existing(
+              "1.0.0",
+              "system",
+              broken ? null : { verdict: "serving", running: null, devices: [] },
+            ),
+          ),
+        };
+      if (script.includes(" start --")) {
+        broken = true;
+        return { code: 127, stderr: "volli-hostd: not found" };
+      }
+      return undefined;
+    });
+    const p = ports(box);
+    const existingHost = await advanceWith(start(), p);
+    const stopped = await advanceWith(answer(existingHost, { kind: "adopt" }), p);
+    const failure = stoppedWith(stopped);
+    if (!("code" in failure)) throw new Error("expected a failure");
+    const recovery = describeFailure(failure, "box").recovery;
+    if (recovery.action !== "retry") throw new Error("expected a retry");
+    const asked = await advanceWith(retry(stopped, recovery.from), p);
+    expect(stoppedWith(asked)).toMatchObject({ kind: "existing-hostd", adoptable: false });
+    expect(asked.decisions.existing).toBeUndefined();
   });
 
   it("retries from the step that broke, never redoing the ones before", async () => {

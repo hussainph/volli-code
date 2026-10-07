@@ -1,6 +1,18 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
+import { parseHostdReleasePin, resolveArtifact, type ArtifactRequest } from "./artifact";
 import { CHECKLIST_ROWS, describeFailure, STEP_ORDER, type ProvisionFailure } from "./failures";
+import { recordingLogger } from "./testing/fake-process";
+
+/** An artifact failure exactly as the app's own `resolveArtifact` answers it. */
+const artifactFailure = async (request: Omit<ArtifactRequest, "logger">) => {
+  const answered = await resolveArtifact({ ...request, logger: recordingLogger().logger });
+  if (!("kind" in answered)) throw new Error("expected the artifact to be unavailable");
+  return answered;
+};
 
 const EVERY: ProvisionFailure[] = [
   { code: "unreachable", step: "connect", detail: "" },
@@ -34,6 +46,13 @@ const EVERY: ProvisionFailure[] = [
     step: "start",
     hostd: "start-failed",
     message: "volli-hostd did not start.",
+    detail: [],
+  },
+  {
+    code: "hostd-refused",
+    step: "enroll",
+    hostd: "no-answer",
+    message: "Volli host is missing on box. Try again to put it back.",
     detail: [],
   },
   { code: "tunnel-failed", step: "link", detail: "" },
@@ -95,5 +114,109 @@ describe("every failure's line and recovery", () => {
 
   it("maps the lab's five rows onto the steps, each step once", () => {
     expect(Object.values(CHECKLIST_ROWS).flat()).toEqual([...STEP_ORDER]);
+  });
+});
+
+describe("the vague strings, replaced (VC-720)", () => {
+  it("says why the host’s identity changed, and what to do about it", () => {
+    expect(describeFailure(EVERY[2]!, "box")).toEqual({
+      line: "box’s identity changed since you last connected. If you rebuilt it, remove the old key, then try again.",
+      recovery: { action: "retry", label: "Try again", from: "connect" },
+    });
+  });
+
+  it("tells a dev build with no hostd tarball how to provide one, instead of looping on a release", async () => {
+    // Each detail below is resolveArtifact's own answer (artifact.ts): the
+    // words failures.ts classifies on are pinned to the real producer.
+    const cache = join(tmpdir(), "vc720-failures-cache");
+    const wanted = "volli-hostd-1.1.0-linux-x64.tar.gz";
+    const nothing = await artifactFailure({
+      version: "1.1.0",
+      target: "linux-x64",
+      cacheDir: cache,
+      pin: null,
+      devTarballs: [],
+    });
+    expect(nothing.detail).toContain("no hostd release assets");
+    expect(
+      describeFailure({ code: nothing.kind, step: "deliver", detail: nothing.detail }, "box"),
+    ).toEqual({
+      line: "Adding box needs a matching hostd tarball and its .sha256 from CI. Restart this dev build with VOLLI_HOSTD_DEV_TARBALLS set to the tarball’s full path.",
+      recovery: { action: "back", label: "Back" },
+    });
+    // Named by VOLLI_HOSTD_DEV_TARBALLS, but gone, or with no .sha256 beside it.
+    const empty = mkdtempSync(join(tmpdir(), "vc720-failures-"));
+    writeFileSync(join(empty, `${wanted}.sha256`), "a".repeat(64));
+    try {
+      for (const devTarballs of [[`/no/such/${wanted}`], [join(empty, wanted)]]) {
+        const missing = await artifactFailure({
+          version: "1.1.0",
+          target: "linux-x64",
+          cacheDir: cache,
+          pin: null,
+          devTarballs,
+        });
+        expect(missing.detail).toMatch(/ is missing\.$/u);
+        expect(
+          describeFailure({ code: missing.kind, step: "deliver", detail: missing.detail }, "box"),
+        ).toEqual({
+          line: "The Volli host tarball VOLLI_HOSTD_DEV_TARBALLS names is missing or unverified. Restore it, then check again.",
+          recovery: { action: "retry", label: "Check again", from: "deliver" },
+        });
+      }
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+    // A pinned release that is not published yet still says so, and a retry may find it.
+    const pin = parseHostdReleasePin({
+      schemaVersion: 1,
+      version: "1.1.0",
+      releaseTag: "v1.1.0",
+      assets: [{ platform: "linux", arch: "x64", name: wanted, sha256: "a".repeat(64) }],
+    });
+    expect(pin).not.toBeNull();
+    const unpublished = await artifactFailure({
+      version: "1.1.0",
+      target: "linux-x64",
+      cacheDir: cache,
+      pin,
+      fetch: async () => new Response(null, { status: 404 }),
+    });
+    expect(unpublished.detail).toBe(`${wanted} is not published at v1.1.0.`);
+    expect(
+      describeFailure(
+        { code: unpublished.kind, step: "deliver", detail: unpublished.detail },
+        "box",
+      ),
+    ).toEqual({
+      line: "This version’s host download isn’t published yet",
+      recovery: { action: "retry", label: "Try again", from: "deliver" },
+    });
+  });
+
+  it("retries a refusal where hostd said it, and a silence from a fresh probe that can repair changed facts", () => {
+    expect(
+      describeFailure(
+        {
+          code: "hostd-refused",
+          step: "install",
+          hostd: "bad-release",
+          message: "Not a release.",
+          detail: [],
+        },
+        "box",
+      ).recovery,
+    ).toEqual({ action: "retry", label: "Try again", from: "install" });
+    const noAnswer: ProvisionFailure = {
+      code: "hostd-refused",
+      step: "enroll",
+      hostd: "no-answer",
+      message: "Volli host is missing on box. Try again to put it back.",
+      detail: [],
+    };
+    expect(describeFailure(noAnswer, "box")).toEqual({
+      line: "Volli host is missing on box. Try again to put it back.",
+      recovery: { action: "retry", label: "Try again", from: "probe" },
+    });
   });
 });
