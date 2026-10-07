@@ -14,7 +14,11 @@
  * short of it (the connection dropped mid-way), exits non-zero, or lacks a
  * fact every step relies on is a failure, never partial facts.
  */
+import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync } from "node:fs";
+import { hostname } from "node:os";
+
 import { readHostdJson, type HostdManagedStatus, type InstallMode } from "./contract";
+import type { SshTarget } from "./target";
 import type { SshTransport } from "./ssh";
 
 /** What sudo allows this login without a prompt. */
@@ -57,6 +61,8 @@ export interface ProbeFacts {
   readonly memoryBytes: number | null;
   readonly sudo: SudoAccess;
   readonly existing: ExistingHostd | null;
+  /** Public sshd keys only, read from /etc/ssh/*.pub; empty when unavailable. */
+  readonly sshHostKeys: readonly string[];
 }
 
 /**
@@ -92,6 +98,12 @@ export const PROBE_SCRIPT = [
   'echo "user=$(id -un)"',
   'echo "home=$HOME"',
   'echo "groups=$(id -nG)"',
+  // Public sshd keys only. Never a user's keys or a private key.
+  "for k in /etc/ssh/*.pub; do",
+  '  if [ -f "$k" ] && [ ! -L "$k" ]; then',
+  '    awk \'NF >= 2 {print "ssh_host_key=" $1 " " $2}\' "$k" 2>/dev/null',
+  "  fi",
+  "done",
   "if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then",
   "  echo \"systemd=$(systemctl --version 2>/dev/null | awk 'NR==1{print $2}')\"",
   "fi",
@@ -178,6 +190,7 @@ export function parseProbe(stdout: string): ProbeFacts {
           ? "password"
           : "none",
     existing,
+    sshHostKeys: map.get("ssh_host_key") ?? [],
   };
 }
 
@@ -247,7 +260,10 @@ export function describeStartup(facts: Pick<ProbeFacts, "launchd">, host: string
 
 /** Compares dotted versions numerically; a prerelease sorts before its release. */
 function versionParts(value: string): { parts: number[]; pre: string | undefined } {
-  const [core, pre] = value.replace(/^v/u, "").split("-", 2) as [string, string | undefined];
+  const withoutBuild = value.replace(/^v/u, "").split("+", 1)[0]!;
+  const at = withoutBuild.indexOf("-");
+  const core = at < 0 ? withoutBuild : withoutBuild.slice(0, at);
+  const pre = at < 0 ? undefined : withoutBuild.slice(at + 1);
   return { parts: core.split(".").map((part) => Number.parseInt(part, 10) || 0), pre };
 }
 
@@ -261,5 +277,91 @@ export function compareVersions(a: string, b: string): number {
   if (left.pre === right.pre) return 0;
   if (left.pre === undefined) return 1;
   if (right.pre === undefined) return -1;
-  return left.pre < right.pre ? -1 : 1;
+  const leftIds = left.pre.split(".");
+  const rightIds = right.pre.split(".");
+  for (let index = 0; index < Math.max(leftIds.length, rightIds.length); index += 1) {
+    const l = leftIds[index];
+    const r = rightIds[index];
+    if (l === undefined) return -1;
+    if (r === undefined) return 1;
+    if (l === r) continue;
+    const ln = /^\d+$/u.test(l);
+    const rn = /^\d+$/u.test(r);
+    if (ln && rn) {
+      const difference = BigInt(l) - BigInt(r);
+      if (difference !== 0n) return difference < 0n ? -1 : 1;
+    } else if (ln !== rn) return ln ? -1 : 1;
+    else return l < r ? -1 : 1;
+  }
+  return 0;
+}
+
+/** Local facts used to recognize this machine without invoking any command. */
+export interface LocalMachineIdentity {
+  readonly hostname: string;
+  readonly sshHostKeys: readonly string[];
+}
+
+function localPublicHostKeys(): string[] {
+  let names: string[];
+  try {
+    names = readdirSync("/etc/ssh");
+  } catch {
+    // Remote Login may not be enabled; hostname detection still works.
+    return [];
+  }
+  const keys: string[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".pub") || name.includes("/")) continue;
+    const path = `/etc/ssh/${name}`;
+    try {
+      // Open without following symlinks or waiting on a replaced FIFO. Check
+      // the opened descriptor, not the pathname: it cannot change between
+      // the regular-file check and read (no stat/open race).
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        if (fstatSync(fd).isFile()) keys.push(readFileSync(fd, "utf8"));
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      // Missing or unreadable public keys cannot establish a match.
+    }
+  }
+  return keys;
+}
+
+function publicKey(value: string): string | null {
+  const [type, key] = value.trim().split(/\s+/u);
+  return type !== undefined && key !== undefined && /^(?:ssh-|ecdsa-)/u.test(type)
+    ? `${type} ${key}`
+    : null;
+}
+
+const normalizeHostname = (name: string) => name.toLowerCase().replace(/\.$/u, "");
+
+/** Loopback, this machine's hostname, or a matching public sshd key. */
+export function isSelfHost(
+  target: SshTarget,
+  remoteKeys: readonly string[],
+  local?: LocalMachineIdentity,
+): boolean {
+  const name = normalizeHostname(
+    target.destination.slice(target.destination.lastIndexOf("@") + 1).replace(/^\[|\]$/gu, ""),
+  );
+  if (
+    ["localhost", "127.0.0.1", "::1", normalizeHostname(local?.hostname ?? hostname())].includes(
+      name,
+    )
+  ) {
+    return true;
+  }
+  if (remoteKeys.length === 0) return false;
+  const keys = new Set(
+    (local?.sshHostKeys ?? localPublicHostKeys()).map(publicKey).filter((key) => key !== null),
+  );
+  return remoteKeys.some((key) => {
+    const parsed = publicKey(key);
+    return parsed !== null && keys.has(parsed);
+  });
 }

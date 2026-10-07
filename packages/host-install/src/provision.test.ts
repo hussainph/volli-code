@@ -123,6 +123,23 @@ describe("the provider-neutral step machine", () => {
     expect(answer(state, { kind: "user-install" }).decisions).toEqual({ userInstall: true });
     expect(answer(state, { kind: "repair" }).decisions).toEqual({ repin: true });
     expect(answer(state, { kind: "sudo-password", password: "pw" }).decisions).toEqual({});
+    const asked = {
+      ...state,
+      status: "stopped" as const,
+      stop: {
+        kind: "question" as const,
+        question: { kind: "self-add" as const, step: "probe" as const },
+      },
+    };
+    expect(answer(asked, { kind: "open" }).decisions).toEqual({ selfAdd: true });
+    const different = {
+      ...asked,
+      stop: {
+        kind: "question" as const,
+        question: { kind: "already-paired" as const, step: "probe" as const, hostId: "host" },
+      },
+    };
+    expect(answer(different, { kind: "open" }).decisions).toEqual({ alreadyPaired: true });
   });
 });
 

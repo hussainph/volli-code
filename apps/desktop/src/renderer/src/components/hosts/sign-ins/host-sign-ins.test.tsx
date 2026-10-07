@@ -172,6 +172,26 @@ describe("the rows", () => {
     ).toEqual([{ providerId: "anthropic", name: "Claude" }]);
   });
 
+  it("caps host labels visibly while preserving the entire DNS-sized suffix and port", () => {
+    const longestDnsName = ["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)].join(
+      ".",
+    );
+    const suffix = `${longestDnsName}.:65535`;
+    expect(longestDnsName).toHaveLength(253);
+    expect(siteOf(`https://${suffix}/login`)).toBe(suffix);
+    expect(siteOf(`https://${"sub.".repeat(200)}${suffix}/login`)).toBe(`…${suffix}`);
+    for (const domain of ["evil.co.uk", "tenant.github.io", "example.com"]) {
+      const url = `https://github.com.${"sub.".repeat(200)}${domain}:8443/login`;
+      const label = siteOf(url);
+      expect(label).toHaveLength(261);
+      expect(label.startsWith("…")).toBe(true);
+      expect(label.endsWith(`${domain}:8443`)).toBe(true);
+      expect(label).not.toBe("github.com");
+    }
+    expect(siteOf("https://clаude.ai/login")).toContain("xn--");
+    expect(siteOf("http://[::1]:8080/login")).toBe("[::1]:8080");
+  });
+
   it("carry exactly one sentence: the trust boundary that is true", () => {
     expect(trustLine(HOST, true)).toBe("hetzner-1 keeps a copy of what this Mac sends.");
     expect(trustLine(HOST, false)).toBe("Nothing is copied from this Mac.");
@@ -246,6 +266,19 @@ describe("HostSignInController", () => {
       kind: "failed",
       message: "The key did not reach the host",
     });
+  });
+
+  it("returns to the row without a failure when the native confirmation is cancelled", async () => {
+    // Native Cancel answers the unchanged host status, not a send receipt.
+    const source = fakeHostSignInSource({ status: status(), send: { ok: true, status: status() } });
+    const controller = new HostSignInController(source, "host-1");
+    await controller.refresh();
+    controller.requestSend("openrouter");
+    await controller.confirmSend("openrouter");
+    expect(controller.getSnapshot().flows["provider:openrouter"]).toBe(IDLE);
+    expect(controller.getSnapshot().rows?.find((row) => row.id === "openrouter")?.state).toBe(
+      "missing",
+    );
   });
 
   it("stores a pasted key or push token on the host, passing the value straight through", async () => {
@@ -608,6 +641,58 @@ describe("the rows on screen", () => {
       container.remove();
       vi.unstubAllGlobals();
     }
+  });
+
+  it("offers HTTP and off-domain links with bounded host labels, opening the original URL only after a click", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const row = signInRowsOf(status(), new Set())[0]!;
+    for (const event of [
+      { kind: "auth-url", url: "https://phishing.example/login", instructions: null },
+      { kind: "auth-url", url: "http://claude.ai/login", instructions: null },
+      {
+        kind: "auth-url",
+        url: `https://${"sub.".repeat(200)}evil.co.uk/login`,
+        instructions: null,
+      },
+      {
+        kind: "device-code",
+        verificationUri: "https://phishing.example/device",
+        userCode: "ABCD",
+        intervalSeconds: null,
+        expiresInSeconds: null,
+      },
+    ] as const) {
+      const openPage = vi.fn();
+      const actions = new HostSignInController(
+        fakeHostSignInSource({ status: status() }),
+        "host-1",
+      );
+      actions.openPage = openPage;
+      const container = document.createElement("div");
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(
+          <SignInRow
+            row={row}
+            flow={reduceSignIn(IDLE, event)}
+            hostName={HOST}
+            source="host"
+            onSource={() => {}}
+            controller={actions}
+          />,
+        );
+      });
+      const url = event.kind === "auth-url" ? event.url : event.verificationUri;
+      const link = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === `Open ${siteOf(url)}`,
+      )!;
+      expect(link).toBeDefined();
+      expect(openPage).not.toHaveBeenCalled();
+      await act(async () => link.click());
+      expect(openPage).toHaveBeenCalledWith(url);
+      await act(async () => root.unmount());
+    }
+    vi.unstubAllGlobals();
   });
 
   it("draws a device code, the paste field and a key field beneath their rows", () => {
