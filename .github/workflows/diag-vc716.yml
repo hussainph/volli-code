@@ -1,0 +1,92 @@
+# DIAGNOSTIC (VC-716) — TEMPORARY, never in the final diff.
+# Menu-bar entry stall attribution: one isolated app per run, and the normal
+# shard-1 concurrency with only menu-bar-host-smoke instrumented.
+name: diag-vc716
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diag-vc716-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated:
+    name: Diag isolated
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Build and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+      - name: Runner facts
+        run: |
+          sysctl -n hw.ncpu hw.memsize machdep.cpu.brand_string || true
+          sw_vers || true
+      - name: Isolated runs
+        env:
+          VOLLI_DIAG_OUT: ${{ runner.temp }}/diag
+        run: |
+          mkdir -p "$VOLLI_DIAG_OUT"
+          for rep in 1 2 3; do
+            for v in early late late-dock noenter-on noenter-off; do
+              echo "=== rep $rep $v"
+              node apps/desktop/e2e/diag-menu-bar-stalls.mjs "$v" "iso-r$rep-$v" || echo "FAILED $v $rep"
+            done
+          done
+          for rep in 1 2; do
+            VOLLI_DIAG_PROFILE=0 node apps/desktop/e2e/diag-menu-bar-stalls.mjs early "iso-r$rep-early-noprof" || true
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: diag-isolated-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/diag
+          retention-days: 14
+
+  shard:
+    name: Diag shard 1 (rep ${{ matrix.rep }})
+    runs-on: macos-15
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Build and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+      - name: Run shard 1 of 3 (menu-bar-host-smoke instrumented)
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
+          VOLLI_DIAG_SMOKE_DIR: ${{ runner.temp }}/diag
+        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier rest --shard 1/3 --jobs 4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: diag-shard-${{ matrix.rep }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/diag
+            ${{ runner.temp }}/smoke-results
+          retention-days: 14
