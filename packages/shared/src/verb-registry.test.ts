@@ -273,6 +273,8 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "session.editQueued": "coordination",
   "session.cancelInteraction": "coordination",
   "session.reconcile": "coordination",
+  "session.listing": "coordination",
+  "session.listingForTicket": "coordination",
   // Sign-ins on a host (VC-702): the person's, on the WebSocket only.
   "signIns.status": "coordination",
   "signIns.setApiKey": "coordination",
@@ -1354,6 +1356,8 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "session.editQueued": ["workspace", "command-id"],
     "session.cancelInteraction": ["workspace", "natural"],
     "session.reconcile": ["workspace", "natural"],
+    "session.listing": ["workspace", "read"],
+    "session.listingForTicket": ["workspace", "read"],
     "logs.tail": ["host", "read"],
     "logs.follow": ["host", "read"],
     "labDiagnostics.list": ["host", "read"],
@@ -1486,6 +1490,8 @@ describe("the host-protocol command catalog (VC-564)", () => {
       | "session.editQueued"
       | "session.cancelInteraction"
       | "session.reconcile"
+      | "session.listing"
+      | "session.listingForTicket"
     >();
   });
 

@@ -44,6 +44,7 @@ import {
   type SessionRecord,
 } from "@volli/shared";
 
+import { sessionListingReaderForProject } from "@renderer/lib/session-listing-reader";
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
 import { markSessionRead } from "./session-read-mark";
@@ -233,7 +234,7 @@ interface ProjectSessionsState {
    * which rows exist at all (a ticket archived out from under them); the push
    * channel carries everything after that.
    */
-  refresh(projectId: string): Promise<void>;
+  refresh(projectId: string, options?: ListingRefreshOptions): Promise<void>;
   /**
    * {@link refresh}, but at most once per project and never twice at a time.
    *
@@ -280,6 +281,16 @@ interface ProjectSessionsState {
   setSessionRead(projectId: string, sessionId: string, unread: boolean): Promise<void>;
 }
 
+/**
+ * How a listing read behaves (VC-713). `quiet` is a read nobody asked for —
+ * the remote listing's poll, focus or reconnect re-read: it keeps the rows on
+ * screen while it runs (no skeleton) and, failing, keeps them and says nothing,
+ * since the next read is already scheduled and no person is waiting on it.
+ */
+export interface ListingRefreshOptions {
+  quiet?: boolean;
+}
+
 /** Replaces the row with `sessionId` in `rows`, or appends it. */
 function upsert<Row>(
   rows: readonly Row[],
@@ -300,24 +311,46 @@ export function createProjectSessionsStore() {
    * every consumer re-render twice per fetch for a fact none of them show.
    */
   const inFlight = new Map<string, Promise<void>>();
+  /**
+   * The newest read per project (VC-713). A remote listing is re-read on a
+   * poll, a focus and a reconnect, and a read can land after a later one: only
+   * the newest read's answer is applied, so an older answer never paints over
+   * a newer one.
+   */
+  const latestRead = new Map<string, number>();
+  let reads = 0;
 
   return create<ProjectSessionsState>()((set, get) => ({
     byProject: {},
     listingState: {},
 
-    async refresh(projectId) {
-      set((state) => ({
-        listingState: { ...state.listingState, [projectId]: "loading" },
-      }));
+    async refresh(projectId, options = {}) {
+      const quiet = options.quiet === true;
+      const thisRead = ++reads;
+      latestRead.set(projectId, thisRead);
+      const current = () => latestRead.get(projectId) === thisRead;
+      if (!quiet) {
+        set((state) => ({
+          listingState: { ...state.listingState, [projectId]: "loading" },
+        }));
+      }
+      const failed = (message: string): void => {
+        if (!current()) return;
+        if (!quiet) toastError(`Couldn't load sessions: ${message}`);
+        // A quiet read keeps loaded rows standing; it only stands down a
+        // skeleton an earlier, superseded read left behind.
+        else if (get().listingState[projectId] !== "loading") return;
+        set((state) => ({
+          listingState: { ...state.listingState, [projectId]: "failed" },
+        }));
+      };
       try {
-        const result = await window.api.sessions.list({ projectId });
+        const result = await sessionListingReaderForProject(projectId).list({ projectId });
         if (!result.ok) {
-          toastError(`Couldn't load sessions: ${result.error}`);
-          set((state) => ({
-            listingState: { ...state.listingState, [projectId]: "failed" },
-          }));
+          failed(result.error);
           return;
         }
+        if (!current()) return;
         const provenance: Record<string, SessionProvenance> = {};
         const read: Record<string, SessionReadState> = {};
         for (const row of result.sessions) {
@@ -340,10 +373,7 @@ export function createProjectSessionsStore() {
           listingState: { ...state.listingState, [projectId]: "loaded" },
         }));
       } catch (error) {
-        toastError(`Couldn't load sessions: ${errorMessage(error)}`);
-        set((state) => ({
-          listingState: { ...state.listingState, [projectId]: "failed" },
-        }));
+        failed(errorMessage(error));
       }
     },
 

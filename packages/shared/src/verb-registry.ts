@@ -3723,6 +3723,32 @@ export const VERB_REGISTRY = [
     options: [],
     catalog: { scope: "workspace", idempotency: "natural" },
   },
+  // A Workspace's Session listing rows (VC-713, feature `sessions.listing`):
+  // the rows the desktop's own listing reads (`volli:session-list`,
+  // `-for-ticket`), full ids included, so a Client of a remote host can paint
+  // its rail, Home and ticket panel and subscribe from a row. The person's.
+  {
+    key: "session.listing",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.listing" },
+    listed: false,
+    group: "Session",
+    summary: "List a Workspace's Sessions as listing rows.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  },
+  {
+    key: "session.listingForTicket",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.listingForTicket" },
+    listed: false,
+    group: "Session",
+    summary: "List one ticket's Sessions as listing rows.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  },
   // The host's recent log (VC-699; HP § Tracing and logs): read-only, the
   // person's (an operator or a paired device; never a Session or a worker),
   // host-scoped so a fleet's control plane reads it through the same door.

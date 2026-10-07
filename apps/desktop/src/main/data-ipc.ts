@@ -169,9 +169,11 @@ import type {
  * performance harness can measure the same function the handler calls.
  */
 import {
+  projectSessionListing,
   publishSessionListingRow,
   readSessionPeekContent,
-  sessionListingRowsForRoster,
+  ticketSessionListing,
+  type SessionListingSources,
   type SessionPeekContentPorts,
 } from "@volli/host-core/sessions";
 import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
@@ -418,6 +420,11 @@ export function registerDataIpcHandlers(
   if (sessionEngine === null) throw new Error("Session Engine is unavailable");
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
+  const listingSources: SessionListingSources = {
+    db,
+    listSessions: (query) => sessionEngine.listSessions(query),
+    liveAttachmentIds,
+  };
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
   const retentionWatcher = () =>
@@ -949,30 +956,17 @@ export function registerDataIpcHandlers(
       }
     },
 
-    "volli:session-list": async (input: ProjectIdInput): Promise<SessionsResult> => {
-      const sessions = await sessionEngine.listSessions({
-        projectId: input.projectId,
-        scope: "all",
-      });
-      return {
-        ok: true,
-        sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
-      };
-    },
+    // The same bodies the host protocol's `session.listing` reads (VC-713),
+    // unbounded here: this window's own listing is whole.
+    "volli:session-list": async (input: ProjectIdInput): Promise<SessionsResult> => ({
+      ok: true,
+      sessions: await projectSessionListing(listingSources, input.projectId),
+    }),
 
-    "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
-      const ticket = getTicketRow(db, input.ticketId);
-      if (ticket === undefined) return { ok: true, sessions: [] };
-      const sessions = await sessionEngine.listSessions({
-        projectId: ticket.project_id,
-        scope: "ticket",
-        ticketId: input.ticketId,
-      });
-      return {
-        ok: true,
-        sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
-      };
-    },
+    "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => ({
+      ok: true,
+      sessions: await ticketSessionListing(listingSources, input.ticketId),
+    }),
 
     /**
      * A person's own read decision (VC-30).

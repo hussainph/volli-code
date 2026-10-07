@@ -178,6 +178,13 @@ describe("the map", () => {
     expect(await unavailable(() => empty["logs.tail"]({}, USER))).toBe(
       "This host keeps no log to read",
     );
+    // A launch with no Session Engine lists no Sessions (VC-713).
+    expect(await unavailable(() => empty["session.listing"]({ projectId: PROJECT }, USER))).toBe(
+      "The Session listing is unavailable on this host",
+    );
+    expect(
+      await unavailable(() => empty["session.listingForTicket"]({ ticketId: "t" }, USER)),
+    ).toBe("The Session listing is unavailable on this host");
     // A default needs Model Access as well as the database.
     expect(
       await unavailable(() =>
@@ -977,5 +984,29 @@ describe("the host's log (VC-699)", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(emitted).toMatchObject([{ entries: [{ record: { msg: "next" } }], gap: false }]);
     stop();
+  });
+});
+
+describe("the Session listing (VC-713)", () => {
+  it("answers a project's and a ticket's rows from the sources it was given, bounded", async () => {
+    ticket("t1");
+    const listSessions = vi.fn(async () => []);
+    const map = handlers({
+      sessionListing: { db: ctx.db, listSessions, liveAttachmentIds: () => new Set() },
+    });
+    expect(await map["session.listing"]({ projectId: PROJECT }, USER)).toEqual({
+      sessions: [],
+      omitted: 0,
+    });
+    expect(listSessions).toHaveBeenLastCalledWith({ projectId: PROJECT, scope: "all" });
+    expect(await map["session.listingForTicket"]({ ticketId: "t1" }, USER)).toEqual({
+      sessions: [],
+      omitted: 0,
+    });
+    expect(listSessions).toHaveBeenLastCalledWith({
+      projectId: PROJECT,
+      scope: "ticket",
+      ticketId: "t1",
+    });
   });
 });
