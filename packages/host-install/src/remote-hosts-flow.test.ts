@@ -146,6 +146,20 @@ describe("a flow's log line", () => {
   });
 });
 
+/** A hostd start answer, as `start --json` prints it. */
+function started(mode: "system" | "user", linger: boolean | null) {
+  return {
+    v: 1 as const,
+    ok: true as const,
+    mode,
+    version: "1.2.0",
+    restarted: true,
+    hostId: null,
+    listen: null,
+    linger,
+  };
+}
+
 describe("what an add has found", () => {
   const probe = {
     kernel: "Linux",
@@ -164,16 +178,6 @@ describe("what an add has found", () => {
     existing: null,
     artifactTarget: "linux-arm64",
   } as const;
-  const started = (mode: "system" | "user", linger: boolean | null) => ({
-    v: 1 as const,
-    ok: true as const,
-    mode,
-    version: "1.2.0",
-    restarted: true,
-    hostId: null,
-    listen: null,
-    linger,
-  });
 
   it("says nothing before a step has, and never makes a fact up", () => {
     expect(flowFacts({}, {})).toEqual({
