@@ -36,9 +36,9 @@ import {
   type DeviceKeyStore,
   type HostdReleasePin,
   type InstallLogger,
-  type RegistryFile,
   type RemoteHosts,
   type RemoteHostsStore,
+  type RemoteHostsWakeCause,
 } from "@volli/host-install";
 
 /** What the sealed credential inventory offers this module: one family's records. */
@@ -81,22 +81,22 @@ export function inventoryDeviceKeys(
   };
 }
 
-/** The registry file: replaced whole, through a temporary file, so it is never half written. */
+/**
+ * The registry file: replaced whole, through a temporary file, so it is never
+ * half written. A missing file is none yet; one that cannot be read or parsed
+ * throws, and the engine then leaves it exactly as it is (read-only).
+ */
 export function fileRegistryStore(path: string): RemoteHostsStore {
   return {
     load() {
       let text: string;
       try {
         text = readFileSync(path, "utf8");
-      } catch {
-        return null;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
       }
-      try {
-        return JSON.parse(text) as RegistryFile;
-      } catch {
-        // The engine reads an unparseable registry as empty, and says so.
-        return { v: 0 } as unknown as RegistryFile;
-      }
+      return JSON.parse(text) as unknown;
     },
     save(file) {
       mkdirSync(dirname(path), { recursive: true });
@@ -130,6 +130,46 @@ export function devTarballsFrom(
   return list === undefined || list === "" ? [] : list.split(delimiter).filter(Boolean);
 }
 
+/** What the wake source reads of Electron: `powerMonitor` and `net` satisfy it. */
+export interface WakePlatform {
+  readonly powerMonitor: {
+    on(event: "resume" | "unlock-screen", listener: () => void): unknown;
+    removeListener(event: "resume" | "unlock-screen", listener: () => void): unknown;
+  };
+  readonly net: { isOnline(): boolean };
+}
+
+/** How often the network is read for coming back online: Electron main has no event for it. */
+export const ONLINE_POLL_MS = 2_000;
+
+/**
+ * The engine's wake source: the Mac woke or its screen unlocked
+ * (`power-resume`), or the network came back (`network-online`, read every
+ * {@link ONLINE_POLL_MS}). Attached while the engine listens, and not after.
+ */
+export function desktopWakeSource(
+  platform: WakePlatform,
+  pollMs: number = ONLINE_POLL_MS,
+): (listener: (cause: RemoteHostsWakeCause) => void) => () => void {
+  return (listener) => {
+    const resumed = (): void => listener("power-resume");
+    platform.powerMonitor.on("resume", resumed);
+    platform.powerMonitor.on("unlock-screen", resumed);
+    let online = platform.net.isOnline();
+    const poll = setInterval(() => {
+      const now = platform.net.isOnline();
+      if (now && !online) listener("network-online");
+      online = now;
+    }, pollMs);
+    poll.unref?.();
+    return () => {
+      clearInterval(poll);
+      platform.powerMonitor.removeListener("resume", resumed);
+      platform.powerMonitor.removeListener("unlock-screen", resumed);
+    };
+  };
+}
+
 export interface DesktopRemoteHostsOptions {
   readonly userData: string;
   readonly appVersion: string;
@@ -142,6 +182,8 @@ export interface DesktopRemoteHostsOptions {
   /** The `cloud` flag, read on every call. */
   readonly enabled: () => boolean;
   readonly logger: InstallLogger;
+  /** Sleep, unlock and the network: tunnels and links try at once (exit criterion 4). */
+  readonly wake?: WakePlatform;
 }
 
 /** The engine, composed with this app's ports. */
@@ -168,6 +210,7 @@ export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): Re
     deviceName: hostname().replace(/\.local$/u, ""),
     tunnel: (tunnel) => createSshTunnel({ ...tunnel }),
     link: (link) => createHostLink(link),
+    ...(options.wake === undefined ? {} : { wake: desktopWakeSource(options.wake) }),
     now: Date.now,
     newId: randomUUID,
     logger,

@@ -89,7 +89,11 @@ describe("a registry file", () => {
       file: { v: 1, hosts: [HOST] },
       problems: ["host 1 is malformed", `host 2 repeats ${HOST.id}`],
     });
-    expect(readRegistry(EMPTY_REGISTRY)).toEqual({ kind: "ok", file: EMPTY_REGISTRY, problems: [] });
+    expect(readRegistry(EMPTY_REGISTRY)).toEqual({
+      kind: "ok",
+      file: EMPTY_REGISTRY,
+      problems: [],
+    });
   });
 
   it("names a key-store entry by host and device, or by flow", () => {

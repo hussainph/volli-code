@@ -40,7 +40,10 @@ export const CURRENT = "/opt/volli-hostd/current/bin/volli-hostd";
 export const NOW = Date.UTC(2026, 0, 1, 12, 0, 0);
 export const PASSWORD = "hunter2-very-secret";
 /** The key-store name of this Mac's device key for the default host and device. */
-export const HOST_KEY = deviceKeyName("0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f", "1f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f");
+export const HOST_KEY = deviceKeyName(
+  "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f",
+  "1f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f",
+);
 
 export const FACTS: Record<string, string> = {
   kernel: "Linux",
@@ -508,7 +511,6 @@ export const ready = (version = "1.1.0"): HostLinkState => ({
 });
 
 export const flush = () => new Promise((resolve) => setImmediate(resolve));
-
 
 /** The id of the question the flow waits on now, as a fresh subscriber reads it; `"none"` when none. */
 export function questionOf(engine: RemoteHosts, flowId: string): string {

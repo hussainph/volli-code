@@ -104,6 +104,11 @@ describe("the Island's words", () => {
       "hetzner-1 no longer serves this project · Read-only",
       "manage-hosts",
     ]);
+    expect(line({ status: "incompatible", reason: "too-many-projects" })).toEqual([
+      "attention",
+      "Too many projects open on hetzner-1 · Read-only",
+      "manage-hosts",
+    ]);
   });
 
   it("says Updating over whatever the link is doing while an update runs", () => {
@@ -242,6 +247,10 @@ describe("the current host's detail", () => {
     });
     expect(detail({ status: "incompatible", reason: "fenced" })).toMatchObject({
       text: "No longer serves this project",
+    });
+    expect(detail({ status: "incompatible", reason: "too-many-projects" })).toMatchObject({
+      text: "Too many projects open",
+      action: { kind: "manage-hosts" },
     });
   });
 

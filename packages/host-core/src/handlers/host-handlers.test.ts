@@ -427,7 +427,7 @@ function sink() {
 describe("remote hosts commands", () => {
   const HOST = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
   const FLOW = "flow-1";
-  const SNAPSHOT: RemoteHostsSnapshot = { v: 1, hosts: [], projects: {} };
+  const SNAPSHOT: RemoteHostsSnapshot = { v: 1, hosts: [], projects: {}, readOnly: null };
   const EVENT: AddHostEvent = {
     kind: "log",
     flowId: FLOW,
@@ -474,8 +474,16 @@ describe("remote hosts commands", () => {
         () => map["hosts.forget"]({ hostId: HOST }, WINDOW),
         () => map["hostAdd.start"]({ target: "you@box" }, WINDOW),
         () => map["hostAdd.subscribe"]({ flowId: FLOW }, WINDOW, sink()),
-        () => map["hostAdd.answer"]({ flowId: FLOW, answer: { kind: "adopt" } }, WINDOW),
-        () => map["hostAdd.sudoPassword"]({ flowId: FLOW, password: PASSWORD }, WINDOW),
+        () =>
+          map["hostAdd.answer"](
+            { flowId: FLOW, questionId: "q1", answer: { kind: "adopt" } },
+            WINDOW,
+          ),
+        () =>
+          map["hostAdd.sudoPassword"](
+            { flowId: FLOW, questionId: "q1", password: PASSWORD },
+            WINDOW,
+          ),
         () => map["hostAdd.retry"]({ flowId: FLOW }, WINDOW),
         () => map["hostAdd.cancel"]({ flowId: FLOW }, WINDOW),
       ];
@@ -499,10 +507,16 @@ describe("remote hosts commands", () => {
       flowId: FLOW,
     });
     expect(
-      await map["hostAdd.answer"]({ flowId: FLOW, answer: { kind: "accept-host-key" } }, WINDOW),
+      await map["hostAdd.answer"](
+        { flowId: FLOW, questionId: "q1", answer: { kind: "accept-host-key" } },
+        WINDOW,
+      ),
     ).toBeNull();
     expect(
-      await map["hostAdd.sudoPassword"]({ flowId: FLOW, password: PASSWORD }, WINDOW),
+      await map["hostAdd.sudoPassword"](
+        { flowId: FLOW, questionId: "q1", password: PASSWORD },
+        WINDOW,
+      ),
     ).toBeNull();
     expect(await map["hostAdd.retry"]({ flowId: FLOW, from: "install" }, WINDOW)).toBeNull();
     expect(await map["hostAdd.retry"]({ flowId: FLOW }, WINDOW)).toBeNull();
@@ -514,8 +528,8 @@ describe("remote hosts commands", () => {
     expect(remote.signIn).toHaveBeenCalledWith(HOST, "anthropic");
     expect(remote.forget).toHaveBeenCalledWith(HOST);
     expect(remote.startAdd).toHaveBeenCalledWith({ target: "you@box", name: "Box" });
-    expect(remote.answerAdd).toHaveBeenCalledWith(FLOW, { kind: "accept-host-key" });
-    expect(remote.sudoPassword).toHaveBeenCalledWith(FLOW, PASSWORD);
+    expect(remote.answerAdd).toHaveBeenCalledWith(FLOW, "q1", { kind: "accept-host-key" });
+    expect(remote.sudoPassword).toHaveBeenCalledWith(FLOW, "q1", PASSWORD);
     expect(remote.retryAdd).toHaveBeenNthCalledWith(1, FLOW, "install");
     expect(remote.retryAdd).toHaveBeenNthCalledWith(2, FLOW, undefined);
     expect(remote.cancelAdd).toHaveBeenCalledWith(FLOW);
@@ -561,7 +575,7 @@ describe("remote hosts commands", () => {
             throw error;
           },
         }).remote,
-      })["hostAdd.sudoPassword"]({ flowId: FLOW, password: PASSWORD }, WINDOW);
+      })["hostAdd.sudoPassword"]({ flowId: FLOW, questionId: "q1", password: PASSWORD }, WINDOW);
 
     const plain = await Promise.resolve(failing(new Error(`sudo refused ${PASSWORD}!`))).catch(
       (error: unknown) => error,
@@ -590,7 +604,7 @@ describe("remote hosts commands", () => {
       }).remote,
     });
     await expect(
-      empty["hostAdd.sudoPassword"]({ flowId: FLOW, password: "" }, WINDOW),
+      empty["hostAdd.sudoPassword"]({ flowId: FLOW, questionId: "q1", password: "" }, WINDOW),
     ).rejects.toBe(clean);
   });
 });

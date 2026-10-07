@@ -450,29 +450,34 @@ export async function discoverHostKeys(options: {
   const scratch = mkdtempSync(join(tmpdir(), "volli-hostkey-"));
   const file = join(scratch, "known_hosts");
   try {
-    await runProcess(spawn, options.sshPath ?? "ssh", [
-      ...[
-        "BatchMode=yes",
-        "StrictHostKeyChecking=accept-new",
-        `UserKnownHostsFile=${file}`,
-        "GlobalKnownHostsFile=/dev/null",
-        "PubkeyAuthentication=no",
-        "PasswordAuthentication=no",
-        "KbdInteractiveAuthentication=no",
-        "GSSAPIAuthentication=no",
-        "HostbasedAuthentication=no",
-        "IdentityAgent=none",
-        "ForwardAgent=no",
-        "ClearAllForwardings=yes",
-        "PermitLocalCommand=no",
-        "ForkAfterAuthentication=no",
-        "ControlMaster=no",
-        "ControlPath=none",
-        "ConnectTimeout=15",
-      ].flatMap((option) => ["-o", option]),
-      ...targetArgs(options.target),
-      "true",
-    ], { timeoutMs: HOST_KEY_TIMEOUT_MS });
+    await runProcess(
+      spawn,
+      options.sshPath ?? "ssh",
+      [
+        ...[
+          "BatchMode=yes",
+          "StrictHostKeyChecking=accept-new",
+          `UserKnownHostsFile=${file}`,
+          "GlobalKnownHostsFile=/dev/null",
+          "PubkeyAuthentication=no",
+          "PasswordAuthentication=no",
+          "KbdInteractiveAuthentication=no",
+          "GSSAPIAuthentication=no",
+          "HostbasedAuthentication=no",
+          "IdentityAgent=none",
+          "ForwardAgent=no",
+          "ClearAllForwardings=yes",
+          "PermitLocalCommand=no",
+          "ForkAfterAuthentication=no",
+          "ControlMaster=no",
+          "ControlPath=none",
+          "ConnectTimeout=15",
+        ].flatMap((option) => ["-o", option]),
+        ...targetArgs(options.target),
+        "true",
+      ],
+      { timeoutMs: HOST_KEY_TIMEOUT_MS },
+    );
     let entries: string[];
     try {
       entries = readFileSync(file, "utf8")
@@ -520,9 +525,14 @@ export async function acceptHostKeys(options: {
   readonly logger: InstallLogger;
 }): Promise<string> {
   const spawn = options.spawn ?? LIVE_SPAWN;
-  const resolved = await runProcess(spawn, options.sshPath ?? "ssh", ["-G", ...targetArgs(options.target)], {
-    timeoutMs: HOST_KEY_TIMEOUT_MS,
-  });
+  const resolved = await runProcess(
+    spawn,
+    options.sshPath ?? "ssh",
+    ["-G", ...targetArgs(options.target)],
+    {
+      timeoutMs: HOST_KEY_TIMEOUT_MS,
+    },
+  );
   const configured = /^userknownhostsfile\s+(\S+)/mu.exec(resolved.stdout)?.[1];
   const file = (configured ?? "~/.ssh/known_hosts").replace(/^~(?=\/)/u, options.home);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });

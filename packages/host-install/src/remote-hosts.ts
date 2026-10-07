@@ -386,6 +386,23 @@ export function answerFits(question: AddHostQuestion, reply: AddHostAnswer): boo
   }
 }
 
+/** The Workspaces that get a link: the first {@link REMOTE_HOST_LINK_CAP} remembered. */
+function linked(entry: RegistryHost): readonly string[] {
+  return entry.workspaceIds.slice(0, REMOTE_HOST_LINK_CAP);
+}
+
+/** Why the flow's current question is not `questionId`, or `null` when it is and `fit` holds. */
+function asking(
+  flow: Flow,
+  questionId: string,
+  fit: (question: AddHostQuestion) => boolean,
+): string | null {
+  const { question } = flow.view;
+  if (flow.status !== "question" || question === null) return `is ${flow.status}, not asking`;
+  if (question.id !== questionId) return `asks ${question.id} now, not ${questionId}`;
+  return fit(question) ? null : `does not take that answer to ${question.kind}`;
+}
+
 /** Waits for every promise to settle, or for `ms`, whichever is first. */
 async function settleWithin(promises: readonly Promise<unknown>[], ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -556,11 +573,6 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   }
 
   /* ── Bringing a host up ──────────────────────────────────────────────── */
-
-  /** The Workspaces that get a link: the first {@link REMOTE_HOST_LINK_CAP} remembered. */
-  function linked(entry: RegistryHost): readonly string[] {
-    return entry.workspaceIds.slice(0, REMOTE_HOST_LINK_CAP);
-  }
 
   /** Moves the host's link, and each of its Workspaces' links, on to what they say now. */
   function follow(runtime: HostRuntime, previous: RemoteHostLink | null): void {
@@ -926,8 +938,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       // From here to the handoff nothing awaits.
       const pinned = state.request.pinnedHostId;
       // The person agreed the host's identity changed: the old one goes.
-      const replaced =
-        pinned !== null && pinned !== hostId ? (entries.get(pinned) ?? null) : null;
+      const replaced = pinned !== null && pinned !== hostId ? (entries.get(pinned) ?? null) : null;
       const kept = entries.get(hostId);
       const remote = flow.remote!;
       const entry: RegistryHost = {
@@ -1109,18 +1120,6 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       change(flow);
       await runFlow(flow);
     });
-  }
-
-  /** Why the flow's current question is not `questionId`, or `null` when it is and `fit` holds. */
-  function asking(
-    flow: Flow,
-    questionId: string,
-    fit: (question: AddHostQuestion) => boolean,
-  ): string | null {
-    const { question } = flow.view;
-    if (flow.status !== "question" || question === null) return `is ${flow.status}, not asking`;
-    if (question.id !== questionId) return `asks ${question.id} now, not ${questionId}`;
-    return fit(question) ? null : `does not take that answer to ${question.kind}`;
   }
 
   async function begin(
@@ -1315,7 +1314,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
         closed = true;
         unsubscribeWake?.();
         // Nothing registers a host from here on: every finalization checks first.
-        for (const hostId of [...runtimes.keys()]) stopHost(hostId);
+        for (const hostId of runtimes.keys()) stopHost(hostId);
         const open = [...flows.values()].filter(
           (flow) => flow.status !== "done" && flow.status !== "cancelled",
         );
@@ -1333,7 +1332,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
             logger.warn("an add flow did not close cleanly", { error: messageOf(result.reason) });
           }
         }
-        for (const flow of [...flows.values()]) dispose(flow);
+        for (const flow of flows.values()) dispose(flow);
       })();
       return closing;
     },

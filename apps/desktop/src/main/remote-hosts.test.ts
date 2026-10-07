@@ -1,12 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { RemoteHostsUnavailableError } from "@volli/host-install";
+import { RemoteHostsUnavailableError, SILENT_LOGGER } from "@volli/host-install";
 
 import {
   createDesktopRemoteHosts,
+  desktopWakeSource,
   devTarballsFrom,
   deviceKeyPurpose,
   fileRegistryStore,
@@ -54,7 +55,7 @@ describe("device keys in the sealed inventory", () => {
 });
 
 describe("the registry file", () => {
-  it("round-trips whole, 0600, and reads a missing or broken file as none", () => {
+  it("round-trips whole, 0600; reads a missing file as none and refuses a broken one", () => {
     const path = join(root, "nested/remote-hosts.json");
     const store = fileRegistryStore(path);
     expect(store.load()).toBeNull();
@@ -62,8 +63,40 @@ describe("the registry file", () => {
     store.save(file);
     expect(store.load()).toEqual(file);
     expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Not JSON, or not a file it can read: thrown, so the engine leaves it alone.
     writeFileSync(path, "{");
-    expect(store.load()).toEqual({ v: 0 });
+    expect(() => store.load()).toThrow(SyntaxError);
+    expect(readFileSync(path, "utf8")).toBe("{");
+    const directory = join(root, "a-directory.json");
+    mkdirSync(directory);
+    expect(() => fileRegistryStore(directory).load()).toThrow(/EISDIR/u);
+    // A save that cannot land throws, and leaves no temporary file behind.
+    expect(() => fileRegistryStore(directory).save(file)).toThrow();
+    expect(() => statSync(`${directory}.${process.pid}.tmp`)).toThrow();
+  });
+
+  it("is never overwritten when a newer Volli wrote it", async () => {
+    const path = join(root, "remote-hosts.json");
+    const newer = `${JSON.stringify({ v: 2, hosts: [], futureData: "keep" })}\n`;
+    writeFileSync(path, newer);
+    const { inventory } = memoryInventory();
+    const hosts = createDesktopRemoteHosts({
+      userData: root,
+      appVersion: "1.1.0",
+      packaged: false,
+      manifestPath: join(root, "absent.json"),
+      env: {},
+      inventory,
+      unlockInventory: async () => {},
+      enabled: () => true,
+      logger: SILENT_LOGGER,
+    });
+    expect(hosts.snapshot().readOnly).toBe("This Mac’s hosts file is from a newer Volli.");
+    await expect(hosts.startAdd({ target: "deploy@box" })).rejects.toMatchObject({
+      code: "registry-read-only",
+    });
+    expect(readFileSync(path, "utf8")).toBe(newer);
+    await hosts.close();
   });
 });
 
@@ -130,5 +163,79 @@ describe("the composed engine", () => {
     );
     expect(() => readFileSync(join(root, "remote-hosts.json"))).toThrow();
     await hosts.close();
+  });
+});
+
+function platform() {
+  const listeners = new Map<string, Set<() => void>>();
+  const state = { online: true };
+  return {
+    state,
+    listeners,
+    fire: (event: string) => {
+      for (const listener of listeners.get(event) ?? []) listener();
+    },
+    platform: {
+      powerMonitor: {
+        on(event: "resume" | "unlock-screen", listener: () => void) {
+          listeners.set(event, (listeners.get(event) ?? new Set()).add(listener));
+        },
+        removeListener(event: "resume" | "unlock-screen", listener: () => void) {
+          listeners.get(event)?.delete(listener);
+        },
+      },
+      net: { isOnline: () => state.online },
+    },
+  };
+}
+
+describe("waking the engine", () => {
+  it("says power-resume on resume and unlock, network-online when the network comes back", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = platform();
+      const causes: string[] = [];
+      const stop = desktopWakeSource(fake.platform, 100)((cause) => causes.push(cause));
+      fake.fire("resume");
+      fake.fire("unlock-screen");
+      vi.advanceTimersByTime(100);
+      fake.state.online = false;
+      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(100);
+      fake.state.online = true;
+      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(100);
+      expect(causes).toEqual(["power-resume", "power-resume", "network-online"]);
+      stop();
+      fake.fire("resume");
+      fake.state.online = false;
+      vi.advanceTimersByTime(100);
+      fake.state.online = true;
+      vi.advanceTimersByTime(100);
+      expect(causes).toHaveLength(3);
+      expect([...fake.listeners.values()].every((set) => set.size === 0)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("wakes the composed engine's hosts: attached while cloud is on, detached at quit", async () => {
+    const fake = platform();
+    const { inventory } = memoryInventory();
+    const hosts = createDesktopRemoteHosts({
+      userData: root,
+      appVersion: "1.1.0",
+      packaged: false,
+      manifestPath: join(root, "absent.json"),
+      env: {},
+      inventory,
+      unlockInventory: async () => {},
+      enabled: () => true,
+      logger: SILENT_LOGGER,
+      wake: fake.platform,
+    });
+    expect(fake.listeners.get("resume")?.size).toBe(1);
+    await hosts.close();
+    expect(fake.listeners.get("resume")?.size).toBe(0);
   });
 });

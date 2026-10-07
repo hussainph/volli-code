@@ -41,6 +41,49 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const existing = (adoptable: boolean) =>
+  harness({
+    overrides: [
+      (script) =>
+        script === PROBE_SCRIPT
+          ? {
+              stdout: probeOutput(
+                {},
+                [
+                  "hostd=system managed 1.0.0",
+                  `hostd_path=${CURRENT}`,
+                  `status=${adoptable ? JSON.stringify({ v: 1, management: 1, verdict: "serving", running: null, devices: [] }) : ""}`,
+                ].join("\n"),
+              ),
+            }
+          : undefined,
+    ],
+  });
+
+const q = (kind: string, fields: Record<string, string | boolean> = {}) => ({
+  id: "q1",
+  kind,
+  step: "probe" as const,
+  ...fields,
+});
+
+const workspaces = (count: number) =>
+  Array.from({ length: count }, (_, i) => `20000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+
+/** Turns the event loop until `check` holds. */
+async function until(check: () => boolean): Promise<void> {
+  while (!check()) await flush();
+}
+
 /** Holds the first flow's write of its host's key, inside its lease, until released. */
 function holdFirstHostKey(h: Harness): { release: () => void; held: () => boolean } {
   let release: (() => void) | undefined;
@@ -66,11 +109,11 @@ describe("quit owns everything in flight (B2)", () => {
         : undefined;
     const { flowId } = await h.engine.startAdd({ target: "deploy@fake" });
     const w = watch(h.engine, flowId);
-    while (release === undefined) await flush();
+    await until(() => release !== undefined);
     const closed = h.engine.close();
     // Cancelled at once; quit waits for the write in flight to land and be undone.
     expect(w.views().at(-1)?.status).toBe("cancelled");
-    release();
+    release!();
     await closed;
     expect(w.views().at(-1)?.status).toBe("cancelled");
     expect(h.tunnels.made.every((tunnel) => tunnel.closed)).toBe(true);
@@ -89,9 +132,9 @@ describe("quit owns everything in flight (B2)", () => {
           })
         : undefined;
     const started = h.engine.startAdd({ target: "deploy@fake" });
-    while (release === undefined) await flush();
+    await until(() => release !== undefined);
     const closed = h.engine.close();
-    release();
+    release!();
     await expect(started).rejects.toBeInstanceOf(RemoteHostsUnavailableError);
     await closed;
     expect(h.keys.keys.size).toBe(0);
@@ -155,7 +198,10 @@ describe("quit owns everything in flight (B2)", () => {
     h.keys.hooks.remove = () => Promise.reject(new Error("keychain locked"));
     await h.engine.close();
     expect(h.log.lines).toContainEqual(
-      expect.objectContaining({ msg: "an add flow did not close cleanly", fields: { error: "keychain locked" } }),
+      expect.objectContaining({
+        msg: "an add flow did not close cleanly",
+        fields: { error: "keychain locked" },
+      }),
     );
   });
 
@@ -299,33 +345,24 @@ setInterval(() => {}, 1000);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const alive = (pid: number): boolean => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
   it("two finishes for one host, then quit: every fake ssh is gone", async () => {
     const children: ChildProcess[] = [];
     let port = 41_000;
     const tunnel: RemoteHostsPorts["tunnel"] = (options) => {
-      let ready: Promise<void> = Promise.resolve();
+      let carried: Promise<void> = Promise.resolve();
       return createSshTunnel({
         ...options,
         sshPath: fakeSsh,
         freePort: async () => (port += 1),
         accepts: async () => {
-          await ready;
+          await carried;
           return true;
         },
         timing: { killAfterMs: 30 },
         spawn(command, args) {
           const child = nodeSpawn(command, [...args], { stdio: ["ignore", "ignore", "pipe"] });
           children.push(child);
-          ready = new Promise<void>((resolve) => {
+          carried = new Promise<void>((resolve) => {
             child.stderr!.once("data", () => resolve());
             child.once("close", () => resolve());
           });
@@ -397,25 +434,6 @@ describe("finished flows are let go (note 3)", () => {
 });
 
 describe("answers must fit the question asked now (note 4)", () => {
-  const existing = (adoptable: boolean) =>
-    harness({
-      overrides: [
-        (script) =>
-          script === PROBE_SCRIPT
-            ? {
-                stdout: probeOutput(
-                  {},
-                  [
-                    "hostd=system managed 1.0.0",
-                    `hostd_path=${CURRENT}`,
-                    `status=${adoptable ? JSON.stringify({ v: 1, management: 1, verdict: "serving", running: null, devices: [] }) : ""}`,
-                  ].join("\n"),
-                ),
-              }
-            : undefined,
-      ],
-    });
-
   it("refuses adopt when the hostd there cannot be adopted", async () => {
     const h = existing(false);
     const { flowId, view } = await startAdd(h);
@@ -455,20 +473,14 @@ describe("answers must fit the question asked now (note 4)", () => {
     const asked = await startAdd(odd);
     const flow = asked.view.question!;
     expect(flow.reason).toBe("install");
-    await expect(odd.engine.answerAdd(asked.flowId, "q1", { kind: "repair" })).rejects.toMatchObject(
-      { code: "flow-not-waiting" },
-    );
+    await expect(
+      odd.engine.answerAdd(asked.flowId, "q1", { kind: "repair" }),
+    ).rejects.toMatchObject({ code: "flow-not-waiting" });
   });
 });
 
 describe("which answers each question takes", () => {
   it("is exactly the ones it offers", () => {
-    const q = (kind: string, fields: Record<string, string | boolean> = {}) => ({
-      id: "q1",
-      kind,
-      step: "probe" as const,
-      ...fields,
-    });
     expect(answerFits(q("host-key"), { kind: "accept-host-key" })).toBe(true);
     expect(answerFits(q("host-key"), { kind: "open" })).toBe(false);
     expect(answerFits(q("existing-hostd", { adoptable: true }), { kind: "adopt" })).toBe(true);
@@ -476,8 +488,12 @@ describe("which answers each question takes", () => {
     expect(answerFits(q("existing-hostd"), { kind: "update" })).toBe(true);
     expect(answerFits(q("already-paired"), { kind: "open" })).toBe(true);
     expect(answerFits(q("already-paired"), { kind: "repair" })).toBe(false);
-    expect(answerFits(q("sudo-password", { reason: "install" }), { kind: "user-install" })).toBe(true);
-    expect(answerFits(q("sudo-password", { reason: "linger" }), { kind: "user-install" })).toBe(false);
+    expect(answerFits(q("sudo-password", { reason: "install" }), { kind: "user-install" })).toBe(
+      true,
+    );
+    expect(answerFits(q("sudo-password", { reason: "linger" }), { kind: "user-install" })).toBe(
+      false,
+    );
     expect(answerFits(q("identity-changed"), { kind: "repair" })).toBe(true);
     expect(answerFits(q("a-later-kind"), { kind: "open" })).toBe(false);
   });
@@ -501,7 +517,11 @@ describe("the sudo password is forgotten at every stop (security N2)", () => {
     expect(w.views().at(-1)?.failure).toMatchObject({ code: "connection-lost", step: "start" });
     await h.engine.retryAdd(flowId);
     // Install ran with it; start, after the failure, asks again.
-    expect(w.views().at(-1)?.question).toMatchObject({ id: "q2", kind: "sudo-password", step: "start" });
+    expect(w.views().at(-1)?.question).toMatchObject({
+      id: "q2",
+      kind: "sudo-password",
+      step: "start",
+    });
     const sudoed = h.box.scripts.filter((entry) => entry.stdin === `${PASSWORD}\n`);
     expect(sudoed).toHaveLength(2);
     await h.engine.sudoPassword(flowId, "q2", PASSWORD);
@@ -519,16 +539,17 @@ describe("the sudo password is forgotten at every stop (security N2)", () => {
     await h.engine.sudoPassword(flowId, "q1", PASSWORD);
     expect(w.views().at(-1)?.question).toMatchObject({ id: "q2", kind: "identity-changed" });
     await h.engine.answerAdd(flowId, "q2", { kind: "repair" });
-    expect(w.views().at(-1)?.question).toMatchObject({ id: "q3", kind: "sudo-password", reason: "enroll" });
+    expect(w.views().at(-1)?.question).toMatchObject({
+      id: "q3",
+      kind: "sudo-password",
+      reason: "enroll",
+    });
     await h.engine.sudoPassword(flowId, "q3", PASSWORD);
     expect(w.views().at(-1)?.status).toBe("done");
   });
 });
 
 describe("the link cap and the link log (notes 1, 5)", () => {
-  const workspaces = (count: number) =>
-    Array.from({ length: count }, (_, i) => `20000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
-
   it("opens at most 24 links for 40 projects; the rest read too many, plainly", () => {
     const ids = workspaces(40);
     const h = harness({ registry: registry(hostEntry({ workspaceIds: ids })) });
@@ -572,12 +593,17 @@ describe("the link cap and the link log (notes 1, 5)", () => {
       { kind: "wake", cause: "power-resume", status: "ready", ...base },
     ];
     for (const event of events) log(event);
-    expect(h.log.lines.slice(-3).map((line) => [line.level, line.msg, line.fields["workspaceId"]])).toEqual([
+    expect(
+      h.log.lines.slice(-3).map((line) => [line.level, line.msg, line.fields["workspaceId"]]),
+    ).toEqual([
       ["warn", "host link state", WS1],
       ["info", "host link state", WS1],
       ["debug", "host link wake", WS1],
     ]);
-    expect(h.log.lines.at(-3)?.fields).toMatchObject({ hostId: HOST_ID, reason: "credential-invalid" });
+    expect(h.log.lines.at(-3)?.fields).toMatchObject({
+      hostId: HOST_ID,
+      reason: "credential-invalid",
+    });
   });
 });
 

@@ -48,6 +48,7 @@ function snapshot(
     projects: Object.fromEntries(
       Object.entries(projects).map(([id, link]) => [id, { hostId: hostOf(id), link }]),
     ),
+    readOnly: null,
   };
 }
 

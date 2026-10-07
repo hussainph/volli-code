@@ -75,9 +75,15 @@ const SNAPSHOT: RemoteHostsSnapshot = {
     },
     "project-2": { hostId: HOST, link: { status: "connecting", attempt: 1 } },
   },
+  readOnly: null,
 };
-const NEXT: RemoteHostsSnapshot = { v: 1, hosts: [], projects: {} };
-const VIEW: AddHostEvent = {
+const NEXT: RemoteHostsSnapshot = {
+  v: 1,
+  hosts: [],
+  projects: {},
+  readOnly: "This Mac’s hosts file is from a newer Volli.",
+};
+const VIEW: Extract<AddHostEvent, { kind: "view" }> = {
   kind: "view",
   view: {
     flowId: FLOW,
@@ -89,6 +95,7 @@ const VIEW: AddHostEvent = {
       { id: "probe", status: "pending" },
     ],
     question: {
+      id: "q1",
       kind: "host-key",
       step: "connect",
       fingerprints: ["SHA256:abc", "SHA256:def"],
@@ -252,9 +259,13 @@ function everyRemoteCall(client: TRPCClient<DesktopRouter>) {
     "hostAdd.subscribe": () =>
       collect((handlers) => client.hostAdd.subscribe.subscribe({ flowId: FLOW }, handlers)).failed,
     "hostAdd.answer": () =>
-      client.hostAdd.answer.mutate({ flowId: FLOW, answer: { kind: "accept-host-key" } }),
+      client.hostAdd.answer.mutate({
+        flowId: FLOW,
+        questionId: "q1",
+        answer: { kind: "accept-host-key" },
+      }),
     "hostAdd.sudoPassword": () =>
-      client.hostAdd.sudoPassword.mutate({ flowId: FLOW, password: PASSWORD }),
+      client.hostAdd.sudoPassword.mutate({ flowId: FLOW, questionId: "q1", password: PASSWORD }),
     "hostAdd.retry": () => client.hostAdd.retry.mutate({ flowId: FLOW }),
     "hostAdd.cancel": () => client.hostAdd.cancel.mutate({ flowId: FLOW }),
   };
@@ -327,11 +338,19 @@ describeContract<Host, DesktopRouter>(
       expect(await client.hostAdd.start.mutate({ target, name })).toEqual({ flowId: FLOW });
       expect(await client.hostAdd.start.mutate({ target: "you@box" })).toEqual({ flowId: FLOW });
       expect(
-        await client.hostAdd.answer.mutate({ flowId: FLOW, answer: { kind: "user-install" } }),
+        await client.hostAdd.answer.mutate({
+          flowId: FLOW,
+          questionId: "q1",
+          answer: { kind: "user-install" },
+        }),
       ).toBeNull();
       const longest = "p".repeat(1024);
       expect(
-        await client.hostAdd.sudoPassword.mutate({ flowId: FLOW, password: longest }),
+        await client.hostAdd.sudoPassword.mutate({
+          flowId: FLOW,
+          questionId: "q1",
+          password: longest,
+        }),
       ).toBeNull();
       expect(await client.hostAdd.retry.mutate({ flowId: FLOW, from: "deliver" })).toBeNull();
       expect(await client.hostAdd.retry.mutate({ flowId: FLOW })).toBeNull();
@@ -345,8 +364,8 @@ describeContract<Host, DesktopRouter>(
         ["hosts.forget", { hostId: HOST }],
         ["hostAdd.start", { target, name }],
         ["hostAdd.start", { target: "you@box" }],
-        ["hostAdd.answer", { flowId: FLOW, answer: { kind: "user-install" } }],
-        ["hostAdd.sudoPassword", { flowId: FLOW, password: longest }],
+        ["hostAdd.answer", { flowId: FLOW, questionId: "q1", answer: { kind: "user-install" } }],
+        ["hostAdd.sudoPassword", { flowId: FLOW, questionId: "q1", password: longest }],
         ["hostAdd.retry", { flowId: FLOW, from: "deliver" }],
         ["hostAdd.retry", { flowId: FLOW }],
         ["hostAdd.cancel", { flowId: FLOW }],
@@ -392,13 +411,19 @@ describeContract<Host, DesktopRouter>(
         ],
         [
           "unknown answer",
-          () => client.hostAdd.answer.mutate({ flowId: FLOW, answer: { kind: "sudo" } as never }),
+          () =>
+            client.hostAdd.answer.mutate({
+              flowId: FLOW,
+              questionId: "q1",
+              answer: { kind: "sudo" } as never,
+            }),
         ],
         [
           "answer with a field",
           () =>
             client.hostAdd.answer.mutate({
               flowId: FLOW,
+              questionId: "q1",
               answer: { kind: "adopt", password: PASSWORD } as never,
             }),
         ],
@@ -407,16 +432,36 @@ describeContract<Host, DesktopRouter>(
           () =>
             client.hostAdd.sudoPassword.mutate({
               flowId: FLOW,
+              questionId: "q1",
               password: PASSWORD + "p".repeat(1024),
             }),
         ],
         [
           "empty password",
-          () => client.hostAdd.sudoPassword.mutate({ flowId: FLOW, password: "" }),
+          () =>
+            client.hostAdd.sudoPassword.mutate({ flowId: FLOW, questionId: "q1", password: "" }),
+        ],
+        [
+          "no question id",
+          () => client.hostAdd.answer.mutate({ flowId: FLOW, answer: { kind: "adopt" } } as never),
+        ],
+        [
+          "question id too long",
+          () =>
+            client.hostAdd.sudoPassword.mutate({
+              flowId: FLOW,
+              questionId: "q".repeat(65),
+              password: PASSWORD,
+            }),
         ],
         [
           "empty flow id",
-          () => client.hostAdd.sudoPassword.mutate({ flowId: "", password: PASSWORD }),
+          () =>
+            client.hostAdd.sudoPassword.mutate({
+              flowId: "",
+              questionId: "q1",
+              password: PASSWORD,
+            }),
         ],
         [
           "unknown step",
@@ -521,10 +566,14 @@ describeContract<Host, DesktopRouter>(
       });
       const client = await connect(fixture);
       expect(
-        await client.hostAdd.sudoPassword.mutate({ flowId: FLOW, password: PASSWORD }),
+        await client.hostAdd.sudoPassword.mutate({
+          flowId: FLOW,
+          questionId: "q1",
+          password: PASSWORD,
+        }),
       ).toBeNull();
       const failure = await expectHostError(
-        client.hostAdd.sudoPassword.mutate({ flowId: FLOW, password: PASSWORD }),
+        client.hostAdd.sudoPassword.mutate({ flowId: FLOW, questionId: "q1", password: PASSWORD }),
       );
       expect(failure.message).toBe("sudo refused the password");
       for (const input of [
@@ -709,7 +758,16 @@ describe("the desktop router's grammar", () => {
 
   it("describes the wire's own values: a snapshot, a view with an open question, a log line", () => {
     expect(remoteHostsSnapshotSchema.parse(SNAPSHOT)).toEqual(SNAPSHOT);
-    for (const event of [VIEW, FAILED, LOG]) expect(addHostEventSchema.parse(event)).toEqual(event);
+    const REPLAY: AddHostEvent = {
+      kind: "replay",
+      view: VIEW.view,
+      log: [LOG.kind === "log" ? LOG.line : (null as never)],
+      omitted: 412,
+    };
+    for (const event of [REPLAY, VIEW, FAILED, LOG]) {
+      expect(addHostEventSchema.parse(event)).toEqual(event);
+    }
+    expect(() => addHostEventSchema.parse({ ...REPLAY, omitted: -1 })).toThrow();
     expect(() =>
       addHostEventSchema.parse({ ...VIEW, view: { ...VIEW.view, status: "paused" } }),
     ).toThrow();

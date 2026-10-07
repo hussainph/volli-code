@@ -267,14 +267,18 @@ describe("questions", () => {
     const h = harness();
     h.box.trusted = false;
     const { flowId } = await startAdd(h);
-    await expect(h.engine.sudoPassword(flowId, questionOf(h.engine, flowId), PASSWORD)).rejects.toMatchObject({
+    await expect(
+      h.engine.sudoPassword(flowId, questionOf(h.engine, flowId), PASSWORD),
+    ).rejects.toMatchObject({
       code: "flow-not-waiting",
     });
     await h.engine.answerAdd(flowId, questionOf(h.engine, flowId), { kind: "accept-host-key" });
-    await expect(h.engine.answerAdd(flowId, questionOf(h.engine, flowId), { kind: "adopt" })).rejects.toBeInstanceOf(
-      RemoteHostsError,
-    );
-    await expect(h.engine.sudoPassword(flowId, questionOf(h.engine, flowId), PASSWORD)).rejects.toMatchObject({
+    await expect(
+      h.engine.answerAdd(flowId, questionOf(h.engine, flowId), { kind: "adopt" }),
+    ).rejects.toBeInstanceOf(RemoteHostsError);
+    await expect(
+      h.engine.sudoPassword(flowId, questionOf(h.engine, flowId), PASSWORD),
+    ).rejects.toMatchObject({
       code: "flow-not-waiting",
     });
     await expect(h.engine.retryAdd(flowId)).rejects.toMatchObject({ code: "flow-not-waiting" });
@@ -531,17 +535,17 @@ describe("cancelling an add", () => {
 
   it("wins while the flow's key is read: nothing is written", async () => {
     const h = harness();
-    let release!: () => void;
+    const held: { release?: () => void } = {};
     h.keys.hooks.get = (name) =>
       name.startsWith("flow:")
         ? new Promise<void>((resolve) => {
-            release = resolve;
+            held.release = resolve;
           })
         : undefined;
     const { flowId } = await h.engine.startAdd({ target: "deploy@box" });
-    while (release === undefined) await flush();
+    while (held.release === undefined) await flush();
     await h.engine.cancelAdd(flowId);
-    release();
+    held.release();
     await flush();
     expect(h.keys.calls).toEqual(["put flow:flow-1", "remove flow:flow-1"]);
     expect(h.engine.snapshot().hosts).toEqual([]);
@@ -892,9 +896,9 @@ describe("a host's lifecycle", () => {
     expect(() => h.engine.openWorkspace(HOST_ID, "not-a-workspace")).toThrow(
       expect.objectContaining({ code: "bad-workspace" }),
     );
-    expect(() =>
-      h.engine.openWorkspace("5f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f", WS1),
-    ).toThrow(expect.objectContaining({ code: "unknown-host" }));
+    expect(() => h.engine.openWorkspace("5f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f", WS1)).toThrow(
+      expect.objectContaining({ code: "unknown-host" }),
+    );
   });
 
   it("forgets a host: its tunnel and links closed, its entry and key gone, the box untouched", async () => {
@@ -973,7 +977,11 @@ describe("refusals", () => {
 
 describe("the registry file", () => {
   it.each([
-    ["from a newer Volli", { v: 2, hosts: [hostEntry({ id: OTHER_ID })], futureData: "keep" }, "This Mac’s hosts file is from a newer Volli."],
+    [
+      "from a newer Volli",
+      { v: 2, hosts: [hostEntry({ id: OTHER_ID })], futureData: "keep" },
+      "This Mac’s hosts file is from a newer Volli.",
+    ],
     ["not a registry", { v: 1, hosts: "lots" }, "This Mac’s hosts file can’t be read."],
     ["unreadable", new Error("Unexpected token } in JSON"), "This Mac’s hosts file can’t be read."],
   ])("leaves a file %s exactly as it is, and refuses every change", async (_, file, line) => {
@@ -1006,7 +1014,10 @@ describe("the registry file", () => {
     const h = harness({ registry: registry(hostEntry()) });
     h.store.state.saveFails = true;
     expect(() => h.engine.openWorkspace(HOST_ID, WS1)).toThrow(
-      expect.objectContaining({ code: "registry-unwritable", message: "Couldn’t save this Mac’s hosts file." }),
+      expect.objectContaining({
+        code: "registry-unwritable",
+        message: "Couldn’t save this Mac’s hosts file.",
+      }),
     );
     expect(h.engine.snapshot().projects).toEqual({});
     expect(h.log.lines).toContainEqual(
@@ -1035,7 +1046,10 @@ describe("the registry file", () => {
     await h.engine.forget(HOST_ID);
     expect(h.engine.snapshot().hosts).toEqual([]);
     expect(h.log.lines).toContainEqual(
-      expect.objectContaining({ msg: "a device key was not removed", fields: { key: HOST_KEY, error: "keychain locked" } }),
+      expect.objectContaining({
+        msg: "a device key was not removed",
+        fields: { key: HOST_KEY, error: "keychain locked" },
+      }),
     );
   });
 

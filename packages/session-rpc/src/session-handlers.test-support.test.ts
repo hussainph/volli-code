@@ -67,8 +67,12 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["hosts.forget"]({ hostId: HOST }, CALL),
     () => handlers["hostAdd.start"]({ target: "you@box" }, CALL),
     () => handlers["hostAdd.subscribe"]({ flowId: "f" }, CALL, sink),
-    () => handlers["hostAdd.answer"]({ flowId: "f", answer: { kind: "adopt" } }, CALL),
-    () => handlers["hostAdd.sudoPassword"]({ flowId: "f", password: "p" }, CALL),
+    () =>
+      handlers["hostAdd.answer"](
+        { flowId: "f", questionId: "q1", answer: { kind: "adopt" } },
+        CALL,
+      ),
+    () => handlers["hostAdd.sudoPassword"]({ flowId: "f", questionId: "q1", password: "p" }, CALL),
     () => handlers["hostAdd.retry"]({ flowId: "f" }, CALL),
     () => handlers["hostAdd.cancel"]({ flowId: "f" }, CALL),
   ];
@@ -142,7 +146,7 @@ describe("sessionHandlersFrom", () => {
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
     expect(port).toHaveBeenCalledTimes(30);
-    expect(port).toHaveBeenCalledWith({ flowId: "f", password: "p" }, CALL);
+    expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
       sessionId: "s",

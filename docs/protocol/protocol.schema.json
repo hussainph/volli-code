@@ -192,10 +192,16 @@
               "maxLength": 128,
               "minLength": 1,
               "type": "string"
+            },
+            "questionId": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
             }
           },
           "required": [
             "flowId",
+            "questionId",
             "answer"
           ],
           "type": "object"
@@ -368,6 +374,308 @@
               "additionalProperties": false,
               "properties": {
                 "kind": {
+                  "const": "replay",
+                  "type": "string"
+                },
+                "log": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "at": {
+                        "type": "string"
+                      },
+                      "fields": {
+                        "additionalProperties": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "level": {
+                        "enum": [
+                          "debug",
+                          "info",
+                          "warn",
+                          "error"
+                        ],
+                        "type": "string"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "at",
+                      "level",
+                      "message",
+                      "fields"
+                    ],
+                    "type": "object"
+                  },
+                  "readOnly": true,
+                  "type": "array"
+                },
+                "omitted": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "view": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "failure": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "detail": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "line": {
+                              "type": "string"
+                            },
+                            "recovery": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "action": {
+                                      "const": "retry",
+                                      "type": "string"
+                                    },
+                                    "from": {
+                                      "enum": [
+                                        "connect",
+                                        "probe",
+                                        "deliver",
+                                        "install",
+                                        "start",
+                                        "enroll",
+                                        "link"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "action",
+                                    "label",
+                                    "from"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "action": {
+                                      "const": "back",
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "action",
+                                    "label"
+                                  ],
+                                  "type": "object"
+                                }
+                              ]
+                            },
+                            "step": {
+                              "enum": [
+                                "connect",
+                                "probe",
+                                "deliver",
+                                "install",
+                                "start",
+                                "enroll",
+                                "link"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "step",
+                            "line",
+                            "recovery",
+                            "detail"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "flowId": {
+                      "type": "string"
+                    },
+                    "hostId": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "question": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {
+                            "$ref": "#/$defs/__schema0"
+                          },
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "step": {
+                              "enum": [
+                                "connect",
+                                "probe",
+                                "deliver",
+                                "install",
+                                "start",
+                                "enroll",
+                                "link"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "step"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startup": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "running",
+                        "question",
+                        "failed",
+                        "done",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    },
+                    "steps": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "enum": [
+                              "connect",
+                              "probe",
+                              "deliver",
+                              "install",
+                              "start",
+                              "enroll",
+                              "link"
+                            ],
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "running",
+                              "done",
+                              "skipped",
+                              "failed"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "target": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "flowId",
+                    "target",
+                    "name",
+                    "status",
+                    "steps",
+                    "question",
+                    "failure",
+                    "hostId",
+                    "startup"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "view",
+                "log",
+                "omitted"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
                   "const": "view",
                   "type": "string"
                 },
@@ -496,6 +804,9 @@
                             "$ref": "#/$defs/__schema0"
                           },
                           "properties": {
+                            "id": {
+                              "type": "string"
+                            },
                             "kind": {
                               "type": "string"
                             },
@@ -513,6 +824,7 @@
                             }
                           },
                           "required": [
+                            "id",
                             "kind",
                             "step"
                           ],
@@ -688,10 +1000,16 @@
               "maxLength": 1024,
               "minLength": 1,
               "type": "string"
+            },
+            "questionId": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
             }
           },
           "required": [
             "flowId",
+            "questionId",
             "password"
           ],
           "type": "object"
@@ -1131,6 +1449,16 @@
               },
               "type": "object"
             },
+            "readOnly": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "v": {
               "const": 1,
               "type": "number"
@@ -1139,7 +1467,8 @@
           "required": [
             "v",
             "hosts",
-            "projects"
+            "projects",
+            "readOnly"
           ],
           "type": "object"
         },
@@ -1466,6 +1795,16 @@
               },
               "type": "object"
             },
+            "readOnly": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "v": {
               "const": 1,
               "type": "number"
@@ -1474,7 +1813,8 @@
           "required": [
             "v",
             "hosts",
-            "projects"
+            "projects",
+            "readOnly"
           ],
           "type": "object"
         },

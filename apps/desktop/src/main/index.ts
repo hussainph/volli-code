@@ -834,6 +834,8 @@ const appStartup = app.whenReady().then(async () => {
     enabled: () => isExperimentEnabled("cloud"),
     // The app's structured log (VC-699): redacted, its fields never a secret.
     logger: hostLogger("host-install"),
+    // Lid open, screen unlocked, network back: every tunnel and link tries now.
+    wake: { powerMonitor, net },
   });
   const hostCore = createHostCore(hostPorts, {
     dataDir: app.getPath("userData"),

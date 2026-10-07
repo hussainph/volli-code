@@ -323,21 +323,30 @@ describe("the system ssh runner", () => {
   });
 });
 
-describe("the runner owns its ssh processes", () => {
-  /** Each command's child exits only when SIGKILLed, as one ignoring SIGTERM does. */
-  const stubborn = () =>
-    scriptedSpawn((child) => {
-      if (child.args.includes("exit")) {
-        child.exit(0);
-        return;
-      }
-      child.process.kill = ((signal: string) => {
-        child.killed.push(signal);
-        if (signal === "SIGKILL") child.exit(null);
-        return true;
-      }) as never;
-    });
+/** Each command's child exits only when SIGKILLed, as one ignoring SIGTERM does. */
+const stubborn = () =>
+  scriptedSpawn((child) => {
+    if (child.args.includes("exit")) {
+      child.exit(0);
+      return;
+    }
+    child.process.kill = ((signal: string) => {
+      child.killed.push(signal);
+      if (signal === "SIGKILL") child.exit(null);
+      return true;
+    }) as never;
+  });
 
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+describe("the runner owns its ssh processes", () => {
   it("ends every running command at close, waits for it, then ends the master", async () => {
     const { spawn, children } = stubborn();
     const ssh = systemSsh({
@@ -416,19 +425,15 @@ setInterval(() => {}, 1000);
         return child;
       },
     });
-    const alive = (pid: number): boolean => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false;
-      }
-    };
+
     try {
       const command = ssh.exec("pretend long install");
       await started;
       await ssh.close();
-      expect(await command).toMatchObject({ code: 255, stderr: expect.stringContaining(CANCELLED) });
+      expect(await command).toMatchObject({
+        code: 255,
+        stderr: expect.stringContaining(CANCELLED),
+      });
       // Gone by the time close answers: no pause, no extra wait.
       expect(pids.map(alive)).toEqual([false, false]);
     } finally {
