@@ -29,7 +29,8 @@ directories:
 # chunks (all @volli/* source and, with it, their third-party deps), and vite
 # compiles every renderer dep into dist/. What the packaged main process
 # require()s from node_modules at runtime is therefore a tiny closed set:
-#   @trpc/server, better-sqlite3, node-pty
+#   @trpc/server, @trpc/client (VC-670's client host link, which remote
+#   hosts open from main: VC-700), better-sqlite3, node-pty
 # (node-pty via a lazy `import("node-pty")`), sharp (and its platform-native
 # `@img` binary/libvips packages, loaded lazily by the read-image processor —
 # see the optionalDependencies note below), yaml (prompt-template
@@ -67,7 +68,7 @@ files:
   - dist-electron/**
   - "!dist-electron/*.map"
   - "!node_modules/!(@asamuzakjp|@bramus|@csstools|@earendil-works|@exodus|@img|@trpc|@vscode|argparse|better-sqlite3|bidi-js|builder-util-runtime|css-tree|data-urls|debug|decimal.js|detect-libc|electron-updater|entities|fs-extra|graceful-fs|html-encoding-sniffer|is-potential-custom-element-name|js-yaml|jsdom|jsonfile|lazy-val|lodash.escaperegexp|lodash.isequal|lru-cache|mdn-data|ms|node-pty|parse5|punycode|quickjs-wasi|require-from-string|sax|saxes|semver|sharp|source-map-js|symbol-tree|tiny-typed-emitter|tldts|tldts-core|tough-cookie|tr46|undici|universalify|w3c-xmlserializer|webidl-conversions|whatwg-mimetype|whatwg-url|xml-name-validator|xmlchars|yaml)/**"
-  - "!node_modules/@trpc/!(server)/**"
+  - "!node_modules/@trpc/!(server|client)/**"
   - "!node_modules/@earendil-works/!(pi-codemode)/**"
   # Dev-only artifacts inside kept modules: deps/ is better-sqlite3's vendored
   # SQLite source (9 MB of sqlite3.c), needed only to compile the addon.
