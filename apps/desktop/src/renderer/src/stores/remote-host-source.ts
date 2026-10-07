@@ -9,16 +9,16 @@
  * source feeds each into its own {@link createHostLinkTracker}, which keeps
  * `everReady`/`droppedAt` and says when the wording changes on its own (a
  * drop reads `reconnecting`, then `offline` once its grace ends). One timer,
- * at the soonest such moment, re-words them. A host has no link of its own:
- * the store aggregates it from its projects'.
+ * at the soonest such moment, re-words them. A host's own reachability comes
+ * from the engine, not those projects. Subscription loss keeps remote claims
+ * read-only, shows a visible error and resubscribes with bounded backoff.
  *
  * Unchanged records and link views keep their identity across snapshots, so
  * `useSyncExternalStore` readers re-render only for what moved. Actions are
  * the person's intent, sent once (Ruling 1); one that fails says so in a
  * toast.
  */
-import type { HostLinkState } from "@volli/host-protocol/client-link";
-import type { RemoteHost, RemoteHostLinkState, RemoteHostsSnapshot } from "@volli/shared";
+import { remoteHostDiagnostic, type RemoteHost, type RemoteHostsSnapshot } from "@volli/shared";
 import { toast } from "sonner";
 
 import {
@@ -30,6 +30,8 @@ import { isExperimentOn, useExperimentsStore } from "./experiments";
 import { useRemoteHostsStore } from "./remote-hosts";
 import {
   createHostLinkTracker,
+  hostLinkView,
+  hostLinkViewChangesAt,
   useHostConnectionStore,
   type HostConnectionSource,
   type HostId,
@@ -63,8 +65,8 @@ export interface RemoteHostSourceOptions {
    */
   readonly onSignIn?: (target: HostSignInSheetTarget) => void;
   /**
-   * The registry's hosts on every snapshot, and none once the stream ends or
-   * the source closes: what Settings → Hosts reads (`remote-hosts.ts`).
+   * The registry's hosts on every snapshot, kept on stream failure with its
+   * error as read-only, and cleared on close: Settings → Hosts' reading.
    */
   readonly onHosts?: (hosts: readonly RemoteHost[], readOnly: string | null) => void;
 }
@@ -76,16 +78,7 @@ export interface RemoteHostSource extends HostConnectionSource {
 
 const EMPTY: HostSourceSnapshot = Object.freeze({ hosts: [], projects: {} });
 
-/**
- * A wire link state as the client host link's own: the tracker reads only
- * the status and, per status, `retryAt` and `error.reason`. A `ready` link's
- * welcome stays in main; nothing here reads it.
- */
-function asLinkState(state: RemoteHostLinkState): HostLinkState {
-  return state as unknown as HostLinkState;
-}
-
-/** One remote host as VC-576's record: no link, which is its projects'. */
+/** One remote host's facts, including known expired sign-ins; health is worded below. */
 export function remoteHostRecord(host: RemoteHost): HostSourceRecord {
   return {
     id: host.id,
@@ -94,9 +87,11 @@ export function remoteHostRecord(host: RemoteHost): HostSourceRecord {
     os: host.os,
     version: host.version,
     liveSessions: host.liveSessions,
-    // Updating a host over SSH, and its sign-ins, come with later tickets.
+    // No update operation is running: re-add is the SSH update path.
     update: null,
-    expiredSignIns: [],
+    expiredSignIns: (host.signInExpiry ?? [])
+      .filter((signIn) => signIn.expired)
+      .map(({ providerId, name }) => ({ providerId, name })),
   };
 }
 
@@ -112,7 +107,9 @@ const sameRecord = (a: HostSourceRecord, b: HostSourceRecord): boolean =>
   a.name === b.name &&
   a.os === b.os &&
   a.version === b.version &&
-  a.liveSessions === b.liveSessions;
+  a.liveSessions === b.liveSessions &&
+  JSON.stringify(a.expiredSignIns) === JSON.stringify(b.expiredSignIns) &&
+  JSON.stringify(a.link) === JSON.stringify(b.link);
 
 const sameView = (a: HostLinkView, b: HostLinkView): boolean =>
   JSON.stringify(a) === JSON.stringify(b);
@@ -134,23 +131,21 @@ export function createRemoteHostSource(
   const listeners = new Set<() => void>();
   /** One tracker per project, kept while main keeps naming the project. */
   const trackers = new Map<string, HostLinkTracker>();
-  let wire: RemoteHostsSnapshot | null = null;
+  let wire: RemoteHostsSnapshot = { v: 1, hosts: [], projects: {}, readOnly: null };
   let snapshot: HostSourceSnapshot = EMPTY;
   let cancelTimer: (() => void) | null = null;
   let closed = false;
+  let subscriptionError: string | null = null;
+  let failedAt = 0;
+  let cancelRetry: (() => void) | null = null;
+  let unsubscribe: (() => void) | null = null;
+  let subscriptionGeneration = 0;
+  let failures = 0;
 
   /** Words every project's link now; arms one timer for the soonest change. */
   function publish(): void {
     cancelTimer?.();
     cancelTimer = null;
-    if (wire === null) {
-      trackers.clear();
-      if (snapshot !== EMPTY) {
-        snapshot = EMPTY;
-        for (const listener of listeners) listener();
-      }
-      return;
-    }
     const at = now();
     const factsOf = new Map(wire.hosts.map((host) => [host.id, host]));
     let soonest: number | null = null;
@@ -164,7 +159,7 @@ export function createRemoteHostSource(
       const host = factsOf.get(hostId);
       // A project whose host main has not named (yet): no version facts to add.
       const worded = tracker.view(
-        asLinkState(link),
+        link,
         at,
         host === undefined
           ? {}
@@ -177,47 +172,108 @@ export function createRemoteHostSource(
       // What the project's ready link granted (VC-712): the same array while it reads the same.
       const granted =
         wired !== undefined && sameStrings(before?.granted, wired) ? before!.granted : wired;
+      const view: HostLinkView =
+        subscriptionError !== null
+          ? { status: "offline", since: failedAt, retryAt: null, detail: subscriptionError }
+          : worded.link.status === "incompatible" && worded.link.refusalCode === "workspace-unknown"
+            ? { ...worded.link, workspaceId: projectId }
+            : worded.link;
       projects[projectId] =
         before !== undefined &&
         before.hostId === hostId &&
-        sameView(before.link, worded.link) &&
+        sameView(before.link, view) &&
         before.granted === granted
           ? before
-          : { hostId, link: worded.link, ...(granted === undefined ? {} : { granted }) };
+          : { hostId, link: view, ...(granted === undefined ? {} : { granted }) };
     }
     for (const projectId of trackers.keys()) {
       if (!(projectId in wire.projects)) trackers.delete(projectId);
     }
     const hosts = wire.hosts.map((host) => {
-      const record = remoteHostRecord(host);
+      const health = host.reachability;
+      const context = {
+        everReady: health?.everReady ?? false,
+        droppedAt: health?.droppedAt ?? null,
+        now: at,
+        availableUpdate: host.availableUpdate,
+        hostIsNewer: host.hostIsNewer,
+      };
+      let link: HostLinkView =
+        subscriptionError !== null
+          ? { status: "offline", since: failedAt, retryAt: null, detail: subscriptionError }
+          : health === undefined
+            ? { status: "connecting" }
+            : hostLinkView(health.state, context);
+      if (subscriptionError === null && link.status === "offline" && host.lastSshFailure) {
+        link = { ...link, detail: remoteHostDiagnostic(host.lastSshFailure.line) };
+      }
+      if (health !== undefined && subscriptionError === null) {
+        const recheckAt = hostLinkViewChangesAt(health.state, context);
+        if (recheckAt !== null && (soonest === null || recheckAt < soonest)) soonest = recheckAt;
+      }
+      const record: HostSourceRecord = { ...remoteHostRecord(host), link };
       const before = snapshot.hosts.find((entry) => entry.id === host.id);
       return before !== undefined && sameRecord(before, record) ? before : record;
     });
     const changed =
+      subscriptionError !== (snapshot.error ?? null) ||
       hosts.length !== snapshot.hosts.length ||
       hosts.some((host, index) => host !== snapshot.hosts[index]) ||
       Object.keys(projects).length !== Object.keys(snapshot.projects).length ||
       Object.entries(projects).some(([id, project]) => snapshot.projects[id] !== project);
-    if (changed) snapshot = { hosts, projects };
+    if (changed)
+      snapshot = {
+        hosts,
+        projects,
+        ...(subscriptionError === null ? {} : { error: subscriptionError }),
+      };
     if (soonest !== null) cancelTimer = setTimer(publish, Math.max(0, soonest - at));
     if (changed) for (const listener of listeners) listener();
   }
 
-  const unsubscribe = client.subscribe({
-    onData(next) {
-      if (closed) return;
-      wire = next;
+  function connect(): void {
+    if (closed) return;
+    cancelRetry?.();
+    cancelRetry = null;
+    const mine = ++subscriptionGeneration;
+    unsubscribe?.();
+    unsubscribe = null;
+    const current = () => !closed && mine === subscriptionGeneration;
+    const fail = (error: unknown): void => {
+      if (!current()) return;
+      // Keep claims: losing the stream must not route remote ids to This Mac.
+      failedAt = now();
+      subscriptionError = remoteHostDiagnostic(
+        `Couldn’t read host state: ${error instanceof Error && error.message ? error.message : "connection failed"}`,
+      );
       publish();
-      onHosts(next.hosts, next.readOnly);
-    },
-    onError() {
-      // Flag off, or main has no registry this launch: no remote hosts.
-      if (closed) return;
-      wire = null;
-      publish();
-      onHosts([], null);
-    },
-  });
+      onHosts(wire.hosts, subscriptionError);
+      subscriptionGeneration += 1;
+      unsubscribe?.();
+      unsubscribe = null;
+      failures += 1;
+      cancelRetry = setTimer(connect, Math.min(30_000, 1_000 * 2 ** Math.min(failures - 1, 5)));
+    };
+    try {
+      const stop = client.subscribe({
+        onData(next) {
+          if (!current()) return;
+          failures = 0;
+          subscriptionError = null;
+          wire = next;
+          publish();
+          onHosts(next.hosts, next.readOnly);
+        },
+        onError: fail,
+      });
+      // A transport may fail synchronously while subscribe is being set up.
+      if (current()) unsubscribe = stop;
+      else stop();
+    } catch (error) {
+      fail(error);
+    }
+  }
+  connect();
 
   const act = (work: Promise<unknown>): void => {
     work.catch((error: unknown) =>
@@ -231,7 +287,11 @@ export function createRemoteHostSource(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    retry: (hostId) => act(client.retry(hostId)),
+    retry: (hostId) => {
+      if (subscriptionError !== null) connect();
+      else act(client.retry(hostId));
+    },
+    retrySubscription: connect,
     updateHost: (hostId, when) => act(client.updateHost(hostId, when)),
     cancelScheduledUpdate: (hostId) => act(client.cancelScheduledUpdate(hostId)),
     signIn: (hostId, providerId) =>
@@ -245,7 +305,11 @@ export function createRemoteHostSource(
       closed = true;
       cancelTimer?.();
       cancelTimer = null;
-      unsubscribe();
+      subscriptionGeneration += 1;
+      cancelRetry?.();
+      cancelRetry = null;
+      unsubscribe?.();
+      unsubscribe = null;
       onHosts([], null);
     },
   };

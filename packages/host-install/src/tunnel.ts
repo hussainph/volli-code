@@ -29,13 +29,24 @@ import { createConnection, createServer } from "node:net";
 
 import type { ListenAddress } from "./contract";
 import type { InstallLogger } from "./logger";
-import { classifySshFailure, exitsWithin, KILL_WAIT_MS, type SpawnProcess } from "./ssh";
+import {
+  classifySshFailure,
+  exitsWithin,
+  KILL_WAIT_MS,
+  type SpawnProcess,
+  type SshFailure,
+} from "./ssh";
 import { targetArgs, type SshTarget } from "./target";
 
 export type TunnelState =
   | { readonly status: "starting" }
   | { readonly status: "up"; readonly url: string; readonly localPort: number }
-  | { readonly status: "down"; readonly error: string; readonly retryInMs: number }
+  | {
+      readonly status: "down";
+      readonly error: string;
+      readonly retryInMs: number;
+      readonly sshFailure?: SshFailure;
+    }
   | { readonly status: "closed" };
 
 export interface TunnelTiming {
@@ -92,6 +103,15 @@ export interface SshTunnel {
 
 /** Why a superseded or closed setup stopped: not a failure of the tunnel. */
 class Cancelled extends Error {}
+
+class TunnelFailure extends Error {
+  constructor(
+    message: string,
+    readonly sshFailure: SshFailure | null,
+  ) {
+    super(message);
+  }
+}
 
 export function freeLoopbackPort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -242,7 +262,7 @@ export function createSshTunnel(options: SshTunnelOptions): SshTunnel {
       exited = 127;
     });
     process.on("close", (code) => {
-      exited = code ?? 255;
+      exited ??= code ?? 255;
       if (mine !== generation) return;
       if (state.status === "up") {
         logger.warn("tunnel dropped", {
@@ -250,7 +270,10 @@ export function createSshTunnel(options: SshTunnelOptions): SshTunnel {
           code: exited,
           detail: stderr.trim().slice(-300),
         });
-        scheduleRetry(stderr || `ssh exited ${exited}`);
+        scheduleRetry(
+          stderr || `ssh exited ${exited}`,
+          classifySshFailure({ code: exited, stdout: "", stderr }),
+        );
       }
     });
     const deadline = Date.now() + timing.readyTimeoutMs;
@@ -258,8 +281,8 @@ export function createSshTunnel(options: SshTunnelOptions): SshTunnel {
       for (;;) {
         if (exited !== null) {
           if (/Address already in use|cannot listen to port/u.test(stderr)) localPort = null;
-          const failure = classifySshFailure({ code: 255, stdout: "", stderr });
-          throw new Error(failure?.detail || `ssh exited ${exited}`);
+          const failure = classifySshFailure({ code: exited, stdout: "", stderr });
+          throw new TunnelFailure(failure?.detail || `ssh exited ${exited}`, failure);
         }
         const carries = await accepts(port);
         current();
@@ -294,10 +317,15 @@ export function createSshTunnel(options: SshTunnelOptions): SshTunnel {
     return run;
   };
 
-  const scheduleRetry = (error: string): void => {
+  const scheduleRetry = (error: string, sshFailure: SshFailure | null = null): void => {
     failures += 1;
     const retryInMs = Math.min(timing.backoffMaxMs, timing.backoffMinMs * 2 ** (failures - 1));
-    set({ status: "down", error: error.trim().slice(-300), retryInMs });
+    set({
+      status: "down",
+      error: error.trim().slice(-300),
+      retryInMs,
+      ...(sshFailure === null ? {} : { sshFailure }),
+    });
     clearTimeout(retryTimer);
     retryTimer = setTimeout(() => void reconnect(), retryInMs);
   };
@@ -315,7 +343,10 @@ export function createSshTunnel(options: SshTunnelOptions): SshTunnel {
     } catch (error) {
       if (closed) return;
       logger.warn("tunnel reconnect failed", { error: (error as Error).message });
-      scheduleRetry((error as Error).message);
+      scheduleRetry(
+        (error as Error).message,
+        error instanceof TunnelFailure ? error.sshFailure : null,
+      );
     }
   };
 
@@ -327,7 +358,14 @@ export function createSshTunnel(options: SshTunnelOptions): SshTunnel {
       const message = (error as Error).message;
       logger.warn("tunnel failed to open", { error: message });
       // The caller retries a first open; only a tunnel that was up reconnects by itself.
-      set({ status: "down", error: message, retryInMs: 0 });
+      set({
+        status: "down",
+        error: message,
+        retryInMs: 0,
+        ...(error instanceof TunnelFailure && error.sshFailure !== null
+          ? { sshFailure: error.sshFailure }
+          : {}),
+      });
       throw error;
     }
   };

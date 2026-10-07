@@ -14,8 +14,9 @@
  * handshake and handed straight to the link.
  *
  * **One host, one link.** Each host's `RemoteHostLink` is its Workspace
- * links' most informative state or, while none is open, its tunnel's
- * (`remote-hosts-link.ts`), in the shape VC-576's `hostLinkView` reads. At
+ * links' most informative state or, while none is open, a bounded SSH
+ * hostd-status probe's (`remote-hosts-link.ts`). A TCP route alone is never
+ * ready. The engine publishes this per-host truth for VC-576's view. At
  * most {@link REMOTE_HOST_LINK_CAP} Workspace links per host: a project past
  * it reads "Too many projects open", never offline or open.
  *
@@ -52,6 +53,7 @@ import type {
 } from "@volli/host-protocol/client-link";
 import {
   OperationUnavailableError,
+  boundedRemoteHostHealth,
   REMOTE_HOST_LINK_CAP,
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
@@ -107,6 +109,7 @@ import {
 } from "./remote-hosts-flow";
 import { generateDeviceKey, mintDeviceCredential } from "./remote-hosts-device-key";
 import { nextRemoteHostLink, remoteHostLinkState, versionFacts } from "./remote-hosts-link";
+import { sshFailureLine, statusEvidence } from "./remote-hosts-health";
 import {
   cliError,
   createFailure,
@@ -232,7 +235,7 @@ export const DEFAULT_QUIT_GRACE_MS = 5_000;
 export interface RemoteHostsPorts {
   readonly store: RemoteHostsStore;
   readonly deviceKeys: DeviceKeyStore;
-  /** Production: `systemSsh`. One per flow, closed when it ends. */
+  /** Production: `systemSsh`. Each flow, management command and status probe owns and closes its connection. */
   readonly ssh: (target: SshTarget) => SshTransport;
   /** Production: `discoverHostKeys` / `acceptHostKeys` for the target. */
   readonly hostKeys: (target: SshTarget) => SshProviderPorts["hostKeys"];
@@ -265,9 +268,9 @@ export interface RemoteHostsPorts {
 export interface RemoteHosts {
   snapshot(): RemoteHostsSnapshot;
   /**
-   * The host's own link, off the wire: its Workspaces' links aggregated, or
-   * its tunnel's while it serves none. For the app's log and the add flow;
-   * the UI words each project's link and aggregates them itself (VC-576).
+   * The host's own health: its validated Workspace links aggregated, or
+   * hostd-status evidence while it serves none. Also published as each
+   * host's reachability, including hosts with no open projects.
    */
   hostLink(hostId: string): RemoteHostLink;
   /** Called on every change with a new snapshot, not with the current one. */
@@ -482,6 +485,12 @@ interface HostRuntime {
   readonly projectLinks: Map<string, RemoteHostLink>;
   timer: ReturnType<typeof setTimeout> | undefined;
   closed: boolean;
+  health: RemoteHostLinkState;
+  /** Monotonic evidence revision: a probe cannot supersede a newer Workspace observation. */
+  healthGeneration: number;
+  lastWelcome: NonNullable<RemoteHost["lastWelcome"]> | null;
+  lastSshFailure: NonNullable<RemoteHost["lastSshFailure"]> | null;
+  probe: { cancel(): void } | null;
 }
 
 interface Flow {
@@ -519,12 +528,16 @@ interface Flow {
 }
 
 /** A link's state from the host's tunnel and these Workspace links (all of them, or one). */
-function derive(runtime: HostRuntime, links: readonly HeldLink[]) {
+function derive(runtime: HostRuntime, links: readonly HeldLink[], host = false) {
   return remoteHostLinkState({
-    tunnel: runtime.tunnel.state,
+    tunnel:
+      runtime.tunnel.state.status === "down" && runtime.lastSshFailure !== null
+        ? { ...runtime.tunnel.state, error: runtime.lastSshFailure.line }
+        : runtime.tunnel.state,
     attempt: runtime.attempt,
     retryAt: runtime.retryAt,
     links: links.map((held): HostLinkState => held.link.getState()),
+    ...(host ? { health: runtime.health } : {}),
   });
 }
 
@@ -626,6 +639,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   /** Why the registry must not be written, or `null`. */
   let readOnly: string | null = null;
   let started = false;
+  let startingHosts = false;
   let closed = false;
   let closing: Promise<void> | null = null;
   /**
@@ -633,7 +647,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
    * them still owns (a replaced host's, a cancelled link step's).
    */
   const tunnelsMade = new Set<SshTunnel>();
-  /** Each project script's SSH connection while it runs (VC-710): quit SIGKILLs what is left. */
+  /** Management/status SSH connections while owned: quit SIGKILLs what is left. */
   const projectSsh = new Set<SshTransport>();
   /** Epoch ms by which quit is done, once it has begun. */
   let quitDeadline: number | null = null;
@@ -687,7 +701,14 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   }
 
   function hostJson(entry: RegistryHost): RemoteHost {
+    const runtime = runtimes.get(entry.id)!;
     return {
+      ...boundedRemoteHostHealth({
+        reachability: runtime.link,
+        lastWelcome: runtime.lastWelcome,
+        signInExpiry: null,
+        lastSshFailure: runtime.lastSshFailure,
+      }),
       id: entry.id,
       name: entry.name,
       target: entry.target,
@@ -707,6 +728,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   }
 
   function publish(): void {
+    if (startingHosts) return;
     const projects: Record<string, RemoteProjectLink> = {};
     for (const entry of entries.values()) {
       const runtime = runtimes.get(entry.id)!;
@@ -770,8 +792,10 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   function ensureStarted(): void {
     if (started) return;
     started = true;
+    startingHosts = true;
     load();
     for (const entry of entries.values()) startHost(entry);
+    startingHosts = false;
     unsubscribeWake = ports.wake?.((cause) => wakeAll(cause));
     publish();
   }
@@ -795,7 +819,11 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   function follow(runtime: HostRuntime, previous: RemoteHostLink | null): void {
     const now = ports.now();
     const entry = entries.get(runtime.id)!;
-    runtime.link = nextRemoteHostLink(previous, derive(runtime, [...runtime.links.values()]), now);
+    runtime.link = nextRemoteHostLink(
+      previous,
+      derive(runtime, [...runtime.links.values()], true),
+      now,
+    );
     entry.workspaceIds.forEach((workspaceId, index) => {
       const held = runtime.links.get(workspaceId);
       const state =
@@ -872,27 +900,160 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       features: ports.linkFeatures ?? [],
       credential: () => credentialFor(runtime.id, workspaceId),
       log: linkLogger(runtime.id, workspaceId),
+      // The first welcome must match enrollment too, before a lastSeen fence exists.
+      verifyProof: (welcome) =>
+        welcome.host.id === runtime.id
+          ? null
+          : {
+              code: "PRECONDITION_FAILED",
+              reason: "workspace-epoch-fenced",
+              message: "The host identity changed. Add it again.",
+            },
     });
     const unsubscribe = link.subscribeState((state) => {
-      if (state.status === "ready") noteVersion(runtime, state.welcome.host.version);
+      if (
+        runtime.closed ||
+        runtimes.get(runtime.id) !== runtime ||
+        runtime.links.get(workspaceId)?.link !== link
+      )
+        return;
+      if (state.status === "ready") {
+        const welcome = state.welcome;
+        noteVersion(runtime, welcome.host.version);
+        runtime.lastWelcome = {
+          at: ports.now(),
+          hostId: welcome.host.id,
+          version: welcome.host.version,
+          protocol: welcome.protocolVersion,
+          features: [...welcome.features],
+        };
+      }
+      // Closing the last project must not resurrect an earlier status-ready
+      // after a Workspace link has since observed loss/refusal.
+      runtime.healthGeneration += 1;
+      runtime.health = derive(runtime, [...runtime.links.values()]);
       recompute(runtime);
     });
     runtime.links.set(workspaceId, { link, url, unsubscribe });
   }
 
   function onTunnel(runtime: HostRuntime, state: TunnelState): void {
+    if (runtime.closed || runtimes.get(runtime.id) !== runtime) return;
     if (state.status === "up") {
+      probeStatus(runtime);
       runtime.attempt = 0;
       clearTimeout(runtime.timer);
       runtime.timer = undefined;
       for (const workspaceId of linked(entries.get(runtime.id)!)) {
         openLink(runtime, workspaceId, state.url);
       }
-    } else if (state.status === "down") {
-      runtime.attempt += 1;
-      runtime.retryAt = ports.now() + state.retryInMs;
+    } else {
+      runtime.probe?.cancel();
+      runtime.probe = null;
+      runtime.health = { status: "connecting", attempt: runtime.attempt };
+      if (state.status === "down") {
+        if (state.sshFailure !== undefined) {
+          runtime.lastSshFailure = sshFailureLine(state.sshFailure, entries.get(runtime.id)!.name);
+        }
+        runtime.attempt += 1;
+        runtime.retryAt = ports.now() + state.retryInMs;
+      }
     }
     recompute(runtime);
+  }
+
+  /** One bounded status command per trigger, never a poll or a fabricated Workspace. */
+  function probeStatus(runtime: HostRuntime): void {
+    if (runtime.closed || runtime.probe !== null) return;
+    const entry = entries.get(runtime.id)!;
+    const ssh = ports.ssh(parseSshTarget(entry.target) as SshTarget);
+    projectSsh.add(ssh);
+    let closingSsh: Promise<void> | null = null;
+    const close = (): Promise<void> =>
+      (closingSsh ??= ssh
+        .close({
+          deadline: quitDeadline ?? Date.now() + 1_000,
+        })
+        .catch((error: unknown) => {
+          logger.warn("host status ssh did not close cleanly", {
+            hostId: runtime.id,
+            error: messageOf(error),
+          });
+        })
+        .finally(() => projectSsh.delete(ssh)));
+    let stopProbe!: () => void;
+    const stopped = new Promise<never>((_resolve, reject) => {
+      stopProbe = () => {
+        reject(new Error("Host status check stopped."));
+        void close();
+      };
+    });
+    const probe = { cancel: stopProbe };
+    const healthGeneration = runtime.healthGeneration;
+    runtime.probe = probe;
+    runtime.health = { status: "connecting", attempt: 0 };
+    const timer = setTimeout(stopProbe, 3_000);
+    // System data is private to volli (0700). As in the install probe, use
+    // already-granted noninteractive sudo; never ask for or retain a password.
+    // Without that permission status remains explicitly unavailable.
+    const script = devicesListScript(entry.mode).replace(
+      `exec "$b" devices list --${entry.mode} </dev/null`,
+      [
+        ...(entry.mode === "system"
+          ? [
+              'if sudo -n true >/dev/null 2>&1; then exec sudo -n -u volli "$b" status --json --system </dev/null; fi',
+            ]
+          : []),
+        `exec "$b" status --json --${entry.mode} </dev/null`,
+      ].join("\n"),
+    );
+    void track(
+      (async () => {
+        try {
+          const result = await Promise.race([
+            ssh.exec(script, { label: "host-status", timeoutMs: 3_000 }),
+            stopped,
+          ]);
+          if (
+            runtime.closed ||
+            runtimes.get(runtime.id) !== runtime ||
+            runtime.probe !== probe ||
+            runtime.healthGeneration !== healthGeneration
+          )
+            return;
+          const evidence = statusEvidence(result, runtime.id, entry.name, runtime.remote.listen);
+          runtime.health = evidence.state;
+          runtime.lastSshFailure = evidence.sshFailure;
+          if (evidence.version !== null) noteVersion(runtime, evidence.version);
+          recompute(runtime);
+        } catch (error) {
+          if (
+            runtime.closed ||
+            runtimes.get(runtime.id) !== runtime ||
+            runtime.probe !== probe ||
+            runtime.healthGeneration !== healthGeneration
+          )
+            return;
+          runtime.health = {
+            status: "unreachable",
+            attempt: 0,
+            retryAt: 0,
+            closeCode: null,
+            error: {
+              code: "SERVICE_UNAVAILABLE",
+              reason: "host-status-unavailable",
+              message: `Host status isn't available on ${entry.name}.`,
+            },
+          };
+          logger.warn("host status check failed", { hostId: runtime.id, error: messageOf(error) });
+          recompute(runtime);
+        } finally {
+          clearTimeout(timer);
+          if (runtime.probe === probe) runtime.probe = null;
+          await close();
+        }
+      })(),
+    );
   }
 
   /** The first open; a tunnel retries by itself only once it has been up. */
@@ -922,6 +1083,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       } else {
         runtime.tunnel.wake();
       }
+      if (runtime.tunnel.state.status === "up") probeStatus(runtime);
       for (const held of runtime.links.values()) held.link.wake(cause);
     }
   }
@@ -952,6 +1114,11 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       projectLinks: new Map(),
       timer: undefined,
       closed: false,
+      health: { status: "connecting", attempt: 0 },
+      healthGeneration: 0,
+      lastWelcome: null,
+      lastSshFailure: null,
+      probe: null,
     };
     follow(runtime, null);
     runtimes.set(entry.id, runtime);
@@ -964,6 +1131,8 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     const runtime = runtimes.get(hostId);
     if (runtime === undefined) return;
     runtime.closed = true;
+    runtime.probe?.cancel();
+    runtime.probe = null;
     clearTimeout(runtime.timer);
     runtime.unsubscribeTunnel();
     for (const held of runtime.links.values()) {
@@ -1671,6 +1840,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       hostOf(hostId);
       const runtime = runtimes.get(hostId)!;
       runtime.tunnel.wake();
+      if (runtime.tunnel.state.status === "up") probeStatus(runtime);
       for (const held of runtime.links.values()) held.link.reconnect();
     },
     updateHost() {
@@ -1854,9 +2024,9 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       return flowFacts(flow.results, flow.state.decisions);
     },
     async cancelAdd(flowId) {
-      // The one call that stays open with `cloud` off: a flow already under
-      // way when the flag turned off is still stopped (the window cancels it
-      // as its sheet unmounts). It starts nothing, and needs no started engine.
+      // Explicit cancellation stays available with `cloud` off for a flow
+      // already under way. Sheet unmount only releases UI observation.
+      // This starts nothing and needs no started engine.
       if (closed) throw new RemoteHostsUnavailableError();
       const flow = flowOf(flowId);
       // Done: the host is in the registry, too late to cancel (Forget undoes it).

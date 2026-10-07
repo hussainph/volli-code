@@ -10,6 +10,7 @@
  */
 import {
   MAX_ACTIVE_ADD_HOSTS,
+  REMOTE_HOST_HEALTH_LIMITS,
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
   REMOTE_HOST_NAME_MAX,
@@ -54,8 +55,8 @@ const flowId = z.string().min(1).max(MAX_FLOW_ID_LENGTH);
 /** The id of the question an answer is for (`AddHostQuestion.id`). */
 export const MAX_QUESTION_ID_LENGTH = 64;
 /** A project link's granted features (VC-712): a welcome's own bounds, 256 of at most 128 characters. */
-export const MAX_GRANTED_FEATURES = 256;
-export const MAX_GRANTED_FEATURE_LENGTH = 128;
+export const MAX_GRANTED_FEATURES = REMOTE_HOST_HEALTH_LIMITS.features;
+export const MAX_GRANTED_FEATURE_LENGTH = REMOTE_HOST_HEALTH_LIMITS.feature;
 const questionId = z.string().min(1).max(MAX_QUESTION_ID_LENGTH);
 
 /** The add flow's steps, in order (`@volli/host-install`'s `STEP_ORDER`). */
@@ -135,20 +136,31 @@ export const renameHostInputSchema = z.strictObject({
 const linkError = z.object({ code: z.string(), reason: z.string(), message: z.string() });
 const attempt = z.number().int().nonnegative();
 const closeCode = z.number().int().nullable();
-const linkState = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("connecting"), attempt }),
-  z.object({ status: z.literal("ready") }),
+function linkStateWith(error: typeof linkError) {
+  return z.discriminatedUnion("status", [
+    z.object({ status: z.literal("connecting"), attempt }),
+    z.object({ status: z.literal("ready") }),
+    z.object({
+      status: z.literal("unreachable"),
+      attempt,
+      error,
+      closeCode,
+      retryAt: z.number(),
+    }),
+    z.object({ status: z.literal("refused"), error, closeCode }),
+    z.object({ status: z.literal("fenced"), error }),
+    z.object({ status: z.literal("closed") }),
+  ]);
+}
+const linkState = linkStateWith(linkError);
+// Only the new host-health field is bounded: existing project-link errors stay compatible.
+const healthLinkState = linkStateWith(
   z.object({
-    status: z.literal("unreachable"),
-    attempt,
-    error: linkError,
-    closeCode,
-    retryAt: z.number(),
+    code: z.string().max(REMOTE_HOST_HEALTH_LIMITS.errorCode),
+    reason: z.string().max(REMOTE_HOST_HEALTH_LIMITS.errorReason),
+    message: z.string().max(REMOTE_HOST_HEALTH_LIMITS.diagnostic),
   }),
-  z.object({ status: z.literal("refused"), error: linkError, closeCode }),
-  z.object({ status: z.literal("fenced"), error: linkError }),
-  z.object({ status: z.literal("closed") }),
-]);
+);
 const remoteHost = z.object({
   id: z.string(),
   name: z.string(),
@@ -166,6 +178,47 @@ const remoteHost = z.object({
   system: z.string().nullable(),
   arch: z.string().nullable(),
   hostKeys: z.array(z.string()).readonly(),
+  // Reuses the existing CLOSED link-state union; no new output enum.
+  reachability: z
+    .object({
+      state: healthLinkState,
+      everReady: z.boolean(),
+      droppedAt: z.number().nullable(),
+    })
+    .optional(),
+  lastWelcome: z
+    .object({
+      at: z.number(),
+      hostId: z.string().max(REMOTE_HOST_HEALTH_LIMITS.hostId),
+      version: z.string().max(REMOTE_HOST_HEALTH_LIMITS.version),
+      protocol: z.number().int().positive(),
+      features: z
+        .array(z.string().max(MAX_GRANTED_FEATURE_LENGTH))
+        .max(MAX_GRANTED_FEATURES)
+        .readonly(),
+    })
+    .nullable()
+    .optional(),
+  signInExpiry: z
+    .array(
+      z.object({
+        providerId: z.string().max(REMOTE_HOST_HEALTH_LIMITS.providerId),
+        name: z.string().max(REMOTE_HOST_HEALTH_LIMITS.providerName),
+        expiresAt: z.number().nullable(),
+        expired: z.boolean(),
+      }),
+    )
+    .max(REMOTE_HOST_HEALTH_LIMITS.signInExpiry)
+    .readonly()
+    .nullable()
+    .optional(),
+  lastSshFailure: z
+    .object({
+      code: z.string().max(REMOTE_HOST_HEALTH_LIMITS.sshCode),
+      line: z.string().max(REMOTE_HOST_HEALTH_LIMITS.diagnostic),
+    })
+    .nullable()
+    .optional(),
 });
 const remoteProjectLink = z.object({
   hostId: z.string(),

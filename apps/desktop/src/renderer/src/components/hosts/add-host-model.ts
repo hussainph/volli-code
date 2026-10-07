@@ -115,7 +115,9 @@ function foundOf(id: ChecklistRowId, view: AddHostFlowView): string {
       if (facts.keepsRunning === false) return "Stops when you log out";
       return view.startup ?? NOUNS.start;
     case "pair":
-      return facts.alreadyPaired ? "Already paired with this Mac" : "Paired with this Mac";
+      // VC-719: the flow proved SSH (and pairing), not that hostd answered —
+      // the engine's health probe says ready, on the host, afterwards.
+      return facts.alreadyPaired ? "Already paired with this Mac" : "Connected over SSH";
   }
 }
 
@@ -284,7 +286,9 @@ const OS_NAMES = { linux: "Linux", macos: "macOS" } as const;
 /**
  * The finished sheet's one-line summary, from what the add found:
  * "Ubuntu 24.04.1 LTS · x86-64 · Volli host 1.1.0"; the registry's OS where
- * the add did not say.
+ * the add did not say. When it says nothing of the host, the one proved
+ * claim stands (VC-719): never "Ready" — that is the engine's health to
+ * say, on the host, after the sheet closes.
  */
 export function readySummary(view: AddHostFlowView, host: RemoteHost | undefined): string {
   const { facts } = view;
@@ -295,7 +299,7 @@ export function readySummary(view: AddHostFlowView, host: RemoteHost | undefined
     facts.arch,
     version === null ? null : `Volli host ${version}`,
   ].filter((part): part is string => part !== null);
-  return parts.length === 0 ? "Ready" : parts.join(" · ");
+  return parts.length === 0 ? "Connected over SSH" : parts.join(" · ");
 }
 
 /**

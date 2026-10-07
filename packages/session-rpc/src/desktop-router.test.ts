@@ -1213,6 +1213,56 @@ describe("the desktop router's grammar", () => {
     expect(activeAddHostsSchema.parse([])).toEqual([]);
   });
 
+  it("accepts additive engine-owned health facts while preserving older hosts and unknown expiry", () => {
+    const withFacts: RemoteHostsSnapshot = {
+      ...SNAPSHOT,
+      hosts: [
+        {
+          ...SNAPSHOT.hosts[0]!,
+          reachability: { state: { status: "ready" }, everReady: true, droppedAt: null },
+          lastWelcome: {
+            at: 123,
+            hostId: HOST,
+            version: "1.2.0",
+            protocol: 1,
+            features: ["sessions"],
+          },
+          signInExpiry: null,
+          lastSshFailure: { code: "host-key-changed", line: "The host key changed." },
+        },
+      ],
+    };
+    expect(remoteHostsSnapshotSchema.parse(withFacts)).toEqual(withFacts);
+    expect(remoteHostsSnapshotSchema.parse(SNAPSHOT)).toEqual(SNAPSHOT);
+    const known = {
+      ...withFacts,
+      hosts: [
+        {
+          ...withFacts.hosts[0]!,
+          lastWelcome: null,
+          lastSshFailure: null,
+          signInExpiry: [
+            { providerId: "anthropic", name: "Anthropic", expiresAt: 456, expired: false },
+          ],
+        },
+      ],
+    };
+    expect(remoteHostsSnapshotSchema.parse(known)).toEqual(known);
+    const oversized = {
+      ...withFacts,
+      hosts: [
+        {
+          ...withFacts.hosts[0]!,
+          lastWelcome: {
+            ...withFacts.hosts[0]!.lastWelcome!,
+            features: ["x".repeat(MAX_GRANTED_FEATURE_LENGTH + 1)],
+          },
+        },
+      ],
+    };
+    expect(remoteHostsSnapshotSchema.safeParse(oversized).success).toBe(false);
+  });
+
   it("describes the wire's own values: a snapshot, a view with an open question, a log line", () => {
     expect(remoteHostsSnapshotSchema.parse(SNAPSHOT)).toEqual(SNAPSHOT);
     const REPLAY: AddHostEvent = {

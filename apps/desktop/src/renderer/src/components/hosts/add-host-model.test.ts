@@ -128,7 +128,7 @@ describe("the checklist's rows", () => {
       "Ubuntu 24.04.1 LTS · x86-64 · 8 GB",
       "Volli host 1.1.0",
       "Keeps running when you log out",
-      "Paired with this Mac",
+      "Connected over SSH",
     ]);
     // A user unit that does not linger, a Mac's login start, and what a skipped row found.
     const rows = stepRows(
@@ -161,9 +161,24 @@ describe("the checklist's rows", () => {
       "Check the system",
       "Install",
       "Start",
-      "Paired with this Mac",
+      "Connected over SSH",
     ]);
     expect(memoryText(1)).toBe("1 MB");
+  });
+
+  it("claims the tunnel, not the host: done says Connected over SSH (VC-719)", () => {
+    // The flow proved SSH and pairing; whether the host ANSWERS is the
+    // engine's health, read on the host after the sheet closes. The last
+    // row never claims ready or a serving hostd.
+    const rows = stepRows(view({ status: "done", steps: all("done") }));
+    expect(rows[4]).toMatchObject({ id: "pair", mark: "done", label: "Connected over SSH" });
+    expect(readySummary(view({ status: "done", steps: all("done") }), undefined)).toBe(
+      "Connected over SSH",
+    );
+    // A check that found this Mac paired already still says what it found.
+    expect(
+      stepRows(view({ facts: { ...NO_FACTS, alreadyPaired: true }, steps: all("done") }))[4],
+    ).toMatchObject({ label: "Already paired with this Mac" });
   });
 
   it("marks the row a question waits on for attention, and a failed row failed", () => {
@@ -361,8 +376,8 @@ describe("ready", () => {
     expect(readySummary(view(), host())).toBe("Linux · Volli host 1.1.0");
     expect(readySummary(view(), host({ os: "macos", version: null }))).toBe("macOS");
     expect(readySummary(view({ facts: { ...NO_FACTS, os: "macos" } }), undefined)).toBe("macOS");
-    expect(readySummary(view(), host({ os: null, version: null }))).toBe("Ready");
-    expect(readySummary(view(), undefined)).toBe("Ready");
+    expect(readySummary(view(), host({ os: null, version: null }))).toBe("Connected over SSH");
+    expect(readySummary(view(), undefined)).toBe("Connected over SSH");
   });
 
   it("states when it starts and whose account its agents share", () => {

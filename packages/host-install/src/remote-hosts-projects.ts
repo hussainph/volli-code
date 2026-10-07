@@ -19,7 +19,7 @@
  * CLI presents the login's operator token or nothing.
  */
 import {
-  redactLogText,
+  remoteHostDiagnostic,
   REMOTE_HOST_PROJECT_TEXT_MAX,
   REMOTE_HOST_PROJECTS_MAX,
   type RemoteHostProject,
@@ -288,10 +288,6 @@ export function cliError(stderr: string): { code: string; reason: string } | nul
   return { code, reason: oneLine(text) };
 }
 
-/** A URL's credentials, query and fragment: what a host's words must never carry back. */
-const URL_SECRETS = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/@'"]*@)?([^\s?#'"]*)[?#][^\s'"]*/giu;
-const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]*@/giu;
-
 /**
  * A host's words, made one bounded line a person may read: a URL's
  * credentials, query and fragment cut, credential-shaped text redacted
@@ -299,15 +295,7 @@ const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@'"]*@/giu;
  * echo is the engine's to scrub by value before this.
  */
 export function oneLine(text: string, max = 240): string {
-  const scrubbed = redactLogText(
-    text.replace(URL_SECRETS, "$1$2?[redacted]").replace(URL_USERINFO, "$1[redacted]@"),
-    Number.MAX_SAFE_INTEGER,
-  );
-  const line = scrubbed
-    .replace(/[\p{Cc}]+/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  return remoteHostDiagnostic(text, max);
 }
 
 const isText = (value: unknown): value is string =>

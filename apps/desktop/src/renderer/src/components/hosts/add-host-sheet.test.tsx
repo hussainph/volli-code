@@ -466,6 +466,16 @@ describe("Add a host", () => {
         startup: "Starts when you log in to studio",
       }),
     });
+    expect(sheet().textContent).toContain("studio · Connected over SSH");
+    expect(sheet().textContent).not.toContain("studio is ready");
+    await act(async () =>
+      useRemoteHostsStore.getState().setHosts([
+        {
+          ...host,
+          reachability: { state: { status: "ready" }, everReady: true, droppedAt: null },
+        },
+      ]),
+    );
     expect(sheet().textContent).toContain("studio is ready");
     expect(sheet().textContent).toContain("macOS · Volli host 1.1.0");
     expect(sheet().querySelector('[aria-label="About this host"]')?.textContent).toBe(

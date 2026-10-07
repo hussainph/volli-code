@@ -2,11 +2,10 @@
  * What Settings → Hosts says about each host (VC-700 PR 3; VC-615 flow 7):
  * pure, so every word is tested without the pane.
  *
- * A host's health is its projects' links aggregated (VC-576's store); a host
- * that serves no project here has no link to judge, so it says so instead of
- * claiming "Online". Its facts come from the registry: how it was installed
- * (a user install's agents share the person's account), how it is reached,
- * when it starts on its own.
+ * A host's health comes from the engine-projected HostRecord link, independent
+ * of whether any projects are open here. Its facts come from the registry:
+ * how it was installed (a user install's agents share the person's account),
+ * how it is reached, when it starts on its own.
  */
 import type { RemoteHost, RemoteHostDevice } from "@volli/shared";
 
@@ -19,9 +18,8 @@ export interface HostHealth {
   readonly label: string;
 }
 
-/** The Health pill beside a remote host, or `null` while it serves no project here. */
-export function hostHealth(host: HostRecord, projects: number): HostHealth | null {
-  if (projects === 0) return null;
+/** The Health pill beside every remote host, including one with no projects. */
+export function hostHealth(host: HostRecord): HostHealth {
   if (host.update?.status === "running") return { state: "working", label: "Updating" };
   switch (host.link.status) {
     case "open":

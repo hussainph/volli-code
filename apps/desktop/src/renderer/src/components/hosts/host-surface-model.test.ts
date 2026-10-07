@@ -30,6 +30,43 @@ function host(link: HostLinkView, overrides: Partial<HostRecord> = {}): HostReco
 const OFFLINE: HostLinkView = { status: "offline", since: SINCE, retryAt: NOW + 7_200 };
 
 describe("the Island's words", () => {
+  it("names a missing project with Forget, and other refusals by code", () => {
+    const missing: HostLinkView = {
+      status: "incompatible",
+      reason: "refused",
+      refusalCode: "workspace-unknown",
+      workspaceId: "project-1",
+    };
+    expect(hostSurface(host(missing), NOW)).toMatchObject({
+      line: "This project isn’t on hetzner-1 any more",
+      action: { kind: "forget-project", label: "Forget", workspaceId: "project-1" },
+    });
+    expect(hostDetail(host(missing))).toMatchObject({
+      text: "This project isn’t on hetzner-1 any more",
+      action: { kind: "forget-project", workspaceId: "project-1" },
+    });
+    expect(
+      hostSurface(
+        host({ status: "incompatible", reason: "refused", refusalCode: "workspace-unknown" }),
+        NOW,
+      ),
+    ).not.toHaveProperty("action");
+    const refusal: HostLinkView = {
+      status: "incompatible",
+      reason: "refused",
+      refusalCode: "credential-revoked",
+    };
+    expect(hostSurface(host(refusal), NOW)?.line).toContain("credential-revoked");
+    expect(hostDetail(host(refusal))).toMatchObject({
+      text: "Connection refused (credential-revoked)",
+    });
+    expect(
+      hostDetail(
+        host({ status: "offline", since: 0, retryAt: null, detail: "Host is not serving" }),
+      ),
+    ).toMatchObject({ kind: "offline", text: "Can’t reach hetzner-1 · Host is not serving" });
+  });
+
   it("says nothing for a host that serves, or only has an update on offer", () => {
     expect(hostSurface(host({ status: "open" }), NOW)).toBeNull();
     expect(
