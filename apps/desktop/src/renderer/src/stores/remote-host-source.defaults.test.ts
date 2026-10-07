@@ -39,6 +39,7 @@ vi.mock("sonner", () => ({ toast: { error: toastError } }));
 import { useHostSignInSheet } from "../components/hosts/sign-ins/remote-host-sign-in-source";
 import { createHostConnectionStore, HOST_OFFLINE_AFTER_MS } from "./host-connection";
 import { attachRemoteHostsWhileCloud, createRemoteHostSource } from "./remote-host-source";
+import { useRemoteHostsStore } from "./remote-hosts";
 
 const HOST = "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
 const ERROR = { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: "down" };
@@ -86,8 +87,6 @@ describe("the remote host source's defaults", () => {
         return () => {};
       },
       retry: async () => null,
-      updateHost: async () => null,
-      cancelScheduledUpdate: async () => null,
       signIn: async () => null,
     });
     handlers[0]!.onData(snapshot({ status: "ready" }));
@@ -116,8 +115,6 @@ describe("the remote host source's defaults", () => {
       retry: async () => {
         throw new Error("No remote host there.");
       },
-      updateHost: async () => null,
-      cancelScheduledUpdate: async () => null,
       signIn: async () => null,
     });
     await source.retry?.(HOST);
@@ -132,8 +129,6 @@ describe("the remote host source's defaults", () => {
     const source = createRemoteHostSource({
       subscribe: () => () => {},
       retry: async () => null,
-      updateHost: async () => null,
-      cancelScheduledUpdate: async () => null,
       signIn: async () => null,
     });
     source.signIn(HOST, "anthropic");
@@ -157,8 +152,6 @@ describe("the remote host source's defaults", () => {
         return () => {};
       },
       retry: async () => null,
-      updateHost: async () => null,
-      cancelScheduledUpdate: async () => null,
       signIn: async () => null,
     });
     const down = {
@@ -200,7 +193,18 @@ describe("the remote host source's defaults", () => {
     expect(bridge.handlers).toHaveLength(1);
     bridge.handlers[0]!.onData(snapshot({ status: "ready" }));
     expect(store.getState().projects["p1"]?.hostId).toBe(HOST);
-    stop();
+    try {
+      store.getState().updateHost(HOST, "now");
+      expect(useRemoteHostsStore.getState().addHost).toEqual({ open: true, target: "deploy@box" });
+      useRemoteHostsStore.getState().closeAddHost();
+      store.getState().cancelScheduledUpdate(HOST);
+      expect(useRemoteHostsStore.getState().addHost).toEqual({ open: true, target: "deploy@box" });
+      expect(bridge.client.hosts.updateHost.mutate).not.toHaveBeenCalled();
+      expect(bridge.client.hosts.cancelScheduledUpdate.mutate).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      useRemoteHostsStore.getState().closeAddHost();
+    }
     expect(bridge.unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

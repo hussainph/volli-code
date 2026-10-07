@@ -31,6 +31,8 @@ import type {
   HostSignInUpdate,
 } from "@volli/shared";
 
+import { SIGN_IN_CATALOG, signInWebUrl } from "@volli/shared";
+
 import { bindOneCallback, type RelayBinding } from "./relay-client";
 
 /** The sign-in operations of one host's link: the host protocol's, as a typed client calls them. */
@@ -153,18 +155,16 @@ export const REFUSED_SIGN_IN_LINK = "The host sent a sign-in link Volli won’t 
 export const MAX_SIGN_IN_URL_LENGTH = 8192;
 
 /**
- * Whether a link the host sent is one this Mac opens: an `http:` or `https:`
- * page, of bounded length. A host is not trusted to name anything else
- * (`file:`, an app's own scheme, `ssh:`) to this Mac's browser.
+ * Whether this Mac may open a host's page on its own: a bounded HTTPS URL on
+ * this provider's exact authorization host in the Client's own catalog.
+ * HTTP and off-domain pages need an explicit click on their domain-named link.
  */
-export function isOpenableSignInUrl(url: string): boolean {
-  if (url.length > MAX_SIGN_IN_URL_LENGTH) return false;
-  try {
-    const { protocol } = new URL(url);
-    return protocol === "https:" || protocol === "http:";
-  } catch {
+export function isOpenableSignInUrl(url: string, providerId: string): boolean {
+  const page = signInWebUrl(url);
+  if (page === null || page.protocol !== "https:" || page.username !== "" || page.password !== "")
     return false;
-  }
+  const provider = SIGN_IN_CATALOG.providers.find((entry) => entry.id === providerId);
+  return provider !== undefined && provider.authorizationDomains.some((host) => host === page.host);
 }
 
 /** Settles with `promise`'s value, or `fallback` after `ms`. */
@@ -282,16 +282,19 @@ export function runHostSignIn(options: RunHostSignInOptions): HostSignInRun {
         return;
       }
       case "auth-url":
-        // The host names the page; only a plain web page is ever opened.
-        if (!isOpenableSignInUrl(update.url)) {
+        if (signInWebUrl(update.url) === null) {
           refuseLink(flowId);
           return;
         }
+        // A safe web link is still shown when off-domain, but never auto-opened.
         onEvent(update);
-        await options.openExternal(update.url);
+        if (isOpenableSignInUrl(update.url, options.providerId)) {
+          await options.openExternal(update.url);
+        }
         return;
       case "device-code":
-        if (!isOpenableSignInUrl(update.verificationUri)) {
+        // Device pages always need a click: the person first copies the code.
+        if (signInWebUrl(update.verificationUri) === null) {
           refuseLink(flowId);
           return;
         }

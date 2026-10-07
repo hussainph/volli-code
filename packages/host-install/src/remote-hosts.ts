@@ -277,9 +277,8 @@ export interface RemoteHosts {
   subscribe(listener: (snapshot: RemoteHostsSnapshot) => void): () => void;
   /** Reconnect now: the tunnel, and every Workspace link. */
   retry(hostId: string): void;
-  /** v1 refuses: {@link REMOTE_HOST_UPDATE_UNAVAILABLE}. */
+  /** Compatibility-only wire methods; updates use the add flow, never a schedule. */
   updateHost(hostId: string, when: "now" | "when-idle"): void;
-  /** v1 refuses: {@link REMOTE_HOST_UPDATE_UNAVAILABLE}. */
   cancelScheduledUpdate(hostId: string): void;
   /** v1 refuses: {@link REMOTE_HOST_SIGN_IN_UNAVAILABLE}. */
   signIn(hostId: string, providerId: string): void;
@@ -578,6 +577,8 @@ function enqueue(flow: Flow, job: () => Promise<void>): Promise<void> {
 /** Whether `reply` is an answer the question offers. */
 export function answerFits(question: AddHostQuestion, reply: AddHostAnswer): boolean {
   switch (question.kind) {
+    case "self-add":
+      return reply.kind === "open";
     case "host-key":
       return reply.kind === "accept-host-key";
     case "existing-hostd":

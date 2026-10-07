@@ -26,7 +26,7 @@ export type HostSurfaceIcon = "reconnect" | "offline" | "warning";
 /** The one thing a surface's button does. */
 export type HostSurfaceAction =
   | { readonly kind: "retry"; readonly label: "Retry now" }
-  | { readonly kind: "update-host"; readonly label: "Update host" }
+  | { readonly kind: "update-host"; readonly label: "Re-add to update" }
   | { readonly kind: "update-app"; readonly label: "Update Volli" }
   | { readonly kind: "manage-hosts"; readonly label: "Manage hosts…" }
   | { readonly kind: "forget-project"; readonly label: "Forget"; readonly workspaceId: string };
@@ -50,7 +50,7 @@ export interface HostSurface {
 export const HOST_RECONNECT_GRACE_MS = 1_500;
 
 const RETRY: HostSurfaceAction = { kind: "retry", label: "Retry now" };
-const UPDATE_HOST: HostSurfaceAction = { kind: "update-host", label: "Update host" };
+const UPDATE_HOST: HostSurfaceAction = { kind: "update-host", label: "Re-add to update" };
 const UPDATE_APP: HostSurfaceAction = { kind: "update-app", label: "Update Volli" };
 const MANAGE_HOSTS: HostSurfaceAction = { kind: "manage-hosts", label: "Manage hosts…" };
 
@@ -343,7 +343,6 @@ export function hostTransitionToast(before: HostRecord, after: HostRecord): Host
     const version = after.version ?? before.update.targetVersion;
     return {
       title: `${after.name} is on Volli host ${version}`,
-      description: "Sessions picked up where they paused",
     };
   }
   if (before.link.status === "offline" && serving) {

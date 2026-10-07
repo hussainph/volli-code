@@ -101,8 +101,6 @@ function fakeClient() {
       };
     },
     retry: (hostId) => answer("retry", hostId),
-    updateHost: (hostId, when) => answer("updateHost", hostId, when),
-    cancelScheduledUpdate: (hostId) => answer("cancelScheduledUpdate", hostId),
     signIn: (hostId, providerId) => answer("signIn", hostId, providerId),
   };
   return {
@@ -632,25 +630,68 @@ describe("the remote host source", () => {
       onActionError: (message) => errors.push(message),
     });
     source.retry(HOST);
-    source.updateHost(HOST, "when-idle");
-    source.cancelScheduledUpdate(HOST);
     source.signIn(HOST, "anthropic");
     expect(fake.calls).toEqual([
       ["retry", HOST],
-      ["updateHost", HOST, "when-idle"],
-      ["cancelScheduledUpdate", HOST],
       ["signIn", HOST, "anthropic"],
     ]);
-    fake.refuseWith(new Error("Updating a host from this Mac comes in a later build."));
-    source.updateHost(HOST, "now");
-    await vi.waitFor(() =>
-      expect(errors).toEqual(["Updating a host from this Mac comes in a later build."]),
-    );
+    fake.refuseWith(new Error("Retry failed."));
+    source.retry(HOST);
+    await vi.waitFor(() => expect(errors).toEqual(["Retry failed."]));
     fake.refuseWith("not an error");
     source.retry(HOST);
     await vi.waitFor(() => expect(errors).toHaveLength(2));
     expect(errors[1]).toBe("That didn’t work.");
     source.close();
+  });
+
+  it("re-adds from the current wire target for both compatibility actions without an RPC", () => {
+    const fake = fakeClient();
+    const source = createRemoteHostSource(fake.client);
+    const open = vi.spyOn(useRemoteHostsStore.getState(), "openAddHost");
+    try {
+      source.updateHost(HOST, "now");
+      source.cancelScheduledUpdate("unknown");
+      expect(open).not.toHaveBeenCalled();
+
+      fake.push(snapshot([remote()]));
+      source.updateHost(HOST, "now");
+      expect(open).toHaveBeenLastCalledWith("deploy@hetzner-1");
+      expect(useRemoteHostsStore.getState().addHost).toEqual({
+        open: true,
+        target: "deploy@hetzner-1",
+      });
+
+      // Target-only changes need not change the projected HostSourceRecord.
+      const before = source.getSnapshot().hosts[0];
+      fake.push(snapshot([remote({ target: "admin@new-box" })]));
+      expect(source.getSnapshot().hosts[0]).toBe(before);
+      source.updateHost(HOST, "when-idle");
+      source.cancelScheduledUpdate(HOST);
+      expect(open).toHaveBeenCalledTimes(3);
+      expect(open).toHaveBeenLastCalledWith("admin@new-box");
+      expect(useRemoteHostsStore.getState().addHost).toEqual({
+        open: true,
+        target: "admin@new-box",
+      });
+      expect(fake.calls).toEqual([]);
+
+      source.updateHost("unknown", "when-idle");
+      source.cancelScheduledUpdate("unknown");
+      fake.push(snapshot([]));
+      source.updateHost(HOST, "now");
+      source.cancelScheduledUpdate(HOST);
+      fake.push(snapshot([remote()]));
+      source.close();
+      source.updateHost(HOST, "now");
+      source.cancelScheduledUpdate(HOST);
+      expect(open).toHaveBeenCalledTimes(3);
+      expect(fake.calls).toEqual([]);
+    } finally {
+      source.close();
+      open.mockRestore();
+      useRemoteHostsStore.getState().closeAddHost();
+    }
   });
 
   it("opens the host's sign-ins once main's preflight for Sign in answers (VC-702)", async () => {
@@ -704,8 +745,6 @@ describe("the tier client and the flag", () => {
           },
         },
         retry: { mutate },
-        updateHost: { mutate },
-        cancelScheduledUpdate: { mutate },
         signIn: { mutate },
       },
     };
@@ -731,7 +770,7 @@ describe("the tier client and the flag", () => {
       fake.push(snapshot([], { orphan: { status: "ready" } }));
       expect(source.getSnapshot().projects.orphan?.link.status).toBe("open");
       fake.refuseWith(new Error("action failed"));
-      source.updateHost(HOST, "now");
+      source.retry(HOST);
       await Promise.resolve();
       expect(toast.error).toHaveBeenCalledWith("action failed");
       fake.fail(new Error("lost"));
@@ -768,8 +807,6 @@ describe("the tier client and the flag", () => {
           },
         },
         retry: mutate("retry"),
-        updateHost: mutate("updateHost"),
-        cancelScheduledUpdate: mutate("cancelScheduledUpdate"),
         signIn: mutate("signIn"),
       },
     };
@@ -784,13 +821,11 @@ describe("the tier client and the flag", () => {
     stop();
     expect(unsubscribed).toBe(true);
     await client.retry(HOST);
-    await client.updateHost(HOST, "now");
-    await client.cancelScheduledUpdate(HOST);
+    expect(client).not.toHaveProperty("updateHost");
+    expect(client).not.toHaveProperty("cancelScheduledUpdate");
     await client.signIn(HOST, "anthropic");
     expect(calls).toEqual([
       ["retry", { hostId: HOST }],
-      ["updateHost", { hostId: HOST, when: "now" }],
-      ["cancelScheduledUpdate", { hostId: HOST }],
       ["signIn", { hostId: HOST, providerId: "anthropic" }],
     ]);
   });
