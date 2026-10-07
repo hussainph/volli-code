@@ -10,7 +10,13 @@
  * none, host-scoped status evidence answers; TCP alone stays connecting.
  */
 import type { HostLinkState } from "@volli/host-protocol/client-link";
-import type { RemoteHostLink, RemoteHostLinkError, RemoteHostLinkState } from "@volli/shared";
+import {
+  remoteHostDiagnostic,
+  REMOTE_HOST_HEALTH_LIMITS,
+  type RemoteHostLink,
+  type RemoteHostLinkError,
+  type RemoteHostLinkState,
+} from "@volli/shared";
 
 import { compareVersions } from "./probe";
 import type { TunnelState } from "./tunnel";
@@ -27,7 +33,11 @@ export interface LinkInputs {
 }
 
 function errorOf(error: { code: string; message: string; reason?: string }): RemoteHostLinkError {
-  return { code: error.code, reason: error.reason ?? "", message: error.message };
+  return {
+    code: remoteHostDiagnostic(error.code, REMOTE_HOST_HEALTH_LIMITS.errorCode),
+    reason: remoteHostDiagnostic(error.reason ?? "", REMOTE_HOST_HEALTH_LIMITS.errorReason),
+    message: remoteHostDiagnostic(error.message),
+  };
 }
 
 /** The first link in `status`, in the order links were opened. */
@@ -74,7 +84,11 @@ export function remoteHostLinkState(inputs: LinkInputs): RemoteHostLinkState {
       return {
         status: "unreachable",
         attempt: inputs.attempt,
-        error: { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: tunnel.error },
+        error: {
+          code: "SERVICE_UNAVAILABLE",
+          reason: "host-unreachable",
+          message: remoteHostDiagnostic(tunnel.error),
+        },
         closeCode: null,
         retryAt: inputs.retryAt,
       };

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { HostLinkState } from "@volli/host-protocol/client-link";
 import { hostError, type HostWelcome } from "@volli/host-protocol";
+import type { RemoteHostLinkState } from "@volli/shared";
 
 import {
   aggregateLink,
@@ -356,6 +357,31 @@ describe("hostLinkView", () => {
       retryAt: 9_000,
       detail: "gone",
     });
+  });
+
+  it("sanitizes peer close reasons and both refusal diagnostic fields at the mapping boundary", () => {
+    const raw =
+      "closed\u0007\n https://user:p4ss@host/path?token=verysecret#fragment-secret ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const safe = "closed https://host/path?[redacted] [redacted]";
+    const context: HostLinkContext = { everReady: false, droppedAt: null, now: 0 };
+    expect(
+      hostLinkView({ ...unreachable, error: hostError("host-unreachable", raw) }, context),
+    ).toMatchObject({ status: "offline", detail: safe });
+    for (const error of [
+      { code: "UNAUTHORIZED", reason: raw, message: "refused" },
+      { code: raw, reason: "", message: "refused" },
+    ]) {
+      const state: RemoteHostLinkState = { status: "refused", error, closeCode: 4401 };
+      expect(hostLinkView(state, context)).toMatchObject({
+        status: "incompatible",
+        reason: "refused",
+        refusalCode: safe,
+      });
+    }
+    // A diagnostic made only of controls must not publish an empty visible detail.
+    expect(
+      hostLinkView({ ...unreachable, error: hostError("host-unreachable", "\u0007\n\t") }, context),
+    ).not.toHaveProperty("detail");
   });
 
   it("keeps a refusal code when no reason is supplied, and permits an empty transport detail", () => {

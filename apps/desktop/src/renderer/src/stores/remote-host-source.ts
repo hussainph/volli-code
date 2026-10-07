@@ -18,7 +18,7 @@
  * the person's intent, sent once (Ruling 1); one that fails says so in a
  * toast.
  */
-import type { RemoteHost, RemoteHostsSnapshot } from "@volli/shared";
+import { remoteHostDiagnostic, type RemoteHost, type RemoteHostsSnapshot } from "@volli/shared";
 import { toast } from "sonner";
 
 import {
@@ -205,7 +205,7 @@ export function createRemoteHostSource(
             ? { status: "connecting" }
             : hostLinkView(health.state, context);
       if (subscriptionError === null && link.status === "offline" && host.lastSshFailure) {
-        link = { ...link, detail: host.lastSshFailure.line };
+        link = { ...link, detail: remoteHostDiagnostic(host.lastSshFailure.line) };
       }
       if (health !== undefined && subscriptionError === null) {
         const recheckAt = hostLinkViewChangesAt(health.state, context);
@@ -243,7 +243,9 @@ export function createRemoteHostSource(
       if (!current()) return;
       // Keep claims: losing the stream must not route remote ids to This Mac.
       failedAt = now();
-      subscriptionError = `Couldn’t read host state: ${error instanceof Error && error.message ? error.message : "connection failed"}`;
+      subscriptionError = remoteHostDiagnostic(
+        `Couldn’t read host state: ${error instanceof Error && error.message ? error.message : "connection failed"}`,
+      );
       publish();
       onHosts(wire.hosts, subscriptionError);
       subscriptionGeneration += 1;

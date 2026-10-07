@@ -53,6 +53,7 @@ import type {
 } from "@volli/host-protocol/client-link";
 import {
   OperationUnavailableError,
+  boundedRemoteHostHealth,
   REMOTE_HOST_LINK_CAP,
   REMOTE_HOST_DEVICE_TEXT_MAX,
   REMOTE_HOST_DEVICES_MAX,
@@ -475,6 +476,8 @@ interface HostRuntime {
   timer: ReturnType<typeof setTimeout> | undefined;
   closed: boolean;
   health: RemoteHostLinkState;
+  /** Monotonic evidence revision: a probe cannot supersede a newer Workspace observation. */
+  healthGeneration: number;
   lastWelcome: NonNullable<RemoteHost["lastWelcome"]> | null;
   lastSshFailure: NonNullable<RemoteHost["lastSshFailure"]> | null;
   probe: { cancel(): void } | null;
@@ -690,10 +693,12 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
   function hostJson(entry: RegistryHost): RemoteHost {
     const runtime = runtimes.get(entry.id)!;
     return {
-      reachability: runtime.link,
-      lastWelcome: runtime.lastWelcome,
-      signInExpiry: null,
-      lastSshFailure: runtime.lastSshFailure,
+      ...boundedRemoteHostHealth({
+        reachability: runtime.link,
+        lastWelcome: runtime.lastWelcome,
+        signInExpiry: null,
+        lastSshFailure: runtime.lastSshFailure,
+      }),
       id: entry.id,
       name: entry.name,
       target: entry.target,
@@ -915,6 +920,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       }
       // Closing the last project must not resurrect an earlier status-ready
       // after a Workspace link has since observed loss/refusal.
+      runtime.healthGeneration += 1;
       runtime.health = derive(runtime, [...runtime.links.values()]);
       recompute(runtime);
     });
@@ -973,6 +979,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       };
     });
     const probe = { cancel: stopProbe };
+    const healthGeneration = runtime.healthGeneration;
     runtime.probe = probe;
     runtime.health = { status: "connecting", attempt: 0 };
     const timer = setTimeout(stopProbe, 3_000);
@@ -997,7 +1004,12 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
             ssh.exec(script, { label: "host-status", timeoutMs: 3_000 }),
             stopped,
           ]);
-          if (runtime.closed || runtimes.get(runtime.id) !== runtime || runtime.probe !== probe)
+          if (
+            runtime.closed ||
+            runtimes.get(runtime.id) !== runtime ||
+            runtime.probe !== probe ||
+            runtime.healthGeneration !== healthGeneration
+          )
             return;
           const evidence = statusEvidence(result, runtime.id, entry.name, runtime.remote.listen);
           runtime.health = evidence.state;
@@ -1005,7 +1017,12 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
           if (evidence.version !== null) noteVersion(runtime, evidence.version);
           recompute(runtime);
         } catch (error) {
-          if (runtime.closed || runtimes.get(runtime.id) !== runtime || runtime.probe !== probe)
+          if (
+            runtime.closed ||
+            runtimes.get(runtime.id) !== runtime ||
+            runtime.probe !== probe ||
+            runtime.healthGeneration !== healthGeneration
+          )
             return;
           runtime.health = {
             status: "unreachable",
@@ -1088,6 +1105,7 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       timer: undefined,
       closed: false,
       health: { status: "connecting", attempt: 0 },
+      healthGeneration: 0,
       lastWelcome: null,
       lastSshFailure: null,
       probe: null,

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { REMOTE_HOST_HEALTH_LIMITS as limits, remoteHostDiagnostic } from "@volli/shared";
 import type { SshExecResult } from "./ssh";
 import type { HostLinkState } from "@volli/host-protocol/client-link";
 import type { TunnelState } from "./tunnel";
@@ -199,6 +200,43 @@ describe("bounded engine status ownership", () => {
     const h = harness({ registry: registry(hostEntry()), tunnelMode: "hold", wake: true });
     h.wake.fire("power-resume");
     expect(h.box.statusScripts).toHaveLength(0);
+    await h.engine.close();
+  });
+
+  it("bounds and sanitizes link diagnostics before publishing snapshots, retaining only bounded welcome evidence", async () => {
+    const h = harness({ registry: registry(hostEntry({ workspaceIds: [WS1] })) });
+    await flush();
+    const link = h.links.made[0]!;
+    const version = `1.0.0-${"v".repeat(limits.version - 6)}`;
+    link.set(ready(version));
+    expect(h.engine.snapshot().hosts[0]!.lastWelcome?.version).toBe(version);
+    link.set(ready(`${version}v`));
+    expect(h.engine.snapshot().hosts[0]!.lastWelcome).toBeNull();
+    const token = `ghp_${"a".repeat(36)}`;
+    const message = `bad\u0007\n https://user:fake-password@example.test/path?key=fake-query#fake-fragment ${token} ${"m".repeat(limits.diagnostic + 1)}`;
+    link.set({
+      status: "unreachable",
+      attempt: 1,
+      closeCode: 1006,
+      retryAt: 0,
+      error: { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message },
+    });
+    const wire = h.engine.snapshot();
+    const state = wire.hosts[0]!.reachability!.state;
+    expect(state).toMatchObject({
+      error: {
+        reason: "host-unreachable",
+        message: remoteHostDiagnostic(message),
+      },
+    });
+    expect(wire.projects[WS1]!.link).toMatchObject({
+      error: { message: remoteHostDiagnostic(message) },
+    });
+    for (const secret of ["fake-password", "fake-query", "fake-fragment", token])
+      expect(JSON.stringify(wire)).not.toContain(secret);
+    if (!("error" in state)) throw new Error("fixture must be unreachable");
+    expect(state.error.message).not.toMatch(/[\p{Cc}]/u);
+    expect(state.error.message).toHaveLength(limits.diagnostic);
     await h.engine.close();
   });
 

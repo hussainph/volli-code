@@ -17,6 +17,7 @@ import { createThisMacSource } from "./host-sources";
 import { useExperimentsStore } from "./experiments";
 import { useRemoteHostsStore } from "./remote-hosts";
 import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
+import { hostDetail } from "../components/hosts/host-surface-model";
 import { toast } from "sonner";
 
 vi.mock("../lib/session-rpc-ipc-link", () => ({ sessionRpcClient: vi.fn() }));
@@ -24,6 +25,27 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 const HOST = "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
 const ERROR = { code: "SERVICE_UNAVAILABLE", reason: "host-unreachable", message: "down" };
+
+// Synthetic peer/transport diagnostics: none are credentials from this machine.
+const DIAGNOSTICS = [
+  { name: "controls", raw: "link\u0007\t closed\n\r\u0000 now", safe: "link closed now" },
+  {
+    name: "URL credentials, query and fragment",
+    raw: "https://user:p4ss@host/path?token=verysecret#fragment-secret",
+    safe: "https://host/path?[redacted]",
+  },
+  {
+    name: "URL credentials without a query",
+    raw: "https://user:p4ss@host/path",
+    safe: "https://[redacted]@host/path",
+  },
+  {
+    name: "GitHub token",
+    raw: "link ghp_abcdefghijklmnopqrstuvwxyz0123456789 closed",
+    safe: "link [redacted] closed",
+  },
+  { name: "overlength text", raw: "x".repeat(1_000), safe: `${"x".repeat(599)}…` },
+];
 
 function remote(overrides: Partial<RemoteHost> = {}): RemoteHost {
   return {
@@ -111,6 +133,123 @@ function timers(clock: { now: number }) {
 }
 
 describe("the remote host source", () => {
+  it.each(DIAGNOSTICS)("sanitizes $name from peer states through host detail", ({ raw, safe }) => {
+    const fake = fakeClient();
+    const source = createRemoteHostSource(fake.client, { now: () => 10_000 });
+    const store = createHostConnectionStore();
+    const detach = store.getState().attach(source);
+    try {
+      for (const state of [
+        {
+          status: "unreachable" as const,
+          attempt: 0,
+          retryAt: 0,
+          closeCode: 1006,
+          error: { ...ERROR, message: raw },
+        },
+        {
+          status: "refused" as const,
+          closeCode: 4401,
+          error: { ...ERROR, reason: raw },
+        },
+      ]) {
+        fake.push(
+          snapshot([remote({ reachability: { state, everReady: false, droppedAt: 0 } })], {
+            p1: state,
+          }),
+        );
+        const host = store.getState().hosts[0]!;
+        const link = host.link;
+        const expected =
+          state.status === "unreachable"
+            ? { status: "offline", detail: safe }
+            : { status: "incompatible", refusalCode: safe };
+        expect(link).toMatchObject(expected);
+        expect(store.getState().projects.p1?.link).toMatchObject(expected);
+        expect(hostDetail(host)).toMatchObject({
+          text:
+            state.status === "unreachable"
+              ? `Can’t reach hetzner-1 · ${safe}`
+              : `Connection refused (${safe})`,
+        });
+        // Identical wire updates still keep the published host identity.
+        fake.push(
+          snapshot([remote({ reachability: { state, everReady: false, droppedAt: 0 } })], {
+            p1: state,
+          }),
+        );
+        expect(store.getState().hosts[0]).toBe(host);
+      }
+      // SSH copy overrides the peer diagnostic, but must not bypass sanitization.
+      fake.push(
+        snapshot([
+          remote({
+            reachability: {
+              state: {
+                status: "unreachable",
+                attempt: 0,
+                retryAt: 0,
+                closeCode: null,
+                error: ERROR,
+              },
+              everReady: false,
+              droppedAt: 0,
+            },
+            lastSshFailure: { code: "key-refused", line: raw },
+          }),
+        ]),
+      );
+      expect(store.getState().hosts[0]?.link).toMatchObject({ status: "offline", detail: safe });
+      expect(hostDetail(store.getState().hosts[0]!)).toMatchObject({
+        text: `Can’t reach hetzner-1 · ${safe}`,
+      });
+    } finally {
+      detach();
+      source.close();
+    }
+  });
+
+  it.each(DIAGNOSTICS)(
+    "sanitizes $name in subscription errors before publication",
+    ({ raw, safe }) => {
+      const fake = fakeClient();
+      const clock = { now: 0 };
+      const timer = timers(clock);
+      const onHosts = vi.fn();
+      const source = createRemoteHostSource(fake.client, {
+        now: () => clock.now,
+        setTimer: timer.setTimer,
+        onHosts,
+      });
+      const store = createHostConnectionStore();
+      const detach = store.getState().attach(source);
+      try {
+        const host = remote();
+        fake.push(snapshot([host], { p1: { status: "ready" } }));
+        fake.fail(new Error(raw));
+        const line = `Couldn’t read host state: ${safe}`;
+        const expected = line.length > 600 ? `${line.slice(0, 599)}…` : line;
+        expect(source.getSnapshot().error).toBe(expected);
+        expect(store.getState().sourceError).toBe(expected);
+        expect(store.getState().projects.p1?.link).toMatchObject({
+          status: "offline",
+          detail: expected,
+        });
+        expect(store.getState().hosts[0]?.link).toMatchObject({
+          status: "offline",
+          detail: expected,
+        });
+        expect(hostDetail(store.getState().hosts[0]!)).toMatchObject({
+          text: `Can’t reach hetzner-1 · ${expected}`,
+        });
+        expect(onHosts).toHaveBeenLastCalledWith([host], expected);
+      } finally {
+        detach();
+        source.close();
+      }
+    },
+  );
+
   it("uses engine host health even with no projects or a refused project, and maps known expiry", () => {
     const fake = fakeClient();
     const clock = { now: 1_000 };
@@ -177,6 +316,9 @@ describe("the remote host source", () => {
     );
     expect(store.getState().hosts[0]?.link).toMatchObject({
       detail: "No SSH key loaded for hetzner-1.",
+    });
+    expect(hostDetail(store.getState().hosts[0]!)).toMatchObject({
+      text: "Can’t reach hetzner-1 · No SSH key loaded for hetzner-1.",
     });
     fake.push(snapshot([ready]));
     expect(store.getState().hosts[0]?.link.status).toBe("open");

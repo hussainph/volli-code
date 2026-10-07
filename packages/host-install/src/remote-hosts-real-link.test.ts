@@ -34,7 +34,7 @@ async function until(check: () => boolean): Promise<void> {
   }
 }
 
-async function fixture() {
+async function fixture(statusResult?: Promise<{ stdout: string }>) {
   const identity = { id: HOST_ID, version: "1.2.0" };
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
@@ -90,7 +90,8 @@ async function fixture() {
     overrides: [
       (_script, options) =>
         options.label === "host-status"
-          ? json({
+          ? (statusResult ??
+            json({
               v: 1,
               management: 1,
               verdict: serving ? "serving" : "not-serving",
@@ -102,7 +103,7 @@ async function fixture() {
                     listen: LISTEN,
                   }
                 : null,
-            })
+            }))
           : undefined,
     ],
   });
@@ -192,6 +193,39 @@ describe("engine health over a real loopback route and real createHostLink", () 
     expect(f.links[0]!.getState().status).toBe("closed");
     expect(f.engine.snapshot().hosts).toEqual([]);
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "does not let a late probe %s supersede welcome, loss and final Workspace close",
+    async (completion) => {
+      let resolve!: (value: { stdout: string }) => void;
+      let reject!: (error: Error) => void;
+      const status = new Promise<{ stdout: string }>((done, fail) => {
+        resolve = done;
+        reject = fail;
+      });
+      const f = await fixture(status);
+      f.setServing(true);
+      f.engine.openWorkspace(HOST_ID, WS1);
+      await until(() => f.engine.snapshot().projects[WS1]?.link.status === "ready");
+      f.setServing(false);
+      await until(() => f.engine.snapshot().projects[WS1]?.link.status === "unreachable");
+      f.engine.closeWorkspace(HOST_ID, WS1);
+      const host = () => f.engine.snapshot().hosts[0]!;
+      expect(host().reachability?.state.status).toBe("unreachable");
+      const lost = host().reachability;
+      if (completion === "resolve") {
+        resolve(
+          json({
+            v: 1,
+            verdict: "serving",
+            running: { state: "serving", hostId: HOST_ID, version: "1.2.0", listen: LISTEN },
+          }),
+        );
+      } else reject(new Error("late probe failed"));
+      await until(() => f.h.box.statusTransports.every((ssh) => ssh.closed));
+      expect(host().reachability).toEqual(lost);
+    },
+  );
 
   it("refuses another host's first welcome, and closes a real connecting link on quit", async () => {
     const f = await fixture();

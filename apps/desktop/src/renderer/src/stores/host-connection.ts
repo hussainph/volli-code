@@ -25,7 +25,11 @@
  */
 import { create } from "zustand";
 import type { HostLinkState } from "@volli/host-protocol/client-link";
-import { REMOTE_HOST_TOO_MANY_PROJECTS, type RemoteHostLinkState } from "@volli/shared";
+import {
+  remoteHostDiagnostic,
+  REMOTE_HOST_TOO_MANY_PROJECTS,
+  type RemoteHostLinkState,
+} from "@volli/shared";
 
 /** A host's id: the host's own UUID for a remote one, {@link THIS_MAC_HOST_ID} for this Mac. */
 export type HostId = string;
@@ -558,11 +562,13 @@ export function hostLinkView(
     case "unreachable": {
       const since = context.droppedAt ?? context.now;
       if (withinGrace(context, since)) return { status: "reconnecting" };
+      // Peer close reasons may carry secrets or controls. Publish only a bounded diagnostic.
+      const detail = remoteHostDiagnostic(state.error.message);
       return {
         status: "offline",
         since,
         retryAt: state.retryAt,
-        ...(state.error.message ? { detail: state.error.message } : {}),
+        ...(detail ? { detail } : {}),
       };
     }
     case "refused":
@@ -574,7 +580,7 @@ export function hostLinkView(
         return {
           status: "incompatible",
           reason: "refused",
-          refusalCode: state.error.reason || state.error.code,
+          refusalCode: remoteHostDiagnostic(state.error.reason || state.error.code),
         };
       }
       return context.hostIsNewer
