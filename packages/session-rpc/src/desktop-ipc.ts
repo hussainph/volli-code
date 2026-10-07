@@ -152,6 +152,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hostAdd.cancel": "ipc",
   "hosts.rename": "ipc",
   "hosts.devices": "ipc",
+  "hostAdd.facts": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

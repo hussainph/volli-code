@@ -170,6 +170,13 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "The devices a remote host has enrolled, read from it over SSH.",
   },
+  {
+    // Beside `hostAdd.subscribe`, whose event union is closed: read on each view.
+    key: "hostAdd.facts",
+    placement: "host",
+    idempotency: "read",
+    summary: "What an add flow has found about its host so far: its login, system, version.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

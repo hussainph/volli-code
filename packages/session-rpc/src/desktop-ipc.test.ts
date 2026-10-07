@@ -93,6 +93,7 @@ describe("the desktop's IPC exposure", () => {
       "hostAdd.cancel",
       "hosts.rename",
       "hosts.devices",
+      "hostAdd.facts",
     ]);
   });
 

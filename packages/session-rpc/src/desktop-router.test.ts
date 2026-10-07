@@ -17,6 +17,7 @@ import {
   REMOTE_HOST_NAME_MAX,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   type AddHostEvent,
+  type AddHostFacts,
   type HandlerCall,
   type RemoteHostDevices,
   type RemoteHostsSnapshot,
@@ -40,6 +41,7 @@ import {
 import { RpcDiagnosticLog } from "./index";
 import {
   addHostEventSchema,
+  addHostFactsSchema,
   remoteHostDevicesSchema,
   remoteHostsSnapshotSchema,
 } from "./remote-hosts-schema";
@@ -139,17 +141,17 @@ const VIEW: Extract<AddHostEvent, { kind: "view" }> = {
     failure: null,
     hostId: null,
     startup: null,
-    facts: {
-      user: "you",
-      os: "linux",
-      system: null,
-      arch: null,
-      memoryBytes: null,
-      version: null,
-      keepsRunning: null,
-      alreadyPaired: false,
-    },
   },
+};
+const FACTS: AddHostFacts = {
+  user: "you",
+  os: "linux",
+  system: "Ubuntu 24.04.1 LTS",
+  arch: "x86-64",
+  memoryBytes: 8 * 1024 ** 3,
+  version: null,
+  keepsRunning: null,
+  alreadyPaired: false,
 };
 const FAILED: AddHostEvent = {
   kind: "view",
@@ -234,6 +236,7 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hostAdd.cancel": record("hostAdd.cancel", null),
     "hosts.rename": record("hosts.rename", null),
     "hosts.devices": record("hosts.devices", DEVICES),
+    "hostAdd.facts": record("hostAdd.facts", FACTS),
     ...fixture.overrides,
   };
 }
@@ -304,6 +307,7 @@ function everyRemoteCall(client: TRPCClient<DesktopRouter>) {
     "hosts.forget": () => client.hosts.forget.mutate({ hostId: HOST }),
     "hosts.rename": () => client.hosts.rename.mutate({ hostId: HOST, name: "Build box" }),
     "hosts.devices": () => client.hosts.devices.query({ hostId: HOST }),
+    "hostAdd.facts": () => client.hostAdd.facts.query({ flowId: FLOW }),
     "hostAdd.start": () => client.hostAdd.start.mutate({ target: "you@box" }),
     "hostAdd.subscribe": () =>
       collect((handlers) => client.hostAdd.subscribe.subscribe({ flowId: FLOW }, handlers)).failed,
@@ -408,6 +412,7 @@ describeContract<Host, DesktopRouter>(
       expect(await client.hostAdd.retry.mutate({ flowId: FLOW, from: "deliver" })).toBeNull();
       expect(await client.hostAdd.retry.mutate({ flowId: FLOW })).toBeNull();
       expect(await client.hostAdd.cancel.mutate({ flowId: FLOW })).toBeNull();
+      expect(await client.hostAdd.facts.query({ flowId: FLOW })).toEqual(FACTS);
       expect(fixture.calls.map(({ key, input }) => [key, input])).toEqual([
         ["hosts.snapshot", undefined],
         ["hosts.retry", { hostId: HOST }],
@@ -424,6 +429,7 @@ describeContract<Host, DesktopRouter>(
         ["hostAdd.retry", { flowId: FLOW, from: "deliver" }],
         ["hostAdd.retry", { flowId: FLOW }],
         ["hostAdd.cancel", { flowId: FLOW }],
+        ["hostAdd.facts", { flowId: FLOW }],
       ]);
       for (const { call } of fixture.calls) expect(call).toEqual(WINDOW_CALL);
     });
@@ -478,6 +484,7 @@ describeContract<Host, DesktopRouter>(
           "devices with an unknown key",
           () => client.hosts.devices.query({ hostId: HOST, all: true } as never),
         ],
+        ["facts of no flow", () => client.hostAdd.facts.query({} as never)],
         ["target too long", () => client.hostAdd.start.mutate({ target: "t".repeat(256) })],
         ["empty target", () => client.hostAdd.start.mutate({ target: "" })],
         [
@@ -807,6 +814,7 @@ describe("the desktop router's grammar", () => {
         "hostAdd.cancel",
         "hosts.rename",
         "hosts.devices",
+        "hostAdd.facts",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({
@@ -824,6 +832,8 @@ describe("the desktop router's grammar", () => {
       outputValidation: "network-and-tests",
     });
     expect(schemas["hosts.devices"]!.output).toBe(remoteHostDevicesSchema);
+    expect(schemas["hostAdd.facts"]).toMatchObject({ type: "query" });
+    expect(schemas["hostAdd.facts"]!.output).toBe(addHostFactsSchema);
     for (const key of ["hosts.subscribe", "hostAdd.subscribe"]) {
       expect(schemas[key], key).toMatchObject({
         type: "subscription",
@@ -851,6 +861,8 @@ describe("the desktop router's grammar", () => {
       expect(addHostEventSchema.parse(event)).toEqual(event);
     }
     expect(() => addHostEventSchema.parse({ ...REPLAY, omitted: -1 })).toThrow();
+    expect(addHostFactsSchema.parse(FACTS)).toEqual(FACTS);
+    expect(() => addHostFactsSchema.parse({ ...FACTS, memoryBytes: -1 })).toThrow();
     expect(() =>
       addHostEventSchema.parse({ ...VIEW, view: { ...VIEW.view, status: "paused" } }),
     ).toThrow();

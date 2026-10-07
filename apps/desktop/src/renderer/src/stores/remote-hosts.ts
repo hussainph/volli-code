@@ -15,6 +15,7 @@
 import type {
   AddHostAnswer,
   AddHostEvent,
+  AddHostFacts,
   AddHostStartInput,
   AddHostStepId,
   RemoteHost,
@@ -37,6 +38,8 @@ export interface RemoteHostsApi {
   sudoPassword(flowId: string, questionId: string, password: string): Promise<unknown>;
   retryAdd(flowId: string, from?: AddHostStepId): Promise<unknown>;
   cancelAdd(flowId: string): Promise<unknown>;
+  /** What the flow has found so far: read on each view, beside the stream. */
+  addFacts(flowId: string): Promise<AddHostFacts>;
   rename(hostId: string, name: string): Promise<unknown>;
   forget(hostId: string): Promise<unknown>;
   devices(hostId: string): Promise<RemoteHostDevices>;
@@ -71,6 +74,7 @@ export interface RemoteHostsApiRpc {
       mutate(input: { flowId: string; from?: AddHostStepId }): Promise<unknown>;
     };
     readonly cancel: { mutate(input: { flowId: string }): Promise<unknown> };
+    readonly facts: { query(input: { flowId: string }): Promise<AddHostFacts> };
   };
 }
 
@@ -92,6 +96,7 @@ export function remoteHostsApi(rpc: RemoteHostsApiRpc): RemoteHostsApi {
     retryAdd: (flowId, from) =>
       rpc.hostAdd.retry.mutate(from === undefined ? { flowId } : { flowId, from }),
     cancelAdd: (flowId) => rpc.hostAdd.cancel.mutate({ flowId }),
+    addFacts: (flowId) => rpc.hostAdd.facts.query({ flowId }),
     rename: (hostId, name) => rpc.hosts.rename.mutate({ hostId, name }),
     forget: (hostId) => rpc.hosts.forget.mutate({ hostId }),
     devices: (hostId) => rpc.hosts.devices.query({ hostId }),

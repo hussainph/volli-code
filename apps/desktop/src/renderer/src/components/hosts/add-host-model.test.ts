@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AddHostStepStatus, AddHostView, RemoteHost } from "@volli/shared";
+import type { AddHostStepStatus, RemoteHost } from "@volli/shared";
 
 import {
   agentsShareAccountLine,
@@ -8,14 +8,15 @@ import {
   readyFacts,
   readySummary,
   memoryText,
+  NO_FACTS,
   stepRows,
   validTarget,
+  type AddHostFlowView,
 } from "./add-host-model";
-import { NO_FACTS } from "@renderer/stores/remote-hosts.test-support";
 
 const STEPS = ["connect", "probe", "deliver", "install", "start", "enroll", "link"] as const;
 
-function view(patch: Partial<AddHostView> = {}): AddHostView {
+function view(patch: Partial<AddHostFlowView> = {}): AddHostFlowView {
   return {
     flowId: "flow-1",
     target: "deploy@box",
@@ -100,6 +101,17 @@ describe("the checklist's rows", () => {
       ["active", "Starting…"],
       ["active", "Pairing…"],
     ]);
+    // The check, running.
+    expect(
+      stepRows(
+        view({
+          steps: [
+            { id: "connect", status: "done" },
+            { id: "probe", status: "running" },
+          ],
+        }),
+      )[1],
+    ).toMatchObject({ mark: "active", label: "Checking the system…" });
     // Halfway, but stopped (a failure elsewhere): it waits.
     expect(
       stepRows(view({ status: "failed", steps: [{ id: "deliver", status: "done" }] }))[2],

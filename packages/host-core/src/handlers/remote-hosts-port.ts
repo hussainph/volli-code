@@ -29,6 +29,7 @@
 import type {
   AddHostAnswer,
   AddHostEvent,
+  AddHostFacts,
   AddHostStartInput,
   AddHostStepId,
   RemoteHostDevices,
@@ -89,4 +90,6 @@ export interface RemoteHostsPort {
   retryAdd(flowId: string, from?: AddHostStepId): Answer<void>;
   /** Cancels the flow. */
   cancelAdd(flowId: string): Answer<void>;
+  /** What the flow has found about its host so far: read beside its view. */
+  addFacts(flowId: string): Answer<AddHostFacts>;
 }

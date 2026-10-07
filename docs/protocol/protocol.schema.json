@@ -254,6 +254,122 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "hostAdd.facts": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "flowId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "flowId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "alreadyPaired": {
+              "type": "boolean"
+            },
+            "arch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "keepsRunning": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "memoryBytes": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "os": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "linux",
+                    "macos"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "system": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "user": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "user",
+            "os",
+            "system",
+            "arch",
+            "memoryBytes",
+            "version",
+            "keepsRunning",
+            "alreadyPaired"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "hostAdd.retry": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -452,100 +568,6 @@
                 "view": {
                   "additionalProperties": false,
                   "properties": {
-                    "facts": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "alreadyPaired": {
-                          "type": "boolean"
-                        },
-                        "arch": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "keepsRunning": {
-                          "anyOf": [
-                            {
-                              "type": "boolean"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "memoryBytes": {
-                          "anyOf": [
-                            {
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "os": {
-                          "anyOf": [
-                            {
-                              "enum": [
-                                "linux",
-                                "macos"
-                              ],
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "system": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "user": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "version": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        }
-                      },
-                      "required": [
-                        "user",
-                        "os",
-                        "system",
-                        "arch",
-                        "memoryBytes",
-                        "version",
-                        "keepsRunning",
-                        "alreadyPaired"
-                      ],
-                      "type": "object"
-                    },
                     "failure": {
                       "anyOf": [
                         {
@@ -767,8 +789,7 @@
                     "question",
                     "failure",
                     "hostId",
-                    "startup",
-                    "facts"
+                    "startup"
                   ],
                   "type": "object"
                 }
@@ -791,100 +812,6 @@
                 "view": {
                   "additionalProperties": false,
                   "properties": {
-                    "facts": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "alreadyPaired": {
-                          "type": "boolean"
-                        },
-                        "arch": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "keepsRunning": {
-                          "anyOf": [
-                            {
-                              "type": "boolean"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "memoryBytes": {
-                          "anyOf": [
-                            {
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "os": {
-                          "anyOf": [
-                            {
-                              "enum": [
-                                "linux",
-                                "macos"
-                              ],
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "system": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "user": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "version": {
-                          "anyOf": [
-                            {
-                              "type": "string"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        }
-                      },
-                      "required": [
-                        "user",
-                        "os",
-                        "system",
-                        "arch",
-                        "memoryBytes",
-                        "version",
-                        "keepsRunning",
-                        "alreadyPaired"
-                      ],
-                      "type": "object"
-                    },
                     "failure": {
                       "anyOf": [
                         {
@@ -1106,8 +1033,7 @@
                     "question",
                     "failure",
                     "hostId",
-                    "startup",
-                    "facts"
+                    "startup"
                   ],
                   "type": "object"
                 }

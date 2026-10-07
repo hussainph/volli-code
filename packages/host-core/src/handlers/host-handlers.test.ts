@@ -11,6 +11,7 @@ import {
   OperationUnavailableError,
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   type AddHostEvent,
+  type AddHostFacts,
   type DataChangedEvent,
   type HandlerCall,
   type ModelAccessSnapshot,
@@ -512,6 +513,17 @@ describe("remote hosts commands", () => {
     ],
   };
 
+  const FACTS: AddHostFacts = {
+    user: "you",
+    os: "linux",
+    system: "Ubuntu 24.04.1 LTS",
+    arch: "x86-64",
+    memoryBytes: null,
+    version: null,
+    keepsRunning: null,
+    alreadyPaired: false,
+  };
+
   function port(overrides: Partial<RemoteHostsPort> = {}) {
     const unsubscribe = vi.fn();
     const remote = {
@@ -536,6 +548,7 @@ describe("remote hosts commands", () => {
       cancelAdd: vi.fn(),
       rename: vi.fn(),
       devices: vi.fn(async () => DEVICES),
+      addFacts: vi.fn(() => FACTS),
       ...overrides,
     } satisfies RemoteHostsPort;
     return { remote, unsubscribe };
@@ -567,6 +580,7 @@ describe("remote hosts commands", () => {
         () => map["hostAdd.cancel"]({ flowId: FLOW }, WINDOW),
         () => map["hosts.rename"]({ hostId: HOST, name: "Box" }, WINDOW),
         () => map["hosts.devices"]({ hostId: HOST }, WINDOW),
+        () => map["hostAdd.facts"]({ flowId: FLOW }, WINDOW),
       ];
       for (const call of calls) {
         expect(await unavailable(call)).toBe("Remote hosts are unavailable on this host");
@@ -604,6 +618,7 @@ describe("remote hosts commands", () => {
     expect(await map["hostAdd.cancel"]({ flowId: FLOW }, WINDOW)).toBeNull();
     expect(await map["hosts.rename"]({ hostId: HOST, name: "Build box" }, WINDOW)).toBeNull();
     expect(await map["hosts.devices"]({ hostId: HOST }, WINDOW)).toBe(DEVICES);
+    expect(await map["hostAdd.facts"]({ flowId: FLOW }, WINDOW)).toBe(FACTS);
 
     expect(remote.retry).toHaveBeenCalledWith(HOST);
     expect(remote.updateHost).toHaveBeenCalledWith(HOST, "when-idle");
@@ -618,6 +633,7 @@ describe("remote hosts commands", () => {
     expect(remote.cancelAdd).toHaveBeenCalledWith(FLOW);
     expect(remote.rename).toHaveBeenCalledWith(HOST, "Build box");
     expect(remote.devices).toHaveBeenCalledWith(HOST);
+    expect(remote.addFacts).toHaveBeenCalledWith(FLOW);
   });
 
   // The registry's own refusals (an unknown host, a bad label, a host it could

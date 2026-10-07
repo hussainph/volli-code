@@ -22,7 +22,7 @@ import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
-import type { AddHostLogLine, AddHostView, RemoteHost } from "@volli/shared";
+import type { AddHostLogLine, RemoteHost } from "@volli/shared";
 
 import { Button } from "@renderer/components/ui/button";
 import {
@@ -43,6 +43,7 @@ import {
   readySummary,
   stepRows,
   validTarget,
+  type AddHostFlowView,
   type QuestionPrompt,
 } from "./add-host-model";
 import { EASE_OUT, HostGlyph, StepMark, SwapText } from "./host-parts";
@@ -112,7 +113,7 @@ function AddHostBody({
           <FlowScreen
             flow={flow}
             target={phase.target}
-            view={phase.view}
+            view={phase.view === null ? null : { ...phase.view, facts: phase.facts }}
             log={phase.log}
             omitted={phase.omitted}
             lost={phase.lost}
@@ -219,7 +220,7 @@ function FlowScreen({
 }: {
   flow: AddHostFlow;
   target: string;
-  view: AddHostView | null;
+  view: AddHostFlowView | null;
   log: readonly NumberedLogLine[];
   omitted: number;
   lost: boolean;
@@ -342,7 +343,7 @@ function Stopped({
   onPasswordText,
 }: {
   flow: AddHostFlow;
-  view: AddHostView | null;
+  view: AddHostFlowView | null;
   name: string;
   lost: boolean;
   busy: boolean;
@@ -505,7 +506,7 @@ function Actions({
   hasPassword,
 }: {
   flow: AddHostFlow;
-  view: AddHostView | null;
+  view: AddHostFlowView | null;
   name: string;
   lost: boolean;
   busy: boolean;
@@ -630,7 +631,7 @@ function Actions({
 
 /* ── Ready ─────────────────────────────────────────────────────────────── */
 
-function ReadyBody({ view, host }: { view: AddHostView; host: RemoteHost | undefined }) {
+function ReadyBody({ view, host }: { view: AddHostFlowView; host: RemoteHost | undefined }) {
   const facts = readyFacts(view, host);
   return (
     <motion.div

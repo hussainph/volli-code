@@ -187,11 +187,15 @@ export interface AddHostView {
    * says nothing (a Linux host starts at boot).
    */
   readonly startup: string | null;
-  /** What the flow has found so far: the checklist's completed rows read these, never made up. */
-  readonly facts: AddHostFacts;
 }
 
-/** What an add has learned about the host, each `null` until a step has said it. */
+/**
+ * `hostAdd.facts`: what an add has learned about the host so far, each `null`
+ * until a step has said it. The checklist's completed rows read these, never
+ * made up. A read of its own beside the view: `hostAdd.subscribe`'s event
+ * union is closed to change (the protocol-schema gate), and this object may
+ * gain fields where that union cannot.
+ */
 export interface AddHostFacts {
   /** The login it connected as. */
   readonly user: string | null;

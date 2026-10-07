@@ -579,6 +579,8 @@ describe("finished flows are let go (note 3)", () => {
       expect.objectContaining({ code: "unknown-flow" }),
     );
     expect(() => h.engine.subscribeAdd(flows[2]!, () => {})).not.toThrow();
+    // A finished flow's facts are there to read until it is let go.
+    expect(h.engine.addFacts(flows[2]!)).toMatchObject({ version: "1.1.0" });
     await new Promise((resolve) => setTimeout(resolve, 80));
     for (const flowId of flows) {
       expect(() => h.engine.subscribeAdd(flowId, () => {})).toThrow(
@@ -660,6 +662,7 @@ describe("cloud turning off with a flow under way (PR 3)", () => {
     const { flowId, w } = await startAdd(h);
     on = false;
     expect(() => h.engine.subscribeAdd(flowId, () => {})).toThrow(RemoteHostsUnavailableError);
+    expect(() => h.engine.addFacts(flowId)).toThrow(RemoteHostsUnavailableError);
     await expect(h.engine.retryAdd(flowId)).rejects.toBeInstanceOf(RemoteHostsUnavailableError);
     await h.engine.cancelAdd(flowId);
     expect(w.views().at(-1)?.status).toBe("cancelled");

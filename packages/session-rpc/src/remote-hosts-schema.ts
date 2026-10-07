@@ -13,6 +13,7 @@ import {
   REMOTE_HOST_DEVICES_MAX,
   REMOTE_HOST_NAME_MAX,
   type AddHostEvent,
+  type AddHostFacts,
   type AddHostFailure,
   type AddHostLogLine,
   type AddHostStepId,
@@ -204,16 +205,17 @@ const addHostView = z.object({
   failure: addHostFailure.nullable(),
   hostId: z.string().nullable(),
   startup: z.string().nullable(),
-  facts: z.object({
-    user: z.string().nullable(),
-    os: z.enum(["linux", "macos"]).nullable(),
-    system: z.string().nullable(),
-    arch: z.string().nullable(),
-    memoryBytes: z.number().nonnegative().nullable(),
-    version: z.string().nullable(),
-    keepsRunning: z.boolean().nullable(),
-    alreadyPaired: z.boolean(),
-  }),
+});
+/** `AddHostFacts`: what `hostAdd.facts` answers. A plain object, so it may gain fields. */
+export const addHostFactsSchema = z.object({
+  user: z.string().nullable(),
+  os: z.enum(["linux", "macos"]).nullable(),
+  system: z.string().nullable(),
+  arch: z.string().nullable(),
+  memoryBytes: z.number().nonnegative().nullable(),
+  version: z.string().nullable(),
+  keepsRunning: z.boolean().nullable(),
+  alreadyPaired: z.boolean(),
 });
 const addHostLogLine = z.object({
   at: z.string(),
@@ -239,6 +241,7 @@ export type RemoteHostsOutputSchemasMatch = AssertNever<
       ? never
       : "remoteHostsSnapshotSchema")
   | (z.output<typeof addHostEventSchema> extends AddHostEvent ? never : "addHostEventSchema")
+  | (z.output<typeof addHostFactsSchema> extends AddHostFacts ? never : "addHostFactsSchema")
   | (z.output<typeof remoteHostDevicesSchema> extends RemoteHostDevices
       ? never
       : "remoteHostDevicesSchema")
@@ -259,6 +262,7 @@ export type RemoteHostsSchemaKeysCoverage = AssertNever<
   | MissingKeys<RemoteHost, z.output<typeof remoteHost>>
   | MissingKeys<RemoteProjectLink, z.output<typeof remoteProjectLink>>
   | MissingKeys<AddHostView, z.output<typeof addHostView>>
+  | MissingKeys<AddHostFacts, z.output<typeof addHostFactsSchema>>
   | MissingKeys<AddHostFailure, z.output<typeof addHostFailure>>
   | MissingKeys<AddHostLogLine, z.output<typeof addHostLogLine>>
   | MissingKeys<RemoteHostDevices, z.output<typeof remoteHostDevicesSchema>>

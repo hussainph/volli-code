@@ -72,17 +72,17 @@ describe("adding a host end to end", () => {
       hostId: HOST_ID,
       // A Linux host starts at boot: nothing to say.
       startup: null,
-      // What each step found: the checklist's completed rows.
-      facts: {
-        user: "deploy",
-        os: "linux",
-        system: "Ubuntu 24.04.1 LTS",
-        arch: "x86-64",
-        memoryBytes: 8_167_236 * 1024,
-        version: "1.1.0",
-        keepsRunning: true,
-        alreadyPaired: false,
-      },
+    });
+    // What each step found: the checklist's completed rows, read beside the view.
+    expect(h.engine.addFacts(flowId)).toEqual({
+      user: "deploy",
+      os: "linux",
+      system: "Ubuntu 24.04.1 LTS",
+      arch: "x86-64",
+      memoryBytes: 8_167_236 * 1024,
+      version: "1.1.0",
+      keepsRunning: true,
+      alreadyPaired: false,
     });
     // Each step shows running, in order, each after the ones before it are done.
     const running = w
@@ -1268,6 +1268,9 @@ describe("refusals", () => {
       code: "unknown-flow",
     });
     await expect(h.engine.cancelAdd("nope")).rejects.toMatchObject({ code: "unknown-flow" });
+    expect(() => h.engine.addFacts("nope")).toThrow(
+      expect.objectContaining({ code: "unknown-flow" }),
+    );
   });
 });
 

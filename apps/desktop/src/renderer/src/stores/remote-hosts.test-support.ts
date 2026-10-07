@@ -1,18 +1,22 @@
 /**
  * A scripted {@link RemoteHostsApi} for tests and the lab (VC-700 PR 3): it
  * records every call, lets the caller push flow events as desktop main would,
- * and answers `devices` from a table. Nothing here talks to main.
+ * and answers `devices` from a table and `addFacts` with the facts of the
+ * last view pushed (a {@link flowView}'s `facts`). Nothing here talks to main.
  */
 import type {
   AddHostEvent,
   AddHostFacts,
   AddHostStepId,
-  AddHostView,
   RemoteHost,
   RemoteHostDevice,
 } from "@volli/shared";
 
+import { NO_FACTS, type AddHostFlowView } from "@renderer/components/hosts/add-host-model";
+
 import type { RemoteHostsApi } from "./remote-hosts";
+
+export { NO_FACTS };
 
 export type FakeCall =
   | readonly ["startAdd", string]
@@ -36,6 +40,8 @@ export interface FakeRemoteHostsApi extends RemoteHostsApi {
   fail(flowId: string): void;
   /** What `startAdd` answers next: a flow id, or a refusal. */
   nextStart: { flowId: string } | Error;
+  /** What `addFacts` answers next for a flow, over the last view's; or a refusal. */
+  factsOf: Map<string, AddHostFacts | Error>;
   /** What `devices(hostId)` answers: a list, or a refusal. */
   devicesOf: Map<string, readonly RemoteHostDevice[] | Error>;
   /** Makes the next call of `method` refuse with `message`. */
@@ -52,6 +58,8 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
   >();
   const refusals = new Map<string, string>();
   const calls: FakeCall[] = [];
+  /** Each flow's facts, from the last view pushed that carried some. */
+  const found = new Map<string, AddHostFacts>();
   const settle = (method: string): Promise<null> => {
     const message = refusals.get(method);
     if (message === undefined) return Promise.resolve(null);
@@ -62,7 +70,11 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
     calls,
     nextStart: { flowId: "flow-1" },
     devicesOf: new Map(),
+    factsOf: new Map(),
     emit(flowId, event) {
+      if (event.kind !== "log" && "facts" in event.view) {
+        found.set(flowId, (event.view as AddHostFlowView).facts);
+      }
       for (const handlers of subscribers.get(flowId) ?? []) handlers.onEvent(event);
     },
     following: (flowId) => (subscribers.get(flowId)?.size ?? 0) > 0,
@@ -101,6 +113,10 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
       calls.push(["cancelAdd", flowId]);
       return Promise.resolve(null);
     },
+    addFacts(flowId) {
+      const answer = api.factsOf.get(flowId) ?? found.get(flowId) ?? NO_FACTS;
+      return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+    },
     rename(hostId, name) {
       calls.push(["rename", hostId, name]);
       return settle("rename");
@@ -120,24 +136,15 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
   return api;
 }
 
-/** An add that has found nothing yet. */
-export const NO_FACTS: AddHostFacts = {
-  user: null,
-  os: null,
-  system: null,
-  arch: null,
-  memoryBytes: null,
-  version: null,
-  keepsRunning: null,
-  alreadyPaired: false,
-};
-
 const STEP_IDS = ["connect", "probe", "deliver", "install", "start", "enroll", "link"] as const;
 
-/** An add flow's view, every step pending unless `done` / `at` say otherwise. */
+/**
+ * An add flow's view, every step pending unless `done` / `at` say otherwise,
+ * with the facts the fake's `addFacts` will answer for it.
+ */
 export function flowView(
-  patch: Partial<AddHostView> & { done?: number; at?: AddHostStepId } = {},
-): AddHostView {
+  patch: Partial<AddHostFlowView> & { done?: number; at?: AddHostStepId } = {},
+): AddHostFlowView {
   const { done = 0, at, ...rest } = patch;
   return {
     flowId: "flow-1",

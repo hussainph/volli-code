@@ -7,12 +7,13 @@
  * included), Start and Pair (opening the connection included). Each has a
  * noun while it waits ("Install"), a verb while it runs ("Installing Volli
  * host…") and, once done, what it found ("Volli host 1.1.0"), read from the
- * flow's facts, never made up: where nothing was found, the noun. A stopped flow says one line and offers one
- * recovery (plus Back): a question's comes from its kind, a failure's from
+ * flow's facts (`hostAdd.facts`), never made up: where nothing was found,
+ * the noun. A stopped flow says one line and offers one recovery (plus Back): a question's comes from its kind, a failure's from
  * `@volli/host-install` itself (`AddHostFailure.line` / `.recovery`), so the
  * words for a typed failure live in one place.
  */
 import type {
+  AddHostFacts,
   AddHostQuestion,
   AddHostStepId,
   AddHostStepStatus,
@@ -22,6 +23,24 @@ import type {
 
 import type { StepMarkStatus } from "./host-parts";
 import type { HostBadge } from "./host-surface-model";
+
+/**
+ * A flow's view with what it has found so far: main streams the view and
+ * answers its facts beside it (`hostAdd.facts`, read on each view).
+ */
+export type AddHostFlowView = AddHostView & { readonly facts: AddHostFacts };
+
+/** An add that has found nothing yet (or whose facts have not arrived). */
+export const NO_FACTS: AddHostFacts = Object.freeze({
+  user: null,
+  os: null,
+  system: null,
+  arch: null,
+  memoryBytes: null,
+  version: null,
+  keepsRunning: null,
+  alreadyPaired: false,
+});
 
 /** The checklist's five rows, the lab's (`#host-add`): seven steps underneath. */
 export type ChecklistRowId = "connect" | "check" | "install" | "start" | "pair";
@@ -76,7 +95,7 @@ function verbOf(id: ChecklistRowId, name: string): string {
 }
 
 /** What a done row found, from the flow's facts; the noun where it found nothing to say. */
-function foundOf(id: ChecklistRowId, view: AddHostView): string {
+function foundOf(id: ChecklistRowId, view: AddHostFlowView): string {
   const { facts } = view;
   switch (id) {
     case "connect":
@@ -101,7 +120,7 @@ function foundOf(id: ChecklistRowId, view: AddHostView): string {
 }
 
 /** One row's mark, from the steps under it. */
-function rowMark(statuses: readonly AddHostStepStatus[], view: AddHostView): StepMarkStatus {
+function rowMark(statuses: readonly AddHostStepStatus[], view: AddHostFlowView): StepMarkStatus {
   if (statuses.includes("failed")) return "failed";
   if (statuses.includes("running")) return view.status === "question" ? "attention" : "active";
   const finished = statuses.filter((status) => status === "done" || status === "skipped");
@@ -111,7 +130,7 @@ function rowMark(statuses: readonly AddHostStepStatus[], view: AddHostView): Ste
 }
 
 /** The checklist's rows: five, each saying what it found once done. */
-export function stepRows(view: AddHostView): StepRow[] {
+export function stepRows(view: AddHostFlowView): StepRow[] {
   const status = new Map(view.steps.map((step) => [step.id, step.status]));
   // Already paired: the check found it, and pairing is in place; nothing else need run.
   const paired = view.question?.kind === "already-paired";
@@ -137,7 +156,7 @@ export function stepRows(view: AddHostView): StepRow[] {
 }
 
 /** The sheet's host tile badge: the flow's state, at a glance; a check once it is ready. */
-export function flowBadge(view: AddHostView): HostBadge | "ready" {
+export function flowBadge(view: AddHostFlowView): HostBadge | "ready" {
   if (view.status === "done") return "ready";
   if (view.status === "failed") return "fail";
   if (view.status === "question") return "attention";
@@ -267,7 +286,7 @@ const OS_NAMES = { linux: "Linux", macos: "macOS" } as const;
  * "Ubuntu 24.04.1 LTS · x86-64 · Volli host 1.1.0"; the registry's OS where
  * the add did not say.
  */
-export function readySummary(view: AddHostView, host: RemoteHost | undefined): string {
+export function readySummary(view: AddHostFlowView, host: RemoteHost | undefined): string {
   const { facts } = view;
   const os = facts.os ?? host?.os ?? null;
   const version = facts.version ?? host?.version ?? null;
@@ -283,7 +302,7 @@ export function readySummary(view: AddHostView, host: RemoteHost | undefined): s
  * The facts a finished add states once: when it starts on its own (a Mac's
  * at login, `AddHostView.startup`) and whose account its agents run as.
  */
-export function readyFacts(view: AddHostView, host: RemoteHost | undefined): string[] {
+export function readyFacts(view: AddHostFlowView, host: RemoteHost | undefined): string[] {
   const facts: string[] = [];
   if (view.startup !== null) facts.push(view.startup);
   if (host?.agentsShareAccount === true) facts.push(agentsShareAccountLine(host.name));

@@ -77,6 +77,7 @@ const SAMPLE_INPUTS: {
   "hostAdd.cancel": { flowId: FLOW },
   "hosts.rename": { hostId: HOST, name: "Build box" },
   "hosts.devices": { hostId: HOST },
+  "hostAdd.facts": { flowId: FLOW },
   "ticket.move": { projectId: PROJECT, ticketId: "ticket-1", toStatus: "done" },
   "sessions.create": { operationId: "op", projectId: PROJECT, ticketId: null, title: null },
   "sessions.attach": { operationId: "op", ...SESSION },

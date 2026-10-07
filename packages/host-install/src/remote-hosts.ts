@@ -61,6 +61,7 @@ import {
   REMOTE_HOST_UPDATE_UNAVAILABLE,
   type AddHostAnswer,
   type AddHostEvent,
+  type AddHostFacts,
   type AddHostLogLine,
   type AddHostQuestion,
   type AddHostStartInput,
@@ -290,6 +291,11 @@ export interface RemoteHosts {
    * way: turning the flag off must still let the window stop it.
    */
   cancelAdd(flowId: string): Promise<void>;
+  /**
+   * What the flow has found about its host so far (`hostAdd.facts`), read
+   * beside each view; a finished flow's until it is let go.
+   */
+  addFacts(flowId: string): AddHostFacts;
   /** Stops everything: at quit. Every call shares the first. */
   close(): Promise<void>;
 }
@@ -992,7 +998,6 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
       failure: status === "failed" ? failureJson(state, flow.name) : null,
       hostId: flow.hostId,
       startup: probe === undefined ? null : describeStartup(probe, flow.name),
-      facts: flowFacts(flow.results, state.decisions),
     };
     emit(flow, { kind: "view", view: flow.view });
   }
@@ -1495,6 +1500,11 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
           flow.state = retryFrom(flow.state, from);
         },
       );
+    },
+    addFacts(flowId) {
+      guard();
+      const flow = flowOf(flowId);
+      return flowFacts(flow.results, flow.state.decisions);
     },
     async cancelAdd(flowId) {
       // The one call that stays open with `cloud` off: a flow already under

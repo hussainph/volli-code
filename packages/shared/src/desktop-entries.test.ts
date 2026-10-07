@@ -73,11 +73,18 @@ describe("the desktop-only tier", () => {
       "hostAdd.cancel",
       "hosts.rename",
       "hosts.devices",
+      "hostAdd.facts",
     ]);
     for (const entry of remote) expect(entry.placement, entry.key).toBe("host");
     expect(
       remote.filter(({ idempotency }) => idempotency === "read").map(({ key }) => key),
-    ).toEqual(["hosts.snapshot", "hosts.subscribe", "hostAdd.subscribe", "hosts.devices"]);
+    ).toEqual([
+      "hosts.snapshot",
+      "hosts.subscribe",
+      "hostAdd.subscribe",
+      "hosts.devices",
+      "hostAdd.facts",
+    ]);
     expect(new Set(DESKTOP_ENTRIES.map(({ key }) => key)).size).toBe(DESKTOP_ENTRIES.length);
   });
 

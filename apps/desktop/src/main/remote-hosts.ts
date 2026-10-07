@@ -245,5 +245,6 @@ export function remoteHostsPort(hosts: RemoteHosts): RemoteHostsPort {
       hosts.sudoPassword(flowId, questionId, password),
     retryAdd: (flowId, from) => hosts.retryAdd(flowId, from),
     cancelAdd: (flowId) => hosts.cancelAdd(flowId),
+    addFacts: (flowId) => hosts.addFacts(flowId),
   };
 }

@@ -33,6 +33,7 @@ import {
   DESKTOP_CATALOG_ENTRIES,
   type AddHostAnswer,
   type AddHostEvent,
+  type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
   type DesktopCatalogEntry,
@@ -63,6 +64,7 @@ import {
   addHostStartInputSchema,
   flowInputSchema,
   hostAddAnswerInputSchema,
+  addHostFactsSchema,
   hostAddRetryInputSchema,
   hostInputSchema,
   remoteHostDevicesSchema,
@@ -113,6 +115,7 @@ export interface DesktopRouterHandlers {
   /** Managing a host (VC-700 PR 3): this Mac's label, and the host's devices read over SSH. */
   readonly "hosts.rename": HostHandler<RenameRemoteHostInput, null>;
   readonly "hosts.devices": HostHandler<{ hostId: string }, RemoteHostDevices>;
+  readonly "hostAdd.facts": HostHandler<{ flowId: string }, AddHostFacts>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -310,6 +313,14 @@ export function createDesktopRouter() {
         .input(flowInputSchema)
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["hostAdd.cancel"](input, ctx.call)),
+      /**
+       * What the flow has found so far, read on each view: beside
+       * `subscribe`, whose closed event union cannot carry it.
+       */
+      facts: hostProcedure("hostAdd.facts")
+        .input(flowInputSchema)
+        .output(addHostFactsSchema)
+        .query(({ ctx, input }) => ctx.handlers["hostAdd.facts"](input, ctx.call)),
     },
   });
 }

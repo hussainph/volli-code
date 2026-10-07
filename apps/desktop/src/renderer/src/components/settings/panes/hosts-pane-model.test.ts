@@ -133,6 +133,7 @@ describe("the host's system and key", () => {
 
   it("shows a trusted host key short, the whole one to copy; none when it was already known", () => {
     expect(shortFingerprint("SHA256:q3Zt9fK1x0mVabcdefg")).toBe("q3Zt 9fK1 x0mV");
+    expect(shortFingerprint("SHA256:")).toBe("");
     const facts = hostFacts(
       registryHost({ hostKeys: ["SHA256:q3Zt9fK1x0mVabcdefg", "SHA256:other"] }),
     );

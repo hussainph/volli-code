@@ -243,17 +243,21 @@ describe("waking the engine", () => {
 });
 
 describe("the engine as the handler map's port", () => {
-  it("passes a rename and a device list straight to the engine", async () => {
+  it("passes a rename, a device list and an add's facts straight to the engine", async () => {
     const HOST = "0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f";
     const devices: RemoteHostDevices = { hostId: HOST, devices: [] };
+    const facts = { user: "deploy" };
     const engine = {
       rename: vi.fn(),
       devices: vi.fn(async () => devices),
+      addFacts: vi.fn(() => facts),
     };
     const port = remoteHostsPort(engine as unknown as RemoteHosts);
     expect(port.rename(HOST, "Build box")).toBeUndefined();
     expect(engine.rename).toHaveBeenCalledWith(HOST, "Build box");
     expect(await port.devices(HOST)).toBe(devices);
     expect(engine.devices).toHaveBeenCalledWith(HOST);
+    expect(port.addFacts("flow-1")).toBe(facts);
+    expect(engine.addFacts).toHaveBeenCalledWith("flow-1");
   });
 });

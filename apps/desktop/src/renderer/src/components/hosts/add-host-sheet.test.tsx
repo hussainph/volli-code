@@ -8,6 +8,7 @@ import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-
 import {
   createFakeRemoteHostsApi,
   flowView,
+  NO_FACTS,
   registryHost,
   type FakeRemoteHostsApi,
 } from "@renderer/stores/remote-hosts.test-support";
@@ -644,6 +645,33 @@ describe("Add a host: the visual review", () => {
       "ready",
     );
     expect(sheet().textContent).toContain("Ubuntu 24.04.1 LTS · x86-64 · Volli host 1.1.0");
+  });
+
+  it("reads the facts beside each view: the newest read wins, a refused one changes nothing", async () => {
+    await startFlow();
+    const found = { ...NO_FACTS, user: "deploy" };
+    // Main's views carry no facts: the sheet reads them (`hostAdd.facts`).
+    const reads: ((facts: typeof found) => void)[] = [];
+    api.addFacts = () => new Promise((resolve) => reads.push(resolve));
+    await emit({ kind: "view", view: flowView({ done: 1, at: "probe" }) });
+    await emit({ kind: "view", view: flowView({ done: 1, at: "probe" }) });
+    expect(reads).toHaveLength(2);
+    // The second read answers first; the first, older, is left behind.
+    await act(async () => reads[1]!(found));
+    await act(async () => reads[0]!({ ...found, user: "stale" }));
+    // (The noun it replaces lingers while it crosses out.)
+    expect(rows()[0]).toMatch(/^connect:done:.*Connected as deploy$/u);
+    expect(rows()[0]).not.toContain("stale");
+    // A finished flow let go: its read is refused, and what was found stays.
+    api.addFacts = () => Promise.reject(new Error("unknown-flow"));
+    await emit({ kind: "view", view: flowView({ done: 1, at: "probe" }) });
+    expect(rows()[0]).toMatch(/Connected as deploy$/u);
+    // A read answered after the sheet let the flow go is dropped.
+    api.addFacts = () => new Promise((resolve) => reads.push(resolve));
+    await emit({ kind: "view", view: flowView({ done: 1, at: "probe" }) });
+    await act(async () => useRemoteHostsStore.getState().closeAddHost());
+    await act(async () => reads.at(-1)!({ ...found, user: "late" }));
+    expect(api.calls.at(-1)).toEqual(["cancelAdd", "flow-1"]);
   });
 
   it("waits to Run it until the sudo field has text", async () => {

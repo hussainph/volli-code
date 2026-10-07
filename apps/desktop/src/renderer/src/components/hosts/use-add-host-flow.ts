@@ -3,16 +3,25 @@
  * flow in desktop main followed over `hostAdd.subscribe`.
  *
  * Main owns the flow — its steps, its questions, its log — and streams it;
- * this only holds the latest view and the log lines, and turns the person's
+ * this only holds the latest view, what the flow has found (read with
+ * `hostAdd.facts` on each view) and the log lines, and turns the person's
  * clicks into the tier's calls. A sudo password goes from the field to
  * `hostAdd.sudoPassword` and is never kept here. Leaving a flow that has not
  * finished (Back, Close) cancels it in main, which discards whatever step was
  * in flight.
  */
 import * as React from "react";
-import type { AddHostAnswer, AddHostLogLine, AddHostStepId, AddHostView } from "@volli/shared";
+import type {
+  AddHostAnswer,
+  AddHostFacts,
+  AddHostLogLine,
+  AddHostStepId,
+  AddHostView,
+} from "@volli/shared";
 
 import type { RemoteHostsApi } from "@renderer/stores/remote-hosts";
+
+import { NO_FACTS } from "./add-host-model";
 
 /** How many log lines Details keeps (main keeps the same, `ADD_HOST_LOG_LIMIT`). */
 export const ADD_HOST_LOG_LINES = 500;
@@ -37,6 +46,8 @@ export type AddHostPhase =
       readonly target: string;
       /** `null` until main's first view arrives. */
       readonly view: AddHostView | null;
+      /** What the flow has found, as main last answered: {@link NO_FACTS} until then. */
+      readonly facts: AddHostFacts;
       readonly log: readonly NumberedLogLine[];
       /** Earlier lines main left out of its replay, or this dropped past {@link ADD_HOST_LOG_LINES}. */
       readonly omitted: number;
@@ -87,8 +98,26 @@ export function useAddHostFlow(
 
   React.useEffect(() => {
     if (flowId === null) return;
-    return api.subscribeAdd(flowId, {
+    // The newest read of the flow's facts wins; one left behind, or refused
+    // (a finished flow let go), changes nothing.
+    let asked = 0;
+    let following = true;
+    const readFacts = () => {
+      const ask = ++asked;
+      api.addFacts(flowId).then(
+        (facts) => {
+          if (!following || ask !== asked) return;
+          setPhase((before) =>
+            before.kind === "flow" && before.flowId === flowId ? { ...before, facts } : before,
+          );
+        },
+        () => {},
+      );
+    };
+    const unsubscribe = api.subscribeAdd(flowId, {
       onEvent(event) {
+        // A view (or a replay) may follow a step that found something.
+        if (event.kind !== "log") readFacts();
         setPhase((before) => {
           if (before.kind !== "flow" || before.flowId !== flowId) return before;
           if (event.kind === "view") return { ...before, view: event.view, lost: false };
@@ -118,6 +147,10 @@ export function useAddHostFlow(
         );
       },
     });
+    return () => {
+      following = false;
+      unsubscribe();
+    };
   }, [api, flowId]);
 
   /** Runs one call on the flow; its buttons wait for it, and a refusal is said. */
@@ -185,6 +218,7 @@ export function useAddHostFlow(
             flowId: id,
             target,
             view: null,
+            facts: NO_FACTS,
             log: [],
             omitted: 0,
             lost: false,

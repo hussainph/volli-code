@@ -43,6 +43,7 @@ const bridge = vi.hoisted(() => {
         sudoPassword: { mutate: record("hostAdd.sudoPassword") },
         retry: { mutate: record("hostAdd.retry") },
         cancel: { mutate: record("hostAdd.cancel") },
+        facts: { query: record("hostAdd.facts", { user: "deploy" }) },
       },
     },
   };
@@ -56,7 +57,14 @@ import {
   remoteHosts,
   setRemoteHostsApi,
 } from "./remote-hosts";
-import { createFakeRemoteHostsApi, registryHost } from "./remote-hosts.test-support";
+import {
+  createFakeRemoteHostsApi,
+  flowView,
+  NO_FACTS,
+  registryHost,
+} from "./remote-hosts.test-support";
+
+const LINE = { at: "t", level: "info", message: "m", fields: {} } as const;
 
 afterEach(() => {
   setRemoteHostsApi(null);
@@ -76,6 +84,7 @@ describe("the remote hosts API over the tier", () => {
     await api.rename("h", "Build box");
     await api.forget("h");
     expect(await api.devices("h")).toEqual({ hostId: "h", devices: [] });
+    expect(await api.addFacts("flow-1")).toEqual({ user: "deploy" });
     expect(bridge.calls).toEqual([
       ["hostAdd.start", { target: "deploy@box" }],
       [
@@ -89,6 +98,7 @@ describe("the remote hosts API over the tier", () => {
       ["hosts.rename", { hostId: "h", name: "Build box" }],
       ["hosts.forget", { hostId: "h" }],
       ["hosts.devices", { hostId: "h" }],
+      ["hostAdd.facts", { flowId: "flow-1" }],
     ]);
   });
 
@@ -155,7 +165,21 @@ describe("the scripted fake", () => {
   it("tolerates events and ends for a flow nobody follows", () => {
     const fake = createFakeRemoteHostsApi();
     expect(fake.following("flow-9")).toBe(false);
-    expect(() => fake.emit("flow-9", { kind: "view", view: null as never })).not.toThrow();
+    expect(() => fake.emit("flow-9", { kind: "view", view: flowView() })).not.toThrow();
     expect(() => fake.fail("flow-9")).not.toThrow();
+  });
+
+  it("answers a flow's facts: as set, else the last view's that carried some, else none", async () => {
+    const fake = createFakeRemoteHostsApi();
+    expect(await fake.addFacts("flow-1")).toBe(NO_FACTS);
+    const facts = { ...NO_FACTS, user: "deploy" };
+    fake.emit("flow-1", { kind: "replay", view: flowView({ facts }), log: [], omitted: 0 });
+    // A view as main sends it, without facts, leaves the last ones.
+    const { facts: _none, ...bare } = flowView();
+    fake.emit("flow-1", { kind: "view", view: bare });
+    fake.emit("flow-1", { kind: "log", flowId: "flow-1", line: LINE });
+    expect(await fake.addFacts("flow-1")).toBe(facts);
+    fake.factsOf.set("flow-1", new Error("let go"));
+    await expect(fake.addFacts("flow-1")).rejects.toThrow("let go");
   });
 });
