@@ -33,6 +33,7 @@ import { HealthPanel } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { useRemoteProjectHost } from "@renderer/components/hosts/use-hosts";
 import { toastError } from "@renderer/lib/toast";
 import { cliStatusRows, type CliStatusRow } from "@renderer/components/pages/cli-status-model";
 
@@ -57,7 +58,12 @@ interface AboutReportSnapshot {
 export function AboutPane() {
   const harnesses = useHarnessListingsState();
   const { listings } = harnesses;
-  const projectCwd = useSelectedProject()?.path;
+  const selected = useSelectedProject();
+  // This Mac's tools, measured from the selected project's folder when it is
+  // one of This Mac's; a remote project's folder is on its host (VC-711), so
+  // About measures from main's own cwd for it.
+  const remoteHost = useRemoteProjectHost(selected?.id ?? null);
+  const projectCwd = remoteHost === null ? selected?.path : undefined;
   const statusScope = projectCwd ?? null;
   const [rows, setRows] = React.useState<readonly CliStatusRow[]>([]);
   const [checks, setChecks] = React.useState<readonly DoctorCheck[]>([]);

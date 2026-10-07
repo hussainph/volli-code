@@ -74,6 +74,7 @@ import {
 import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { writeThrough } from "@renderer/stores/mutate";
+import { notAvailableOn, remoteHostNow } from "./remote-project";
 
 /** Which scope a commit writes to (#69). */
 export type ThemeScope = { kind: "global" } | { kind: "project"; projectId: string };
@@ -170,12 +171,23 @@ export interface ThemeStoreDeps {
 
 const defaultDeps: ThemeStoreDeps = {
   gateway: {
-    state: (input) => window.api.theme.state(input),
+    // A remote project's own canvas is its host's (VC-711): this Mac reads
+    // and writes the global scope's, never a project row it does not hold.
+    state: (input) => window.api.theme.state(remoteHostNow(input.projectId) === null ? input : {}),
     setGlobalCanvas: (canvas) => window.api.theme.setGlobalCanvas(canvas),
     setGlobalAppearance: (appearance) => window.api.theme.setGlobalAppearance(appearance),
-    setProjectCanvas: (projectId, canvas) => window.api.theme.setProjectCanvas(projectId, canvas),
-    setProjectAppearance: (projectId, appearance) =>
-      window.api.theme.setProjectAppearance(projectId, appearance),
+    setProjectCanvas: (projectId, canvas) => {
+      const host = remoteHostNow(projectId);
+      return host === null
+        ? window.api.theme.setProjectCanvas(projectId, canvas)
+        : Promise.resolve({ ok: false, error: notAvailableOn(host) });
+    },
+    setProjectAppearance: (projectId, appearance) => {
+      const host = remoteHostNow(projectId);
+      return host === null
+        ? window.api.theme.setProjectAppearance(projectId, appearance)
+        : Promise.resolve({ ok: false, error: notAvailableOn(host) });
+    },
     setFirstPaint: (hint) => window.api.theme.setFirstPaint(hint),
   },
   // Point-free on purpose. An arrow re-listing the parameters is how the

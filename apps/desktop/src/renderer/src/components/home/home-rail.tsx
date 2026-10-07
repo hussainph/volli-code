@@ -115,6 +115,7 @@ import {
 import { useSessionsStore } from "@renderer/stores/sessions";
 import { RAIL_NARROW_MAX_WIDTH, useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 /**
  * Every rail block is the same shape at the same inset — one seam, spelled
@@ -197,29 +198,38 @@ export function HomeRail({
                 turned off or nothing was metered. Now's alone: the other pages
                 are navigators, and a spend figure under a folder listing is a
                 fact about neither the folder nor the file. */}
-            <HomeUsageRailFooter projectId={project.id} sessionId={parseHomeChatTab(activeTabId)} />
+            <LocalOnly projectId={project.id} fallback={null}>
+              <HomeUsageRailFooter
+                projectId={project.id}
+                sessionId={parseHomeChatTab(activeTabId)}
+              />
+            </LocalOnly>
           </>
         ) : null}
         {mode === "files" ? (
-          <HomeFilesPanel
-            project={project}
-            onPreviewFile={(relPath) =>
-              useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
-            }
-            onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
-          />
+          <LocalOnly projectId={project.id}>
+            <HomeFilesPanel
+              project={project}
+              onPreviewFile={(relPath) =>
+                useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+              }
+              onPinFile={(relPath) => useWorkspaceStore.getState().pinHomeFile(project.id, relPath)}
+            />
+          </LocalOnly>
         ) : null}
         {mode === "search" ? (
           // A match opens in the same replaceable preview slot a navigator row
           // does (decision #56) — the line it lands on is the search panel's
           // own business, through `editor/reveal-line.ts`.
-          <FileSearchPanel
-            scope={{ kind: "home", projectId: project.id }}
-            root={project.name}
-            onOpenMatch={(relPath) =>
-              useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
-            }
-          />
+          <LocalOnly projectId={project.id}>
+            <FileSearchPanel
+              scope={{ kind: "home", projectId: project.id }}
+              root={project.name}
+              onOpenMatch={(relPath) =>
+                useWorkspaceStore.getState().previewHomeFile(project.id, relPath)
+              }
+            />
+          </LocalOnly>
         ) : null}
       </section>
       {/* The Main checkout, under EVERY page (VC-406): the branch, and the one
@@ -227,7 +237,9 @@ export function HomeRail({
           folded above it. Outside the tabpanel because it is not a page's
           content — it is true of the project whichever page is up, and Files
           and Search are the pages where "which tree is this" is asked most. */}
-      <HomeCheckoutFooter projectId={project.id} />
+      <LocalOnly projectId={project.id} fallback={null}>
+        <HomeCheckoutFooter projectId={project.id} />
+      </LocalOnly>
     </div>
   );
 }

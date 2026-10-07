@@ -588,6 +588,9 @@ export default defineConfig(({ mode }) => ({
         // when a relayed stream resumes, waits for a slot, or ends is a rule
         // no screenshot shows until a board silently stops following.
         "src/lib/relay-host-link.ts",
+        // Which remote boards a window opens, when it says a host offers none,
+        // and when it asks again (VC-711): a loop or a silence no screenshot shows.
+        "src/lib/follow-remote-projects.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",

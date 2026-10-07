@@ -28,6 +28,12 @@ import {
   useProjectsStore,
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
+import { isRemoteProject, useHostConnectionStore } from "@renderer/stores/host-connection";
+import { useRemoteBoardAvailabilityStore } from "@renderer/stores/remote-board-availability";
+import { followRemoteClaims, type FollowedHostStore } from "@renderer/lib/follow-remote-projects";
+import { relayHostLink } from "@renderer/lib/relay-host-link";
+import { relaySessionListing } from "@renderer/lib/remote-session-listing";
+import { setRemoteSessionListing } from "@renderer/lib/session-listing-reader";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useThemeStore } from "@renderer/stores/theme";
@@ -203,13 +209,40 @@ async function refreshWorkspaceList(
     ? previousSelection
     : (projects[0]?.id ?? null);
   const known = new Set(projects.map(({ id }) => id));
+  const hosts = useHostConnectionStore.getState();
   for (const projectId of Object.keys(useBoardStore.getState().ticketsByProject)) {
-    if (!known.has(projectId)) useBoardStore.getState().forget(projectId);
+    // A remote project is never in this Mac's bootstrap (VC-711): its board
+    // stays, and leaves with its claim (`followRemoteProjects`).
+    if (!known.has(projectId) && !isRemoteProject(hosts, projectId)) {
+      useBoardStore.getState().forget(projectId);
+    }
   }
   useProjectsStore.getState().hydrate(projects, selectedProjectId);
   for (const { id } of projects) useBoardStore.getState().seedProject(id);
   useBoardStore.getState().notePlanningChange(change);
   return { ok: true };
+}
+
+/**
+ * Follows every remote project the host-connection store claims
+ * (`./follow-remote-projects`), dropping a project's board and row when its
+ * claim goes.
+ */
+export function followRemoteProjects(
+  sync: { open(projectId: string): Promise<void>; close(projectId: string): void },
+  store: FollowedHostStore = useHostConnectionStore,
+  alive: () => boolean = () => true,
+): () => void {
+  return followRemoteClaims({
+    sync,
+    store,
+    alive,
+    availability: useRemoteBoardAvailabilityStore.getState(),
+    drop: (projectId) => {
+      useBoardStore.getState().forget(projectId);
+      useProjectsStore.getState().dropRemoteProject(projectId);
+    },
+  });
 }
 
 /** Whether the host has the `cloud` flag on: the Session router's experiments read. */
@@ -251,6 +284,18 @@ export async function startBoardProtocolIfEnabled(
       unconfirmed: (message) => toast.warning(message),
     },
   });
+  // A remote project's Session listing (VC-713) over its Workspace link, for
+  // the window's life: its rail, Home and ticket panel never ask `window.api`.
+  setRemoteSessionListing(
+    relaySessionListing({
+      isRemote: (projectId) => isRemoteProject(useHostConnectionStore.getState(), projectId),
+      projectOfTicket: (ticketId) => sync.workspaceOf(ticketId),
+      link: (projectId) => relayHostLink(projectId),
+    }),
+  );
+  // Remote projects (VC-711): each one's board over its Workspace link, for
+  // the window's life.
+  followRemoteProjects(sync, useHostConnectionStore, () => boardProtocol()?.sync === sync);
   await Promise.all(
     useProjectsStore.getState().projects.map(({ id }) =>
       sync.open(id).catch((error: unknown) => {

@@ -74,6 +74,13 @@ export function useProjectHostView(projectId: string | null): HostRecord {
   return React.useMemo(() => (host.link === link ? host : { ...host, link }), [host, link]);
 }
 
+export {
+  notAvailableOn,
+  refuseRemote,
+  remoteHostNow,
+  useRemoteProjectHost,
+} from "@renderer/stores/remote-project";
+
 /** The project in front of the person. */
 export function useCurrentProjectId(): string | null {
   return useProjectsStore((state) => state.selectedProjectId);
