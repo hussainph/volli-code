@@ -53,12 +53,27 @@ export interface HostFact {
   readonly value: string;
   /** The row's `(i)`. */
   readonly hint?: string;
+  /** The whole value, to copy, when `value` shows a short form of it (a host key). */
+  readonly full?: string;
+}
+
+/** A host key fingerprint's short form, as the lab shows it: "q3Zt 9fK1 x0mV". */
+export function shortFingerprint(fingerprint: string): string {
+  const body = fingerprint.replace(/^SHA256:/u, "");
+  return (body.slice(0, 12).match(/.{1,4}/gu) ?? []).join(" ");
+}
+
+/** "Ubuntu 24.04.1 LTS · x86-64", from what its check found; its OS where it found nothing. */
+export function systemLine(host: RemoteHost): string {
+  const os = host.system ?? (host.os === null ? null : OS_NAMES[host.os]);
+  const parts = [os, host.arch].filter((part): part is string => part !== null);
+  return parts.length === 0 ? "Unknown" : parts.join(" · ");
 }
 
 /** A remote host's page rows under "Host", in order (the name row is its own). */
 export function hostFacts(host: RemoteHost): HostFact[] {
   const facts: HostFact[] = [
-    { label: "System", value: host.os === null ? "Unknown" : OS_NAMES[host.os] },
+    { label: "System", value: systemLine(host) },
     { label: "Version", value: host.version === null ? "Unknown" : `Volli host ${host.version}` },
     {
       label: "Connection",
@@ -84,6 +99,16 @@ export function hostFacts(host: RemoteHost): HostFact[] {
         }
       : { label: "Starts", value: "When it boots" },
   ];
+  const [key] = host.hostKeys;
+  if (key !== undefined) {
+    // Only a key the person compared while adding it: an already-known key stays in their ssh.
+    facts.push({
+      label: "Host key",
+      value: shortFingerprint(key),
+      hint: "The key you compared and trusted when you added it.",
+      full: host.hostKeys.join("\n"),
+    });
+  }
   return facts;
 }
 

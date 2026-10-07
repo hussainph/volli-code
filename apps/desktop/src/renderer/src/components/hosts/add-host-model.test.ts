@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { AddHostView, RemoteHost } from "@volli/shared";
+import type { AddHostStepStatus, AddHostView, RemoteHost } from "@volli/shared";
 
 import {
   agentsShareAccountLine,
@@ -7,9 +7,11 @@ import {
   questionPrompt,
   readyFacts,
   readySummary,
+  memoryText,
   stepRows,
   validTarget,
 } from "./add-host-model";
+import { NO_FACTS } from "@renderer/stores/remote-hosts.test-support";
 
 const STEPS = ["connect", "probe", "deliver", "install", "start", "enroll", "link"] as const;
 
@@ -24,6 +26,7 @@ function view(patch: Partial<AddHostView> = {}): AddHostView {
     failure: null,
     hostId: null,
     startup: null,
+    facts: NO_FACTS,
     ...patch,
   };
 }
@@ -43,51 +46,146 @@ function host(patch: Partial<RemoteHost> = {}): RemoteHost {
     deviceId: "1f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f",
     addedAt: "2026-10-07T00:00:00.000Z",
     liveSessions: null,
+    system: null,
+    arch: null,
+    hostKeys: [],
     ...patch,
   };
 }
 
+const FOUND = {
+  user: "deploy",
+  os: "linux" as const,
+  system: "Ubuntu 24.04.1 LTS",
+  arch: "x86-64",
+  memoryBytes: 8 * 1024 ** 3,
+  version: "1.1.0",
+  keepsRunning: true,
+  alreadyPaired: false,
+};
+
+const all = (status: AddHostStepStatus) => STEPS.map((id) => ({ id, status }));
+
 describe("the checklist's rows", () => {
-  it("says a noun while waiting, a verb while running, and marks each status", () => {
+  it("is five rows: uploading under Install, opening the connection under Pair", () => {
+    const rows = stepRows(view());
+    expect(rows.map((row) => [row.id, row.mark, row.label])).toEqual([
+      ["connect", "pending", "Connect"],
+      ["check", "pending", "Check the system"],
+      ["install", "pending", "Install"],
+      ["start", "pending", "Start"],
+      ["pair", "pending", "Pair"],
+    ]);
+  });
+
+  it("says a verb while a row runs, halfway through its steps included", () => {
     const rows = stepRows(
       view({
+        name: "hetzner-1",
         steps: [
-          { id: "connect", status: "done" },
-          { id: "probe", status: "skipped" },
-          { id: "deliver", status: "running" },
+          { id: "connect", status: "running" },
+          { id: "probe", status: "pending" },
+          { id: "deliver", status: "done" },
           { id: "install", status: "pending" },
-          { id: "start", status: "failed" },
-          { id: "enroll", status: "pending" },
+          { id: "start", status: "running" },
+          { id: "enroll", status: "running" },
           { id: "link", status: "pending" },
         ],
       }),
     );
-    expect(rows.map((row) => [row.id, row.mark, row.label, row.detail])).toEqual([
-      ["connect", "done", "Connect", null],
-      ["probe", "done", "Check the system", "Already in place"],
-      ["deliver", "active", "Uploading Volli host…", null],
-      ["install", "pending", "Install", null],
-      ["start", "failed", "Start", null],
-      ["enroll", "pending", "Pair this Mac", null],
-      ["link", "pending", "Open the connection", null],
+    expect(rows.map((row) => [row.mark, row.label])).toEqual([
+      ["active", "Connecting to hetzner-1…"],
+      ["pending", "Check the system"],
+      ["active", "Installing Volli host…"],
+      ["active", "Starting…"],
+      ["active", "Pairing…"],
     ]);
+    // Halfway, but stopped (a failure elsewhere): it waits.
+    expect(
+      stepRows(view({ status: "failed", steps: [{ id: "deliver", status: "done" }] }))[2],
+    ).toMatchObject({ mark: "pending", label: "Install" });
   });
 
-  it("marks the step a question waits on for attention, not as running", () => {
+  it("says what each done row found, the lab's words", () => {
+    expect(
+      stepRows(view({ status: "done", steps: all("done"), facts: FOUND })).map((row) => row.label),
+    ).toEqual([
+      "Connected as deploy",
+      "Ubuntu 24.04.1 LTS · x86-64 · 8 GB",
+      "Volli host 1.1.0",
+      "Keeps running when you log out",
+      "Paired with this Mac",
+    ]);
+    // A user unit that does not linger, a Mac's login start, and what a skipped row found.
+    const rows = stepRows(
+      view({
+        steps: STEPS.map((id) => ({ id, status: id === "start" ? "skipped" : "done" })),
+        facts: { ...FOUND, keepsRunning: false, memoryBytes: 512 * 1024 ** 2, alreadyPaired: true },
+      }),
+    );
+    expect(rows.map((row) => [row.label, row.detail])).toEqual([
+      ["Connected as deploy", null],
+      ["Ubuntu 24.04.1 LTS · x86-64 · 512 MB", null],
+      ["Volli host 1.1.0", null],
+      ["Stops when you log out", "Already in place"],
+      ["Already paired with this Mac", null],
+    ]);
+    expect(
+      stepRows(
+        view({
+          steps: all("done"),
+          startup: "Starts when you log in to studio",
+          facts: { ...FOUND, os: "macos", keepsRunning: null },
+        }),
+      )[3]?.label,
+    ).toBe("Starts when you log in to studio");
+  });
+
+  it("keeps the noun where nothing was found, and never makes a fact up", () => {
+    expect(stepRows(view({ steps: all("done") })).map((row) => row.label)).toEqual([
+      "Connect",
+      "Check the system",
+      "Install",
+      "Start",
+      "Paired with this Mac",
+    ]);
+    expect(memoryText(1)).toBe("1 MB");
+  });
+
+  it("marks the row a question waits on for attention, and a failed row failed", () => {
+    const asked = stepRows(
+      view({ status: "question", steps: [{ id: "connect", status: "running" }] }),
+    );
+    expect(asked[0]).toMatchObject({ mark: "attention", label: "Connect" });
+    const failed = stepRows(view({ status: "failed", steps: [{ id: "link", status: "failed" }] }));
+    expect(failed[4]).toMatchObject({ mark: "failed", label: "Pair" });
+  });
+
+  it("ticks Check and Pair when this Mac is already paired, with no attention on the check", () => {
     const rows = stepRows(
       view({
         status: "question",
-        steps: STEPS.map((id) => ({ id, status: id === "connect" ? "running" : "pending" })),
+        steps: [
+          { id: "connect", status: "done" },
+          { id: "probe", status: "running" },
+        ],
+        question: { id: "q1", kind: "already-paired", step: "probe", hostId: "h" },
       }),
     );
-    expect(rows[0]).toMatchObject({ mark: "attention", label: "Connect" });
+    expect(rows.map((row) => [row.mark, row.label])).toEqual([
+      ["done", "Connect"],
+      ["done", "Check the system"],
+      ["pending", "Install"],
+      ["pending", "Start"],
+      ["done", "Already paired with this Mac"],
+    ]);
   });
 
-  it("badges the tile for a failure or a question only", () => {
+  it("badges the tile: a failure, a question, and a check once it is ready", () => {
     expect(flowBadge(view({ status: "failed" }))).toBe("fail");
     expect(flowBadge(view({ status: "question" }))).toBe("attention");
     expect(flowBadge(view())).toBeNull();
-    expect(flowBadge(view({ status: "done" }))).toBeNull();
+    expect(flowBadge(view({ status: "done" }))).toBe("ready");
   });
 });
 
@@ -242,11 +340,15 @@ describe("questions", () => {
 });
 
 describe("ready", () => {
-  it("sums the host up from the registry", () => {
-    expect(readySummary(host())).toBe("Linux · Volli host 1.1.0");
-    expect(readySummary(host({ os: "macos", version: null }))).toBe("macOS");
-    expect(readySummary(host({ os: null, version: null }))).toBe("Ready");
-    expect(readySummary(undefined)).toBe("Ready");
+  it("sums the host up from what the add found, the registry's OS where it found nothing", () => {
+    expect(readySummary(view({ facts: FOUND }), host())).toBe(
+      "Ubuntu 24.04.1 LTS · x86-64 · Volli host 1.1.0",
+    );
+    expect(readySummary(view(), host())).toBe("Linux · Volli host 1.1.0");
+    expect(readySummary(view(), host({ os: "macos", version: null }))).toBe("macOS");
+    expect(readySummary(view({ facts: { ...NO_FACTS, os: "macos" } }), undefined)).toBe("macOS");
+    expect(readySummary(view(), host({ os: null, version: null }))).toBe("Ready");
+    expect(readySummary(view(), undefined)).toBe("Ready");
   });
 
   it("states when it starts and whose account its agents share", () => {

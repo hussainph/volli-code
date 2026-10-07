@@ -17,6 +17,8 @@
 import * as React from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
+import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
 import { DevicesIcon } from "@phosphor-icons/react/dist/csr/Devices";
 import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
@@ -426,7 +428,11 @@ function HostPage({
         <NameRow host={remote} startEditing={startRename} readOnly={readOnly !== null} />
         {hostFacts(remote).map((fact) => (
           <PrefRow key={fact.label} label={fact.label} hint={fact.hint}>
-            <span className="truncate text-ui text-muted-foreground">{fact.value}</span>
+            {fact.full === undefined ? (
+              <span className="truncate text-ui text-muted-foreground">{fact.value}</span>
+            ) : (
+              <FullValue short={fact.value} full={fact.full} label={fact.label} />
+            )}
           </PrefRow>
         ))}
       </PrefSection>
@@ -591,6 +597,34 @@ function DevicesSection({ host }: { host: RemoteHost }) {
         ))
       }
     </AsyncSection>
+  );
+}
+
+/** A short form shown, the whole value one click away: selectable on hover, copied on Copy. */
+function FullValue({ short, full, label }: { short: string; full: string; label: string }) {
+  const [copied, setCopied] = React.useState(false);
+  React.useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 1400);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <span title={full} className="truncate font-mono text-ui text-muted-foreground select-all">
+        {short}
+      </span>
+      <Button
+        size="icon-xs"
+        variant="ghost"
+        aria-label={copied ? "Copied" : `Copy ${label.toLowerCase()}`}
+        onClick={() => {
+          void navigator.clipboard?.writeText(full).catch(() => {});
+          setCopied(true);
+        }}
+      >
+        {copied ? <CheckIcon weight="bold" className="text-positive" /> : <CopyIcon />}
+      </Button>
+    </span>
   );
 }
 

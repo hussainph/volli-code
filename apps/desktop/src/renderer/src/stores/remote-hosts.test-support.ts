@@ -5,6 +5,7 @@
  */
 import type {
   AddHostEvent,
+  AddHostFacts,
   AddHostStepId,
   AddHostView,
   RemoteHost,
@@ -119,6 +120,18 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
   return api;
 }
 
+/** An add that has found nothing yet. */
+export const NO_FACTS: AddHostFacts = {
+  user: null,
+  os: null,
+  system: null,
+  arch: null,
+  memoryBytes: null,
+  version: null,
+  keepsRunning: null,
+  alreadyPaired: false,
+};
+
 const STEP_IDS = ["connect", "probe", "deliver", "install", "start", "enroll", "link"] as const;
 
 /** An add flow's view, every step pending unless `done` / `at` say otherwise. */
@@ -139,6 +152,7 @@ export function flowView(
     failure: null,
     hostId: null,
     startup: null,
+    facts: NO_FACTS,
     ...rest,
   };
 }
@@ -159,6 +173,9 @@ export function registryHost(patch: Partial<RemoteHost> = {}): RemoteHost {
     deviceId: "1f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f",
     addedAt: "2026-10-07T00:00:00.000Z",
     liveSessions: null,
+    system: null,
+    arch: null,
+    hostKeys: [],
     ...patch,
   };
 }

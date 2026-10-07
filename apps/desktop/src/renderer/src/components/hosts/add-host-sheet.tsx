@@ -71,7 +71,13 @@ export function AddHostSheet() {
         aria-describedby={undefined}
         // Anchored from the top, not centred: the sheet changes height as
         // the flow moves, and a centred sheet would move its title each time.
-        className="top-[14vh] max-w-[30rem] translate-y-0 gap-0 overflow-hidden p-0 sm:max-w-[30rem]"
+        // Capped to the window: its middle scrolls, its footer always shows.
+        // Arrives as the lab's does (260 ms, from .96 and 8 px low), leaves faster.
+        className={cn(
+          "top-[14vh] flex max-h-[80vh] max-w-[30rem] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[30rem]",
+          "data-[state=open]:duration-[260ms] data-[state=open]:zoom-in-96 data-[state=open]:slide-in-from-bottom-2",
+          "data-[state=closed]:duration-150 data-[state=closed]:zoom-out-98 data-[state=closed]:slide-out-to-bottom-1",
+        )}
       >
         <MotionConfig reducedMotion="user">
           {open ? <AddHostBody key={opening} initialTarget={target} leaveRef={leave} /> : null}
@@ -91,18 +97,50 @@ function AddHostBody({
   const flow = useAddHostFlow(remoteHosts(), initialTarget, toastError);
   leaveRef.current = flow.leave;
   const { phase } = flow;
-  return phase.kind === "entry" ? (
-    <EntryScreen flow={flow} target={phase.target} error={phase.error} starting={phase.starting} />
-  ) : (
-    <FlowScreen
-      flow={flow}
-      target={phase.target}
-      view={phase.view}
-      log={phase.log}
-      omitted={phase.omitted}
-      lost={phase.lost}
-      busy={phase.busy}
-    />
+  return (
+    // The address and the checklist cross over: one lets go, the other settles.
+    <AnimatePresence initial={false} mode="popLayout">
+      <Screen key={phase.kind}>
+        {phase.kind === "entry" ? (
+          <EntryScreen
+            flow={flow}
+            target={phase.target}
+            error={phase.error}
+            starting={phase.starting}
+          />
+        ) : (
+          <FlowScreen
+            flow={flow}
+            target={phase.target}
+            view={phase.view}
+            log={phase.log}
+            omitted={phase.omitted}
+            lost={phase.lost}
+            busy={phase.busy}
+          />
+        )}
+      </Screen>
+    </AnimatePresence>
+  );
+}
+
+/**
+ * Screen to screen inside the sheet, the lab's: the old lets go at once, the
+ * new settles in from a little below. A motion element, so `popLayout` takes
+ * the old one out of flow while it fades.
+ */
+function Screen({ children, ref }: { children: React.ReactNode; ref?: React.Ref<HTMLDivElement> }) {
+  return (
+    <motion.div
+      ref={ref}
+      className="flex min-h-0 flex-1 flex-col"
+      initial={{ opacity: 0, y: 6, filter: "blur(2px)" }}
+      animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+      exit={{ opacity: 0, transition: { duration: 0.1 } }}
+      transition={{ duration: 0.24, ease: EASE_OUT, delay: 0.04 }}
+    >
+      {children}
+    </motion.div>
   );
 }
 
@@ -189,19 +227,28 @@ function FlowScreen({
 }) {
   const hosts = useRemoteHostsStore((state) => state.hosts);
   const [details, setDetails] = React.useState(false);
+  // Whether the sudo field has text: "Run it" waits for some. Never the text itself.
+  const [hasPassword, setHasPassword] = React.useState(false);
+  const questionId = view?.question?.id ?? null;
+  React.useEffect(() => setHasPassword(false), [questionId]);
   const name = view?.name ?? target;
   const done = view?.status === "done";
   const host = remoteHostOf(hosts, view?.hostId ?? null);
   return (
-    <div>
-      <div className="flex items-center gap-4 px-6 pt-6 pb-4">
-        <HostGlyph os={host?.os ?? null} size="md" badge={view === null ? null : flowBadge(view)} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-4 px-6 pt-6 pb-4">
+        <HostGlyph
+          // The OS as soon as the check finds it, not only once the host is kept.
+          os={host?.os ?? view?.facts.os ?? null}
+          size="md"
+          badge={view === null ? null : flowBadge(view)}
+        />
         <div className="min-w-0">
           <DialogTitle className="truncate">
             <SwapText>{done ? `${name} is ready` : name}</SwapText>
           </DialogTitle>
           <DialogDescription className={cn("truncate text-ui", !done && "font-mono")}>
-            {done ? readySummary(host) : target}
+            {done && view !== null ? readySummary(view, host) : target}
           </DialogDescription>
         </div>
       </div>
@@ -209,42 +256,51 @@ function FlowScreen({
         <ReadyBody view={view} host={host} />
       ) : (
         <>
-          <ol aria-label="Steps" className="flex flex-col px-6 pb-4">
-            {view === null
-              ? null
-              : stepRows(view).map((row) => (
-                  <li key={row.id} className="flex h-8 items-center gap-2" data-step={row.id}>
-                    <StepMark status={row.mark} />
-                    <SwapText
-                      className={cn(
-                        "min-w-0 flex-1 text-ui transition-colors duration-200",
-                        row.mark === "pending" ? "text-muted-foreground" : "text-foreground",
+          <div className="min-h-0 flex-1 overflow-y-auto" data-slot="add-host-body">
+            <ol aria-label="Steps" className="flex flex-col px-6 pb-4">
+              {view === null
+                ? null
+                : stepRows(view).map((row) => (
+                    <li key={row.id} className="flex h-8 items-center gap-2" data-step={row.id}>
+                      <StepMark status={row.mark} />
+                      <SwapText
+                        className={cn(
+                          "min-w-0 flex-1 text-ui transition-colors duration-200",
+                          row.mark === "pending" ? "text-muted-foreground" : "text-foreground",
+                        )}
+                      >
+                        {row.label}
+                      </SwapText>
+                      {row.detail === null ? null : (
+                        <span className="shrink-0 text-ui text-muted-foreground">{row.detail}</span>
                       )}
-                    >
-                      {row.label}
-                    </SwapText>
-                    {row.detail === null ? null : (
-                      <span className="shrink-0 text-ui text-muted-foreground">{row.detail}</span>
-                    )}
-                  </li>
-                ))}
-          </ol>
-          <Stopped flow={flow} view={view} name={name} lost={lost} busy={busy} />
-          <AnimatePresence initial={false}>
-            {details ? (
-              <motion.div
-                key="log"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.16 }}
-                className="px-6 pb-4"
-              >
-                <LogView lines={log} omitted={omitted} detail={view?.failure?.detail ?? null} />
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
-          <div className="flex items-center gap-2 border-t border-border/60 px-4 py-4">
+                    </li>
+                  ))}
+            </ol>
+            <Stopped
+              flow={flow}
+              view={view}
+              name={name}
+              lost={lost}
+              busy={busy}
+              onPasswordText={setHasPassword}
+            />
+            <AnimatePresence initial={false}>
+              {details ? (
+                <motion.div
+                  key="log"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.16 }}
+                  className="px-6 pb-4"
+                >
+                  <LogView lines={log} omitted={omitted} detail={view?.failure?.detail ?? null} />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+          <div className="flex shrink-0 items-center gap-2 border-t border-border/60 px-4 py-4">
             <Button
               size="sm"
               variant="ghost"
@@ -261,7 +317,14 @@ function FlowScreen({
               />
             </Button>
             <span className="flex-1" />
-            <Actions flow={flow} view={view} name={name} lost={lost} busy={busy} />
+            <Actions
+              flow={flow}
+              view={view}
+              name={name}
+              lost={lost}
+              busy={busy}
+              hasPassword={hasPassword}
+            />
           </div>
         </>
       )}
@@ -276,12 +339,14 @@ function Stopped({
   name,
   lost,
   busy,
+  onPasswordText,
 }: {
   flow: AddHostFlow;
   view: AddHostView | null;
   name: string;
   lost: boolean;
   busy: boolean;
+  onPasswordText: (has: boolean) => void;
 }) {
   let body: React.ReactNode = null;
   if (lost) {
@@ -289,7 +354,14 @@ function Stopped({
   } else if (view?.status === "failed" && view.failure !== null) {
     body = <Line tone="error">{view.failure.line}</Line>;
   } else if (view?.status === "question" && view.question !== null) {
-    body = <QuestionBody prompt={questionPrompt(view.question, name)} flow={flow} busy={busy} />;
+    body = (
+      <QuestionBody
+        prompt={questionPrompt(view.question, name)}
+        flow={flow}
+        busy={busy}
+        onPasswordText={onPasswordText}
+      />
+    );
   }
   return (
     <AnimatePresence initial={false}>
@@ -324,10 +396,12 @@ function QuestionBody({
   prompt,
   flow,
   busy,
+  onPasswordText,
 }: {
   prompt: QuestionPrompt;
   flow: AddHostFlow;
   busy: boolean;
+  onPasswordText: (has: boolean) => void;
 }) {
   switch (prompt.kind) {
     case "host-key":
@@ -336,9 +410,10 @@ function QuestionBody({
           <Line tone="attention">{prompt.line}</Line>
           <ul aria-label="Host key fingerprints" className="flex flex-col gap-1">
             {prompt.fingerprints.map((entry) => (
-              <li key={entry.fingerprint} className="flex items-center gap-2 text-ui">
+              <li key={entry.fingerprint} className="flex items-start gap-2 text-ui">
                 <span className="w-16 shrink-0 text-muted-foreground">{entry.type}</span>
-                <span className="min-w-0 truncate font-mono">{entry.fingerprint}</span>
+                {/* Whole, and selectable: a fingerprint is compared character by character. */}
+                <span className="min-w-0 font-mono break-all select-text">{entry.fingerprint}</span>
               </li>
             ))}
           </ul>
@@ -359,7 +434,7 @@ function QuestionBody({
     case "unknown":
       return <Line tone="attention">{prompt.line}</Line>;
     case "sudo-password":
-      return <SudoBody prompt={prompt} flow={flow} busy={busy} />;
+      return <SudoBody prompt={prompt} flow={flow} busy={busy} onPasswordText={onPasswordText} />;
   }
 }
 
@@ -368,10 +443,13 @@ function SudoBody({
   prompt,
   flow,
   busy,
+  onPasswordText,
 }: {
   prompt: Extract<QuestionPrompt, { kind: "sudo-password" }>;
   flow: AddHostFlow;
   busy: boolean;
+  /** Whether the field has text: all its owner learns of it. */
+  onPasswordText: (has: boolean) => void;
 }) {
   // Uncontrolled: the password lives in the field alone, never in React state
   // or props. Submit reads it once, clears the field, and hands it to main.
@@ -381,6 +459,7 @@ function SudoBody({
     if (input === null || input.value.length === 0 || busy) return;
     const password = input.value;
     input.value = "";
+    onPasswordText(false);
     flow.sudoPassword(password);
   };
   return (
@@ -403,6 +482,7 @@ function SudoBody({
           placeholder={prompt.placeholder}
           className="h-9 text-sm"
           defaultValue=""
+          onInput={(event) => onPasswordText(event.currentTarget.value.length > 0)}
         />
       </form>
       {prompt.userInstall === null ? null : (
@@ -422,12 +502,15 @@ function Actions({
   name,
   lost,
   busy,
+  hasPassword,
 }: {
   flow: AddHostFlow;
   view: AddHostView | null;
   name: string;
   lost: boolean;
   busy: boolean;
+  /** The sudo field has text: "Run it" waits for some. */
+  hasPassword: boolean;
 }) {
   const close = () => {
     flow.leave();
@@ -529,7 +612,7 @@ function Actions({
                 {prompt.userInstall.label}
               </Button>
             )}
-            <Button size="sm" type="submit" form="add-host-sudo" disabled={busy}>
+            <Button size="sm" type="submit" form="add-host-sudo" disabled={busy || !hasPassword}>
               {prompt.action}
             </Button>
           </>
@@ -551,6 +634,7 @@ function ReadyBody({ view, host }: { view: AddHostView; host: RemoteHost | undef
   const facts = readyFacts(view, host);
   return (
     <motion.div
+      className="flex min-h-0 flex-col"
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.28, ease: EASE_OUT, delay: 0.12 }}

@@ -158,12 +158,10 @@ describe("Add a host", () => {
     await emit({ kind: "view", view: flowView({ done: 2, at: "deliver" }) });
     expect(rows()).toEqual([
       "connect:done:Connect",
-      "probe:done:Check the system",
-      "deliver:active:Uploading Volli host…",
-      "install:pending:Install",
+      "check:done:Check the system",
+      "install:active:Installing Volli host…",
       "start:pending:Start",
-      "enroll:pending:Pair this Mac",
-      "link:pending:Open the connection",
+      "pair:pending:Pair",
     ]);
     await emit({
       kind: "log",
@@ -194,7 +192,7 @@ describe("Add a host", () => {
       log: [line("tunnel retrying"), line("tunnel up")],
       omitted: 412,
     });
-    expect(rows().at(-1)).toBe("link:active:Opening the connection…");
+    expect(rows().at(-1)).toBe("pair:active:Pairing…");
     await click(sheet(), "Details");
     expect(sheet().querySelector('[role="log"]')?.textContent).toBe(
       "412 earlier lines omittedtunnel retryingtunnel up",
@@ -613,5 +611,122 @@ describe("Add a host: the review's probes", () => {
     // Writable again: Add comes back.
     await act(async () => useRemoteHostsStore.getState().setHosts([registryHost()], null));
     expect(useHostConnectionStore.getState().entryPoints.addHost).not.toBeNull();
+  });
+});
+
+describe("Add a host: the visual review", () => {
+  const FULL_FINGERPRINT = "SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s";
+
+  it("says what each done row found, and badges the ready tile with a check", async () => {
+    await startFlow();
+    const facts = {
+      user: "deploy",
+      os: "linux" as const,
+      system: "Ubuntu 24.04.1 LTS",
+      arch: "x86-64",
+      memoryBytes: 8 * 1024 ** 3,
+      version: "1.1.0",
+      keepsRunning: true,
+      alreadyPaired: false,
+    };
+    await emit({ kind: "view", view: flowView({ done: 4, at: "start", facts }) });
+    expect(rows()).toEqual([
+      "connect:done:Connected as deploy",
+      "check:done:Ubuntu 24.04.1 LTS · x86-64 · 8 GB",
+      "install:done:Volli host 1.1.0",
+      "start:active:Starting…",
+      "pair:pending:Pair",
+    ]);
+    // The OS shows as soon as the check found it.
+    expect(sheet().querySelector('[data-slot="host-glyph"] svg')).not.toBeNull();
+    await emit({ kind: "view", view: flowView({ status: "done", done: 7, facts, hostId: null }) });
+    expect(sheet().querySelector('[data-slot="host-glyph"]')?.getAttribute("data-badge")).toBe(
+      "ready",
+    );
+    expect(sheet().textContent).toContain("Ubuntu 24.04.1 LTS · x86-64 · Volli host 1.1.0");
+  });
+
+  it("waits to Run it until the sudo field has text", async () => {
+    await startFlow();
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "question",
+        at: "install",
+        question: {
+          id: "q1",
+          kind: "sudo-password",
+          step: "install",
+          reason: "install",
+          command: "sudo example",
+          retry: false,
+        },
+      }),
+    });
+    expect(button("Run it")?.disabled).toBe(true);
+    await type(input("sudo password"), "x");
+    expect(button("Run it")?.disabled).toBe(false);
+    await type(input("sudo password"), "");
+    expect(button("Run it")?.disabled).toBe(true);
+  });
+
+  it("shows a whole, real-length fingerprint, selectable, never cut", async () => {
+    await startFlow();
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "question",
+        at: "connect",
+        question: {
+          id: "q1",
+          kind: "host-key",
+          step: "connect",
+          offer: {
+            entries: ["box ssh-ed25519 AAAA"],
+            fingerprints: [{ type: "ED25519", fingerprint: FULL_FINGERPRINT }],
+          },
+        },
+      }),
+    });
+    const shown = [...sheet().querySelectorAll('[aria-label="Host key fingerprints"] li span')].at(
+      -1,
+    )!;
+    expect(shown.textContent).toBe(FULL_FINGERPRINT);
+    expect(shown.className).toContain("break-all");
+    expect(shown.className).not.toContain("truncate");
+  });
+
+  it("keeps the footer outside the scrolling body, the longest question with Details open", async () => {
+    await startFlow();
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "question",
+        at: "install",
+        question: {
+          id: "q1",
+          kind: "sudo-password",
+          step: "install",
+          reason: "install",
+          command: "sudo volli-hostd install --system --data-dir /var/lib/volli-hostd",
+          retry: true,
+        },
+      }),
+    });
+    for (let index = 0; index < 40; index += 1) {
+      await emit({ kind: "log", flowId: "flow-1", line: line(`line ${index}`) });
+    }
+    await click(sheet(), "Details");
+    const body = sheet().querySelector<HTMLElement>('[data-slot="add-host-body"]')!;
+    expect(body.className).toContain("overflow-y-auto");
+    expect(body.className).toContain("min-h-0");
+    // Details, the account-only answer and Run it sit in the footer, past the scroller.
+    for (const name of ["Details", "Install for my account only", "Run it"]) {
+      const control = button(name)!;
+      expect(body.contains(control)).toBe(false);
+    }
+    expect(body.querySelector('[role="log"]')).not.toBeNull();
+    // The sheet itself is capped to the window, its middle the part that gives.
+    expect(sheet().className).toContain("max-h-[80vh]");
   });
 });

@@ -10,6 +10,7 @@
  * `MotionConfig reducedMotion="user"`.
  */
 import * as React from "react";
+import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
 import { AnimatePresence, motion } from "motion/react";
 import { AppleLogoIcon } from "@phosphor-icons/react/dist/csr/AppleLogo";
 import { DesktopTowerIcon } from "@phosphor-icons/react/dist/csr/DesktopTower";
@@ -52,7 +53,8 @@ export function HostGlyph({
 }: {
   os: HostOs | null;
   local?: boolean;
-  badge?: HostBadge;
+  /** A host's state, or `ready`: a green check, the add just finished. */
+  badge?: HostBadge | "ready";
   size?: keyof typeof TILE;
   className?: string;
 }) {
@@ -95,6 +97,7 @@ export function HostGlyph({
             className={cn(
               "absolute grid place-items-center rounded-full ring-2 ring-background",
               tile.badge,
+              badge === "ready" && "bg-positive text-positive-foreground",
               badge === "fail" && "bg-destructive",
               badge === "attention" && "bg-attention",
               badge === "offline" && "bg-muted-foreground/50",
@@ -103,7 +106,9 @@ export function HostGlyph({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.4, opacity: 0 }}
             transition={{ type: "spring", duration: 0.35, bounce: 0.3 }}
-          />
+          >
+            {badge === "ready" ? <CheckIcon weight="bold" className="size-[70%]" /> : null}
+          </motion.span>
         )}
       </AnimatePresence>
     </span>

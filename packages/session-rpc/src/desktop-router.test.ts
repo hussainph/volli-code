@@ -68,6 +68,9 @@ const SNAPSHOT: RemoteHostsSnapshot = {
       deviceId: "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
       addedAt: "2026-10-06T00:00:00.000Z",
       liveSessions: null,
+      system: "Ubuntu 24.04.1 LTS",
+      arch: "x86-64",
+      hostKeys: ["SHA256:abc"],
     },
   ],
   projects: {
@@ -136,6 +139,16 @@ const VIEW: Extract<AddHostEvent, { kind: "view" }> = {
     failure: null,
     hostId: null,
     startup: null,
+    facts: {
+      user: "you",
+      os: "linux",
+      system: null,
+      arch: null,
+      memoryBytes: null,
+      version: null,
+      keepsRunning: null,
+      alreadyPaired: false,
+    },
   },
 };
 const FAILED: AddHostEvent = {

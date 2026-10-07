@@ -452,6 +452,100 @@
                 "view": {
                   "additionalProperties": false,
                   "properties": {
+                    "facts": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "alreadyPaired": {
+                          "type": "boolean"
+                        },
+                        "arch": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "keepsRunning": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "memoryBytes": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "os": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "linux",
+                                "macos"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "system": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "user": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "version": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "user",
+                        "os",
+                        "system",
+                        "arch",
+                        "memoryBytes",
+                        "version",
+                        "keepsRunning",
+                        "alreadyPaired"
+                      ],
+                      "type": "object"
+                    },
                     "failure": {
                       "anyOf": [
                         {
@@ -673,7 +767,8 @@
                     "question",
                     "failure",
                     "hostId",
-                    "startup"
+                    "startup",
+                    "facts"
                   ],
                   "type": "object"
                 }
@@ -696,6 +791,100 @@
                 "view": {
                   "additionalProperties": false,
                   "properties": {
+                    "facts": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "alreadyPaired": {
+                          "type": "boolean"
+                        },
+                        "arch": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "keepsRunning": {
+                          "anyOf": [
+                            {
+                              "type": "boolean"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "memoryBytes": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "os": {
+                          "anyOf": [
+                            {
+                              "enum": [
+                                "linux",
+                                "macos"
+                              ],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "system": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "user": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "version": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "user",
+                        "os",
+                        "system",
+                        "arch",
+                        "memoryBytes",
+                        "version",
+                        "keepsRunning",
+                        "alreadyPaired"
+                      ],
+                      "type": "object"
+                    },
                     "failure": {
                       "anyOf": [
                         {
@@ -917,7 +1106,8 @@
                     "question",
                     "failure",
                     "hostId",
-                    "startup"
+                    "startup",
+                    "facts"
                   ],
                   "type": "object"
                 }
@@ -1284,6 +1474,16 @@
                   "agentsShareAccount": {
                     "type": "boolean"
                   },
+                  "arch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "availableUpdate": {
                     "anyOf": [
                       {
@@ -1299,6 +1499,13 @@
                   },
                   "hostIsNewer": {
                     "type": "boolean"
+                  },
+                  "hostKeys": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "readOnly": true,
+                    "type": "array"
                   },
                   "id": {
                     "type": "string"
@@ -1339,6 +1546,16 @@
                       }
                     ]
                   },
+                  "system": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "target": {
                     "type": "string"
                   },
@@ -1370,7 +1587,10 @@
                   "hostIsNewer",
                   "deviceId",
                   "addedAt",
-                  "liveSessions"
+                  "liveSessions",
+                  "system",
+                  "arch",
+                  "hostKeys"
                 ],
                 "type": "object"
               },
@@ -1630,6 +1850,16 @@
                   "agentsShareAccount": {
                     "type": "boolean"
                   },
+                  "arch": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "availableUpdate": {
                     "anyOf": [
                       {
@@ -1645,6 +1875,13 @@
                   },
                   "hostIsNewer": {
                     "type": "boolean"
+                  },
+                  "hostKeys": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "readOnly": true,
+                    "type": "array"
                   },
                   "id": {
                     "type": "string"
@@ -1685,6 +1922,16 @@
                       }
                     ]
                   },
+                  "system": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "target": {
                     "type": "string"
                   },
@@ -1716,7 +1963,10 @@
                   "hostIsNewer",
                   "deviceId",
                   "addedAt",
-                  "liveSessions"
+                  "liveSessions",
+                  "system",
+                  "arch",
+                  "hostKeys"
                 ],
                 "type": "object"
               },

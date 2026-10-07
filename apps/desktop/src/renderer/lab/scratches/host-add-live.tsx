@@ -20,7 +20,13 @@
  * main: the API is `createFakeRemoteHostsApi`, driven by timers.
  */
 import * as React from "react";
-import type { AddHostLogLine, AddHostStepId, AddHostView, RemoteHost } from "@volli/shared";
+import type {
+  AddHostFacts,
+  AddHostLogLine,
+  AddHostStepId,
+  AddHostView,
+  RemoteHost,
+} from "@volli/shared";
 
 import { HostsChrome } from "@renderer/components/hosts/hosts-chrome";
 import { openAddHostSheet } from "@renderer/components/hosts/host-entry";
@@ -31,6 +37,7 @@ import { setRemoteHostsApi, useRemoteHostsStore } from "@renderer/stores/remote-
 import {
   createFakeRemoteHostsApi,
   flowView,
+  NO_FACTS,
   registryHost,
 } from "@renderer/stores/remote-hosts.test-support";
 
@@ -78,6 +85,9 @@ const EXISTING: RemoteHost = registryHost({
   id: "6f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f",
   name: "hetzner-1",
   target: "deploy@hetzner-1",
+  system: "Ubuntu 24.04.1 LTS",
+  arch: "x86-64",
+  hostKeys: ["SHA256:q3Zt9fK1x0mVbN7cR2pL8sWdE4yH6uJ0aK5gT1vQ9zM"],
 });
 
 const line = (message: string, fields: AddHostLogLine["fields"] = {}): AddHostLogLine => ({
@@ -98,12 +108,15 @@ function stopFor(scenario: Scenario, step: AddHostStepId): Partial<AddHostView> 
         step: "connect",
         offer: {
           entries: ["box ssh-ed25519 AAAAC3Nza…"],
-          fingerprints: [{ type: "ED25519", fingerprint: "SHA256:k3Vq9bS0nq2lKc0sZ7uA1XcB" }],
+          fingerprints: [
+            { type: "ED25519", fingerprint: "SHA256:k3Vq9bS0nq2lKc0sZ7uA1XcBqWm4Ty8RfJ2hLp6vN0E" },
+          ],
         },
       },
     };
   }
   if (scenario === "sudo" && step === "install") {
+    // (The script emits a long log before this stop: open Details to see the footer stay put.)
     return {
       status: "question",
       question: {
@@ -189,11 +202,35 @@ export default function HostAddLiveScratch() {
       { at: number; answered: boolean; target: string; userMode: boolean }
     >();
 
+    /**
+     * What main would have found by now: each fact from the step that finds
+     * it (the check, the install, the start), as the engine's `flowFacts`.
+     */
+    const factsAt = (flow: { at: number; userMode: boolean }): AddHostFacts => {
+      const mac = scenarioRef.current === "mac";
+      const done = (step: AddHostStepId) => flow.at > STEPS.indexOf(step);
+      return {
+        ...NO_FACTS,
+        ...(done("probe")
+          ? {
+              user: mac ? "you" : "deploy",
+              os: mac ? ("macos" as const) : ("linux" as const),
+              system: mac ? "macOS 15.1" : "Ubuntu 24.04.1 LTS",
+              arch: mac ? "arm64" : "x86-64",
+              memoryBytes: (mac ? 16 : 8) * 1024 ** 3,
+            }
+          : {}),
+        ...(done("install") ? { version: "1.1.0" } : {}),
+        ...(done("start") ? { keepsRunning: mac ? null : true } : {}),
+      };
+    };
+
     const run = (flowId: string) => {
       const flow = progress.get(flowId);
       if (flow === undefined) return;
       const step = STEPS[flow.at];
       const target = flow.target;
+      const facts = factsAt(flow);
       if (step === undefined) {
         const mac = scenarioRef.current === "mac";
         // A Mac always runs as the person; Linux does when they chose their account only.
@@ -205,6 +242,13 @@ export default function HostAddLiveScratch() {
           os: mac ? "macos" : "linux",
           mode: user ? "user" : "system",
           agentsShareAccount: user,
+          system: facts.system,
+          arch: facts.arch,
+          // Only a key the person compared and trusted while adding it.
+          hostKeys:
+            scenarioRef.current === "host-key"
+              ? ["SHA256:k3Vq9bS0nq2lKc0sZ7uA1XcBqWm4Ty8RfJ2hLp6vN0E"]
+              : [],
         });
         api.devicesOf.set(host.id, [
           {
@@ -230,14 +274,33 @@ export default function HostAddLiveScratch() {
             done: 7,
             hostId: host.id,
             startup: mac ? `Starts when you log in to ${target}` : null,
+            facts,
           }),
         });
         return;
       }
       const stop = flow.answered ? null : stopFor(scenarioRef.current, step);
       if (stop !== null) {
+        if (stop.question?.kind === "sudo-password") {
+          // A long Details log, as an install that ran a while leaves.
+          for (let index = 0; index < 60; index += 1) {
+            api.emit(flowId, {
+              kind: "log",
+              flowId,
+              line: line("ssh exec finished", { label: `install: step ${index}`, code: 0 }),
+            });
+          }
+        }
         // As main shows a stop: a question waits on its step (running), a failure fails it.
-        const view = flowView({ flowId, target, name: target, done: flow.at, at: step, ...stop });
+        const view = flowView({
+          flowId,
+          target,
+          name: target,
+          done: flow.at,
+          at: step,
+          facts,
+          ...stop,
+        });
         api.emit(flowId, {
           kind: "view",
           view:
@@ -250,7 +313,7 @@ export default function HostAddLiveScratch() {
       api.emit(flowId, { kind: "log", flowId, line: line("step started", { step }) });
       api.emit(flowId, {
         kind: "view",
-        view: flowView({ flowId, target, name: target, done: flow.at, at: step }),
+        view: flowView({ flowId, target, name: target, done: flow.at, at: step, facts }),
       });
       later(STEP_MS, () => {
         api.emit(flowId, { kind: "log", flowId, line: line("step finished", { step }) });

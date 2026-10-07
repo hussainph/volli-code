@@ -4,7 +4,15 @@ import type { RemoteHostDevice } from "@volli/shared";
 import { THIS_MAC_HOST, type HostRecord } from "@renderer/stores/host-connection";
 import { registryHost } from "@renderer/stores/remote-hosts.test-support";
 
-import { deviceMeta, hostFacts, hostHealth, hostRowMeta, orderDevices } from "./hosts-pane-model";
+import {
+  deviceMeta,
+  hostFacts,
+  hostHealth,
+  hostRowMeta,
+  orderDevices,
+  shortFingerprint,
+  systemLine,
+} from "./hosts-pane-model";
 
 const remote = (patch: Partial<HostRecord>): HostRecord => ({
   ...THIS_MAC_HOST,
@@ -109,5 +117,30 @@ describe("paired devices", () => {
       "tablet",
       "old",
     ]);
+  });
+});
+
+describe("the host's system and key", () => {
+  it("reads the system its check found, and its OS where it found nothing", () => {
+    expect(systemLine(registryHost({ system: "Ubuntu 24.04.1 LTS", arch: "x86-64" }))).toBe(
+      "Ubuntu 24.04.1 LTS · x86-64",
+    );
+    expect(systemLine(registryHost({ os: "macos", system: null, arch: "arm64" }))).toBe(
+      "macOS · arm64",
+    );
+    expect(systemLine(registryHost({ os: null, system: null, arch: null }))).toBe("Unknown");
+  });
+
+  it("shows a trusted host key short, the whole one to copy; none when it was already known", () => {
+    expect(shortFingerprint("SHA256:q3Zt9fK1x0mVabcdefg")).toBe("q3Zt 9fK1 x0mV");
+    const facts = hostFacts(
+      registryHost({ hostKeys: ["SHA256:q3Zt9fK1x0mVabcdefg", "SHA256:other"] }),
+    );
+    expect(facts.at(-1)).toMatchObject({
+      label: "Host key",
+      value: "q3Zt 9fK1 x0mV",
+      full: "SHA256:q3Zt9fK1x0mVabcdefg\nSHA256:other",
+    });
+    expect(hostFacts(registryHost()).map((fact) => fact.label)).not.toContain("Host key");
   });
 });
