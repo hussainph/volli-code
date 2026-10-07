@@ -182,6 +182,26 @@ describe("the remote hosts store", () => {
 });
 
 describe("the scripted fake", () => {
+  it("answers a host's projects and a create as set, else none and made (VC-710)", async () => {
+    const fake = createFakeRemoteHostsApi();
+    expect(await fake.projects("h")).toEqual({
+      hostId: "h",
+      projects: [],
+      adds: { kind: "ready" },
+    });
+    fake.projectsOf.set("h", new Error("unreachable"));
+    await expect(fake.projects("h")).rejects.toThrow("unreachable");
+    expect(await fake.createProject({ hostId: "h", path: "/a" })).toMatchObject({
+      ok: true,
+      project: { name: "Acme" },
+    });
+    fake.nextCreate = new Error("lost");
+    await expect(fake.createProject({ hostId: "h", path: "/a" })).rejects.toThrow("lost");
+    await fake.openWorkspace("h", "w");
+    fake.refuseNext("closeWorkspace", "no");
+    await expect(fake.closeWorkspace("h", "w")).rejects.toThrow("no");
+  });
+
   it("tolerates events and ends for a flow nobody follows", () => {
     const fake = createFakeRemoteHostsApi();
     expect(fake.following("flow-9")).toBe(false);

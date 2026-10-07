@@ -53,17 +53,8 @@ export interface FakeRemoteHostsApi extends RemoteHostsApi {
   devicesOf: Map<string, readonly RemoteHostDevice[] | Error>;
   /** What `projects(hostId)` answers (VC-710): a listing, or a refusal; none listed, ready. */
   projectsOf: Map<string, Omit<RemoteHostProjects, "hostId"> | Error>;
-  /**
-   * What `createProject` answers next; by default the project it names, made.
-   * A function sees the input; a promise lets a test hold it.
-   */
-  nextCreate:
-    | CreateRemoteProjectResult
-    | Error
-    | ((
-        input: CreateRemoteProjectInput,
-      ) => CreateRemoteProjectResult | Promise<CreateRemoteProjectResult>)
-    | null;
+  /** What `createProject` answers next: a result, or a refusal; by default the project it names, made. */
+  nextCreate: CreateRemoteProjectResult | Error | null;
   /** Makes the next call of `method` refuse with `message`. */
   refuseNext(
     method:
@@ -172,16 +163,15 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
       calls.push(["createProject", input]);
       const next = api.nextCreate;
       if (next instanceof Error) throw next;
-      if (typeof next === "function") return next(input);
       return (
         next ?? {
           ok: true,
           created: true,
           project: {
             id: "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
-            name: input.name ?? "acme",
+            name: "Acme",
             prefix: "AC",
-            path: input.path ?? "/srv/volli/acme",
+            path: "/srv/volli/acme",
             tickets: 0,
           },
         }
