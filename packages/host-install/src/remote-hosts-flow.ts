@@ -20,6 +20,13 @@ import { nextStep, type ProvisionResults, type ProvisionState } from "./provisio
 /** How many log lines a flow keeps for Details. */
 export const ADD_HOST_LOG_LIMIT = 500;
 
+/**
+ * The most log a subscriber's first event carries (UTF-8 bytes of its lines'
+ * JSON): one bounded event, however long the flow ran, so a late subscriber
+ * reads it through any bounded stream. Earlier lines are counted, not sent.
+ */
+export const ADD_HOST_REPLAY_BYTES = 64 * 1024;
+
 export const isSkipped = (result: unknown): boolean =>
   typeof result === "object" &&
   result !== null &&
@@ -53,10 +60,30 @@ export function stoppedAt(
   return { step, failed: state.stop.kind === "failed" };
 }
 
-export function questionJson(state: ProvisionState): AddHostQuestion | null {
+/** The question a state stopped on, as plain JSON, under the id an answer must name. */
+export function questionJson(state: ProvisionState, id: string): AddHostQuestion | null {
   if (state.stop?.kind !== "question") return null;
   // Plain JSON already: a kind, a step, and the question's own facts.
-  return JSON.parse(JSON.stringify(state.stop.question)) as AddHostQuestion;
+  return { ...(JSON.parse(JSON.stringify(state.stop.question)) as AddHostQuestion), id };
+}
+
+/**
+ * The newest lines that fit in `maxBytes`, oldest first, and how many before
+ * them are left out. A line too big on its own ends the tail there.
+ */
+export function logTail(
+  lines: readonly AddHostLogLine[],
+  maxBytes: number = ADD_HOST_REPLAY_BYTES,
+): { readonly lines: readonly AddHostLogLine[]; readonly omitted: number } {
+  let start = lines.length;
+  let bytes = 0;
+  while (start > 0) {
+    const size = Buffer.byteLength(JSON.stringify(lines[start - 1]));
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    start -= 1;
+  }
+  return { lines: lines.slice(start), omitted: start };
 }
 
 export function failureJson(state: ProvisionState, host: string): AddHostFailure | null {

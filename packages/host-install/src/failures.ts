@@ -99,6 +99,11 @@ export type ProvisionFailure =
   // tunnel
   | { readonly code: "tunnel-failed"; readonly step: "link"; readonly detail: string }
   /**
+   * Everything worked, and this Mac could not keep the host: its device key
+   * or its hosts file would not save. Nothing was half kept; the link runs again.
+   */
+  | { readonly code: "save-failed"; readonly step: "link"; readonly detail: string }
+  /**
    * A step found the state missing what it relies on (a result, a fact), or
    * threw: never an exception for the caller, always this, retried from the
    * probe so every fact and decision is gathered again.
@@ -268,6 +273,8 @@ export function describeFailure(
       };
     case "tunnel-failed":
       return { line: `Couldn’t open the tunnel to ${host}`, recovery: retry("Try again", step) };
+    case "save-failed":
+      return { line: `Couldn’t save ${host} on this Mac`, recovery: retry("Try again", step) };
     case "unexpected-state":
       return {
         line: `Adding ${host} lost track of where it was`,

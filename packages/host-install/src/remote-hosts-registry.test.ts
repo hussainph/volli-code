@@ -67,24 +67,33 @@ describe("a registry host", () => {
 });
 
 describe("a registry file", () => {
-  it("is empty, with one problem, when it is not a v1 registry", () => {
-    for (const value of [null, "text", { v: 2, hosts: [] }, { v: 1, hosts: {} }]) {
-      expect(readRegistry(value)).toEqual({
-        file: EMPTY_REGISTRY,
-        problems: ["not a v1 registry"],
-      });
+  it("is unreadable, never empty, when it is not a registry", () => {
+    for (const value of [null, "text", [HOST]]) {
+      expect(readRegistry(value)).toEqual({ kind: "unreadable", problem: "not a registry" });
     }
+    for (const value of [{ v: 1, hosts: {} }, { v: 0, hosts: [] }, { hosts: [] }, { v: 1.5 }]) {
+      expect(readRegistry(value)).toEqual({ kind: "unreadable", problem: "not a v1 registry" });
+    }
+  });
+
+  it("says a newer Volli wrote it, and reads nothing past its version", () => {
+    expect(readRegistry({ v: 2, hosts: [HOST], futureData: "x" })).toEqual({
+      kind: "newer",
+      version: 2,
+    });
   });
 
   it("keeps every valid host once and names what it dropped", () => {
     expect(readRegistry({ v: 1, hosts: [HOST, { ...HOST, name: "" }, HOST] })).toEqual({
+      kind: "ok",
       file: { v: 1, hosts: [HOST] },
       problems: ["host 1 is malformed", `host 2 repeats ${HOST.id}`],
     });
+    expect(readRegistry(EMPTY_REGISTRY)).toEqual({ kind: "ok", file: EMPTY_REGISTRY, problems: [] });
   });
 
-  it("names a key-store entry by host or by flow", () => {
-    expect(deviceKeyName(HOST.id)).toBe(`host:${HOST.id}`);
+  it("names a key-store entry by host and device, or by flow", () => {
+    expect(deviceKeyName(HOST.id, HOST.deviceId)).toBe(`host:${HOST.id}:${HOST.deviceId}`);
     expect(flowKeyName("f1")).toBe("flow:f1");
   });
 });

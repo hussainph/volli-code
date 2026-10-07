@@ -234,9 +234,15 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "hostAdd.start": HostHandler<AddHostStartInput, { flowId: string }>;
   /** The flow's current view first, then every change and log line. */
   readonly "hostAdd.subscribe": HostSubscriptionHandler<{ flowId: string }, AddHostEvent>;
-  readonly "hostAdd.answer": HostHandler<{ flowId: string; answer: AddHostAnswer }, null>;
+  readonly "hostAdd.answer": HostHandler<
+    { flowId: string; questionId: string; answer: AddHostAnswer },
+    null
+  >;
   /** Write-only: the password is never echoed, and an error that carries it is scrubbed. */
-  readonly "hostAdd.sudoPassword": HostHandler<{ flowId: string; password: string }, null>;
+  readonly "hostAdd.sudoPassword": HostHandler<
+    { flowId: string; questionId: string; password: string },
+    null
+  >;
   readonly "hostAdd.retry": HostHandler<{ flowId: string; from?: AddHostStepId }, null>;
   readonly "hostAdd.cancel": HostHandler<{ flowId: string }, null>;
 }
@@ -610,10 +616,11 @@ function hostHandlerEntries(
     },
     "hostAdd.subscribe": async ({ flowId }, _call, sink) =>
       remoteHosts().subscribeAdd(flowId, (event) => sink.emit(event)),
-    "hostAdd.answer": ({ flowId, answer }) => done(() => remoteHosts().answerAdd(flowId, answer)),
-    "hostAdd.sudoPassword": async ({ flowId, password }) => {
+    "hostAdd.answer": ({ flowId, questionId, answer }) =>
+      done(() => remoteHosts().answerAdd(flowId, questionId, answer)),
+    "hostAdd.sudoPassword": async ({ flowId, questionId, password }) => {
       try {
-        return await done(() => remoteHosts().sudoPassword(flowId, password));
+        return await done(() => remoteHosts().sudoPassword(flowId, questionId, password));
       } catch (error) {
         throw withoutSecret(error, password);
       }

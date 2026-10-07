@@ -47,8 +47,11 @@ export function fakeChild(command: string, args: readonly string[]): FakeChild {
     exit: (code) => {
       stdout.end();
       stderr.end();
-      // After the streams drain, as a real child's close does.
-      setImmediate(() => emitter.emit("close", code));
+      // Exit, then close after the streams drain, as a real child's do.
+      setImmediate(() => {
+        emitter.emit("exit", code);
+        emitter.emit("close", code);
+      });
     },
     fail: (error) => {
       setImmediate(() => emitter.emit("error", error));

@@ -70,7 +70,7 @@ describe("a flow's steps", () => {
 
 describe("a flow's question and failure as JSON", () => {
   it("is null when the state did not stop that way", () => {
-    expect(questionJson(READY)).toBeNull();
+    expect(questionJson(READY, "q1")).toBeNull();
     expect(failureJson(READY, "box")).toBeNull();
   });
 
@@ -83,7 +83,12 @@ describe("a flow's question and failure as JSON", () => {
         question: { kind: "already-paired", step: "probe", hostId: "h" },
       },
     };
-    expect(questionJson(state)).toEqual({ kind: "already-paired", step: "probe", hostId: "h" });
+    expect(questionJson(state, "q3")).toEqual({
+      id: "q3",
+      kind: "already-paired",
+      step: "probe",
+      hostId: "h",
+    });
   });
 
   it("gives the line, the recovery and any detail", () => {

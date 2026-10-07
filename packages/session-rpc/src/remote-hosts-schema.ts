@@ -33,6 +33,9 @@ export const MAX_PROVIDER_ID_LENGTH = 128;
 export const MAX_SUDO_PASSWORD_LENGTH = 1024;
 
 const flowId = z.string().min(1).max(MAX_FLOW_ID_LENGTH);
+/** The id of the question an answer is for (`AddHostQuestion.id`). */
+export const MAX_QUESTION_ID_LENGTH = 64;
+const questionId = z.string().min(1).max(MAX_QUESTION_ID_LENGTH);
 
 /** The add flow's steps, in order (`@volli/host-install`'s `STEP_ORDER`). */
 export const ADD_HOST_STEPS = [
@@ -86,9 +89,14 @@ const addHostAnswerSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("user-install") }),
   z.strictObject({ kind: z.literal("repair") }),
 ]);
-export const hostAddAnswerInputSchema = z.strictObject({ flowId, answer: addHostAnswerSchema });
+export const hostAddAnswerInputSchema = z.strictObject({
+  flowId,
+  questionId,
+  answer: addHostAnswerSchema,
+});
 export const sudoPasswordInputSchema = z.strictObject({
   flowId,
+  questionId,
   password: z.string().min(1).max(MAX_SUDO_PASSWORD_LENGTH),
 });
 export const hostAddRetryInputSchema = z.strictObject({ flowId, from: stepId.optional() });
@@ -134,10 +142,14 @@ export const remoteHostsSnapshotSchema = z.object({
   hosts: z.array(remoteHost).readonly(),
   /** Project id → its host and that project's own Workspace link (VC-670). */
   projects: z.record(z.string(), remoteProjectLink),
+  /** Why this Mac's hosts cannot change now, or `null`. */
+  readOnly: z.string().nullable(),
 });
 
 /** A question's `kind` and `step`, and its own fields as open JSON. */
-const addHostQuestion = z.object({ kind: z.string(), step: stepId }).catchall(z.json());
+const addHostQuestion = z
+  .object({ id: z.string(), kind: z.string(), step: stepId })
+  .catchall(z.json());
 const addHostFailure = z.object({
   code: z.string(),
   step: stepId,
@@ -167,6 +179,12 @@ const addHostLogLine = z.object({
 });
 /** `AddHostEvent`: what `hostAdd.subscribe` emits. */
 export const addHostEventSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("replay"),
+    view: addHostView,
+    log: z.array(addHostLogLine).readonly(),
+    omitted: z.number().int().nonnegative(),
+  }),
   z.object({ kind: z.literal("view"), view: addHostView }),
   z.object({ kind: z.literal("log"), flowId: z.string(), line: addHostLogLine }),
 ]);

@@ -35,9 +35,13 @@ export interface RegistryFile {
 
 export const EMPTY_REGISTRY: RegistryFile = { v: 1, hosts: [] };
 
-/** The key-store name of a host's device key. */
-export function deviceKeyName(hostId: string): string {
-  return `host:${hostId}`;
+/**
+ * The key-store name of this Mac's device key for one enrollment on a host.
+ * Per device, so a re-add's new key sits beside the old one until the
+ * registry names it, and a failure in between loses neither.
+ */
+export function deviceKeyName(hostId: string, deviceId: string): string {
+  return `host:${hostId}:${deviceId}`;
 }
 
 /** The key-store name of an add flow's device key, before it has a host. */
@@ -92,17 +96,27 @@ export function readRegistryHost(value: unknown): RegistryHost | null {
   };
 }
 
+/** What a registry file holds, read: its hosts, or why this Mac must leave it alone. */
+export type RegistryRead =
+  /** `problems` says what was dropped (for the log); the rest are kept. */
+  | { readonly kind: "ok"; readonly file: RegistryFile; readonly problems: readonly string[] }
+  /** Written by a newer Volli: never read past, never overwritten. */
+  | { readonly kind: "newer"; readonly version: number }
+  /** Not a registry at all: never overwritten either. */
+  | { readonly kind: "unreadable"; readonly problem: string };
+
 /**
- * The registry a file holds: every valid host, each id once. `problems` says
- * what was dropped (for the log); a file that is not a registry at all is
- * one problem and an empty registry.
+ * The registry a file holds: every valid host, each id once. A file from a
+ * newer Volli, or one that is not a registry, is reported, not emptied: the
+ * caller keeps it as it is.
  */
-export function readRegistry(value: unknown): {
-  readonly file: RegistryFile;
-  readonly problems: readonly string[];
-} {
-  if (!isRecord(value) || value.v !== 1 || !Array.isArray(value.hosts)) {
-    return { file: EMPTY_REGISTRY, problems: ["not a v1 registry"] };
+export function readRegistry(value: unknown): RegistryRead {
+  if (!isRecord(value)) return { kind: "unreadable", problem: "not a registry" };
+  if (typeof value.v === "number" && Number.isInteger(value.v) && value.v > 1) {
+    return { kind: "newer", version: value.v };
+  }
+  if (value.v !== 1 || !Array.isArray(value.hosts)) {
+    return { kind: "unreadable", problem: "not a v1 registry" };
   }
   const hosts: RegistryHost[] = [];
   const problems: string[] = [];
@@ -113,5 +127,5 @@ export function readRegistry(value: unknown): {
       problems.push(`host ${index} repeats ${host.id}`);
     } else hosts.push(host);
   });
-  return { file: { v: 1, hosts }, problems };
+  return { kind: "ok", file: { v: 1, hosts }, problems };
 }

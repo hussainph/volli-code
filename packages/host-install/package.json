@@ -13,6 +13,10 @@
     "./contract": {
       "types": "./src/contract.ts",
       "import": "./src/contract.ts"
+    },
+    "./testing": {
+      "types": "./src/testing/index.ts",
+      "import": "./src/testing/index.ts"
     }
   },
   "scripts": {

@@ -35,6 +35,8 @@ export interface SshExecOptions {
   /** Called with the running byte count of a streamed stdin. */
   readonly onProgress?: (bytes: number) => void;
   readonly timeoutMs?: number;
+  /** Ends the command early, as a timeout does: SIGTERM, SIGKILL after a grace, then it answers. */
+  readonly signal?: AbortSignal;
   /** What the log calls this command; the command itself is logged at debug only. */
   readonly label?: string;
 }
@@ -51,7 +53,11 @@ export interface SshTransport {
   readonly target: SshTarget;
   /** Runs `script` with the box's `/bin/sh`, whatever the login shell is. */
   exec(script: string, options?: SshExecOptions): Promise<SshExecResult>;
-  /** Ends the shared connection. */
+  /**
+   * Ends every command still running (each answers as cancelled, once its
+   * process has exited) and the shared connection. Every call after the
+   * first shares it; an `exec` after it answers cancelled and spawns nothing.
+   */
   close(): Promise<void>;
 }
 
@@ -146,14 +152,37 @@ const LIVE_SPAWN: SpawnProcess = (command, args) =>
 /** The most output kept from one command: the probe and JSON answers are a few KB. */
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
-/** Runs one process to its end, feeding stdin and collecting output. Never rejects. */
+/** How long a process has after SIGTERM before SIGKILL, and after SIGKILL before it is given up on. */
+export const DEFAULT_KILL_AFTER_MS = 2_000;
+
+/** What a command ended by this runner answers, after ssh's own words. */
+export const TIMED_OUT = "Connection timed out (volli)";
+export const CANCELLED = "Cancelled (volli)";
+
+export interface RunProcessOptions extends SshExecOptions {
+  /** SIGTERM's grace before SIGKILL; {@link DEFAULT_KILL_AFTER_MS} by default. */
+  readonly killAfterMs?: number;
+}
+
+/**
+ * Runs one process to its end, feeding stdin and collecting output. Never
+ * rejects. A timeout or an abort ends it: SIGTERM, then SIGKILL if it is
+ * still there `killAfterMs` later, and it answers (code 255) only once the
+ * process has exited, so nothing it started outlives its answer.
+ */
 export function runProcess(
   spawn: SpawnProcess,
   command: string,
   args: readonly string[],
-  options: SshExecOptions = {},
+  options: RunProcessOptions = {},
 ): Promise<SshExecResult> {
+  const killAfterMs = options.killAfterMs ?? DEFAULT_KILL_AFTER_MS;
+  const { signal } = options;
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve({ code: 255, stdout: "", stderr: CANCELLED });
+      return;
+    }
     let child: ChildProcess;
     try {
       child = spawn(command, args);
@@ -164,19 +193,40 @@ export function runProcess(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let exited = false;
+    /** Why this runner is ending it, once it is. */
+    let ending: string | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (result: SshExecResult): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(killTimer);
+      signal?.removeEventListener("abort", onAbort);
       resolve(result);
+    };
+    const ended = (): void =>
+      finish({ code: 255, stdout, stderr: stderr === "" ? ending! : `${stderr}\n${ending!}` });
+    const stop = (why: string): void => {
+      if (ending !== null || settled) return;
+      ending = why;
+      if (exited) {
+        ended();
+        return;
+      }
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+        // SIGKILL cannot be ignored: past this, there is no process left to wait on.
+        killTimer = setTimeout(ended, killAfterMs);
+      }, killAfterMs);
     };
     const timer =
       options.timeoutMs === undefined
         ? undefined
-        : setTimeout(() => {
-            child.kill("SIGTERM");
-            finish({ code: 255, stdout, stderr: `${stderr}\nConnection timed out (volli)` });
-          }, options.timeoutMs);
+        : setTimeout(() => stop(TIMED_OUT), options.timeoutMs);
+    const onAbort = (): void => stop(CANCELLED);
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
       if (stdout.length < MAX_OUTPUT) stdout += chunk;
     });
@@ -186,7 +236,15 @@ export function runProcess(
     child.on("error", (error: NodeJS.ErrnoException) => {
       finish({ code: error.code === "ENOENT" ? 127 : 255, stdout, stderr: error.message });
     });
-    child.on("close", (code) => finish({ code: code ?? 255, stdout, stderr }));
+    child.on("exit", () => {
+      exited = true;
+      // Ended by this runner: it has exited, which is what its answer waits for.
+      if (ending !== null) ended();
+    });
+    child.on("close", (code) => {
+      if (ending !== null) ended();
+      else finish({ code: code ?? 255, stdout, stderr });
+    });
     const stdin = child.stdin!;
     // A remote end that stops reading early is its own failure, reported by its exit code.
     stdin.on("error", () => {});
@@ -218,7 +276,12 @@ export interface SystemSshOptions {
    */
   readonly controlDir?: string;
   readonly spawn?: SpawnProcess;
+  /** SIGTERM's grace before SIGKILL for a command it ends; {@link DEFAULT_KILL_AFTER_MS} by default. */
+  readonly killAfterMs?: number;
 }
+
+/** How long `close` waits for `ssh -O exit` to end the master. */
+const CONTROL_EXIT_TIMEOUT_MS = 5_000;
 
 /** A ControlMaster directory another user could reach: whoever can, can ride the connection. */
 export class UnsafeControlDirError extends Error {
@@ -252,11 +315,21 @@ export function ensureControlDir(dir: string, uid: number = userInfo().uid): str
   return dir;
 }
 
-/** The runner over the system `ssh`. Throws `UnsafeControlDirError` for an unsafe `controlDir`. */
+/**
+ * The runner over the system `ssh`. Throws `UnsafeControlDirError` for an
+ * unsafe `controlDir`.
+ *
+ * **It owns its ssh processes.** Every command's process is this one's child
+ * until it exits; `close()` ends the ones still running (SIGTERM, then
+ * SIGKILL) and waits for them before it ends the master, so a cancelled flow
+ * or a quit never leaves one behind, and a command with no timeout can still
+ * be ended.
+ */
 export function systemSsh(options: SystemSshOptions): SshTransport {
   const { target, logger } = options;
   const ssh = options.sshPath ?? "ssh";
   const spawn = options.spawn ?? LIVE_SPAWN;
+  const killAfterMs = options.killAfterMs ?? DEFAULT_KILL_AFTER_MS;
   const owned = options.controlDir === undefined;
   const controlDir =
     options.controlDir === undefined
@@ -264,30 +337,55 @@ export function systemSsh(options: SystemSshOptions): SshTransport {
       : ensureControlDir(options.controlDir);
   const controlPath = join(controlDir, "%C");
   const base = [...connectionOptions(controlPath), "-T"];
+  /** Ends every command at close. */
+  const closing = new AbortController();
+  /** Every command still running: close waits for each to answer. */
+  const active = new Set<Promise<SshExecResult>>();
+  let closed: Promise<void> | null = null;
   return {
     target,
     async exec(script, execOptions = {}) {
+      const label = execOptions.label ?? "command";
+      if (closing.signal.aborted) {
+        logger.debug("ssh exec refused: the connection is closed", { label });
+        return { code: 255, stdout: "", stderr: CANCELLED };
+      }
       const started = Date.now();
       const args = [...base, ...targetArgs(target), `sh -c ${shellQuote(script)}`];
-      logger.debug("ssh exec", { label: execOptions.label ?? "command", script });
-      const result = await runProcess(spawn, ssh, args, execOptions);
+      logger.debug("ssh exec", { label, script });
+      const run = runProcess(spawn, ssh, args, {
+        ...execOptions,
+        killAfterMs,
+        signal:
+          execOptions.signal === undefined
+            ? closing.signal
+            : AbortSignal.any([closing.signal, execOptions.signal]),
+      });
+      active.add(run);
+      const result = await run;
+      active.delete(run);
       const failure = classifySshFailure(result);
       logger[failure === null ? "debug" : "warn"]("ssh exec finished", {
-        label: execOptions.label ?? "command",
+        label,
         code: result.code,
         ms: Date.now() - started,
         ...(failure === null ? {} : { failure: failure.kind, detail: failure.detail }),
       });
       return result;
     },
-    async close() {
-      await runProcess(spawn, ssh, [
-        ...connectionOptions(controlPath),
-        "-O",
-        "exit",
-        ...targetArgs(target),
-      ]);
-      if (owned) rmSync(controlDir, { recursive: true, force: true });
+    close() {
+      closed ??= (async () => {
+        closing.abort();
+        await Promise.all(active);
+        await runProcess(
+          spawn,
+          ssh,
+          [...connectionOptions(controlPath), "-O", "exit", ...targetArgs(target)],
+          { timeoutMs: CONTROL_EXIT_TIMEOUT_MS, killAfterMs },
+        );
+        if (owned) rmSync(controlDir, { recursive: true, force: true });
+      })();
+      return closed;
     },
   };
 }
@@ -298,6 +396,9 @@ export interface HostKeyOffer {
   /** What the person compares: `SHA256:…`, with the key type. */
   readonly fingerprints: readonly { readonly type: string; readonly fingerprint: string }[];
 }
+
+/** A host-key command's bound: past ssh's own 15 s connect timeout, never forever. */
+const HOST_KEY_TIMEOUT_MS = 30_000;
 
 /** `ssh-keygen -l`'s name for each known_hosts key type. */
 const KEYGEN_TYPES: Readonly<Record<string, string>> = {
@@ -371,7 +472,7 @@ export async function discoverHostKeys(options: {
       ].flatMap((option) => ["-o", option]),
       ...targetArgs(options.target),
       "true",
-    ]);
+    ], { timeoutMs: HOST_KEY_TIMEOUT_MS });
     let entries: string[];
     try {
       entries = readFileSync(file, "utf8")
@@ -381,7 +482,9 @@ export async function discoverHostKeys(options: {
       entries = [];
     }
     if (entries.length === 0) return null;
-    const listed = await runProcess(spawn, options.keygenPath ?? "ssh-keygen", ["-l", "-f", file]);
+    const listed = await runProcess(spawn, options.keygenPath ?? "ssh-keygen", ["-l", "-f", file], {
+      timeoutMs: HOST_KEY_TIMEOUT_MS,
+    });
     const fingerprints = listed.stdout
       .split("\n")
       .map((line) => /^\d+\s+(SHA256:\S+)\s+.*\((\S+)\)\s*$/u.exec(line.trim()))
@@ -417,10 +520,9 @@ export async function acceptHostKeys(options: {
   readonly logger: InstallLogger;
 }): Promise<string> {
   const spawn = options.spawn ?? LIVE_SPAWN;
-  const resolved = await runProcess(spawn, options.sshPath ?? "ssh", [
-    "-G",
-    ...targetArgs(options.target),
-  ]);
+  const resolved = await runProcess(spawn, options.sshPath ?? "ssh", ["-G", ...targetArgs(options.target)], {
+    timeoutMs: HOST_KEY_TIMEOUT_MS,
+  });
   const configured = /^userknownhostsfile\s+(\S+)/mu.exec(resolved.stdout)?.[1];
   const file = (configured ?? "~/.ssh/known_hosts").replace(/^~(?=\/)/u, options.home);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });

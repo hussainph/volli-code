@@ -96,8 +96,14 @@ export interface DesktopRouterHandlers {
   readonly "hosts.forget": HostHandler<{ hostId: string }, null>;
   readonly "hostAdd.start": HostHandler<AddHostStartInput, { flowId: string }>;
   readonly "hostAdd.subscribe": DesktopSubscriptionHandler<{ flowId: string }, AddHostEvent>;
-  readonly "hostAdd.answer": HostHandler<{ flowId: string; answer: AddHostAnswer }, null>;
-  readonly "hostAdd.sudoPassword": HostHandler<{ flowId: string; password: string }, null>;
+  readonly "hostAdd.answer": HostHandler<
+    { flowId: string; questionId: string; answer: AddHostAnswer },
+    null
+  >;
+  readonly "hostAdd.sudoPassword": HostHandler<
+    { flowId: string; questionId: string; password: string },
+    null
+  >;
   readonly "hostAdd.retry": HostHandler<{ flowId: string; from?: AddHostStepId }, null>;
   readonly "hostAdd.cancel": HostHandler<{ flowId: string }, null>;
 }
@@ -255,7 +261,10 @@ export function createDesktopRouter() {
         .input(addHostStartInputSchema)
         .output(z.object({ flowId: z.string() }))
         .mutation(({ ctx, input }) => ctx.handlers["hostAdd.start"](input, ctx.call)),
-      /** The flow's current view first, then every change to it and each log line. */
+      /**
+       * One bounded replay first (the view and the newest of the log), then
+       * every change to the view and each new log line.
+       */
       subscribe: hostProcedure("hostAdd.subscribe")
         .input(flowInputSchema)
         .subscription(async function* ({ ctx, input, signal }) {

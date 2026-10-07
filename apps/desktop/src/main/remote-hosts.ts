@@ -195,8 +195,9 @@ export function remoteHostsPort(hosts: RemoteHosts): RemoteHostsPort {
     forget: (hostId) => hosts.forget(hostId),
     startAdd: (input) => hosts.startAdd(input),
     subscribeAdd: (flowId, listener) => hosts.subscribeAdd(flowId, (event) => void listener(event)),
-    answerAdd: (flowId, answer) => hosts.answerAdd(flowId, answer),
-    sudoPassword: (flowId, password) => hosts.sudoPassword(flowId, password),
+    answerAdd: (flowId, questionId, answer) => hosts.answerAdd(flowId, questionId, answer),
+    sudoPassword: (flowId, questionId, password) =>
+      hosts.sudoPassword(flowId, questionId, password),
     retryAdd: (flowId, from) => hosts.retryAdd(flowId, from),
     cancelAdd: (flowId) => hosts.cancelAdd(flowId),
   };

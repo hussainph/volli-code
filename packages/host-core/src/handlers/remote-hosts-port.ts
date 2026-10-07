@@ -73,10 +73,13 @@ export interface RemoteHostsPort {
     flowId: string,
     listener: (event: AddHostEvent) => void | Promise<void>,
   ): Answer<RemoteHostsUnsubscribe>;
-  /** Answers the question the flow stopped on. */
-  answerAdd(flowId: string, answer: AddHostAnswer): Answer<void>;
-  /** Hands the flow the sudo password it asked for. Write-only: never echoed or logged. */
-  sudoPassword(flowId: string, password: string): Answer<void>;
+  /** Answers the question the flow stopped on: `questionId` must be that one's, and the answer fit it. */
+  answerAdd(flowId: string, questionId: string, answer: AddHostAnswer): Answer<void>;
+  /**
+   * Hands the flow the sudo password its question `questionId` asked for.
+   * Write-only: never echoed or logged.
+   */
+  sudoPassword(flowId: string, questionId: string, password: string): Answer<void>;
   /** Retries a failed flow, from `from` or from the step its failure names. */
   retryAdd(flowId: string, from?: AddHostStepId): Answer<void>;
   /** Cancels the flow. */

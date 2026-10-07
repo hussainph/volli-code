@@ -104,6 +104,12 @@ export interface RemoteHostsSnapshot {
   readonly hosts: readonly RemoteHost[];
   /** Project id → its host and its link. Empty until a remote project is opened (VC-700 PR 3). */
   readonly projects: Readonly<Record<string, RemoteProjectLink>>;
+  /**
+   * Why this Mac's hosts cannot change now, in one line, or `null`: its hosts
+   * file is from a newer Volli, or cannot be read. The file is left exactly
+   * as it is, and adding, forgetting or opening a project on a host refuses.
+   */
+  readonly readOnly: string | null;
 }
 
 /* ── Adding a host ──────────────────────────────────────────────────────── */
@@ -126,6 +132,8 @@ export type AddHostStepStatus = "pending" | "running" | "done" | "skipped" | "fa
  * version…). A sudo password question names the command, never a password.
  */
 export interface AddHostQuestion {
+  /** This question's id in its flow: an answer names it, so a stale answer is refused. */
+  readonly id: string;
   readonly kind: string;
   readonly step: AddHostStepId;
   readonly [field: string]: RemoteHostJson;
@@ -180,8 +188,20 @@ export interface AddHostLogLine {
   readonly fields: Readonly<Record<string, string | number | boolean | null>>;
 }
 
-/** What `hostAdd.subscribe` streams: the view on every change, and each log line. */
+/**
+ * What `hostAdd.subscribe` streams: first one `replay` (the view now and the
+ * newest of the log, bounded in bytes), then the view on every change and
+ * each new log line.
+ */
 export type AddHostEvent =
+  | {
+      readonly kind: "replay";
+      readonly view: AddHostView;
+      /** The newest log lines, oldest first. */
+      readonly log: readonly AddHostLogLine[];
+      /** How many earlier lines were left out ("N earlier lines omitted"). */
+      readonly omitted: number;
+    }
   | { readonly kind: "view"; readonly view: AddHostView }
   | { readonly kind: "log"; readonly flowId: string; readonly line: AddHostLogLine };
 
@@ -200,6 +220,12 @@ export interface AddHostStartInput {
   /** What to call it; the target when absent. */
   readonly name?: string;
 }
+
+/** Every link to one host this Mac opens at most: other Macs and reconnects keep the rest of hostd's 32. */
+export const REMOTE_HOST_LINK_CAP = 24;
+
+/** The reason a project past {@link REMOTE_HOST_LINK_CAP} reads, refused by this Mac (never by the host). */
+export const REMOTE_HOST_TOO_MANY_PROJECTS = "too-many-projects";
 
 /** The text a refusal of an action v1 does not do yet carries. */
 export const REMOTE_HOST_UPDATE_UNAVAILABLE =
