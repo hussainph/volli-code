@@ -127,6 +127,7 @@
   "tiers": {
     "desktop": {
       "hostAdd.active": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
@@ -178,6 +179,7 @@
         "voidOutput": false
       },
       "hostAdd.answer": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -292,6 +294,7 @@
         "voidOutput": false
       },
       "hostAdd.cancel": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -317,6 +320,7 @@
         "voidOutput": false
       },
       "hostAdd.facts": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -433,6 +437,7 @@
         "voidOutput": false
       },
       "hostAdd.retry": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -470,6 +475,7 @@
         "voidOutput": false
       },
       "hostAdd.start": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -509,6 +515,7 @@
         "voidOutput": false
       },
       "hostAdd.subscribe": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1179,6 +1186,7 @@
         "voidOutput": false
       },
       "hostAdd.sudoPassword": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1216,6 +1224,7 @@
         "voidOutput": false
       },
       "hostLink.mutate": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1247,6 +1256,7 @@
         "voidOutput": false
       },
       "hostLink.query": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1278,6 +1288,7 @@
         "voidOutput": false
       },
       "hostLink.subscribe": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1460,6 +1471,7 @@
         "voidOutput": false
       },
       "hostSignIns.answer": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1507,6 +1519,7 @@
         "voidOutput": false
       },
       "hostSignIns.cancel": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1543,6 +1556,7 @@
         "voidOutput": false
       },
       "hostSignIns.macKeys": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
@@ -1560,6 +1574,7 @@
         "voidOutput": false
       },
       "hostSignIns.run": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -1908,6 +1923,7 @@
         "voidOutput": false
       },
       "hostSignIns.sendFromThisMac": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2091,6 +2107,7 @@
         "voidOutput": false
       },
       "hostSignIns.setApiKey": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2235,6 +2252,7 @@
         "voidOutput": false
       },
       "hostSignIns.setGitCredential": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2385,6 +2403,7 @@
         "voidOutput": false
       },
       "hostSignIns.status": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2517,6 +2536,7 @@
         "voidOutput": false
       },
       "hosts.cancelScheduledUpdate": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2542,6 +2562,7 @@
         "voidOutput": false
       },
       "hosts.closeWorkspace": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2573,6 +2594,7 @@
         "voidOutput": false
       },
       "hosts.createProject": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2726,6 +2748,7 @@
         "voidOutput": false
       },
       "hosts.devices": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2815,6 +2838,7 @@
         "voidOutput": false
       },
       "hosts.forget": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2840,6 +2864,7 @@
         "voidOutput": false
       },
       "hosts.openWorkspace": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2871,6 +2896,7 @@
         "voidOutput": false
       },
       "hosts.projects": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -2995,6 +3021,7 @@
         "voidOutput": false
       },
       "hosts.rename": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -3026,6 +3053,7 @@
         "voidOutput": false
       },
       "hosts.retry": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -3051,6 +3079,7 @@
         "voidOutput": false
       },
       "hosts.signIn": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -3082,6 +3111,7 @@
         "voidOutput": false
       },
       "hosts.snapshot": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
@@ -3802,6 +3832,7 @@
         "voidOutput": false
       },
       "hosts.subscribe": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
@@ -4522,6 +4553,7 @@
         "voidOutput": false
       },
       "hosts.updateHost": {
+        "compatibility": "client-local",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "additionalProperties": false,
@@ -4555,6 +4587,7 @@
         "voidOutput": false
       },
       "project.reorder": {
+        "compatibility": "host-command",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "properties": {
@@ -4580,6 +4613,7 @@
         "voidOutput": false
       },
       "worktree.trimSettings": {
+        "compatibility": "host-command",
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"

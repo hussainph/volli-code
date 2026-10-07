@@ -65,8 +65,6 @@ export function schemaChanges(before, after, path = "", direction = "input", con
   const compare = (old, next, at) => schemaChanges(old, next, at, direction, nested);
   const changes = [];
   const fail = (at, reason) => changes.push({ path: at, reason });
-  const enumGrowth = (at, reason) =>
-    changes.push({ path: at, reason, ...(state.reportEnumGrowth ? { severity: "warning" } : {}) });
   if (!object(before) || !object(after)) return [{ path, reason: "schema narrowed or replaced" }];
   if (after.type !== undefined) {
     const oldTypes = list(before.type);
@@ -119,7 +117,7 @@ export function schemaChanges(before, after, path = "", direction = "input", con
     ((newValues === undefined && after.anyOf === undefined) ||
       newValues?.some((next) => !oldValues.some((value) => isDeepStrictEqual(value, next))))
   ) {
-    enumGrowth(`${path}/${literalKeyword}`, "output enum widened (requires tolerant reader)");
+    fail(`${path}/${literalKeyword}`, "output enum widened (requires tolerant reader)");
   }
   // Mixed Zod literals omit `type`. Even a tolerant scalar reader only earns
   // new values of its existing JSON types, not new nullability/value types.
@@ -130,7 +128,7 @@ export function schemaChanges(before, after, path = "", direction = "input", con
       (newValues === undefined && after.type === undefined && after.anyOf === undefined) ||
       newTypes.some((type) => !oldTypes.has(type === "integer" ? "number" : type))
     ) {
-      enumGrowth(`${path}/type`, "output enum value type widened");
+      fail(`${path}/type`, "output enum value type widened");
     }
   }
   const oldRequired = list(before.required);
@@ -251,17 +249,12 @@ export function schemaChanges(before, after, path = "", direction = "input", con
   return changes;
 }
 
-const hasFailures = (changes) => changes.some(({ severity }) => severity !== "warning");
 function compatibleChanges(candidates, compare) {
-  let warningMatch;
   for (const candidate of candidates) {
     const changes = compare(candidate);
-    // Prefer an exact match to a warning-only widening match, so reordering
-    // overlapping anyOf alternatives cannot manufacture a growth warning.
     if (changes.length === 0) return changes;
-    if (!hasFailures(changes) && warningMatch === undefined) warningMatch = changes;
   }
-  return warningMatch;
+  return undefined;
 }
 
 function literalType(value) {
@@ -394,19 +387,46 @@ function resolveLocalRef(schema, root, cache, resolving = new Set()) {
   return annotated;
 }
 
-/**
- * Both tiers are compared; adding a provider/tier cannot hide existing entries.
- * A desktop-only entry may leave its tier only by promotion (D-A1 = (c)): it
- * reappears under the same key in the public tier, and is then held to the
- * same additive rules against its desktop shape.
+// Baselines before VC-725 have no classification. Only these client families
+// were bundled with their caller; every other unclassified entry stays frozen.
+// Explicit metadata takes precedence, so reclassifying a frozen host command
+// cannot use this migration fallback to bypass its old contract.
+const desktopClass = (key, entry) =>
+  entry.compatibility ??
+  (/^(hosts|hostAdd|hostSignIns|hostLink)\./u.test(key) ? "client-local" : "host-command");
+
+/** Public entries and desktop host commands are additive-only. Client-local
+ * entries are reported, including additions and compatible schema edits: their
+ * renderer and main ship together, with no N−1 promise. Host commands may leave
+ * the desktop tier only by compatible same-key promotion to public.
  */
 export function protocolChanges(before, after) {
   const changes = [];
   for (const [tier, entries] of Object.entries(before.tiers)) {
     for (const [key, entry] of Object.entries(entries)) {
       const path = `/tiers/${escape(tier)}/${escape(key)}`;
+      const local = tier === "desktop" && desktopClass(key, entry) === "client-local";
+      const desktopNext = after.tiers[tier]?.[key];
+      if (
+        tier === "desktop" &&
+        desktopNext &&
+        desktopClass(key, entry) !== desktopClass(key, desktopNext)
+      )
+        changes.push({
+          path: `${path}/compatibility`,
+          reason: "desktop compatibility class changed",
+        });
+      if (local) {
+        if (!desktopNext || !isDeepStrictEqual(entry, desktopNext))
+          changes.push({
+            path,
+            reason: desktopNext ? "client-local entry changed" : "client-local entry removed",
+            severity: "warning",
+          });
+        continue;
+      }
       const promoted = tier === "desktop" ? after.tiers.public?.[key] : undefined;
-      const next = after.tiers[tier]?.[key] ?? promoted;
+      const next = desktopNext ?? promoted;
       if (!next) {
         changes.push({ path, reason: "catalog entry removed" });
         continue;
@@ -419,14 +439,20 @@ export function protocolChanges(before, after) {
       }
       for (const direction of ["input", "output"])
         changes.push(
-          ...schemaChanges(entry[direction], next[direction], `${path}/${direction}`, direction, {
-            // Main and renderer ship together. Only this new enum-growth rule
-            // is report-only on desktop, pending O1; promotion earns the public
-            // contract. Existing desktop type/union/narrowing rules still gate.
-            reportEnumGrowth: tier === "desktop" && Object.hasOwn(after.tiers.desktop ?? {}, key),
-          }),
+          ...schemaChanges(entry[direction], next[direction], `${path}/${direction}`, direction),
         );
     }
+  }
+  for (const [key, entry] of Object.entries(after.tiers.desktop ?? {})) {
+    if (
+      !Object.hasOwn(before.tiers.desktop ?? {}, key) &&
+      desktopClass(key, entry) === "client-local"
+    )
+      changes.push({
+        path: `/tiers/desktop/${escape(key)}`,
+        reason: "client-local entry added",
+        severity: "warning",
+      });
   }
   // Public operation membership is frozen, even when widening it seems additive.
   for (const field of ["baseOperations", "hostScopeBaseOperations"]) {
@@ -452,15 +478,17 @@ export function protocolChanges(before, after) {
         reason: "frozen feature membership changed",
       });
   }
-  // anyOf's two directional checks may reach the same report twice.
-  const warnings = new Set();
-  return changes.filter((change) => {
-    if (change.severity !== "warning") return true;
-    const key = JSON.stringify([change.path, change.reason]);
-    if (warnings.has(key)) return false;
-    warnings.add(key);
-    return true;
-  });
+  return changes;
+}
+
+/** Lines printed by the gate even when there are no compatibility failures. */
+export function protocolReportLines(changes) {
+  return changes
+    .filter(({ severity }) => severity === "warning")
+    .map(
+      ({ path, reason }) =>
+        `Report (client-local, not a cross-version promise): ${path}: ${reason}`,
+    );
 }
 
 /** An exception is exact-path, explained, and tied to a real breaking version bump. */

@@ -109,21 +109,39 @@ describe("committed protocol schema projection", () => {
 
   it("includes desktop-only providers without demanding public registry rows", () => {
     expect(
-      generateProtocolSchema([{ tier: "desktop", procedures: () => sample }], [], [{ key: "read" }])
-        .tiers.desktop!.read,
-    ).toMatchObject({ kind: "query", input: { type: "string" }, output: { type: "string" } });
+      generateProtocolSchema(
+        [{ tier: "desktop", procedures: () => sample }],
+        [],
+        [{ key: "read", compatibility: "host-command" }],
+      ).tiers.desktop!.read,
+    ).toMatchObject({
+      compatibility: "host-command",
+      kind: "query",
+      input: { type: "string" },
+      output: { type: "string" },
+    });
   });
 
   it("publishes exactly the declared desktop-only entries", () => {
-    expect(Object.keys(generateProtocolSchema().tiers.desktop!).toSorted()).toEqual(
+    const document = generateProtocolSchema();
+    for (const entry of DESKTOP_ENTRIES) {
+      expect(document.tiers.desktop![entry.key]).toMatchObject({
+        compatibility: entry.compatibility,
+      });
+      expect(document.tiers.public![entry.key]).toBeUndefined();
+    }
+    for (const entry of Object.values(document.tiers.public!)) {
+      expect(entry).not.toHaveProperty("compatibility");
+    }
+    expect(Object.keys(document.tiers.desktop!).toSorted()).toEqual(
       DESKTOP_ENTRIES.map(({ key }) => key).toSorted(),
     );
     expect(() =>
       generateProtocolSchema([{ tier: "desktop", procedures: () => sample }], [], []),
     ).toThrow("Schema/desktop-tier mismatch: missing ; extra read");
-    expect(() => generateProtocolSchema([], [], [{ key: "read" }])).toThrow(
-      "Schema/desktop-tier mismatch: missing read; extra",
-    );
+    expect(() =>
+      generateProtocolSchema([], [], [{ key: "read", compatibility: "host-command" }]),
+    ).toThrow("Schema/desktop-tier mismatch: missing read; extra");
   });
 
   it("refuses incomplete or duplicate providers and unpublishable schemas", () => {
@@ -138,7 +156,7 @@ describe("committed protocol schema projection", () => {
           { tier: "desktop", procedures: () => sample },
         ],
         [],
-        [{ key: "read" }],
+        [{ key: "read", compatibility: "host-command" }],
       ),
     ).toThrow("Duplicate schema provider");
     expect(() =>
@@ -150,7 +168,7 @@ describe("committed protocol schema projection", () => {
           },
         ],
         [],
-        [{ key: "opaque" }],
+        [{ key: "opaque", compatibility: "host-command" }],
       ),
     ).toThrow("Custom types cannot be represented");
   });

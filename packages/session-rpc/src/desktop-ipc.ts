@@ -140,6 +140,11 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "board.removeComment": "ipc",
   "board.setLabelColor": "ipc",
   // The desktop-only tier: the window's by definition (`DESKTOP_ENTRIES`).
+  // Its compatibility classes (VC-725) govern the schema gate, not exposure:
+  // host commands (`project.reorder`, `worktree.trimSettings`) are
+  // additive-only across supported skew, while the client-local families
+  // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`) ship with this
+  // renderer and main in one bundle and are not cross-version promises.
   "project.reorder": "ipc",
   "worktree.trimSettings": "ipc",
   "hosts.snapshot": "ipc",
