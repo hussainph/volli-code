@@ -68,7 +68,16 @@ import {
 } from "@volli/shared";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { createOldSessionRouter } from "./session-rpc-n-minus-one.test-support";
+import { createOldSessionRouter, loadCanaryPeer } from "./session-rpc-n-minus-one.test-support";
+
+import {
+  captureCanaryRecording,
+  checkNextHost,
+  recordingExchanges,
+  replayCanaryPeer,
+  peerInput,
+} from "../../../../packages/session-rpc/src/canary-peer.test-support";
+const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
 
 const CURRENT = new URL("./session-listing-wire-fixtures/current.json", import.meta.url);
 const N_MINUS_ONE = new URL("./session-listing-wire-fixtures/n-minus-one.json", import.meta.url);
@@ -314,9 +323,19 @@ function N_MINUS_ONE_CLIENT_REQUEST(): readonly string[] {
 async function recordCurrent(): Promise<Omit<CurrentWire, "provenance">> {
   const host = await todaysHost(REQUESTED);
   const welcome = await host.client.protocol.welcome.query();
-  const listingInput = { projectId: WORKSPACE };
-  const ticketInput = { ticketId: TICKET };
-  const refusalInput = { ticketId: FOREIGN_TICKET };
+  const listingInput = peerInput(canary, "listing-websocket", "session.listing", {
+    projectId: WORKSPACE,
+  });
+  const ticketInput = peerInput(canary, "listing-websocket", "session.listingForTicket", {
+    ticketId: TICKET,
+  });
+  const refusalInput = peerInput(
+    canary,
+    "listing-websocket",
+    "session.listingForTicket",
+    { ticketId: FOREIGN_TICKET },
+    1,
+  );
   const old = await todaysHost(N_MINUS_ONE_CLIENT_REQUEST());
   return {
     welcome: { requested: REQUESTED, granted: welcome.features },
@@ -350,6 +369,9 @@ async function recordCurrent(): Promise<Omit<CurrentWire, "provenance">> {
 describe("the Session listing on the public wire (VC-713)", () => {
   it("today's host answers exactly the committed recordings", async () => {
     const recorded = await recordCurrent();
+    const exchanges = recordingExchanges(recorded);
+    captureCanaryRecording("listing-websocket", "websocket", recorded, exchanges);
+    if (canary) checkNextHost(canary, "listing-websocket", recorded);
     if (RECORD) {
       const provenance = read<CurrentWire>(CURRENT).provenance;
       writeFileSync(CURRENT, `${JSON.stringify({ provenance, ...recorded }, null, 2)}\n`);
@@ -384,51 +406,64 @@ describe("the Session listing on the public wire (VC-713)", () => {
     expect(wire.refusal.output).toMatchObject({ code: "NOT_FOUND", reason: "workspace-unknown" });
   });
 
-  it("a new Client keeps its listing for the older host, which never had this one", async () => {
-    const frozen = read<FrozenWire>(N_MINUS_ONE);
-    const hello: HostHello = buildHostHello({
-      client: { kind: "desktop", version: "new" },
-      workspaceId: WORKSPACE,
-      lastSeen: null,
-      features: REQUESTED,
-      credential: "test-only-credential",
-    });
-    const welcome: HostWelcome = {
-      protocolVersion: 1,
-      host: { id: HOST_ID, version: "n-minus-one" },
-      workspace: { id: WORKSPACE, epoch: 1 },
-      actor: DEVICE,
-      features: REQUESTED.filter((feature) => frozen.hostOffered.includes(feature)),
-      proof: null,
-    };
-    expect(validateWelcome(welcome, hello, {})).toMatchObject({ ok: true });
-    expect(welcome.features).not.toContain("sessions.listing");
-    // A call anyway reaches the frozen peer's router, which has no such operation.
-    const frozenHost = webSocketContractLink<null, HostRouter>({
-      router: createOldSessionRouter(HostProcedureError) as unknown as HostRouter,
-      createContext: () => ({}) as never,
-    });
-    const connection = await frozenHost.open(null);
-    try {
-      const answer = await refusalOf(
-        getUntypedClient(connection.client).query("session.listing", { projectId: WORKSPACE }),
-      );
-      expect({
-        procedure: "session.listing",
-        input: { projectId: WORKSPACE },
-        output: answer,
-      }).toEqual(frozen.unknownOperation);
-    } finally {
-      await connection.close();
-    }
-  });
+  it.runIf(!canary)(
+    "a new Client keeps its listing for the older host, which never had this one",
+    async () => {
+      const frozen = read<FrozenWire>(N_MINUS_ONE);
+      const hello: HostHello = buildHostHello({
+        client: { kind: "desktop", version: "new" },
+        workspaceId: WORKSPACE,
+        lastSeen: null,
+        features: REQUESTED,
+        credential: "test-only-credential",
+      });
+      const welcome: HostWelcome = {
+        protocolVersion: 1,
+        host: { id: HOST_ID, version: "n-minus-one" },
+        workspace: { id: WORKSPACE, epoch: 1 },
+        actor: DEVICE,
+        features: REQUESTED.filter((feature) => frozen.hostOffered.includes(feature)),
+        proof: null,
+      };
+      expect(validateWelcome(welcome, hello, {})).toMatchObject({ ok: true });
+      expect(welcome.features).not.toContain("sessions.listing");
+      // A call anyway reaches the frozen peer's router, which has no such operation.
+      const frozenHost = webSocketContractLink<null, HostRouter>({
+        router: createOldSessionRouter(HostProcedureError) as unknown as HostRouter,
+        createContext: () => ({}) as never,
+      });
+      const connection = await frozenHost.open(null);
+      try {
+        const answer = await refusalOf(
+          getUntypedClient(connection.client).query("session.listing", { projectId: WORKSPACE }),
+        );
+        expect({
+          procedure: "session.listing",
+          input: { projectId: WORKSPACE },
+          output: answer,
+        }).toEqual(frozen.unknownOperation);
+      } finally {
+        await connection.close();
+      }
+    },
+  );
 
-  it("an older Client is granted no listing by today's host, and is refused before input", () => {
-    const wire = read<CurrentWire>(CURRENT);
-    expect(wire.oldClient.granted).not.toContain("sessions.listing");
-    expect(wire.oldClient.refusal.output).toMatchObject({
-      code: "FORBIDDEN",
-      reason: "verb-refused",
-    });
-  });
+  it.runIf(!canary)(
+    "an older Client is granted no listing by today's host, and is refused before input",
+    () => {
+      const wire = read<CurrentWire>(CURRENT);
+      expect(wire.oldClient.granted).not.toContain("sessions.listing");
+      expect(wire.oldClient.refusal.output).toMatchObject({
+        code: "FORBIDDEN",
+        reason: "verb-refused",
+      });
+    },
+  );
 });
+
+it.runIf(!!canary)(
+  "next Client reads the actual canary listing over the WebSocket adapter",
+  async () => {
+    await replayCanaryPeer(canary!, "listing-websocket", sessionProcedureSchemas());
+  },
+);

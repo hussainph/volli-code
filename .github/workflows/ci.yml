@@ -273,7 +273,9 @@ jobs:
         run: >-
           node --test scripts/release-workflow.test.mjs
           scripts/hostd-release-manifest.test.mjs
+          scripts/record-canary-peer.test.mjs
           apps/desktop/scripts/copy-hostd-manifest.test.mjs
+          apps/desktop/scripts/check-packaged-e2e.test.mjs
 
       - name: Check host Electron boundary and CI gate policy
         run: |
@@ -868,6 +870,11 @@ jobs:
           test -f "$resources/LICENSES.chromium.html"
           test -f "$resources/app.asar.unpacked/node_modules/@earendil-works/pi-codemode/dist/runtime/worker.js"
           test -f "$resources/app.asar.unpacked/node_modules/quickjs-wasi/quickjs.wasm"
+
+      # Exercise the same actual-artifact assertion before the first release
+      # cut, not only after signing/notarizing in the release workflow.
+      - name: "Gate: no e2e files in packaged app"
+        run: node apps/desktop/scripts/check-packaged-e2e.mjs --app "apps/desktop/release/mac-arm64/Volli Code.app"
 
       - name: Run core e2e and verify quiet native windows
         env:

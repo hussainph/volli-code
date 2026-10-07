@@ -13,12 +13,15 @@ const workflow = parse(
 
 // Evaluate only the small condition vocabulary used by this workflow. Unknown
 // atoms fail syntax checking rather than being silently treated as truthy.
-function enabled(job, { event, dryRun, results = {}, cancelled = false }) {
+function enabled(job, { event, dryRun, results = {}, outputs = {}, cancelled = false }) {
   const condition = workflow.jobs[job].if
     .replaceAll("always()", "true")
     .replaceAll("cancelled()", String(cancelled))
     .replaceAll("github.event_name", JSON.stringify(event))
     .replaceAll("inputs.dry_run", String(dryRun))
+    .replace(/needs\.([\w-]+)\.outputs\.([\w-]+)/g, (_, name, key) =>
+      JSON.stringify(outputs[name]?.[key] ?? ""),
+    )
     .replace(/needs\.([\w-]+)\.result/g, (_, name) => JSON.stringify(results[name] ?? "skipped"));
   assert.match(condition, /^[\w\s'"=!&|().-]+$/);
   return Function(`"use strict"; return (${condition});`)();
@@ -227,6 +230,114 @@ test("desktop gets the same generated pin; release cleanup keeps hostd assets an
   assert.match(steps[verify].run, /\[ "\$\{#hostdFiles\[@\]\}" -eq 11 \]/);
   assert.match(steps[verify].run, /hostd-provenance.sigstore.json/);
   assert.match(steps[verify].run, /hostd release asset missing or empty/);
+});
+
+test("peer capture is advisory, resolves the release commit, and exercises dry runs", () => {
+  const capture = workflow.jobs["canary-peer"];
+  const attach = workflow.jobs["canary-peer-asset"];
+  assert.equal(capture["continue-on-error"], true);
+  assert.equal(attach["continue-on-error"], true);
+  assert.deepEqual(capture.needs, ["prepare", "hostd-ref"]);
+  assert.deepEqual(attach.needs, ["canary-peer", "release"]);
+  // No critical-path job may depend on either advisory job.
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (name === "canary-peer-asset") continue;
+    assert.ok(!(job.needs ?? []).includes("canary-peer"), name);
+    assert.ok(!(job.needs ?? []).includes("canary-peer-asset"), name);
+  }
+  assert.equal(capture.permissions.contents, "read");
+  assert.equal(capture.steps[0].with.ref, "${{ needs.hostd-ref.outputs.ref }}");
+  assert.equal(capture.steps[0].with["persist-credentials"], false);
+  const command = capture.steps.find((step) => step.id === "capture");
+  assert.match(
+    command.run,
+    /node scripts\/record-canary-peer\.mjs --tag "\$PEER_TAG" --commit "\$\(git rev-parse HEAD\)" --out/,
+  );
+  assert.equal(command.env.VOLLI_CONCURRENCY_HINT, "2");
+  const upload = capture.steps.find((step) => step.id === "upload");
+  const download = attach.steps.find((step) => step.with?.name);
+  assert.equal(upload.with.name, "canary-peer-${{ github.run_attempt }}");
+  assert.equal(download.with.name, upload.with.name);
+  assert.match(capture.outputs.captured, /steps\.upload\.outputs\.artifact-id/);
+  const attachment = attach.steps.find(
+    (step) => step.name === "Attach without changing the release",
+  );
+  assert.match(attachment.run, /gh release view/);
+  assert.match(attachment.run, /if \[ -n "\$existing" \]; then[\s\S]*exit 0/);
+  assert.doesNotMatch(attachment.run, /^\s*gh release upload.*--clobber/m);
+  const scope = capture.steps.find((step) => step.id === "scope");
+  assert.match(scope.run, /dry-run-\$\(git rev-parse HEAD\)/);
+  assert.match(scope.run, /\[\[ "\$RELEASE_TAG" == v\*-\* \]\]/);
+  const ctx = {
+    event: "workflow_dispatch",
+    dryRun: true,
+    results: { "hostd-ref": "success", release: "success" },
+    outputs: { "canary-peer": { captured: "true" } },
+  };
+  assert.equal(enabled("canary-peer", ctx), true);
+  // Even with fabricated successful release/capture outputs, dry runs cannot publish.
+  assert.equal(enabled("canary-peer-asset", ctx), false);
+  assert.equal(enabled("canary-peer-asset", { ...ctx, dryRun: false }), true);
+  assert.equal(enabled("canary-peer-asset", { ...ctx, event: "push" }), true);
+  assert.equal(enabled("canary-peer-asset", { ...ctx, event: "push", outputs: {} }), false);
+  const publish = workflow.jobs.release.steps.find(
+    (step) => step.name === "Publish artifacts to the release",
+  );
+  assert.match(publish.run, /\[ "\$name" != canary-peer\.json \] \|\| continue/);
+});
+
+test("dry-run provenance resolution never uses a distributable tag", (t) => {
+  const root = versionFixture(t);
+  const output = join(root, "outputs");
+  const scope = workflow.jobs["canary-peer"].steps.find((step) => step.id === "scope").run;
+  for (const [dryRun, tag, expected] of [
+    ["true", "v0.3.0-canary.1", "dry-run-"],
+    ["false", "v0.3.0-canary.1", "tag=v0.3.0-canary.1"],
+    ["false", "v0.3.0", ""],
+  ]) {
+    writeFileSync(output, "");
+    const result = spawnSync("bash", ["-c", scope], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_OUTPUT: output, DRY_RUN: dryRun, RELEASE_TAG: tag },
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const resolved = readFileSync(output, "utf8");
+    if (dryRun === "true") assert.match(resolved, /^tag=dry-run-[0-9a-f]{40}\n$/);
+    assert.ok(resolved.includes(expected));
+    if (!expected) assert.equal(resolved, "");
+  }
+});
+
+test("packaging exclusion also runs on the existing unsigned CI artifact before core smoke", () => {
+  const ci = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const steps = ci.jobs["smoke-boot"].steps;
+  const pack = steps.findIndex((step) => step.name === "Verify unsigned desktop packaging");
+  const gate = steps.findIndex((step) => step.name === "Gate: no e2e files in packaged app");
+  const smoke = steps.findIndex(
+    (step) => step.name === "Run core e2e and verify quiet native windows",
+  );
+  assert.ok(pack >= 0 && pack < gate && gate < smoke);
+  const releaseGate = workflow.jobs.release.steps.find(
+    (step) => step.name === "Gate: no e2e files in packaged app",
+  );
+  assert.equal(steps[gate].run, releaseGate.run);
+  assert.equal(steps[gate]["working-directory"], undefined);
+  assert.equal(steps[gate].if, undefined);
+  assert.notEqual(steps[gate]["continue-on-error"], true);
+});
+
+test("packaging exclusion is a failing release gate before publishing", () => {
+  const steps = workflow.jobs.release.steps;
+  const gate = steps.findIndex((step) => step.name === "Gate: no e2e files in packaged app");
+  const packageIndex = steps.findIndex((step) => step.name === "Package, sign, notarize, staple");
+  const publish = steps.findIndex((step) => step.name === "Publish artifacts to the release");
+  assert.ok(packageIndex < gate && gate < publish);
+  assert.match(
+    steps[gate].run,
+    /check-packaged-e2e\.mjs --app "apps\/desktop\/release\/mac-arm64\/Volli Code\.app"/,
+  );
+  assert.notEqual(steps[gate]["continue-on-error"], true);
 });
 
 function versionFixture(t, version = "1.2.3") {
