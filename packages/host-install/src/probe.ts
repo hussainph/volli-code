@@ -14,7 +14,7 @@
  * short of it (the connection dropped mid-way), exits non-zero, or lacks a
  * fact every step relies on is a failure, never partial facts.
  */
-import { closeSync, constants, lstatSync, openSync, readFileSync, readdirSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { hostname } from "node:os";
 
 import { readHostdJson, type HostdManagedStatus, type InstallMode } from "./contract";
@@ -315,14 +315,14 @@ function localPublicHostKeys(): string[] {
     if (!name.endsWith(".pub") || name.includes("/")) continue;
     const path = `/etc/ssh/${name}`;
     try {
-      // Do not follow symlinks outside the permitted directory.
-      if (lstatSync(path).isFile()) {
-        const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-        try {
-          keys.push(readFileSync(fd, "utf8"));
-        } finally {
-          closeSync(fd);
-        }
+      // Open without following symlinks or waiting on a replaced FIFO. Check
+      // the opened descriptor, not the pathname: it cannot change between
+      // the regular-file check and read (no stat/open race).
+      const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        if (fstatSync(fd).isFile()) keys.push(readFileSync(fd, "utf8"));
+      } finally {
+        closeSync(fd);
       }
     } catch {
       // Missing or unreadable public keys cannot establish a match.
