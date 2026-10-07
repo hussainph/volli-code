@@ -95,6 +95,7 @@ describe("questions", () => {
   it("shows a host key's fingerprints to compare, dropping malformed ones", () => {
     const prompt = questionPrompt(
       {
+        id: "q1",
         kind: "host-key",
         step: "connect",
         offer: {
@@ -118,15 +119,22 @@ describe("questions", () => {
       ],
       action: "Trust and continue",
     });
-    expect(questionPrompt({ kind: "host-key", step: "connect", offer: null }, "box")).toMatchObject(
-      { fingerprints: [] },
-    );
+    expect(
+      questionPrompt({ id: "q1", kind: "host-key", step: "connect", offer: null }, "box"),
+    ).toMatchObject({ fingerprints: [] });
   });
 
   it("offers Use <version> only for an older host it can manage", () => {
     expect(
       questionPrompt(
-        { kind: "existing-hostd", step: "probe", version: "0.2.4", mode: "user", adoptable: true },
+        {
+          id: "q1",
+          kind: "existing-hostd",
+          step: "probe",
+          version: "0.2.4",
+          mode: "user",
+          adoptable: true,
+        },
         "box",
       ),
     ).toEqual({
@@ -137,13 +145,13 @@ describe("questions", () => {
       action: "Update and pair",
     });
     expect(
-      questionPrompt({ kind: "existing-hostd", step: "probe", adoptable: false }, "box"),
+      questionPrompt({ id: "q1", kind: "existing-hostd", step: "probe", adoptable: false }, "box"),
     ).toMatchObject({ line: "Volli host an older version is already running here", adopt: null });
   });
 
   it("opens a host this Mac already paired with", () => {
     expect(
-      questionPrompt({ kind: "already-paired", step: "probe", hostId: "h" }, "studio"),
+      questionPrompt({ id: "q1", kind: "already-paired", step: "probe", hostId: "h" }, "studio"),
     ).toEqual({
       kind: "already-paired",
       line: "This Mac is already paired with studio",
@@ -154,6 +162,7 @@ describe("questions", () => {
   it("asks for sudo with the command, offering a user install only for installing", () => {
     const install = questionPrompt(
       {
+        id: "q1",
         kind: "sudo-password",
         step: "install",
         reason: "install",
@@ -176,27 +185,46 @@ describe("questions", () => {
     });
     expect(
       questionPrompt(
-        { kind: "sudo-password", step: "start", reason: "linger", command: "sudo x", retry: false },
+        {
+          id: "q1",
+          kind: "sudo-password",
+          step: "start",
+          reason: "linger",
+          command: "sudo x",
+          retry: false,
+        },
         "box",
       ),
     ).toMatchObject({ line: "Keeping it running after you log out needs sudo", userInstall: null });
     expect(
       questionPrompt(
-        { kind: "sudo-password", step: "enroll", reason: "enroll", command: "sudo y", retry: true },
+        {
+          id: "q1",
+          kind: "sudo-password",
+          step: "enroll",
+          reason: "enroll",
+          command: "sudo y",
+          retry: true,
+        },
         "box",
       ),
     ).toMatchObject({ line: "That password didn’t work", retry: true, userInstall: null });
     expect(
-      questionPrompt({ kind: "sudo-password", step: "install", reason: "other" }, "box"),
+      questionPrompt({ id: "q1", kind: "sudo-password", step: "install", reason: "other" }, "box"),
     ).toMatchObject({ line: "This step needs sudo", command: "sudo", userInstall: null });
-    expect(questionPrompt({ kind: "sudo-password", step: "install" }, "box")).toMatchObject({
+    expect(
+      questionPrompt({ id: "q1", kind: "sudo-password", step: "install" }, "box"),
+    ).toMatchObject({
       line: "Installing for every account needs sudo",
     });
   });
 
   it("says a restored host must pair again", () => {
     expect(
-      questionPrompt({ kind: "identity-changed", step: "enroll", pinned: "a", hostId: "b" }, "box"),
+      questionPrompt(
+        { id: "q1", kind: "identity-changed", step: "enroll", pinned: "a", hostId: "b" },
+        "box",
+      ),
     ).toEqual({
       kind: "identity-changed",
       line: "box has a new identity",
@@ -206,7 +234,7 @@ describe("questions", () => {
   });
 
   it("can only go back from a question it does not know", () => {
-    expect(questionPrompt({ kind: "brand-new", step: "link" }, "box")).toEqual({
+    expect(questionPrompt({ id: "q1", kind: "brand-new", step: "link" }, "box")).toEqual({
       kind: "unknown",
       line: "box asked something this build can’t answer",
     });

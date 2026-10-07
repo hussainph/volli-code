@@ -239,6 +239,8 @@ describe("waking the engine", () => {
     expect(fake.listeners.get("resume")?.size).toBe(1);
     await hosts.close();
     expect(fake.listeners.get("resume")?.size).toBe(0);
+  });
+});
 
 describe("the engine as the handler map's port", () => {
   it("passes a rename and a device list straight to the engine", async () => {

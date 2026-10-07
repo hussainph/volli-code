@@ -99,6 +99,7 @@ function AddHostBody({
       target={phase.target}
       view={phase.view}
       log={phase.log}
+      omitted={phase.omitted}
       lost={phase.lost}
       busy={phase.busy}
     />
@@ -174,6 +175,7 @@ function FlowScreen({
   target,
   view,
   log,
+  omitted,
   lost,
   busy,
 }: {
@@ -181,6 +183,7 @@ function FlowScreen({
   target: string;
   view: AddHostView | null;
   log: readonly NumberedLogLine[];
+  omitted: number;
   lost: boolean;
   busy: boolean;
 }) {
@@ -237,7 +240,7 @@ function FlowScreen({
                 transition={{ duration: 0.16 }}
                 className="px-6 pb-4"
               >
-                <LogView lines={log} detail={view?.failure?.detail ?? null} />
+                <LogView lines={log} omitted={omitted} detail={view?.failure?.detail ?? null} />
               </motion.div>
             ) : null}
           </AnimatePresence>
@@ -613,7 +616,15 @@ const fieldText = (fields: AddHostLogLine["fields"]): string =>
  * a window onto another machine should look like one. Never a secret (main
  * logs none).
  */
-function LogView({ lines, detail }: { lines: readonly NumberedLogLine[]; detail: string | null }) {
+function LogView({
+  lines,
+  omitted,
+  detail,
+}: {
+  lines: readonly NumberedLogLine[];
+  omitted: number;
+  detail: string | null;
+}) {
   const scroller = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
     const element = scroller.current;
@@ -629,6 +640,11 @@ function LogView({ lines, detail }: { lines: readonly NumberedLogLine[]; detail:
       {lines.length === 0 && detail === null ? (
         <div className="text-white/35">Nothing yet</div>
       ) : null}
+      {omitted === 0 ? null : (
+        <div className="text-white/35">
+          {omitted === 1 ? "1 earlier line omitted" : `${omitted} earlier lines omitted`}
+        </div>
+      )}
       {lines.map(({ seq, line }) => (
         <div
           key={seq}

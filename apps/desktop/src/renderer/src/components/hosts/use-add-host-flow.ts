@@ -38,6 +38,8 @@ export type AddHostPhase =
       /** `null` until main's first view arrives. */
       readonly view: AddHostView | null;
       readonly log: readonly NumberedLogLine[];
+      /** Earlier lines main left out of its replay, or this dropped past {@link ADD_HOST_LOG_LINES}. */
+      readonly omitted: number;
       /** The stream ended without the flow finishing. */
       readonly lost: boolean;
       /** A call is in flight: its buttons wait. */
@@ -59,6 +61,10 @@ export interface AddHostFlow {
 
 const messageOf = (error: unknown): string =>
   error instanceof Error && error.message !== "" ? error.message : "That didn’t work.";
+
+/** The id of the question on screen, or `""` (main refuses an answer to none). */
+const questionOf = (phase: AddHostPhase): string =>
+  phase.kind === "flow" ? (phase.view?.question?.id ?? "") : "";
 
 const finished = (view: AddHostView | null): boolean =>
   view !== null && (view.status === "done" || view.status === "cancelled");
@@ -86,10 +92,23 @@ export function useAddHostFlow(
         setPhase((before) => {
           if (before.kind !== "flow" || before.flowId !== flowId) return before;
           if (event.kind === "view") return { ...before, view: event.view, lost: false };
+          if (event.kind === "replay") {
+            // A (re)subscription: main's view and the newest of its log, whole.
+            const seq = before.log.at(-1)?.seq ?? 0;
+            return {
+              ...before,
+              view: event.view,
+              lost: false,
+              log: event.log.map((line, index) => ({ seq: seq + index + 1, line })),
+              omitted: event.omitted,
+            };
+          }
           const log = [...before.log, { seq: (before.log.at(-1)?.seq ?? 0) + 1, line: event.line }];
+          const over = Math.max(0, log.length - ADD_HOST_LOG_LINES);
           return {
             ...before,
-            log: log.length > ADD_HOST_LOG_LINES ? log.slice(-ADD_HOST_LOG_LINES) : log,
+            log: over > 0 ? log.slice(over) : log,
+            omitted: before.omitted + over,
           };
         });
       },
@@ -145,6 +164,7 @@ export function useAddHostFlow(
             target,
             view: null,
             log: [],
+            omitted: 0,
             lost: false,
             busy: false,
           }),
@@ -152,8 +172,10 @@ export function useAddHostFlow(
           setPhase({ kind: "entry", target: now.target, error: messageOf(error), starting: false }),
       );
     },
-    answer: (reply) => call((id) => api.answerAdd(id, reply)),
-    sudoPassword: (password) => call((id) => api.sudoPassword(id, password)),
+    // Each names the question on screen: one main no longer asks is refused there.
+    answer: (reply) => call((id) => api.answerAdd(id, questionOf(current.current), reply)),
+    sudoPassword: (password) =>
+      call((id) => api.sudoPassword(id, questionOf(current.current), password)),
     retry: (from) => call((id) => api.retryAdd(id, from)),
     back() {
       const now = current.current;

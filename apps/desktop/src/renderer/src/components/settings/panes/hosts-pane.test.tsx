@@ -132,15 +132,27 @@ describe("Settings → Hosts", () => {
     expect(text).toContain("Your account");
     expect(text).toContain("When you log in to studio");
     expect(text).toContain("No projects on this host yet");
-    const devices = [...root.querySelectorAll('[data-testid], li, [data-slot="item-row"]')]
-      .map((node) => node.textContent ?? "")
-      .join("|");
-    expect(text.indexOf("Hussain’s MacBook Pro")).toBeLessThan(text.indexOf("Old laptop"));
-    expect(text).toContain("This Mac");
-    expect(devices.length).toBeGreaterThan(0);
+    // One row per device: this Mac first, a revoked one last.
+    const devices = [...root.querySelectorAll<HTMLElement>('[data-testid^="host-device-"]')].map(
+      (node) => [node.dataset["testid"], node.textContent ?? ""],
+    );
+    expect(devices.map(([id]) => id)).toEqual(["host-device-dev-me", "host-device-dev-old"]);
+    expect(devices[0]![1]).toContain("This Mac");
+    expect(devices[1]![1]).not.toContain("This Mac");
     await click(root, "All hosts");
     await settle();
     expect(rowNames(root)[2]).toContain("studio");
+  });
+
+  it("says a hosts file it cannot change, and offers no way to add", async () => {
+    const root = await renderPane([]);
+    await act(async () =>
+      useRemoteHostsStore.getState().setHosts([], "This Mac’s hosts file is from a newer Volli."),
+    );
+    expect(root.querySelector('[role="status"]')?.textContent).toBe(
+      "This Mac’s hosts file is from a newer Volli. Its hosts can’t be added or changed here.",
+    );
+    expect(root.textContent).not.toContain("Add a host…");
   });
 
   it("lists a host's projects", async () => {

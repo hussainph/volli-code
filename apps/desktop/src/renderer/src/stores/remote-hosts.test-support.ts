@@ -15,8 +15,10 @@ import type { RemoteHostsApi } from "./remote-hosts";
 
 export type FakeCall =
   | readonly ["startAdd", string]
-  | readonly ["answerAdd", string, string]
-  | readonly ["sudoPassword", string, string]
+  /** The flow, the answer's kind, and the question it named. */
+  | readonly ["answerAdd", string, string, string]
+  /** The flow, the password, and the question it named. */
+  | readonly ["sudoPassword", string, string, string]
   | readonly ["retryAdd", string, AddHostStepId | undefined]
   | readonly ["cancelAdd", string]
   | readonly ["rename", string, string]
@@ -82,12 +84,12 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
       subscribers.set(flowId, set);
       return () => set.delete(handlers);
     },
-    answerAdd(flowId, answer) {
-      calls.push(["answerAdd", flowId, answer.kind]);
+    answerAdd(flowId, questionId, answer) {
+      calls.push(["answerAdd", flowId, answer.kind, questionId]);
       return settle("answerAdd");
     },
-    sudoPassword(flowId, password) {
-      calls.push(["sudoPassword", flowId, password]);
+    sudoPassword(flowId, questionId, password) {
+      calls.push(["sudoPassword", flowId, password, questionId]);
       return settle("sudoPassword");
     },
     retryAdd(flowId, from) {

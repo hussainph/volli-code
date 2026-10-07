@@ -27,13 +27,14 @@ import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
 /** What managing remote hosts asks of desktop main (the desktop-only tier). */
 export interface RemoteHostsApi {
   startAdd(input: AddHostStartInput): Promise<{ readonly flowId: string }>;
-  /** The flow's view (then its log so far) at once, then every change. */
+  /** One replay (the view, the newest of the log) at once, then every change. */
   subscribeAdd(
     flowId: string,
     handlers: { onEvent(event: AddHostEvent): void; onError(error: unknown): void },
   ): () => void;
-  answerAdd(flowId: string, answer: AddHostAnswer): Promise<unknown>;
-  sudoPassword(flowId: string, password: string): Promise<unknown>;
+  /** Answers the question `questionId` (the view's `question.id`): a stale one is refused. */
+  answerAdd(flowId: string, questionId: string, answer: AddHostAnswer): Promise<unknown>;
+  sudoPassword(flowId: string, questionId: string, password: string): Promise<unknown>;
   retryAdd(flowId: string, from?: AddHostStepId): Promise<unknown>;
   cancelAdd(flowId: string): Promise<unknown>;
   rename(hostId: string, name: string): Promise<unknown>;
@@ -57,10 +58,14 @@ export interface RemoteHostsApiRpc {
       ): { unsubscribe(): void };
     };
     readonly answer: {
-      mutate(input: { flowId: string; answer: AddHostAnswer }): Promise<unknown>;
+      mutate(input: {
+        flowId: string;
+        questionId: string;
+        answer: AddHostAnswer;
+      }): Promise<unknown>;
     };
     readonly sudoPassword: {
-      mutate(input: { flowId: string; password: string }): Promise<unknown>;
+      mutate(input: { flowId: string; questionId: string; password: string }): Promise<unknown>;
     };
     readonly retry: {
       mutate(input: { flowId: string; from?: AddHostStepId }): Promise<unknown>;
@@ -80,8 +85,10 @@ export function remoteHostsApi(rpc: RemoteHostsApiRpc): RemoteHostsApi {
       );
       return () => subscription.unsubscribe();
     },
-    answerAdd: (flowId, answer) => rpc.hostAdd.answer.mutate({ flowId, answer }),
-    sudoPassword: (flowId, password) => rpc.hostAdd.sudoPassword.mutate({ flowId, password }),
+    answerAdd: (flowId, questionId, answer) =>
+      rpc.hostAdd.answer.mutate({ flowId, questionId, answer }),
+    sudoPassword: (flowId, questionId, password) =>
+      rpc.hostAdd.sudoPassword.mutate({ flowId, questionId, password }),
     retryAdd: (flowId, from) =>
       rpc.hostAdd.retry.mutate(from === undefined ? { flowId } : { flowId, from }),
     cancelAdd: (flowId) => rpc.hostAdd.cancel.mutate({ flowId }),
@@ -94,9 +101,14 @@ export function remoteHostsApi(rpc: RemoteHostsApiRpc): RemoteHostsApi {
 export interface RemoteHostsState {
   /** The registry's hosts as main last streamed them. Empty with `cloud` off. */
   readonly hosts: readonly RemoteHost[];
+  /**
+   * Why this Mac's hosts cannot change now (its hosts file is from a newer
+   * Volli, or unreadable), or `null`: Settings → Hosts says so and offers no change.
+   */
+  readonly readOnly: string | null;
   /** The Add-a-host sheet. `target` prefills its field (Back from a flow keeps what was typed). */
   readonly addHost: { readonly open: boolean; readonly target: string };
-  setHosts(hosts: readonly RemoteHost[]): void;
+  setHosts(hosts: readonly RemoteHost[], readOnly?: string | null): void;
   openAddHost(target?: string): void;
   closeAddHost(): void;
 }
@@ -107,8 +119,10 @@ const NO_HOSTS: readonly RemoteHost[] = Object.freeze([]);
 export function createRemoteHostsStore() {
   return create<RemoteHostsState>()((set) => ({
     hosts: NO_HOSTS,
+    readOnly: null,
     addHost: { open: false, target: "" },
-    setHosts: (hosts) => set({ hosts: hosts.length === 0 ? NO_HOSTS : hosts }),
+    setHosts: (hosts, readOnly = null) =>
+      set({ hosts: hosts.length === 0 ? NO_HOSTS : hosts, readOnly }),
     openAddHost: (target = "") => set({ addHost: { open: true, target } }),
     closeAddHost: () => set((state) => ({ addHost: { ...state.addHost, open: false } })),
   }));
@@ -120,7 +134,7 @@ let api: RemoteHostsApi | null = null;
 
 /** The app's {@link RemoteHostsApi}, over the session-rpc bridge; tests and the lab swap it. */
 export function remoteHosts(): RemoteHostsApi {
-  api ??= remoteHostsApi(sessionRpcClient() as unknown as RemoteHostsApiRpc);
+  api ??= remoteHostsApi(sessionRpcClient());
   return api;
 }
 

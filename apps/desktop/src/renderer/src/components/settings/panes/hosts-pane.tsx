@@ -228,17 +228,24 @@ function HostList({
   onRename: (host: RemoteHost) => void;
   onForget: (host: RemoteHost) => void;
 }) {
+  // Main leaves a hosts file it cannot read (or a newer Volli's) as it is, and refuses changes.
+  const readOnly = useRemoteHostsStore((state) => state.readOnly);
   return (
     <PrefSection
       title="Hosts"
       icon={HardDrivesIcon}
       // With only This Mac, the empty row below is the one way in.
       action={
-        hosts.length === 0 ? undefined : (
+        hosts.length === 0 || readOnly !== null ? undefined : (
           <SectionAction label="Add a host…" icon={PlusIcon} onAct={openAddHostSheet} />
         )
       }
     >
+      {readOnly === null ? null : (
+        <p role="status" className="text-ui text-muted-foreground">
+          {readOnly} Its hosts can’t be added or changed here.
+        </p>
+      )}
       <div className="flex flex-col">
         <ListRow
           data-host-row=""
@@ -259,7 +266,7 @@ function HostList({
               />
             </Collapse>
           ))}
-          {hosts.length === 0 ? (
+          {hosts.length === 0 && readOnly === null ? (
             <Collapse key="empty">
               <ListRow
                 data-host-row=""
@@ -558,6 +565,7 @@ function DevicesSection({ host }: { host: RemoteHost }) {
             meta={deviceMeta(device)}
             leading={<Mark icon={LaptopIcon} />}
             badges={device.thisMac ? <Badge variant="outline">This Mac</Badge> : undefined}
+            testId={`host-device-${device.deviceId}`}
           />
         ))
       }

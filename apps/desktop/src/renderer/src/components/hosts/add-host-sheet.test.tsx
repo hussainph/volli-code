@@ -43,11 +43,11 @@ function sheet(): HTMLElement {
   return found;
 }
 
-async function type(input: HTMLInputElement, value: string): Promise<void> {
+async function type(field: HTMLInputElement, value: string): Promise<void> {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
   await act(async () => {
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    setter.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
 
@@ -180,6 +180,52 @@ describe("Add a host", () => {
     expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
   });
 
+  it("opens on main's replay: the view, the newest log, and how much came before", async () => {
+    await startFlow();
+    const line = (message: string) => ({
+      at: "t",
+      level: "info" as const,
+      message,
+      fields: {},
+    });
+    await emit({
+      kind: "replay",
+      view: flowView({ done: 6, at: "link" }),
+      log: [line("tunnel retrying"), line("tunnel up")],
+      omitted: 412,
+    });
+    expect(rows().at(-1)).toBe("link:active:Opening the connection…");
+    await click(sheet(), "Details");
+    expect(sheet().querySelector('[role="log"]')?.textContent).toBe(
+      "412 earlier lines omittedtunnel retryingtunnel up",
+    );
+    // A resubscription's replay replaces what was shown, never doubles it.
+    await emit({
+      kind: "replay",
+      view: flowView({ done: 6, at: "link" }),
+      log: [line("again")],
+      omitted: 1,
+    });
+    expect(sheet().querySelector('[role="log"]')?.textContent).toBe("1 earlier line omittedagain");
+    await emit({ kind: "log", flowId: "flow-1", line: line("next") });
+    expect(sheet().querySelector('[role="log"]')?.textContent).toBe(
+      "1 earlier line omittedagainnext",
+    );
+  });
+
+  it("names the question on screen when it answers, so main refuses a stale one", async () => {
+    await startFlow();
+    await emit({
+      kind: "view",
+      view: flowView({
+        status: "question",
+        question: { id: "q3", kind: "identity-changed", step: "enroll", pinned: "a", hostId: "b" },
+      }),
+    });
+    await click(sheet(), "Pair again");
+    expect(api.calls.at(-1)).toEqual(["answerAdd", "flow-1", "repair", "q3"]);
+  });
+
   it("asks to trust an unknown host key, showing what to compare", async () => {
     await startFlow();
     await emit({
@@ -188,6 +234,7 @@ describe("Add a host", () => {
         status: "question",
         at: "connect",
         question: {
+          id: "q1",
           kind: "host-key",
           step: "connect",
           offer: {
@@ -203,7 +250,7 @@ describe("Add a host", () => {
       "ED25519SHA256:abc",
     );
     await click(sheet(), "Trust and continue");
-    expect(api.calls.at(-1)).toEqual(["answerAdd", "flow-1", "accept-host-key"]);
+    expect(api.calls.at(-1)).toEqual(["answerAdd", "flow-1", "accept-host-key", "q1"]);
   });
 
   it("sends a sudo password straight to main, and offers an install for this account only", async () => {
@@ -215,6 +262,7 @@ describe("Add a host", () => {
         done: 3,
         at: "install",
         question: {
+          id: "q1",
           kind: "sudo-password",
           step: "install",
           reason: "install",
@@ -228,12 +276,12 @@ describe("Add a host", () => {
     expect(sheet().textContent).toContain("Agents on deploy@box will share your account.");
     await type(input("sudo password"), "hunter2");
     await click(sheet(), "Run it");
-    expect(api.calls.at(-1)).toEqual(["sudoPassword", "flow-1", "hunter2"]);
+    expect(api.calls.at(-1)).toEqual(["sudoPassword", "flow-1", "hunter2", "q1"]);
     // Never kept: the field is empty again, and nothing else holds it.
     expect(input("sudo password").value).toBe("");
     expect(JSON.stringify(useRemoteHostsStore.getState())).not.toContain("hunter2");
     await click(sheet(), "Install for my account only");
-    expect(api.calls.at(-1)).toEqual(["answerAdd", "flow-1", "user-install"]);
+    expect(api.calls.at(-1)).toEqual(["answerAdd", "flow-1", "user-install", "q1"]);
   });
 
   it("says a refused call in a toast and lets the buttons work again", async () => {
@@ -244,7 +292,7 @@ describe("Add a host", () => {
         status: "question",
         at: "probe",
         done: 1,
-        question: { kind: "already-paired", step: "probe", hostId: "h" },
+        question: { id: "q1", kind: "already-paired", step: "probe", hostId: "h" },
       }),
     });
     api.refuseNext("answerAdd", "The flow is not waiting");
@@ -262,6 +310,7 @@ describe("Add a host", () => {
         at: "probe",
         done: 1,
         question: {
+          id: "q1",
           kind: "existing-hostd",
           step: "probe",
           version: "0.2.4",
@@ -279,6 +328,7 @@ describe("Add a host", () => {
         at: "probe",
         done: 1,
         question: {
+          id: "q1",
           kind: "existing-hostd",
           step: "probe",
           version: "0.2.4",
@@ -295,7 +345,7 @@ describe("Add a host", () => {
         status: "question",
         at: "enroll",
         done: 5,
-        question: { kind: "identity-changed", step: "enroll", pinned: "a", hostId: "b" },
+        question: { id: "q1", kind: "identity-changed", step: "enroll", pinned: "a", hostId: "b" },
       }),
     });
     expect(sheet().textContent).toContain("It was restored or reinstalled.");
@@ -307,6 +357,7 @@ describe("Add a host", () => {
         at: "start",
         done: 4,
         question: {
+          id: "q1",
           kind: "sudo-password",
           step: "start",
           reason: "linger",
@@ -323,14 +374,14 @@ describe("Add a host", () => {
         status: "question",
         at: "link",
         done: 6,
-        question: { kind: "brand-new", step: "link" },
+        question: { id: "q1", kind: "brand-new", step: "link" },
       }),
     });
     expect(sheet().textContent).toContain("asked something this build can’t answer");
     expect(api.calls.slice(1)).toEqual([
-      ["answerAdd", "flow-1", "adopt"],
-      ["answerAdd", "flow-1", "update"],
-      ["answerAdd", "flow-1", "repair"],
+      ["answerAdd", "flow-1", "adopt", "q1"],
+      ["answerAdd", "flow-1", "update", "q1"],
+      ["answerAdd", "flow-1", "repair", "q1"],
     ]);
   });
 
@@ -340,9 +391,8 @@ describe("Add a host", () => {
       kind: "view",
       view: {
         ...flowView({ status: "failed", done: 0 }),
-        steps: flowView({ done: 0 }).steps.map((step) =>
-          step.id === "connect" ? { ...step, status: "failed" } : step,
-        ),
+        // The first step failed; the rest wait.
+        steps: flowView({ done: 0 }).steps.with(0, { id: "connect", status: "failed" }),
         failure: {
           code: "unreachable",
           step: "connect",
