@@ -470,13 +470,9 @@ test("failed local interruption remains pending for cleanup retry, never claims 
 });
 
 test("native Quit dispatches the real macOS action instead of no-op JS role.click", () => {
-  const supervisor = read("../supervisor.mjs");
-  const native = supervisor.slice(
-    supervisor.indexOf('case "native-quit":'),
-    supervisor.indexOf('case "native-reopen":'),
-  );
+  const native = read("native-window-lifecycle.mjs");
   const begin = "app.evaluate(({ Menu }) => {";
-  const body = native.slice(native.indexOf(begin) + begin.length, native.indexOf("});"));
+  const body = native.slice(native.indexOf(begin) + begin.length, native.indexOf("}),"));
   const actions = [];
   const result = new Function("Menu", body)({
     getApplicationMenu: () => ({
@@ -592,13 +588,20 @@ test("journey arranges only benign Git state and runs all eight real assertions 
   );
   const supervisor = read("../supervisor.mjs");
   assert.doesNotMatch(supervisor, /VOLLI_SMOKE_MENU_BAR_HOST|volliMenuBarHost/);
+  assert.match(supervisor, /await quitNativeWindow\(app, page\)/u);
+  const lifecycle = read("./native-window-lifecycle.mjs");
   assert.match(
-    supervisor,
+    lifecycle,
     /windows\.filter\(\(window\) => window\.isVisible\(\)\)\.length/u,
     "quit observes real native visibility, not the retained Playwright Page count",
   );
-  assert.match(supervisor, /return measured\.visible === 0 \? measured : false/u);
+  assert.match(lifecycle, /assert\.equal\(nativeWindows\.visible, 0/u);
   assert.match(smoke, /assert\.equal\(quit\.nativeWindows\.visible, 0\)/u);
+  assert.match(
+    smoke,
+    /await call\("native-reopen"\);\s*nativeQuitAttempted = false;[\s\S]*?await selectHost\(REMOTE_HOST\);[\s\S]*?stableWaitingLabel\(line\) === rowLabel/u,
+    "a fresh renderer navigates back through the host switcher before proving the same Session row",
+  );
   assert.match(smoke, /await stopLocalKeepalive\(\);\s*await selectHost\(REMOTE_HOST\)/u);
   assert.match(
     smoke,
