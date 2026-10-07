@@ -6,12 +6,13 @@
  * this only holds the latest view, what the flow has found (read with
  * `hostAdd.facts` on each view) and the log lines, and turns the person's
  * clicks into the tier's calls. A sudo password goes from the field to
- * `hostAdd.sudoPassword` and is never kept here. Leaving a flow that has not
- * finished (Back, Close) cancels it in main, which discards whatever step was
- * in flight.
+ * `hostAdd.sudoPassword` and is never kept here. Closing the sheet only
+ * detaches its UI. The hook lives in the sheet owner, not its visible body;
+ * only explicit Cancel or Back cancels in main.
  */
 import * as React from "react";
 import type {
+  ActiveAddHost,
   AddHostAnswer,
   AddHostFacts,
   AddHostLogLine,
@@ -53,8 +54,10 @@ export type AddHostPhase =
       readonly omitted: number;
       /** The stream ended without the flow finishing. */
       readonly lost: boolean;
-      /** A call is in flight: its buttons wait. */
+      /** A step-driving call is in flight: repeated answers/retries wait, Cancel does not. */
       readonly busy: boolean;
+      /** Cancellation preempts a pending step-driving RPC. */
+      readonly cancelling: boolean;
     };
 
 export interface AddHostFlow {
@@ -66,8 +69,12 @@ export interface AddHostFlow {
   retry(from?: AddHostStepId): void;
   /** Leaves the flow (cancelling it) for the address field, keeping what was typed. */
   back(): void;
-  /** Cancels an unfinished flow; the caller closes the sheet. */
-  leave(): void;
+  /** Only a still-current successful cancellation may invoke the close callback. */
+  leave(onCancelled?: () => void): Promise<void>;
+  /** Clears only a terminal flow when the sheet closes. */
+  resetFinished(): void;
+  /** Reopen: resubscribe a lost observer or discover main's active reference, never start an install. */
+  reattach(): void;
 }
 
 const messageOf = (error: unknown): string =>
@@ -80,6 +87,21 @@ const questionOf = (phase: AddHostPhase): string =>
 const finished = (view: AddHostView | null): boolean =>
   view !== null && (view.status === "done" || view.status === "cancelled");
 
+function followingFlow(flowId: string, target: string): AddHostPhase {
+  return {
+    kind: "flow",
+    flowId,
+    target,
+    view: null,
+    facts: NO_FACTS,
+    log: [],
+    omitted: 0,
+    lost: false,
+    busy: false,
+    cancelling: false,
+  };
+}
+
 export function useAddHostFlow(
   api: RemoteHostsApi,
   initialTarget: string,
@@ -91,6 +113,7 @@ export function useAddHostFlow(
     error: null,
     starting: false,
   });
+  const [subscriptionGeneration, resubscribe] = React.useState(0);
   const flowId = phase.kind === "flow" ? phase.flowId : null;
   // The latest phase, for the callbacks below without re-binding them.
   const current = React.useRef(phase);
@@ -116,6 +139,7 @@ export function useAddHostFlow(
     };
     const unsubscribe = api.subscribeAdd(flowId, {
       onEvent(event) {
+        if (!following) return;
         // A view (or a replay) may follow a step that found something.
         if (event.kind !== "log") readFacts();
         setPhase((before) => {
@@ -142,6 +166,7 @@ export function useAddHostFlow(
         });
       },
       onError() {
+        if (!following) return;
         setPhase((before) =>
           before.kind === "flow" && before.flowId === flowId ? { ...before, lost: true } : before,
         );
@@ -151,82 +176,144 @@ export function useAddHostFlow(
       following = false;
       unsubscribe();
     };
-  }, [api, flowId]);
+  }, [api, flowId, subscriptionGeneration]);
 
-  /** Runs one call on the flow; its buttons wait for it, and a refusal is said. */
+  // Unmount releases local observation, never the install owned by main.
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // One intent generation: cancellation supersedes a step RPC; replacing or
+  // clearing a flow supersedes both. Even same-id late replies cannot settle
+  // a newer operation. The ref also guards double clicks before React renders.
+  const operation = React.useRef(0);
+  const pending = React.useRef<"step" | "cancel" | "start" | null>(null);
+  const owns = React.useCallback(
+    (id: string, generation: number): boolean =>
+      mounted.current &&
+      operation.current === generation &&
+      current.current.kind === "flow" &&
+      current.current.flowId === id,
+    [],
+  );
+
   const call = React.useCallback(
     (run: (id: string) => Promise<unknown>) => {
       const now = current.current;
-      if (now.kind !== "flow" || now.busy) return;
+      if (now.kind !== "flow" || pending.current !== null) return;
       const id = now.flowId;
-      const settle = () =>
+      const generation = ++operation.current;
+      pending.current = "step";
+      setPhase((before) =>
+        before.kind === "flow" && before.flowId === id ? { ...before, busy: true } : before,
+      );
+      const settle = (error?: unknown) => {
+        if (!owns(id, generation)) return;
+        pending.current = null;
         setPhase((before) =>
           before.kind === "flow" && before.flowId === id ? { ...before, busy: false } : before,
         );
-      setPhase({ ...now, busy: true });
-      run(id).then(settle, (error: unknown) => {
-        settle();
-        onError(messageOf(error));
-      });
+        if (error !== undefined) onError(messageOf(error));
+      };
+      run(id).then(
+        () => settle(),
+        (error: unknown) => settle(error),
+      );
     },
-    [onError],
+    [onError, owns],
   );
 
-  /**
-   * The start in flight, if any: left (Close, unmount) before main answered,
-   * its flow is cancelled the moment the answer lands, never followed.
-   */
-  const starting = React.useRef<{ abandoned: boolean } | null>(null);
-
-  const cancel = React.useCallback(() => {
-    if (starting.current !== null) starting.current.abandoned = true;
+  const cancel = async (onCancelled?: () => void): Promise<void> => {
     const now = current.current;
-    if (now.kind !== "flow" || finished(now.view)) return;
-    // Fire and forget: the flow is left either way, and main discards it.
-    api.cancelAdd(now.flowId).catch(() => {});
-  }, [api]);
+    if (now.kind !== "flow" || pending.current === "cancel") return;
+    const id = now.flowId;
+    const generation = ++operation.current;
+    pending.current = "cancel";
+    setPhase((before) =>
+      before.kind === "flow" && before.flowId === id
+        ? { ...before, busy: false, cancelling: true }
+        : before,
+    );
+    try {
+      if (!finished(now.view)) await api.cancelAdd(id);
+      if (!owns(id, generation)) return;
+      pending.current = null;
+      // Close synchronously inside the identity guard, not in an old Actions
+      // promise callback which could close a replacement flow's sheet.
+      onCancelled?.();
+      setPhase({ kind: "entry", target: now.target, error: null, starting: false });
+    } catch (error) {
+      if (!owns(id, generation)) return;
+      pending.current = null;
+      setPhase((before) =>
+        before.kind === "flow" && before.flowId === id ? { ...before, cancelling: false } : before,
+      );
+      onError(messageOf(error));
+    }
+  };
 
-  // Leaving by any road, the sheet's body unmounting included (Close, or
-  // `cloud` turning off), cancels an unfinished flow and a start in flight.
-  React.useEffect(() => cancel, [cancel]);
+  const discovery = React.useRef(0);
+  const discover = React.useCallback(() => {
+    const now = current.current;
+    if (now.kind !== "entry" || pending.current !== null) return;
+    const read = ++discovery.current;
+    const generation = operation.current;
+    const valid = () =>
+      mounted.current &&
+      read === discovery.current &&
+      operation.current === generation &&
+      current.current.kind === "entry";
+    api.activeAdds().then(
+      (flows) => {
+        if (!valid()) return;
+        const active: ActiveAddHost | undefined = flows[0];
+        if (active === undefined) return;
+        ++operation.current;
+        setPhase(followingFlow(active.flowId, active.target));
+      },
+      (error: unknown) => {
+        if (!valid()) return;
+        setPhase((before) =>
+          before.kind === "entry" ? { ...before, error: messageOf(error) } : before,
+        );
+      },
+    );
+  }, [api]);
+  // Main, not this React owner, is the recoverable index after window close,
+  // navigation/reload or cloud off/on. One bounded read; no polling or starts.
+  React.useEffect(() => {
+    discover();
+  }, [discover]);
 
   return {
     phase,
-    setTarget(target) {
-      setPhase((before) => (before.kind === "entry" ? { ...before, target, error: null } : before));
-    },
+    setTarget: React.useCallback((target: string) => {
+      setPhase((before) =>
+        before.kind === "entry" && before.target !== target
+          ? { ...before, target, error: null }
+          : before,
+      );
+    }, []),
     connect() {
       const now = current.current;
-      if (now.kind !== "entry" || now.starting) return;
+      if (now.kind !== "entry" || now.starting || pending.current !== null) return;
       const target = now.target.trim();
+      const generation = ++operation.current;
+      pending.current = "start";
       setPhase({ ...now, starting: true, error: null });
-      const attempt = { abandoned: false };
-      starting.current = attempt;
-      const settled = (): boolean => {
-        if (starting.current === attempt) starting.current = null;
-        return attempt.abandoned;
-      };
       api.startAdd({ target }).then(
         ({ flowId: id }) => {
-          if (settled()) {
-            // Left while main was starting it: it never reaches the screen.
-            api.cancelAdd(id).catch(() => {});
-            return;
-          }
-          setPhase({
-            kind: "flow",
-            flowId: id,
-            target,
-            view: null,
-            facts: NO_FACTS,
-            log: [],
-            omitted: 0,
-            lost: false,
-            busy: false,
-          });
+          if (!mounted.current || operation.current !== generation) return;
+          pending.current = null;
+          setPhase(followingFlow(id, target));
         },
         (error: unknown) => {
-          if (settled()) return;
+          if (!mounted.current || operation.current !== generation) return;
+          pending.current = null;
           setPhase({ kind: "entry", target: now.target, error: messageOf(error), starting: false });
         },
       );
@@ -239,9 +326,21 @@ export function useAddHostFlow(
     back() {
       const now = current.current;
       if (now.kind !== "flow") return;
-      cancel();
-      setPhase({ kind: "entry", target: now.target, error: null, starting: false });
+      void cancel();
     },
     leave: cancel,
+    reattach: React.useCallback(() => {
+      const now = current.current;
+      if (now.kind === "flow" && now.lost) resubscribe((generation) => generation + 1);
+      else if (now.kind === "entry") discover();
+    }, [discover]),
+    resetFinished: React.useCallback(() => {
+      const now = current.current;
+      if (now.kind === "flow" && finished(now.view)) {
+        ++operation.current;
+        pending.current = null;
+        setPhase({ kind: "entry", target: "", error: null, starting: false });
+      }
+    }, []),
   };
 }

@@ -34,6 +34,7 @@ import {
   HOST_LINK_RELAY_EVENT_ID_MAX,
   HOST_LINK_RELAY_PATH_MAX,
   hostLinkRelayEventEnds,
+  type ActiveAddHost,
   type AddHostAnswer,
   type AddHostEvent,
   type AddHostFacts,
@@ -75,6 +76,7 @@ import {
 } from "./catalog";
 import { procedureSchemas } from "./procedure-schema";
 import {
+  activeAddHostsSchema,
   addHostEventSchema,
   addHostStartInputSchema,
   flowInputSchema,
@@ -138,6 +140,8 @@ export interface DesktopRouterHandlers {
   >;
   readonly "hostAdd.retry": HostHandler<{ flowId: string; from?: AddHostStepId }, null>;
   readonly "hostAdd.cancel": HostHandler<{ flowId: string }, null>;
+  /** The add flows main still owns (VC-720): bounded, secret-free, newest first. */
+  readonly "hostAdd.active": HostHandler<void, readonly ActiveAddHost[]>;
   /** Sign-ins on a remote host, from this desktop (VC-702 PR 2): desktop main's, over its link. */
   readonly "hostSignIns.status": HostHandler<{ hostId: string }, HostSignInStatus>;
   readonly "hostSignIns.macKeys": HostHandler<void, readonly string[]>;
@@ -521,6 +525,15 @@ export function createDesktopRouter() {
         .input(flowInputSchema)
         .output(addHostFactsSchema)
         .query(({ ctx, input }) => ctx.handlers["hostAdd.facts"](input, ctx.call)),
+      /**
+       * The add flows main still owns (VC-720): bounded, secret-free
+       * references, newest first, for a destroyed or reloaded window to
+       * rediscover an install that outlived it and subscribe to it again.
+       * Each view travels whole only through `subscribe`.
+       */
+      active: hostProcedure("hostAdd.active")
+        .output(activeAddHostsSchema)
+        .query(({ ctx }) => ctx.handlers["hostAdd.active"](undefined, ctx.call)),
     },
     /**
      * Sign-ins on a remote host, from this desktop (VC-702 PR 2). Values go in

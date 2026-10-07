@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { HostLinkLogEvent } from "@volli/host-protocol/client-link";
-import { REMOTE_HOST_LINK_CAP } from "@volli/shared";
+import { MAX_ACTIVE_ADD_HOSTS, REMOTE_HOST_LINK_CAP } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { PROBE_SCRIPT } from "./probe";
@@ -298,6 +298,44 @@ describe("quit owns everything in flight (B2)", () => {
 });
 
 describe("one finalization per host (B3)", () => {
+  it("detaching during install leaves it running and startAdd re-attaches to the same flow", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered = false;
+    const h = harness({
+      overrides: [
+        async (script) => {
+          if (!script.includes(" install --")) return undefined;
+          entered = true;
+          await held;
+          return undefined;
+        },
+      ],
+    });
+    const { flowId } = await h.engine.startAdd({ target: "deploy@box" });
+    const first = watch(h.engine, flowId);
+    await until(() => entered);
+    expect(
+      first
+        .views()
+        .at(-1)
+        ?.steps.find((step) => step.id === "install")?.status,
+    ).toBe("running");
+    first.stop();
+    const again = await h.engine.startAdd({ target: "deploy@box" });
+    expect(again.flowId).toBe(flowId);
+    const attached = watch(h.engine, again.flowId);
+    expect(attached.events[0]?.kind).toBe("replay");
+    expect(attached.views().at(-1)?.status).toBe("running");
+    release();
+    expect((await attached.until()).status).toBe("done");
+    expect(h.engine.snapshot().hosts).toHaveLength(1);
+    attached.stop();
+    await h.engine.close();
+  });
+
   it("a target with a flow under way answers that flow: a retried start is the same add", async () => {
     const h = harness();
     h.box.trusted = false;
@@ -604,6 +642,53 @@ describe("finished flows are let go (note 3)", () => {
     expect(() => h.engine.subscribeAdd(flowId, () => {})).toThrow(
       expect.objectContaining({ code: "unknown-flow" }),
     );
+    await h.engine.close();
+  });
+});
+
+describe("the add flows main still owns (VC-720)", () => {
+  it("lists its live flows newest first, and a done or cancelled one leaves", async () => {
+    const h = harness();
+    // Each flow stops on its host key and stays there: nothing finishes, and
+    // retention keeps every terminal flow past these reads.
+    h.box.trusted = false;
+    const first = await startAdd(h, { target: "a@one", name: "One" });
+    const second = await startAdd(h, { target: "b@two" });
+    expect(first.view.status).toBe("question");
+    expect(second.view.status).toBe("question");
+    // Newest first, and exactly the four reference fields: no view, no secret.
+    expect(h.engine.activeAdds()).toEqual([
+      { flowId: second.flowId, target: "b@two", name: "b@two", status: "question" },
+      { flowId: first.flowId, target: "a@one", name: "One", status: "question" },
+    ]);
+    // A window gone makes no difference: main owns the flow either way.
+    second.w.stop();
+
+    // Done: the host is in the registry, and the flow has left the list.
+    await h.engine.answerAdd(first.flowId, "q1", { kind: "accept-host-key" });
+    await first.w.until((view) => view.status === "done");
+    expect(h.engine.activeAdds().map((active) => active.flowId)).toEqual([second.flowId]);
+
+    // Cancelled leaves too, well before retention would let it go.
+    await h.engine.cancelAdd(second.flowId);
+    expect(h.engine.activeAdds()).toEqual([]);
+    await h.engine.close();
+  });
+
+  it("answers at most MAX_ACTIVE_ADD_HOSTS of them, newest first", async () => {
+    const h = harness();
+    h.box.trusted = false;
+    const flows: string[] = [];
+    for (let index = 0; index < MAX_ACTIVE_ADD_HOSTS + 3; index += 1) {
+      const { flowId } = await startAdd(h, { target: `you@box-${index}` });
+      flows.push(flowId);
+    }
+    const active = h.engine.activeAdds();
+    expect(active).toHaveLength(MAX_ACTIVE_ADD_HOSTS);
+    // The three oldest are past the bound; the newest leads.
+    expect(active.map((entry) => entry.flowId)).toEqual(flows.slice(3).toReversed());
+    for (const flowId of flows) await h.engine.cancelAdd(flowId);
+    expect(h.engine.activeAdds()).toEqual([]);
     await h.engine.close();
   });
 });

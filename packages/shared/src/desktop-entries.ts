@@ -288,6 +288,16 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "Follow one subscription of a remote project over its Workspace link.",
   },
+  // The add flows main still owns (VC-720): a bounded, secret-free reference
+  // to each, so a destroyed or reloaded window can rediscover an install that
+  // outlived it and subscribe to it again. The whole view stays with
+  // `hostAdd.subscribe`.
+  {
+    key: "hostAdd.active",
+    placement: "host",
+    idempotency: "read",
+    summary: "The add flows main still owns, newest first, without their views.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

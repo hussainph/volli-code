@@ -28,6 +28,7 @@ afterEach(async () => {
   toast.error.mockClear();
   setRemoteHostsApi(null);
   vi.restoreAllMocks();
+  useRemoteHostsStore.setState({ addHostActivity: null });
 });
 
 /**
@@ -200,6 +201,24 @@ describe("host chip", () => {
       "Manage hosts…",
     ]);
     expect(list.querySelector('[aria-current="true"]')?.textContent).toContain("hetzner-1");
+  });
+
+  it("keeps a detached add visible and opens its existing sheet", async () => {
+    world = hostWorld();
+    const addHost = vi.fn();
+    useHostConnectionStore.getState().setEntryPoints({ addHost, manageHosts: () => {} });
+    useRemoteHostsStore.setState({ addHostActivity: { name: "box", status: "running" } });
+    await world.render(<HostChip />);
+    await click(await openSwitcher(), "Adding box…");
+    expect(addHost).toHaveBeenCalledOnce();
+    await act(async () =>
+      useRemoteHostsStore.setState({ addHostActivity: { name: "box", status: "question" } }),
+    );
+    expect((await openSwitcher()).textContent).toContain("Adding box — needs attention…");
+    await act(async () =>
+      useRemoteHostsStore.setState({ addHostActivity: { name: "box", status: "done" } }),
+    );
+    expect(switcher().textContent).toContain("box added — view…");
   });
 
   it("withholds Add a host… once VC-700 registered and a read-only hosts file withheld it", async () => {

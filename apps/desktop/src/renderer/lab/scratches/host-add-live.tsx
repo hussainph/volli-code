@@ -29,7 +29,6 @@ import type {
 } from "@volli/shared";
 
 import { HostsChrome } from "@renderer/components/hosts/hosts-chrome";
-import { openAddHostSheet } from "@renderer/components/hosts/host-entry";
 import { HostsPane } from "@renderer/components/settings/panes/hosts-pane";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useExperimentsStore } from "@renderer/stores/experiments";
@@ -47,6 +46,8 @@ export const note =
 
 type Scenario =
   | "happy"
+  | "host-key-changed"
+  | "detach"
   | "host-key"
   | "sudo"
   | "existing"
@@ -58,6 +59,8 @@ type Scenario =
 
 const SCENARIOS: readonly { value: Scenario; label: string }[] = [
   { value: "happy", label: "Straight through" },
+  { value: "detach", label: "Detach during install (Esc, then re-open)" },
+  { value: "host-key-changed", label: "Changed SSH key (port 2222)" },
   { value: "host-key", label: "Unknown host key" },
   { value: "sudo", label: "Needs a sudo password (or: my account only)" },
   { value: "existing", label: "An older Volli host is there" },
@@ -99,6 +102,18 @@ const line = (message: string, fields: AddHostLogLine["fields"] = {}): AddHostLo
 
 /** Where the scenario stops before it can finish, once; `null` runs straight through. */
 function stopFor(scenario: Scenario, step: AddHostStepId): Partial<AddHostView> | null {
+  if (scenario === "host-key-changed" && step === "connect") {
+    return {
+      status: "failed",
+      failure: {
+        code: "host-key-changed",
+        step: "connect",
+        line: "box’s identity changed since you last connected. If you rebuilt it, remove the old key, then try again.",
+        recovery: { action: "retry", label: "Try again", from: "connect" },
+        detail: "REMOTE HOST IDENTIFICATION HAS CHANGED!",
+      },
+    };
+  }
   if (scenario === "host-key" && step === "connect") {
     return {
       status: "question",
@@ -182,6 +197,7 @@ function stopFor(scenario: Scenario, step: AddHostStepId): Partial<AddHostView> 
 
 export default function HostAddLiveScratch() {
   const [scenario, setScenario] = React.useState<Scenario>("host-key");
+  const activity = useRemoteHostsStore((state) => state.addHostActivity);
   const scenarioRef = React.useRef(scenario);
   scenarioRef.current = scenario;
 
@@ -315,7 +331,7 @@ export default function HostAddLiveScratch() {
         kind: "view",
         view: flowView({ flowId, target, name: target, done: flow.at, at: step, facts }),
       });
-      later(STEP_MS, () => {
+      later(scenarioRef.current === "detach" && step === "install" ? 15000 : STEP_MS, () => {
         api.emit(flowId, { kind: "log", flowId, line: line("step finished", { step }) });
         flow.at += 1;
         run(flowId);
@@ -434,11 +450,23 @@ export default function HostAddLiveScratch() {
           <button
             type="button"
             className="rounded-md border border-border px-3 py-1 hover:bg-muted"
-            onClick={() => openAddHostSheet()}
+            onClick={() => {
+              const store = useRemoteHostsStore.getState();
+              if (store.readOnly === null)
+                store.openAddHost(
+                  scenario === "host-key-changed" ? "deploy@box:2222" : "deploy@box",
+                );
+            }}
           >
-            Add a host…
+            {activity === null ? "Add a host…" : `Re-attach to ${activity.name}…`}
           </button>
+          <span role="status" className="text-muted-foreground">
+            {activity === null ? "" : `${activity.name}: ${activity.status}`}
+          </span>
         </div>
+        <p className="text-ui text-muted-foreground">
+          Simulated backend: the shipped UI over scripted flow events; no SSH or main process.
+        </p>
         <HostsChrome />
         <div className="max-w-2xl">
           <HostsPane />
