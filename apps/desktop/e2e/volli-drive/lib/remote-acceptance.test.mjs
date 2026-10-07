@@ -21,6 +21,7 @@ import {
   visibleServingRow,
   snapshotSubtree,
   projectCreationOutcome,
+  acceptanceHostAddState,
 } from "./remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -122,6 +123,43 @@ test("visible controls handle colon-quoted YAML keys and disabled rows without r
   );
   assert.equal(visibleControls(tree, "button", "volli-acceptance", { contains: true }).length, 1);
   assert.equal(visibleControls(tree, "button", "Connect").length, 1);
+});
+const selfAddQuestion = `- paragraph: This is the Mac you're using. Its projects already run here. Add it anyway (for testing)?
+- button "Add anyway" [ref=e1]
+- button "Cancel" [ref=e2]`;
+test("host add tolerates pre-VC-724 readiness and handles the optional self-add question first", () => {
+  assert.equal(acceptanceHostAddState("Installing…", "box"), "pending");
+  assert.equal(acceptanceHostAddState("box is ready", "box"), "ready");
+  assert.equal(acceptanceHostAddState("another host is ready", "box"), "pending");
+  assert.equal(acceptanceHostAddState(selfAddQuestion, "box"), "self-add");
+  assert.equal(
+    acceptanceHostAddState(`box is ready\n${selfAddQuestion}`, "box"),
+    "self-add",
+    "a background ready label cannot skip the visible confirmation",
+  );
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  assert.match(smoke, /acceptanceHostAddState\(current\.text, REMOTE_HOST\)/u);
+  assert.match(smoke, /await shot\("step-1-self-add-question"\)/u);
+  assert.match(smoke, /await click\("button", "Add anyway"\)/u);
+});
+test("self-add requires the full visible question and enabled unambiguous answers", () => {
+  assert.throws(
+    () =>
+      acceptanceHostAddState(selfAddQuestion.replace("Its projects already run here. ", ""), "box"),
+    /confirmation text/u,
+  );
+  for (const tree of [
+    selfAddQuestion.replace("[ref=e1]", "[disabled]"),
+    selfAddQuestion.replace('- button "Add anyway" [ref=e1]', ""),
+    `${selfAddQuestion}\n- button "Add anyway" [ref=e3]`,
+  ])
+    assert.throws(() => acceptanceHostAddState(tree, "box"), /enabled Add anyway/u);
+  for (const tree of [
+    selfAddQuestion.replace("[ref=e2]", "[disabled]"),
+    selfAddQuestion.replace('- button "Cancel" [ref=e2]', ""),
+    `${selfAddQuestion}\n- button "Cancel" [ref=e3]`,
+  ])
+    assert.throws(() => acceptanceHostAddState(tree, "box"), /enabled Cancel/u);
 });
 test("host selection is scoped to the switcher, excluding background rename controls", () => {
   const tree = `- generic:\n  - button "volli-acceptance Rename" [ref=e1]\n- dialog "Switch host" [ref=e2]:\n  - group "Hosts":\n    - button "volli-acceptance 0 projects" [ref=e3]\n- button "More for volli-acceptance" [ref=e4]`;

@@ -50,6 +50,24 @@ export function snapshotSubtree(tree, role, name) {
   return lines.slice(start, end).join("\n");
 }
 
+/** VC-724 is optional until it lands; a visible self-add question is never skipped. */
+export function acceptanceHostAddState(tree, hostName) {
+  const answers = visibleControls(tree, "button", "Add anyway");
+  if (answers.length || tree.includes("This is the Mac you're using")) {
+    const question =
+      "This is the Mac you're using. Its projects already run here. Add it anyway (for testing)?";
+    if (!tree.includes(question))
+      throw new Error("Self-add confirmation text is missing or changed");
+    if (answers.length !== 1 || answers[0].includes("[disabled]") || !answers[0].includes("[ref="))
+      throw new Error("Expected one enabled Add anyway button");
+    const cancel = visibleControls(tree, "button", "Cancel");
+    if (cancel.length !== 1 || cancel[0].includes("[disabled]"))
+      throw new Error("Expected one enabled Cancel button for self-add");
+    return "self-add";
+  }
+  return tree.includes(`${hostName} is ready`) ? "ready" : "pending";
+}
+
 /** Require source, component and message within one visible log list row. */
 export function visibleServingRow(tree, host) {
   const lines = tree.split("\n");

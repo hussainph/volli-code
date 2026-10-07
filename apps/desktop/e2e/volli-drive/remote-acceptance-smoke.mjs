@@ -26,6 +26,7 @@ import {
   STREAM_REPLY,
   assertAcceptanceRunner,
   projectCreationOutcome,
+  acceptanceHostAddState,
 } from "./lib/remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -132,7 +133,23 @@ async function journey() {
     await click("button", "Connect");
     // known_hosts is the fixture's independently generated key. No ambient
     // trust/keys/agent or network destination can enter the system SSH client.
-    const ready = await wait(`${REMOTE_HOST} is ready`, 120_000);
+    let ready;
+    await waitUntil(
+      "host ready, answering the optional VC-724 self-add confirmation",
+      async () => {
+        const current = await snap();
+        const state = acceptanceHostAddState(current.text, REMOTE_HOST);
+        if (state === "self-add") {
+          await shot("step-1-self-add-question");
+          await click("button", "Add anyway");
+          return false;
+        }
+        if (state !== "ready") return false;
+        ready = current;
+        return true;
+      },
+      { timeout: 120_000, interval: 200 },
+    );
     assert.match(ready.text, /Volli host/);
     assert.ok(ready.text.includes(`Starts when you log in to ${REMOTE_HOST}`));
     await shot("step-1-ready");
