@@ -8,8 +8,11 @@ import type {
   AddHostEvent,
   AddHostFacts,
   AddHostStepId,
+  CreateRemoteProjectInput,
+  CreateRemoteProjectResult,
   RemoteHost,
   RemoteHostDevice,
+  RemoteHostProjects,
 } from "@volli/shared";
 
 import { NO_FACTS, type AddHostFlowView } from "@renderer/components/hosts/add-host-model";
@@ -28,7 +31,11 @@ export type FakeCall =
   | readonly ["cancelAdd", string]
   | readonly ["rename", string, string]
   | readonly ["forget", string]
-  | readonly ["devices", string];
+  | readonly ["devices", string]
+  | readonly ["projects", string]
+  | readonly ["createProject", CreateRemoteProjectInput]
+  | readonly ["openWorkspace", string, string]
+  | readonly ["closeWorkspace", string, string];
 
 export interface FakeRemoteHostsApi extends RemoteHostsApi {
   readonly calls: FakeCall[];
@@ -44,9 +51,29 @@ export interface FakeRemoteHostsApi extends RemoteHostsApi {
   factsOf: Map<string, AddHostFacts | Error>;
   /** What `devices(hostId)` answers: a list, or a refusal. */
   devicesOf: Map<string, readonly RemoteHostDevice[] | Error>;
+  /** What `projects(hostId)` answers (VC-710): a listing, or a refusal; none listed, ready. */
+  projectsOf: Map<string, Omit<RemoteHostProjects, "hostId"> | Error>;
+  /**
+   * What `createProject` answers next; by default the project it names, made.
+   * A function sees the input; a promise lets a test hold it.
+   */
+  nextCreate:
+    | CreateRemoteProjectResult
+    | Error
+    | ((
+        input: CreateRemoteProjectInput,
+      ) => CreateRemoteProjectResult | Promise<CreateRemoteProjectResult>)
+    | null;
   /** Makes the next call of `method` refuse with `message`. */
   refuseNext(
-    method: "answerAdd" | "sudoPassword" | "retryAdd" | "rename" | "forget",
+    method:
+      | "answerAdd"
+      | "sudoPassword"
+      | "retryAdd"
+      | "rename"
+      | "forget"
+      | "openWorkspace"
+      | "closeWorkspace",
     message: string,
   ): void;
 }
@@ -70,6 +97,8 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
     calls,
     nextStart: { flowId: "flow-1" },
     devicesOf: new Map(),
+    projectsOf: new Map(),
+    nextCreate: null,
     factsOf: new Map(),
     emit(flowId, event) {
       if (event.kind !== "log" && "facts" in event.view) {
@@ -131,6 +160,40 @@ export function createFakeRemoteHostsApi(): FakeRemoteHostsApi {
       return answer instanceof Error
         ? Promise.reject(answer)
         : Promise.resolve({ hostId, devices: answer });
+    },
+    projects(hostId) {
+      calls.push(["projects", hostId]);
+      const answer = api.projectsOf.get(hostId) ?? { projects: [], adds: { kind: "ready" } };
+      return answer instanceof Error
+        ? Promise.reject(answer)
+        : Promise.resolve({ hostId, ...answer });
+    },
+    async createProject(input) {
+      calls.push(["createProject", input]);
+      const next = api.nextCreate;
+      if (next instanceof Error) throw next;
+      if (typeof next === "function") return next(input);
+      return (
+        next ?? {
+          ok: true,
+          created: true,
+          project: {
+            id: "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+            name: input.name ?? "acme",
+            prefix: "AC",
+            path: input.path ?? "/srv/volli/acme",
+            tickets: 0,
+          },
+        }
+      );
+    },
+    openWorkspace(hostId, workspaceId) {
+      calls.push(["openWorkspace", hostId, workspaceId]);
+      return settle("openWorkspace");
+    },
+    closeWorkspace(hostId, workspaceId) {
+      calls.push(["closeWorkspace", hostId, workspaceId]);
+      return settle("closeWorkspace");
     },
   };
   return api;

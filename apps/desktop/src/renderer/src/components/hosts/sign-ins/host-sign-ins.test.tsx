@@ -581,6 +581,35 @@ describe("the rows on screen", () => {
     ).toContain("hetzner-1 cannot be reached right now");
   });
 
+  it("reads an unreachable host again on Retry, and shows its rows once it answers (AM2)", async () => {
+    const source = fakeHostSignInSource({ status: status() });
+    source.failNextStatus();
+    const retried = new HostSignInController(source, "host-1");
+    function Rows() {
+      const snapshot = useHostSignIns(retried);
+      return <HostSignInRows hostName={HOST} snapshot={snapshot} controller={retried} />;
+    }
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    try {
+      await act(async () => root.render(<Rows />));
+      expect(container.textContent).toContain("hetzner-1 cannot be reached right now");
+      const retry = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Retry",
+      )!;
+      await act(async () => retry.click());
+      expect(source.calls.filter((call) => call === "status host-1")).toHaveLength(2);
+      expect(container.textContent).not.toContain("cannot be reached");
+      expect(container.querySelector('[data-row="git:github.com"]')).not.toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("draws a device code, the paste field and a key field beneath their rows", () => {
     const [, xai, openrouter] = signInRowsOf(status(), new Set());
     const code = reduceSignIn(IDLE, {

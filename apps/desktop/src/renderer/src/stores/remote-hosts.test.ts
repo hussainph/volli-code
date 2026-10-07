@@ -26,6 +26,10 @@ const bridge = vi.hoisted(() => {
         rename: { mutate: record("hosts.rename") },
         forget: { mutate: record("hosts.forget") },
         devices: { query: record("hosts.devices", { hostId: "h", devices: [] }) },
+        projects: { query: record("hosts.projects", { hostId: "h", projects: [] }) },
+        createProject: { mutate: record("hosts.createProject", { ok: true }) },
+        openWorkspace: { mutate: record("hosts.openWorkspace") },
+        closeWorkspace: { mutate: record("hosts.closeWorkspace") },
       },
       hostAdd: {
         start: { mutate: record("hostAdd.start", { flowId: "flow-1" }) },
@@ -85,6 +89,10 @@ describe("the remote hosts API over the tier", () => {
     await api.forget("h");
     expect(await api.devices("h")).toEqual({ hostId: "h", devices: [] });
     expect(await api.addFacts("flow-1")).toEqual({ user: "deploy" });
+    expect(await api.projects("h")).toEqual({ hostId: "h", projects: [] });
+    expect(await api.createProject({ hostId: "h", gitUrl: "u" })).toEqual({ ok: true });
+    await api.openWorkspace("h", "w");
+    await api.closeWorkspace("h", "w");
     expect(bridge.calls).toEqual([
       ["hostAdd.start", { target: "deploy@box" }],
       [
@@ -99,6 +107,10 @@ describe("the remote hosts API over the tier", () => {
       ["hosts.forget", { hostId: "h" }],
       ["hosts.devices", { hostId: "h" }],
       ["hostAdd.facts", { flowId: "flow-1" }],
+      ["hosts.projects", { hostId: "h" }],
+      ["hosts.createProject", { hostId: "h", gitUrl: "u" }],
+      ["hosts.openWorkspace", { hostId: "h", workspaceId: "w" }],
+      ["hosts.closeWorkspace", { hostId: "h", workspaceId: "w" }],
     ]);
   });
 
@@ -151,6 +163,14 @@ describe("the remote hosts store", () => {
     expect(store.getState().addHost).toEqual({ open: false, target: "deploy@box" });
     store.getState().openAddHost();
     expect(store.getState().addHost).toEqual({ open: true, target: "" });
+    // "Open a project on <host>…" (VC-710): it keeps its host while it fades out.
+    expect(store.getState().openProject).toEqual({ open: false, hostId: null, start: "list" });
+    store.getState().openProjectSheet("h");
+    expect(store.getState().openProject).toEqual({ open: true, hostId: "h", start: "list" });
+    store.getState().closeProjectSheet();
+    expect(store.getState().openProject).toEqual({ open: false, hostId: "h", start: "list" });
+    store.getState().openProjectSheet("h", "new");
+    expect(store.getState().openProject).toEqual({ open: true, hostId: "h", start: "new" });
   });
 
   it("finds one host's record, or none for This Mac", () => {

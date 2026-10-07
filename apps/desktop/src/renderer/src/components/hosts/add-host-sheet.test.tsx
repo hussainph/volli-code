@@ -473,6 +473,24 @@ describe("Add a host", () => {
     expect(api.calls.some(([method]) => method === "cancelAdd")).toBe(false);
   });
 
+  it("offers the next step once the host is added: a project on it (AM2, VC-710)", async () => {
+    const host = registryHost({ name: "studio" });
+    useRemoteHostsStore.getState().setHosts([host]);
+    await startFlow("me@studio");
+    await emit({
+      kind: "view",
+      view: flowView({ name: "studio", status: "done", done: 7, hostId: host.id }),
+    });
+    await click(sheet(), "Open a project on studio…");
+    expect(useRemoteHostsStore.getState().addHost.open).toBe(false);
+    expect(useRemoteHostsStore.getState().openProject).toEqual({
+      open: true,
+      hostId: host.id,
+      start: "list",
+    });
+    await act(async () => useRemoteHostsStore.getState().closeProjectSheet());
+  });
+
   it("cancels an unfinished flow when the sheet is closed", async () => {
     await startFlow();
     await emit({ kind: "view", view: flowView({ at: "connect" }) });

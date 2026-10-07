@@ -535,17 +535,32 @@ function NameRow({
   );
 }
 
-/** The projects this Mac opened on the host: a workspace lives on exactly one host. */
+/**
+ * The projects this Mac opened on the host: a workspace lives on exactly one
+ * host. "Open…" lists the host's own and "New project…" makes one there
+ * (VC-710), both in "Open a project on <host>…".
+ */
 function ProjectsSection({ hostId }: { hostId: string }) {
   const claims = useHostConnectionStore((state) => state.projects);
   const projects = useProjectsStore((state) => state.projects);
   const mine = projects.filter(
     (project) => (claims[project.id]?.hostId ?? THIS_MAC_HOST_ID) === hostId,
   );
+  const sheet = (start: "list" | "new") => () =>
+    useRemoteHostsStore.getState().openProjectSheet(hostId, start);
   return (
-    <PrefSection title="Projects" icon={FolderSimpleIcon}>
+    <PrefSection
+      title="Projects"
+      icon={FolderSimpleIcon}
+      action={
+        <span className="flex items-center gap-1">
+          <SectionAction label="Open…" icon={FolderSimpleIcon} onAct={sheet("list")} />
+          <SectionAction label="New project…" icon={PlusIcon} onAct={sheet("new")} />
+        </span>
+      }
+    >
       {mine.length === 0 ? (
-        <Empty>No projects on this host yet</Empty>
+        <Empty>{openHere(claims, hostId)}</Empty>
       ) : (
         mine.map((project) => (
           <ItemRow
@@ -557,6 +572,17 @@ function ProjectsSection({ hostId }: { hostId: string }) {
       )}
     </PrefSection>
   );
+}
+
+/**
+ * What an empty Projects section says: none open here, or how many are while
+ * their rows are not this Mac's to name yet (the rail learns remote ones later).
+ */
+function openHere(claims: Readonly<Record<string, { readonly hostId: string }>>, hostId: string) {
+  const count = Object.values(claims).filter((claim) => claim.hostId === hostId).length;
+  return count === 0
+    ? "No projects open on this Mac yet"
+    : `${count} ${count === 1 ? "project" : "projects"} open on this Mac`;
 }
 
 /** The devices the host has enrolled, read from it over SSH each time the page opens. */

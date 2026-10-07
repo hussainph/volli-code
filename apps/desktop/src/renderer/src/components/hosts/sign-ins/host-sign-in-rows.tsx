@@ -77,7 +77,17 @@ export function HostSignInRows({
       <div
         className={cn("flex items-center gap-2 px-2 py-4 text-ui text-muted-foreground", className)}
       >
-        {snapshot.unreachable ? `${hostName} cannot be reached right now` : <Spinner />}
+        {snapshot.unreachable ? (
+          <>
+            <span className="min-w-0 flex-1">{hostName} cannot be reached right now</span>
+            {/* Its one recovery (AM2): read the host again. */}
+            <Button size="sm" variant="secondary" onClick={() => void controller.refresh()}>
+              Retry
+            </Button>
+          </>
+        ) : (
+          <Spinner />
+        )}
       </div>
     );
   }

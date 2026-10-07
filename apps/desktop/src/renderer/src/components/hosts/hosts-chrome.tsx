@@ -12,6 +12,7 @@ import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 
 import { AddHostSheet } from "./add-host-sheet";
+import { OpenProjectSheet } from "./open-project-sheet";
 import { HostSignInSheet } from "./sign-ins/host-sign-in-sheet";
 import { openAddHostSheet, openHostsSettings } from "./host-entry";
 import { useHostSignInSheet } from "./sign-ins/remote-host-sign-in-source";
@@ -34,12 +35,14 @@ export function HostsChrome() {
     return () => {
       useHostConnectionStore.getState().setEntryPoints({ addHost: null, manageHosts: null });
       useRemoteHostsStore.getState().closeAddHost();
+      useRemoteHostsStore.getState().closeProjectSheet();
       useHostSignInSheet.getState().close();
     };
   }, [cloud]);
   return cloud ? (
     <>
       <AddHostSheet />
+      <OpenProjectSheet />
       <HostSignInSheet />
     </>
   ) : null;
