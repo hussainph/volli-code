@@ -73,6 +73,14 @@ test("SSH fixture config only names loopback and fresh credentials, no ambient k
     assert.ok(config.includes(text));
   assert.ok(!config.includes("~/"));
 });
+test("acceptance SSH keeps StrictModes and uses a fresh CI-home directory, not world-writable tmp", () => {
+  assert.match(
+    read("./remote-acceptance.mjs"),
+    /fs\.mkdtemp\(join\(home, "\.volli-acceptance-sshd-"\)\)/u,
+  );
+  assert.match(read("./sshd-fixture.mjs"), /"StrictModes yes"/u);
+  assert.doesNotMatch(read("./sshd-fixture.mjs"), /"StrictModes no"/u);
+});
 test("daemon cleanup never adopts the retained pid of a stopped/offline status", () => {
   const home = "/fixture/home";
   const status = {

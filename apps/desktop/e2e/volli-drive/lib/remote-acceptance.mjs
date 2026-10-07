@@ -159,9 +159,14 @@ export async function prepareRemoteAcceptance(layout, provider) {
       throw new Error(`Acceptance requires a fresh runner; already exists: ${path}`);
     }
   }
-  const dir = join(layout.scratch, "sshd");
-  await fs.mkdir(dir, { mode: 0o700 });
-  const fixture = await startSshdFixture({ dir, runnerAccountHome: true });
+  // sshd StrictModes checks EVERY ancestor of authorized_keys, including
+  // macOS's world-writable /private/tmp. Keep the disposable fixture below
+  // the fresh CI account's home, never ~/.ssh and never relax StrictModes.
+  const dir = await fs.mkdtemp(join(home, ".volli-acceptance-sshd-"));
+  const fixture = await startSshdFixture({ dir, runnerAccountHome: true }).catch(async (error) => {
+    await fs.rm(dir, { recursive: true, force: true });
+    throw error;
+  });
   try {
     const config = join(dir, "ssh_config");
     await fs.writeFile(config, sshConfig(fixture), { flag: "wx", mode: 0o600 });
@@ -230,7 +235,11 @@ export async function prepareRemoteAcceptance(layout, provider) {
           )
             await stopHostd();
         } finally {
-          await fixture.stop();
+          try {
+            await fixture.stop();
+          } finally {
+            await fs.rm(dir, { recursive: true, force: true });
+          }
         }
       },
       // Deployment precondition, NOT an acceptance action: a host has a
@@ -290,7 +299,11 @@ export async function prepareRemoteAcceptance(layout, provider) {
     };
   } catch (error) {
     await fs.writeFile(join(layout.logsDir, "sshd.log"), fixture.diagnostics());
-    await fixture.stop();
+    try {
+      await fixture.stop();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
     throw error;
   }
 }
