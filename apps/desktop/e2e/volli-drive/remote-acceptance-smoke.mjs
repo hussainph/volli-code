@@ -25,15 +25,15 @@ import {
   REMOTE_PROJECT,
   STREAM_REPLY,
   assertAcceptanceRunner,
-  missingQuestionReply,
+  projectCreationOutcome,
 } from "./lib/remote-acceptance.mjs";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const TITLE = "Cloud acceptance ticket";
-// Owner ruling: only these two steps may XFAIL while VC-721 is pending.
-// Remove on landing. A real question is XPASS/failure until the marker is removed.
-const EXPECTED_QUESTION_FAILURE = { ticket: "VC-721", steps: [6, 7] };
+// VC-722's host-scoped connection will enable UI creation on user installs.
+// Remove on landing; the named refusal is the only accepted expected failure.
+const EXPECTED_PROJECT_FAILURE = { ticket: "VC-722", steps: [2] };
 const results = [];
 let instance;
 let socket;
@@ -107,38 +107,12 @@ async function step(number, assertion, body) {
     const result = await body();
     await shot(`step-${number}`);
     record(number, result?.status ?? "PASS", assertion, result?.detail ?? "");
+    return result;
   } catch (error) {
     record(number, "FAIL", assertion, error.message);
     await shot(`step-${number}-failed`).catch(() => {});
     throw error;
   }
-}
-
-async function questionStep(number, assertion, requestText, question, body) {
-  await step(number, assertion, async () => {
-    await send(requestText);
-    if (EXPECTED_QUESTION_FAILURE?.steps.includes(number)) {
-      const missing = missingQuestionReply(requestText);
-      let current;
-      await waitUntil(
-        "question or narrowly identified missing host tool",
-        async () => {
-          current = await snap();
-          return current.text.includes(question) || current.text.includes(missing);
-        },
-        { timeout: 45_000, interval: 200 },
-      );
-      assert.ok(
-        !current.text.includes(question),
-        `XPASS ${EXPECTED_QUESTION_FAILURE.ticket}: remove expected-failure marker and run the real question journey`,
-      );
-      return {
-        status: "XFAIL",
-        detail: `${EXPECTED_QUESTION_FAILURE.ticket}: hostd did not offer ask_user; no question/lifecycle acceptance claimed`,
-      };
-    }
-    await body();
-  });
 }
 
 async function journey() {
@@ -183,12 +157,12 @@ async function journey() {
     await click("button", "Home");
   });
 
-  await step(
+  const projectResult = await step(
     2,
-    "Open box CLI project through SSH listing; New project names user-install refusal",
+    "New project on host: folder path, Create and open, selected remote Host chip",
     async () => {
-      // Arrange, outside the app: the box's CLI (owner-approved). No DB seed.
-      await call("acceptance-arrange-project");
+      // Only benign Git box state is arranged. Project registration is UI-only.
+      await call("acceptance-arrange-box");
       await click("button", "Settings");
       await wait("Settings categories");
       await click("button", "Hosts");
@@ -197,22 +171,39 @@ async function journey() {
       await click("button", "New project…");
       await wait(`New project on ${REMOTE_HOST}`);
       await type(`Git URL or folder on ${REMOTE_HOST}`, fixture.projectPath);
-      await type("Name (optional)", "Refused user-install creation");
+      await type("Name (optional)", REMOTE_PROJECT);
       await click("button", "Create and open");
-      // The real mutation rejects this install mode, explicitly and visibly.
-      await wait(`${REMOTE_HOST} runs Volli as your login, so this Mac can't add projects to it.`);
-      await shot("step-2-user-install-refusal");
-      await click("button", "Back", { first: true });
-      await wait(`Open a project on ${REMOTE_HOST}`);
-      await wait(`Open ${REMOTE_PROJECT}`);
-      await click("button", `Open ${REMOTE_PROJECT}`);
-      await wait(`Opened ${REMOTE_PROJECT} on ${REMOTE_HOST}`, 90_000);
+      const refusal = `${REMOTE_HOST} runs Volli as your login, so this Mac can't add projects to it.`;
+      const opened = `Opened ${REMOTE_PROJECT} on ${REMOTE_HOST}`;
+      let current;
+      await waitUntil(
+        "project opens or shows its named user-install refusal",
+        async () => {
+          current = await snap();
+          return current.text.includes(opened) || current.text.includes(refusal);
+        },
+        { timeout: 90_000, interval: 200 },
+      );
+      const outcome = projectCreationOutcome(current.text, {
+        hostName: REMOTE_HOST,
+        projectName: REMOTE_PROJECT,
+        expectedTicket: EXPECTED_PROJECT_FAILURE?.ticket,
+      });
+      if (outcome.status === "XFAIL") return outcome;
       await click("button", "Home");
       await selectHost(REMOTE_HOST);
-      const current = await wait(REMOTE_PROJECT);
-      assert.match(current.text, new RegExp(`Host: ${REMOTE_HOST}`));
+      const selected = await wait(REMOTE_PROJECT);
+      assert.match(selected.text, new RegExp(`Host: ${REMOTE_HOST}`));
     },
   );
+  if (projectResult?.status === "XFAIL") {
+    for (let n = 3; n <= 8; n++) {
+      record(n, "BLOCKED", "Requires remote project", EXPECTED_PROJECT_FAILURE.ticket);
+    }
+    const doctor = await call("doctor");
+    assert.ok(doctor.ok, JSON.stringify(doctor));
+    return;
+  }
   await call("acceptance-model");
   await wait(`Host: ${REMOTE_HOST}`);
   await step(3, "Create/move ticket: Backlog then Todo, persisted after UI reopen", async () => {
@@ -264,25 +255,19 @@ async function journey() {
       assert.ok(current.text.includes(`Running on ${REMOTE_HOST}`));
     },
   );
-  await questionStep(
-    6,
-    "Answer question: real options, sent receipt, host continuation",
-    "remote-answer-question",
-    ANSWER_QUESTION,
-    async () => {
-      await wait(ANSWER_QUESTION);
-      await click("radio", "Proceed", { contains: true });
-      await click("button", "Send answer");
-      await wait("Sent: Proceed");
-      await wait(ANSWER_REPLY);
-    },
-  );
-  await questionStep(
+  await step(6, "Answer question: real options, sent receipt, host continuation", async () => {
+    await send("remote-answer-question");
+    await wait(ANSWER_QUESTION);
+    await click("radio", "Proceed", { contains: true });
+    await click("button", "Send answer");
+    await wait("Sent: Proceed");
+    await wait(ANSWER_REPLY);
+  });
+  await step(
     7,
     "Quit/reopen: same remote Session row Waiting for you and pending question",
-    "remote-reopen-question",
-    REOPEN_QUESTION,
     async () => {
+      await send("remote-reopen-question");
       await wait(REOPEN_QUESTION);
       // Menu-bar mode hosts THIS MAC's work, not remote work. A real local
       // scripted turn keeps the client alive while the remote question waits.
@@ -388,7 +373,7 @@ try {
         commit: (await exec("git", ["rev-parse", "HEAD"], { cwd: REPO })).stdout.trim(),
         complete: !failed && results.length === 8 && results.every((row) => row.status === "PASS"),
         failed,
-        expectedFailure: EXPECTED_QUESTION_FAILURE,
+        expectedFailure: EXPECTED_PROJECT_FAILURE,
         instance: instance?.id,
         results,
       },

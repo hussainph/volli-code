@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import { userInfo } from "node:os";
 import { join, isAbsolute } from "node:path";
 import { promisify } from "node:util";
-import { makeScratchRepo, processIdentity, killExactly } from "./core.mjs";
+import { processIdentity, killExactly } from "./core.mjs";
 import { startSshdFixture, scratchSshEnv } from "./sshd-fixture.mjs";
 
 const exec = promisify(execFile);
@@ -15,8 +15,6 @@ export const REOPEN_QUESTION = "Did this question survive reopening Volli?";
 export const ANSWER_REPLY = "REMOTE: answer received on the host";
 export const REOPEN_REPLY = "REMOTE: reopened question answered on the host";
 export const STREAM_REPLY = "REMOTE: scripted turn streamed from the host";
-export const missingQuestionReply = (request) =>
-  `VC-721: hostd has not offered ask_user (${request.includes("remote-reopen-question") ? "reopen" : "answer"})`;
 
 export function assertAcceptanceRunner(env = process.env, platform = process.platform) {
   if (platform !== "darwin" || env.GITHUB_ACTIONS !== "true" || env.RUNNER_OS !== "macOS") {
@@ -81,11 +79,7 @@ export function acceptanceScript(turn) {
   if (!turn.body.tools?.length) return undefined;
   if (turn.text.includes("remote-stream-turn")) return { text: STREAM_REPLY, delayMs: 1500 };
   // Never manufacture a tool the production host did not offer.
-  if (!turn.body.tools.some((tool) => tool.name === "ask_user"))
-    return turn.text.includes("remote-answer-question") ||
-      turn.text.includes("remote-reopen-question")
-      ? missingQuestionReply(turn.text)
-      : undefined;
+  if (!turn.body.tools.some((tool) => tool.name === "ask_user")) return undefined;
   const input = turn.body.input ?? [];
   const last = input.at(-1);
   if (last?.type === "function_call_output") {
@@ -116,6 +110,21 @@ export function acceptanceScript(turn) {
     };
   }
   return undefined;
+}
+
+/** Classify only visible creation outcomes; arbitrary errors never qualify as XFAIL. */
+export function projectCreationOutcome(tree, { hostName, projectName, expectedTicket }) {
+  if (tree.includes(`Opened ${projectName} on ${hostName}`)) {
+    if (expectedTicket)
+      throw new Error(
+        `XPASS ${expectedTicket}: remove project expected-failure marker and run the full journey`,
+      );
+    return { status: "PASS" };
+  }
+  const refusal = `${hostName} runs Volli as your login, so this Mac can't add projects to it.`;
+  if (!tree.includes(refusal)) return null;
+  if (!expectedTicket) throw new Error(`Unexpected project refusal: ${refusal}`);
+  return { status: "XFAIL", detail: `${expectedTicket}: ${refusal}` };
 }
 
 /** Stopped status files retain the old pid; never adopt that possibly reused pid. */
@@ -196,7 +205,8 @@ export async function prepareRemoteAcceptance(layout, provider) {
       `#!/bin/sh\nexec /usr/bin/ssh -F '${config.replaceAll("'", "'\\''")}' "$@"\n`,
       { mode: 0o755 },
     );
-    const repo = await makeScratchRepo(layout.projectsDir, "remote-acceptance");
+    const projectPath = await fs.mkdtemp(join(layout.projectsDir, "remote-acceptance-"));
+    const originPath = `${projectPath}.origin.git`;
     const hostd = `${home}/.local/share/volli-hostd/current/bin/volli-hostd`;
     const runHostd = (args, timeout = 90_000) =>
       exec("/usr/bin/ssh", [...fixture.sshArgs, `'${hostd}' ${args}`], {
@@ -232,18 +242,22 @@ export async function prepareRemoteAcceptance(layout, provider) {
     return {
       ...fixture,
       home,
-      projectPath: repo.dir,
-      async arrangeProject() {
+      projectPath,
+      originPath,
+      async arrangeBox() {
         assertAcceptanceRunner();
-        // Arrange, outside the app: the box's CLI. Owner-approved fixture
-        // setup through the installed production binary, never DB writes or
-        // an injected link. The UI must still list/open the resulting project.
+        // Arrange benign box state over fixture SSH: git repo + bare remote.
+        // No Volli project registration, operator token, DB seed or fake link.
+        // The production UI must create/register the project (VC-722).
         const command = [
           "set -eu",
-          `export VOLLI_SOCKET=${shellQuote(join(home, "Library/Application Support/volli-hostd/volli.sock"))}`,
-          "unset VOLLI_SESSION VOLLI_SESSION_TOKEN VOLLI_TICKET VOLLI_OPERATOR_TOKEN",
-          `git -C ${shellQuote(repo.dir)} init`,
-          `${shellQuote(join(home, ".local/share/volli-hostd/current/bin/volli"))} project add ${shellQuote(repo.dir)} --name ${shellQuote(REMOTE_PROJECT)} --json`,
+          `git init --initial-branch=main ${shellQuote(projectPath)}`,
+          `printf '%s\\n' 'Remote acceptance fixture' > ${shellQuote(join(projectPath, "README.md"))}`,
+          `git -C ${shellQuote(projectPath)} add README.md`,
+          `git -c user.name=Acceptance -c user.email=acceptance@volli.test -c commit.gpgsign=false -C ${shellQuote(projectPath)} commit -m fixture`,
+          `git init --bare --initial-branch=main ${shellQuote(originPath)}`,
+          `git -C ${shellQuote(projectPath)} remote add origin ${shellQuote(originPath)}`,
+          `git -c credential.helper= -C ${shellQuote(projectPath)} push --set-upstream origin main`,
         ].join("\n");
         try {
           const result = await exec("/usr/bin/ssh", [...fixture.sshArgs, command], {
@@ -251,16 +265,16 @@ export async function prepareRemoteAcceptance(layout, provider) {
             timeout: 30_000,
           });
           await fs.writeFile(
-            join(layout.logsDir, "arrange-project.log"),
-            `Arrange, outside the app: the box's CLI\n${result.stdout}\n${result.stderr}`,
+            join(layout.logsDir, "arrange-box.log"),
+            `Arrange benign Git state over fixture SSH\n${result.stdout}\n${result.stderr}`,
           );
         } catch (error) {
           await fs.writeFile(
-            join(layout.logsDir, "arrange-project.log"),
-            `Arrange, outside the app: the box's CLI\nexit: ${error.code}\n${error.stdout ?? ""}\n${error.stderr ?? ""}`,
+            join(layout.logsDir, "arrange-box.log"),
+            `Arrange benign Git state over fixture SSH\nexit: ${error.code}\n${error.stdout ?? ""}\n${error.stderr ?? ""}`,
           );
           throw new Error(
-            `Arrange via box CLI failed: ${error.stderr || error.stdout || error.message}`,
+            `Benign box Git arrange failed: ${error.stderr || error.stdout || error.message}`,
             { cause: error },
           );
         }

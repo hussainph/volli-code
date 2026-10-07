@@ -20,7 +20,7 @@ import {
   stableWaitingLabel,
   visibleServingRow,
   snapshotSubtree,
-  missingQuestionReply,
+  projectCreationOutcome,
 } from "./remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -166,11 +166,7 @@ test("script has real ask_user calls, answered continuation and a separate reope
   );
   assert.equal(
     acceptanceScript({ text: "remote-answer-question", body: { tools: [{ name: "read" }] } }),
-    missingQuestionReply("remote-answer-question"),
-  );
-  assert.notEqual(
-    missingQuestionReply("remote-answer-question"),
-    missingQuestionReply("remote-reopen-question"),
+    undefined,
   );
   assert.equal(acceptanceScript({ text: "remote-stream-turn", body: {} }), undefined);
   const question = acceptanceScript(turn("remote-answer-question"));
@@ -199,7 +195,30 @@ test("script has real ask_user calls, answered continuation and a separate reope
   );
   assert.equal(acceptanceScript(turn("ordinary turn")), undefined);
 });
-test("journey uses owner-approved box CLI arrange, never fake links or app state injection", () => {
+test("VC-722 XFAIL is narrow and unexpected creation success is fatal", () => {
+  const options = { hostName: "box", projectName: "App", expectedTicket: "VC-722" };
+  const refusal = "box runs Volli as your login, so this Mac can't add projects to it.";
+  assert.deepEqual(projectCreationOutcome(refusal, options), {
+    status: "XFAIL",
+    detail: `VC-722: ${refusal}`,
+  });
+  assert.equal(projectCreationOutcome("Connection failed", options), null);
+  assert.throws(() => projectCreationOutcome("Opened App on box", options), /XPASS VC-722/u);
+  assert.throws(
+    () => projectCreationOutcome(`Opened App on box\n${refusal}`, options),
+    /XPASS VC-722/u,
+    "success outranks a stale refusal",
+  );
+  assert.deepEqual(
+    projectCreationOutcome("Opened App on box", { ...options, expectedTicket: null }),
+    { status: "PASS" },
+  );
+  assert.throws(
+    () => projectCreationOutcome(refusal, { ...options, expectedTicket: null }),
+    /Unexpected project refusal/u,
+  );
+});
+test("journey arranges only benign Git state and narrowly XFAILs pending VC-722", () => {
   const smoke = read("../remote-acceptance-smoke.mjs");
   assert.doesNotMatch(smoke, /window\.api|createHostLink|page\.evaluate|setState|lab\//);
   for (const label of [
@@ -215,12 +234,26 @@ test("journey uses owner-approved box CLI arrange, never fake links or app state
     "Search",
   ])
     assert.ok(smoke.includes(label), label);
-  assert.match(smoke, /ticket: "VC-721", steps: \[6, 7\]/u);
-  assert.doesNotMatch(smoke, /VC-710.*XFAIL|XFAIL.*VC-710/u);
+  assert.match(smoke, /ticket: "VC-722", steps: \[2\]/u);
+  assert.doesNotMatch(
+    smoke,
+    /VC-721|EXPECTED_QUESTION_FAILURE/u,
+    "VC-721 is merged: questions have no independent waiver",
+  );
+  assert.ok(
+    smoke.includes("projectCreationOutcome(current.text"),
+    "unexpected project creation must use the tested fatal-XPASS classifier",
+  );
+  assert.ok(
+    smoke.includes(
+      'record(n, "BLOCKED", "Requires remote project", EXPECTED_PROJECT_FAILURE.ticket)',
+    ),
+  );
   const fixture = read("./remote-acceptance.mjs");
-  assert.match(fixture, /project add.*--name/u);
-  assert.ok(fixture.includes("Arrange, outside the app: the box's CLI"));
-  assert.ok(smoke.includes('call("acceptance-arrange-project")'));
+  assert.doesNotMatch(fixture, /project add|operator-token|arrangeProject/u);
+  assert.ok(fixture.includes("git init --bare --initial-branch=main"));
+  assert.ok(fixture.includes("Arrange benign Git state over fixture SSH"));
+  assert.ok(smoke.includes('call("acceptance-arrange-box")'));
   assert.ok(smoke.includes("can't add projects to it."));
   assert.ok(
     smoke.includes('row.status === "PASS"'),

@@ -676,13 +676,13 @@ async function handle(cmd, args) {
   switch (cmd) {
     case "acceptance-fixture":
       if (!remoteFixture) throw new Error("Not a remote acceptance instance");
-      return { projectPath: remoteFixture.projectPath };
-    case "acceptance-arrange-project":
+      return { projectPath: remoteFixture.projectPath, originPath: remoteFixture.originPath };
+    case "acceptance-arrange-box":
       if (!remoteFixture) throw new Error("Not a remote acceptance instance");
-      await remoteFixture.arrangeProject();
+      await remoteFixture.arrangeBox();
       transcript({
-        cmd: "acceptance-arrange-project",
-        setup: "Arrange, outside the app: the box's CLI",
+        cmd: "acceptance-arrange-box",
+        setup: "benign Git repo and bare remote over fixture SSH",
       });
       return { arranged: true };
     case "acceptance-model":
