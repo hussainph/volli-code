@@ -2478,10 +2478,18 @@ const appStartup = app.whenReady().then(async () => {
           window.hide();
         }
         void flushWindowState(closing, MENU_BAR_FLUSH_OVERDUE_MS, (window) => {
-          // A reveal that reused this window took it back: keep it.
-          if (!retiringWindows.has(window) || window.isDestroyed()) return;
-          retiringWindows.delete(window);
-          window.destroy();
+          hostLogger("menu-bar").info("window draft flush acknowledged", { windowId: window.id });
+          // Native destruction must not run inside the acknowledgement IPC
+          // checkpoint (the same compositor-teardown hazard as VC-536 exit).
+          // Keep this Immediate referenced; a reveal before it runs owns the
+          // retained renderer again, so both guards belong inside the callback.
+          setImmediate(() => {
+            if (!retiringWindows.has(window) || window.isDestroyed()) return;
+            retiringWindows.delete(window);
+            hostLogger("menu-bar").info("destroying acknowledged window", { windowId: window.id });
+            window.destroy();
+            hostLogger("menu-bar").info("acknowledged window destroyed", { windowId: window.id });
+          });
         }).then(({ unanswered }) => {
           if (unanswered > 0) {
             hostLogger("menu-bar").warn("windows still saving drafts; kept hidden, not destroyed", {

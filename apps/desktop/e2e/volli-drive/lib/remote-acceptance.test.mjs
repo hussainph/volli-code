@@ -403,6 +403,60 @@ test("an unchanged host chip is not writable readiness after a daemon restart", 
   );
 });
 
+function liftedKeepaliveRetirement(started, quitAttempted, tools) {
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  const body = smoke.slice(
+    smoke.indexOf("async function stopLocalKeepalive()"),
+    smoke.indexOf("async function step("),
+  );
+  return new Function(
+    "tools",
+    `
+    let localKeepaliveStarted = ${started};
+    let nativeQuitAttempted = ${quitAttempted};
+    const LOCAL_KEEPALIVE = "[slow:120000] local-menu-bar-keepalive";
+    const { call, selectHost, click, wait } = tools;
+    ${body}
+    return { run: stopLocalKeepalive, active: () => localKeepaliveStarted };
+  `,
+  )(tools);
+}
+test("keepalive retirement reopens normally and stops only the named local synthetic Session", async () => {
+  const calls = [];
+  const tools = Object.fromEntries(
+    ["call", "selectHost", "click", "wait"].map((name) => [
+      name,
+      async (...args) => calls.push([name, ...args]),
+    ]),
+  );
+  const inactive = liftedKeepaliveRetirement(false, false, tools);
+  await inactive.run();
+  assert.equal(calls.length, 0);
+  const active = liftedKeepaliveRetirement(true, true, tools);
+  await active.run();
+  assert.deepEqual(calls, [
+    ["call", "native-reopen"],
+    ["selectHost", "This Mac"],
+    ["click", "button", "local-menu-bar-keepalive", { contains: true, first: true }],
+    ["wait", "[slow:120000] local-menu-bar-keepalive"],
+    ["click", "button", "Stop turn"],
+    ["call", "wait", { text: "Stop turn", gone: true }],
+  ]);
+  assert.equal(active.active(), false);
+});
+test("failed local interruption remains pending for cleanup retry, never claims a retired turn", async () => {
+  const active = liftedKeepaliveRetirement(true, false, {
+    call: async () => {
+      throw new Error("turn still stopping");
+    },
+    selectHost: async () => {},
+    click: async () => {},
+    wait: async () => {},
+  });
+  await assert.rejects(active.run(), /turn still stopping/u);
+  assert.equal(active.active(), true);
+});
+
 test("journey arranges only benign Git state and runs all eight real assertions without waivers", () => {
   const smoke = read("../remote-acceptance-smoke.mjs");
   assert.doesNotMatch(smoke, /window\.api|createHostLink|page\.evaluate|setState|lab\//);
@@ -481,5 +535,28 @@ test("journey arranges only benign Git state and runs all eight real assertions 
     /complete:\s*!failed &&\s*cleanupVerified &&\s*results.length === 8 &&\s*results.every\(\(row\) => row.status === "PASS"\)/u,
     "eight PASS rows alone cannot claim completion without verified disposal",
   );
-  assert.doesNotMatch(read("../supervisor.mjs"), /VOLLI_SMOKE_MENU_BAR_HOST|volliMenuBarHost/);
+  const supervisor = read("../supervisor.mjs");
+  assert.doesNotMatch(supervisor, /VOLLI_SMOKE_MENU_BAR_HOST|volliMenuBarHost/);
+  assert.match(
+    supervisor,
+    /windows\.filter\(\(window\) => window\.isVisible\(\)\)\.length/u,
+    "quit observes real native visibility, not the retained Playwright Page count",
+  );
+  assert.match(supervisor, /return measured\.visible === 0 \? measured : false/u);
+  assert.match(smoke, /assert\.equal\(quit\.nativeWindows\.visible, 0\)/u);
+  assert.match(smoke, /await stopLocalKeepalive\(\);\s*await selectHost\(REMOTE_HOST\)/u);
+  assert.match(
+    smoke,
+    /await stopLocalKeepalive\(\)\.catch[\s\S]*?\[cli, "stop", instance\.id\]/u,
+    "failure cleanup also retires this journey's local turn before strict app close",
+  );
+  const retirement = smoke.slice(
+    smoke.indexOf("async function stopLocalKeepalive()"),
+    smoke.indexOf("async function step("),
+  );
+  assert.match(retirement, /await selectHost\("This Mac"\)/u);
+  assert.match(retirement, /click\("button", "local-menu-bar-keepalive"/u);
+  assert.match(retirement, /await click\("button", "Stop turn"\)/u);
+  assert.match(retirement, /text: "Stop turn", gone: true/u);
+  assert.doesNotMatch(retirement, /REMOTE_HOST|session\.command|invoke|window\.api/u);
 });

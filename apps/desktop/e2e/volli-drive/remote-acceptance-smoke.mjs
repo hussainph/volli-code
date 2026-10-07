@@ -35,7 +35,10 @@ import {
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("./cli.mjs", import.meta.url));
 const TITLE = "Cloud acceptance ticket";
+const LOCAL_KEEPALIVE = "[slow:120000] local-menu-bar-keepalive";
 const results = [];
+let localKeepaliveStarted = false;
+let nativeQuitAttempted = false;
 let instance;
 let socket;
 const call = (cmd, args = {}) => request(socket, cmd, args, { timeoutMs: 150_000 });
@@ -118,6 +121,21 @@ async function card() {
     kind: "press",
     key: "Enter",
   });
+}
+async function stopLocalKeepalive() {
+  if (!localKeepaliveStarted) return;
+  if (nativeQuitAttempted) {
+    await call("native-reopen");
+    nativeQuitAttempted = false;
+  }
+  await selectHost("This Mac");
+  // Both the rail and sidebar may name the same synthetic Session. Either
+  // opens it; never interrupt a remote Session or a different local turn.
+  await click("button", "local-menu-bar-keepalive", { contains: true, first: true });
+  await wait(LOCAL_KEEPALIVE);
+  await click("button", "Stop turn");
+  await call("wait", { text: "Stop turn", gone: true });
+  localKeepaliveStarted = false;
 }
 async function step(number, assertion, body) {
   try {
@@ -320,7 +338,8 @@ async function journey() {
       await selectHost("This Mac");
       await click("button", "Home");
       await click("button", "New chat", { first: true });
-      await send("[slow:120000] local-menu-bar-keepalive");
+      localKeepaliveStarted = true;
+      await send(LOCAL_KEEPALIVE);
       await wait("Stop turn");
       await selectHost(REMOTE_HOST);
       await click("button", "Home");
@@ -328,9 +347,12 @@ async function journey() {
       const row = controls(before.text, "button", "Waiting for you", { contains: true })[0];
       assert.ok(row, "Waiting remote Session row missing before quit");
       const rowLabel = stableWaitingLabel(row);
+      nativeQuitAttempted = true;
       const quit = await call("native-quit");
       assert.match(quit.label, /Quit/);
+      assert.equal(quit.nativeWindows.visible, 0);
       await call("native-reopen");
+      nativeQuitAttempted = false;
       await wait(`Host: ${REMOTE_HOST}`);
       const reopened = await wait("Waiting for you");
       const recovered = controls(reopened.text, "button", "Waiting for you", {
@@ -346,6 +368,8 @@ async function journey() {
       await selectProceed();
       await submitProceed(REOPEN_QUESTION);
       await wait(REOPEN_REPLY);
+      await stopLocalKeepalive();
+      await selectHost(REMOTE_HOST);
     },
   );
   await step(
@@ -388,6 +412,13 @@ try {
   }
 } finally {
   if (instance) {
+    // Retire only this journey's local live-work holder through the UI even
+    // on failure; an ordinary quit must not be forced over its running turn.
+    await stopLocalKeepalive().catch((error) => {
+      failed = true;
+      cleanupError = `Local keepalive retirement failed: ${error.message}`;
+      console.error(cleanupError);
+    });
     const stopped = await exec(process.execPath, [cli, "stop", instance.id], {
       cwd: REPO,
       timeout: 120_000,

@@ -704,12 +704,25 @@ async function handle(cmd, args) {
         quit.click();
         return { label };
       });
-      await waitUntil("all app windows closed", () => app.windows().length === 0, {
-        timeout: 10_000,
-      });
+      // Production may retain an unacknowledged renderer hidden to protect
+      // drafts. Observe native visibility, not Playwright's retained Pages.
+      const nativeWindows = await waitUntil(
+        "no visible native app windows",
+        async () => {
+          const measured = await app.evaluate(({ BrowserWindow }) => {
+            const windows = BrowserWindow.getAllWindows();
+            return {
+              visible: windows.filter((window) => window.isVisible()).length,
+              retained: windows.length,
+            };
+          });
+          return measured.visible === 0 ? measured : false;
+        },
+        { timeout: 10_000 },
+      );
       current = { generation: ++generation, window: null, refs: new Set() };
-      transcript({ cmd: "native-quit", label: result.label });
-      return result;
+      transcript({ cmd: "native-quit", label: result.label, nativeWindows });
+      return { ...result, nativeWindows };
     }
     case "native-reopen":
       // macOS activation is the production reopen path (also used by the
