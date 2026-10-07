@@ -4,6 +4,14 @@
 /* oxlint-enable typescript/triple-slash-reference */
 // @vitest-environment node
 import { readFileSync } from "node:fs";
+import {
+  captureCanaryRecording,
+  checkNextHost,
+  recordingExchanges,
+  replayCanaryPeer,
+  peerInput,
+  type PeerExchange,
+} from "../../../../packages/session-rpc/src/canary-peer.test-support";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   describeContract,
@@ -23,6 +31,7 @@ import {
   SessionRuntimeCommandConflictError,
   type SessionRuntime,
   type SessionStreamFrame,
+  type SessionStreamQueue,
 } from "@volli/session-engine";
 import { createSessionProjectionCheckpoint } from "@volli/shared";
 import {
@@ -33,6 +42,7 @@ import {
 } from "../renderer/src/lib/session-rpc-contract.test-support";
 import {
   createOldSessionRouter,
+  loadCanaryPeer,
   oldCommandInput,
   oldCommandOutput,
   oldProjectionOutput,
@@ -73,6 +83,8 @@ vi.mock("@volli/session-rpc", async (importOriginal) => {
   });
 });
 
+const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
+
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const session = {
   id: "wire-session",
@@ -101,13 +113,27 @@ function frame(sequence: number): SessionStreamFrame {
 }
 
 /** Independent deterministic runtime data, never reconstructed from expected wire responses. */
-function hostFixture() {
+function hostFixture(rich = false) {
   const cursors: number[] = [];
   const commandIds: string[] = [];
   let emit!: Parameters<SessionRuntime["subscribe"]>[1];
   const accepted = new Map<string, string>();
   const source = createSessionProjectionCheckpoint(session, []).projection;
-  const sparse = { session: source.session } as typeof source;
+  const queue: SessionStreamQueue["queue"] = [
+    {
+      id: "queued",
+      commandId: "submit",
+      state: "queued",
+      message: {
+        id: "queued",
+        role: "user",
+        parts: [{ type: "text", text: "Recorded follow-up" }],
+      },
+    },
+  ];
+  const sparse = (
+    rich ? { ...source, queue, queueRevision: 1 } : { session: source.session }
+  ) as typeof source;
   const runtime: SessionRuntime = {
     projection: async () => ({
       // Sparse projections are part of the pre-669 public contract.
@@ -122,7 +148,7 @@ function hostFixture() {
       transcript: [],
       latestReply: null,
     }),
-    history: async () => ({ frames: [], before: null }),
+    history: async () => ({ frames: [frame(3)], before: null }),
     command: async (input) => {
       if (input.command.kind !== "model.select")
         throw new Error("Recording supports only model.select");
@@ -179,7 +205,13 @@ function hostFixture() {
     },
     resourceWorkspace: ({ id }) => (id === session.id ? WORKSPACE : null),
   };
-  return { host, cursors, commandIds, emit: (value: SessionStreamFrame) => emit(value) };
+  return {
+    host,
+    cursors,
+    commandIds,
+    emit: (value: Parameters<typeof emit>[0]) => emit(value),
+    queue,
+  };
 }
 
 function oldHostLinks(): ContractLink<SessionRouterHost, AppRouter>[] {
@@ -235,7 +267,7 @@ function readRecording(name: string): Recording {
   ) as Recording;
 }
 
-for (const direction of ["old-client-new-host", "new-client-old-host"] as const) {
+for (const direction of canary ? [] : (["old-client-new-host", "new-client-old-host"] as const)) {
   const oldClient = direction === "old-client-new-host";
   const name = oldClient ? "n-minus-one" : "current";
   const currentLinks = [electronIpcSessionLink(), webSocketSessionLink()];
@@ -362,3 +394,122 @@ describe("frozen peer provenance", () => {
     expect(oldRecording).not.toStrictEqual(newRecording);
   });
 });
+
+/** The first distributed peer captures the full Session surface, not the four-entry bootstrap. */
+for (const link of [electronIpcSessionLink(), webSocketSessionLink()]) {
+  const transport = link.name === "electron-ipc" ? "ipc" : "websocket";
+  it(`records Session history and queued follow-ups over ${transport}; both actual-canary skew directions`, async () => {
+    const name = `session-${transport}`;
+    const f = hostFixture(true);
+    const connection = await link.open(f.host);
+    const client = connection.client;
+    const exchanges: PeerExchange[] = [];
+    const input = peerInput(canary, name, "session.projection", { sessionId: session.id });
+    try {
+      exchanges.push({
+        procedure: "session.projection",
+        input,
+        output: await client.session.projection.query(input),
+      });
+      exchanges.push({
+        procedure: "session.snapshot",
+        input,
+        output: await client.session.snapshot.query(input),
+      });
+      const historyInput = peerInput(canary, name, "session.history", { ...input, before: 4 });
+      exchanges.push({
+        procedure: "session.history",
+        input: historyInput,
+        output: await client.session.history.query(historyInput),
+      });
+      const commandInput = peerInput(canary, name, "session.command", {
+        ...input,
+        commandId: "recorded-model",
+        command: {
+          kind: "model.select" as const,
+          selection: { providerId: "test", modelId: "model", reasoningLevel: "high" as const },
+        },
+      });
+      for (let retry = 0; retry < 2; retry++)
+        exchanges.push({
+          procedure: "session.command",
+          input: commandInput,
+          output: await client.session.command.mutate(commandInput),
+        });
+
+      for (const afterSequence of [4, 5]) {
+        const subscribeInput = peerInput(
+          canary,
+          name,
+          "session.subscribe",
+          {
+            ...input,
+            afterSequence,
+            ...(afterSequence === 5 ? { lastEventId: "5" } : {}),
+          },
+          afterSequence === 4 ? 0 : 1,
+        );
+        const stream = recordSubscription<{ id: string; data: unknown }>((handlers) =>
+          client.session.subscribe.subscribe(subscribeInput, handlers),
+        );
+        try {
+          await stream.started;
+          await vi.waitFor(() => expect(f.cursors).toHaveLength(afterSequence === 4 ? 1 : 2));
+          f.emit(frame(afterSequence + 1));
+
+          exchanges.push({
+            procedure: "session.subscribe",
+            input: subscribeInput,
+            frames: [...(await stream.received(1))],
+          });
+        } finally {
+          stream.unsubscribe();
+        }
+      }
+
+      // subscribeQueue is WebSocket-only in the production exposure table.
+      if (transport === "websocket") {
+        const queueStream = recordSubscription<{ id: string; data: unknown }>((handlers) =>
+          client.session.subscribeQueue.subscribe(input, handlers),
+        );
+        try {
+          await queueStream.started;
+          await vi.waitFor(() => expect(f.cursors).toHaveLength(3));
+          f.emit({
+            kind: "queue",
+            sessionId: session.id,
+            throughSequence: 4,
+            revision: 1,
+            queue: f.queue!,
+          });
+          exchanges.push({
+            procedure: "session.subscribeQueue",
+            input,
+            frames: [...(await queueStream.received(1))],
+          });
+        } finally {
+          queueStream.unsubscribe();
+        }
+      }
+      const refusalInput = peerInput(
+        canary,
+        name,
+        "session.projection",
+        { sessionId: "foreign-session" },
+        1,
+      );
+      exchanges.push({
+        procedure: "session.projection",
+        input: refusalInput,
+        error: await expectHostError(client.session.projection.query(refusalInput)),
+      });
+    } finally {
+      await connection.close();
+    }
+    captureCanaryRecording(name, transport, exchanges, recordingExchanges(exchanges));
+    if (canary) {
+      checkNextHost(canary, name, exchanges);
+      await replayCanaryPeer(canary, name, sessionProcedureSchemas());
+    }
+  });
+}

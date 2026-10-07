@@ -1,4 +1,5 @@
 import type { SessionRuntime } from "@volli/session-engine";
+export { loadCanaryPeer } from "../../../../packages/session-rpc/src/canary-peer.test-support";
 /**
  * Frozen public Session peer subset from 4c712841ae777dcc178d10552e7b0052fa905b81
  * (the pre-VC-669 PR base, not a released hostd binary). Only the four entries

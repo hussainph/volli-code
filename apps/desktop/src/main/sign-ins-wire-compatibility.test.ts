@@ -10,13 +10,14 @@
  *   production listener and the stock tRPC WebSocket client, from a
  *   deterministic host (scripted Pi, fake stores, a fake loopback replay),
  *   never written by hand or read back into the host.
- * - `sign-ins-wire-fixtures/n-minus-one.json` is frozen: the release before
- *   VC-702, which offers neither feature (its offer and its Clients' request,
- *   as they shipped), and what that host's frozen router (VC-669's peer,
+ * - `sign-ins-wire-fixtures/n-minus-one.json` is the bootstrap pre-VC-702
+ *   reconstruction, not a distributed release. It offers neither feature,
+ *   and preserves what the frozen router (VC-669's peer,
  *   `session-rpc-n-minus-one.test-support.ts`) answers a call to an
  *   operation it never had.
  *
- * Both skew directions run: a new Client against the old host reads no
+ * When a recorded canary bundle is present, both skew directions replay that
+ * release instead. Otherwise the bootstrap cases run: a new Client reads no
  * `sign-ins` off its welcome and hides the rows; an old Client against
  * today's host is granted neither feature and is refused before any input is
  * read. Sign-ins are WebSocket-only, so there is no IPC leg.
@@ -52,7 +53,16 @@ import { startHostProtocolListener } from "@volli/session-rpc/websocket";
 import type { HostSignInUpdate } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import { createOldSessionRouter } from "./session-rpc-n-minus-one.test-support";
+import { createOldSessionRouter, loadCanaryPeer } from "./session-rpc-n-minus-one.test-support";
+
+import {
+  captureCanaryRecording,
+  checkNextHost,
+  recordingExchanges,
+  replayCanaryPeer,
+  peerInput,
+} from "../../../../packages/session-rpc/src/canary-peer.test-support";
+const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
 
 const CURRENT = new URL("./sign-ins-wire-fixtures/current.json", import.meta.url);
 const N_MINUS_ONE = new URL("./sign-ins-wire-fixtures/n-minus-one.json", import.meta.url);
@@ -283,27 +293,40 @@ async function recordCurrent(): Promise<Omit<CurrentWire, "provenance">> {
       input: null,
       output: await host.client.signIns.status.query(),
     };
-    const setApiKeyInput = { providerId: "openrouter", key: FIXTURE_KEY };
+    const setApiKeyInput = peerInput(canary, "sign-ins-websocket", "signIns.setApiKey", {
+      providerId: "openrouter",
+      key: FIXTURE_KEY,
+    });
     const setApiKey: Recording = {
       procedure: "signIns.setApiKey",
       input: setApiKeyInput,
       output: await host.client.signIns.setApiKey.mutate(setApiKeyInput),
     };
-    const deviceStart = { providerId: "xai" };
+    const deviceStart = peerInput(canary, "sign-ins-websocket", "signIns.start", {
+      providerId: "xai",
+    });
     const deviceFlow = await host.client.signIns.start.mutate(deviceStart);
     const deviceStream = await framesOf(host.client, deviceFlow.flowId, 1);
     host.approve.resolve();
     const deviceFrames = await waitForEnd(deviceStream);
-    const relayStart = { providerId: "anthropic" };
+    const relayStart = peerInput(
+      canary,
+      "sign-ins-websocket",
+      "signIns.start",
+      { providerId: "anthropic" },
+      1,
+    );
     const relayFlow = await host.client.signIns.start.mutate(relayStart);
     const relayStream = await framesOf(host.client, relayFlow.flowId, 3);
-    const deliverInput = {
+    const deliverInput = peerInput(canary, "sign-ins-websocket", "auth.callback.deliver", {
       flowId: relayFlow.flowId,
       pathAndQuery: "/callback?code=fixture-code&state=pkce",
-    };
+    });
     const deliverOutput = await host.client.auth.callback.deliver.mutate(deliverInput);
     const relayFrames = await waitForEnd(relayStream);
-    const refusalInput = { flowId: "another-connections-flow" };
+    const refusalInput = peerInput(canary, "sign-ins-websocket", "signIns.cancel", {
+      flowId: "another-connections-flow",
+    });
     const old = await todaysHost(N_MINUS_ONE_CLIENT_REQUEST());
     let oldClient: CurrentWire["oldClient"];
     try {
@@ -361,6 +384,9 @@ function N_MINUS_ONE_CLIENT_REQUEST(): readonly string[] {
 describe("sign-ins on the public wire (VC-702)", () => {
   it("today's host answers exactly the committed recordings", async () => {
     const recorded = await recordCurrent();
+    const exchanges = recordingExchanges(recorded);
+    captureCanaryRecording("sign-ins-websocket", "websocket", recorded, exchanges);
+    if (canary) checkNextHost(canary, "sign-ins-websocket", recorded);
     if (RECORD) {
       const provenance = read<CurrentWire>(CURRENT).provenance;
       writeFileSync(CURRENT, `${JSON.stringify({ provenance, ...recorded }, null, 2)}\n`);
@@ -391,51 +417,64 @@ describe("sign-ins on the public wire (VC-702)", () => {
     expect(wire.relay.frames[0]).toMatchObject({ kind: "auth-callback" });
   });
 
-  it("a new Client hides sign-ins for the older host, which never had them", async () => {
-    const frozen = read<FrozenWire>(N_MINUS_ONE);
-    // The older host's welcome, judged by today's Client against today's hello.
-    const hello: HostHello = buildHostHello({
-      client: { kind: "desktop", version: "new" },
-      workspaceId: WORKSPACE,
-      lastSeen: null,
-      features: REQUESTED,
-      credential: "test-only-credential",
-    });
-    const welcome: HostWelcome = {
-      protocolVersion: 1,
-      host: { id: HOST_ID, version: "n-minus-one" },
-      workspace: { id: WORKSPACE, epoch: 1 },
-      actor: DEVICE,
-      features: REQUESTED.filter((feature) => frozen.hostOffered.includes(feature)),
-      proof: null,
-    };
-    expect(validateWelcome(welcome, hello, {})).toMatchObject({ ok: true });
-    expect(hostOffersSignIns(welcome)).toBe(false);
-    // A call anyway reaches the frozen peer's router, which has no such operation.
-    const frozenHost = webSocketContractLink<null, HostRouter>({
-      router: createOldSessionRouter(HostProcedureError) as unknown as HostRouter,
-      createContext: () => ({}) as never,
-    });
-    const connection = await frozenHost.open(null);
-    try {
-      const answer = await refusalOf(
-        getUntypedClient(connection.client).query("signIns.status", undefined),
-      );
-      expect({ procedure: "signIns.status", input: null, output: answer }).toEqual(
-        frozen.unknownOperation,
-      );
-    } finally {
-      await connection.close();
-    }
-  });
+  it.runIf(!canary)(
+    "a new Client hides sign-ins for the older host, which never had them",
+    async () => {
+      const frozen = read<FrozenWire>(N_MINUS_ONE);
+      // The older host's welcome, judged by today's Client against today's hello.
+      const hello: HostHello = buildHostHello({
+        client: { kind: "desktop", version: "new" },
+        workspaceId: WORKSPACE,
+        lastSeen: null,
+        features: REQUESTED,
+        credential: "test-only-credential",
+      });
+      const welcome: HostWelcome = {
+        protocolVersion: 1,
+        host: { id: HOST_ID, version: "n-minus-one" },
+        workspace: { id: WORKSPACE, epoch: 1 },
+        actor: DEVICE,
+        features: REQUESTED.filter((feature) => frozen.hostOffered.includes(feature)),
+        proof: null,
+      };
+      expect(validateWelcome(welcome, hello, {})).toMatchObject({ ok: true });
+      expect(hostOffersSignIns(welcome)).toBe(false);
+      // A call anyway reaches the frozen peer's router, which has no such operation.
+      const frozenHost = webSocketContractLink<null, HostRouter>({
+        router: createOldSessionRouter(HostProcedureError) as unknown as HostRouter,
+        createContext: () => ({}) as never,
+      });
+      const connection = await frozenHost.open(null);
+      try {
+        const answer = await refusalOf(
+          getUntypedClient(connection.client).query("signIns.status", undefined),
+        );
+        expect({ procedure: "signIns.status", input: null, output: answer }).toEqual(
+          frozen.unknownOperation,
+        );
+      } finally {
+        await connection.close();
+      }
+    },
+  );
 
-  it("an older Client is granted neither feature by today's host, and refused before input", () => {
-    const wire = read<CurrentWire>(CURRENT);
-    expect(wire.oldClient.granted).not.toContain("sign-ins");
-    expect(wire.oldClient.granted).not.toContain("auth.callback");
-    expect(wire.oldClient.refusal.output).toMatchObject({
-      code: "FORBIDDEN",
-      reason: "verb-refused",
-    });
-  });
+  it.runIf(!canary)(
+    "an older Client is granted neither feature by today's host, and refused before input",
+    () => {
+      const wire = read<CurrentWire>(CURRENT);
+      expect(wire.oldClient.granted).not.toContain("sign-ins");
+      expect(wire.oldClient.granted).not.toContain("auth.callback");
+      expect(wire.oldClient.refusal.output).toMatchObject({
+        code: "FORBIDDEN",
+        reason: "verb-refused",
+      });
+    },
+  );
 });
+
+it.runIf(!!canary)(
+  "next Client reads the actual canary sign-ins over the WebSocket adapter",
+  async () => {
+    await replayCanaryPeer(canary!, "sign-ins-websocket", sessionProcedureSchemas());
+  },
+);
