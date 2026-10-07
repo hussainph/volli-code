@@ -524,9 +524,10 @@ describe("HomeRail", () => {
       p1: { terminal: [], chat: [], provenance: {}, read: {} },
     };
     useProjectSessionsStore.getInitialState().listingState = { p1: "loaded" };
-    useRemoteSessionAvailabilityStore.getInitialState().unavailable = {
-      p1: "Sessions aren’t available on box — update it to use them here",
-    };
+    // Server rendering reads the initial state; its field is read-only to callers.
+    Object.assign(useRemoteSessionAvailabilityStore.getInitialState(), {
+      unavailable: { p1: "Sessions aren’t available on box — update it to use them here" },
+    });
     try {
       const markup = draw(HOME_BOARD_TAB_ID);
       expect(markup).toContain('data-testid="home-sessions-unavailable"');
@@ -534,7 +535,7 @@ describe("HomeRail", () => {
       expect(markup).not.toContain("No sessions yet");
       expect(markup).not.toContain("Retry");
     } finally {
-      useRemoteSessionAvailabilityStore.getInitialState().unavailable = {};
+      Object.assign(useRemoteSessionAvailabilityStore.getInitialState(), { unavailable: {} });
     }
   });
 });
