@@ -34,7 +34,7 @@ export type SignInSource = "mac" | "host";
  */
 export type { ExpiredHostSignIn } from "@volli/shared";
 
-/** One row: a provider this host can sign in to, or a git host it holds a push credential for. */
+/** One row: a provider this host can sign in to, or a git host it can hold a push credential for. */
 export interface SignInRowView {
   /** `provider:<id>` or `git:<host>`: unique across a host's rows. */
   readonly key: string;
@@ -99,26 +99,36 @@ export function gitRowKey(host: string): string {
 /**
  * The rows for one host, providers first in the host's order, then git hosts.
  * `macKeys` is the provider ids this Mac holds a key for: availability, never
- * a value.
+ * a value. GitHub is always offered; `gitHosts` are normalized hosts the
+ * person added on this surface. What the host holds takes precedence.
  */
 export function signInRowsOf(
   status: HostSignInStatus,
   macKeys: ReadonlySet<string>,
+  gitHosts: readonly string[] = [],
 ): readonly SignInRowView[] {
   const providers = status.providers.map((provider) => providerRow(provider, macKeys));
-  const git = status.git.map((row): SignInRowView => ({
-    key: gitRowKey(row.host),
+  const git = status.git.map((row) => gitRow(row.host, row.state, "git"));
+  const held = new Set(status.git.map((row) => row.host));
+  const missing = [...new Set(["github.com", ...gitHosts])]
+    .filter((host) => !held.has(host))
+    .map((host) => gitRow(host, "missing", null));
+  return [...providers, ...git, ...missing];
+}
+
+function gitRow(host: string, state: HostSignInState, held: "git" | null): SignInRowView {
+  return {
+    key: gitRowKey(host),
     kind: "git",
-    id: row.host,
-    label: row.host,
-    state: row.state,
-    held: "git",
+    id: host,
+    label: host,
+    state,
+    held,
     subscription: false,
     takesKey: true,
     macHasKey: false,
     source: "host",
-  }));
-  return [...providers, ...git];
+  };
 }
 
 function providerRow(provider: HostProviderSignIn, macKeys: ReadonlySet<string>): SignInRowView {

@@ -309,3 +309,104 @@ export const REMOTE_HOST_UPDATE_UNAVAILABLE =
   "Updating a host from this Mac comes in a later build: re-run Add a host to install this version.";
 export const REMOTE_HOST_SIGN_IN_UNAVAILABLE =
   "Signing in on a host from this Mac comes in a later build.";
+
+/* ── A host's projects: list, create, open, close (VC-710) ───────────── */
+
+/**
+ * The most projects `hosts.projects` answers, and the longest text any of a
+ * project's fields may be: bounds, not policy. A host's answer past either is
+ * not believed.
+ */
+export const REMOTE_HOST_PROJECTS_MAX = 500;
+export const REMOTE_HOST_PROJECT_TEXT_MAX = 4096;
+
+/**
+ * One project a host has, as its `volli project list` row says it. `id` is
+ * the project's id, which is its Workspace id: what `hosts.openWorkspace`
+ * takes.
+ */
+export interface RemoteHostProject {
+  readonly id: string;
+  readonly name: string;
+  /** Its ticket prefix (`VC`). */
+  readonly prefix: string;
+  /** Its folder on the host. */
+  readonly path: string;
+  readonly tickets: number;
+}
+
+/**
+ * Whether this Mac can add a project to the host, over SSH as its login:
+ *
+ * - `ready`: the login holds an operator token;
+ * - `needs-operator`: it holds none yet; `command`, run once on the host,
+ *   issues it (the add flow issues it itself when it installs);
+ * - `user-install`: hostd runs as the login there (agents share its
+ *   account), which is never issued an operator token.
+ */
+export type RemoteProjectAdds =
+  | { readonly kind: "ready" }
+  | { readonly kind: "needs-operator"; readonly command: string }
+  | { readonly kind: "user-install" };
+
+/** `hosts.projects`: what a host has, read over SSH when asked, never cached. */
+export interface RemoteHostProjects {
+  readonly hostId: string;
+  readonly projects: readonly RemoteHostProject[];
+  readonly adds: RemoteProjectAdds;
+}
+
+/**
+ * `hosts.createProject`: a folder on the host made a project, through its
+ * own `volli project add`. With `gitUrl`, it is cloned first, into `path`
+ * (or, without one, a folder named for the repository in the host's projects
+ * directory). Without `gitUrl`, `path` names a folder the host already has.
+ */
+export interface CreateRemoteProjectInput {
+  readonly hostId: string;
+  readonly path?: string;
+  readonly gitUrl?: string;
+  /** Its name on the board; the folder's name when absent. */
+  readonly name?: string;
+}
+
+/** Why a project was not added, each with its one line (`message`). */
+export type RemoteProjectFailureCode =
+  /** SSH could not reach the host: nothing ran there. */
+  | "host-unreachable"
+  /** The login holds no operator token the host accepts; `command` issues one. */
+  | "not-operator"
+  /** hostd runs as the login: no operator token can be issued there. */
+  | "user-install"
+  /** The `volli` CLI on the host could not reach its hostd. */
+  | "hostd-unreachable"
+  /** hostd refused the folder (it does not exist for hostd, its prefix is taken). */
+  | "refused"
+  /** The git URL is not one this Mac clones (only https, ssh and scp-like). */
+  | "bad-url"
+  /** The folder to clone into is already there. */
+  | "destination-exists"
+  /** Cloning needs sudo with a password; `command` clones by hand. */
+  | "needs-sudo"
+  /** git clone failed: the URL, the network, or credentials. */
+  | "clone-failed"
+  /** The host answered nothing this Mac believes. */
+  | "unavailable";
+
+export interface RemoteProjectFailure {
+  readonly code: RemoteProjectFailureCode;
+  /** One line, for the person. */
+  readonly message: string;
+  /** One command to run on the host, with Copy, or `null`. */
+  readonly command: string | null;
+}
+
+export type CreateRemoteProjectResult =
+  | { readonly ok: true; readonly created: boolean; readonly project: RemoteHostProject }
+  | { readonly ok: false; readonly failure: RemoteProjectFailure };
+
+/** `hosts.openWorkspace` / `hosts.closeWorkspace`: one of the host's projects, on this Mac. */
+export interface RemoteWorkspaceInput {
+  readonly hostId: string;
+  readonly workspaceId: string;
+}

@@ -317,6 +317,88 @@ describe("adding a fresh box with passwordless sudo", () => {
   });
 });
 
+describe("the operator token (VC-710)", () => {
+  const TOKEN_SCRIPT = [
+    `[ -s '/home/deploy/.config/volli/operator-token' ] || '${CURRENT}' operator-token --for 'deploy' >/dev/null`,
+    "[ -e /srv/volli ] || install -d -o volli -g volli -m 750 /srv/volli",
+  ].join("\n");
+
+  it("makes the login an operator while the install holds root, unless it already is one", async () => {
+    const box = fakeBox();
+    const p = ports(box);
+    const done = await advanceWith(start(), p);
+    expect(done.status).toBe("done");
+    const ran = box.scripts.find((entry) => entry.script.includes("operator-token"));
+    expect(ran?.script).toBe(`sudo -n sh -c ${shellQuote(TOKEN_SCRIPT)} </dev/null`);
+    // It runs after the install answered, and before start.
+    const order = box
+      .ran()
+      .map((script) =>
+        script.includes("operator-token")
+          ? "operator"
+          : script.includes(" start --")
+            ? "start"
+            : "",
+      );
+    expect(order.filter(Boolean)).toEqual(["operator", "start"]);
+    expect(p.log.lines).toContainEqual(
+      expect.objectContaining({
+        msg: "made the login an operator",
+        fields: expect.objectContaining({ login: "deploy" }),
+      }),
+    );
+  });
+
+  it("never fails the add when it could not: the app shows the command instead", async () => {
+    const box = fakeBox((script) =>
+      script.includes("operator-token")
+        ? { code: 1, stderr: "volli-hostd operator-token: no user named deploy on this host.\n" }
+        : undefined,
+    );
+    const p = ports(box);
+    expect((await advanceWith(start(), p)).status).toBe("done");
+    expect(p.log.lines).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        msg: "could not make the login an operator; the app shows the command instead",
+        fields: expect.objectContaining({
+          code: 1,
+          stderr: "volli-hostd operator-token: no user named deploy on this host.",
+        }),
+      }),
+    );
+  });
+
+  it("does without it when the password is gone by then, and says so", async () => {
+    const secrets: ProvisionSecrets = { sudoPassword: null };
+    const box = fakeBox(
+      (script) => (script === PROBE_SCRIPT ? { stdout: probeOutput({ sudo: null }) } : undefined),
+      (script) => {
+        if (!script.includes(" install --system")) return undefined;
+        secrets.sudoPassword = null;
+        return json(INSTALLED("system"));
+      },
+    );
+    const p = ports(box);
+    const asked = await advanceWith(start(), p, secrets);
+    secrets.sudoPassword = "hunter2";
+    await advanceWith(answer(asked, { kind: "sudo-password", password: "hunter2" }), p, secrets);
+    expect(box.ran().some((script) => script.includes("operator-token"))).toBe(false);
+    expect(p.log.lines.map((line) => line.msg)).toContain(
+      "no sudo to issue an operator token; the app shows the command instead",
+    );
+  });
+
+  it("is never asked of a user install: its login is hostd's own account", async () => {
+    const box = fakeBox((script) =>
+      script === PROBE_SCRIPT ? { stdout: probeOutput(MAC) } : undefined,
+    );
+    const done = await advanceWith(start({ supportedTargets: ["darwin-arm64"] }), ports(box));
+    expect(done.status).toBe("done");
+    expect(box.ran().some((script) => script.includes("operator-token"))).toBe(false);
+  });
+});
+
 describe("connect", () => {
   it("shows an unknown host key's fingerprint and connects only once it is accepted", async () => {
     let known = false;
@@ -844,10 +926,18 @@ describe("sudo with a password", () => {
     // One sudo each, the command under `exec … </dev/null` so it never inherits the password.
     expect(sudoed.map((entry) => entry.script)).toEqual([
       `sudo -S -p '' sh -c 'exec '\\''${STAGED}/bin/volli-hostd'\\'' install --system --operator '\\''deploy'\\'' </dev/null'`,
+      expect.stringMatching(
+        /^sudo -S -p '' sh -c 'exec sh -c .*operator-token --for .* <\/dev\/null'$/su,
+      ),
       `sudo -S -p '' sh -c 'exec '\\''${CURRENT}'\\'' start --system </dev/null'`,
       expect.stringMatching(/^sudo -S -p '' sh -c 'exec .* enroll --system .* <\/dev\/null'$/u),
     ]);
-    expect(sudoed.map((entry) => entry.stdin)).toEqual(["hunter2\n", "hunter2\n", "hunter2\n"]);
+    expect(sudoed.map((entry) => entry.stdin)).toEqual([
+      "hunter2\n",
+      "hunter2\n",
+      "hunter2\n",
+      "hunter2\n",
+    ]);
     expect(box.ran().join("\n")).not.toContain("hunter2");
     expect(JSON.stringify(done)).not.toContain("hunter2");
     expect(JSON.stringify(p.log.lines)).not.toContain("hunter2");

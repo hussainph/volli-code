@@ -268,7 +268,9 @@ describe("questions", () => {
     await h.engine.sudoPassword(flowId, questionOf(h.engine, flowId), PASSWORD);
     expect(w.views().at(-1)?.status).toBe("done");
     const sudoed = h.box.scripts.filter((entry) => entry.script.startsWith("sudo -S"));
+    // Install, the operator token beside it (VC-710), start, enroll.
     expect(sudoed.map((entry) => entry.stdin)).toEqual([
+      `${PASSWORD}\n`,
       `${PASSWORD}\n`,
       `${PASSWORD}\n`,
       `${PASSWORD}\n`,

@@ -526,11 +526,60 @@ const install: Step = async (ctx) => {
     );
   }
   const command = `${binary} install --system --operator ${shellQuote(probeFacts.user)}`;
-  return finish(
+  const installed = await hostdCommand<HostdInstallResult>(
+    ctx,
     "install",
-    await hostdCommand<HostdInstallResult>(ctx, "install", command, "root", "install"),
+    command,
+    "root",
+    "install",
   );
+  if (!isStopValue(installed) && installed.ok) {
+    await makeOperator(ctx, installed.binary, probeFacts.user, probeFacts.home);
+  }
+  return finish("install", installed);
 };
+
+/**
+ * The person's own login made an operator (VC-710), while this step holds
+ * root: an operator token issued for it unless it holds one already, and the
+ * system install's checkout folder made if there is none (runbook steps 6
+ * and 7), so "New project…" needs nothing run by hand. Never fails the add:
+ * without it, the app shows the one command that issues the token.
+ */
+async function makeOperator(
+  ctx: StepContext,
+  binary: string,
+  login: string,
+  home: string,
+): Promise<void> {
+  const tokenFile = `${home}/.config/volli/operator-token`;
+  const script = [
+    `[ -s ${shellQuote(tokenFile)} ] || ${shellQuote(binary)} operator-token --for ${shellQuote(login)} >/dev/null`,
+    `[ -e ${SYSTEM_CHECKOUTS} ] || install -d -o volli -g volli -m 750 ${SYSTEM_CHECKOUTS}`,
+  ].join("\n");
+  const run = asRoot(ctx, `sh -c ${shellQuote(script)}`);
+  if (run === null) {
+    ctx.logger.warn("no sudo to issue an operator token; the app shows the command instead");
+    return;
+  }
+  const result = await ctx.ports.ssh.exec(run.script, {
+    label: "install: operator",
+    timeoutMs: 60_000,
+    ...(run.stdin === undefined ? {} : { stdin: run.stdin }),
+  });
+  if (result.code === 0) {
+    ctx.logger.info("made the login an operator", { login });
+  } else {
+    ctx.logger.warn("could not make the login an operator; the app shows the command instead", {
+      login,
+      code: result.code,
+      stderr: result.stderr.trim().split("\n").slice(-3).join(" "),
+    });
+  }
+}
+
+/** Where a system install's checkouts live (runbook step 6): `volli`'s, 0750. */
+const SYSTEM_CHECKOUTS = "/srv/volli";
 
 function finish<T extends { readonly ok: true }>(
   step: "install" | "start" | "enroll",
