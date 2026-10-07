@@ -333,10 +333,28 @@ export interface HostLogsQuery {
 }
 
 /**
+ * A query as a door hands it to the host (VC-712): the reader's
+ * {@link HostLogsQuery} plus the door's own byte budget. Never on the wire: a
+ * reader cannot widen it; the door sets it from its frame bound.
+ */
+export interface HostLogsRead extends HostLogsQuery {
+  /**
+   * The largest answer, or followed batch, in UTF-8 bytes of its JSON (the
+   * door's frame budget). The host selects the newest lines that fit, and an
+   * answer that had to leave lines out says so (`gap`). Absent (the desktop's
+   * in-process IPC): bounded by count alone.
+   */
+  readonly maxBytes?: number;
+}
+
+/**
  * Lines, oldest first. `gap` says lines after the reader's cursor are gone
  * (evicted from the host's bounded memory, the host restarted, or more than
- * one answer holds): a reader never mistakes a gap for silence. `cursor` is
- * the newest line the host holds, to follow from.
+ * one answer holds), or that lines it asked for were left out to keep the
+ * answer inside the door's byte budget ({@link HostLogsRead.maxBytes}, a
+ * tail included): a reader never mistakes a gap for silence. `cursor` is the
+ * newest line the host holds, to follow from (a followed batch's: its own
+ * newest line).
  */
 export interface HostLogsBatch {
   readonly entries: readonly HostLogEntry[];

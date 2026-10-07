@@ -634,9 +634,14 @@ export function createRemoteHosts(ports: RemoteHostsPorts): RemoteHosts {
     for (const entry of entries.values()) {
       const runtime = runtimes.get(entry.id)!;
       for (const workspaceId of entry.workspaceIds) {
+        const link = runtime.projectLinks.get(workspaceId)!.state;
+        // What the project's own link granted, while it is ready (VC-712).
+        const held = link.status === "ready" ? runtime.links.get(workspaceId) : undefined;
+        const state = held?.link.getState();
         projects[workspaceId] = {
           hostId: entry.id,
-          link: runtime.projectLinks.get(workspaceId)!.state,
+          link,
+          ...(state?.status === "ready" ? { granted: [...state.welcome.features] } : {}),
         };
       }
     }

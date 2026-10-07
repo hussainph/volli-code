@@ -255,7 +255,7 @@ describe("the remote hosts port's sign-in (VC-702)", () => {
     await remoteHostsPort(engine, preflight).signIn("h", "claude");
     expect(preflight).toHaveBeenCalledWith("h", "claude");
     // Every Workspace link asks for the host's sign-ins and the relay.
-    expect(REMOTE_HOST_LINK_FEATURES).toEqual(["sign-ins", "auth.callback"]);
+    expect(REMOTE_HOST_LINK_FEATURES).toEqual(["sign-ins", "auth.callback", "host.logs"]);
   });
 });
 

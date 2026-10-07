@@ -44,6 +44,8 @@ import { RpcDiagnosticLog } from "./index";
 import {
   addHostEventSchema,
   addHostFactsSchema,
+  MAX_GRANTED_FEATURE_LENGTH,
+  MAX_GRANTED_FEATURES,
   remoteHostDevicesSchema,
   remoteHostsSnapshotSchema,
 } from "./remote-hosts-schema";
@@ -1116,6 +1118,24 @@ describe("the desktop router's grammar", () => {
       expect(() => z.toJSONSchema(input, { io: "input" }), key).not.toThrow();
       expect(() => z.toJSONSchema(output, { io: "output" }), key).not.toThrow();
     }
+  });
+
+  it("bounds a project's granted features as a welcome bounds its own (VC-712)", () => {
+    const granting = (granted: readonly string[]) => ({
+      ...SNAPSHOT,
+      projects: { p1: { hostId: HOST, link: { status: "ready" as const }, granted } },
+    });
+    const most = Array.from({ length: MAX_GRANTED_FEATURES }, (_, index) =>
+      `f${index}`.padEnd(MAX_GRANTED_FEATURE_LENGTH, "x"),
+    );
+    expect(remoteHostsSnapshotSchema.parse(granting(most))).toEqual(granting(most));
+    expect(remoteHostsSnapshotSchema.safeParse(granting([...most, "one more"])).success).toBe(
+      false,
+    );
+    expect(
+      remoteHostsSnapshotSchema.safeParse(granting(["x".repeat(MAX_GRANTED_FEATURE_LENGTH + 1)]))
+        .success,
+    ).toBe(false);
   });
 
   it("describes the wire's own values: a snapshot, a view with an open question, a log line", () => {
