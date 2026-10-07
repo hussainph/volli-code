@@ -585,6 +585,11 @@ test("journey arranges only benign Git state and runs all eight real assertions 
   );
   assert.match(lifecycle, /assert\.equal\(nativeWindows\.visible, 0/u);
   assert.match(smoke, /assert\.equal\(quit\.nativeWindows\.visible, 0\)/u);
+  assert.match(
+    smoke,
+    /await call\("native-reopen"\);\s*nativeQuitAttempted = false;[\s\S]*?await selectHost\(REMOTE_HOST\);[\s\S]*?stableWaitingLabel\(line\) === rowLabel/u,
+    "a fresh renderer navigates back through the host switcher before proving the same Session row",
+  );
   assert.match(smoke, /await stopLocalKeepalive\(\);\s*await selectHost\(REMOTE_HOST\)/u);
   assert.match(
     smoke,
