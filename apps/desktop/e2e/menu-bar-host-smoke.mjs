@@ -99,9 +99,29 @@ async function main() {
         // Entry hides every window at once, asks each renderer to flush its
         // pending drafts, and destroys the windows only after the ack
         // (bounded at 1s; `client-state-flush.ts`), so the count is polled.
+        // DIAGNOSTIC (VC-709): how busy the renderer and main are at entry.
+        const rStart = Date.now();
+        const rendererAge = await page.evaluate(() => Math.round(performance.now()));
+        const rendererRtt = Date.now() - rStart;
+        const homeRail = await page.getByTestId("home-rail").count();
+        await app.evaluate(({ app: electronApp, ipcMain }) => {
+          const diag = { acks: [], quitAt: null, maxLagMs: 0 };
+          globalThis.volliDiag = diag;
+          ipcMain.on("volli:client-state-flushed", () => diag.acks.push(Date.now()));
+          electronApp.on("before-quit", () => {
+            if (diag.quitAt === null) diag.quitAt = Date.now();
+          });
+          let last = Date.now();
+          setInterval(() => {
+            const now = Date.now();
+            diag.maxLagMs = Math.max(diag.maxLagMs, now - last - 50);
+            last = now;
+          }, 50).unref();
+        });
         const entered = await app.evaluate(({ BrowserWindow }) => {
           const host = globalThis.volliMenuBarHost;
           const startedAt = Date.now();
+          globalThis.volliDiag.maxLagMs = 0;
           host.enter();
           globalThis.volliMenuBarEnteredAt = startedAt;
           return {
@@ -121,6 +141,22 @@ async function main() {
         ).catch(() => -1);
         const socket = await identifies();
         const alive = !childHasExited(child);
+        const diag = await app
+          .evaluate(() => {
+            const d = globalThis.volliDiag;
+            const at = globalThis.volliMenuBarEnteredAt;
+            return {
+              ackMs: d.acks.map((t) => t - at),
+              quitMs: d.quitAt === null ? null : d.quitAt - at,
+              maxLagMs: d.maxLagMs,
+              nowMs: Date.now() - at,
+            };
+          })
+          .catch((error) => ({ error: String(error?.message ?? error) }));
+        console.log(
+          `  [DIAG] rendererAge=${rendererAge} rendererRtt=${rendererRtt} homeRail=${homeRail} ` +
+            `main=${JSON.stringify(diag)}`,
+        );
         return {
           ok: entered.visible === 0 && entered.resident && destroyedAfterMs >= 0 && socket && alive,
           detail:
@@ -132,12 +168,20 @@ async function main() {
 
     await must(3, "macOS reopen with no window recreates it and leaves the mode", async () => {
       const state = await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+        const d = globalThis.volliDiag;
+        const at = globalThis.volliMenuBarEnteredAt;
+        const diag = {
+          activateMs: Date.now() - at,
+          quitMs: d.quitAt === null ? null : d.quitAt - at,
+        };
         electronApp.emit("activate");
         return {
+          diag,
           windows: BrowserWindow.getAllWindows().length,
           resident: globalThis.volliMenuBarHost.isResident(),
         };
       });
+      console.log(`  [DIAG] check3 ${JSON.stringify(state.diag)}`);
       const reopened = await waitUntil(
         "the reopened window's renderer",
         async () => {
