@@ -20,6 +20,7 @@ export * from "./operation-unavailable";
 export * from "./handler-refused";
 export * from "./handler-keys";
 export * from "./desktop-entries";
+export * from "./host-link-relay";
 export * from "./agent-surface";
 export * from "./agent-product";
 export * from "./agent-plan";
