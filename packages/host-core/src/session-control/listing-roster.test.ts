@@ -118,6 +118,15 @@ function chatRow(
   };
 }
 
+/** A row's UTF-8 JSON, as the wire weighs it. */
+const size = (row: SessionListingRow) => Buffer.byteLength(JSON.stringify(row), "utf8");
+
+/**
+ * Text at its heaviest: quotes, backslashes and control characters escape to
+ * two to six bytes each, and an astral character is four.
+ */
+const heavy = (length: number) => '"\\\u0001😀'.repeat(Math.ceil(length / 5)).slice(0, length);
+
 describe("the bound for one frame", () => {
   it("answers a listing within the bound whole", () => {
     const rows = [chatRow("a", 1), chatRow("b", 2)];
@@ -195,6 +204,51 @@ describe("the bound for one frame", () => {
         },
       ]).sessions[0]!.provenance,
     ).toEqual({ kind: "automation", automationName: null, automationRunId: null });
+  });
+
+  it("stops at the byte budget too, the person's rows first, and counts what it left out", () => {
+    const rows = [
+      chatRow("old", 1),
+      chatRow("waiting", 0, "waiting"),
+      chatRow("new", 9),
+      chatRow("newer", 10),
+    ];
+    // Room for exactly two rows (and the array around them).
+    const budget = 2 + size(rows[1]!) + 1 + size(rows[3]!);
+    expect(boundedSessionListing(rows, 500, budget)).toEqual({
+      sessions: [rows[1], rows[3]],
+      omitted: 2,
+    });
+    expect(boundedSessionListing(rows, 500, budget - 1)).toEqual({
+      sessions: [rows[1]],
+      omitted: 3,
+    });
+    // A budget no row fits says so rather than sending a page past the frame.
+    expect(boundedSessionListing(rows, 500, 10)).toEqual({ sessions: [], omitted: 4 });
+  });
+
+  it("keeps 500 rows of the largest strings the wire allows inside the budget", () => {
+    const { text, path } = SESSION_LISTING_BOUNDS;
+    const rows = Array.from({ length: 500 }, (_, index): SessionListingRow => {
+      const record = testSession(PROJECT, null, {
+        id: `terminal-${index}`,
+        title: heavy(text),
+        cwd: heavy(path),
+      });
+      return {
+        kind: "terminal",
+        record: { ...record, lastActivityAt: index },
+        usage: EMPTY_SESSION_USAGE_SUMMARY,
+        provenance: PERSON_STARTED,
+      };
+    });
+    const page = boundedSessionListing(rows);
+    const bytes = Buffer.byteLength(JSON.stringify(page.sessions), "utf8");
+    expect(bytes).toBeLessThanOrEqual(SESSION_LISTING_BOUNDS.bytes);
+    expect(page.sessions.length).toBeGreaterThan(0);
+    expect(page.sessions.length + page.omitted).toBe(500);
+    // The newest are the ones kept.
+    expect(page.sessions.at(-1)).toMatchObject({ record: { id: "terminal-499" } });
   });
 
   it("never clips through a surrogate pair", () => {

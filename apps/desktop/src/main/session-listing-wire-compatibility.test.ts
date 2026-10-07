@@ -12,11 +12,14 @@
  *   granted. It is recorded through the real production listener and the stock
  *   tRPC WebSocket client, from host-core's real handler map over a test
  *   database, never written by hand or read back into the host.
- * - `session-listing-wire-fixtures/n-minus-one.json` is frozen: the release
- *   before VC-713, which offers no `sessions.listing` (its hostd's offer and
- *   its Client's request, as they shipped), and what that host's frozen router
- *   (VC-669's peer, `session-rpc-n-minus-one.test-support.ts`) answers a call
- *   to an operation it never had.
+ * - `session-listing-wire-fixtures/n-minus-one.json` is frozen: a
+ *   representative pre-feature peer (main before VC-713, not a shipped
+ *   release), which offers no `sessions.listing`: its hostd's offer as it
+ *   stood, every feature that build knew as the old Client's request, and
+ *   what VC-669's frozen, reconstructed router
+ *   (`session-rpc-n-minus-one.test-support.ts`) answers a call to an
+ *   operation it never had. The old peer's welcome below is synthesized from
+ *   that offer, not recorded.
  *
  * Both skew directions run: a new Client against the old host reads no
  * `sessions.listing` off its welcome and keeps the listing it has; an old

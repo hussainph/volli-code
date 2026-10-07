@@ -512,7 +512,13 @@ export const SessionComposer = React.memo(function SessionComposer({
         onSubmit={() => send(composerIntent({ working, steer: false }))}
         // Capture-phase, and that is load-bearing — see `file-drop.ts` for why
         // this composer must take the drop before `PromptInput`'s own listener.
-        {...fileAttachHandlers(attachUnavailable === null ? onAttachFiles : undefined)}
+        // Where nothing can be attached (a remote host, VC-713), a dropped or
+        // pasted file is still TAKEN here — so the vendored `PromptInput`'s own
+        // listener never stages it in its hidden attachment state — and the
+        // person is told why, rather than the gesture vanishing.
+        {...fileAttachHandlers(
+          attachUnavailable === null ? onAttachFiles : () => toastError(attachUnavailable),
+        )}
       >
         {queued.length > 0 ? (
           // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.

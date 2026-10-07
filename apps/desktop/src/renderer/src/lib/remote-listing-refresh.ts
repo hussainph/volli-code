@@ -21,7 +21,10 @@
  * Every trigger for one Workspace inside {@link REMOTE_LISTING_DEBOUNCE_MS} of
  * its last read collapses into one trailing read at the window's end, so a
  * wake that also reconnects and refocuses reads once, then once more. At most
- * one read per Workspace is in flight.
+ * one read per Workspace is in flight: a trigger during one becomes a single
+ * read after it settles (debounced the same way), never a timer that polls
+ * the read in flight. A Workspace no longer opened is let go of
+ * ({@link RemoteListingRefresh.prune}): its trailing read is cancelled.
  *
  * The scheduler owns its timers and its subscriptions, and `stop()` ends both
  * at once; a read that settles after `stop()` schedules nothing. What a read
@@ -65,6 +68,13 @@ export interface RemoteListingRefreshPorts {
 export interface RemoteListingRefresh {
   /** Reads every opened remote Workspace that is ready (debounced). */
   refreshAll(): void;
+  /**
+   * Lets go of every Workspace no longer opened: its trailing timer is
+   * cancelled and nothing more is read for it. An owner calls this when the
+   * set it answers `workspaces()` from changes (a project forgotten, a host
+   * gone); a read for a Workspace no longer opened is never started anyway.
+   */
+  prune(): void;
   /** Ends every timer and subscription now. Idempotent. */
   stop(): void;
 }
@@ -72,6 +82,8 @@ export interface RemoteListingRefresh {
 interface WorkspaceTimes {
   lastStarted: number;
   inFlight: boolean;
+  /** A trigger arrived while a read was in flight: read once more after it settles. */
+  pending: boolean;
   trailing: unknown;
 }
 
@@ -82,13 +94,25 @@ export function startRemoteListingRefresh(ports: RemoteListingRefreshPorts): Rem
   let pollHandle: unknown;
   let pollDue = clock.now() + REMOTE_LISTING_POLL_MS;
 
+  const opened = (workspaceId: string): boolean => ports.workspaces().includes(workspaceId);
+
   const timesOf = (workspaceId: string): WorkspaceTimes => {
     let entry = times.get(workspaceId);
     if (entry === undefined) {
-      entry = { lastStarted: -Infinity, inFlight: false, trailing: null };
+      entry = { lastStarted: -Infinity, inFlight: false, pending: false, trailing: null };
       times.set(workspaceId, entry);
     }
     return entry;
+  };
+
+  /** Drops a Workspace: its trailing timer, its pending read, its times. */
+  const forget = (workspaceId: string): void => {
+    const entry = times.get(workspaceId);
+    if (entry === undefined) return;
+    if (entry.trailing !== null) clock.clearTimeout(entry.trailing);
+    entry.trailing = null;
+    entry.pending = false;
+    times.delete(workspaceId);
   };
 
   const run = (workspaceId: string, entry: WorkspaceTimes): void => {
@@ -99,33 +123,43 @@ export function startRemoteListingRefresh(ports: RemoteListingRefreshPorts): Rem
       .catch(() => undefined)
       .finally(() => {
         entry.inFlight = false;
+        // A stopped scheduler, or a Workspace let go of meanwhile, reads nothing more.
+        if (stopped || times.get(workspaceId) !== entry || !entry.pending) return;
+        entry.pending = false;
+        trigger(workspaceId);
       });
   };
 
-  /** One read now, or one trailing read at the end of the debounce window. */
-  const trigger = (workspaceId: string, requireReady = true): void => {
+  /**
+   * One read now; or, inside the debounce window, one trailing read at its
+   * end; or, while a read is in flight, one more read after it settles. A
+   * trailing timer always waits a positive time, so a slow read can never
+   * turn this into a loop.
+   */
+  function trigger(workspaceId: string): void {
     if (stopped) return;
-    if (requireReady && !ports.ready(workspaceId)) return;
+    if (!opened(workspaceId)) {
+      forget(workspaceId);
+      return;
+    }
+    if (!ports.ready(workspaceId)) return;
     const entry = timesOf(workspaceId);
+    if (entry.inFlight) {
+      entry.pending = true;
+      return;
+    }
     const since = clock.now() - entry.lastStarted;
-    if (!entry.inFlight && since >= REMOTE_LISTING_DEBOUNCE_MS) {
+    if (since >= REMOTE_LISTING_DEBOUNCE_MS) {
       run(workspaceId, entry);
       return;
     }
     if (entry.trailing !== null) return;
-    const wait = Math.max(0, REMOTE_LISTING_DEBOUNCE_MS - since);
-    // `stop()` clears this timer, so it never fires after it.
+    // `stop()` and `forget()` clear this timer, so it never fires after either.
     entry.trailing = clock.setTimeout(() => {
       entry.trailing = null;
-      if (entry.inFlight) {
-        // Still reading: try once more at the next window's end.
-        trigger(workspaceId, requireReady);
-        return;
-      }
-      if (requireReady && !ports.ready(workspaceId)) return;
-      run(workspaceId, entry);
-    }, wait);
-  };
+      trigger(workspaceId);
+    }, REMOTE_LISTING_DEBOUNCE_MS - since);
+  }
 
   const refreshAll = (): void => {
     for (const workspaceId of ports.workspaces()) trigger(workspaceId);
@@ -150,25 +184,23 @@ export function startRemoteListingRefresh(ports: RemoteListingRefreshPorts): Rem
     schedulePoll();
   }
 
-  const unsubscribeReconnect = ports.onReconnect((workspaceId) => {
-    if (ports.workspaces().includes(workspaceId)) trigger(workspaceId);
-  });
+  // A link this window never opened is not its to read: `trigger` says so.
+  const unsubscribeReconnect = ports.onReconnect(trigger);
   const unsubscribeFocus = ports.onFocus(refreshAll);
   schedulePoll();
 
   return {
     refreshAll,
+    prune() {
+      for (const workspaceId of times.keys()) if (!opened(workspaceId)) forget(workspaceId);
+    },
     stop() {
       if (stopped) return;
       stopped = true;
       unsubscribeReconnect();
       unsubscribeFocus();
       clock.clearTimeout(pollHandle);
-      for (const entry of times.values()) {
-        if (entry.trailing !== null) clock.clearTimeout(entry.trailing);
-        entry.trailing = null;
-      }
-      times.clear();
+      for (const workspaceId of times.keys()) forget(workspaceId);
     },
   };
 }
