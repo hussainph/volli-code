@@ -194,8 +194,7 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
       // then about one frame), what the ring itself keeps otherwise.
       const room = budget - BATCH_BYTES - MAX_CURSOR_LENGTH;
       const maxPendingBytes = Math.min(room, limits.maxBytes);
-      const backlog =
-        query.after === undefined ? null : read({ ...query, limit: LOG_PAGE_LIMIT });
+      const backlog = query.after === undefined ? null : read({ ...query, limit: LOG_PAGE_LIMIT });
       let pending: Held[] = [];
       let pendingHead = 0;
       let pendingBytes = 0;
@@ -239,10 +238,7 @@ export function createLogRing(bounds: Partial<LogRingBounds> = {}): LogRing {
         pending.push(held);
         pendingBytes += cost;
         // Past the bound (or the ring's count), the oldest unsent go: the newest win.
-        while (
-          pendingBytes > maxPendingBytes ||
-          pending.length - pendingHead > limits.maxLines
-        ) {
+        while (pendingBytes > maxPendingBytes || pending.length - pendingHead > limits.maxLines) {
           pendingBytes -= entryBytes(pending[pendingHead]!);
           pendingHead += 1;
           dropped = true;

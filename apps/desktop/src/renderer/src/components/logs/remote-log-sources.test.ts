@@ -279,41 +279,43 @@ describe("remote hosts in the one log viewer (VC-712)", () => {
   });
 });
 
-describe("a Workspace's relayed link as a log source reads it", () => {
-  function fakeRpc() {
-    const opened: {
-      input: Record<string, unknown>;
-      onData(event: HostLinkRelayEvent): void;
-      onError(error: unknown): void;
-      unsubscribe: ReturnType<typeof vi.fn>;
-    }[] = [];
-    const queries: unknown[] = [];
-    const rpc = {
-      hostLink: {
-        query: {
-          query: async (input: unknown) => {
-            queries.push(input);
-            return { entries: [], gap: false, cursor: "r:1" };
-          },
-        },
-        mutate: { mutate: async () => undefined },
-        subscribe: {
-          subscribe: (input: Record<string, unknown>, options: Record<string, unknown>) => {
-            const unsubscribe = vi.fn();
-            opened.push({
-              input,
-              onData: options["onData"] as (event: HostLinkRelayEvent) => void,
-              onError: options["onError"] as (error: unknown) => void,
-              unsubscribe,
-            });
-            return { unsubscribe };
-          },
+/** The window's client as the relay reaches it, the test's to answer. */
+function fakeRpc() {
+  const opened: {
+    input: Record<string, unknown>;
+    onData(event: HostLinkRelayEvent): void;
+    onError(error: unknown): void;
+    unsubscribe: ReturnType<typeof vi.fn>;
+  }[] = [];
+  const queries: unknown[] = [];
+  const rpc = {
+    hostLink: {
+      query: {
+        query: async (input: unknown) => {
+          queries.push(input);
+          return { entries: [], gap: false, cursor: "r:1" };
         },
       },
-    };
-    // The test's fake of the window's client: only the relay's slice.
-    return { rpc: rpc as unknown as RelayHostLinkRpc, opened, queries };
-  }
+      mutate: { mutate: async () => undefined },
+      subscribe: {
+        subscribe: (input: Record<string, unknown>, options: Record<string, unknown>) => {
+          const unsubscribe = vi.fn();
+          opened.push({
+            input,
+            onData: options["onData"] as (event: HostLinkRelayEvent) => void,
+            onError: options["onError"] as (error: unknown) => void,
+            unsubscribe,
+          });
+          return { unsubscribe };
+        },
+      },
+    },
+  };
+  // The test's fake of the window's client: only the relay's slice.
+  return { rpc: rpc as unknown as RelayHostLinkRpc, opened, queries };
+}
+
+describe("a Workspace's relayed link as a log source reads it", () => {
   const openState = { getState: () => OPEN, subscribe: () => () => undefined };
 
   it("queries and follows over the relay, and says when the link's budget makes the follow wait", async () => {

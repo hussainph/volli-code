@@ -109,7 +109,11 @@ describe("the remote host source", () => {
     const granting = (granted: readonly string[] | undefined): RemoteHostsSnapshot => ({
       ...snapshot([remote()]),
       projects: {
-        p1: { hostId: HOST, link: { status: "ready" }, ...(granted === undefined ? {} : { granted }) },
+        p1: {
+          hostId: HOST,
+          link: { status: "ready" },
+          ...(granted === undefined ? {} : { granted }),
+        },
       },
     });
     fake.push(granting(["sign-ins", "host.logs"]));

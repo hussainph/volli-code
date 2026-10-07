@@ -975,10 +975,7 @@ const LOGS_OVERFLOW_MESSAGE = "The log stream fell behind the host's log";
 const LOGS_SOURCE_FAILURE_MESSAGE = "The host's log stopped";
 
 /** A reader's query as the host reads it: with the door's frame budget, when it has one. */
-function logsRead(
-  query: HostLogsQuery,
-  ctx: { readonly maxResponseBytes?: number },
-): HostLogsRead {
+function logsRead(query: HostLogsQuery, ctx: { readonly maxResponseBytes?: number }): HostLogsRead {
   return ctx.maxResponseBytes === undefined ? query : { ...query, maxBytes: ctx.maxResponseBytes };
 }
 

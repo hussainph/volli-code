@@ -26,11 +26,7 @@
  */
 import type { HostError } from "@volli/host-protocol";
 
-import {
-  isLinkReady,
-  relayHostLink,
-  type RelayHostLinkOptions,
-} from "../../lib/relay-host-link";
+import { isLinkReady, relayHostLink, type RelayHostLinkOptions } from "../../lib/relay-host-link";
 import {
   useHostConnectionStore,
   type HostConnectionState,
@@ -117,7 +113,10 @@ export function waitingStatus(host: HostRecord | undefined): {
     case "incompatible":
       return { status: "failed", detail: `${name} can’t serve this app.` };
     default:
-      return { status: "connecting", detail: `Waiting for a link to ${name} that carries its log…` };
+      return {
+        status: "connecting",
+        detail: `Waiting for a link to ${name} that carries its log…`,
+      };
   }
 }
 
@@ -185,7 +184,8 @@ export function attachRemoteLogSources(options: RemoteLogSourcesOptions = {}): (
       if (host.local) continue;
       const claims = Object.values(state.projects).filter((claim) => claim.hostId === host.id);
       const held = registered.get(host.id);
-      const lost = claims.length === 0 || claims.every((claim) => isGone(claim.link));
+      // No project left, or none whose link can still serve (`every` of none is true).
+      const lost = claims.every((claim) => isGone(claim.link));
       if (held !== undefined && lost) {
         registered.delete(host.id);
         held.unregister();

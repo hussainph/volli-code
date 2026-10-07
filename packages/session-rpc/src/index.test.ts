@@ -3345,8 +3345,7 @@ describe("host.logs on the router (VC-699)", () => {
   it("hands the host the door's frame budget, and bounds a stream's queue in bytes (VC-712)", async () => {
     const reads: unknown[] = [];
     const follows: unknown[] = [];
-    const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
-    const one = bytes(logBatch("r:0"));
+    const one = Buffer.byteLength(JSON.stringify(logBatch("r:0")));
     const bounded = (followLogs: Parameters<typeof sessionContext>[0]["followLogs"]) =>
       createSessionRouter().createCaller({
         ...sessionContext({
@@ -3378,6 +3377,32 @@ describe("host.logs on the router (VC-699)", () => {
     ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
     expect(follows).toStrictEqual([{ after: "r:0", maxBytes: one + 16 }]);
     expect(seen).toEqual(["r:0", "r:1", "r:2", "r:3"]);
+    // Replay bounds without a frame bound: the queue is bounded by the replay share alone.
+    const replayOnly = await createSessionRouter()
+      .createCaller({
+        ...sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          runtime: {},
+          diagnostics: new RpcDiagnosticLog(),
+          followLogs: (query, listener) => {
+            follows.push(query);
+            for (let index = 0; index < 10; index += 1) listener(logBatch(`r:${index}`));
+            return () => undefined;
+          },
+        }),
+        replayBounds: { events: 100, bytes: one },
+      })
+      .logs.follow({});
+    const unbudgeted: string[] = [];
+    await expect(
+      (async () => {
+        for await (const tracked of replayOnly) {
+          unbudgeted.push((tracked as unknown as [string])[0]);
+        }
+      })(),
+    ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    expect(follows.at(-1)).toStrictEqual({});
+    expect(unbudgeted).toEqual(["r:0", "r:1"]);
     // An unbounded door (the desktop's IPC) names no budget, as before.
     const local = createSessionRouter().createCaller(
       sessionContext({

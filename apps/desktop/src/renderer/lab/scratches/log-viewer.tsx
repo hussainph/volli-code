@@ -3,10 +3,7 @@ import type { HostLinkRelayEvent, HostLogEntry, HostLogsBatch, LogRecord } from 
 
 import type { LogSource } from "@renderer/components/logs/log-sources";
 import { LogStream, LogViewer } from "@renderer/components/logs/log-viewer";
-import {
-  attachRemoteLogSources,
-  relayLogLink,
-} from "@renderer/components/logs/remote-log-sources";
+import { attachRemoteLogSources, relayLogLink } from "@renderer/components/logs/remote-log-sources";
 import { Button } from "@renderer/components/ui/button";
 import type { RelayHostLinkRpc } from "@renderer/lib/relay-host-link";
 import type { HostLinkView } from "@renderer/stores/host-connection";
@@ -228,7 +225,8 @@ const OPEN: HostLinkView = { status: "open" };
 const FULL = {
   code: "TOO_MANY_REQUESTS",
   reason: "subscription-limit",
-  message: "This project’s link carries as many live views as it can; this one waits for a free one.",
+  message:
+    "This project’s link carries as many live views as it can; this one waits for a free one.",
 };
 
 /**
@@ -238,18 +236,24 @@ const FULL = {
  * the log's stream (`subscription-limit`, AM1), so the source polls; "Drop
  * the link" takes the project's link down, so the dot says so.
  */
+/** The line a lab box cursor names: `box:<seq>`. */
+function seqOf(cursor: unknown): number {
+  return typeof cursor === "string" && cursor.startsWith("box:") ? Number(cursor.slice(4)) : 0;
+}
+
 function labBox() {
-  const lines: HostLogEntry[] = BOX.map((line, index) => ({ ...line, cursor: `box:${index + 1}` }));
+  const lines: HostLogEntry[] = BOX.map(({ record }, index) => ({
+    cursor: `box:${index + 1}`,
+    record,
+  }));
   const followers = new Set<(line: HostLogEntry) => void>();
   const streams = new Set<() => void>();
   const listeners = new Set<() => void>();
   let link: HostLinkView = OPEN;
   let full = false;
-  const seqOf = (cursor: unknown) =>
-    typeof cursor === "string" && cursor.startsWith("box:") ? Number(cursor.slice(4)) : 0;
   const after = (cursor: unknown) => lines.filter((line) => seqOf(line.cursor) > seqOf(cursor));
-  const batch = (entries: HostLogEntry[]): HostLogsBatch => ({
-    entries,
+  const batch = (held: HostLogEntry[]): HostLogsBatch => ({
+    entries: held,
     gap: false,
     cursor: lines.at(-1)!.cursor,
   });
@@ -281,7 +285,8 @@ function labBox() {
     hostLink: {
       query: {
         query: async ({ input }: { input?: { after?: string; limit?: number } }) => {
-          if (link.status !== "open") throw new Error("The project’s host can’t be reached right now.");
+          if (link.status !== "open")
+            throw new Error("The project’s host can’t be reached right now.");
           const unread = input?.after === undefined ? lines : after(input.after);
           return batch(unread.slice(-(input?.limit ?? 500)));
         },

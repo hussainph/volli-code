@@ -218,7 +218,7 @@ function hostLinks(initial: Record<string, ReturnType<typeof scriptedLink>>) {
     },
     /** Runs the newest timer still armed. */
     fire() {
-      const timer = timers.findLast((entry) => !entry.cleared);
+      const timer = timers.findLast((armed) => !armed.cleared);
       if (timer === undefined) throw new Error("no timer armed");
       timer.cleared = true;
       timer.run();
@@ -299,9 +299,7 @@ describe("a remote host's log over its links (VC-712)", () => {
     const b = scriptedLink();
     const host = hostLinks({ a, b });
     const { lines, statuses, handlers } = recorder();
-    hostLinkLogSource({ id: "box", label: "Box", links: host.links }, host.timing).start(
-      handlers,
-    );
+    hostLinkLogSource({ id: "box", label: "Box", links: host.links }, host.timing).start(handlers);
     a.queries[0]!.resolve(page("r:1"));
     await flush();
     // The relay says it while it waits: the source leaves after that call returns.
@@ -339,9 +337,7 @@ describe("a remote host's log over its links (VC-712)", () => {
     const host = hostLinks({ a, b });
     host.set(["a"]);
     const { lines, handlers } = recorder();
-    hostLinkLogSource({ id: "box", label: "Box", links: host.links }, host.timing).start(
-      handlers,
-    );
+    hostLinkLogSource({ id: "box", label: "Box", links: host.links }, host.timing).start(handlers);
     a.queries[0]!.resolve(page("r:1"));
     await flush();
     a.streams[0]!.handlers.onError(Object.assign(new Error("full"), limitError));
@@ -368,9 +364,7 @@ describe("a remote host's log over its links (VC-712)", () => {
     const a = scriptedLink();
     const host = hostLinks({ a });
     const { statuses, handlers } = recorder();
-    hostLinkLogSource({ id: "box", label: "Box", links: host.links }, host.timing).start(
-      handlers,
-    );
+    hostLinkLogSource({ id: "box", label: "Box", links: host.links }, host.timing).start(handlers);
     a.queries[0]!.reject(new Error("verb-refused"));
     await flush();
     expect(statuses.at(-1)).toEqual(["failed", "verb-refused"]);
@@ -415,7 +409,11 @@ describe("a remote host's log over its links (VC-712)", () => {
       },
     };
     const source = hostLinkLogSource(
-      { id: "box", label: "Box", links: { ...host.links, ready: () => [{ key: "a", link: eager }] } },
+      {
+        id: "box",
+        label: "Box",
+        links: { ...host.links, ready: () => [{ key: "a", link: eager }] },
+      },
       host.timing,
     );
     source.start(handlers);

@@ -101,10 +101,7 @@ export function remoteHostRecord(host: RemoteHost): HostSourceRecord {
 }
 
 /** Two lists of the same strings, in the same order. */
-const sameStrings = (
-  a: readonly string[] | undefined,
-  b: readonly string[] | undefined,
-): boolean =>
+const sameStrings = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean =>
   a !== undefined &&
   b !== undefined &&
   a.length === b.length &&

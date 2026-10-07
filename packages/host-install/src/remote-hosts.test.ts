@@ -820,11 +820,11 @@ describe("a host's lifecycle", () => {
       closeCode: 1006,
       retryAt: NOW + 9_000,
     };
-    const granting = ready("1.2.0");
+    const granting = ready("1.2.0") as Extract<HostLinkState, { status: "ready" }>;
     one.set({
       ...granting,
       welcome: { ...granting.welcome, features: ["sign-ins", "host.logs"] },
-    } as HostLinkState);
+    });
     expect(h.engine.snapshot().projects[WS1]).toEqual({
       hostId: HOST_ID,
       link: { status: "ready" },

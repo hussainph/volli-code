@@ -26,7 +26,11 @@ import { connect, createServer, type AddressInfo, type Server, type Socket } fro
 
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import { createLogger, createLogRing, type Logger } from "@volli/host-core/log";
-import { createHostLink, type HostLink, type HostLinkState } from "@volli/host-protocol/client-link";
+import {
+  createHostLink,
+  type HostLink,
+  type HostLinkState,
+} from "@volli/host-protocol/client-link";
 import { ipcLink, type IpcEvent, type IpcResponse } from "@volli/host-protocol/ipc";
 import { createHostRouter, RpcDiagnosticLog, type DesktopIpcRouter } from "@volli/session-rpc";
 import { startHostProtocolListener } from "@volli/session-rpc/websocket";
