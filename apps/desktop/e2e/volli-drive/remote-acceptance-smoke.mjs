@@ -19,6 +19,7 @@ import {
   controlLabel,
   visibleControls as controls,
   stableWaitingLabel,
+  visibleServingRow,
   REMOTE_HOST,
   REMOTE_PROJECT,
   STREAM_REPLY,
@@ -248,11 +249,13 @@ async function journey() {
       await wait("Sources");
       await click("button", REMOTE_HOST);
       await type("Search", "serving");
-      const current = await wait("serving");
+      const current = await wait('button "serving');
       assert.ok(controls(current.text, "button", "This Mac").length === 1);
       assert.ok(controls(current.text, "button", REMOTE_HOST)[0]?.includes("[pressed]"));
-      assert.match(current.text, /hostd/);
-      assert.ok(current.text.split(REMOTE_HOST).length >= 3, "Host label missing from log row");
+      assert.ok(
+        visibleServingRow(current.text, REMOTE_HOST),
+        "Real serving row must name hostd and the remote machine, not just the Search input",
+      );
     },
   );
   const doctor = await call("doctor");

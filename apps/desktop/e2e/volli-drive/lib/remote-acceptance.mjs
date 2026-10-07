@@ -38,6 +38,23 @@ export function visibleControls(tree, role, name, { contains = false } = {}) {
     return actualRole === role && (contains ? label?.includes(name) : label === name);
   });
 }
+/** Require source, component and message within one visible log list row. */
+export function visibleServingRow(tree, host) {
+  const lines = tree.split("\n");
+  return lines.some((line, i) => {
+    if (!/^\s*- listitem(?:[ :]|$)/u.test(line)) return false;
+    const indent = line.search(/\S/u);
+    let end = i + 1;
+    while (end < lines.length && lines[end].search(/\S/u) > indent) end++;
+    const row = lines.slice(i, end).join("\n");
+    return (
+      row.includes(host) &&
+      visibleControls(row, "button", "hostd").length === 1 &&
+      visibleControls(row, "button", "serving", { contains: true }).length === 1
+    );
+  });
+}
+
 /** Strip only displayed age tokens, never a Session's title/identity/state. */
 export function stableWaitingLabel(line) {
   return controlLabel(line)
@@ -81,6 +98,20 @@ export function acceptanceScript(turn) {
     };
   }
   return undefined;
+}
+
+/** Stopped status files retain the old pid; never adopt that possibly reused pid. */
+export function acceptanceDaemonPid(status, home) {
+  if (status.v !== 1 || status.dataDir !== join(home, "Library/Application Support/volli-hostd"))
+    throw new Error("Status did not name this fixture install");
+  if (
+    !["serving", "refusing"].includes(status.verdict) ||
+    !["serving", "refusing"].includes(status.running?.state)
+  )
+    return null;
+  const pid = status.running.pid;
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Invalid fixture hostd pid");
+  return pid;
 }
 
 const quote = (s) => `"${String(s).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
@@ -148,25 +179,29 @@ export async function prepareRemoteAcceptance(layout, provider) {
         env: scratchSshEnv(),
         timeout,
       });
-    const stopHostd = async () => {
-      // Fresh-runner checks above establish ownership; the management status
-      // identifies this install, and signalling still checks pid + start time.
+    let daemonIdentity = null;
+    const captureDaemon = async () => {
       const { stdout } = await runHostd("status --json --user", 10_000).catch((error) => {
         // Managed status prints valid JSON with documented non-serving exits.
         if ([1, 3].includes(error.code) && error.stdout) return { stdout: error.stdout };
         throw error;
       });
       const status = JSON.parse(stdout.trim().split("\n").at(-1));
-      if (
-        status.v !== 1 ||
-        status.dataDir !== join(home, "Library/Application Support/volli-hostd")
-      )
-        throw new Error("Status did not name this fixture install");
-      const pid = status.running?.pid;
-      if (!pid) return;
-      const identity = await processIdentity(pid);
-      if (!identity) return;
-      const signalled = await killExactly([identity], { signal: "SIGTERM", graceMs: 10_000 });
+      const pid = acceptanceDaemonPid(status, home);
+      if (pid) daemonIdentity = await processIdentity(pid);
+    };
+    const stopHostd = async () => {
+      // Only a live serving/refusing status can establish ownership. If SSH
+      // fails later, still reap the previously recorded pid + start identity.
+      let statusError;
+      await captureDaemon().catch((error) => {
+        statusError = error;
+      });
+      const signalled = await killExactly([daemonIdentity].filter(Boolean), {
+        signal: "SIGTERM",
+        graceMs: 10_000,
+      });
+      if (statusError) throw statusError;
       if (signalled.some((entry) => entry.signal === "SIGKILL"))
         throw new Error("Fixture hostd did not stop cleanly after SIGTERM");
     };
@@ -247,7 +282,10 @@ export async function prepareRemoteAcceptance(layout, provider) {
           ],
           { timeout: 15_000 },
         );
+        daemonIdentity = null;
         await runHostd("start --user");
+        await captureDaemon();
+        if (!daemonIdentity) throw new Error("Started fixture hostd has no verified identity");
       },
     };
   } catch (error) {

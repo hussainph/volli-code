@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   acceptanceScript,
   acceptanceTarballs,
+  acceptanceDaemonPid,
   assertAcceptanceRunner,
   sshConfig,
   ANSWER_QUESTION,
@@ -17,6 +18,7 @@ import {
   controlLabel,
   visibleControls,
   stableWaitingLabel,
+  visibleServingRow,
 } from "./remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -71,6 +73,32 @@ test("SSH fixture config only names loopback and fresh credentials, no ambient k
     assert.ok(config.includes(text));
   assert.ok(!config.includes("~/"));
 });
+test("daemon cleanup never adopts the retained pid of a stopped/offline status", () => {
+  const home = "/fixture/home";
+  const status = {
+    v: 1,
+    dataDir: `${home}/Library/Application Support/volli-hostd`,
+    verdict: "serving",
+    running: { state: "serving", pid: 123 },
+  };
+  assert.equal(acceptanceDaemonPid(status, home), 123);
+  assert.equal(
+    acceptanceDaemonPid(
+      { ...status, verdict: "refusing", running: { ...status.running, state: "refusing" } },
+      home,
+    ),
+    123,
+  );
+  assert.equal(acceptanceDaemonPid({ ...status, verdict: "not-serving" }, home), null);
+  assert.equal(
+    acceptanceDaemonPid({ ...status, running: { ...status.running, state: "stopped" } }, home),
+    null,
+  );
+  assert.throws(
+    () => acceptanceDaemonPid({ ...status, dataDir: "/someones/install" }, home),
+    /fixture install/,
+  );
+});
 test("visible controls handle colon-quoted YAML keys and disabled rows without refs", () => {
   const tree = [
     `  - 'button "Host: This Mac" [ref=f2e12]':`,
@@ -84,6 +112,19 @@ test("visible controls handle colon-quoted YAML keys and disabled rows without r
   );
   assert.equal(visibleControls(tree, "button", "volli-acceptance", { contains: true }).length, 1);
   assert.equal(visibleControls(tree, "button", "Connect").length, 1);
+});
+test("log proof requires a real row, not search/filter or other-host names", () => {
+  const header = `- button "volli-acceptance" [pressed]\n- textbox "Search": serving`;
+  const row = `- listitem:\n  - generic: volli-acceptance\n  - button "hostd" [ref=e1]\n  - 'button "serving database: /fixture/db" [ref=e2]'`;
+  assert.equal(visibleServingRow(header, "volli-acceptance"), false);
+  assert.equal(visibleServingRow(`${header}\n${row}`, "volli-acceptance"), true);
+  assert.equal(
+    visibleServingRow(
+      `${header}\n${row.replace("volli-acceptance", "other-host")}`,
+      "volli-acceptance",
+    ),
+    false,
+  );
 });
 const row = (age) => `- button "Chat · Waiting for you Fix 1h timeout ACC-1 · ${age}" [ref=e5]`;
 test("waiting row identity survives a displayed age boundary without erasing title", () => {
