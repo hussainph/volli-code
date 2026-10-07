@@ -10,6 +10,7 @@ import {
   type ProjectsGateway,
   createProjectsStore,
   decodeProjectsUiState,
+  decodeRemoteSelection,
   encodeProjectsUiState,
   useProjectsStore,
 } from "./projects";
@@ -1753,5 +1754,85 @@ describe("remote projects (VC-711)", () => {
     // Nothing claims it: a stranger's row stays out.
     store.getState().adoptProject(REMOTE);
     expect(store.getState().projects).toHaveLength(1);
+  });
+});
+
+describe("remote selection intent", () => {
+  const remote = { hostId: "box-id", projectId: "remote", hostName: "box" };
+  const local = project({ id: "local", path: "/local" });
+  const row = project({ id: "remote", path: "/box" });
+
+  it("persists remote identity additively beside the last local selection", () => {
+    const gateway = fakeGateway();
+    const store = createProjectsStore(
+      gateway,
+      vi.fn(),
+      (id) => id === "remote",
+      (id) => (id === "remote" ? remote : null),
+    );
+    store.getState().hydrate([local], local.id);
+    store.getState().adoptProject(row);
+    store.getState().select(row.id);
+    expect(gateway.setSelection).toHaveBeenCalledWith(local.id, remote);
+    const raw = encodeProjectsUiState(local.id, remote);
+    expect(decodeProjectsUiState(raw)).toBe(local.id);
+    expect(decodeRemoteSelection(raw)).toEqual(remote);
+    store.getState().select(local.id);
+    expect(gateway.setSelection).toHaveBeenLastCalledWith(local.id);
+  });
+
+  it.each([
+    undefined,
+    "bad",
+    "null",
+    "{}",
+    '{"remoteSelection":{}}',
+    JSON.stringify({ remoteSelection: { ...remote, hostId: "this-mac" } }),
+    JSON.stringify({ remoteSelection: { ...remote, projectId: "" } }),
+    JSON.stringify({ remoteSelection: { ...remote, hostName: 1 } }),
+  ])("ignores older and malformed remote intent: %s", (raw) => {
+    expect(decodeRemoteSelection(raw)).toBeNull();
+  });
+
+  it("holds no selected id while pending, preserves it over local refresh, then settles without a write", () => {
+    const { store, gateway, onSelectedProjectChange } = freshStore();
+    store.getState().hydrate([local], local.id);
+    store.getState().beginRemoteRestore(remote);
+    store.getState().hydrate([local], local.id);
+    expect(store.getState().pendingRemoteSelection).toBe(remote);
+    expect(store.getState().selectedProjectId).toBeNull();
+    store.getState().settleRemoteRestore(remote, true);
+    expect(store.getState().selectedProjectId).toBe(remote.projectId);
+    expect(onSelectedProjectChange).toHaveBeenLastCalledWith(remote.projectId);
+    expect(gateway.setSelection).not.toHaveBeenCalled();
+  });
+
+  it("a person's pick retires pending intent and rejects late settlement", () => {
+    const { store } = freshStore();
+    store.getState().hydrate([local], local.id);
+    store.getState().beginRemoteRestore(remote);
+    store.getState().select(local.id);
+    store.getState().settleRemoteRestore(remote, true);
+    expect(store.getState().selectedProjectId).toBe(local.id);
+    expect(store.getState().pendingRemoteSelection).toBeNull();
+  });
+
+  it("a host pick without an open project cancels and persists the local fallback", () => {
+    const { store, gateway } = freshStore();
+    store.getState().hydrate([local], local.id);
+    store.getState().beginRemoteRestore(remote);
+    store.getState().cancelRemoteRestore();
+    expect(store.getState().selectedProjectId).toBe(local.id);
+    expect(gateway.setSelection).toHaveBeenLastCalledWith(local.id);
+  });
+
+  it("adding a local project wins over restore", async () => {
+    const { store } = freshStore();
+    store.getState().hydrate([local], local.id);
+    store.getState().beginRemoteRestore(remote);
+    await store.getState().addProject({ path: "/new", defaultName: "New" });
+    store.getState().settleRemoteRestore(remote, true);
+    expect(store.getState().pendingRemoteSelection).toBeNull();
+    expect(store.getState().selectedProjectId).toBe("id-/new");
   });
 });

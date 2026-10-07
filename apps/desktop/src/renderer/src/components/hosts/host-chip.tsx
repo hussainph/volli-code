@@ -61,10 +61,9 @@ import {
   useAddHostOffered,
   useCloudEnabled,
   useCurrentHost,
-  useCurrentProjectId,
   useHostRecoveryToasts,
   useNow,
-  useProjectHostView,
+  useCurrentProjectHostView,
 } from "./use-hosts";
 
 /** What the tile's badge says to a screen reader: the chip's name carries it. */
@@ -87,7 +86,7 @@ function EnabledHostChip() {
   // The tile draws the HOST's engine-owned health; the detail under the
   // current host in the switcher speaks for the project in front.
   const host = useCurrentHost();
-  const view = useProjectHostView(useCurrentProjectId());
+  const view = useCurrentProjectHostView();
   const pulsing = hostPulsing(host);
   const offline = host.link.status === "offline";
   return (
@@ -187,6 +186,7 @@ export function HostSwitcher({
                     (project) => (claims[project.id]?.hostId ?? THIS_MAC_HOST_ID) === host.id,
                   );
                 onDone();
+                useProjectsStore.getState().cancelRemoteRestore();
                 if (target !== undefined) useProjectsStore.getState().select(target.id);
                 // A remote host with no project open here (VC-710): open one on it.
                 else if (!host.local) useRemoteHostsStore.getState().openProjectSheet(host.id);

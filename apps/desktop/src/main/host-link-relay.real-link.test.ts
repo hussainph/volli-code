@@ -72,6 +72,8 @@ import {
   type BoardClient,
 } from "../renderer/src/lib/board-protocol";
 import { relayHostLink, type RelayLinkStateSource } from "../renderer/src/lib/relay-host-link";
+import { restoreRemoteSelection } from "../renderer/src/lib/restore-remote-selection";
+import type { RemoteSelection } from "../renderer/src/stores/projects";
 import { BoardSync, type BoardSyncView } from "../renderer/src/stores/board-sync";
 import type { HostLinkView } from "../renderer/src/stores/host-connection";
 import { followRemoteClaims } from "../renderer/src/lib/follow-remote-projects";
@@ -394,7 +396,10 @@ interface Painted {
   tickets: Ticket[];
 }
 
-function boardOver(client: ReturnType<typeof createBoardClient>) {
+function boardOver(
+  client: ReturnType<typeof createBoardClient>,
+  adoptProject: (project: Project) => void = () => {},
+) {
   const record = {
     painted: null as Painted | null,
     projects: [] as Project[],
@@ -403,7 +408,10 @@ function boardOver(client: ReturnType<typeof createBoardClient>) {
   };
   const view: BoardSyncView = {
     paint: (_projectId, tickets) => void (record.painted = { tickets }),
-    adoptProject: (project) => void record.projects.push(project),
+    adoptProject: (project) => {
+      record.projects.push(project);
+      adoptProject(project);
+    },
     notePlanningChange: (change) => void record.planning.push(change),
     checkoutMoved: () => {},
     failed: (message) => void record.failures.push(message),
@@ -441,6 +449,78 @@ async function remoteProject(features: readonly string[] = EVERY_FEATURE) {
   return { host, route, link, main, win, relayed, board, limited };
 }
 
+/** A boot-pending window: real link transitions, in-memory selection and snapshot rows. */
+function pendingRemoteWindow(link: HostLink) {
+  const selection: RemoteSelection = { hostId: HOST, projectId: PROJECT, hostName: "saved-box" };
+  const local = testProject({ id: "local-project", name: "On this Mac" });
+  const listeners = new Set<() => void>();
+  let hostListeners = 0;
+  let state = {
+    projects: [local],
+    selectedProjectId: null as string | null,
+    pendingRemoteSelection: selection as RemoteSelection | null,
+    settleRemoteRestore: vi.fn((pending: RemoteSelection, restored: boolean) => {
+      if (state.pendingRemoteSelection !== pending) return;
+      state = {
+        ...state,
+        pendingRemoteSelection: null,
+        selectedProjectId: restored ? pending.projectId : local.id,
+      };
+      for (const listener of listeners) listener();
+    }),
+  };
+  // The registry's claim survives a tunnel outage. Both link views are fed by
+  // subscribeState, not a manually advanced connection fixture.
+  const hosts = {
+    getState: () => ({
+      hosts: [
+        {
+          id: HOST,
+          name: "loopback-box",
+          local: false,
+          os: "linux" as const,
+          version: "relay-real-link",
+          link: viewOf(link.getState()),
+          liveSessions: null,
+          update: null,
+          expiredSignIns: [],
+        },
+      ],
+      projects: { [PROJECT]: { hostId: HOST, link: viewOf(link.getState()) } },
+    }),
+    subscribe: (listener: () => void) => {
+      hostListeners += 1;
+      const stop = link.subscribeState(() => listener());
+      return () => {
+        hostListeners -= 1;
+        stop();
+      };
+    },
+  };
+  const projects = {
+    getState: () => state,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  };
+  return {
+    selection,
+    hosts,
+    projects,
+    listenerCounts: () => [hostListeners, listeners.size],
+    adoptProject(project: Project) {
+      state = { ...state, projects: [...state.projects, project] };
+      for (const listener of listeners) listener();
+    },
+    selectLocal() {
+      state = { ...state, pendingRemoteSelection: null, selectedProjectId: local.id };
+      for (const listener of listeners) listener();
+    },
+    localId: local.id,
+  };
+}
+
 /** What main's relay says to a window's raw relayed stream, as it says it. */
 function rawStream(win: ReturnType<typeof window>, input: { path: string; input: unknown }) {
   const events: HostLinkRelayEvent[] = [];
@@ -458,6 +538,91 @@ function rawStream(win: ReturnType<typeof window>, input: { path: string; input:
 }
 
 describe("a remote project's board through the relay, over a real link", () => {
+  it("restores boot's pending remote selection only after a real reconnect and board row (VC-730)", async () => {
+    const { route, link, board } = await remoteProject();
+    route.cut();
+    await untilState(link, "unreachable");
+    const pending = pendingRemoteWindow(link);
+    const failed = vi.fn();
+    cleanups.push(restoreRemoteSelection({ ...pending, failed }));
+    const { sync, record } = boardOver(board, pending.adoptProject);
+    expect(pending.listenerCounts()).toEqual([1, 1]);
+    expect(pending.projects.getState().selectedProjectId).toBeNull();
+
+    route.unblock();
+    await untilState(link, "ready");
+    // The real welcome makes the matching claim reachable, but is not a row.
+    expect(pending.projects.getState().pendingRemoteSelection).toBe(pending.selection);
+    expect(pending.projects.getState().settleRemoteRestore).not.toHaveBeenCalled();
+    await sync.open(PROJECT);
+    expect(record.projects.map(({ id, name }) => [id, name])).toEqual([[PROJECT, "On the box"]]);
+    expect(pending.projects.getState().selectedProjectId).toBe(PROJECT);
+    expect(pending.projects.getState().pendingRemoteSelection).toBeNull();
+    expect(pending.projects.getState().settleRemoteRestore).toHaveBeenCalledExactlyOnceWith(
+      pending.selection,
+      true,
+    );
+    expect(pending.listenerCounts()).toEqual([0, 0]);
+    expect(failed).not.toHaveBeenCalled();
+    expect(record.failures).toEqual([]);
+  });
+
+  it("a person's pick cancels restore before late real reconnect and snapshot results (VC-730)", async () => {
+    const { route, link, board } = await remoteProject();
+    route.cut();
+    await untilState(link, "unreachable");
+    const pending = pendingRemoteWindow(link);
+    const failed = vi.fn();
+    cleanups.push(restoreRemoteSelection({ ...pending, failed }));
+    const { sync, record } = boardOver(board, pending.adoptProject);
+    expect(pending.listenerCounts()).toEqual([1, 1]);
+
+    pending.selectLocal();
+    expect(pending.listenerCounts()).toEqual([0, 0]);
+    route.unblock();
+    await untilState(link, "ready");
+    await sync.open(PROJECT);
+    expect(record.projects.map(({ id }) => id)).toEqual([PROJECT]);
+    expect(pending.projects.getState().projects.some(({ id }) => id === PROJECT)).toBe(true);
+    expect(pending.projects.getState().selectedProjectId).toBe(pending.localId);
+    expect(pending.projects.getState().pendingRemoteSelection).toBeNull();
+    expect(pending.projects.getState().settleRemoteRestore).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
+    expect(record.failures).toEqual([]);
+  });
+
+  it("a cut link's restore deadline falls back once and releases listeners before late rows (VC-730)", async () => {
+    const { route, link, board } = await remoteProject();
+    route.cut();
+    await untilState(link, "unreachable");
+    const pending = pendingRemoteWindow(link);
+    const failed = vi.fn();
+    cleanups.push(restoreRemoteSelection({ ...pending, failed, deadlineMs: 100 }));
+    expect(pending.listenerCounts()).toEqual([1, 1]);
+    await vi.waitFor(() =>
+      expect(failed).toHaveBeenCalledExactlyOnceWith(
+        "Couldn't reopen the project on loopback-box. Showing This Mac.",
+      ),
+    );
+    expect(pending.projects.getState().selectedProjectId).toBe(pending.localId);
+    expect(pending.projects.getState().pendingRemoteSelection).toBeNull();
+    expect(pending.listenerCounts()).toEqual([0, 0]);
+
+    route.unblock();
+    await untilState(link, "ready");
+    const { sync, record } = boardOver(board, pending.adoptProject);
+    await sync.open(PROJECT);
+    expect(record.projects.map(({ id }) => id)).toEqual([PROJECT]);
+    expect(pending.projects.getState().selectedProjectId).toBe(pending.localId);
+    expect(pending.projects.getState().settleRemoteRestore).toHaveBeenCalledExactlyOnceWith(
+      pending.selection,
+      false,
+    );
+    expect(pending.listenerCounts()).toEqual([0, 0]);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(record.failures).toEqual([]);
+  });
+
   it("reads, creates, moves and comments, and follows another writer on the feed", async () => {
     const { host, main, board } = await remoteProject();
     const { sync, record } = boardOver(board);
