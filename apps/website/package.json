@@ -36,7 +36,7 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "playwright-core": "^1.62.1",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "typescript": "6.0.3",
     "vite-plus": "catalog:",
     "wrangler": "4.143.1"
