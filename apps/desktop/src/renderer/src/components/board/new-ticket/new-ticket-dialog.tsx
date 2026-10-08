@@ -4,6 +4,7 @@ import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { ComposerForm } from "@renderer/components/board/new-ticket/composer-form";
 import { Dialog, DialogContent, DialogTitle } from "@renderer/components/ui/dialog";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
+import { useDialogFocusReturn } from "@renderer/hooks/use-dialog-focus-return";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -27,6 +28,7 @@ export function NewTicketDialog() {
   const project = useSelectedProject();
   const newTicketOpen = useUiStore((state) => state.newTicketOpen);
   const open = newTicketOpen && project !== null;
+  const { restoreFocus } = useDialogFocusReturn(open);
   const [expanded, setExpanded] = React.useState(false);
 
   return (
@@ -41,6 +43,7 @@ export function NewTicketDialog() {
     >
       <DialogContent
         data-testid="new-ticket-composer"
+        onCloseAutoFocus={restoreFocus}
         showCloseButton={false}
         className={cn(
           PROMPT_SURFACE,
