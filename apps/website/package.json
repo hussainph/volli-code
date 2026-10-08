@@ -20,7 +20,7 @@
     "og:check": "node scripts/generate-og-image.mjs --check"
   },
   "dependencies": {
-    "@astrojs/react": "^6.0.4",
+    "@astrojs/react": "^7.0.0",
     "@fontsource-variable/geist-mono": "5.3.0",
     "@fontsource-variable/mona-sans": "5.3.0",
     "@paper-design/shaders": "0.0.81",
