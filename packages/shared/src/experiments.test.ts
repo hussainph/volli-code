@@ -18,11 +18,28 @@ describe("experimental registry", () => {
           "Before enabling unstable cloud features, read the cloud threat model at https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model.",
         default: false,
         scope: "host",
+        availableOn: ["dev", "canary"],
       },
     ]);
     expect(Object.isFrozen(EXPERIMENTS)).toBe(true);
     expect(Object.isFrozen(EXPERIMENTS[0])).toBe(true);
-    expect(resolveExperiments({}, [])).toEqual({ cloud: { enabled: false, source: "default" } });
+    expect(resolveExperiments({}, [], "dev")).toEqual({
+      cloud: { enabled: false, source: "default" },
+    });
+  });
+
+  it("ignores stored intent on stable without hiding deliberate environment opt-ins", () => {
+    expect(resolveExperiments({ cloud: true }, [], "stable")).toEqual({
+      cloud: { enabled: false, source: "default", visible: false },
+    });
+    expect(resolveExperiments({ cloud: true }, ["cloud"], "stable")).toEqual({
+      cloud: { enabled: true, source: "environment" },
+    });
+    for (const kind of ["dev", "canary"] as const) {
+      expect(resolveExperiments({ cloud: true }, [], kind)).toEqual({
+        cloud: { enabled: true, source: "storage" },
+      });
+    }
   });
 
   it("rejects unknown ids, including inherited object names, at runtime", () => {
@@ -71,7 +88,7 @@ describe("experimental registry", () => {
       "{}",
     ]) {
       expect(readStoredExperiments(raw)).toEqual({});
-      expect(resolveExperiments(readStoredExperiments(raw), []).cloud.enabled).toBe(false);
+      expect(resolveExperiments(readStoredExperiments(raw), [], "dev").cloud.enabled).toBe(false);
     }
   });
 
@@ -89,19 +106,19 @@ describe("experimental registry", () => {
   });
 
   it("environment wins over false storage without becoming stored intent", () => {
-    expect(resolveExperiments({ cloud: true }, []).cloud).toEqual({
+    expect(resolveExperiments({ cloud: true }, [], "dev").cloud).toEqual({
       enabled: true,
       source: "storage",
     });
-    expect(resolveExperiments({ cloud: false }, []).cloud).toEqual({
+    expect(resolveExperiments({ cloud: false }, [], "dev").cloud).toEqual({
       enabled: false,
       source: "storage",
     });
-    expect(resolveExperiments({ cloud: false }, ["cloud"]).cloud).toEqual({
+    expect(resolveExperiments({ cloud: false }, ["cloud"], "dev").cloud).toEqual({
       enabled: true,
       source: "environment",
     });
-    expect(resolveExperiments({}, ["cloud"]).cloud).toEqual({
+    expect(resolveExperiments({}, ["cloud"], "dev").cloud).toEqual({
       enabled: true,
       source: "environment",
     });

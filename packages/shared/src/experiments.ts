@@ -1,3 +1,6 @@
+/** Running build identity, supplied by the host; never a user-selected update channel. */
+export type ExperimentBuildKind = "dev" | "canary" | "stable";
+
 /** Pure vocabulary for unfinished product work. Dev-only configs stay separate. */
 export interface ExperimentDefinition {
   readonly id: string;
@@ -5,6 +8,7 @@ export interface ExperimentDefinition {
   readonly description: string;
   readonly default: boolean;
   readonly scope: "host" | "device";
+  readonly availableOn: readonly ExperimentBuildKind[];
 }
 
 /**
@@ -21,6 +25,7 @@ export const EXPERIMENTS = Object.freeze([
       "Before enabling unstable cloud features, read the cloud threat model at https://github.com/hussainph/volli-code/blob/main/SECURITY.md#cloud-threat-model.",
     default: false,
     scope: "host",
+    availableOn: Object.freeze(["dev", "canary"] as const),
   }),
 ] as const satisfies readonly ExperimentDefinition[]);
 
@@ -28,7 +33,12 @@ export type ExperimentId = (typeof EXPERIMENTS)[number]["id"];
 export type ExperimentValues = Record<ExperimentId, boolean>;
 export type ExperimentSnapshot = Record<
   ExperimentId,
-  { enabled: boolean; source: "default" | "storage" | "environment" }
+  {
+    enabled: boolean;
+    source: "default" | "storage" | "environment";
+    /** Absent on older hosts means visible; false hides this setting. */
+    visible?: boolean;
+  }
 >;
 
 /** Code APIs and commands are strict; environment and durable reads are tolerant. */
@@ -103,16 +113,19 @@ export function serializeExperimentUpdate(
 export function resolveExperiments(
   stored: Partial<ExperimentValues>,
   environment: readonly ExperimentId[],
+  buildKind: ExperimentBuildKind,
 ): ExperimentSnapshot {
   return Object.fromEntries(
     EXPERIMENTS.map((entry) => {
       const fromEnvironment = environment.includes(entry.id);
-      const saved = stored[entry.id];
+      const available = (entry.availableOn as readonly ExperimentBuildKind[]).includes(buildKind);
+      const saved = available ? stored[entry.id] : undefined;
       return [
         entry.id,
         {
-          enabled: fromEnvironment || (saved ?? entry.default),
+          enabled: fromEnvironment || (available && (saved ?? entry.default)),
           source: fromEnvironment ? "environment" : saved === undefined ? "default" : "storage",
+          ...(!available && !fromEnvironment ? { visible: false } : {}),
         },
       ];
     }),

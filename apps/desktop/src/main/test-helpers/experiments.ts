@@ -14,7 +14,7 @@ export function describeWithExperiment(id: ExperimentId, suite: () => void): voi
   describe(`with experiment ${id}`, () => {
     let restore: () => void;
     beforeEach(() => {
-      restore = installExperimentalSettings(new ExperimentalSettings(null, id));
+      restore = installExperimentalSettings(new ExperimentalSettings(null, id, "dev"));
     });
     afterEach(() => restore());
     suite();
