@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+// Import the adapter directly: the package root's lazy autoUpdater getter loads Electron.
+import { AppImageUpdater } from "electron-updater/out/AppImageUpdater";
 
 import type { UpdateUiState } from "../ipc/contract";
 import type { NotificationRequest } from "./notifications/dispatch";
 import {
   readAllowPrerelease,
   readUpdateChannel,
+  runningBuildKind,
   writeUpdateChannel,
   startAutoUpdate,
   UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY,
@@ -12,6 +15,26 @@ import {
 } from "./auto-update";
 import { setAppState } from "@volli/host-core/db";
 import { openTestDb, type TestDb } from "@volli/host-core/testing";
+
+describe("running build kind", () => {
+  it.each([
+    [false, "0.2.2", "dev"],
+    [false, "0.3.0-canary.1", "dev"],
+    [true, "0.3.0-canary.1", "canary"],
+    [true, "0.3.0-beta.2+build.7", "canary"],
+    [true, "0.3.0-1", "canary"],
+    [true, "0.2.2", "stable"],
+    [true, "0.2.2+canary-build.1", "stable"],
+  ] as const)("packaged=%s version=%s → %s", (isPackaged, version, kind) => {
+    // AppImageUpdater uses the same AppUpdater constructor/parser as MacUpdater,
+    // but an injected app avoids Electron entirely. No update checks or IO run.
+    const updater = new AppImageUpdater(null, { version, name: "Volli", isPackaged });
+    expect(runningBuildKind(isPackaged, updater.currentVersion)).toBe(kind);
+    // A user choosing the canary feed must not change the running build's kind.
+    updater.allowPrerelease = !updater.allowPrerelease;
+    expect(runningBuildKind(isPackaged, updater.currentVersion)).toBe(kind);
+  });
+});
 
 const INITIAL_DELAY_MS = 30_000;
 const INTERVAL_MS = 4 * 60 * 60 * 1000;

@@ -717,6 +717,7 @@ const experimentIdSchema = z.enum(EXPERIMENTS.map(({ id }) => id));
 const experimentFlagSchema = z.object({
   enabled: z.boolean(),
   source: z.enum(["default", "storage", "environment"]),
+  visible: z.boolean().optional(),
 });
 const experimentSnapshotSchema = z.object(
   Object.fromEntries(EXPERIMENTS.map(({ id }) => [id, experimentFlagSchema])) as Record<

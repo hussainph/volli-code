@@ -288,6 +288,7 @@ import { readCliStatus } from "./cli-status";
 import {
   readAllowPrerelease,
   readUpdateChannel,
+  runningBuildKind,
   startAutoUpdate,
   writeUpdateChannel,
 } from "./auto-update";
@@ -940,8 +941,9 @@ const appStartup = app.whenReady().then(async () => {
     quit: () => setTimeout(() => app.quit(), 0),
   });
   const watchedDb = dbHandle.ok === true ? dbHandle.db : null;
+  const buildKind = runningBuildKind(app.isPackaged, autoUpdater.currentVersion);
   installExperimentalSettings(
-    new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"]),
+    new ExperimentalSettings(watchedDb, process.env["VOLLI_EXPERIMENTAL"], buildKind),
   );
   const sessionWakeBus = liveHost?.sessionWakeBus ?? null;
   const sessionReadWatch = liveHost?.sessionReadWatch ?? null;

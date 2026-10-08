@@ -22,7 +22,7 @@ import { ListMagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/ListMagn
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
-import { EXPERIMENTS, MODEL_TIER_ROWS } from "@volli/shared";
+import { EXPERIMENTS, MODEL_TIER_ROWS, type ExperimentSnapshot } from "@volli/shared";
 
 import { LogViewer } from "@renderer/components/logs/log-viewer";
 import { AgentObservabilitySettings } from "@renderer/components/pages/agent-observability-settings";
@@ -31,6 +31,7 @@ import { ExperimentalSettings } from "@renderer/components/pages/experimental-se
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import { WebAccessSettings } from "@renderer/components/pages/web-access-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
+import { hasVisibleExperiments } from "@renderer/stores/experiments";
 import { hostsCategory } from "./hosts-category";
 import { AboutPane } from "./panes/about-pane";
 import { DisplaySection } from "./panes/display-section";
@@ -65,6 +66,8 @@ export function resolveSettingsCategory(key: string | undefined): string | undef
 }
 
 export interface SettingsGroupsOptions {
+  /** The host's effective experiment availability. Hidden until the first answer. */
+  readonly experiments?: ExperimentSnapshot | null;
   /**
    * Shows System → Logs, the end-to-end log viewer (VC-699): dev builds, and
    * product builds with the `cloud` experiment on (`useLogViewerEnabled`).
@@ -369,21 +372,25 @@ export function settingsGroups(
               },
             ]
           : []),
-        {
-          key: "experimental",
-          label: "Experimental",
-          icon: FlaskIcon,
-          keywords: [
-            "experiment",
-            "experiments",
-            "flags",
-            "feature flags",
-            "cloud",
-            "unstable",
-            ...EXPERIMENTS.map((experiment) => experiment.label.toLowerCase()),
-          ],
-          content: <ExperimentalSettings />,
-        },
+        ...(hasVisibleExperiments(options.experiments ?? null)
+          ? [
+              {
+                key: "experimental",
+                label: "Experimental",
+                icon: FlaskIcon,
+                keywords: [
+                  "experiment",
+                  "experiments",
+                  "flags",
+                  "feature flags",
+                  ...EXPERIMENTS.filter(
+                    ({ id }) => options.experiments?.[id].visible !== false,
+                  ).flatMap((experiment) => [experiment.id, experiment.label.toLowerCase()]),
+                ],
+                content: <ExperimentalSettings />,
+              },
+            ]
+          : []),
         {
           key: "updates",
           label: "Updates",

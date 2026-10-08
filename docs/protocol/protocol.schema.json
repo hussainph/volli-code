@@ -37200,6 +37200,9 @@
                     "environment"
                   ],
                   "type": "string"
+                },
+                "visible": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -37256,6 +37259,9 @@
                     "environment"
                   ],
                   "type": "string"
+                },
+                "visible": {
+                  "type": "boolean"
                 }
               },
               "required": [
