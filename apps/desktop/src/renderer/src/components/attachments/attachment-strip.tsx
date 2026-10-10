@@ -55,14 +55,14 @@ export function AttachmentThumb({
       ) : (
         <div
           aria-label={`${attachment.label} · ${detail}`}
-          className="flex size-full flex-col justify-between rounded-md border border-border/70 bg-muted/40 p-1.5"
+          className="flex size-full flex-col justify-between rounded-md border border-border bg-muted p-2"
         >
-          <span className="text-[10px] font-medium tracking-wide text-muted-foreground">
+          <span className="text-label font-medium text-muted-foreground">
             {fileTypeLabel(attachment.originalName, attachment.mime)}
           </span>
           {/* Two lines of the name, clipped. Enough to tell two PDFs apart,
               which is all this tile has to do. */}
-          <span className="line-clamp-2 break-all text-[10px] leading-tight text-foreground/80">
+          <span className="line-clamp-2 break-all text-label text-foreground">
             {attachment.originalName}
           </span>
         </div>
@@ -70,15 +70,15 @@ export function AttachmentThumb({
       {onRemove === undefined ? null : (
         <Button
           type="button"
-          size="xs"
+          size="icon-xs"
           variant="ghost"
           aria-label={`Remove ${attachment.label}`}
           onClick={() => onRemove(attachment)}
           // Always reachable by keyboard, only visible on hover or focus: a
           // permanent × on every tile turns a quiet strip into a busy one.
-          className="absolute -right-1.5 -top-1.5 size-5 rounded-full border border-border bg-background p-0 opacity-0 shadow-raised transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+          className="absolute -right-1 -top-1 border border-border bg-background opacity-0 shadow-raised focus-visible:opacity-100 group-hover:opacity-100"
         >
-          <XIcon className="size-3" />
+          <XIcon weight="bold" className="size-3" />
         </Button>
       )}
     </div>
@@ -134,7 +134,7 @@ export function AttachmentThumbRow({
           <span
             key={attachment.linkId ?? attachment.blobHash}
             title={`${attachment.label} · ${fileTypeLabel(attachment.originalName, attachment.mime)}`}
-            className="flex size-4 items-center justify-center rounded-sm border border-border/70 bg-muted/40 text-muted-foreground"
+            className="flex size-4 items-center justify-center rounded-sm border border-border bg-muted text-muted-foreground"
           >
             {/* `bold` because this is drawn at 10px: below 12px regular lays
                 down less ink than the label beside it, and coverage is

@@ -46,7 +46,8 @@ import { SessionProvenanceMark } from "@renderer/components/sessions/session-pro
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { MENU_LABEL_CMDK, MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
+import { COMMAND_RESULT_ROW, MENU_LABEL_CMDK } from "@renderer/components/ui/menu-classes";
+import { cn } from "@renderer/lib/utils";
 import { markPerfPhase, PERF_PHASE } from "@renderer/lib/perf-marks";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
@@ -85,18 +86,15 @@ const SCOPE_ICONS: Record<PaletteScopeId, Icon> = {
  * The palette row, written once for both groups — they were two copies of one
  * string, which is how the two drifted apart in the first place.
  *
- * It cannot take `MENU_ROW` wholesale: a menu row is a 28px single-line
- * control and this one stacks a title over its context. What it can take is the
- * part that has nothing to do with height — cmdk's selected/disabled recipe —
- * so the palette highlights exactly like every menu in the app, cursor
- * included: a row answers a press with the arrow, never the hand
- * (`docs/DESIGN.md`'s cursor rule).
+ * Shared destination-result mechanics come from COMMAND_RESULT_ROW, including
+ * selection suppression and cmdk selected/disabled states. This surface owns
+ * only the extra inset for its stacked title/context; Quick Open stays one line.
  *
  * The height is the two line boxes plus `py-2`: `text-ui` (20) over
  * `text-label` (16) plus 16 is 52. Nothing here pins it, and every value is a
  * ladder rung (docs/DESIGN.md's five steps — no half-steps here).
  */
-const PALETTE_ROW = `flex cursor-default items-center gap-2 rounded-lg px-2 py-2 outline-none ${MENU_ROW_STATE_CMDK}`;
+const PALETTE_ROW = cn(COMMAND_RESULT_ROW, "py-2");
 
 /** The row's leading glyph: bare and muted. */
 const PALETTE_ROW_ICON = "size-4 shrink-0 text-muted-foreground";

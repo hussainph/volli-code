@@ -35,7 +35,8 @@ import {
   quickOpenSurfaceFiles,
 } from "@renderer/components/files/quick-open-model";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
-import { MENU_ROW_STATE_CMDK } from "@renderer/components/ui/menu-classes";
+import { COMMAND_RESULT_ROW } from "@renderer/components/ui/menu-classes";
+import { cn } from "@renderer/lib/utils";
 import { toastError } from "@renderer/lib/toast";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
@@ -47,7 +48,7 @@ import { remoteHostNow } from "@renderer/stores/remote-project";
  * file's name and its folder are one fact read left to right, and the list is
  * long enough that 52px rows would show half as many of them.
  */
-const QUICK_OPEN_ROW = `flex h-7 cursor-default items-center gap-2 rounded-lg px-2 outline-none ${MENU_ROW_STATE_CMDK}`;
+const QUICK_OPEN_ROW = cn(COMMAND_RESULT_ROW, "h-7");
 
 /** The row's leading glyph: bare and muted, exactly the palette's. */
 const QUICK_OPEN_ROW_ICON = "size-4 shrink-0 text-muted-foreground";

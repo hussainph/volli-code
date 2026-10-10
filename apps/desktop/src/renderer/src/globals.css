@@ -589,7 +589,9 @@
     background: var(--canvas);
   }
   body {
-    @apply text-foreground font-sans;
+    /* Unsized UI and body portals share the UI rung, never browser-default 16px.
+     * Reading surfaces and headings declare their larger semantic rung. */
+    @apply text-foreground font-sans text-ui;
     background: transparent;
     font-synthesis: none;
   }

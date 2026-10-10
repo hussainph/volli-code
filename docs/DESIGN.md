@@ -267,6 +267,16 @@ than duplicating it under a second name:
 | heading | `text-heading` | 18px / 26px | −0.01em | dialog titles, reading-page mastheads, section headers |
 | title | `text-title` | 24px / 30px | −0.02em | the ticket title; the largest text in the app |
 
+**The document default is `text-ui`.** Body declares the UI rung so unsized UI never
+falls back to browser-default 16px. Dialog, AlertDialog, Popover, Command and shared menu
+content also declare it at their boundary, including body portals. Reading content takes
+`text-sm` / `leading-prose`; titles and headings take their explicit rung. Caller overrides
+remain supported—do not add `text-ui` at every consumer to compensate for a missing default.
+`ui/overlay-typography.test.tsx` guards the body declaration, actual portal contracts and
+explicit reading/heading overrides. `text-ui-sm` is not a registered utility. The token gate
+rejects numeric px/rem font-size literals (relative markdown em sizing remains separately
+inventoried, not silently converted).
+
 Rules:
 - **No arbitrary sizes.** `text-[13px]`-style literals are banned; if a real need falls between
   steps, the scale changes here first.
@@ -314,6 +324,39 @@ inline style.
 drawings — `variant="folder"` (rounded top corners, active tab bleeding `-mb-px` over the strip's
 bottom border) and `variant="pill"` (rounded rectangle in a centred band). A tab is a place, not a
 hero action; the two strips that sat at `h-8 text-sm` were reading at `lg`.
+
+## Shared UI primitives — composition registry (VC-617)
+
+Start here rather than copying the drawing from a neighboring page. All colors remain
+semantic generated tokens; product state and mutations belong to the consumer.
+
+| Object | Primitive / contract | When to use it |
+|---|---|---|
+| Reading/workbench page | `ContentColumn` / `WorkbenchColumn`, `PageHeader` | Choose the surface tier and one gutter/header owner; do not restate measures. |
+| Action | `Button`, size/variant axes | Every ordinary action; retain icons, accessible names and keyboard focus. |
+| Fused actions | `ButtonGroup` | Adjacent controls that form one compound action, not an arbitrary toolbar container. |
+| Closed-set value | `Segmented` | A small, visible choice set. Navigation destinations are not preference segments. |
+| Field | `Input`, `Textarea`, `InputGroup` | Writing fields and attached adornments; the shared field-state contract is authoritative. |
+| Rename-in-place | `InlineRename` | Use row/field/title variants; consumers own entry and persistence, the primitive owns one-shot commit/cancel. |
+| List entry | `ListRow`, `ListRowSkeleton` | Shared row geometry, active/inert branch, optional metadata and sibling actions. Preserve list-specific semantics. |
+| Section eyebrow | `SectionHeading` | Compact section labels. Reading/dialog titles keep their heading rung instead. |
+| Mark/count | `Badge` variants | Status/metadata chips or counts; choose the role rather than reauthoring a span's shell. |
+| Empty list/page | `EMPTY_INLINE` / `EMPTY_PAGE` | Choose whether one list or the whole surface is empty. Container geometry and page child hierarchy remain caller-owned. |
+| Feedback | `Notice` | Error/warning/neutral/success reports with optional recovery actions. Preserve trust/announcement semantics. |
+| State/loading | `StatusDot`, `Spinner`, `Skeleton`, `loading-region` | Shared material and accessible state. Placeholder geometry belongs to the content it replaces. |
+| Menu/picker | DropdownMenu / ContextMenu / Select / Command | Shared menu rows, labels, states and surface defaults via `menu-classes.ts`; retain widget-specific roles/positioning. |
+| Destination search result | `COMMAND_RESULT_ROW` in `menu-classes.ts` | ⌘K/⌘P share row mechanics and UI type with menus; consumers keep stacked/single-line density and authored glyph ink. |
+| Floating panel | `PopoverContent` | Anchored interactive panels; preserve portal, ref and wheel behavior. |
+| Dialog/confirmation | `DialogContent` / `AlertDialogContent` | Bounded interaction / explicit confirmation, not a handrolled overlay. Content defaults to UI size. |
+| Hover label/reveal | Tooltip / ValueReveal | Brief labels and clipped values, not explanatory onboarding paragraphs. |
+| Disclosure | Accordion / Collapsible | Structured sections / unstyled behavioral composition, not an extra card language. |
+| Workspace places | Tab / TabStrip, split primitives | Navigation/reorder/split behavior; never move terminal/native Browser Tab lifetime into a new wrapper. |
+| Preferences | `settings/kit` sections/rows/async/table contracts | Settings and Configure have a shared vocabulary already; do not flatten control-bearing rows into ordinary lists. |
+
+The [component inventory](research/vc-617-component-inventory.md) records provisional
+source verdicts and outstanding visual/consumer work. Specialized board, editor, terminal,
+Browser Tab, drag-target and identity drawings are not automatically generic primitive
+candidates. The parked Surface material studies are **not** the production direction.
 
 ## Cursors — native, and one rule
 
@@ -555,6 +598,13 @@ The Ticket adds one **paperclip menu**, not a permanent Attachments heading or p
 menu lists attached files and carries attachment/removal actions where this host may mutate them;
 a host-supplied read-only list stays read-only. It remains reachable across directory/filter
 changes and without a worktree, including attachments that have no materialized file path.
+Composer attachment thumbnails keep their 64px object geometry; file labels take `text-label`
+with opaque semantic ink, an 8px inset and two clamped filename lines. Remove takes the shared
+`Button size="icon-xs"` contract, revealed on hover or keyboard focus; read-only transcript
+copies have no removal action. The queued thumbnail row remains a glyph-sized drawing with
+`text-label` overflow, not illegible type labels squeezed into 16px. The browser-only
+`attachment-tiles` audit fixture imports these production components without upload/host writes.
+
 Attachments belong to the Ticket, not the folder. Home has no paperclip because this scope has no
 Ticket attachments. Referenced rows (`@path` from the Body, plus path-backed attachments) still
 follow the listing on a Ticket and keep their folder beside the name. Search is the same page at

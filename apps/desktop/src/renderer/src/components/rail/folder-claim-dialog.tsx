@@ -108,9 +108,7 @@ export function FolderClaimDialog() {
                 >
                   <ArrowsLeftRightIcon />
                   This is {candidate.name}
-                  <span className="truncate text-ui-sm text-muted-foreground">
-                    {candidate.path}
-                  </span>
+                  <span className="truncate text-ui text-muted-foreground">{candidate.path}</span>
                 </Button>
               ))}
             </div>

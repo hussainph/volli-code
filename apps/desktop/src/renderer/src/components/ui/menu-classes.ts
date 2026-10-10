@@ -13,6 +13,7 @@
  * that depends on it stay with each surface.
  */
 
+import { cn } from "@renderer/lib/utils";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
 import { SECTION_HEADING, SECTION_HEADING_CMDK } from "@renderer/components/ui/section-heading";
 
@@ -22,7 +23,7 @@ import { SECTION_HEADING, SECTION_HEADING_CMDK } from "@renderer/components/ui/s
  * the menu that opened it.
  */
 export const MENU_SURFACE =
-  "z-50 min-w-[8rem] rounded-container border bg-popover text-foreground shadow-overlay";
+  "z-50 min-w-[8rem] rounded-container border bg-popover text-ui text-foreground shadow-overlay";
 
 /**
  * The 4px the rows sit inside. Separate from {@link MENU_SURFACE} because the
@@ -76,8 +77,10 @@ export const MENU_SURFACE_MOTION = `${MENU_SURFACE_FADE} ${MENU_SURFACE_ANCHORED
  * which is the intended reading: a menu row is a control, and this app's
  * controls are pills.
  */
-export const MENU_ROW =
-  "relative flex cursor-default items-center gap-2 rounded-row px-2 py-1 text-ui outline-hidden select-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground";
+const MENU_ROW_LAYOUT =
+  "relative flex cursor-default items-center gap-2 rounded-row px-2 py-1 text-ui outline-hidden select-none";
+
+export const MENU_ROW = `${MENU_ROW_LAYOUT} [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5 [&_svg:not([class*='text-'])]:text-muted-foreground`;
 
 /** Radix row states: `focus` is the roving highlight, `data-disabled` a bare attribute. */
 export const MENU_ROW_STATE =
@@ -86,6 +89,19 @@ export const MENU_ROW_STATE =
 /** cmdk row states: a controlled `data-selected`, and `data-disabled="true"`. */
 export const MENU_ROW_STATE_CMDK =
   "data-[selected=true]:bg-accent data-[selected=true]:text-foreground data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50";
+
+/**
+ * Destination search rows (⌘K / ⌘P) share the menu mechanics, not its stadium
+ * silhouette. Consumers own density: the palette stacks context with py-2;
+ * Quick Open keeps a single 28px line. No copied cursor/selection/type recipe.
+ */
+// Result rows own their glyphs (including nested provenance marks): inheriting
+// MENU_ROW's descendant ink rule would mute a bolt colored by its parent span.
+export const COMMAND_RESULT_ROW = cn(
+  MENU_ROW_LAYOUT,
+  MENU_ROW_STATE_CMDK,
+  "rounded-lg outline-none",
+);
 
 /** A sub-menu trigger stays lit for as long as the surface it opened is up. */
 export const MENU_ROW_OPEN = "data-[state=open]:bg-accent data-[state=open]:text-foreground";

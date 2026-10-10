@@ -77,7 +77,9 @@ export function TicketBodyPanel({
         {bodyStatus === "loading" ? <TicketBodyPlaceholder /> : null}
         {bodyStatus === "failed" ? (
           <div data-testid="ticket-body-failed" className={cn(EMPTY_PAGE, "gap-4")}>
-            <p className="text-muted-foreground">Couldn&rsquo;t load this ticket&rsquo;s body.</p>
+            <p className="text-sm text-muted-foreground">
+              Couldn&rsquo;t load this ticket&rsquo;s body.
+            </p>
             <Button variant="outline" size="sm" onClick={onRetryBody}>
               Try again
             </Button>
