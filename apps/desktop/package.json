@@ -105,6 +105,7 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "^6.1.0",
+    "dialkit": "2.0.2",
     "electron": "^44.0.0",
     "electron-builder": "26.15.3",
     "playwright-core": "^1.62.1",

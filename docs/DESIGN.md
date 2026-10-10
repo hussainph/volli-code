@@ -707,3 +707,98 @@ governs every 4px, because sixteen distinct steps is what governing only the pag
   cards, the composer) align their **borders** to the column edge instead.
 - Terminals, file editors, and diffs are Tier B planes inside the ticket surface: full-bleed to
   the card edge (terminals) or gutter-aligned where the workbench benefits from it.
+
+## Surface research — not an adopted production treatment (VC-617)
+
+`pnpm lab` → `/lab/?clean#surface-materials` opens the **Surface** tuning scratch.
+It composes real Button, Segmented, ListRow, Input, Textarea and Popover primitives,
+with fixture-only interactions and a lab-only DialKit (MIT) editor. The additional gallery
+covers Badge, Switch, Checkbox, Select, Accordion, TabStrip, ButtonGroup, Notice, StatusDot,
+Spinner, Skeleton, InputGroup, Tooltip, DropdownMenu, ContextMenu, Dialog, SectionHeading,
+Separator and PriorityIndicator. These are imported production components, not replicas;
+local state exercises choices, navigation, loading/error feedback and floating surfaces.
+Flat, Borrowed light, Modern Aqua, All glass and Sculpted Aqua are starting points,
+not new app themes.
+
+Preview and tuning controls have independent, keyboard-focusable scroll regions. Workspace /
+Components jump buttons keep the gallery accessible without remounting either fixture.
+On narrow windows the two bounded regions stack; the document itself does not scroll.
+Gallery portals receive the same scoped theme and inspector finish, and register their actual
+geometry with the shared lighting rig. The gallery work surface follows Work Pane dials.
+Menu/dialog fixtures are non-modal so inspector tuning remains possible while they are open;
+the dialog deliberately omits the production modal scrim. The Radix Select retains its own
+modal interaction model. No fixture invokes app settings, stores or host mutations.
+
+**macOS 27 reference study:** the separate Material Study switch preserves authored Surface /
+Modern Aqua recipes. Clear, Balanced and Tinted are stops on a continuous Balance dial, coupling
+face transmission (24% → 90% opacity), diffusion (6 → 22px blur) and a restrained neutral tint.
+These are our authored approximation coefficients, not Apple's native values. Thin dark boundaries
+and tight specular catches replace the broad Aqua bevel; glass stays on the toolbar and floating
+fixtures, with opaque working content and an edge-to-edge quiet rail. Active / Inactive reduces
+chrome sheen, rim and shadow without fading text. A local theme-derived backdrop provides a
+repeatable diffusion test; it is not a desktop wallpaper capture. No pixel sampling, physical
+lensing, HDR output or automatic content-aware contrast is claimed. Displacement is disabled
+in this study. Surface-only DialKit groups are hidden, not reset; versions and Copy Study retain
+the authored inputs, and Copy Study also includes resolved material values.
+
+The continuum follows [Apple's macOS 27 release description](https://support.apple.com/en-us/127257),
+not the separate regular/clear API variants explained in
+[Meet Liquid Glass](https://developer.apple.com/videos/play/wwdc2025/219/).
+[Apple's macOS 27 design kits](https://developer.apple.com/news/?id=e2lxw9l1) are available,
+but no kit assets have been imported. Identical native screenshots and side-by-side calibration
+remain pending; the study is reference-informed, not a fidelity score or native replica.
+
+The working hypothesis is **one lighting grammar, multiple material responses**: quiet work
+panes, satin controls, modern glass fixtures. Compare All glass against Sculpted Aqua rather
+than assuming every surface should use the same finish. Inspector starts (glass / satin /
+porcelain) vary the face sheen, bevel and elevation; Work Pane starts (opaque / frosted /
+clear / sculpted) independently vary transmission and dimension. All use the same measured
+spatial lighting, including broad, opposing lit/shaded bevels. The labels are visual research
+profiles, not claims of physically simulated substances.
+
+Face opacity, blur, tint, lift, bevel, sheen and radius are tunable without remounting the
+reading surface or inspector. Canvas → Backdrop Detail adds a decorative grid/pools behind
+the pane to make transmission visible. Opacity never dilutes text, but extreme transmission
+can still reduce contrast; large-pane blur is a costlier experiment than edge/light movement.
+All theme colours and canvas properties come from the production derivation, scoped onto
+both the preview and its body portal; tuning never writes app settings or paints the root.
+DialKit versions persist only in this browser. **Copy study** includes the authored canvas
+and material/light-placement values; its colour pickers flatten alpha over neutral into opaque sRGB stops.
+
+**Lighting follows placement, not a baked global shadow.** Move the K/R sources by pointer
+or arrow keys, or move the fixture rail; real screen-space bounds (including the Radix portal)
+and explicit surface heights determine distance falloff, lit edges and projected shadows.
+A taller neighbour intersecting a centre ray attenuates the light. This is a cheap 2.5D
+approximation, not ray tracing, physical refraction or global illumination. Angle resets the
+source arrangement; Placement dials and browser-local versions retain the actual positions.
+
+Bounds are cached and invalidated by resize, scroll, layout changes and portal repositioning.
+Input is coalesced into one requested frame; there is no idle loop or React render during a
+light drag (positions commit on release). Static gradient/shadow textures are reused through
+**leaf-only transform/opacity** updates, without changing blur, gradient or shadow recipes.
+During a pointer drag only the decorative leaves receive temporary layer-promotion hints,
+removed on release/unmount. This makes lighting compositor-friendly; GPU allocation is
+browser-dependent, not guaranteed. Backdrop blur/displacement remain extra rendering costs
+and need profiling before adoption. With the lab running, `node apps/desktop/scripts/lab-surface-check.mjs`
+(`--browser /path/to/chrome` to choose a browser) runs an isolated 90-step real drag,
+asserts cached bounds / committed positions / field lifetime / dark and narrow layouts /
+independent dial scrolling / real gallery interactions and scoped portal materials,
+and reports Chrome paint, raster, main-thread and GPU-compositing evidence. Add
+`--preset "All glass"` to measure the large transparent/blurred-pane treatment separately.
+
+**Native Liquid Glass feasibility (research only):** the community
+[electron-liquid-glass](https://github.com/Meridius-Labs/electron-liquid-glass) addon wraps
+`NSGlassEffectView` behind Electron web content on macOS 26+. This is a native window
+material, not a migration of SwiftUI controls into React DOM. Its private `unstable_*`
+methods, incomplete view-management API, signing and inactive-window behaviour need a
+separate review/spike; nothing native has been installed here. Electron documents a
+[Swift/SwiftUI native bridge](https://www.electronjs.org/docs/latest/tutorial/native-code-and-electron-swift-macos),
+but its proposed [first-class glass/region API](https://github.com/electron/electron/pull/50415)
+was closed unmerged when researched. Built-in vibrancy is a different material. Our React
+study remains a theme-derived approximation, not Apple's native compositor.
+
+Blur, tint, rim lighting and lift are the portable experiment. The separately labelled
+SVG backdrop displacement is noise distortion, **not physical refraction**, and may be
+unsupported by a browser. Do not promote its CSS or dials into production without an
+accessibility, browser/performance and light/dark/custom-canvas review. The app-wide audit
+and centralized primitive adoption remain separate work, after the language is agreed.

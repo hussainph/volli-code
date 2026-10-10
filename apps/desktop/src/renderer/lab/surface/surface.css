@@ -1,0 +1,525 @@
+/* Experimental materials, scoped to this scratch and its explicitly themed portal. */
+.surface-study {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  font-size: var(--text-ui);
+  line-height: var(--text-ui--line-height);
+  color: var(--foreground);
+  background: var(--background);
+}
+.surface-study > header {
+  flex-shrink: 0;
+}
+.surface-study-layout {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 24px;
+  padding: 24px;
+}
+.surface-preview-scroll,
+.surface-dials {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.surface-preview-scroll > * {
+  flex-shrink: 0;
+}
+.surface-preview-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--background);
+  border-bottom: 1px solid var(--border);
+}
+#surface-workspace,
+#surface-components {
+  scroll-margin-top: 44px;
+}
+.surface-preview-scroll:focus-visible,
+.surface-dials:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.surface-environment {
+  position: relative;
+  isolation: isolate;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--canvas);
+  min-height: 620px;
+}
+.surface-satin {
+  position: relative;
+  border: 1px solid var(--border-strong);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--surface-highlight) var(--surface-crown), var(--muted)),
+    var(--muted) 48%,
+    var(--muted)
+  );
+}
+.surface-satin [aria-pressed="true"] {
+  background: color-mix(in oklab, var(--primary) var(--surface-colour), var(--card));
+  color: var(--foreground);
+  box-shadow: var(--surface-contact);
+}
+.surface-work {
+  position: relative;
+  --material-face: color-mix(in srgb, var(--card) var(--work-opacity), transparent);
+  --material-bevel: var(--work-bevel);
+  --material-sheen: var(--work-sheen);
+  background: none;
+  backdrop-filter: var(--work-backdrop);
+  border: 1px solid var(--border);
+  border-radius: var(--work-radius);
+}
+.surface-work > .surface-spatial-layers > .surface-spatial-shadow {
+  box-shadow: var(--work-shadow);
+}
+.surface-backdrop-detail {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 31px, var(--border-strong) 31px 32px),
+    repeating-linear-gradient(90deg, transparent 0 31px, var(--border-strong) 31px 32px),
+    radial-gradient(
+      ellipse at 25% 45%,
+      color-mix(in srgb, var(--surface-key) 25%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse at 80% 75%,
+      color-mix(in srgb, var(--surface-return) 25%, transparent),
+      transparent 60%
+    );
+}
+.surface-composition {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 224px;
+  align-items: start;
+  gap: 24px;
+  padding-top: 24px;
+}
+.surface-study [data-surface-primary] {
+  /* Keep the production primitive's solved ink/fill pair opaque. */
+  box-shadow: none;
+}
+.surface-study [data-surface-writing] {
+  background: var(--muted);
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  box-shadow: inset 0 1px 3px color-mix(in srgb, var(--scrim) 30%, transparent);
+}
+.surface-lens {
+  position: relative;
+  --material-face: color-mix(in srgb, var(--card) var(--surface-opacity), transparent);
+  --material-bevel: var(--surface-bevel);
+  --material-sheen: var(--surface-sheen);
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  line-height: var(--text-ui--line-height);
+  border-radius: var(--surface-radius);
+  border: 1px solid var(--border-strong);
+  background: none;
+  backdrop-filter: var(--surface-backdrop);
+  box-shadow: none;
+}
+/* Material response changes the face, not the theme or opaque content ink.
+ * Bevel textures below are lit by the same spatial sources as every control. */
+.surface-dimensional[data-material="glass"] {
+  --material-paint:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--surface-highlight) var(--material-sheen), transparent),
+      transparent 35%,
+      transparent 70%,
+      color-mix(in srgb, var(--surface-return) var(--material-sheen), transparent)
+    ),
+    var(--material-face);
+}
+.surface-dimensional[data-material="satin"],
+.surface-dimensional[data-material="frosted"] {
+  --material-paint:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-highlight) var(--material-sheen), transparent),
+      transparent 45%,
+      color-mix(in srgb, var(--scrim) 4%, transparent)
+    ),
+    var(--material-face);
+}
+.surface-dimensional[data-material="porcelain"],
+.surface-dimensional[data-material="matte"] {
+  --material-paint:
+    radial-gradient(
+      ellipse at 50% 20%,
+      color-mix(in srgb, var(--surface-highlight) var(--material-sheen), transparent),
+      transparent 75%
+    ),
+    var(--material-face);
+}
+/* Put filled shadow silhouettes below the face, not hollow translated outlines
+ * over it. The fixed blur textures are reused while only transforms/opacity move. */
+.surface-dimensional > .surface-spatial-layers {
+  isolation: isolate;
+}
+.surface-material-face {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--material-paint, var(--material-face));
+}
+.surface-dimensional > .surface-spatial-layers > .surface-spatial-shadow {
+  z-index: -1;
+  background: var(--scrim);
+  filter: blur(var(--surface-shadow-blur));
+}
+.surface-work > .surface-spatial-layers > .surface-spatial-shadow {
+  filter: blur(var(--work-shadow-blur));
+}
+.surface-dimensional > .surface-spatial-layers > .surface-spatial-face,
+.surface-dimensional > .surface-spatial-layers > .surface-spatial-edge {
+  z-index: 1;
+}
+/* Prepainted textures: spatial updates touch only leaf transform and opacity.
+ * No permanent will-change blanket, transitions or idle animation. Browser
+ * compositing is an optimization opportunity, not a guarantee of GPU allocation. */
+.surface-spatial-control {
+  position: relative;
+}
+.surface-spatial-layers,
+.surface-spatial-face,
+.surface-spatial-shadow,
+.surface-spatial-edge {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.surface-spatial-layers {
+  z-index: 0;
+}
+.surface-satin > :not(.surface-spatial-layers),
+.surface-spatial-control > :not(.surface-spatial-layers),
+.surface-lens > :not(.surface-spatial-layers):not(.absolute),
+.surface-work > :not(.surface-spatial-layers) {
+  position: relative;
+  z-index: 1;
+}
+/* Preserve the production Dialog close button's absolute positioning while
+ * lifting it above the decorative material face, like the other content. */
+.surface-lens > .absolute {
+  z-index: 1;
+}
+.surface-spatial-face {
+  overflow: hidden;
+}
+.surface-light-key {
+  --spatial-colour: var(--surface-key);
+}
+.surface-light-return {
+  --spatial-colour: var(--surface-return);
+}
+.surface-spatial-glow {
+  position: absolute;
+  left: calc(50% - 160px);
+  top: calc(50% - 160px);
+  width: 320px;
+  height: 320px;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle, var(--spatial-colour), transparent 70%);
+}
+.surface-spatial-shadow {
+  opacity: 0;
+  box-shadow: var(--surface-shadow);
+}
+.surface-satin .surface-spatial-shadow,
+.surface-spatial-control .surface-spatial-shadow {
+  box-shadow: 0 0 6px -2px color-mix(in srgb, var(--scrim) 45%, transparent);
+}
+.surface-spatial-edge {
+  opacity: 0;
+}
+.surface-edge-top {
+  box-shadow: inset 0 var(--surface-thickness) 0 var(--surface-highlight);
+}
+.surface-edge-right {
+  box-shadow: inset calc(-1 * var(--surface-thickness)) 0 0 var(--spatial-colour);
+}
+.surface-edge-bottom {
+  box-shadow: inset 0 calc(-1 * var(--surface-thickness)) 0 var(--spatial-colour);
+}
+.surface-edge-left {
+  box-shadow: inset var(--surface-thickness) 0 0 var(--surface-highlight);
+}
+/* Broad bevels pair a soft facing catch with an opposing shaded edge.
+ * Zero bevel is a valid whole recipe, not a `none` in a comma shadow list. */
+.surface-dimensional > .surface-spatial-layers > .surface-edge-top {
+  box-shadow:
+    inset 0 var(--material-bevel) var(--material-bevel) calc(-0.5 * var(--material-bevel))
+      var(--surface-highlight),
+    inset 0 calc(-1 * var(--material-bevel)) var(--material-bevel)
+      calc(-0.5 * var(--material-bevel)) color-mix(in srgb, var(--scrim) 55%, transparent);
+}
+.surface-dimensional > .surface-spatial-layers > .surface-edge-right {
+  box-shadow:
+    inset calc(-1 * var(--material-bevel)) 0 var(--material-bevel)
+      calc(-0.5 * var(--material-bevel)) var(--surface-highlight),
+    inset var(--material-bevel) 0 var(--material-bevel) calc(-0.5 * var(--material-bevel))
+      color-mix(in srgb, var(--scrim) 55%, transparent);
+}
+.surface-dimensional > .surface-spatial-layers > .surface-edge-bottom {
+  box-shadow:
+    inset 0 calc(-1 * var(--material-bevel)) var(--material-bevel)
+      calc(-0.5 * var(--material-bevel)) var(--surface-highlight),
+    inset 0 var(--material-bevel) var(--material-bevel) calc(-0.5 * var(--material-bevel))
+      color-mix(in srgb, var(--scrim) 55%, transparent);
+}
+.surface-dimensional > .surface-spatial-layers > .surface-edge-left {
+  box-shadow:
+    inset var(--material-bevel) 0 var(--material-bevel) calc(-0.5 * var(--material-bevel))
+      var(--surface-highlight),
+    inset calc(-1 * var(--material-bevel)) 0 var(--material-bevel)
+      calc(-0.5 * var(--material-bevel)) color-mix(in srgb, var(--scrim) 55%, transparent);
+}
+.surface-light-handles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.surface-light-handle {
+  position: absolute;
+  top: -14px;
+  left: -14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--foreground);
+  border: 2px solid var(--spatial-colour);
+  box-shadow: var(--shadow-raised);
+  cursor: grab;
+  touch-action: none;
+  pointer-events: auto;
+}
+.surface-light-handle:active {
+  cursor: grabbing;
+}
+.surface-light-handle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+.surface-composition[data-rail-side="left"] {
+  grid-template-columns: 224px minmax(0, 1fr);
+}
+.surface-composition[data-rail-side="left"] > section {
+  grid-column: 2;
+  grid-row: 1;
+}
+.surface-composition[data-rail-side="left"] > aside {
+  grid-column: 1;
+  grid-row: 1;
+}
+.surface-lens [data-slot="input"] {
+  background: var(--card);
+  box-shadow: none;
+}
+.surface-model-choice {
+  background: color-mix(in oklab, var(--surface-return) var(--surface-colour), var(--card));
+  border: 1px solid var(--border);
+  color: var(--foreground);
+}
+.surface-dials {
+  min-width: 0;
+}
+.surface-dials .dialkit-root {
+  font-family: var(--font-sans);
+}
+.surface-dials .dialkit-panel {
+  width: 100%;
+}
+@media (max-width: 1100px) {
+  .surface-composition,
+  .surface-composition[data-rail-side="left"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .surface-composition[data-rail-side="left"] > section,
+  .surface-composition[data-rail-side="left"] > aside {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
+@media (max-width: 800px) {
+  .surface-study-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 3fr) minmax(160px, 2fr);
+    gap: 16px;
+    padding: 16px;
+  }
+  .surface-environment {
+    padding: 16px;
+  }
+}
+
+/* macOS 27 reference-informed treatment, deliberately separate from Aqua.
+ * No native compositor / pixel sampling: this backdrop is a local test scene.
+ * Thin dark containment + narrow bright catches replace the moulded bevel.
+ */
+.surface-reference .surface-environment {
+  padding: 0;
+  border-radius: 18px;
+  background: var(--muted);
+  box-shadow: var(--surface-shadow);
+}
+.surface-reference .surface-environment::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse at 10% 0%,
+      color-mix(in srgb, var(--surface-key) 55%, var(--card)),
+      transparent 65%
+    ),
+    radial-gradient(
+      ellipse at 95% 5%,
+      color-mix(in srgb, var(--surface-return) 50%, transparent),
+      transparent 60%
+    ),
+    repeating-linear-gradient(
+      150deg,
+      transparent 0 52px,
+      color-mix(in srgb, var(--foreground) 9%, transparent) 54px 78px,
+      transparent 82px 140px
+    );
+}
+.surface-reference-titlebar {
+  position: relative;
+  z-index: 1;
+}
+.surface-reference-titlebar i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  border: 1px solid var(--muted-foreground);
+}
+.surface-reference-toolbar {
+  margin: 0 12px;
+}
+.surface-reference .surface-composition {
+  gap: 0;
+  padding-top: 12px;
+  min-height: 510px;
+}
+.surface-reference .surface-composition > .surface-work {
+  border: 0;
+  border-radius: 0 0 0 18px;
+}
+.surface-reference .surface-composition > aside {
+  background: color-mix(in srgb, var(--muted) 88%, transparent);
+  border-inline-start: 1px solid var(--border);
+  border-radius: 0 0 18px 0;
+  padding: 16px 12px;
+}
+.surface-reference .surface-composition[data-rail-side="left"] > aside {
+  border-inline-start: 0;
+  border-inline-end: 1px solid var(--border);
+  border-radius: 0 0 0 18px;
+}
+.surface-reference .surface-composition[data-rail-side="left"] > .surface-work {
+  border-radius: 0 0 18px 0;
+}
+.surface-reference #surface-components {
+  border-radius: 18px;
+}
+.surface-lens.surface-reference {
+  --material-face: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--muted) var(--surface-tint), var(--card)) var(--surface-opacity),
+    transparent
+  );
+  backdrop-filter: var(--surface-backdrop) saturate(var(--reference-saturation));
+  border-color: color-mix(in srgb, var(--scrim) 22%, var(--border));
+  box-shadow:
+    inset 0 0.75px 0 color-mix(in srgb, var(--surface-highlight) 72%, transparent),
+    inset 0 -0.75px 0 color-mix(in srgb, var(--scrim) 15%, transparent);
+  --material-paint:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-highlight) var(--surface-sheen), transparent),
+      transparent 24%
+    ),
+    var(--material-face);
+}
+.surface-lens.surface-reference > .surface-spatial-layers > .surface-edge-top {
+  box-shadow:
+    inset 0 1px 0 var(--surface-highlight),
+    inset 0 -1px 1px color-mix(in srgb, var(--scrim) 35%, transparent);
+}
+.surface-lens.surface-reference > .surface-spatial-layers > .surface-edge-bottom {
+  box-shadow:
+    inset 0 -1px 0 var(--surface-highlight),
+    inset 0 1px 1px color-mix(in srgb, var(--scrim) 35%, transparent);
+}
+.surface-lens.surface-reference > .surface-spatial-layers > .surface-edge-left {
+  box-shadow:
+    inset 1px 0 0 var(--surface-highlight),
+    inset -1px 0 1px color-mix(in srgb, var(--scrim) 35%, transparent);
+}
+.surface-lens.surface-reference > .surface-spatial-layers > .surface-edge-right {
+  box-shadow:
+    inset -1px 0 0 var(--surface-highlight),
+    inset 1px 0 1px color-mix(in srgb, var(--scrim) 35%, transparent);
+}
+@media (max-width: 1100px) {
+  .surface-reference .surface-composition > .surface-work,
+  .surface-reference .surface-composition[data-rail-side="left"] > .surface-work {
+    border-radius: 0;
+  }
+  .surface-reference .surface-composition > aside,
+  .surface-reference .surface-composition[data-rail-side="left"] > aside {
+    border-inline: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 18px 18px;
+  }
+}
+/* Keep one persistent controller/version bundle; hide inapplicable editor groups
+ * instead of unregistering the user's authored recipes when comparing studies.
+ * Bound to dialkit@2.0.2's accessible group headers, covered in the browser check.
+ */
+.surface-reference
+  .surface-dials
+  .dialkit-folder:has(> .dialkit-folder-header > [aria-label="Lens"]),
+.surface-reference
+  .surface-dials
+  .dialkit-folder:has(> .dialkit-folder-header > [aria-label="Work Pane"]),
+.surface-reference
+  .surface-dials
+  .dialkit-folder:has(> .dialkit-folder-header > [aria-label="Controls"]),
+.surface-reference
+  .surface-dials
+  .dialkit-folder:has(> .dialkit-folder-header > [aria-label="Lighting"]),
+.surface-reference
+  .surface-dials
+  .dialkit-folder:has(> .dialkit-folder-header > [aria-label="Optical Experiment"]),
+.surface-study:not(.surface-reference)
+  .surface-dials
+  .dialkit-folder:has(> .dialkit-folder-header > [aria-label="Reference"]) {
+  display: none;
+}
