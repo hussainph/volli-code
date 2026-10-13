@@ -39,6 +39,11 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { createSessionEngine } from "@volli/session-engine";
+import {
+  askUserInteractionId,
+  readInteractionAnswers,
+  type SessionInteractionPrompt,
+} from "@volli/shared";
 import { createSqliteSessionFollowUpLedger } from "./session-follow-up-repo";
 import { createBackupBundle, readBackupBundle } from "../backup/bundle";
 import { restoreBackupBundle } from "../backup/restore";
@@ -192,12 +197,12 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-function headEngine(db: Database.Database) {
+function headEngine(db: Database.Database, prefix = "head") {
   let next = 0;
   return createSessionEngine({
     ledger: createSqliteSessionLedger(db),
     clock: { now: () => NOW },
-    ids: { next: (kind) => `head-${kind}-${++next}` },
+    ids: { next: (kind) => `${prefix}-${kind}-${++next}` },
   });
 }
 
@@ -416,6 +421,172 @@ describe.skipIf(manifest === null)(
         }
       } finally {
         db.close();
+      }
+    });
+
+    it("shows and answers all three head-written ask_user prompts without erasing the birth marker", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return; // N-1 refuses a breaking profile.
+      const sessionId = "session-head";
+      const attachmentId = "head-pi-attachment";
+      const interactionId = askUserInteractionId("n1-multi-question");
+      const adapterProvenance = {
+        source: { kind: "adapter", id: "pi", detail: null },
+        venue: null,
+      } as const;
+      // The simplified Pi mapping: generated positional ids, single choice,
+      // and custom answers on every prompt. Flat fields mirror prompt:0.
+      const prompts: readonly SessionInteractionPrompt[] = [
+        {
+          id: "prompt:0",
+          label: "Which storage should I use?",
+          detail: null,
+          options: [
+            { id: "choice:0", label: "SQLite", description: null },
+            { id: "choice:1", label: "Postgres", description: null },
+          ],
+          multiple: false,
+          custom: true,
+        },
+        {
+          id: "prompt:1",
+          label: "Which checks should I run?",
+          detail: null,
+          options: [
+            { id: "choice:0", label: "Unit tests", description: null },
+            { id: "choice:1", label: "Typecheck", description: null },
+          ],
+          multiple: false,
+          custom: true,
+        },
+        {
+          id: "prompt:2",
+          label: "What else should I preserve?",
+          detail: null,
+          options: [],
+          multiple: false,
+          custom: true,
+        },
+      ];
+      const answers = [
+        { promptId: "prompt:0", optionIds: ["choice:0"], response: null },
+        { promptId: "prompt:1", optionIds: ["choice:1"], response: "Only focused checks" },
+        { promptId: "prompt:2", optionIds: [], response: "Keep existing changes" },
+      ];
+      const resolution = {
+        optionIds: ["choice:0", "choice:1"],
+        response: "Only focused checks\n\nKeep existing changes",
+        answers,
+      };
+      const birthInput = {
+        kind: "tool-surface",
+        tools: ["read", "ask_user"],
+        askUserQuestions: true,
+      } as const;
+      const first = prompts[0]!;
+      const interaction = {
+        id: interactionId,
+        attachmentId,
+        kind: "question" as const,
+        title: first.label,
+        detail: null,
+        options: first.options,
+        multiple: first.multiple,
+        prompts,
+        native: {
+          id: "head-native-session",
+          detail: {
+            runtime: "pi",
+            sessionId: "head-native-session",
+            sessionFilePath: join(root, "head-native-session.jsonl"),
+          },
+        },
+      };
+      const writer = openVolliDb(dbPath);
+      try {
+        const engine = headEngine(writer, "head-ask-user");
+        await engine.getOrRecordSessionInput({ sessionId, input: birthInput, provenance });
+        await engine.observe({
+          id: "head-pi-opened",
+          sessionId,
+          occurredAt: NOW,
+          provenance: adapterProvenance,
+          kind: "attachment.opened",
+          attachment: {
+            id: attachmentId,
+            sessionId,
+            adapterId: "pi",
+            venue: { id: "n1-local", kind: "local" },
+            continuity: "fresh",
+            native: interaction.native,
+            authority: null,
+          },
+        });
+        await engine.observe({
+          id: "head-ask-user-opened",
+          sessionId,
+          occurredAt: NOW,
+          provenance: adapterProvenance,
+          kind: "interaction.opened",
+          interaction,
+        });
+      } finally {
+        writer.close();
+      }
+      const storedInputs = (db: Database.Database) =>
+        (
+          db
+            .prepare("SELECT payload FROM session_events WHERE session_id = ? ORDER BY sequence")
+            .all(sessionId) as { payload: string }[]
+        ).filter(({ payload }) => JSON.parse(payload).kind === "session.input.recorded");
+      const before = new Database(dbPath, { readonly: true });
+      let rawInputs: { payload: string }[];
+      try {
+        rawInputs = storedInputs(before);
+        expect(rawInputs.map(({ payload }) => JSON.parse(payload))).toEqual([
+          { kind: "session.input.recorded", input: birthInput },
+        ]);
+      } finally {
+        before.close();
+      }
+
+      const run = await n1(dbPath, [{ kind: "askUser", sessionId, interactionId, answers }]);
+      expect(value(run, 0)).toEqual({
+        prompts,
+        toolSurface: { kind: "tool-surface", tools: ["read", "ask_user"] },
+        rendererNative: { id: null, detail: null },
+        // The shipped card holds submit until all questions have an answer.
+        submitStates: [false, false, false, true],
+        resolution,
+        answers,
+        activeCount: 0,
+        route: { adapterId: "pi", attachmentId },
+      });
+
+      assertHeadReads(dbPath);
+      const reopened = openVolliDb(dbPath);
+      try {
+        const engine = headEngine(reopened);
+        const session = await engine.getSession({ sessionId });
+        expect(session?.interactions.active).toEqual([]);
+        const resolved = session?.interactions.resolved[0];
+        expect(resolved).toMatchObject({ interaction, resolution });
+        expect(readInteractionAnswers(resolved!.interaction, resolved!.resolution)).toEqual(
+          answers,
+        );
+        // N-1 ignores the unknown marker in its decoded input, but must never
+        // rewrite the raw birth event (or the new declaration would be lost).
+        expect(storedInputs(reopened)).toEqual(rawInputs!);
+        expect(
+          await engine.getOrRecordSessionInput({ sessionId, input: birthInput, provenance }),
+        ).toEqual(birthInput);
+        const events = await engine.listEvents({ sessionId });
+        expect(
+          events.find(({ payload }) => payload.kind === "interaction.resolved")?.payload,
+        ).toEqual({ kind: "interaction.resolved", attachmentId, interactionId, resolution });
+      } finally {
+        reopened.close();
       }
     });
 

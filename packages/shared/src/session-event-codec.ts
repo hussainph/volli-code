@@ -210,7 +210,14 @@ const codecs = {
             : decodeToolSurfaceInput(input, kind, `${context}.input`);
       return { kind: "session.input.recorded", input: decoded };
     },
-    scrub: (payload) => payload,
+    scrub: (payload) => {
+      const { input } = payload;
+      if (input.kind !== "tool-surface") return { kind: payload.kind, input };
+      // The declaration revision is attach-only host state, not a renderer
+      // capability. Keep it durable without widening the public Session wire.
+      const { askUserQuestions: _askUserQuestions, ...surface } = input;
+      return { kind: payload.kind, input: surface };
+    },
   },
   "session.signaled": {
     decode: (record, context) => ({
@@ -1336,10 +1343,15 @@ function decodeToolSurfaceInput(
   kind: "tool-surface";
   tools: readonly SessionToolId[];
   mcpManagementNames?: "server";
+  askUserQuestions?: true;
   mcpTools?: readonly McpToolDefinition[];
   codeMode?: CodeModeSurface;
 } {
   const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
+  // Birth-only declaration marker: historical absence must not become a default.
+  if (input.askUserQuestions !== undefined && input.askUserQuestions !== true) {
+    throw new Error(`${context}.askUserQuestions must be true when present`);
+  }
   const mcpManagementNames =
     input.mcpManagementNames === undefined
       ? undefined
@@ -1367,6 +1379,7 @@ function decodeToolSurfaceInput(
     kind,
     tools,
     ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
+    ...(input.askUserQuestions === true ? { askUserQuestions: true as const } : {}),
     ...(mcpTools === undefined ? {} : { mcpTools }),
     ...(codeMode === undefined ? {} : { codeMode }),
   };

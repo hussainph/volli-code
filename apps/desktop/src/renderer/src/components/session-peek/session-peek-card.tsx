@@ -378,6 +378,7 @@ export function SessionPeekCard({
     : pinned
       ? (activeQuestion ?? null)
       : (content?.question ?? null);
+  const questionPrompts = question === null ? [] : readInteractionPrompts(question);
   const age = row.at === null ? "" : relativeTime(row.at, now);
   const unreadable = content?.unreadable ?? 0;
 
@@ -462,7 +463,9 @@ export function SessionPeekCard({
               data-peek-question=""
               className="font-medium text-foreground [overflow-wrap:anywhere]"
             >
-              {readInteractionPrompts(question)[0]?.label ?? question.title}
+              {questionPrompts.length > 1
+                ? `${questionPrompts.length} questions: ${questionPrompts[0]?.label ?? question.title}`
+                : (questionPrompts[0]?.label ?? question.title)}
             </p>
           </CardBlock>
         ) : null}

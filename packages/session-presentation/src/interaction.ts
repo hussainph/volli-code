@@ -513,10 +513,9 @@ export function interactionAnswers(
 /**
  * The answers, plus the flat pair every stored resolution still carries.
  *
- * The flat `optionIds` are the union in prompt order, which is exactly what an
- * adapter decodes back into per-question answers — the option ids
- * encode their own question index, so flattening is lossless rather than a
- * lossy convenience. `answers` rides along for the readers that understand it.
+ * The flat `optionIds` concatenate selections in prompt order for historical
+ * readers. IDs may repeat across prompts (the simplified tool uses `choice:0`
+ * on each question), so only `answers` preserves their question association.
  */
 export function interactionResolution(
   interaction: RendererSessionInteraction,
@@ -618,7 +617,7 @@ export function createSubmissionLatch(): InteractionSubmissionLatch {
  * permission card — beside a primary control that changed its own label with
  * the draft, the three of them read as three ways of saying no.
  */
-export const SEND_ANSWER_LABEL = "Send answer";
+export const SEND_ANSWER_LABEL = "Answer";
 export const DECLINE_ANSWER_LABEL = "Decline to answer";
 export const WITHDRAW_QUESTION_LABEL = "Withdraw question";
 /**
@@ -1097,7 +1096,10 @@ export function describeInteractionResolution(
   return {
     verdict,
     lead: RECEIPT_LEADS[verdict],
-    subject: interaction.title,
+    subject:
+      isAskUserInteraction(interaction) && prompts.length > 1
+        ? `${prompts.length} questions`
+        : interaction.title,
     trailer: receiptTrailer(verdict, chosen, resolution.response),
   };
 }

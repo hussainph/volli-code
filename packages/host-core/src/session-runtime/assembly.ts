@@ -190,6 +190,8 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                 // At birth, freeze the wire spelling too. The old mcp_* names
                 // remain available only to Sessions whose record predates this marker.
                 mcpManagementNames: "server",
+                // Declaration changes apply only at new birth, never on legacy backfill.
+                ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
                 ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               },

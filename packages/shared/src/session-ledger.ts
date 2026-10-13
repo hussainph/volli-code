@@ -602,6 +602,8 @@ export type SessionInput =
       tools: readonly SessionToolId[];
       /** New MCP-management wire names. Absent on historical surfaces, whose mcp_* names must survive reattachment. */
       mcpManagementNames?: "server";
+      /** Multi-question ask_user declaration, frozen at new birth only (VC-749). Absent keeps the historical single-question surface. */
+      askUserQuestions?: true;
       /** Exact sanitized dynamic definitions corresponding to MCP names in tools. */
       mcpTools?: readonly McpToolDefinition[];
       /**

@@ -96,7 +96,7 @@ function footer(): HTMLElement {
 
 /** Every control the footer draws, in the order the keyboard walks them. */
 function footerButtons(): readonly HTMLButtonElement[] {
-  return [...footer().querySelectorAll<HTMLButtonElement>("button")];
+  return [...footer().querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
 }
 
 /** Press the control that answers, whatever this build calls it. */
@@ -162,7 +162,7 @@ describe("the footer once a press has been refused", () => {
     );
 
     const before = footerButtons().map((button) => button.textContent);
-    const refusal = footer().querySelector<HTMLButtonElement>('button[data-variant="outline"]');
+    const refusal = footerButtons().find((button) => button.textContent === "Decline to answer");
     expect(refusal).not.toBeNull();
     await act(async () => {
       refusal?.click();

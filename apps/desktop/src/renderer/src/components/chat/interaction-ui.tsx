@@ -10,7 +10,7 @@
  *    between them is the whole act; several questions step through a counter.
  *  - {@link QuestionCard} — an *answer*. Option ids are the harness's own
  *    encoded values, so there is no verdict to weight and no list to read
- *    against itself — one question at a time, rows that answer on the click,
+ *    against itself — one question at a time, rows that select without submitting,
  *    and a box beside them wherever the harness said words can be read back.
  *
  * A refusal is not always one of the options. A permission declares `reject`,
@@ -43,7 +43,7 @@
  * able to type into a dead end is always here, under the sentence asking for it.
  *
  * **What each act does to the question is in its name.** `Withdraw question`
- * takes the ask away, `Decline to answer` sends the empty refusal, `Send answer`
+ * takes the ask away, `Decline to answer` sends the empty refusal, `Answer`
  * sends what is on the card, and once one of them lands the card says which,
  * in its own place, rather than going quietly inert (`describeInteractionSent`).
  * All four go through one synchronous latch per interaction id
@@ -144,9 +144,8 @@ const FIELD_LABEL: Record<InteractionFieldRole, string> = {
  * Shared as a string rather than as a component, because the two rows are not
  * the same element and must not be: a question's row is a button this card
  * drives itself, a verdict's is a label over a native input whose group
- * semantics the browser owns. What they *are* differs; how they read must not,
- * so the target, the wash and the rhythm live in one place where they cannot
- * drift apart a class at a time.
+ * semantics the browser owns. They share a target and rhythm; the questionnaire
+ * adds full-width frames without changing the permission rows.
  */
 const OPTION_ROW =
   "group flex min-w-0 cursor-default items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors outline-none";
@@ -220,9 +219,12 @@ export function PendingInteractionAnnouncement({
 }: {
   interaction: RendererSessionInteraction | null;
 }) {
+  const count = interaction === null ? 0 : interactionQuestions(interaction).length;
   return (
     <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-      {interaction ? `Request pending: ${interaction.title}` : ""}
+      {interaction
+        ? `Request pending: ${isAskUserInteraction(interaction) && count > 1 ? `${count} questions` : interaction.title}`
+        : ""}
     </span>
   );
 }
@@ -594,7 +596,7 @@ function DecisionCard({
  * **Choosing is not sending (VC-289).** A single choice used to answer and
  * advance on the click that made it, which meant the fastest gesture on the
  * card was also the irreversible one, and the step in view had no control at
- * all to say what pressing it would do. A click selects; `Send answer` sends;
+ * all to say what pressing it would do. A click selects; `Answer` sends;
  * `Decline to answer` refuses; `Withdraw question` takes the ask away. Four
  * acts, four names, and each name is the effect.
  *
@@ -650,6 +652,7 @@ function QuestionCard({
   const refusable = needsOwnRefusal(interaction);
   const askedId = step?.question.prompt.id ?? "";
   const advanceLabel = step?.advanceLabel ?? null;
+  const requestHeading = step && step.count > 1 ? `${step.count} questions` : interaction.title;
 
   /** What the card will say about a response the moment it leaves. */
   const receipt = (kind: InteractionSentKind, submission: InteractionSubmission | null) =>
@@ -692,7 +695,7 @@ function QuestionCard({
    * {@link interactionAdvance}'s; what is left here is where it puts the reader.
    *
    * One function for the control and for the keyboard, because they are one
-   * act: `Send answer` and ⌘⏎ racing each other still take the same latch, and
+   * act: `Answer` and ⌘⏎ racing each other still take the same latch, and
    * only the first of them reaches the resolver.
    */
   const advance = (from: InteractionDraft = draft) => {
@@ -732,20 +735,32 @@ function QuestionCard({
    */
   const choose = (option: SessionInteractionOption) => {
     if (resolving || !step) return;
-    setDraft(selectOption(draft, step.question.prompt, option.id));
-    setBlocked(null);
-  };
-
-  /** Arrowed onto, which chooses without committing — the radio's own reading. */
-  const mark = (option: SessionInteractionOption) => {
-    if (resolving || !step) return;
-    setDraft(selectOption(draft, step.question.prompt, option.id));
+    const prompt = step.question.prompt;
+    const next = selectOption(draft, prompt, option.id);
+    // The simplified tool offers alternatives, not a note beside a choice.
+    // Historical prompts keep their existing custom/multiple answer semantics.
+    setDraft(
+      prompt.custom &&
+        !prompt.multiple &&
+        prompt.options.every((item) => /^choice:\d+$/.test(item.id))
+        ? setPromptResponse(next, prompt.id, "")
+        : next,
+    );
     setBlocked(null);
   };
 
   const write = (response: string) => {
     if (!step) return;
-    setDraft(setPromptResponse(draft, step.question.prompt.id, response));
+    const prompt = step.question.prompt;
+    const next = setPromptResponse(draft, prompt.id, response);
+    setDraft(
+      response.trim() &&
+        prompt.custom &&
+        !prompt.multiple &&
+        prompt.options.every((item) => /^choice:\d+$/.test(item.id))
+        ? { ...next, [prompt.id]: { ...promptDraft(next, prompt.id), optionIds: [] } }
+        : next,
+    );
     setBlocked(null);
   };
 
@@ -765,7 +780,7 @@ function QuestionCard({
       <form
         ref={ref}
         tabIndex={-1}
-        aria-label={interaction.title}
+        aria-label={requestHeading}
         className={cn(
           "pointer-events-auto overflow-hidden outline-none",
           COMPOSER_STACK_SHELL,
@@ -773,7 +788,7 @@ function QuestionCard({
         )}
       >
         <div className="px-4 py-4">
-          <QuestionSentReceipt heading={step?.heading ?? interaction.title} receipt={sent} />
+          <QuestionSentReceipt heading={requestHeading} receipt={sent} />
         </div>
       </form>
     );
@@ -783,7 +798,7 @@ function QuestionCard({
     <form
       ref={ref}
       tabIndex={-1}
-      aria-label={interaction.title}
+      aria-label={step?.heading ?? interaction.title}
       onSubmit={(event) => {
         event.preventDefault();
         advance();
@@ -838,9 +853,8 @@ function QuestionCard({
                   interaction={interaction}
                   draft={draft}
                   disabled={resolving}
-                  onBack={() => go(step.index - 1)}
                   onChoose={choose}
-                  onMark={mark}
+                  onMark={choose}
                   onWrite={write}
                   onAdvance={() => advance()}
                 />
@@ -855,7 +869,7 @@ function QuestionCard({
         className={cn(
           // Wrapping, for the verdict card's reason and one more of its own:
           // this footer can hold five controls at once (minimise, withdraw,
-          // Skip, Reject, and the control that advances), which is a row no
+          // Previous, Decline, and the control that advances), which is a row no
           // narrow pane has ever been able to draw on one line.
           "flex flex-wrap items-center gap-x-1 gap-y-1 px-4 py-2",
           // No rule under nothing: a request that declares no questions is all
@@ -867,7 +881,7 @@ function QuestionCard({
 
             It leads the footer because it is the only control on this card that
             does not touch the question: Withdraw question takes the ask away,
-            Decline to answer refuses it, Send answer answers it, and this one
+            Decline to answer refuses it, Answer answers it, and this one
             only decides how much of the pane the card is holding while all
             three stay exactly where they were. Nothing durable moves, so it
             keeps its place in both states rather than rearranging the footer
@@ -930,28 +944,21 @@ function QuestionCard({
         ) : null}
         {/* The same give as the verdict card's cluster, and the same reason:
             see the note there. Three actions at once is the state that needs
-            it — Skip, Reject and the advance control together are wider than a
+            it — Previous, Decline and the advance control together are wider than a
             320px pane's content box before any of them has a long word in it. */}
         <div
           data-slot="interaction-actions"
           className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1"
         >
-          {/* Movement, not an answer: a resolution carries one `answers` array,
-              so there is no partial one to send and nothing durable a skip
-              could write. It steps past the question and leaves it unanswered,
-              and Submit still waits for it — which is why the last question has
-              no Skip, and why a blocked Submit walks back to what was passed. */}
-          {step?.skippable ? (
+          {step && step.count > 1 ? (
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="text-muted-foreground"
-              disabled={resolving}
-              onClick={() => go(step.index + 1)}
+              disabled={resolving || step.first}
+              onClick={() => go(step.index - 1)}
             >
-              Skip
-              <ArrowRightIcon className="size-3.5" />
+              Previous
             </Button>
           ) : null}
           {/* The refusal none of the harness's own ids can carry, named for
@@ -971,7 +978,7 @@ function QuestionCard({
             </Button>
           ) : null}
           {/* Always drawn, and it says which of the two acts it is: `Next`
-              while there is a question after this one, `Send answer` where the
+              while there is a question after this one, `Answer` where the
               press ends the request. Live rather than gated, unlike the verdict
               card's — a control that goes quietly dead says less than one that
               answers what it is waiting for. */}
@@ -1100,7 +1107,6 @@ function QuestionStep({
   interaction,
   draft,
   disabled,
-  onBack,
   onChoose,
   onMark,
   onWrite,
@@ -1110,7 +1116,6 @@ function QuestionStep({
   interaction: RendererSessionInteraction;
   draft: InteractionDraft;
   disabled?: boolean;
-  onBack(): void;
   onChoose(option: SessionInteractionOption): void;
   onMark(option: SessionInteractionOption): void;
   onWrite(response: string): void;
@@ -1128,7 +1133,6 @@ function QuestionStep({
   const wordsDropped = promptResponseSuperseded(interaction, prompt, draft);
   const written = promptDraft(draft, prompt.id).response;
   const chosen = promptDraft(draft, prompt.id).optionIds;
-  const fieldRole = promptFieldRole(prompt, draft);
   // The harness's call, and the only one: `custom` is what says a written
   // answer can be read back at all. Refusing is never gated on it — that is the
   // card's own Reject, and it stands whether or not there is a box here.
@@ -1142,9 +1146,8 @@ function QuestionStep({
   // own footer. A reader looking at a question does not read "type your answer
   // four inches below the question, past the buttons" — and where the question
   // listed nothing to click, the card had a headline, Cancel, Reject and no way
-  // whatsoever to answer it. The composer still answers, because a question
-  // must never make the box under it a dead end; it is the fallback, not the
-  // affordance.
+  // whatsoever to answer it. The card owns the answer; the composer below
+  // stays a message field, never a competing answer path.
   const fieldOpen = askFieldOpen(prompt);
   // Roving, the radio group's own rule: the chosen row is the tab stop, and
   // where nothing is chosen yet the first one is.
@@ -1167,22 +1170,9 @@ function QuestionStep({
   return (
     <fieldset className="min-w-0" disabled={disabled}>
       {step.count > 1 ? (
-        <div className="mb-1 flex items-center gap-1">
-          <span className="text-ui text-muted-foreground tabular-nums">
-            Question {step.index + 1} of {step.count}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="ml-auto"
-            aria-label="Previous question"
-            disabled={step.first}
-            onClick={onBack}
-          >
-            <CaretLeftIcon className="size-3" />
-          </Button>
-        </div>
+        <p className="mb-2 text-ui text-muted-foreground tabular-nums">
+          {step.index + 1} of {step.count}
+        </p>
       ) : null}
       {/* A paragraph carrying the group's name, not a heading: the card sits
           inside a transcript with an outline of its own, and the request's
@@ -1200,7 +1190,7 @@ function QuestionStep({
         <div
           role={prompt.multiple ? "group" : "radiogroup"}
           aria-labelledby={headingId}
-          className="-mx-2 mt-4 flex flex-col"
+          className="mt-4 flex flex-col gap-2"
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing) return;
             const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
@@ -1226,20 +1216,12 @@ function QuestionStep({
               onAdvance();
               return;
             }
-            // The numeral beside a row is its name, so typing it is pressing it
-            // — and the one past the last row is the box, which is a row here
-            // too and answers to its number the same way.
-            const digit = Number.parseInt(event.key, 10);
-            if (Number.isNaN(digit) || digit < 1) return;
-            const option = prompt.options[digit - 1];
+            if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+            if (!/^[1-9]$/.test(event.key)) return;
+            const option = prompt.options[Number(event.key) - 1];
             if (option) {
               event.preventDefault();
               onChoose(option);
-              return;
-            }
-            if (fieldOpen && digit === prompt.options.length + 1) {
-              event.preventDefault();
-              fieldRef.current?.focus();
             }
           }}
         >
@@ -1260,48 +1242,22 @@ function QuestionStep({
                 onClick={() => onChoose(option)}
                 className={cn(
                   OPTION_ROW,
-                  "hover:bg-muted/30 focus-visible:bg-muted/30 focus-visible:ring-1 focus-visible:ring-ring",
-                  checked && "bg-muted/70",
+                  "w-full items-start rounded-xl border border-input bg-input/20 px-4 hover:bg-input/40 focus-visible:ring-1 focus-visible:ring-ring",
+                  checked && "border-primary/40 bg-primary/10",
                   superseded && "cursor-default opacity-50",
-                  step.layout === "stacked" && "items-start",
                 )}
               >
-                <OptionChip
-                  position={position + 1}
-                  checked={checked}
-                  outlined={prompt.multiple}
-                  className={step.layout === "stacked" ? "mt-px" : undefined}
-                />
-                <span
-                  className={cn(
-                    "flex min-w-0 flex-1",
-                    step.layout === "stacked" ? "flex-col gap-1" : "items-baseline gap-1",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "min-w-0 text-ui font-medium text-foreground",
-                      step.layout === "stacked" ? "text-balance" : "truncate",
-                    )}
-                  >
+                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="min-w-0 break-words text-ui font-medium text-foreground">
                     {option.label}
                   </span>
-                  {/* Inline, `flex-1` and not a second `auto` basis: two
-                      truncating siblings shrink in proportion to their content,
-                      so a long description ate the label it exists to explain.
-                      Stacked, it has the row to itself and wraps — which is the
-                      whole reason that layout exists. */}
                   {option.description ? (
-                    <span
-                      className={cn(
-                        "min-w-0 text-ui text-muted-foreground",
-                        step.layout === "stacked" ? "text-pretty" : "flex-1 truncate",
-                      )}
-                    >
+                    <span className="min-w-0 break-words text-ui text-muted-foreground">
                       {option.description}
                     </span>
                   ) : null}
                 </span>
+                <OptionChip position={position + 1} checked={checked} outlined={prompt.multiple} />
                 {/* No arrow on a question's rows any more, and its absence is
                     the point. The glyph means "this press is the act", which
                     was true while a single choice sent on the click and became
@@ -1316,23 +1272,7 @@ function QuestionStep({
       )}
 
       {fieldOpen ? (
-        <div
-          className={cn(
-            "flex min-w-0 items-start gap-2 rounded-lg",
-            // Beside options it is the last row of the same list, and it wears
-            // the row's own padding and number. Alone it is the answer itself,
-            // and stands clear of the ask above it.
-            alone ? "mt-4" : "-mx-2 mt-1 px-2 py-2",
-          )}
-        >
-          {alone ? null : (
-            <OptionChip
-              position={prompt.options.length + 1}
-              checked={written.trim().length > 0}
-              outlined={false}
-              className="mt-1"
-            />
-          )}
+        <div className="mt-2 min-w-0">
           <Textarea
             ref={fieldRef}
             value={written}
@@ -1340,9 +1280,9 @@ function QuestionStep({
             // A placeholder is not a name: it leaves the box unnamed to AT, and
             // it is gone the moment anyone types into it. Alone, the question
             // itself is the name — there is nothing else the box could be.
-            aria-label={alone ? undefined : FIELD_LABEL[fieldRole]}
+            aria-label={alone ? undefined : "Another answer"}
             aria-labelledby={alone ? headingId : undefined}
-            placeholder={FIELD_PLACEHOLDER[fieldRole]}
+            placeholder="Type another answer…"
             onChange={(event) => onWrite(event.currentTarget.value)}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing) return;
@@ -1361,16 +1301,7 @@ function QuestionStep({
               onAdvance();
             }}
             className={cn(
-              // No edge of its own, in either place. The card already draws
-              // one, and a bordered box inside a bordered card is two frames
-              // around one thing — which is also what made the box beside the
-              // options the odd row out in a list nothing else is fenced in.
-              // What says a box can be typed into is the placeholder and the
-              // caret, the same two things that say it in the composer.
-              "min-h-9 resize-none border-0 bg-transparent px-0 text-ui shadow-none md:text-ui dark:bg-transparent",
-              // Beside options it is one row of their list and wears the row's
-              // rhythm; alone it is the answer and keeps the field's own floor.
-              !alone && "min-h-6 py-0",
+              "min-h-9 w-full resize-none rounded-xl border-input bg-input/20 px-4 text-ui shadow-none md:text-ui dark:bg-input/20",
               wordsDropped && "opacity-50",
             )}
           />

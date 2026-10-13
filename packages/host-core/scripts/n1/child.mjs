@@ -15,6 +15,9 @@
 // line and exits 0. A step that throws is reported, not fatal: the refusal
 // step is supposed to throw. Never prints a secret value.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { registerHooks } from "node:module";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const n1 = (path) => import(`n1:${path}`);
 
@@ -130,6 +133,138 @@ const steps = {
       });
       const read = await engine.getSession({ sessionId: created.session.id });
       return { sessionId: created.session.id, readBack: read?.session?.id ?? null };
+    } finally {
+      db.close();
+    }
+  },
+
+  /** Reads and answers a head-written card through N-1's codec, UI rules and ledger. */
+  askUser: async (step) => {
+    const { createSessionEngine } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const shared = await n1("@volli/shared");
+    // prepare.mjs installs the host's dependency closure only. Presentation is
+    // shipped in both tags, but after the host extraction it is outside that
+    // closure. Import its exact shipped helper file, resolving its sole import
+    // to the SAME N-1 shared package the host uses, without linking or rewriting
+    // any extracted source (and without falling back to head's implementation).
+    const helperUrl = pathToFileURL(
+      join(process.env.VOLLI_N1_TREE, "packages/session-presentation/src/interaction.ts"),
+    ).href;
+    const helperImports = registerHooks({
+      resolve(specifier, context, nextResolve) {
+        return nextResolve(
+          context.parentURL === helperUrl && specifier === "@volli/shared"
+            ? "n1:@volli/shared"
+            : specifier,
+          context,
+        );
+      },
+    });
+    let ui;
+    try {
+      ui = await n1(helperUrl);
+    } finally {
+      helperImports.deregister();
+    }
+    const db = openVolliDb(command.dbPath);
+    try {
+      let next = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `${step.sessionId}-n1-answer-${kind}-${++next}` },
+      });
+      // getSession folds persisted events with N-1's real stored codec.
+      const before = await engine.getSession({ sessionId: step.sessionId });
+      const interaction = before?.interactions.active.find((ask) => ask.id === step.interactionId);
+      if (!interaction) throw new Error("Head-written ask_user card is not pending in N-1");
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      const opened = events.find(
+        ({ payload }) =>
+          payload.kind === "interaction.opened" && payload.interaction.id === interaction.id,
+      );
+      if (!opened) throw new Error("Head-written interaction event is missing in N-1");
+      // N-1 keeps original membership but ignores the new schema marker in
+      // its decoded birth input. Reading/answering must not rewrite its bytes.
+      const toolSurface = await engine.getOrRecordSessionInput({
+        sessionId: step.sessionId,
+        input: { kind: "tool-surface", tools: ["write"] },
+        provenance,
+      });
+      const renderer = shared.decodeRendererSessionEventPayload(
+        opened.payload,
+        "N-1 ask_user card",
+      );
+      const card = renderer.interaction;
+      const prompts = shared.readInteractionPrompts(card);
+      let draft = ui.emptyInteractionDraft(card);
+      const submitStates = [ui.canSubmitInteraction(card, draft)];
+      for (const answer of step.answers) {
+        const prompt = prompts.find((candidate) => candidate.id === answer.promptId);
+        if (!prompt) throw new Error(`N-1 did not render prompt ${answer.promptId}`);
+        for (const optionId of answer.optionIds) draft = ui.selectOption(draft, prompt, optionId);
+        if (answer.response !== null) {
+          draft = ui.setPromptResponse(draft, prompt.id, answer.response);
+        }
+        submitStates.push(ui.canSubmitInteraction(card, draft));
+      }
+      if (!submitStates.at(-1)) throw new Error("N-1 UI cannot submit the fully answered card");
+      const resolution = ui.interactionResolution(card, draft);
+      const submitted = await engine.submit({
+        commandId: `${step.sessionId}-n1-answer-command`,
+        sessionId: step.sessionId,
+        intent: {
+          kind: "interaction.resolve",
+          attachmentId: interaction.attachmentId,
+          interactionId: interaction.id,
+          resolution,
+          reference: { id: `${step.sessionId}-n1-answer-artifact`, mediaType: null, digest: null },
+        },
+        provenance,
+      });
+      if (submitted.receipt?.status === "rejected") {
+        throw new Error(`N-1 rejected the answer: ${submitted.receipt.code}`);
+      }
+      // No executor/provider is needed: report the adapter's durable fact as
+      // the real engine does once its resolution endpoint has accepted it.
+      await engine.observe({
+        id: `${step.sessionId}-n1-answer-observation`,
+        sessionId: step.sessionId,
+        attachmentId: interaction.attachmentId,
+        occurredAt: NOW,
+        provenance: { source: { kind: "adapter", id: "pi", detail: null }, venue: null },
+        kind: "interaction.resolved",
+        interactionId: interaction.id,
+        resolution,
+      });
+      const after = await engine.getSession({ sessionId: step.sessionId });
+      const resolved = after.interactions.resolved.find(
+        (ask) => ask.interaction.id === interaction.id,
+      );
+      const resolvedEvents = await engine.listEvents({ sessionId: step.sessionId });
+      const resolvedEvent = resolvedEvents.find(
+        ({ payload }) =>
+          payload.kind === "interaction.resolved" && payload.interactionId === interaction.id,
+      );
+      if (!resolvedEvent) throw new Error("N-1 did not persist the card answer");
+      const rendererAnswer = shared.decodeRendererSessionEventPayload(
+        resolvedEvent.payload,
+        "N-1 ask_user answer",
+      );
+      if (JSON.stringify(rendererAnswer.resolution) !== JSON.stringify(resolved.resolution)) {
+        throw new Error("N-1 renderer codec changed the stored answer");
+      }
+      return {
+        prompts,
+        toolSurface,
+        rendererNative: card.native,
+        submitStates,
+        resolution,
+        answers: shared.readInteractionAnswers(card, rendererAnswer.resolution),
+        activeCount: after.interactions.active.length,
+        route: submitted.command.route,
+      };
     } finally {
       db.close();
     }

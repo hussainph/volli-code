@@ -266,7 +266,7 @@ describe("choosing an answer, and sending it", () => {
     expect(row(host, "Detailed").getAttribute("aria-checked")).toBe("true");
     expect(sent).toEqual([]);
 
-    press(control(host, "Send answer"));
+    press(control(host, "Answer"));
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.optionIds).toEqual(["question:0:ZGV0YWlsZWQ"]);
@@ -305,7 +305,7 @@ describe("choosing an answer, and sending it", () => {
 
     press(row(host, "Brief"));
     press(row(host, "Detailed"));
-    press(control(host, "Send answer"));
+    press(control(host, "Answer"));
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.optionIds).toEqual(["question:0:YnJpZWY", "question:0:ZGV0YWlsZWQ"]);
@@ -322,10 +322,171 @@ describe("choosing an answer, and sending it", () => {
       />,
     );
 
-    press(control(host, "Send answer"));
+    press(control(host, "Answer"));
 
     expect(sent).toEqual([]);
     expect(host.querySelector("[role='alert']")?.textContent).toContain("Choose an option");
+  });
+
+  it("preserves historical mixed multi/custom answers in one submission", async () => {
+    const prompts: SessionInteractionPrompt[] = [
+      {
+        id: "scope",
+        label: "Which scope should this change cover?",
+        detail: null,
+        options: [
+          { id: "tool", label: "Tool and adapter only", description: null },
+          { id: "renderer", label: "Include renderer changes", description: null },
+        ],
+        multiple: false,
+        custom: false,
+      },
+      {
+        id: "checks",
+        label: "Which checks should run before handoff?",
+        detail: null,
+        options: [
+          { id: "tests", label: "Focused tests", description: null },
+          { id: "types", label: "Typecheck", description: null },
+        ],
+        multiple: true,
+        custom: true,
+      },
+      {
+        id: "name",
+        label: "What should the handoff be called?",
+        detail: null,
+        options: [],
+        multiple: false,
+        custom: true,
+      },
+    ];
+    const first = prompts[0]!;
+    // Match PiBinding.#askUser, not ask()'s legacy aggregate flat fields.
+    const interaction: RendererSessionInteraction = {
+      id: "ask-user:call-multi",
+      attachmentId: "attach-1",
+      kind: "question",
+      title: first.label,
+      detail: null,
+      options: first.options,
+      multiple: first.multiple,
+      prompts,
+      native: { id: null, detail: null },
+    };
+    const harness = slowResolver();
+    const host = mount(<InteractionCard interaction={interaction} onResolve={harness.resolve} />);
+
+    press(row(host, "Tool and adapter only"));
+    expect(harness.calls).toEqual([]);
+    press(control(host, "Next"));
+    await settle();
+    expect(host.querySelector("form")?.getAttribute("aria-label")).toBe(prompts[1]!.label);
+
+    press(row(host, "Focused tests"));
+    press(row(host, "Typecheck"));
+    type(host.querySelector<HTMLTextAreaElement>("textarea")!, "Also check older readers");
+    expect(harness.calls).toEqual([]);
+    press(control(host, "Next"));
+    await settle();
+
+    type(host.querySelector<HTMLTextAreaElement>("textarea")!, "Multi-question handoff");
+    expect(harness.calls).toEqual([]);
+    press(control(host, "Answer"));
+
+    expect(harness.calls).toHaveLength(1);
+    expect(host.querySelector("form")?.getAttribute("aria-label")).toBe("3 questions");
+    expect(harness.calls[0]).toEqual({
+      // The existing renderer keeps the aggregate flat answer for old readers.
+      optionIds: ["tool", "tests", "types"],
+      response: "Also check older readers\n\nMulti-question handoff",
+      answers: [
+        { promptId: "scope", optionIds: ["tool"], response: null },
+        {
+          promptId: "checks",
+          optionIds: ["tests", "types"],
+          response: "Also check older readers",
+        },
+        { promptId: "name", optionIds: [], response: "Multi-question handoff" },
+      ],
+    });
+    await harness.land(true);
+    expect(harness.calls).toHaveLength(1);
+  });
+
+  it("answers three simplified Pi questions with shortcuts and one atomic submit", async () => {
+    const prompts = [0, 1, 2].map((index) =>
+      askPrompt({
+        id: `prompt:${index}`,
+        label: `Decision ${index + 1}`,
+        custom: true,
+        options: [
+          { id: "choice:0", label: "First", description: null },
+          { id: "choice:1", label: "Second", description: null },
+        ],
+      }),
+    );
+    const harness = slowResolver();
+    const host = mount(<InteractionCard interaction={ask(prompts)} onResolve={harness.resolve} />);
+    const shortcut = (key: string) =>
+      act(() =>
+        row(host, "First").dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })),
+      );
+    shortcut("1");
+    expect(row(host, "First").getAttribute("aria-checked")).toBe("true");
+    expect(harness.calls).toEqual([]);
+    press(control(host, "Next"));
+    await settle();
+    shortcut("2");
+    expect(row(host, "Second").getAttribute("aria-checked")).toBe("true");
+    press(control(host, "Next"));
+    await settle();
+    const box = host.querySelector<HTMLTextAreaElement>("textarea")!;
+    type(box, "Another approach");
+    const submit = control(host, "Answer");
+    burst(
+      () => submit.click(),
+      () => commit(box),
+    );
+    expect(harness.calls).toHaveLength(1);
+    expect(harness.calls[0]?.answers).toEqual([
+      { promptId: "prompt:0", optionIds: ["choice:0"], response: null },
+      { promptId: "prompt:1", optionIds: ["choice:1"], response: null },
+      { promptId: "prompt:2", optionIds: [], response: "Another approach" },
+    ]);
+    await harness.land(true);
+  });
+
+  it("treats another answer as an alternative, never typing numeral shortcuts into a selection", () => {
+    const sent: SessionInteractionResolution[] = [];
+    const prompt = askPrompt({
+      custom: true,
+      options: [
+        { id: "choice:0", label: "First", description: null },
+        { id: "choice:1", label: "Second", description: null },
+      ],
+    });
+    const host = mount(
+      <InteractionCard
+        interaction={ask([prompt])}
+        onResolve={({ resolution }) => {
+          sent.push(resolution);
+        }}
+      />,
+    );
+    press(row(host, "First"));
+    const box = host.querySelector<HTMLTextAreaElement>("textarea")!;
+    type(box, "My answer");
+    expect(row(host, "First").getAttribute("aria-checked")).toBe("false");
+    act(() => box.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true })));
+    expect(row(host, "Second").getAttribute("aria-checked")).toBe("false");
+    press(row(host, "Second"));
+    expect(box.value).toBe("");
+    type(box, "Final answer");
+    press(control(host, "Answer"));
+    expect(sent[0]?.answers).toEqual([
+      { promptId: "prompt:0", optionIds: [], response: "Final answer" },
+    ]);
   });
 
   it("keeps each question's draft while the reader walks between them", async () => {
@@ -346,7 +507,7 @@ describe("choosing an answer, and sending it", () => {
     press(row(host, "Brief"));
 
     // Back, and the first answer is still standing where it was left.
-    press(host.querySelector<HTMLButtonElement>("[aria-label='Previous question']")!);
+    press(control(host, "Previous"));
     await settle();
     expect(row(host, "Detailed").getAttribute("aria-checked")).toBe("true");
 
@@ -355,7 +516,7 @@ describe("choosing an answer, and sending it", () => {
     press(control(host, "Next"));
     await settle();
     expect(row(host, "Brief").getAttribute("aria-checked")).toBe("true");
-    press(control(host, "Send answer"));
+    press(control(host, "Answer"));
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.answers).toEqual([
@@ -376,7 +537,7 @@ describe("the one submission latch, from the chair", () => {
     );
 
     press(row(host, "Detailed"));
-    const send = control(host, "Send answer");
+    const send = control(host, "Answer");
     burst(
       () => send.click(),
       () => send.click(),
@@ -402,7 +563,7 @@ describe("the one submission latch, from the chair", () => {
     );
 
     press(row(host, "Brief"));
-    const send = control(host, "Send answer");
+    const send = control(host, "Answer");
     const decline = control(host, "Decline to answer");
     const withdraw = control(host, "Withdraw question");
     burst(
@@ -434,7 +595,7 @@ describe("the one submission latch, from the chair", () => {
     );
 
     press(row(host, "Detailed"));
-    press(control(host, "Send answer"));
+    press(control(host, "Answer"));
     await harness.land(false);
 
     // The same draft, on the same question, with the failure said out loud.
@@ -442,7 +603,7 @@ describe("the one submission latch, from the chair", () => {
     expect(row(host, "Detailed").getAttribute("aria-checked")).toBe("true");
 
     // And the retry is an ordinary press of the same control.
-    press(control(host, "Send answer"));
+    press(control(host, "Answer"));
     expect(harness.calls).toHaveLength(2);
     expect(harness.calls[1]?.optionIds).toEqual(["question:0:ZGV0YWlsZWQ"]);
     // The same delivery, still refused: the card is given back again, with the
@@ -460,7 +621,7 @@ describe("the receipt the card leaves in its own place", () => {
     );
 
     press(row(host, "Detailed"));
-    press(control(host, "Send answer"));
+    press(control(host, "Answer"));
 
     const receipt = host.querySelector("[role='status']");
     expect(receipt?.textContent).toBe("Sent: Detailed");
