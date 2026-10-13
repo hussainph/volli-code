@@ -200,7 +200,13 @@ const CODE_MODE_PARAGRAPH = [
 ].join("\n");
 
 function executionLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): string {
-  const codeMode = tools.codeMode?.nudge === true ? `\n\n${CODE_MODE_PARAGRAPH}` : "";
+  // The birth marker protects old Cache Prefixes while new Sessions no longer
+  // invite bash calls their programs cannot make (VC-748).
+  const paragraph =
+    tools.codeMode?.descriptionVersion === 2
+      ? CODE_MODE_PARAGRAPH.replace("a loop of bash or read calls", "a loop of read calls")
+      : CODE_MODE_PARAGRAPH;
+  const codeMode = tools.codeMode?.nudge === true ? `\n\n${paragraph}` : "";
   if (role === "subagent" || !(tools.verbs ?? []).includes("session.delegate")) {
     return `${EXECUTION_CORE}${codeMode}`;
   }

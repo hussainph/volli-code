@@ -25,24 +25,21 @@
  * shown the model — except a non-zero `bash` exit and an MCP `isError`, which
  * are answers rather than failures and resolve, as Pi's own codemode does.
  *
- * **No image enters a script** (phase 1's explicit image design). A block that
- * was an image becomes a placeholder naming its type, and nothing a script
- * prints or returns is sent to the model as an image. Images are where a page
- * could put text that reads as Volli's own and a person cannot see, and the
- * one tool whose result is only an image — `browser_screenshot` — is not
- * code-callable at all.
+ * Image bytes stay host-side; opaque handles may be returned or emitted with image(handle).
  */
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ImageHandle } from "./images";
 import { isMcpToolId, MCP_UNTRUSTED_DATA_WARNING_TEXT } from "./trust";
 
 /** A JSON Schema, as declarations render it. */
 export type JsonSchema = Record<string, unknown>;
 
-export type ToolKind = "bash" | "mcp" | "verb" | "structured" | "text";
+export type ToolKind = "bash" | "mcp" | "verb" | "structured" | "text" | "image";
 
 /** Which shape a tool's results take, from the frozen tool and its own schema. */
 export function toolKind(name: string, isVerb: boolean, outputSchema?: unknown): ToolKind {
+  if (name === "browser_screenshot") return "image";
   if (name === "bash") return "bash";
   if (isMcpToolId(name)) return "mcp";
   if (isVerb) return "verb";
@@ -62,7 +59,7 @@ function isSchema(value: unknown): value is JsonSchema {
  * `schema` types the part of the result a tool declares for itself: an MCP
  * tool's `structuredContent`, or a Volli verb's `details`.
  */
-export function outputSchemaFor(kind: ToolKind, schema?: unknown): JsonSchema {
+export function outputSchemaFor(kind: ToolKind, schema?: unknown, legacy = false): JsonSchema {
   switch (kind) {
     case "bash":
       return {
@@ -82,9 +79,12 @@ export function outputSchemaFor(kind: ToolKind, schema?: unknown): JsonSchema {
           text: { type: "string" },
           structuredContent: isSchema(schema) ? schema : {},
           isError: { type: "boolean" },
+          ...(legacy ? {} : { images: { type: "array", items: imageHandleSchema } }),
           omittedImages: { type: "number" },
         },
-        required: ["text", "isError", "omittedImages"],
+        required: legacy
+          ? ["text", "isError", "omittedImages"]
+          : ["text", "isError", "images", "omittedImages"],
       };
     case "verb":
       return {
@@ -105,8 +105,10 @@ export function outputSchemaFor(kind: ToolKind, schema?: unknown): JsonSchema {
       };
     case "structured":
       return schema as JsonSchema;
+    case "image":
+      return imageResultSchema;
     case "text":
-      return { type: "string" };
+      return legacy ? { type: "string" } : { anyOf: [{ type: "string" }, imageResultSchema] };
   }
 }
 
@@ -115,15 +117,43 @@ export type ShapedOutcome = { ok: true; value: unknown } | { ok: false; message:
 
 type Block = AgentToolResult<unknown>["content"][number];
 
-/** A tool's blocks as text, every image a placeholder. */
-function textOf(content: readonly Block[]): { text: string; images: number } {
-  let images = 0;
-  const parts = content.map((block) => {
-    if (block.type === "text") return block.text;
-    images += 1;
-    return `[image ${block.mimeType} left out: Code Mode passes no images to programs]`;
-  });
-  return { text: parts.join("\n"), images };
+const imageHandleSchema = {
+  type: "object",
+  properties: { type: { const: "image" }, handle: { type: "string" } },
+  required: ["type", "handle"],
+};
+const imageResultSchema = {
+  type: "object",
+  properties: {
+    text: { type: "string" },
+    images: { type: "array", items: imageHandleSchema },
+    omittedImages: { type: "number" },
+  },
+  required: ["text", "images", "omittedImages"],
+};
+
+/** A tool's text and opaque image references; no payload enters QuickJS. */
+function textOf(
+  content: readonly Block[],
+  capture?: (image: Extract<Block, { type: "image" }>) => ImageHandle | undefined,
+  legacy = false,
+): { text: string; images: ImageHandle[]; omittedImages: number } {
+  const images: ImageHandle[] = [];
+  let omittedImages = 0;
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") parts.push(block.text);
+    else {
+      const handle = capture?.(block);
+      if (handle === undefined) {
+        omittedImages += 1;
+        parts.push(
+          `[image ${block.mimeType} left out: ${legacy ? "Code Mode passes no images to programs" : "Code Mode image bound"}]`,
+        );
+      } else images.push(handle);
+    }
+  }
+  return { text: parts.join("\n"), images, omittedImages };
 }
 
 /**
@@ -143,8 +173,11 @@ export function shapeResult(
   kind: ToolKind,
   result: AgentToolResult<unknown>,
   isError: boolean,
+  capture?: (image: Extract<Block, { type: "image" }>) => ImageHandle | undefined,
+  legacy = false,
 ): ShapedOutcome {
-  const { text, images } = textOf(result.content ?? []);
+  const shaped = textOf(result.content ?? [], legacy ? undefined : capture, legacy);
+  const { text, images, omittedImages } = shaped;
   switch (kind) {
     case "bash": {
       const details = (result.details ?? {}) as BashDetails;
@@ -186,8 +219,16 @@ export function shapeResult(
       if (!fromServer)
         return isError
           ? { ok: false, message: text }
-          : { ok: true, value: { text, isError: false, omittedImages: images } };
-      const body = textOf(content.slice(1));
+          : {
+              ok: true,
+              value: { text, isError: false, ...(legacy ? {} : { images }), omittedImages },
+            };
+      // Already captured above: strip only the wrapper text, not the images twice.
+      const body = {
+        text: text.slice(MCP_UNTRUSTED_DATA_WARNING_TEXT.length).replace(/^\n/u, ""),
+        images,
+        omittedImages,
+      };
       return {
         ok: true,
         value: {
@@ -196,7 +237,8 @@ export function shapeResult(
             ? {}
             : { structuredContent: result.structuredContent }),
           isError,
-          omittedImages: body.images,
+          ...(legacy ? {} : { images: body.images }),
+          omittedImages: body.omittedImages,
         },
       };
     }
@@ -216,7 +258,11 @@ export function shapeResult(
           message: "The tool declared an output schema but returned no structured content.",
         };
       return { ok: true, value: result.structuredContent };
+    case "image":
+      return isError ? { ok: false, message: text } : { ok: true, value: shaped };
     case "text":
-      return isError ? { ok: false, message: text } : { ok: true, value: text };
+      return isError
+        ? { ok: false, message: text }
+        : { ok: true, value: !legacy && (images.length > 0 || omittedImages > 0) ? shaped : text };
   }
 }

@@ -1497,6 +1497,7 @@ describe("the host protocol listener (VC-663)", () => {
           "sessions.queue",
           "sessions.subscribe",
           "sessions.history",
+          "sessions.pictures",
           "session.read",
           "board.read",
           "board.write",

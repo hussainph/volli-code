@@ -41,6 +41,7 @@ import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages"
 import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import {
   mcpProviderToolName,
+  codeModeSurfaceFor,
   parseMcpToolKey,
   withParallelReadEligibility,
   sessionToolIds,
@@ -2870,6 +2871,55 @@ describe("startSession", () => {
 
     expect(kinds(attachment.observations)).toEqual(["attachment:started"]);
     await handle.close();
+  });
+
+  it("persists returned Code Mode pixels through the owning Session's host sink", async () => {
+    const tools = ["read", "codemode"] as const;
+    const att = fixture({ tools: { tools: ["read"], codeMode: codeModeSurfaceFor({ tools }) } });
+    writeFileSync(join(att.worktreePath, "canvas.png"), Buffer.from(TINY_PNG, "base64"));
+    const persistActivityImage = vi.fn(() => "runtime-picture");
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: att.sessionDataDir,
+      persistActivityImage,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("codemode", { code: 'return await tools.read({path:"canvas.png"});' });
+            emit.finish();
+          },
+          settles("Picture delivered."),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(att.spec);
+    try {
+      await handle.submitUserMessage("Read the canvas");
+      expect(persistActivityImage).toHaveBeenCalledWith("session-1", {
+        data: TINY_PNG,
+        mimeType: "image/png",
+      });
+      const activity = att.observations.find(
+        (item) =>
+          item.kind === "activity" &&
+          item.state === "completed" &&
+          item.descriptor.nativeToolName === "codemode",
+      );
+      expect(activity).toMatchObject({
+        output: {
+          content: expect.arrayContaining([
+            {
+              type: "image",
+              mimeType: "image/png",
+              picture: "runtime-picture",
+              caption: "Image from read (call 1) (Session workspace content).",
+            },
+          ]),
+        },
+      });
+      expect(JSON.stringify(activity)).not.toContain(TINY_PNG);
+    } finally {
+      await handle.close();
+    }
   });
 
   it("runs the real Pi loop against the worktree and settles durable history", async () => {

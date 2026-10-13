@@ -10,6 +10,9 @@
  * slice. Session commands and boot recovery move behind this assembly next.
  */
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { BrowserPictureStore } from "../browser/picture-store";
+import { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
 import type { PiModelAccess, CodeModeSandboxAssets } from "@volli/agent-runtime";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
@@ -66,6 +69,8 @@ export interface RuntimeAssemblyOptions {
   mcpDispatch: HostMcpDispatch;
   codeMode: HostCodeMode;
   codeModeSandbox?: CodeModeSandboxAssets;
+  /** Desktop's screenshot store; headless hosts use the same disk path and bounds. */
+  pictures?: BrowserPictureStore;
   observability: ObservabilitySink | null;
   delegation: TicketSessionDelegationStore | null;
   secrets: SecretService;
@@ -203,6 +208,13 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           },
         }
       : null;
+  const pictures =
+    options.pictures ??
+    new BrowserPictureStore({
+      createId: randomUUID,
+      now: Date.now,
+      persist: browserPictureDisk(browserPicturesRoot(dataDir)),
+    });
   const piSessionsDirectory = join(dataDir, "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
@@ -211,6 +223,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
     sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
+          persistActivityImage: (sessionId, image) => pictures.keepActivityImage(sessionId, image),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -439,6 +452,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
     });
   }
   return {
+    pictures,
     sessionToolSurface,
     piRuntimeHost,
     sessionRuntime,

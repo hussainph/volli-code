@@ -1282,10 +1282,12 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
 function scrubSessionInputRecord(payload: PayloadOf<"session.input.recorded">) {
   const { input } = payload;
   if (input.kind !== "tool-surface") return { kind: payload.kind, input };
-  // The declaration revision is attach-only host state, not a renderer
-  // capability. Keep it durable without widening the public Session wire.
-  const { askUserQuestions: _askUserQuestions, ...surface } = input;
-  return { kind: payload.kind, input: surface };
+  // Birth-only declaration state stays durable on the host, never on the
+  // renderer/public wire. Keep all tool-surface markers in this one scrub path.
+  const { askUserQuestions: _askUserQuestions, codeMode: frozenCodeMode, ...surface } = input;
+  if (frozenCodeMode === undefined) return { kind: payload.kind, input: surface };
+  const { descriptionVersion: _descriptionVersion, ...codeMode } = frozenCodeMode;
+  return { kind: payload.kind, input: { ...surface, codeMode } };
 }
 
 function decodeSessionInputRecord(

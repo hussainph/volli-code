@@ -515,6 +515,7 @@ export interface PiAdapterOptions {
    * bundled (VC-471). Decides nothing about which Sessions have Code Mode.
    */
   codeModeSandbox?: PiRuntimeHostOptions["codeModeSandbox"];
+  persistActivityImage?: PiRuntimeHostOptions["persistActivityImage"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -722,6 +723,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
     ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
+    ...(options.persistActivityImage === undefined
+      ? {}
+      : { persistActivityImage: options.persistActivityImage }),
   });
 
   return {

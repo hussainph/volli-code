@@ -89,6 +89,21 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
 }
 
 describe("sessionHandlersFrom", () => {
+  it("reads a picture through the stated port, or returns an explicit unavailable chunk", async () => {
+    const ports: Ports = { runtime: {}, sessionMayAct, resourceWorkspace };
+    const input = { sessionId: "session", pictureId: "picture" };
+    expect(await sessionHandlersFrom(ports)["session.picture"](input, CALL)).toEqual({
+      data: null,
+      mimeType: null,
+      nextOffset: null,
+    });
+    const readPicture = vi.fn(() => ({ data: "AAAA", mimeType: "image/png", nextOffset: null }));
+    expect(
+      await sessionHandlersFrom({ ...ports, readPicture })["session.picture"](input, CALL),
+    ).toEqual({ data: "AAAA", mimeType: "image/png", nextOffset: null });
+    expect(readPicture).toHaveBeenCalledExactlyOnceWith(input, CALL);
+  });
+
   it("answers unavailable for the host project ports absent from legacy fixtures", () => {
     const handlers = sessionHandlersFrom({ runtime: {} });
     expect(() => handlers["workspaces.list"](undefined, CALL)).toThrowError(
@@ -229,6 +244,6 @@ describe("sessionHandlersFrom", () => {
     // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
     // projects' four (VC-710), the active add flows' one (VC-720), and
     // the host-scoped projects' two and HOST relay's three (VC-722).
-    expect(Object.keys(context.handlers)).toHaveLength(82);
+    expect(Object.keys(context.handlers)).toHaveLength(83);
   });
 });

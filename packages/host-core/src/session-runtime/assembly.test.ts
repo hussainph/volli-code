@@ -197,6 +197,20 @@ describe("runtime attachment assembly", () => {
     },
   );
 
+  it("binds the shared bounded screenshot sink even on a headless host, and recovers its pictures", async () => {
+    const options = await fixture();
+    const first = createRuntimeAssembly(options);
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    const data = Buffer.alloc(50_000, 201).toString("base64");
+    const id = native.persistActivityImage!("session", { data, mimeType: "image/png" })!;
+    expect(first.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
+    const second = createRuntimeAssembly(options);
+    expect(second.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
+    expect(createRuntimeAssembly({ ...options, pictures: second.pictures }).pictures).toBe(
+      second.pictures,
+    );
+  });
+
   it("binds the supplied browser before any recovery/attachment can run", async () => {
     const options = await fixture();
     // Only the factory's construction input is under test; it must not drive the engine.

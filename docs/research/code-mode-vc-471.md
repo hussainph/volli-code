@@ -123,6 +123,16 @@ program may *not* call.
 | `deferred` | no | yes | counted only; found with `searchTools()` |
 | `hidden` | no | no | no |
 
+> **2026-10-13 — VC-748 supersedes phase 1's image and callable-tool rules.**
+> Nested images now become opaque host-side handles, and `image(handle)` or
+> handles in a returned value deliver bounded images after the text, with
+> source/trust framing. New Sessions allow every held tool except bash,
+> questions/secrets, todo_write and background shells; legacy routes and
+> descriptions stay frozen. Newly callable tools and their groups remain
+> declared for N−1 compatibility. The phase-1 tables and image rule below are
+> historical evidence; see [Programs and images](../mcp.md#programs-and-images-vc-748)
+> for the current developer contract and the [user guide](../../apps/docs/src/content/docs/guides/code-mode.mdx).
+
 **Defaults** (`defaultToolRoute` in `@volli/shared`):
 
 | tool | route | why |
