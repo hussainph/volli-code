@@ -2920,6 +2920,7 @@ describe("agent command service", () => {
         latestAttachment: { origin: null, reattached: false },
         latestTurn: null,
         pendingSubagents: [],
+        pendingQuestions: [],
       },
     });
     // Full UUIDs are not public session handles — only the short id resolves.
