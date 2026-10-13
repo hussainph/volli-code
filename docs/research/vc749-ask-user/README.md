@@ -21,6 +21,7 @@ Independent visual-tier review fetched the reference and drove the actual compon
 - Light: three-question keyboard-only completion using number keys, Tab, Enter and inline text; three answers, submissions 0 → 1; another Enter stayed at 1.
 - Light: one question, narrow + long text, typed answer submitted with Enter.
 - Dark: one question, narrow, keyboard-only choice 2 and Tab/Enter submission.
+- Dark: three-question keyboard-only completion with choices on prompts 0/1 and “Dark keyboard handoff” on prompt 2; Tab to Answer and Enter submitted all three exactly once. Repeated Enter left the payload and count unchanged; console had no errors.
 - Dark: three questions, narrow + long text, Previous/Next and minimize/expand retained typed and selected answers; final payload included all three. This retention run used clicked navigation.
 - Blank submission displayed “Choose an option” without submitting. Decline produced one empty-answer resolution and “Declined to answer”. Withdrawal displayed “Withdrew question”, with no answer submission.
 - Long labels wrap, long question text scrolls internally, and narrow footer controls remain reachable. Permission and credential fixtures looked unchanged in both themes; neither was submitted.
