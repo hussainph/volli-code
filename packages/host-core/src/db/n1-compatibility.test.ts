@@ -79,6 +79,7 @@ import { insertProject } from "./projects-repo";
 import { MIN_READER_VERSION_KEY, readMinReaderVersion } from "./schema-compatibility";
 import { hasSecret, writeSecret } from "./secrets-repo";
 import { testProject } from "./test-helpers";
+import { recoveredPiQuestion } from "./fixtures/recovered-pi-question";
 import { listTicketsByProject } from "./tickets-repo";
 
 interface N1Manifest {
@@ -642,135 +643,65 @@ describe.skipIf(manifest === null)(
         await headProfile();
         const { head, guarded } = await probe();
         if (guarded && headFloor() > head) return;
-        const writer = openVolliDb(dbPath);
         const sessionId = "session-head";
-        const attachmentId = "head-recovered-attachment";
-        const interactionId = "head-recovered-question";
-        const adapter = {
-          source: { kind: "adapter" as const, id: "pi", detail: null },
-          venue: null,
-        };
-        try {
-          const engine = headEngine(writer, "head-recovery");
-          await engine.getOrRecordSessionInput({
-            sessionId,
-            input: { kind: "tool-surface", tools: ["read", "ask_user"] },
-            provenance,
-          });
-          await engine.observe({
-            id: "recovery-open",
-            sessionId,
-            occurredAt: NOW,
-            provenance: adapter,
-            kind: "attachment.opened",
-            attachment: {
-              id: attachmentId,
-              sessionId,
-              adapterId: "pi",
-              venue: { id: "local", kind: "local" },
-              continuity: "fresh",
-              native: null,
-              authority: null,
-            },
-          });
-          const options = [{ id: "keep", label: "Keep it", description: null }];
-          await engine.observe({
-            id: "recovery-question",
-            sessionId,
-            attachmentId,
-            occurredAt: NOW,
-            provenance: adapter,
-            kind: "interaction.opened",
-            interaction: {
-              id: interactionId,
-              attachmentId,
-              kind: "question",
-              title: "Which scope should survive?",
-              detail: null,
-              options,
-              multiple: false,
-              native: { id: null, detail: null },
-              ...(shape === "questions"
-                ? {
-                    prompts: [
-                      {
-                        id: "scope",
-                        label: "Which scope should survive?",
-                        detail: null,
-                        options,
-                        multiple: false,
-                        custom: true,
-                      },
-                      {
-                        id: "timing",
-                        label: "When should it ship?",
-                        detail: null,
-                        options: [],
-                        multiple: false,
-                        custom: true,
-                      },
-                    ],
-                  }
-                : {}),
-            },
-          });
-          await engine.observe({
-            id: "recovery-abandoned",
-            sessionId,
-            attachmentId,
-            occurredAt: NOW,
-            provenance,
-            kind: "interaction.cancelled",
-            interactionId,
-            reason: "abandoned",
-          });
-          await engine.observe({
-            id: "recovery-warning",
-            sessionId,
-            attachmentId,
-            occurredAt: NOW,
-            provenance,
-            kind: "attention.raised",
-            attention: {
-              id: `${attachmentId}:boot-recovery`,
-              attachmentId,
-              kind: "partial_turn_interrupted",
-              detail: "Prior process ended",
-              diagnostic: null,
-            },
-          });
-          await engine.observe({
-            id: "recovery-closed",
-            sessionId,
-            attachmentId,
-            occurredAt: NOW,
-            provenance,
-            kind: "attachment.closed",
-            outcome: "interrupted",
-          });
-          await engine.observe({
-            id: "recovery-acknowledged",
-            sessionId,
-            occurredAt: NOW,
-            provenance,
-            kind: "attention.cleared",
-            attentionId: `${attachmentId}:boot-recovery`,
-          });
-        } finally {
-          writer.close();
-        }
+        const fixture = await recoveredPiQuestion({
+          root,
+          dbPath,
+          sessionId,
+          projectId: PROJECT_ID,
+          shape,
+        });
         const run = await n1(dbPath, [
-          { kind: "recoveredQuestion", sessionId, workspace: join(root, "repo") },
+          {
+            kind: "recoveredQuestion",
+            sessionId,
+            workspace: join(root, "repo"),
+            sessionDataDir: fixture.sessionDataDir,
+            sidecarPath: fixture.sidecarPath,
+            askUserQuestions: shape === "questions",
+            transcriptsRoot: sessionTranscriptsRoot(root),
+          },
         ]);
-        expect(value(run, 0)).toEqual({
+        const recovered = value(run, 0);
+        expect(recovered).toMatchObject({
           activeCount: 0,
+          activeAfter: 0,
           cancellationReason: "abandoned",
           questionTitle: "Which scope should survive?",
-          attachStatus: "accepted",
+          attachStatus: "open",
           deliveryStatus: "accepted",
-          turnActive: true,
+          turnOpened: 1,
+          realAttachCount: 1,
+          attachContinuity: "native_resume",
+          recoveredSidecar: fixture.sidecarPath,
+          providerRequests: 1,
           answers: 0,
+          acceptedNextMessages: 1,
         });
+        expect(JSON.stringify(recovered.messages)).toContain("Which scope should survive?");
+        expect(JSON.stringify(recovered.messages)).toContain("Continue without an answer");
+        if (shape === "questions") {
+          expect(recovered.questionPrompts).toEqual([
+            "Which scope should survive?",
+            "When should it ship?",
+          ]);
+          expect(JSON.stringify(recovered.messages)).toContain("When should it ship?");
+        }
+        const failedResult = [
+          expect.objectContaining({
+            toolName: "ask_user",
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+              },
+            ],
+          }),
+        ];
+        expect(recovered.results).toEqual(failedResult);
+        expect(recovered.sidecarResults).toEqual(failedResult);
+        expect(JSON.stringify(recovered.results)).not.toContain("Chose:");
         assertHeadReads(dbPath);
         const read = openVolliDb(dbPath);
         try {
@@ -782,11 +713,24 @@ describe.skipIf(manifest === null)(
           ).toMatchObject([{ id: "head-follow-up", state: "queued" }]);
           const events = await headEngine(read).listEvents({ sessionId });
           expect(
+            events
+              .filter(({ payload }) => payload.kind === "interaction.opened")
+              .map(({ payload }) => payload),
+          ).toEqual([{ kind: "interaction.opened", interaction: fixture.question }]);
+          expect(
             events.filter(({ payload }) => payload.kind === "interaction.cancelled"),
           ).toHaveLength(1);
           expect(
             events.filter(({ payload }) => payload.kind === "interaction.resolved"),
           ).toHaveLength(0);
+          expect(events.filter(({ payload }) => payload.kind === "turn.started")).toHaveLength(2);
+          expect(
+            events.filter(
+              ({ payload }) =>
+                payload.kind === "command.receipt.recorded" &&
+                payload.receipt.commandId === "head-question-message",
+            ),
+          ).toHaveLength(1);
         } finally {
           read.close();
         }

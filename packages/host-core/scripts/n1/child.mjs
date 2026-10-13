@@ -210,18 +210,33 @@ const steps = {
     }
   },
 
-  /** Reads head's restart cancellation and admits a new turn using N-1's real runtime/ledger. */
+  /** Replays HEAD's repaired Pi sidecar through N−1's shipped adapter AND Pi runtime. */
   recoveredQuestion: async (step) => {
-    const { createSessionEngine, createSessionRuntime, createInMemoryTranscriptArtifactStore } =
+    const { createSessionEngine, createSessionRuntime, sessionRootThreadId } =
       await n1("@volli/session-engine");
     const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const { createPiNativeAdapter } = await n1("./session-runtime/pi-adapter");
+    const { createFileTranscriptArtifactStore } = await n1(
+      "./session-runtime/transcript-artifacts",
+    );
+    // This helper and all its Pi dependencies are the PREVIOUS tree's own
+    // source/lockfile, just like the runtime. Only provider output is scripted.
+    const { scriptedProvider } = await n1(
+      pathToFileURL(
+        join(
+          process.env.VOLLI_N1_TREE,
+          "packages/agent-runtime/test-fixtures/scripted-provider.ts",
+        ),
+      ).href,
+    );
+    const script = scriptedProvider([{ text: "Continued without an answer." }]);
     const db = openVolliDb(command.dbPath);
     let runtime;
     try {
       let next = 0;
       const engine = createSessionEngine({
         ledger: createSqliteSessionLedger(db),
-        clock: { now: () => NOW },
+        clock: { now: () => NOW + ++next },
         ids: { next: (kind) => `recovery-${kind}-${++next}` },
       });
       const before = await engine.getSession({ sessionId: step.sessionId });
@@ -231,12 +246,33 @@ const steps = {
       const cancellation = history.find(
         ({ payload }) => payload.kind === "interaction.cancelled",
       )?.payload;
-      // Only the executor boundary is scripted. N-1's admission, event codec,
-      // frozen input read, receipt and turn projection are shipped production.
+      const adapter = createPiNativeAdapter({
+        sessionDataDir: step.sessionDataDir,
+        models: script.models,
+        now: () => NOW + ++next,
+        readWorkspaceEnvironment: () => undefined,
+        usageLimits: {
+          fetch: async () => {
+            throw new Error("Fixture has no network");
+          },
+        },
+        resolveRuntimeContext: async () => ({
+          role: "ticket",
+          projectId: before.session.projectId,
+          ticketId: before.session.ticketId,
+          rootThreadId: sessionRootThreadId(step.sessionId),
+          brief: "N−1 recovered question fixture",
+          model: { providerId: "scripted-fixture", modelId: "scripted", reasoningLevel: "off" },
+          toolSurface: ["read", "ask_user"],
+          ...(step.askUserQuestions ? { askUserQuestions: true } : {}),
+          promptResources: [],
+        }),
+      });
+      const attachSpecs = [];
       runtime = createSessionRuntime({
         engine,
-        artifacts: createInMemoryTranscriptArtifactStore(),
-        clock: { now: () => NOW },
+        artifacts: createFileTranscriptArtifactStore(step.transcriptsRoot),
+        clock: { now: () => NOW + ++next },
         ids: { next: (kind) => `recovery-runtime-${kind}-${++next}` },
         locations: {
           resolve: async () => ({
@@ -250,42 +286,23 @@ const steps = {
           reaffirm: async () => undefined,
         },
         executor: {
-          id: "pi",
-          durableIdNamespace: "pi",
-          adapterVersion: "fixture",
-          runtime: { path: "/fixture", version: "1", fingerprint: "fixture" },
-          attach: async (_spec, sink) => ({
-            native: { id: "recovered-native", detail: null },
-            dispatch: async (delivery) => {
-              if (delivery.kind === "message.submit")
-                await sink.emit({
-                  kind: "turn",
-                  state: "started",
-                  turnId: `turn:${delivery.commandId}`,
-                  occurredAt: NOW,
-                });
-              return {
-                commandId: delivery.commandId,
-                status: "accepted",
-                acceptedAt: NOW,
-                native: null,
-              };
-            },
-            reconcile: async () => ({ cursor: null, observations: [], receipts: [] }),
-            release: async () => undefined,
-          }),
+          ...adapter,
+          attach: (spec, sink) => {
+            attachSpecs.push(spec);
+            return adapter.attach(spec, sink);
+          },
         },
       });
-      const attached = await runtime.command({
-        commandId: "n1-recovery-attach",
-        sessionId: step.sessionId,
-        command: { kind: "adapter.attach", continuity: "context_replay" },
-      });
+      // The host's real cold-recovery path calls the adapter with native_resume
+      // and the durable binding's locator, then replays its receipts/markers.
+      await runtime.reconcile({ sessionId: step.sessionId, attachmentId: before.liveExecutor.id });
+      const attached = await engine.getSession({ sessionId: step.sessionId });
       const delivered = await runtime.command({
         commandId: "n1-recovery-message",
         sessionId: step.sessionId,
         command: {
           kind: "message.submit",
+          settle: "opened",
           message: {
             id: "n1-recovery-message",
             role: "user",
@@ -294,15 +311,47 @@ const steps = {
         },
       });
       const after = await engine.getSession({ sessionId: step.sessionId });
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      const messages = script.requests[0] ?? [];
+      const results = messages.filter(
+        (message) => message.role === "toolResult" && message.toolName === "ask_user",
+      );
+      const sidecarResults = readFileSync(step.sidecarPath, "utf8")
+        .trimEnd()
+        .split("\n")
+        .flatMap((line) => {
+          const record = JSON.parse(line);
+          return Array.isArray(record) ? record : [record];
+        })
+        .filter(
+          (record) =>
+            record.message?.role === "toolResult" && record.message.toolName === "ask_user",
+        )
+        .map((record) => record.message);
       return {
         activeCount: before.interactions.active.length,
+        activeAfter: after.interactions.active.length,
         cancellationReason: cancellation?.reason,
         questionTitle: question?.title,
-        attachStatus: attached.receipt?.status,
+        questionPrompts: question?.prompts?.map((prompt) => prompt.label),
+        attachStatus: attached.liveExecutor?.status,
         deliveryStatus: delivered.receipt?.status,
-        turnActive: after.turnActive,
-        answers: (await engine.listEvents({ sessionId: step.sessionId })).filter(
-          ({ payload }) => payload.kind === "interaction.resolved",
+        realAttachCount: attachSpecs.length,
+        attachContinuity: attachSpecs[0]?.continuity,
+        recoveredSidecar: attachSpecs[0]?.native?.detail?.sessionFilePath,
+        turnOpened:
+          events.filter(({ payload }) => payload.kind === "turn.started").length -
+          history.filter(({ payload }) => payload.kind === "turn.started").length,
+        providerRequests: script.requests.length,
+        messages,
+        results,
+        sidecarResults,
+        answers: events.filter(({ payload }) => payload.kind === "interaction.resolved").length,
+        acceptedNextMessages: events.filter(
+          ({ payload }) =>
+            payload.kind === "command.receipt.recorded" &&
+            payload.receipt.commandId === "n1-recovery-message" &&
+            payload.receipt.status === "accepted",
         ).length,
       };
     } finally {
