@@ -413,6 +413,162 @@ describe("ask_user tool", () => {
   });
 });
 
+describe("ask_user related questions", () => {
+  const questions = [
+    { question: "Which scope?", choices: ["Small", "Full"] },
+    { question: "Which checks?", choices: ["Unit", "Integration"] },
+    { question: "What name?", choices: [] },
+  ];
+
+  it("declares only a required questions array without a top-level union, only on the birth-marked surface", () => {
+    const old = createAskUserTool(async () => CHOSE_ONE);
+    const tool = createAskUserTool(async () => CHOSE_ONE, undefined, true);
+    expect(tool.parameters.required).toEqual(["questions"]);
+    expect(Object.keys(tool.parameters.properties)).toEqual(["questions"]);
+    expect(tool.parameters).toHaveProperty("additionalProperties", false);
+    expect(tool.parameters).not.toHaveProperty("oneOf");
+    expect(tool.parameters.properties.questions).toMatchObject({ minItems: 1, maxItems: 4 });
+    expect(Object.keys(tool.parameters.properties.questions.items.properties)).toEqual([
+      "question",
+      "choices",
+    ]);
+    expect(old.parameters).not.toHaveProperty("properties.questions");
+    expect(tool.description).toContain("same step");
+    expect(old.description).not.toContain("Batch");
+    expect(
+      JSON.stringify({ description: old.description, parameters: old.parameters }),
+    ).toMatchSnapshot();
+    const fromRecordedSurface = (askUserQuestions?: true) =>
+      createSessionTools(
+        {
+          tools: { tools: [], askUserQuestions },
+          askUser: async () => CHOSE_ONE,
+        },
+        null as never,
+      )[0];
+    expect(fromRecordedSurface().description).toBe(old.description);
+    expect(fromRecordedSurface().parameters).toEqual(old.parameters);
+    expect(fromRecordedSurface(true).description).toBe(tool.description);
+    expect(fromRecordedSurface(true).parameters).toEqual(tool.parameters);
+  });
+
+  it("refuses a batch on the historical tool even if execution is called directly", async () => {
+    const host = recordingHost(CHOSE_ONE);
+    const tool = createAskUserTool(host.askUser);
+    await expect(tool.execute("old", { questions } as never)).rejects.toThrow(
+      "only the single-question fields",
+    );
+    expect(host.asks).toHaveLength(0);
+  });
+
+  it("passes one batch to the host and returns each question with its answer", async () => {
+    const host = recordingHost({
+      optionIds: ["choice:0"],
+      response: null,
+      answers: [
+        { promptId: "prompt:2", optionIds: [], response: "  Keep my whitespace.  " },
+        { promptId: "prompt:0", optionIds: ["choice:0"], response: null },
+        { promptId: "prompt:1", optionIds: ["choice:1"], response: "Browser checks instead" },
+      ],
+    });
+    const tool = createAskUserTool(host.askUser, undefined, true);
+    const result = await tool.execute("batch", { questions });
+    expect(host.asks).toHaveLength(1);
+    expect(host.asks[0].request).toEqual({
+      toolCallId: "batch",
+      question: questions[0].question,
+      questions,
+    });
+    expect(JSON.parse(resultText(result))).toEqual([
+      { question: "Which scope?", answer: "Small" },
+      { question: "Which checks?", answer: "Browser checks instead" },
+      { question: "What name?", answer: "  Keep my whitespace.  " },
+    ]);
+  });
+
+  it("names unanswered questions, including historical flat resolution's later prompts", async () => {
+    const flat = createAskUserTool(
+      async () => ({ optionIds: ["choice:0"], response: null }),
+      undefined,
+      true,
+    );
+    expect(JSON.parse(resultText(await flat.execute("flat", { questions })))).toEqual([
+      { question: "Which scope?", answer: "Small" },
+      { question: "Which checks?", answer: null, unanswered: true },
+      { question: "What name?", answer: null, unanswered: true },
+    ]);
+    const empty = createAskUserTool(
+      async () => ({ optionIds: [], response: null, answers: [] }),
+      undefined,
+      true,
+    );
+    expect(JSON.parse(resultText(await empty.execute("empty", { questions })))).toEqual(
+      questions.map(({ question }) => ({ question, answer: null, unanswered: true })),
+    );
+  });
+
+  it.each([
+    { optionIds: [], response: "  " },
+    { optionIds: ["not-a-choice"], response: null },
+  ])("never invents an answer from an empty or unknown choice: %j", async (resolution) => {
+    const tool = createAskUserTool(async () => resolution, undefined, true);
+    expect(
+      JSON.parse(resultText(await tool.execute("empty", { questions: [questions[0]] }))),
+    ).toEqual([{ question: "Which scope?", answer: null, unanswered: true }]);
+  });
+
+  it("keeps historical flat bytes but names a downgraded flat call retried after upgrade", async () => {
+    const oldHost = recordingHost({ optionIds: ["a", "b"], response: "  original reply  " });
+    const newHost = recordingHost({ optionIds: ["a", "b"], response: "  original reply  " });
+    const params = { question: "Which?", options: [{ id: "a", label: "A" }], allowOther: false };
+    const old = await createAskUserTool(oldHost.askUser).execute("flat", params);
+    expect(resultText(old)).toBe("Chose: a, b\n\noriginal reply");
+    expect(oldHost.asks[0].request).toEqual({ toolCallId: "flat", ...params, multiple: undefined });
+    const current = createAskUserTool(newHost.askUser, undefined, true);
+    // A downgraded executor may leave a flat call in the transcript. Upgrade
+    // gives a repairable tool error, never a newly parked, unanswerable card.
+    await expect(current.execute("flat", params as never)).rejects.toThrow("questions");
+    expect(newHost.asks).toHaveLength(0);
+  });
+
+  it("accepts one or four questions, prose-only and repeated choices in separate questions", async () => {
+    const host = recordingHost({ optionIds: [], response: "prose" });
+    const tool = createAskUserTool(host.askUser, undefined, true);
+    await tool.execute("one", { questions: [questions[0]] });
+    await tool.execute("free", { questions: [{ question: "Write?", choices: [] }] });
+    await tool.execute("four", { questions: [...questions, questions[0]] });
+    expect(host.asks).toHaveLength(3);
+  });
+
+  it.each([
+    [{}, "invalid fields"],
+    [{ questions: [] }, "invalid fields"],
+    [{ questions: Array.from({ length: 5 }, () => questions[0]) }, "invalid fields"],
+    [{ questions, question: "Also flat" }, "invalid fields"],
+    [{ questions, multiple: false }, "invalid fields"],
+    [{ questions: [{ question: " ", choices: [] }] }, "question text"],
+    [{ questions: [{ question: "Q", choices: ["One"] }] }, "2-5 choices"],
+    [
+      { questions: [{ question: "Q", choices: Array.from({ length: 6 }, (_, i) => String(i)) }] },
+      "invalid fields",
+    ],
+    [{ questions: [{ question: "Q", choices: ["X", " X "] }] }, "distinct choices"],
+    [{ questions: [{ question: "Q", choices: [" ", "Y"] }] }, "non-empty"],
+    [{ questions: [null] }, "invalid fields"],
+    [{ questions: [{ question: "Q" }] }, "invalid fields"],
+    [{ questions: [{ question: "Q", choices: [null] }] }, "invalid fields"],
+    [{ questions: [{ ...questions[0], multiple: true }] }, "invalid fields"],
+    [{ questions: [{ ...questions[0], allowOther: false }] }, "invalid fields"],
+  ])("rejects an invalid call before opening a card: %j", async (params, error) => {
+    const host = recordingHost(CHOSE_ONE);
+    const tool = createAskUserTool(host.askUser, undefined, true);
+    await expect(tool.execute("bad", params as Parameters<typeof tool.execute>[1])).rejects.toThrow(
+      error,
+    );
+    expect(host.asks).toHaveLength(0);
+  });
+});
+
 /**
  * The two lines Volli writes around a page, as a reader of the result must be
  * able to find them: an edge, the words, and the id that ties one to the other.

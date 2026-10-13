@@ -195,9 +195,10 @@ describe("a Session's birth", () => {
     const record = codeModeSurfaceAtBirth({ birth, tools, mcpTools: [...many, ...small] })!;
     expect(record.mode).toBe("off");
     expect(record.limits).toEqual(DEFAULT_CODE_MODE_LIMITS);
-    expect(record.routes["read"]).toBe("direct");
+    expect(record.routes["read"]).toBe("both");
+    expect(record.routes["execute"]).toBe("direct");
     expect(record.routes[many[0]!.providerName]).toBe("deferred");
-    expect(record.routes[small[0]!.providerName]).toBe("direct");
+    expect(record.routes[small[0]!.providerName]).toBe("both");
     const overridden = codeModeSurfaceAtBirth({
       birth,
       tools,

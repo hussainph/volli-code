@@ -360,20 +360,31 @@ test("script has real ask_user calls, answered continuation and a separate reope
   assert.equal(acceptanceScript({ text: "remote-stream-turn", body: {} }), undefined);
   const question = acceptanceScript(turn("remote-answer-question"));
   assert.equal(question.toolCalls[0].name, "ask_user");
-  assert.equal(question.toolCalls[0].arguments.question, ANSWER_QUESTION);
+  assert.deepEqual(question.toolCalls[0].arguments, {
+    questions: [{ question: ANSWER_QUESTION, choices: ["Proceed", "Stop"] }],
+  });
   assert.equal(
     acceptanceScript(
-      turn("remote-answer-question", [{ type: "function_call_output", output: "Chose: proceed" }]),
+      turn("remote-answer-question", [
+        {
+          type: "function_call_output",
+          output: JSON.stringify([{ question: ANSWER_QUESTION, answer: "Proceed" }]),
+        },
+      ]),
     ),
     ANSWER_REPLY,
   );
-  assert.equal(
-    acceptanceScript(turn("remote-reopen-question")).toolCalls[0].arguments.question,
-    REOPEN_QUESTION,
-  );
+  assert.deepEqual(acceptanceScript(turn("remote-reopen-question")).toolCalls[0].arguments, {
+    questions: [{ question: REOPEN_QUESTION, choices: ["Proceed", "Stop"] }],
+  });
   assert.equal(
     acceptanceScript(
-      turn("remote-reopen-question", [{ type: "function_call_output", output: "Chose: proceed" }]),
+      turn("remote-reopen-question", [
+        {
+          type: "function_call_output",
+          output: JSON.stringify([{ question: REOPEN_QUESTION, answer: "Proceed" }]),
+        },
+      ]),
     ),
     REOPEN_REPLY,
   );
@@ -382,6 +393,20 @@ test("script has real ask_user calls, answered continuation and a separate reope
     ANSWER_REPLY,
     "Reopened answer cannot match a previous visible reply",
   );
+  for (const output of [
+    "Chose: proceed",
+    "not JSON",
+    "null",
+    "[]",
+    JSON.stringify([{ question: ANSWER_QUESTION, answer: "Stop" }]),
+    JSON.stringify([{ question: REOPEN_QUESTION, answer: "Proceed" }]),
+    JSON.stringify([{ question: ANSWER_QUESTION, answer: null, unanswered: true }]),
+  ]) {
+    assert.equal(
+      acceptanceScript(turn("remote-answer-question", [{ type: "function_call_output", output }])),
+      "REMOTE: expected Proceed answer was not delivered",
+    );
+  }
   assert.equal(acceptanceScript(turn("ordinary turn")), undefined);
 });
 test("folder project must open; the old user-install refusal is a failure, never a waiver", () => {
@@ -598,8 +623,8 @@ test("journey arranges only benign Git state and runs all eight real assertions 
   assert.doesNotMatch(smoke, /click\("radio"|force:\s*true/u);
   assert.match(
     smoke,
-    /click\("button", "Submit", \{ scope: \{ role: "form", name: question \} \}\)/u,
-    "the declared-stop card submits through its own real form control",
+    /click\("button", "Answer", \{ scope: \{ role: "form", name: question \} \}\)/u,
+    "the question card submits through its own real form control",
   );
   for (const receiptAssertion of [
     'visibleAnswerReceipt((await snap()).text, question, "Proceed")',

@@ -16,7 +16,7 @@ import { Switch } from "@renderer/components/ui/switch";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
-import { useExperimentsStore } from "@renderer/stores/experiments";
+import { hasVisibleExperiments, useExperimentsStore } from "@renderer/stores/experiments";
 
 type LoadState =
   | { status: "loading" }
@@ -81,10 +81,12 @@ export function ExperimentalSettings() {
   }
 
   const snapshot = state.status === "loaded" ? state.snapshot : null;
+  if (snapshot !== null && !hasVisibleExperiments(snapshot)) return null;
+  const experiments = EXPERIMENTS.filter(({ id }) => snapshot?.[id].visible !== false);
 
   return (
     <PrefSection title="Experimental" icon={FlaskIcon}>
-      {EXPERIMENTS.map((experiment) => {
+      {experiments.map((experiment) => {
         const value = snapshot?.[experiment.id];
         const environmentLocked = value?.source === "environment";
         return (

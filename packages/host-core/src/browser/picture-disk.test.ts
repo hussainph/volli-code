@@ -30,6 +30,21 @@ const record = (over: Partial<BrowserPictureRecord> = {}): BrowserPictureRecord 
 });
 
 describe("browserPictureDisk", () => {
+  it("round-trips every Code Mode image MIME through the same disk sink", () => {
+    for (const mime of ["image/gif", "image/webp", "image/bmp"] as const) {
+      const disk = browserPictureDisk(root);
+      disk.write(Buffer.from(mime), record({ mime }));
+      expect(browserPictureDisk(root).read(ID)).toEqual({ bytes: Buffer.from(mime), mime });
+      expect(browserPictureDisk(root).list()).toEqual([record({ mime })]);
+      disk.remove(ID);
+    }
+    const valid = record();
+    for (const mime of [3, "text/html", "__proto__"]) {
+      writeFileSync(join(root, `${ID}.json`), JSON.stringify({ ...valid, mime }));
+      expect(browserPictureDisk(root).list()).toEqual([]);
+    }
+  });
+
   it("writes a picture beside a record that says what it is, and reads the bytes back with their type", () => {
     const diskSink = browserPictureDisk(root);
 
@@ -62,6 +77,15 @@ describe("browserPictureDisk", () => {
     writeFileSync(join(root, `${OTHER}.json`), JSON.stringify({ id: OTHER, tabId: 7 }));
 
     expect(diskSink.list().map((one) => one.id)).toEqual([ID]);
+  });
+
+  it("skips non-record JSON and keeps a null owner on an otherwise valid sidecar", () => {
+    for (const value of [null, 1, "string"]) {
+      writeFileSync(join(root, `${ID}.json`), JSON.stringify(value));
+      expect(browserPictureDisk(root).list()).toEqual([]);
+    }
+    browserPictureDisk(root).write(Buffer.from("png"), record({ ownerSessionId: null }));
+    expect(browserPictureDisk(root).list()).toEqual([record({ ownerSessionId: null })]);
   });
 
   it("removes both halves of a picture the sweep let go of", () => {

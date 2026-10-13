@@ -37,7 +37,7 @@ must PASS with graceful disposal on the exact SHA** before a canary is claimed.
 | 3 | Create a ticket in Backlog, move to Todo, reopen it; title, `Status: Todo`, `Running on <host>` | 3 (board) |
 | 4 | Paste only the fake API key; `Signed in on <host> · API key` | 2 |
 | 5 | Start a real remote Session; `Stop turn`, scripted streamed reply, remote host pill | 3 (Session) |
-| 6 | See the real question/options, select Proceed and send; host's answered continuation | 4 (answer) |
+| 6 | See the real question/options, select Proceed and press Answer; host's answered continuation | 4 (answer) |
 | 7 | Leave another remote question pending; Quit through the native menu, reopen through macOS activation; same Session row says `Waiting for you`, same question remains answerable | 4, 5 |
 | 8 | Logs has `This Mac` and host sources; filtering to the host shows its real `hostd` `serving` line with its machine label | 6 |
 
@@ -62,7 +62,10 @@ SSH/install/pair, Git arrange, arbitrary errors/timeouts and cleanup errors.
 
 Steps 6–7 require the host's real question capability and answered continuation.
 The scripted provider only calls `ask_user` when production offers that tool;
-it never manufactures availability or a successful answer. A VC-721 regression
+it never manufactures availability or a successful answer. These fresh Sessions
+use `questions: [{ question, choices: ["Proceed", "Stop"] }]`; the driver selects
+Proceed then presses Answer, and the provider checks the returned question/answer
+JSON before continuing. Historical unmarked Sessions retain the flat declaration. A VC-721 regression
 must remain a failure at the actual failing question/reopen step, not a skip.
 This guide describes the required journey, not evidence that the updated smoke
 has already passed. The disposable-runner CI result must establish that.

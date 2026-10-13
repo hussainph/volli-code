@@ -2647,7 +2647,7 @@ const traceStep = (
 
 describe("BrowserTabHost traces (VC-453)", () => {
   let traces: BrowserTraceStore;
-  let frames: Map<string, { bytes: Uint8Array; mime: "image/jpeg" | "image/png" }>;
+  let frames: Map<string, { bytes: Uint8Array; mime: BrowserPictureRecord["mime"] }>;
 
   beforeEach(() => {
     frames = new Map();

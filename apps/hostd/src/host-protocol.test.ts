@@ -47,6 +47,7 @@ describe("what hostd offers", () => {
       "sessions.queue",
       "sessions.subscribe",
       "sessions.history",
+      "sessions.pictures",
       "session.read",
       "board.read",
       "board.write",

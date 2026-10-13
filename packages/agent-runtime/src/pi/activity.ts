@@ -7,6 +7,7 @@
  */
 
 import { safeStopMessage, type DiagnosticRedactionPort } from "./safe-diagnostic";
+import { projectCodeModePictures, type ActivityImagePersistence } from "./activity-images";
 
 import type {
   ActivityBrowse,
@@ -53,6 +54,8 @@ export interface PiActivityContext {
   input?: unknown;
   startedAt?: unknown;
   observedAt?: unknown;
+  /** Host's bounded picture store; never part of the provider's tool result. */
+  persistImage?: ActivityImagePersistence;
 }
 
 const TOOL_KIND: Record<string, ActivityKind> = {
@@ -136,11 +139,14 @@ export function mapPiActivity(
           ? readField(rawEvent, "result")
           : null;
     const input = normalizeInput(sourceInput);
-    const output = normalizeActivityValue(
-      toolName in BROWSER_TOOL_ACTION || isMcpToolId(toolName)
-        ? withoutBinaryBytes(sourceOutput)
-        : sourceOutput,
-    );
+    const output =
+      toolName === "codemode"
+        ? normalizeCodeModeOutput(sourceOutput, context.persistImage)
+        : normalizeActivityValue(
+            toolName in BROWSER_TOOL_ACTION || isMcpToolId(toolName)
+              ? withoutBinaryBytes(sourceOutput)
+              : sourceOutput,
+          );
     const startedAt =
       type === "tool_execution_start"
         ? timestampOf(readField(rawContext, "observedAt"))
@@ -149,13 +155,28 @@ export function mapPiActivity(
       type === "tool_execution_end" ? timestampOf(readField(rawContext, "observedAt")) : null;
     const descriptor = descriptorFor(toolName, input, output, sourceOutput, startedAt, endedAt);
     const state = activityState(type, readField(rawEvent, "isError"));
+    const pictureContent = recordOf(output)?.content;
+    const hasReturnedPictures =
+      toolName === "codemode" &&
+      Array.isArray(pictureContent) &&
+      pictureContent.some((block) => recordOf(block)?.type === "image");
     const base = {
       kind: "activity" as const,
       turnId,
       activityId: identifierOf(readField(rawEvent, "toolCallId"), "unknown"),
       state,
       descriptor,
-      input,
+      // All shipped translators preserve failed input but drop failed output.
+      // Put the reserved facet in the recovery marker's input, not in a new
+      // translator-derived metadata field: N−1 then replays the identical
+      // content-addressed artifact, and legacy failed markers remain unchanged.
+      input:
+        state === "failed" && hasReturnedPictures
+          ? ({
+              ...recordOf(normalizeActivityValue(input, 8 * 1024)),
+              "volli.activity.output": output,
+            } as RuntimeActivityValue)
+          : input,
       output,
     };
 
@@ -163,7 +184,9 @@ export function mapPiActivity(
       ? {
           ...base,
           state,
-          error: failureText(output, descriptor.outcome?.summary ?? null, credentialRedaction),
+          error: hasReturnedPictures
+            ? `${failureText(output, descriptor.outcome?.summary ?? null, credentialRedaction).slice(0, 180)}\nCode Mode returned images. Display requires Volli 0.2.2 or newer; older builds omit them.`
+            : failureText(output, descriptor.outcome?.summary ?? null, credentialRedaction),
         }
       : base;
   } catch {
@@ -532,6 +555,47 @@ function failureText(
   return "Tool execution failed.";
 }
 
+/** Image references survive even when the ordinary text/metadata budget is spent. */
+function normalizeCodeModeOutput(
+  value: unknown,
+  persist: ActivityImagePersistence | undefined,
+): RuntimeActivityValue {
+  const projected = recordOf(projectCodeModePictures(value, persist));
+  if (projected === null || !Array.isArray(projected.content)) return normalizeActivityValue(value);
+  // This literal object always fits the structural budget, so normalization
+  // produces an object even when all of its original fields were omitted.
+  const normalized = normalizeActivityValue({ ...projected, content: [] }, 8 * 1024) as Record<
+    string,
+    RuntimeActivityValue
+  >;
+  let remaining = MAX_ACTIVITY_VALUE_TOTAL_LENGTH - JSON.stringify(normalized).length - 16 * 1024;
+  const content: RuntimeActivityValue[] = [];
+  for (const raw of projected.content as unknown[]) {
+    const block = recordOf(raw);
+    if (block?.type === "image") {
+      content.push({
+        type: "image",
+        mimeType: cleanPayloadText(block.mimeType) ?? null,
+        picture: cleanPayloadText(block.picture)?.slice(0, MAX_ACTIVITY_IDENTIFIER_LENGTH) ?? null,
+        ...(typeof block.caption === "string"
+          ? { caption: cleanPayloadText(block.caption) ?? "" }
+          : {}),
+      });
+    } else if (block?.type === "text") {
+      const text = cleanPayloadText(block.text);
+      if (text !== null) {
+        // Reserve room for the source lines and omission fallbacks after the
+        // program's potentially large first text block.
+        const kept = text.slice(0, Math.min(remaining, content.length === 0 ? 32 * 1024 : 512));
+        remaining -= kept.length;
+        content.push({ type: "text", text: kept });
+      }
+    }
+  }
+  normalized.content = content;
+  return normalized as RuntimeActivityValue;
+}
+
 function normalizeInput(value: unknown): RuntimeActivityValue {
   const normalized = normalizeActivityValue(value);
   const input = recordOf(normalized);
@@ -543,10 +607,13 @@ function normalizeInput(value: unknown): RuntimeActivityValue {
   return input;
 }
 
-function normalizeActivityValue(value: unknown): RuntimeActivityValue {
+function normalizeActivityValue(
+  value: unknown,
+  budget = MAX_ACTIVITY_VALUE_TOTAL_LENGTH,
+): RuntimeActivityValue {
   const normalized = normalizeValue(
     value,
-    { nodes: 0, seen: new WeakSet<object>(), remaining: MAX_ACTIVITY_VALUE_TOTAL_LENGTH },
+    { nodes: 0, seen: new WeakSet<object>(), remaining: budget },
     0,
   );
   return normalized as RuntimeActivityValue;

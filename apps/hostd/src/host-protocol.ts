@@ -76,6 +76,7 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "sessions.queue",
   "sessions.subscribe",
   "sessions.history",
+  "sessions.pictures",
   "session.read",
   "board.read",
   "board.write",

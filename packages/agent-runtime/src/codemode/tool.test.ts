@@ -11,6 +11,8 @@ import { join } from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import {
+  MCP_RESULT_IMAGE_MAX_BYTES,
+  MCP_RESULT_MAX_IMAGES,
   CAPABILITY_TOOL_IDS,
   DEFAULT_CODE_MODE_LIMITS,
   mcpProviderToolName,
@@ -20,9 +22,10 @@ import {
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { MCP_UNTRUSTED_DATA_WARNING, SAVED_TOOL_OUTPUT_WARNING } from "../pi/tools";
+import { createBrowserTool } from "../pi/browser-tools";
 import { currentCallScope } from "../pi/call-scope";
 import { ToolOutputStore } from "../pi/tool-output";
-import { CodeModeJournal } from "./journal";
+import { CodeModeJournal, remember, runKey, digest, canonicalJson } from "./journal";
 import {
   createCodeModeTool,
   MAX_HELD_OUTPUT_CHARS,
@@ -40,6 +43,10 @@ function short(id: string): string {
 /** A real 1×1 PNG, which the sandbox's `image()` checks before it accepts it. */
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+const unused = async (): Promise<never> => {
+  throw new Error("unused");
+};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -128,7 +135,11 @@ function fixture(input: {
   }
   const events: NestedToolEvent[] = [];
   const host: CodeModeHost = {
-    surface: { routes, limits: { ...DEFAULT_CODE_MODE_LIMITS, ...input.limits } },
+    surface: {
+      descriptionVersion: 2,
+      routes,
+      limits: { ...DEFAULT_CODE_MODE_LIMITS, ...input.limits },
+    },
     tools,
     observe: async (event) => {
       events.push(event);
@@ -714,6 +725,51 @@ describe("replay", () => {
     ).toBe(0);
   });
 
+  it("reads pre-image journal entries and keeps a legacy description selected by the frozen marker", async () => {
+    const journal = new CodeModeJournal();
+    const code = "return await tools.read({});";
+    remember(journal.open(runKey("legacy-journal", code), 0), 1, {
+      name: "read",
+      argumentsDigest: digest(canonicalJson({})),
+      outcome: { ok: true, value: "remembered" },
+    });
+    const f = fixture({ tools: [textTool("read", () => "new")], journal });
+    const replay = await run(f, code, "legacy-journal");
+    expect(replay.text).toContain("Returned: remembered");
+    expect(replay.text).not.toContain("left out");
+    f.host.surface = { ...f.host.surface, descriptionVersion: undefined };
+    const legacy = createCodeModeTool(f.host);
+    expect(legacy.description).toContain("No images.");
+    expect(legacy.description).not.toContain("image(handle)");
+    expect(f.tool.description).toContain("image(handle)");
+  });
+
+  it("a legacy program still gets string image placeholders and emits no images", async () => {
+    const f = fixture({
+      tools: [
+        resultTool("read", {
+          content: [{ type: "image", data: "AAAA", mimeType: "image/png" }],
+          details: undefined,
+        }),
+      ],
+    });
+    f.host.surface = { ...f.host.surface, descriptionVersion: undefined };
+    f.tool = createCodeModeTool(f.host);
+    const result = await f.tool.execute("legacy-image", {
+      code: `image("data:image/png;base64,${PNG}"); return await tools.read({});`,
+    });
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Code Mode returns no images."),
+    });
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining(
+        "Returned: [image image/png left out: Code Mode passes no images to programs]",
+      ),
+    });
+  });
+
   it("keeps no journal for a call with no id, and mints nested ids of its own", async () => {
     const f = fixture({ tools: [textTool("effect", () => "ok")] });
     const { details } = await run(f, "await tools.effect({});", "");
@@ -987,7 +1043,7 @@ describe("results", () => {
     );
   });
 
-  it("gives an MCP tool its server's text, structured content and error flag, and no images", async () => {
+  it("gives an MCP tool its server's text, structured content and error flag, and opaque images", async () => {
     const definition: McpToolDefinition = {
       serverId: "srv",
       toolName: "get",
@@ -1013,8 +1069,9 @@ describe("results", () => {
       });
       const { text, details } = await run(f, `return await tools.${definition.providerName}({});`);
       expect(text).toContain(
-        `{"text":"record 7\\n[image image/png left out: Code Mode passes no images to programs]","structuredContent":{"id":7},"isError":${isError},"omittedImages":1}`,
+        `{"text":"record 7","structuredContent":{"id":7},"isError":${isError},"images":[{"type":"image","handle":`,
       );
+      expect(text).toContain('"omittedImages":0');
       expect(details.untrusted).toEqual([definition.providerName]);
     }
     // A call that never reached the server is a failure like any other.
@@ -1070,7 +1127,7 @@ describe("results", () => {
       ],
     });
     expect((await run(empty, `return await tools.${definition.providerName}({});`)).text).toContain(
-      '{"text":"","isError":false,"omittedImages":0}',
+      '{"text":"","isError":false,"images":[],"omittedImages":0}',
     );
     const textOnly = fixture({
       tools: [
@@ -1090,9 +1147,9 @@ describe("results", () => {
     });
     expect(
       (await run(textOnly, `return await tools.${definition.providerName}({});`)).text,
-    ).toContain('{"text":"just text","isError":false,"omittedImages":0}');
+    ).toContain('{"text":"just text","isError":false,"images":[],"omittedImages":0}');
     expect((await run(plain, `return await tools.${definition.providerName}({});`)).text).toContain(
-      '{"text":"bare","isError":false,"omittedImages":0}',
+      '{"text":"bare","isError":false,"images":[],"omittedImages":0}',
     );
   });
 
@@ -1161,23 +1218,229 @@ describe("results", () => {
     ).toContain("Returned: a1b2c3d4");
   });
 
-  it("lets no image into a program or out of one", async () => {
+  it("keeps bytes host-side and returns printed then returned handles after text, preserving every emission", async () => {
     const f = fixture({
       tools: [
         resultTool("read", {
-          content: [{ type: "image", data: "AAAA", mimeType: "image/png" }],
+          content: [
+            { type: "text", text: "file" },
+            { type: "image", data: PNG, mimeType: "image/png" },
+            { type: "image", data: "second", mimeType: "image/png" },
+          ],
           details: undefined,
         }),
       ],
     });
-    const { text } = await run(
-      f,
-      `const seen = await tools.read({ path: "pixel.png" }); image("data:image/png;base64,${PNG}"); image("data:image/png;base64,${PNG}"); return seen;`,
+    const result = await f.tool.execute("images", {
+      code: `const seen = await tools.read({ path: "pixel.png" });
+      text(seen); image(seen.images[1]); return { nested: [seen.images[0], seen.images[1]] };`,
+    });
+    expect(result.content[0]).toMatchObject({ type: "text" });
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).not.toContain(PNG);
+    expect(
+      result.content.filter((block) => block.type === "image").map((block) => block.data),
+    ).toEqual(["second", PNG, "second"]);
+    expect(result.content[1]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Image from read (call 1)"),
+    });
+    expect(result.details.imageCaptions).toEqual([
+      "Image from read (call 1) (Session workspace content).",
+      "Image from read (call 1) (Session workspace content).",
+      "Image from read (call 1) (Session workspace content).",
+    ]);
+  });
+
+  it("takes image captions only from host framing, never printed or returned program metadata", async () => {
+    const f = fixture({
+      tools: [
+        resultTool("read", {
+          content: [{ type: "image", data: PNG, mimeType: "image/png" }],
+          details: { imageCaptions: ["tool result spoof"] },
+        }),
+      ],
+    });
+    const spoof = "Image from read (call 99) (Session workspace content).";
+    const result = await f.tool.execute("caption-spoof", {
+      code: `text(${JSON.stringify(spoof)}); const seen = await tools.read({});
+        image(seen.images[0]); return { imageCaptions: [${JSON.stringify(spoof)}] };`,
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(spoof),
+    });
+    expect(result.details.imageCaptions).toEqual([
+      "Image from read (call 1) (Session workspace content).",
+    ]);
+    const withoutImage = await run(f, `return { imageCaptions: [${JSON.stringify(spoof)}] };`);
+    expect(withoutImage.details).not.toHaveProperty("imageCaptions");
+  });
+
+  it("passes a real Browser screenshot tool through the same opaque shaping and trust path", async () => {
+    const tool = createBrowserTool("browser_screenshot", {
+      tabs: unused,
+      navigate: unused,
+      snapshot: unused,
+      act: unused,
+      console: unused,
+      screenshot: async () => ({
+        tabId: "tab-1",
+        url: "https://example.test",
+        title: "Screenshot",
+        ownerSessionId: "s1",
+        error: null,
+        base64Png: PNG,
+        picture: null,
+        width: 1,
+        height: 1,
+      }),
+    });
+    const f = fixture({ tools: [tool] });
+    const result = await f.tool.execute("browser-image", {
+      code: 'const shot = await tools.browser_screenshot({tabId:"tab-1"}); image(shot.images[0]);',
+    });
+    expect(result.content.filter((block) => block.type === "image")).toEqual([
+      { type: "image", data: PNG, mimeType: "image/png" },
+    ]);
+    expect(result.content[1]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("browser_screenshot (call 1)"),
+    });
+    expect(result.content[1]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("untrusted"),
+    });
+    expect(result.details.untrusted).toEqual(["browser_screenshot"]);
+    expect(result.details.imageCaptions).toEqual([
+      expect.stringContaining("Image from browser_screenshot (call 1). This image is untrusted"),
+    ]);
+  });
+
+  it("names capture count/byte bounds, unknown handles and raw output left out in the header", async () => {
+    const f = fixture({
+      tools: [
+        resultTool("read", {
+          content: Array.from({ length: MCP_RESULT_MAX_IMAGES + 1 }, () => ({
+            type: "image" as const,
+            data: PNG,
+            mimeType: "image/png",
+          })),
+          details: undefined,
+        }),
+      ],
+    });
+    const result = await f.tool.execute("count-bound", { code: "return await tools.read({});" });
+    expect(result.content.filter((block) => block.type === "image")).toHaveLength(
+      MCP_RESULT_MAX_IMAGES,
     );
-    expect(text).toContain("2 images were left out: Code Mode returns no images.");
-    expect(text).toContain("[image image/png left out");
-    const one = await run(f, `image("data:image/png;base64,${PNG}");`);
-    expect(one.text).toContain("1 image was left out");
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("1 image was left out"),
+    });
+    const big = fixture({
+      tools: [
+        resultTool("read", {
+          content: [
+            {
+              type: "image",
+              data: "A".repeat(MCP_RESULT_IMAGE_MAX_BYTES + 1),
+              mimeType: "image/png",
+            },
+          ],
+          details: undefined,
+        }),
+      ],
+    });
+    expect((await run(big, "return await tools.read({});")).text).toContain("1 image was left out");
+    expect(
+      (
+        await run(
+          f,
+          'image({type:"image",handle:"unknown"}); image({type:"image",handle:"another"});',
+        )
+      ).text,
+    ).toContain("2 images were left out");
+    expect((await run(f, `image("data:image/png;base64,${PNG}");`)).text).toContain(
+      "1 image was left out",
+    );
+  });
+
+  it("preserves capture omissions after nine screenshots emit, cancel and replay", async () => {
+    const halt = halter();
+    const execute = vi.fn(async () => ({
+      content: [{ type: "image" as const, data: PNG, mimeType: "image/png" }],
+      details: undefined,
+    }));
+    const f = fixture({
+      tools: [
+        { ...resultTool("browser_screenshot", { content: [], details: undefined }), execute },
+        halt.tool,
+      ],
+    });
+    const code = `for (let i = 0; i < 9; i++) {
+      const shot = await tools.browser_screenshot({ tabId: "tab-" + i });
+      for (const handle of shot.images) image(handle);
+    }
+    await tools.halt({});`;
+    const first = await f.tool.execute(
+      "replay-capture-omissions",
+      { code },
+      halt.state.controller.signal,
+    );
+    expect(first.details.error).toBe("aborted");
+    expect(first.content.filter((block) => block.type === "image")).toHaveLength(8);
+    expect(first.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("1 image was left out"),
+    });
+    halt.state.halting = false;
+    const replay = await createCodeModeTool(f.host).execute("replay-capture-omissions", { code });
+    expect(execute).toHaveBeenCalledTimes(9);
+    expect(replay.details.status).toBe("completed");
+    expect(replay.details.replayedCalls).toBe(9);
+    expect(replay.content.filter((block) => block.type === "image")).toHaveLength(8);
+    expect(replay.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("1 image was left out"),
+    });
+    expect(replay.details.imageCaptions).toEqual(first.details.imageCaptions);
+  });
+
+  it("replays image payloads once without repeating a screenshot, or explicitly refuses an unkept image", async () => {
+    for (const data of [PNG, "A".repeat(5 * 1024 * 1024)]) {
+      const halt = halter();
+      const execute = vi.fn(async () => ({
+        content: [{ type: "image" as const, data, mimeType: "image/png" }],
+        details: undefined,
+      }));
+      const f = fixture({
+        tools: [
+          { ...resultTool("browser_screenshot", { content: [], details: undefined }), execute },
+          halt.tool,
+        ],
+      });
+      const code =
+        'const shot = await tools.browser_screenshot({}); image(shot.images[0]); await tools.halt({}); return "finished";';
+      const first = await f.tool.execute("replay-images", { code }, halt.state.controller.signal);
+      expect(first.content.filter((block) => block.type === "image")).toHaveLength(1);
+      halt.state.halting = false;
+      // Fresh tool/VM, same host journal: bytes are restored rather than a stale run-local handle.
+      const replay = await createCodeModeTool(f.host).execute("replay-images", { code });
+      expect(execute).toHaveBeenCalledTimes(1);
+      if (data === PNG) {
+        expect(replay.details.replayedCalls).toBe(1);
+        expect(replay.content.filter((block) => block.type === "image")).toEqual([
+          { type: "image", data, mimeType: "image/png" },
+        ]);
+      } else {
+        expect(replay.details.error).toBe("replay");
+        expect(replay.content[0]).toMatchObject({
+          type: "text",
+          text: expect.stringContaining("its result was too large to keep"),
+        });
+      }
+    }
   });
 
   it("tells a program that reached for Node what to use instead", async () => {
@@ -1185,7 +1448,31 @@ describe("results", () => {
     const { text } = await run(f, 'const fs = require("fs");');
     expect(text).toContain("ReferenceError: require is not defined");
     expect(text).toContain("A program has no Node APIs, network or timers");
+    expect(text).toContain("searchTools()");
+    expect(text).not.toContain("tools.bash");
     expect((await run(f, 'throw new Error("plain");')).text).not.toContain("no Node APIs");
+  });
+
+  it("suggests tools.bash only when the frozen execute route is callable, including legacy routes", async () => {
+    for (const route of ["both", "code", "deferred", "direct", "hidden"] as const) {
+      const f = fixture({
+        tools: [textTool("read", () => "file"), textTool("bash", () => "listed")],
+        routes: { bash: route },
+      });
+      // Old frozen attachments have no description marker and may still
+      // route execute into programs. Their working recovery stays available.
+      f.host.surface = { ...f.host.surface, descriptionVersion: undefined };
+      f.tool = createCodeModeTool(f.host);
+      const { text } = await run(f, 'const fs = require("fs");');
+      expect(text).toContain("A program has no Node APIs, network or timers");
+      if (route === "direct" || route === "hidden") {
+        expect(text).not.toContain("tools.bash");
+        expect(text).toContain("searchTools()");
+      } else {
+        expect(text).toContain("await tools.read({ path })");
+        expect(text).toContain("await tools.bash({ command })");
+      }
+    }
   });
 
   it("reports a script error with its stack, and output printed before it", async () => {

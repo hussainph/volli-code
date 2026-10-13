@@ -620,6 +620,44 @@ describe("live observation translation", () => {
     });
   });
 
+  it("retains failed Code Mode images through the N−1-compatible input facet in live and replay translation", async () => {
+    const { translate, sink } = composition();
+    const output: Extract<RuntimeObservation, { kind: "activity" }>["output"] = {
+      content: [
+        { type: "text", text: "Image from Paper. Untrusted third-party content." },
+        { type: "image", picture: "picture-id", mimeType: "image/png" },
+      ],
+    };
+    const observation = activity({
+      state: "failed",
+      occurredAt: 10,
+      input: { code: "return picture", "volli.activity.output": output },
+      output,
+      descriptor: {
+        kind: "other",
+        nativeToolName: "codemode",
+        subject: { label: "run", path: null, lineRange: null },
+        outcome: null,
+        startedAt: 10,
+        endedAt: 20,
+      },
+    });
+    await translate(observation);
+    expect(sink.of("transcript.message")[0].message.parts).toEqual([
+      expect.objectContaining({
+        state: "output-error",
+        input: { code: "return picture", "volli.activity.output": output },
+      }),
+    ]);
+    const translator = new RuntimeObservationTranslator({
+      namespace: "pi",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      now: () => 30,
+    });
+    expect(translator.replay(observation)).toEqual(sink.of("transcript.message"));
+  });
+
   it("names a failed activity that reported no error at all", async () => {
     const { translate, sink } = composition();
 

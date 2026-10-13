@@ -623,6 +623,8 @@ describe("Session tRPC router", () => {
       cloud: { enabled: true, source: "storage" },
     });
     expect(writes).toEqual([{ id: "cloud", enabled: true }]);
+    experimentSnapshot = { cloud: { enabled: false, source: "default", visible: false } };
+    await expect(caller.settings.experiments()).resolves.toEqual(experimentSnapshot);
   });
 
   it("rejects unknown experiment ids, non-booleans, and non-JSON-safe snapshots", async () => {

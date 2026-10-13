@@ -66,6 +66,54 @@ const shot = (over: Partial<Parameters<BrowserPictureStore["put"]>[0]> = {}) => 
 });
 
 describe("BrowserPictureStore", () => {
+  it("keeps Code Mode images under the screenshot count/age budget and recovers them after relaunch", () => {
+    const sink = disk();
+    const first = store({ persist: sink.persist, persistLimit: 2 });
+    const bytes = Buffer.alloc(400_000, 199);
+    const image = { data: bytes.toString("base64"), mimeType: "image/png" };
+    const id = first.pictures.keepActivityImage("session", image)!;
+    expect(first.pictures.describe(id)).toMatchObject({
+      ownerSessionId: "session",
+      tabId: "codemode:session",
+    });
+    const second = store({ persist: sink.persist, persistLimit: 2, firstId: 10, now: () => 2_000 });
+    const chunks: string[] = [];
+    let offset: number | null = 0;
+    do {
+      const read = second.pictures.readActivityImage("session", id, offset);
+      expect(read.mimeType).toBe("image/png");
+      expect(read.data!.length).toBeLessThanOrEqual(256 * 1024);
+      chunks.push(read.data!);
+      offset = read.nextOffset;
+    } while (offset !== null);
+    expect(Buffer.from(chunks.join(""), "base64")).toEqual(bytes);
+    expect(second.pictures.readActivityImage("other-session", id)).toEqual({
+      data: null,
+      mimeType: null,
+      nextOffset: null,
+    });
+    for (const invalidOffset of [-1, 1, 1.5, Number.NaN, bytes.length + 2]) {
+      expect(second.pictures.readActivityImage("session", id, invalidOffset).data).toBeNull();
+    }
+    expect(second.pictures.readActivityImage("session", "never").data).toBeNull();
+    second.pictures.put(shot({ persist: true }));
+    second.pictures.keepActivityImage("session", image);
+    expect(second.pictures.readActivityImage("session", id).data).toBeNull();
+    expect(sink.files.size).toBe(2);
+  });
+
+  it("explicitly refuses non-durable activity pictures and unsupported image formats", () => {
+    expect(
+      store({ persist: null }).pictures.keepActivityImage("session", {
+        data: "AAAA",
+        mimeType: "image/png",
+      }),
+    ).toBeNull();
+    expect(
+      store().pictures.keepActivityImage("session", { data: "AAAA", mimeType: "text/html" }),
+    ).toBeNull();
+  });
+
   it("keeps the bytes in main and hands out an opaque reference the renderer resolves to a data URL", () => {
     const { pictures } = store();
 

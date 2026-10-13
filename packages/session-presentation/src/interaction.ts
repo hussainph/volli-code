@@ -513,10 +513,9 @@ export function interactionAnswers(
 /**
  * The answers, plus the flat pair every stored resolution still carries.
  *
- * The flat `optionIds` are the union in prompt order, which is exactly what an
- * adapter decodes back into per-question answers — the option ids
- * encode their own question index, so flattening is lossless rather than a
- * lossy convenience. `answers` rides along for the readers that understand it.
+ * The flat `optionIds` concatenate selections in prompt order for historical
+ * readers. IDs may repeat across prompts (the simplified tool uses `choice:0`
+ * on each question), so only `answers` preserves their question association.
  */
 export function interactionResolution(
   interaction: RendererSessionInteraction,
@@ -542,11 +541,11 @@ export function interactionResolution(
  * `resolving` is React state: it is set inside the act it guards and read on
  * the next render, so two presses inside one tick both see `false` and both
  * reach the resolver. That was survivable while a question had one commit
- * control and stopped being survivable the moment it had several — Send
- * answer, the keyboard, Decline to answer, Withdraw question — plus a composer
- * downstairs with a submit path of its own. The composer's answer road is gone
- * (VC-289), but the four on the card remain, and "exactly one of these
- * happens" cannot be expressed by anything that settles a render later.
+ * control and stopped being survivable the moment it had several — Answer,
+ * keyboard submission, Decline to answer, Escape to stop the turn — plus a
+ * composer downstairs with a submit path of its own. The composer's answer
+ * road is gone (VC-289), but competing card deliveries remain, and "exactly
+ * one of these happens" cannot wait until a render later.
  *
  * So the latch is taken **synchronously, before the act begins**, and it is
  * keyed by interaction id because several requests can be open at once — a
@@ -605,20 +604,18 @@ export function createSubmissionLatch(): InteractionSubmissionLatch {
 /* ------------------------------------------------- the three acts, and their words */
 
 /**
- * The three acts an open question offers, named once.
+ * The answer controls and the verdict card's withdrawal labels, named once.
  *
  * They are here rather than in the card because the card is not the only thing
  * that has to agree about them: the receipt a sent response leaves is written
  * from the same vocabulary, and "Reject" on a control with "Declined to answer"
  * under it is one act reported as two.
  *
- * Each one names its **effect on the question**, which is what the footer used
- * to leave to the reader to infer. "Cancel request" named a mechanism nothing
- * else on screen mentions, and "Reject" is a verdict word borrowed from the
- * permission card — beside a primary control that changed its own label with
- * the draft, the three of them read as three ways of saying no.
+ * Question footers offer Answer and Decline to answer; Escape invokes their
+ * end-turn handler without a withdrawal button. Verdict cards retain a
+ * withdrawal control named for the request they hold.
  */
-export const SEND_ANSWER_LABEL = "Send answer";
+export const SEND_ANSWER_LABEL = "Answer";
 export const DECLINE_ANSWER_LABEL = "Decline to answer";
 export const WITHDRAW_QUESTION_LABEL = "Withdraw question";
 /**
@@ -635,7 +632,7 @@ export function withdrawLabel(interaction: RendererSessionInteraction): string {
   return interaction.kind === "question" ? WITHDRAW_QUESTION_LABEL : WITHDRAW_REQUEST_LABEL;
 }
 
-/** The three ways one question ends, as the card that ended it reports them. */
+/** The three delivery paths a question card reports, including stopping the turn. */
 export type InteractionSentKind = "answered" | "declined" | "withdrawn";
 
 /**
@@ -651,7 +648,7 @@ export type InteractionSentKind = "answered" | "declined" | "withdrawn";
  */
 export interface InteractionSentReceipt {
   kind: InteractionSentKind;
-  /** `Sent`, `Declined to answer`, `Withdrew question`. */
+  /** `Sent`, `Declined to answer`, `Stopped turn`. */
   lead: string;
   /** What travelled, where there is something to quote back. */
   value: string | null;
@@ -659,13 +656,13 @@ export interface InteractionSentReceipt {
   line: string;
 }
 
-// The past tense of the controls above — written out rather than derived from
-// them, because a receipt reports what happened and a button offers to make it
-// happen. Recognisably the same act, and never the same words.
+// Written out rather than derived from labels: a receipt reports what happened.
+// The legacy `withdrawn` kind now reports the question card's end-turn handler;
+// DecisionCard's withdrawal labels remain unchanged.
 const SENT_LEADS: Record<InteractionSentKind, string> = {
   answered: "Sent",
   declined: "Declined to answer",
-  withdrawn: "Withdrew question",
+  withdrawn: "Stopped turn",
 };
 
 /**
@@ -684,7 +681,7 @@ export function describeInteractionSent(
   submission: InteractionSubmission | null,
 ): InteractionSentReceipt {
   const lead = SENT_LEADS[kind];
-  // A withdrawal decides nothing and so has nothing to quote — its caller has no
+  // Stopping the turn decides nothing and has nothing to quote — its caller has no
   // submission to hand over, which is what makes `null` the whole of that case
   // rather than a branch on the kind. What a response did carry is read off the
   // submission: the labels and words on the resolution, or the message a
@@ -1097,7 +1094,10 @@ export function describeInteractionResolution(
   return {
     verdict,
     lead: RECEIPT_LEADS[verdict],
-    subject: interaction.title,
+    subject:
+      isAskUserInteraction(interaction) && prompts.length > 1
+        ? `${prompts.length} questions`
+        : interaction.title,
     trailer: receiptTrailer(verdict, chosen, resolution.response),
   };
 }

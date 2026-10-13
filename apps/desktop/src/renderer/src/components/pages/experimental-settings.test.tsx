@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { ExperimentSnapshot } from "@volli/shared";
+import { resolveExperiments, type ExperimentSnapshot } from "@volli/shared";
 import { toast } from "sonner";
 
 const rpc = vi.hoisted(() => ({ query: vi.fn(), mutate: vi.fn() }));
@@ -21,9 +21,11 @@ vi.mock("sonner", () => ({
 import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
 
 import { ExperimentalSettings } from "./experimental-settings";
+import { SettingsPage } from "./settings-page";
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
+const originalScrollTo = HTMLElement.prototype.scrollTo;
 
 function snapshot(
   enabled: boolean,
@@ -34,6 +36,8 @@ function snapshot(
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  HTMLElement.prototype.scrollTo = vi.fn();
+  useExperimentsStore.setState({ snapshot: null });
   rpc.query.mockReset().mockResolvedValue(snapshot(false));
   rpc.mutate.mockReset().mockResolvedValue(snapshot(true, "storage"));
 });
@@ -43,8 +47,10 @@ afterEach(async () => {
   container?.remove();
   root = null;
   container = null;
+  useExperimentsStore.setState({ snapshot: null });
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  HTMLElement.prototype.scrollTo = originalScrollTo;
 });
 
 async function renderPane(): Promise<void> {
@@ -67,6 +73,35 @@ async function click(element: HTMLElement): Promise<void> {
 }
 
 describe("Settings → Experimental", () => {
+  it.each(["dev", "canary", "stable"] as const)(
+    "projects %s visibility into the actual Settings rail and deep links",
+    async (kind) => {
+      const experiments = resolveExperiments({ cloud: true }, [], kind);
+      useExperimentsStore.getState().receive(experiments);
+      rpc.query.mockResolvedValue(experiments);
+      container = document.createElement("div");
+      document.body.append(container);
+      root = createRoot(container);
+      await act(async () => root?.render(<SettingsPage initialCategoryKey="experimental" />));
+      if (kind === "stable") {
+        expect(container.textContent).not.toContain("Experimental");
+        expect(container.textContent).not.toContain("Volli Cloud");
+        expect(document.querySelector('[data-testid="experiment-cloud-switch"]')).toBeNull();
+      } else {
+        expect(container.textContent).toContain("Experimental");
+        expect(experimentSwitch().disabled).toBe(false);
+      }
+    },
+  );
+  it("renders neither the hidden switch nor an empty Experimental section on stable", async () => {
+    rpc.query.mockResolvedValueOnce({
+      cloud: { enabled: false, source: "default", visible: false },
+    });
+    await renderPane();
+    expect(container?.textContent).toBe("");
+    expect(document.querySelector('[data-testid="experiment-cloud-switch"]')).toBeNull();
+    expect(rpc.mutate).not.toHaveBeenCalled();
+  });
   it("keeps the switch disabled until the registry snapshot loads", async () => {
     let resolveRead: ((value: ExperimentSnapshot) => void) | undefined;
     rpc.query.mockReturnValueOnce(
