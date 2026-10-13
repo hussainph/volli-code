@@ -1693,7 +1693,7 @@ describe("the renderer-safe scrub", () => {
       input: { kind: "tool-surface", tools: ["ask_user"] },
     };
     expect(scrubSessionEventPayload(payload)).toEqual(scrubbed);
-    expect(decodeRendererSessionEventPayload(payload)).toEqual(scrubbed);
+    expect(decodeRendererSessionEventPayload(payload, "payload")).toEqual(scrubbed);
     expect(parseRendererSessionEvent(rendererEvent({ payload }), "event")).toMatchObject({
       ok: true,
       event: { payload: scrubbed },
