@@ -479,6 +479,19 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             // acceptance, and still validate the adapter and attachment route.
             assertReceiptMatchesCommand(command, session, observation.receipt);
             assertAdapterReceiptRoute(command, observation);
+            // Only the frozen timestamp-derived Pi receipt identity is a
+            // legacy alias. An arbitrary new id remains conflicting evidence,
+            // even when its outcome and timestamp happen to be identical.
+            if (
+              command.route!.adapterId !== "pi" ||
+              accepted.id !== `native-receipt:${command.id}:accepted:${accepted.acceptedAt}` ||
+              observation.receipt.id !==
+                `native-receipt:${command.id}:accepted:${observation.receipt.acceptedAt}`
+            ) {
+              throw new SessionEngineConflictError(
+                `Receipt ${observation.receipt.id} is not a legacy Pi acceptance replay`,
+              );
+            }
             if (
               !sameCommandReceiptOutcome(accepted, {
                 ...observation.receipt,

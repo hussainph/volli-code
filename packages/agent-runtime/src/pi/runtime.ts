@@ -2063,13 +2063,19 @@ async function attachSession(
       activeAttentionReasons.add("runtime-failure");
     }
     for (const recoveredTurnId of openTurnIds) {
-      await persistObservation({
-        kind: "attention",
-        state: "raised",
-        reason: "partial-turn",
-        message: "A recovered Pi turn ended before its completion marker was committed.",
-      });
-      activeAttentionReasons.add("partial-turn");
+      // Attention identity is frozen per attachment/reason, not per notice.
+      // A generic restart warning must not replace an active diagnostic (such
+      // as conflicting settled history) with a warning the host may retire.
+      // Still interrupt every open turn even when its warning is already held.
+      if (!activeAttentionReasons.has("partial-turn")) {
+        await persistObservation({
+          kind: "attention",
+          state: "raised",
+          reason: "partial-turn",
+          message: "A recovered Pi turn ended before its completion marker was committed.",
+        });
+        activeAttentionReasons.add("partial-turn");
+      }
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
     }
     // A notice that the last process was reconnecting describes a wait no

@@ -172,7 +172,7 @@ function fixture() {
 type Host = ReturnType<typeof fixture>;
 type Launch = ReturnType<Host["launch"]>;
 
-async function start(f: Host) {
+async function start(f: Host, settledPrefix = false) {
   const { sessionId } = await f.host.command({
     commandId: `create-${clock++}`,
     command: {
@@ -195,6 +195,21 @@ async function start(f: Host) {
     command: { kind: "adapter.attach", continuity: "fresh" },
   });
   expect(attached.receipt?.status).toBe("accepted");
+  if (settledPrefix) {
+    const settled = await f.host.command({
+      sessionId,
+      commandId: `prefix-${clock++}`,
+      command: {
+        kind: "message.submit",
+        message: {
+          id: "prefix-message",
+          role: "user",
+          parts: [{ type: "text", text: "Establish a settled reply before asking" }],
+        },
+      },
+    });
+    expect(settled.receipt?.status).toBe("accepted");
+  }
   const commandId = `submit-${clock++}`;
   const result = await f.host.command({
     sessionId,
@@ -413,6 +428,79 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
     expect(results[0]).toMatchObject({ isError: true });
     expect(JSON.stringify(results[0])).toContain("No answer was obtained");
     expect(JSON.stringify(results[0])).not.toContain("Chose:");
+  });
+
+  it("keeps conflicting settled history blocking when the same recovery also interrupts an open turn", async () => {
+    const f = fixture();
+    f.replies.unshift({ text: "A settled reply before the pending question." });
+    const { sessionId, attachmentId, interaction } = await start(f, true);
+    let corrupted = 0;
+    for (const entry of readdirSync(f.sessionDataDir, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      const path = join(entry.parentPath, entry.name);
+      const lines = readFileSync(path, "utf8")
+        .trimEnd()
+        .split("\n")
+        .map((line) => {
+          const transaction = JSON.parse(line);
+          for (const record of Array.isArray(transaction) ? transaction : [transaction]) {
+            if (record.type === "custom" && record.data?.kind === "message-settled") {
+              record.data.message.entryId = "missing-settled-entry";
+              corrupted += 1;
+            }
+          }
+          return JSON.stringify(transaction);
+        });
+      writeFileSync(path, `${lines.join("\n")}\n`);
+    }
+    expect(corrupted).toBe(1);
+    const current = await f.restart(f, true);
+    expect(await f.boot(current)).toEqual({ closed: 0, errors: [] });
+    const diagnostic = {
+      id: `pi:attention:${attachmentId}:partial-turn`,
+      kind: "partial_turn_interrupted",
+      detail:
+        "Pi recovery history disagreed about a settled assistant message; the incomplete turn was withheld.",
+    };
+    const recovered = (await current.host.projection({ sessionId })).projection;
+    expect(recovered.turnActive).toBe(false);
+    expect(recovered.interactions.active).toEqual([]);
+    expect(recovered.attention.active).toContainEqual(expect.objectContaining(diagnostic));
+    const events = await current.engine.listEvents({ sessionId });
+    expect(events.map(({ payload }) => payload)).toContainEqual(
+      expect.objectContaining({ kind: "turn.interrupted" }),
+    );
+    expect(events.map(({ payload }) => payload)).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction.cancelled",
+        interactionId: interaction.id,
+        reason: "abandoned",
+      }),
+    );
+    assertFailedAskResult(f);
+    await queue(current, sessionId);
+    const blocked = (await current.host.projection({ sessionId })).projection;
+    expect(blocked.queue).toHaveLength(1);
+    expect(blocked.queue![0]!.state).toBe("queued");
+    expect(blocked.attention.active).toContainEqual(expect.objectContaining(diagnostic));
+    expect(blocked.attention.active).toContainEqual(
+      expect.objectContaining({
+        kind: "adapter_unrecoverable",
+        detail: expect.stringContaining("partial_turn_interrupted"),
+      }),
+    );
+    expect(f.script.requests).toHaveLength(2);
+    await assertNoAnswers(current, sessionId);
+    // Repeated attachment/queue recovery must not downgrade the diagnostic either.
+    const relaunched = await f.restart(current);
+    expect(await f.boot(relaunched)).toEqual({ closed: 0, errors: [] });
+    await relaunched.host.recoverFollowUps();
+    const stillBlocked = (await relaunched.host.projection({ sessionId })).projection;
+    expect(stillBlocked.queue).toHaveLength(1);
+    expect(stillBlocked.attention.active).toContainEqual(expect.objectContaining(diagnostic));
+    expect(f.script.requests).toHaveLength(2);
+    assertFailedAskResult(f);
+    await assertNoAnswers(relaunched, sessionId);
   });
 
   it("abandons every prompt of a persisted questions ask without inventing answers", async () => {

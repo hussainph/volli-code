@@ -4920,26 +4920,26 @@ describe("startSession", () => {
     await secondHandle.close();
   });
 
-  it("settles an unterminated recovered turn as partial instead of completing it", async () => {
-    const attachment = fixture();
-    const firstRuntime = createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(
-        scriptedStream([
-          (emit) => {
-            emit.text("settled before crash");
-            emit.finish();
-          },
-        ]),
-      ),
-    });
-    const firstHandle = await firstRuntime.startSession(attachment.spec);
-    await firstHandle.submitUserMessage("start", "queue", "command-partial-turn");
-    const recovery = firstHandle.recovery!;
-    await firstHandle.close();
-    writeSidecarEntries(
-      recovery.sessionFilePath,
-      entryRecords(recovery.sessionFilePath).filter((entry) => {
+  it.each([false, true])(
+    "settles an unterminated recovered turn without downgrading conflicting settled history (%s)",
+    async (conflictingHistory) => {
+      const attachment = fixture();
+      const firstRuntime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.text("settled before crash");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const firstHandle = await firstRuntime.startSession(attachment.spec);
+      await firstHandle.submitUserMessage("start", "queue", "command-partial-turn");
+      const recovery = firstHandle.recovery!;
+      await firstHandle.close();
+      const entries = entryRecords(recovery.sessionFilePath).filter((entry) => {
         const data = entry["data"] as { kind?: string; state?: string } | undefined;
         return !(
           entry["type"] === "custom" &&
@@ -4947,33 +4947,45 @@ describe("startSession", () => {
           data?.kind === "turn" &&
           data.state === "completed"
         );
-      }),
-    );
+      });
+      if (conflictingHistory) {
+        const marker = entries.find(
+          (entry) => (entry["data"] as { kind?: string } | undefined)?.kind === "message-settled",
+        )!;
+        (marker["data"] as { message: { entryId: string } }).message.entryId = "missing-entry";
+      }
+      writeSidecarEntries(recovery.sessionFilePath, entries);
 
-    const secondRuntime = createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(scriptedStream([])),
-    });
-    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
-    const replay = await secondHandle.reconcile(null);
+      const secondRuntime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(scriptedStream([])),
+      });
+      const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+      const replay = await secondHandle.reconcile(null);
 
-    expect(kinds([...replay.observations])).toEqual([
-      "turn:started",
-      "usage",
-      "message-settled",
-      "attention",
-      "turn:interrupted",
-    ]);
-    expect(replay.observations[3]).toMatchObject({
-      kind: "attention",
-      state: "raised",
-      reason: "partial-turn",
-    });
-    expect(replay.receipts).toEqual([
-      expect.objectContaining({ commandId: "command-partial-turn" }),
-    ]);
-    await secondHandle.close();
-  });
+      expect(kinds([...replay.observations])).toEqual([
+        "turn:started",
+        "usage",
+        ...(conflictingHistory ? [] : ["message-settled"]),
+        "attention",
+        "turn:interrupted",
+      ]);
+      expect(replay.observations.filter(({ kind }) => kind === "attention")).toEqual([
+        expect.objectContaining({
+          kind: "attention",
+          state: "raised",
+          reason: "partial-turn",
+          message: conflictingHistory
+            ? "Pi recovery history disagreed about a settled assistant message; the incomplete turn was withheld."
+            : "A recovered Pi turn ended before its completion marker was committed.",
+        }),
+      ]);
+      expect(replay.receipts).toEqual([
+        expect.objectContaining({ commandId: "command-partial-turn" }),
+      ]);
+      await secondHandle.close();
+    },
+  );
 
   it("withholds an assistant entry without a semantic marker as a recoverable partial turn", async () => {
     const attachment = fixture();
