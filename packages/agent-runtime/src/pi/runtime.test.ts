@@ -4529,10 +4529,13 @@ describe("startSession", () => {
       ),
     });
     const first = await runtime.startSession(attachment.spec);
-    await first.submitUserMessage("once", "queue", "command-once");
+    const accepted = await first.submitUserMessage("once", "queue", "command-once");
+    expect(accepted).toEqual({ kind: "delivered", delivery: "prompt", acceptedAt: expect.any(Number) });
+    const acceptedAt = accepted.kind === "delivered" ? accepted.acceptedAt : undefined;
+    expect((await first.reconcile(null)).receipts).toEqual([{ commandId: "command-once", acceptedAt }]);
     expect(
       await first.submitUserMessage("once", "queue", "command-once", [], [], "opened"),
-    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false });
+    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false, acceptedAt });
     const recovery = first.recovery;
     await first.close();
     const reopenedRuntime = createPiAgentRuntime({
@@ -4542,7 +4545,7 @@ describe("startSession", () => {
     const reopened = await reopenedRuntime.startSession({ ...attachment.spec, recovery });
     expect(
       await reopened.submitUserMessage("once", "queue", "command-once", [], [], "opened"),
-    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false });
+    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false, acceptedAt });
     expect(
       (await reopened.reconcile(null)).receipts?.filter(
         ({ commandId }) => commandId === "command-once",
@@ -4605,7 +4608,7 @@ describe("startSession", () => {
     allowCompletion.resolve();
     await first;
     await secondStarted.promise;
-    expect(await second).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    expect(await second).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true, acceptedAt: expect.any(Number) });
     expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
       "first-command",
       "second-command",
@@ -5630,7 +5633,7 @@ describe("startSession", () => {
     ).not.toContain("host-steer");
     release.resolve();
     await steerStarted.promise;
-    await expect(steer).resolves.toEqual({ kind: "delivered", delivery: "steer" });
+    await expect(steer).resolves.toEqual({ kind: "delivered", delivery: "steer", acceptedAt: expect.any(Number) });
     const reconciled = await handle.reconcile(null);
     expect(reconciled.receipts?.map(({ commandId }) => commandId)).toContain("host-steer");
     expect(entryRecords(handle.recovery!.sessionFilePath)).toContainEqual(
@@ -5885,7 +5888,7 @@ describe("startSession", () => {
       ).resolves.toEqual({ kind: "delivered", delivery });
 
       allowCompletion.resolve();
-      await expect(first).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+      await expect(first).resolves.toEqual({ kind: "delivered", delivery: "prompt", acceptedAt: expect.any(Number) });
 
       expect(contexts).toHaveLength(2);
       expect(JSON.stringify(contexts[1]?.messages)).toContain("take another route");
@@ -6538,7 +6541,7 @@ describe("settling a submit on the turn opening (VC-324)", () => {
       "opened",
     );
 
-    expect(delivered).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    expect(delivered).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true, acceptedAt: expect.any(Number) });
     // The run is still going: the answer came back on `turn:started` alone.
     await running.promise;
     expect(kinds(observations)).toEqual(["attachment:started", "turn:started"]);
@@ -6588,7 +6591,7 @@ describe("settling a submit on the turn opening (VC-324)", () => {
 
     await expect(
       handle.submitUserMessage("go", "steer", "command-doomed", [], [], "opened"),
-    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true, acceptedAt: expect.any(Number) });
 
     await raised.promise;
     expect(attentions(observations)).toEqual([
@@ -6656,7 +6659,7 @@ describe("settling a submit on the turn opening (VC-324)", () => {
 
     await expect(
       handle.submitUserMessage("first", "steer", "command-detached", [], [], "opened"),
-    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true, acceptedAt: expect.any(Number) });
     await detachedFailed.promise;
     await runEnded.promise;
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -7899,6 +7902,7 @@ describe("compacting a context that reached its reserve", () => {
     await expect(handle.submitUserMessage("and now?", "queue", "command-2")).resolves.toEqual({
       kind: "delivered",
       delivery: "prompt",
+      acceptedAt: expect.any(Number),
     });
 
     // No compaction was due and none may be reported — least of all a failure.
@@ -10881,6 +10885,7 @@ describe("recovering a turn whose reasoning the provider refused", () => {
     await expect(handle.retry("command-retry")).resolves.toEqual({
       kind: "delivered",
       delivery: "retry",
+      acceptedAt: expect.any(Number),
     });
     expect(calls).toHaveLength(4);
     expect(settledTexts(attachment.observations)).toEqual(["first answer", "recovered by hand"]);

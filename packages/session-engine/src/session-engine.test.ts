@@ -299,6 +299,42 @@ describe("SessionEngine creation and explicit commands", () => {
     ).rejects.toBeInstanceOf(SessionEngineConflictError);
   });
 
+  it("reconciles the same routed acceptance with a different recovery timestamp, without weakening conflicts", async () => {
+    const { ledger, plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const opened = attachment(session.id);
+    await plane.observe({ id: "replay-open", sessionId: session.id, occurredAt: 1,
+      provenance: adapterProvenance, kind: "attachment.opened", attachment: opened });
+    const submitted = await plane.submit({ commandId: "replay-message", sessionId: session.id,
+      intent: { kind: "message.submit", reference: { id: "message", mediaType: null, digest: null } },
+      provenance: userProvenance });
+    const observation = { id: "live-acceptance", sessionId: session.id, attachmentId: opened.id,
+      occurredAt: 200, provenance: adapterProvenance, kind: "command.receipt" as const,
+      receipt: { id: "live-receipt", commandId: submitted.command.id, status: "accepted" as const,
+        acceptedAt: 200, result: { kind: "message.submitted" as const, sessionId: session.id } } };
+    const first = await plane.observe(observation);
+    const replay = { ...observation, id: "recovered-acceptance",
+      receipt: { ...observation.receipt, id: "marker-receipt", acceptedAt: 100 } };
+    expect(await plane.observe(replay)).toEqual(first);
+    expect(await ledger.transaction((tx) => tx.listReceipts(submitted.command.id))).toHaveLength(1);
+    await expect(plane.observe({ ...replay, attachmentId: "other" })).rejects.toThrow("routed attachment");
+    await expect(plane.observe({ ...replay, provenance: userProvenance })).rejects.toThrow("adapter opencode");
+    await expect(plane.observe({ ...replay, receipt: { ...replay.receipt,
+      result: { kind: "message.submitted", sessionId: "other" } } })).rejects.toThrow("result");
+    await expect(plane.observe({ ...replay, receipt: { ...replay.receipt,
+      result: { ...replay.receipt.result, corrupt: true } } } as SessionObservation))
+      .rejects.toThrow("already accepted differently");
+    await expect(plane.observe({ ...observation, id: "same-id-different-time",
+      receipt: { ...observation.receipt, acceptedAt: 100 } })).rejects.toThrow("already recorded differently");
+    await plane.observe({ ...observation, id: "completed-event", receipt: {
+      id: "completed-receipt", commandId: submitted.command.id, status: "completed",
+      result: observation.receipt.result } });
+    expect(await plane.observe(replay)).toEqual(first);
+    const transaction = ledger.transaction.bind(ledger);
+    ledger.transaction = (work) => transaction((tx) => work({ ...tx, listEvents: () => [] }));
+    await expect(plane.observe(replay)).rejects.toThrow("has no Session event");
+  });
+
   it("persists adapter-bound intent without manufacturing a receipt, then appends adapter receipts as facts", async () => {
     const { ledger, plane } = composition();
     const { session } = await plane.createSession(createRequest());

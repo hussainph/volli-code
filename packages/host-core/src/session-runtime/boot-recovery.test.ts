@@ -232,7 +232,7 @@ describe("closeStaleAttachments", () => {
     expect(target.observed).toEqual([]);
   });
 
-  it("retires only host permission questions parked on the recovered attachment", async () => {
+  it("retires permission and model questions only on the recovered attachment", async () => {
     const lost = session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true);
     const target = recorder({
       "project-1": [
@@ -243,6 +243,7 @@ describe("closeStaleAttachments", () => {
               { id: "budget-ask:lost", attachmentId: "pi-1", kind: "permission" },
               { id: "ask-user:model", attachmentId: "pi-1", kind: "question" },
               { id: "confirm-ask:elsewhere", attachmentId: "pi-2", kind: "permission" },
+              { id: "ask-user:elsewhere", attachmentId: "pi-2", kind: "question" },
             ],
           },
         },
@@ -251,8 +252,9 @@ describe("closeStaleAttachments", () => {
     await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);
     expect(target.observed).toMatchObject([
       { kind: "interaction.cancelled", interactionId: "budget-ask:lost", reason: "abandoned" },
+      { kind: "interaction.cancelled", interactionId: "ask-user:model", reason: "abandoned" },
     ]);
-    expect(target.observed).toHaveLength(1);
+    expect(target.observed).toHaveLength(2);
   });
 
   it("reports a failed permission retirement and keeps recovering", async () => {
@@ -288,7 +290,7 @@ describe("closeStaleAttachments", () => {
   });
 
   it.each(["already-interrupted", "failed-reconcile", "closed"])(
-    "retires abandoned host permissions after %s",
+    "retires abandoned permissions and model questions after %s",
     async (state) => {
       const lost = session(
         "session-1",
@@ -313,6 +315,7 @@ describe("closeStaleAttachments", () => {
                     attachmentId: "pi-1",
                     kind: "permission",
                   },
+                  { id: "ask-user:lost", attachmentId: "pi-1", kind: "question" },
                 ],
               },
             },
@@ -330,6 +333,9 @@ describe("closeStaleAttachments", () => {
             event.kind === "interaction.cancelled" && event.interactionId === "budget-ask:lost",
         ),
       ).toBe(true);
+      expect(target.observed).toContainEqual(expect.objectContaining({
+        kind: "interaction.cancelled", interactionId: "ask-user:lost", reason: "abandoned",
+      }));
     },
   );
 

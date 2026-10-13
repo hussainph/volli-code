@@ -55,6 +55,7 @@ import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
 import { positiveIntOr, projectForCreate, ticketForDisplayId } from "./resolution";
+import { pendingSessionQuestions } from "./pending-session-questions";
 import { publicSessionOrigin } from "./wire";
 import { hostLogger } from "../log/root";
 
@@ -432,6 +433,7 @@ export async function sessionShowVerb(
           status: terminal.endedAt === null ? "running" : "exited",
           harness: effectiveHarnessId(terminal),
           signal: publicSessionSignal(projection, observedAt),
+          pendingQuestions: pendingSessionQuestions(projection),
           startedBy: publicStartedBy(
             readSessionProvenance(options.db, {
               sessionId: terminal.id,
@@ -502,6 +504,7 @@ export async function sessionShowVerb(
         role: record.role,
         signal: publicSessionSignal(projection, observedAt),
         waitingOn: record.waitingOn,
+        pendingQuestions: pendingSessionQuestions(projection),
         interruptedReason: interruptedReason(record, projection),
         startedBy: publicStartedBy(provenance, true),
         parentSession:
@@ -614,6 +617,7 @@ export async function sessionPeekVerb(
         session: shortSessionId(resolved.session.id),
         status: observation.status,
         output: observation.output,
+        pendingQuestions: pendingSessionQuestions(projection),
         startedBy: publicStartedBy(
           readSessionProvenance(options.db, {
             sessionId: resolved.session.id,
@@ -659,6 +663,7 @@ export async function sessionPeekVerb(
       // describes a Session whichever surface asks.
       status: record.activity,
       waitingOn: record.waitingOn,
+      pendingQuestions: pendingSessionQuestions(chat.projection),
       // See `session list` — the state word's reason, on the same guard.
       interruptedReason: interruptedReason(record, chat.projection),
       ...sessionOrchestrationCells(
