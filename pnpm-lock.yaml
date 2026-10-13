@@ -34,7 +34,7 @@ packageExtensionsChecksum: sha256-q5WdBF7BCWKzly/tgcivWtVAQ00t1e/WaEGl0+mhjaI=
 
 patchedDependencies:
   '@dnd-kit/core@6.3.1': b27bef7dadf707ad29bd0f46903d9a5511eb602aae423b29b62b58aeef24571d
-  '@earendil-works/pi-codemode@1.0.0': 717d372d545de0bc6ac3ebe3b9b77c33700a602225ad37279dc69db12a9cf047
+  '@earendil-works/pi-codemode@1.0.0': b6d34f3d55307652512b2c064260bdb0c8a8081c01fa417b58087f6b88fea14a
 
 importers:
 
@@ -69,7 +69,7 @@ importers:
         version: 3.2.2(react@19.2.8)
       '@earendil-works/pi-codemode':
         specifier: 1.0.0
-        version: 1.0.0(patch_hash=717d372d545de0bc6ac3ebe3b9b77c33700a602225ad37279dc69db12a9cf047)
+        version: 1.0.0(patch_hash=b6d34f3d55307652512b2c064260bdb0c8a8081c01fa417b58087f6b88fea14a)
       '@earendil-works/pi-mcp':
         specifier: 0.99.2
         version: 0.99.2
@@ -473,7 +473,7 @@ importers:
         version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.21.3)(zod@4.4.3)
       '@earendil-works/pi-codemode':
         specifier: 1.0.0
-        version: 1.0.0(patch_hash=717d372d545de0bc6ac3ebe3b9b77c33700a602225ad37279dc69db12a9cf047)
+        version: 1.0.0(patch_hash=b6d34f3d55307652512b2c064260bdb0c8a8081c01fa417b58087f6b88fea14a)
       '@earendil-works/pi-telemetry':
         specifier: 1.0.0
         version: 1.0.0
@@ -608,7 +608,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-codemode':
         specifier: 1.0.0
-        version: 1.0.0(patch_hash=717d372d545de0bc6ac3ebe3b9b77c33700a602225ad37279dc69db12a9cf047)
+        version: 1.0.0(patch_hash=b6d34f3d55307652512b2c064260bdb0c8a8081c01fa417b58087f6b88fea14a)
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
@@ -8680,7 +8680,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-codemode@1.0.0(patch_hash=717d372d545de0bc6ac3ebe3b9b77c33700a602225ad37279dc69db12a9cf047)':
+  '@earendil-works/pi-codemode@1.0.0(patch_hash=b6d34f3d55307652512b2c064260bdb0c8a8081c01fa417b58087f6b88fea14a)':
     dependencies:
       quickjs-wasi: 3.6.2
 

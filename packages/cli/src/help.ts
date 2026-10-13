@@ -209,24 +209,61 @@ function usageLine(entry: VerbEntry, mode: "reference" | "detail"): string {
   return `${prefix}${cliVerbName(entry.key)}${id}${opts.length > 0 ? ` ${opts}` : ""}${extra}`;
 }
 
-function doorLabel(entry: VerbEntry): string {
+function doorLabel(entry: VerbEntry, runtime: AgentHelpRuntime): string {
   const cli = entry.accessModes.includes("cli");
   const tool = entry.accessModes.includes("tool");
-  if (cli && tool) return "Agent CLI and Agent Tool Surface";
+  const route = toolRouteLabel(runtime.surface?.routes?.[entry.key]);
+  if (cli && tool) return `Agent CLI and Agent Tool Surface (${route})`;
   if (cli) return "Agent CLI";
-  if (tool) return "Agent Tool Surface (named tool; not shell-executable)";
+  if (tool) return `Agent Tool Surface (${route}; not shell-executable)`;
   // `hostApi` needs no door word yet: `verbTier` refuses a hostApi-only entry
   // until the External Agent Surface defines its governance, so command detail
   // cannot render one. The surface that lifts that refusal names its own door.
   return "app only (no agent door)";
 }
 
+/** Labels an open output route without interpreting missing/new values as direct. */
+export function toolRouteLabel(route: string | undefined): string {
+  switch (route) {
+    case "direct":
+      return "direct (named tool only)";
+    case "both":
+      return "both (named tool or codemode)";
+    case "code":
+      return "code (through codemode only)";
+    case "deferred":
+      return "deferred (through codemode only; searchTools / describeTool)";
+    case "hidden":
+      return "hidden (unavailable)";
+    default:
+      return "route unknown";
+  }
+}
+
 function runtimeSurfaceLines(runtime: AgentHelpRuntime): string[] {
   if (runtime.surface !== null) {
-    return [
-      `Resolved Session Role: ${runtime.surface.role}`,
-      `Frozen Agent Tool Surface: ${runtime.surface.tools.length === 0 ? "(empty)" : runtime.surface.tools.join(", ")}`,
+    const surface = runtime.surface;
+    const lines = [
+      `Resolved Session Role: ${surface.role}`,
+      `Frozen Agent Tool Surface: ${surface.tools.length === 0 ? "(empty)" : ""}`,
     ];
+    const groups = new Map<string, string[]>();
+    for (const tool of surface.tools) {
+      const route = surface.routes?.[tool];
+      const server = surface.mcpServerIds?.[tool];
+      const line = `  ${tool} — ${toolRouteLabel(route)}`;
+      if (server !== undefined && (route === "code" || route === "deferred")) {
+        const group = `mcp:${server} — through codemode only`;
+        const rows = groups.get(group) ?? [];
+        rows.push(line);
+        groups.set(group, rows);
+      } else {
+        lines.push(line);
+      }
+    }
+    for (const [heading, rows] of groups)
+      lines.push(`  ${heading}`, ...rows.map((row) => `  ${row}`));
+    return lines;
   }
   if (runtime.surfaceUnknownReason !== null) {
     return [
@@ -241,7 +278,7 @@ function toolAvailability(entry: VerbEntry, runtime: AgentHelpRuntime): string |
   if (runtime.surface !== null) {
     const roleName = SESSION_ROLE_NAMES[runtime.surface.role];
     return runtime.surface.tools.includes(entry.key)
-      ? `Tool availability: carried by this ${roleName}'s frozen Agent Tool Surface.`
+      ? `Tool availability: carried by this ${roleName}'s frozen Agent Tool Surface; ${toolRouteLabel(runtime.surface.routes?.[entry.key])}.`
       : `Tool availability: not carried by this ${roleName}'s frozen Agent Tool Surface.`;
   }
   return runtime.surfaceUnknownReason === null
@@ -342,7 +379,7 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
   const lines = [
     `${cliVerbName(entry.key)} — ${entry.summary}`,
     "",
-    `Door: ${doorLabel(entry)}`,
+    `Door: ${doorLabel(entry, runtime)}`,
     `Verb tier: ${tier ?? "none"}`,
   ];
   const availability = toolAvailability(entry, runtime);
@@ -357,7 +394,10 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
       }
     }
   } else if (entry.tool !== undefined) {
-    lines.push("", `Tool: ${entry.tool.name}`);
+    lines.push(
+      "",
+      `Tool: ${entry.tool.name} — ${toolRouteLabel(runtime.surface?.routes?.[entry.key])}`,
+    );
     if (entry.tool.input.length > 0) {
       lines.push("", "Input:");
       lines.push(...toolInputLines(entry.tool.input));
@@ -384,7 +424,15 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
   if (onCli && entry.example !== undefined) lines.push("", `Example: ${entry.example}`);
   if (entry.notes !== undefined && entry.notes.length > 0) {
     lines.push("", "Notes:");
-    for (const note of entry.notes) lines.push(`- ${note}`);
+    // Registry notes predate Code Mode and describe a named-tool door. Keep
+    // their semantics, but do not present that historical door as a direct call.
+    for (const note of entry.notes) {
+      lines.push(
+        `- ${note
+          .replaceAll("Agents use the named tool", "Agents use the Agent Tool Surface")
+          .replaceAll("Runs as a named tool", "Runs through the Agent Tool Surface")}`,
+      );
+    }
   }
   return `${lines.join("\n")}\n`;
 }
@@ -398,12 +446,16 @@ function groupWords(entries: readonly VerbEntry[]): Set<string> {
   return words;
 }
 
-function groupDetail(word: string, entries: readonly VerbEntry[]): string {
+function groupDetail(
+  word: string,
+  entries: readonly VerbEntry[],
+  runtime: AgentHelpRuntime,
+): string {
   const subcommands = entries
     .map((entry) => ({
       name: cliVerbName(entry.key),
       summary: entry.summary,
-      door: doorLabel(entry),
+      door: doorLabel(entry, runtime),
     }))
     .filter((subcommand) => subcommand.name.startsWith(`${word} `));
   const width = Math.max(...subcommands.map((subcommand) => subcommand.name.length));
@@ -458,7 +510,7 @@ export function resolveHelp(
   }
   const first = path[0]!;
   if (groupWords(discoverable).has(first)) {
-    return { ok: true, text: groupDetail(first, discoverable) };
+    return { ok: true, text: groupDetail(first, discoverable, options.runtime ?? STATIC_RUNTIME) };
   }
   if (path.length === 1 && isTopic(first)) {
     return { ok: true, text: topicText(first, options) };

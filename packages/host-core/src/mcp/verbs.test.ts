@@ -207,6 +207,20 @@ async function installed(h: ReturnType<typeof harness>, tools = "read_file") {
   return h.call("mcp.install", { ...LOCAL, tools, confirm: "apply" });
 }
 
+/**
+ * Who gets a successful write's change (VC-752). A new root Session does. A
+ * delegated helper inherits its parent's frozen tools and does not, so the copy
+ * must name the tool that starts a new root Session, and never the old promise
+ * that the next Session created has them all.
+ */
+function expectWhoGetsTheChange(text: string): void {
+  expect(text).toContain("New root Sessions get the updated MCP tools");
+  expect(text).toContain("session_start");
+  expect(text).toContain("delegated helpers inherit their parent's frozen MCP tools");
+  expect(text).not.toContain("These tools are not available in this Session");
+  expect(text).not.toContain("next Session created");
+}
+
 afterEach(() => {
   relaunchedDb?.close();
   relaunchedDb = null;
@@ -436,7 +450,7 @@ describe("mcp_install applies only on the explicit second call", () => {
     expect(result.text).toContain("Installed Acme Files");
     // Acceptance 3: the honest explanation, in the result text.
     expect(result.text).toContain("frozen when it is created");
-    expect(result.text).toContain("next Session created");
+    expectWhoGetsTheChange(result.text);
     const [server] = listMcpServers(h.db, "project-one");
     expect(server?.catalog.map((tool) => [tool.name, tool.enabled])).toEqual([
       ["read_file", true],
@@ -682,6 +696,10 @@ describe("mcp_enable, mcp_disable, mcp_tools and mcp_refresh", () => {
 
     expect(result.text).toContain("Turned Acme Files off");
     expect(result.text).toContain("can still reattach");
+    // Nothing was taken from this Session, so the install copy's "not available
+    // in this Session" would be false here.
+    expect(result.text).toContain("keeps the tools it was created with");
+    expect(result.text).not.toContain("not available in this Session");
     expect(listMcpServers(h.db, "project-one")[0]?.enabled).toBe(false);
     expect(h.settings.selectedTools("project-one")).toEqual([]);
   });
@@ -694,7 +712,7 @@ describe("mcp_enable, mcp_disable, mcp_tools and mcp_refresh", () => {
     const result = await h.call("mcp.enable", { server: "files" });
 
     expect(result.text).toContain("Turned Acme Files on");
-    expect(result.text).toContain("next Session created");
+    expectWhoGetsTheChange(result.text);
     expect(h.settings.selectedTools("project-one").map((tool) => tool.toolName)).toEqual([
       "read_file",
     ]);
@@ -1009,7 +1027,8 @@ describe("what an install reaches, and what it must not", () => {
     ]);
     // The result says so in plain words rather than leaving the model to
     // discover it by calling a tool that is not there.
-    expect(result.text).toContain("not available in this Session");
+    expect(result.text).toContain("This Session's tools are unchanged");
+    expectWhoGetsTheChange(result.text);
   });
 
   it("breaks reattachment for an older Session once its server is removed (acceptance 8)", async () => {

@@ -73,7 +73,14 @@ import {
 import { RunImages } from "./images";
 import { checkScript } from "./script";
 import { ExecutionSlots, Mutex, RunClock } from "./schedule";
-import { outputSchemaFor, shapeResult, toolKind, type ShapedOutcome, type ToolKind } from "./shape";
+import {
+  LEGACY_IMAGE_OMISSION,
+  outputSchemaFor,
+  shapeResult,
+  toolKind,
+  type ShapedOutcome,
+  type ToolKind,
+} from "./shape";
 import { isUntrustedSource, untrustedEnvelope } from "./trust";
 import { withCallScope } from "../pi/call-scope";
 import { SAVED_TOOL_OUTPUT_WARNING } from "../pi/tools";
@@ -610,7 +617,13 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       isError: outcome.isError,
     });
     const captured: string[] = [];
-    let captureOmissions = 0;
+    const legacy = host.surface.descriptionVersion === undefined;
+    // Legacy shaping never invokes capture. Count its omissions here too, so
+    // the outer result explains them even when the program returns nothing.
+    let captureOmissions = legacy
+      ? outcome.result.content.filter((block) => block.type === "image").length
+      : 0;
+    omittedImages += captureOmissions;
     const shaped = shapeResult(
       input.kinds.get(tool.name)!,
       outcome.result,
@@ -627,7 +640,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
         } else captured.push(handle.handle);
         return handle;
       },
-      host.surface.descriptionVersion === undefined,
+      legacy,
     );
     if (outcome.isError && signal.aborted) {
       // Cancelled under it: nothing says the call completed, so it is neither
@@ -931,7 +944,7 @@ async function assemble(input: {
       ? ` ${emitted.content.length / 2} image(s) attached (display requires Volli 0.2.2 or newer).`
       : "",
     omitted > 0
-      ? ` ${omitted} image${omitted === 1 ? " was" : "s were"} left out: ${input.legacy ? "Code Mode returns no images." : "image bound exceeded, unavailable handle, or non-handle image output."}`
+      ? ` ${omitted} image${omitted === 1 ? " was" : "s were"} left out: ${input.legacy ? LEGACY_IMAGE_OMISSION : "image bound exceeded, unavailable handle, or non-handle image output."}`
       : "",
   ].join("");
   return {
