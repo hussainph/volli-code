@@ -177,6 +177,8 @@ describe("BrowserTabRegistry (VC-561)", () => {
     const otherHeld = backend.open(sessionTab(ME.sessionId));
     backend.hold(otherHeld.tabId, OTHER);
     const otherOwned = backend.open(sessionTab(OTHER.sessionId));
+    const newerAttachment = backend.open(sessionTab(ME.sessionId));
+    backend.hold(newerAttachment.tabId, { ...ME, attachmentId: "att-newer" });
     const signal = new AbortController().signal;
     await port.acquire({ tabId: free.tabId, signal });
     await port.release({ tabId: free.tabId, signal });
@@ -190,6 +192,7 @@ describe("BrowserTabRegistry (VC-561)", () => {
       personHeld.tabId,
       otherHeld.tabId,
       otherOwned.tabId,
+      newerAttachment.tabId,
     ]);
     expect(backend.entry(personHeld.tabId).state.heldBy).toEqual({ kind: "person" });
     expect(backend.entry(otherHeld.tabId).state.heldBy).toMatchObject({
@@ -199,7 +202,7 @@ describe("BrowserTabRegistry (VC-561)", () => {
     port.turnEnded({ closeHeadlessOwned: true });
     port.dispose();
     port.dispose();
-    expect(backend.list(SCOPE)).toHaveLength(6);
+    expect(backend.list(SCOPE)).toHaveLength(7);
     backend.closeAll();
   });
 
