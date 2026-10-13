@@ -62,7 +62,10 @@ SSH/install/pair, Git arrange, arbitrary errors/timeouts and cleanup errors.
 
 Steps 6–7 require the host's real question capability and answered continuation.
 The scripted provider only calls `ask_user` when production offers that tool;
-it never manufactures availability or a successful answer. A VC-721 regression
+it never manufactures availability or a successful answer. These fresh Sessions
+use `questions: [{ question, choices: ["Proceed", "Stop"] }]`; the driver selects
+Proceed then presses Answer, and the provider checks the returned question/answer
+JSON before continuing. Historical unmarked Sessions retain the flat declaration. A VC-721 regression
 must remain a failure at the actual failing question/reopen step, not a skip.
 This guide describes the required journey, not evidence that the updated smoke
 has already passed. The disposable-runner CI result must establish that.
