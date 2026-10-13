@@ -739,7 +739,7 @@ function CodeModeImage({ block }: { block: Extract<CodeModeContent, { type: "ima
         state={dataUrl === null ? picture : { kind: "ready", dataUrl }}
       />
       {block.caption === undefined ? null : (
-        <figcaption className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
+        <figcaption className="mt-1 whitespace-pre-wrap text-ui text-muted-foreground">
           {block.caption}
         </figcaption>
       )}
