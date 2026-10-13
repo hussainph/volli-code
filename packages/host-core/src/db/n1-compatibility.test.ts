@@ -590,6 +590,86 @@ describe.skipIf(manifest === null)(
       }
     });
 
+    it("replays and records an answer to a flat ask left pending by N-1 in a new-birth Session", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      const sessionId = "session-head";
+      const interactionId = askUserInteractionId("downgraded-flat");
+      const birthInput = {
+        kind: "tool-surface",
+        tools: ["ask_user"],
+        askUserQuestions: true,
+      } as const;
+      const writer = openVolliDb(dbPath);
+      try {
+        await headEngine(writer, "flat-birth").getOrRecordSessionInput({
+          sessionId,
+          input: birthInput,
+          provenance,
+        });
+      } finally {
+        writer.close();
+      }
+      const pending = value(
+        await n1(dbPath, [{ kind: "pendingFlatAsk", sessionId, interactionId }]),
+        0,
+      );
+      expect(pending.surface).toEqual({ kind: "tool-surface", tools: ["ask_user"] });
+      expect(pending.activeCount).toBe(1);
+      const upgraded = openVolliDb(dbPath);
+      try {
+        const engine = headEngine(upgraded, "upgraded-flat");
+        expect(
+          await engine.getOrRecordSessionInput({ sessionId, input: birthInput, provenance }),
+        ).toEqual(birthInput);
+        const before = await engine.getSession({ sessionId });
+        expect(before?.interactions.active).toEqual([pending.interaction]);
+        const resolution = {
+          optionIds: ["keep"],
+          response: "Keep this answer",
+          answers: [{ promptId: "prompt:0", optionIds: ["keep"], response: "Keep this answer" }],
+        };
+        const submitted = await engine.submit({
+          commandId: "upgraded-flat-answer",
+          sessionId,
+          provenance,
+          intent: {
+            kind: "interaction.resolve",
+            attachmentId: "n1-flat-attachment",
+            interactionId,
+            resolution,
+            reference: { id: "upgraded-flat-answer-artifact", mediaType: null, digest: null },
+          },
+        });
+        // The engine persists and routes intent; the adapter's resolution
+        // observation below is the durable completion, as in the N-1 lane.
+        expect(submitted.receipt).toBeNull();
+        expect(submitted.command.route).toEqual({
+          adapterId: "pi",
+          attachmentId: "n1-flat-attachment",
+        });
+        await engine.observe({
+          id: "upgraded-flat-resolved",
+          sessionId,
+          occurredAt: NOW,
+          provenance: { source: { kind: "adapter", id: "pi", detail: null }, venue: null },
+          kind: "interaction.resolved",
+          attachmentId: "n1-flat-attachment",
+          interactionId,
+          resolution,
+        });
+        const after = await engine.getSession({ sessionId });
+        expect(after?.interactions.active).toEqual([]);
+        expect(after?.interactions.resolved[0]).toMatchObject({
+          interaction: pending.interaction,
+          resolution,
+        });
+      } finally {
+        upgraded.close();
+      }
+    });
+
     it("makes a backup bundle of a head profile that both builds restore", async () => {
       await headProfile();
       const { head, guarded } = await probe();

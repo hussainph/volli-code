@@ -857,14 +857,11 @@ const askUserSchema = Type.Object({
   ),
 });
 
-// Birth-marked declaration: changing these bytes needs a new birth marker.
-// No top-level union: providers receive one object, and execution enforces
-// exactly one of the original flat call or the additive questions array.
-const askUserQuestionsSchema = Type.Object({
-  ...askUserSchema.properties,
-  question: Type.Optional(askUserSchema.properties.question),
-  questions: Type.Optional(
-    Type.Array(
+// This birth marker is not shipped yet: owner review made its declaration
+// questions-only. Once released, changing these bytes needs a new marker.
+const askUserQuestionsSchema = Type.Object(
+  {
+    questions: Type.Array(
       Type.Object(
         {
           question: Type.String({
@@ -878,45 +875,22 @@ const askUserQuestionsSchema = Type.Object({
         },
         { additionalProperties: false },
       ),
-      {
-        minItems: 1,
-        maxItems: 4,
-        description:
-          "1-4 related decisions blocking the same step. Use instead of the flat question fields.",
-      },
+      { minItems: 1, maxItems: 4, description: "1-4 related decisions blocking the same step." },
     ),
-  ),
-});
+  },
+  { additionalProperties: false },
+);
 
 const ASK_USER_QUESTIONS_DESCRIPTION = [
-  "Ask the person driving this session only for a decision that genuinely blocks the same step and is theirs to make, with no defensible default.",
-  "Use questions for 1-4 related decisions, each with short, distinct choices; an empty choices array asks for prose. They can always type another answer.",
-  "Keep questions short. Do not ask about what you can find in the workspace, narrate progress, confirm assigned work, pad a batch, or run a questionnaire.",
-  "Use either questions or the single-question fields, never both. The turn is blocked until they answer.",
+  "Ask the person only for related decisions that genuinely block the same step and are theirs to make, with no defensible default.",
+  "Use 1-4 short questions with choices, or an empty choices array for prose. They can always type another answer.",
+  "Do not ask what you can find in the workspace, narrate progress, confirm assigned work, or pad a batch. The turn is blocked until they answer.",
 ].join(" ");
 
 function askUserRequest(
   toolCallId: string,
   params: Static<typeof askUserQuestionsSchema>,
 ): RuntimeAskUserRequest {
-  if (params.questions === undefined) {
-    if (params.question === undefined) throw new Error("ask_user: provide question or questions.");
-    // Do not normalize historical calls: their request and answer stay exact.
-    return {
-      toolCallId,
-      question: params.question,
-      options: params.options,
-      multiple: params.multiple,
-      allowOther: params.allowOther,
-    };
-  }
-  if (
-    [params.question, params.options, params.multiple, params.allowOther].some(
-      (field) => field !== undefined,
-    )
-  ) {
-    throw new Error("ask_user: use questions or the flat question fields, not both.");
-  }
   for (const [index, question] of params.questions.entries()) {
     if (!question.question.trim())
       throw new Error(`ask_user: question ${index + 1} needs question text.`);
@@ -1063,11 +1037,23 @@ export function createAskUserTool(
           .join("; ");
         throw new Error(`ask_user: invalid fields: ${errors}`);
       }
-      const params: Static<typeof askUserQuestionsSchema> = input;
-      if (params.questions !== undefined && questions !== true) {
-        throw new Error("ask_user: this Session supports only the single-question fields.");
+      let request: RuntimeAskUserRequest;
+      if (questions === true) {
+        request = askUserRequest(toolCallId, input as Static<typeof askUserQuestionsSchema>);
+      } else {
+        if ("questions" in input && input.questions !== undefined) {
+          throw new Error("ask_user: this Session supports only the single-question fields.");
+        }
+        // Do not normalize historical calls: their request and answer stay exact.
+        const params = input as Static<typeof askUserSchema>;
+        request = {
+          toolCallId,
+          question: params.question,
+          options: params.options,
+          multiple: params.multiple,
+          allowOther: params.allowOther,
+        };
       }
-      const request = askUserRequest(toolCallId, params);
       const withdrawn = new AbortController();
       const abandon = (): void => withdrawn.abort();
       const signals = [signal, callSignal].filter((one) => one !== undefined);

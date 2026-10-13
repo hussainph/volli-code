@@ -420,10 +420,12 @@ describe("ask_user related questions", () => {
     { question: "What name?", choices: [] },
   ];
 
-  it("adds one optional array without a top-level union, only on the birth-marked surface", () => {
+  it("declares only a required questions array without a top-level union, only on the birth-marked surface", () => {
     const old = createAskUserTool(async () => CHOSE_ONE);
     const tool = createAskUserTool(async () => CHOSE_ONE, undefined, true);
-    expect(tool.parameters.required).toBeUndefined();
+    expect(tool.parameters.required).toEqual(["questions"]);
+    expect(Object.keys(tool.parameters.properties)).toEqual(["questions"]);
+    expect(tool.parameters).toHaveProperty("additionalProperties", false);
     expect(tool.parameters).not.toHaveProperty("oneOf");
     expect(tool.parameters.properties.questions).toMatchObject({ minItems: 1, maxItems: 4 });
     expect(Object.keys(tool.parameters.properties.questions.items.properties)).toEqual([
@@ -515,18 +517,18 @@ describe("ask_user related questions", () => {
     ).toEqual([{ question: "Which scope?", answer: null, unanswered: true }]);
   });
 
-  it("keeps flat requests and answer bytes identical on both declarations", async () => {
+  it("keeps historical flat bytes but names a downgraded flat call retried after upgrade", async () => {
     const oldHost = recordingHost({ optionIds: ["a", "b"], response: "  original reply  " });
     const newHost = recordingHost({ optionIds: ["a", "b"], response: "  original reply  " });
     const params = { question: "Which?", options: [{ id: "a", label: "A" }], allowOther: false };
     const old = await createAskUserTool(oldHost.askUser).execute("flat", params);
-    const current = await createAskUserTool(newHost.askUser, undefined, true).execute(
-      "flat",
-      params,
-    );
-    expect(JSON.stringify(newHost.asks[0].request)).toBe(JSON.stringify(oldHost.asks[0].request));
-    expect(JSON.stringify(current)).toBe(JSON.stringify(old));
-    expect(resultText(current)).toBe("Chose: a, b\n\noriginal reply");
+    expect(resultText(old)).toBe("Chose: a, b\n\noriginal reply");
+    expect(oldHost.asks[0].request).toEqual({ toolCallId: "flat", ...params, multiple: undefined });
+    const current = createAskUserTool(newHost.askUser, undefined, true);
+    // A downgraded executor may leave a flat call in the transcript. Upgrade
+    // gives a repairable tool error, never a newly parked, unanswerable card.
+    await expect(current.execute("flat", params as never)).rejects.toThrow("questions");
+    expect(newHost.asks).toHaveLength(0);
   });
 
   it("accepts one or four questions, prose-only and repeated choices in separate questions", async () => {
@@ -539,11 +541,11 @@ describe("ask_user related questions", () => {
   });
 
   it.each([
-    [{}, "provide question or questions"],
+    [{}, "invalid fields"],
     [{ questions: [] }, "invalid fields"],
     [{ questions: Array.from({ length: 5 }, () => questions[0]) }, "invalid fields"],
-    [{ questions, question: "Also flat" }, "not both"],
-    [{ questions, multiple: false }, "not both"],
+    [{ questions, question: "Also flat" }, "invalid fields"],
+    [{ questions, multiple: false }, "invalid fields"],
     [{ questions: [{ question: " ", choices: [] }] }, "question text"],
     [{ questions: [{ question: "Q", choices: ["One"] }] }, "2-5 choices"],
     [

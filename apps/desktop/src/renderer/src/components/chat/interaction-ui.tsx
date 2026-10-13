@@ -42,11 +42,11 @@
  * longer hides its field under any condition, so the thing a reader must not be
  * able to type into a dead end is always here, under the sentence asking for it.
  *
- * **What each act does to the question is in its name.** `Withdraw question`
- * takes the ask away, `Decline to answer` sends the empty refusal, `Answer`
- * sends what is on the card, and once one of them lands the card says which,
- * in its own place, rather than going quietly inert (`describeInteractionSent`).
- * All four go through one synchronous latch per interaction id
+ * **The controls answer; Escape stops the turn.** `Decline to answer` sends
+ * the empty refusal and `Answer` sends what is on the card. Escape uses the
+ * caller's end-turn handler, without a competing footer button. Once an act
+ * lands the card says which, in its own place (`describeInteractionSent`).
+ * All delivery paths go through one synchronous latch per interaction id
  * (`createSubmissionLatch`), so the first press is the one that happens.
  *
  * Decision logic lives in `interaction.ts`. Everything here is presentation
@@ -103,7 +103,6 @@ import {
   selectOption,
   setPromptResponse,
   withdrawLabel,
-  WITHDRAW_QUESTION_LABEL,
   type InteractionCarousel,
   type InteractionDraft,
   type InteractionFieldRole,
@@ -240,14 +239,14 @@ export interface InteractionCardProps {
    */
   onResolve(submission: InteractionSubmission): void | Promise<boolean | void>;
   /**
-   * Withdraws this durable request, as a control and as Escape. A card on a row
-   * leaves it off because only the co-mounted foot offers request withdrawal.
-   * This is deliberately distinct from the composer's turn-only interrupt.
+   * The caller's exit handler: Escape stops the turn on a question card;
+   * verdict cards also expose it as a withdrawal control. A card on a row
+   * leaves it off because only the co-mounted foot owns this exit.
    *
    * Reported the same way {@link InteractionCardProps.onResolve} is, and for the
-   * same reason: a withdrawal holds the card's one submission latch while it
+   * same reason: the exit holds the card's one submission latch while it
    * travels, so a caller that can see it fail is what puts the question back
-   * rather than leaving a card that says it withdrew something it did not.
+   * rather than leaving a card that reports an exit that did not land.
    */
   onWithdraw?(): void | Promise<boolean | void>;
   /** A decision is in flight; the harness's own verdict is what clears the card. */
@@ -271,8 +270,8 @@ export function InteractionCard(props: InteractionCardProps) {
 /**
  * The one door out of a card, and the two things the card learns from it.
  *
- * **Everything that ends this request comes through here** — the answer, the
- * refusal, the withdrawal, and every key that stands for one of them — because
+ * **Every delivery path comes through here** — answers, refusals, the exit
+ * handler, and every key that stands for one of them — because
  * the latch underneath is what makes "exactly one of them happens" true. It is
  * taken synchronously, before the act begins (`createSubmissionLatch`, which
  * owns that rule and the reasons); `resolving` cannot do that job, because it
@@ -329,11 +328,10 @@ function useDelivery(interactionId: string, onResolve: InteractionCardProps["onR
 }
 
 /**
- * Escape ends the turn; it never dismisses the question, which outlives the
- * turn and leaves the projection only when it is answered or withdrawn. So it
- * does exactly what Withdraw question does — the same handler, through the same
- * latch — and only where a card offers withdrawal at all: at the foot, next to
- * the composer that still owns turn-only interrupt.
+ * Escape invokes the caller's exit handler through the same synchronous latch
+ * as answers and refusals. On a question card it ends the turn, without a
+ * withdrawal button; verdict cards retain their withdrawal control. Only the
+ * foot mount supplies this handler, beside the composer that owns interrupt.
  *
  * Where there is none, the key is left to bubble. Swallowing it there meant a
  * card on a row absorbed the one gesture that interrupts from anywhere and
@@ -597,8 +595,8 @@ function DecisionCard({
  * advance on the click that made it, which meant the fastest gesture on the
  * card was also the irreversible one, and the step in view had no control at
  * all to say what pressing it would do. A click selects; `Answer` sends;
- * `Decline to answer` refuses; `Withdraw question` takes the ask away. Four
- * acts, four names, and each name is the effect.
+ * `Decline to answer` refuses; Escape stops the turn through the same latch.
+ * The footer offers answers and navigation, not a second exit control.
  *
  * Five things this card owns that `interaction.ts` cannot:
  *
@@ -663,8 +661,8 @@ function QuestionCard({
     send(refusal, receipt("declined", refusal));
   };
 
-  // Undefined rather than a no-op where the mount offers no withdrawal, so the
-  // control and the Escape key are absent together.
+  // Undefined rather than a no-op where the mount supplies no exit handler,
+  // so Escape stays unclaimed there. No question footer button invokes it.
   const withdraw = onWithdraw
     ? () => commit(receipt("withdrawn", null), () => onWithdraw())
     : undefined;
@@ -868,8 +866,8 @@ function QuestionCard({
         data-slot="interaction-footer"
         className={cn(
           // Wrapping, for the verdict card's reason and one more of its own:
-          // this footer can hold five controls at once (minimise, withdraw,
-          // Previous, Decline, and the control that advances), which is a row no
+          // this footer can hold four controls at once (minimise, Previous,
+          // Decline, and the control that advances), which is a row no
           // narrow pane has ever been able to draw on one line.
           "flex flex-wrap items-center gap-x-1 gap-y-1 px-4 py-2",
           // No rule under nothing: a request that declares no questions is all
@@ -880,11 +878,10 @@ function QuestionCard({
         {/* The card standing out of its own transcript's way.
 
             It leads the footer because it is the only control on this card that
-            does not touch the question: Withdraw question takes the ask away,
-            Decline to answer refuses it, Answer answers it, and this one
-            only decides how much of the pane the card is holding while all
-            three stay exactly where they were. Nothing durable moves, so it
-            keeps its place in both states rather than rearranging the footer
+            does not touch the question: Decline to answer refuses it, Answer
+            answers it, and this one only decides how much of the pane the card
+            is holding while both stay exactly where they were. Nothing durable
+            moves, so it keeps its place in both states rather than rearranging the footer
             under a reader who is going to press it twice.
 
             A glyph, not a word — and the glyph is spatial rather than
@@ -908,25 +905,6 @@ function QuestionCard({
             onClick={() => setCollapsed((standing) => !standing)}
           >
             {collapsed ? <CaretUpIcon /> : <CaretDownIcon />}
-          </Button>
-        ) : null}
-        {/* What withdrawal DOES to the question, rather than the machinery it
-            operates on. "Cancel request" named an object no other part of this
-            surface mentions, and stood beside "Reject" and a primary control
-            that renamed itself with the draft — three ways of saying no, and a
-            reader guessing which. Ghost and muted still: taking the question
-            away is not an answer to it. */}
-        {withdraw ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
-            disabled={resolving}
-            onClick={withdraw}
-          >
-            <XCircleIcon className="size-3.5" />
-            {WITHDRAW_QUESTION_LABEL}
           </Button>
         ) : null}
         {/* One notice slot, left-aligned, for the two things that stop a press
@@ -964,8 +942,7 @@ function QuestionCard({
           {/* The refusal none of the harness's own ids can carry, named for
               what it does to the question rather than borrowed from the verdict
               card. Outlined: it stands beside the control that answers because
-              it is the other half of the same decision, and above withdrawal
-              because it is one. */}
+              it is the other half of the same decision. */}
           {refusable ? (
             <Button
               type="button"
@@ -1004,7 +981,7 @@ function QuestionCard({
  * looked identical from the chair.
  *
  * So it says which one happened and what it carried, in the place the question
- * stood: `Sent: Detailed`, `Declined to answer`, `Withdrew question`. The words
+ * stood: `Sent: Detailed`, `Declined to answer`, `Stopped turn`. The words
  * are {@link describeInteractionSent}'s — the same vocabulary the controls that
  * caused them use, in the past tense.
  *
@@ -1033,8 +1010,8 @@ export function QuestionSentReceipt({
       <p role="status" className="flex min-w-0 items-start gap-1 text-ui text-muted-foreground">
         {/* Answered is the only one of the three that got what it asked for, and
             ink is what says so — the same accent the card's palm wears while it
-            is asking. A decline and a withdrawal are ordinary ends, not
-            failures, so neither one is destructive. */}
+            is asking. Declining and stopping the turn are ordinary outcomes,
+            not failures, so neither one is destructive. */}
         {receipt.kind === "answered" ? (
           <CheckIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-primary" weight="bold" />
         ) : (
@@ -1056,9 +1033,8 @@ export function QuestionSentReceipt({
  * before the composer under it is counted, which on a short window leaves the
  * transcript no viewport at all — and the reader who wants the paragraph that
  * explains *why* they are being asked is looking for it in exactly the rows
- * the card is standing on. The only gesture that used to clear a card was
- * Withdraw question, which throws the question away to read the sentence behind
- * it. This is the same relief without the loss.
+ * the card is standing on. Minimizing exposes the sentence behind it without
+ * answering the question or stopping the turn.
  *
  * One line and the counter — a window title, which is what a put-away card is.
  * The heading truncates rather than wrapping because a predictable, one-line
@@ -1068,8 +1044,8 @@ export function QuestionSentReceipt({
  *
  * Nothing here is a control. The draft, the step, the notice and every act in
  * the footer survive untouched — minimising is the card taking up less room,
- * never the question becoming less answerable, and where `allowOther` holds it
- * is still answerable from the composer directly below without expanding at all.
+ * never the question becoming less answerable. Expand it to edit the answer;
+ * the composer below remains a separate message field.
  */
 function MinimizedQuestion({ step }: { step: InteractionStep }) {
   return (

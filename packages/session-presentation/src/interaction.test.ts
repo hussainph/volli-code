@@ -1335,9 +1335,8 @@ describe("the receipt a question leaves the moment it is answered", () => {
     ).toBe("Sent: cut a patch instead");
   });
 
-  it("gives a decline and a withdrawal receipts of their own", () => {
-    // Three different ends to one question, and a reader has to be able to tell
-    // which one happened from the card alone.
+  it("gives decline and stopped-turn receipts of their own", () => {
+    // Stopping the turn is not an answer or a withdrawal of the question.
     const asked = question([prompt()]);
     expect(describeInteractionSent(asked, "declined", refusalSubmission(asked, {}))).toEqual({
       kind: "declined",
@@ -1347,9 +1346,9 @@ describe("the receipt a question leaves the moment it is answered", () => {
     });
     expect(describeInteractionSent(asked, "withdrawn", null)).toEqual({
       kind: "withdrawn",
-      lead: "Withdrew question",
+      lead: "Stopped turn",
       value: null,
-      line: "Withdrew question",
+      line: "Stopped turn",
     });
   });
 

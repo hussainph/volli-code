@@ -138,6 +138,78 @@ const steps = {
     }
   },
 
+  /** Leaves a flat Pi-style card pending while a new-birth Session is downgraded. */
+  pendingFlatAsk: async (step) => {
+    const { createSessionEngine } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const shared = await n1("@volli/shared");
+    const db = openVolliDb(command.dbPath);
+    try {
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `pending-flat-${kind}` },
+      });
+      const surface = await engine.getOrRecordSessionInput({
+        sessionId: step.sessionId,
+        input: { kind: "tool-surface", tools: ["ask_user"] },
+        provenance,
+      });
+      const attachmentId = "n1-flat-attachment";
+      const native = { id: null, detail: null };
+      const adapter = { source: { kind: "adapter", id: "pi", detail: null }, venue: null };
+      await engine.observe({
+        id: "n1-flat-attached",
+        sessionId: step.sessionId,
+        occurredAt: NOW,
+        provenance: adapter,
+        kind: "attachment.opened",
+        attachment: {
+          id: attachmentId,
+          sessionId: step.sessionId,
+          adapterId: "pi",
+          venue: { id: "n1-local", kind: "local" },
+          continuity: "fresh",
+          native,
+          authority: null,
+        },
+      });
+      const options = [{ id: "keep", label: "Keep it", description: null }];
+      const interaction = {
+        id: step.interactionId,
+        attachmentId,
+        kind: "question",
+        title: "Keep the downgraded change?",
+        detail: null,
+        options,
+        multiple: false,
+        native,
+        prompts: [
+          {
+            id: shared.DEFAULT_INTERACTION_PROMPT_ID,
+            label: "Keep the downgraded change?",
+            detail: null,
+            options,
+            multiple: false,
+            custom: true,
+          },
+        ],
+      };
+      await engine.observe({
+        id: "n1-flat-opened",
+        sessionId: step.sessionId,
+        occurredAt: NOW,
+        provenance: adapter,
+        kind: "interaction.opened",
+        interaction,
+      });
+      const pending = await engine.getSession({ sessionId: step.sessionId });
+      return { surface, interaction, activeCount: pending.interactions.active.length };
+    } finally {
+      db.close();
+    }
+  },
+
   /** Reads and answers a head-written card through N-1's codec, UI rules and ledger. */
   askUser: async (step) => {
     const { createSessionEngine } = await n1("@volli/session-engine");

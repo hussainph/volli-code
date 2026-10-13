@@ -224,6 +224,7 @@ async function fixture(input: object = { questions }, batch = true) {
       .all(sessionId) as { payload: string }[];
   return {
     db,
+    engine,
     host,
     model,
     sessionId,
@@ -394,7 +395,7 @@ describe("ask_user real tool → Pi adapter → SQLite Session interaction", () 
     }
   });
 
-  it.each([true, false])(
+  it.each([false])(
     "keeps the historical flat interaction and answer bytes (batch declaration: %s)",
     async (batch) => {
       const f = await fixture(
@@ -463,7 +464,7 @@ describe("ask_user real tool → Pi adapter → SQLite Session interaction", () 
     { options: [], multiple: false, allowOther: false, custom: true },
   ])("preserves legacy flat option and custom rules: %j", async (legacy) => {
     const { custom, ...input } = legacy;
-    const f = await fixture({ question: "Historical question", ...input });
+    const f = await fixture({ question: "Historical question", ...input }, false);
     try {
       const interaction = await f.opened();
       expect(readInteractionPrompts(interaction)).toEqual([
@@ -525,13 +526,90 @@ describe("ask_user real tool → Pi adapter → SQLite Session interaction", () 
       "must not have more than 5 items",
     ],
     [{ questions: [{ question: "Pick?" }] }, "invalid fields"],
-    [{ question: "Flat", questions }, "use questions or the flat question fields"],
+    [{ question: "Flat", questions }, "invalid fields"],
   ] as const)("rejects an invalid batch before writing a card: %j", async (input, error) => {
     const f = await fixture(input);
     try {
       expect(await f.model.result()).toMatchObject({ error: expect.stringContaining(error) });
       expect((await f.snapshot()).interactions.active).toEqual([]);
       expect(f.stored()).toEqual([]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("names a downgraded flat call retried on the new declaration without parking", async () => {
+    const f = await fixture({
+      question: "Flat call from a downgraded executor",
+      options: legacyOptions,
+    });
+    try {
+      expect(await f.model.result()).toMatchObject({ error: expect.stringContaining("questions") });
+      expect((await f.snapshot()).interactions.active).toEqual([]);
+      expect(f.stored()).toEqual([]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("names a stale downgraded flat card after upgrade and lets cancellation clear it", async () => {
+    const f = await fixture({
+      question: "Flat call left by a downgraded executor",
+      options: legacyOptions,
+    });
+    try {
+      expect(await f.model.result()).toMatchObject({ error: expect.stringContaining("questions") });
+      const attachmentId = (await f.snapshot()).liveExecutor!.id;
+      // Replay the old stored card vocabulary, as separately written/read by
+      // the exact N-1 build in the compatibility lane. No live wait survived.
+      const options = legacyOptions.map((option) => ({
+        id: option.id,
+        label: option.label,
+        description: option.description ?? null,
+      }));
+      await f.engine.observe({
+        id: "restored-flat-opened",
+        sessionId: f.sessionId,
+        occurredAt: 8_000,
+        provenance: { source: { kind: "adapter", id: "pi", detail: null }, venue: null },
+        kind: "interaction.opened",
+        interaction: {
+          id: "ask-user:call-7",
+          attachmentId,
+          kind: "question",
+          title: "Flat call left by a downgraded executor",
+          detail: null,
+          options,
+          multiple: false,
+          native: { id: null, detail: null },
+          prompts: [
+            {
+              id: "prompt:0",
+              label: "Flat call left by a downgraded executor",
+              detail: null,
+              options,
+              multiple: false,
+              custom: true,
+            },
+          ],
+        },
+      });
+      const attempted = await f.answer({ optionIds: ["spike"], response: null });
+      expect(attempted.receipt).toMatchObject({
+        status: "rejected",
+        code: "PI_INTERACTION_UNKNOWN",
+        detail: expect.stringContaining("Nothing is waiting on this question"),
+      });
+      await f.host.cancelInteraction({
+        sessionId: f.sessionId,
+        interactionId: "ask-user:call-7",
+        reason: "abandoned",
+      });
+      expect((await f.snapshot()).interactions.active).toEqual([]);
+      expect(f.stored().map((row) => JSON.parse(row.payload).kind)).toEqual([
+        "interaction.opened",
+        "interaction.cancelled",
+      ]);
     } finally {
       await f.cleanup();
     }
@@ -551,7 +629,7 @@ describe("ask_user real tool → Pi adapter → SQLite Session interaction", () 
   });
 
   it("preserves a flat dismissal as an empty answer, not a fabricated choice", async () => {
-    const f = await fixture({ question: "What should I change?" });
+    const f = await fixture({ question: "What should I change?" }, false);
     try {
       await f.opened();
       await f.answer({ optionIds: [], response: null });

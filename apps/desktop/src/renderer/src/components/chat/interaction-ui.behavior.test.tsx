@@ -163,6 +163,18 @@ function commit(node: HTMLElement): void {
   );
 }
 
+/** Escape on the card, without flushing a render between competing acts. */
+function escape(node: HTMLElement, isComposing = false): KeyboardEvent {
+  const event = new globalThis.KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+    isComposing,
+  });
+  node.dispatchEvent(event);
+  return event;
+}
+
 /** ⌘⏎ on the element that has it, on its own. */
 function commitKey(node: HTMLElement): void {
   act(() => commit(node));
@@ -549,7 +561,7 @@ describe("the one submission latch, from the chair", () => {
     expect(harness.calls).toHaveLength(1);
   });
 
-  it("blocks a competing decline and withdrawal until the first act settles", async () => {
+  it("blocks a competing decline and Escape until the answer settles", async () => {
     const harness = slowResolver();
     const withdrawn: string[] = [];
     const host = mount(
@@ -565,11 +577,12 @@ describe("the one submission latch, from the chair", () => {
     press(row(host, "Brief"));
     const send = control(host, "Answer");
     const decline = control(host, "Decline to answer");
-    const withdraw = control(host, "Withdraw question");
+    const form = host.querySelector("form")!;
+    expect(() => control(host, "Withdraw question")).toThrow();
     burst(
       () => send.click(),
       () => decline.click(),
-      () => withdraw.click(),
+      () => escape(form),
     );
 
     // One resolver call, and it is the answer: the two acts that would have
@@ -630,7 +643,7 @@ describe("the receipt the card leaves in its own place", () => {
     expect(host.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("says a decline and a withdrawal in their own words", () => {
+  it("says a decline and a stopped turn in their own words", () => {
     const declined = mount(
       <InteractionCard interaction={ask([askPrompt()])} onResolve={() => undefined} />,
     );
@@ -652,40 +665,169 @@ describe("the receipt the card leaves in its own place", () => {
         }}
       />,
     );
-    press(control(withdrawn, "Withdraw question"));
+    burst(() => escape(withdrawn.querySelector("form")!));
 
     expect(withdrawals).toEqual(["withdrawn"]);
-    expect(withdrawn.querySelector("[role='status']")?.textContent).toBe("Withdrew question");
+    expect(withdrawn.querySelector("[role='status']")?.textContent).toBe("Stopped turn");
   });
 
-  it("withdraws once, whether by control or by Escape", () => {
-    // Inside one commit, or the test proves nothing: pressed and then keyed,
-    // the first press has already re-rendered the card as a receipt with no
-    // key handler on it, and Escape would find nothing to reach whether or not
-    // a latch stood in the way. In one `act` the form is still the form, the
-    // key still lands on it, and only the latch says no.
+  it("stops once when repeated Escape, decline and answer race", () => {
+    // Inside one commit the form still has all its handlers; only the latch
+    // can stop the competing acts before React renders the receipt.
     const withdrawals: string[] = [];
+    const resolutions: SessionInteractionResolution[] = [];
     const host = mount(
       <InteractionCard
         interaction={ask([askPrompt()])}
-        onResolve={() => undefined}
+        onResolve={({ resolution }) => {
+          resolutions.push(resolution);
+        }}
         onWithdraw={() => {
           withdrawals.push("withdrawn");
         }}
       />,
     );
+    press(row(host, "Detailed"));
     const form = host.querySelector("form")!;
-    const withdraw = control(host, "Withdraw question");
+    const decline = control(host, "Decline to answer");
+    const answer = control(host, "Answer");
+    expect(() => control(host, "Withdraw question")).toThrow();
 
     burst(
-      () => withdraw.click(),
-      () =>
-        form.dispatchEvent(
-          new globalThis.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-        ),
+      () => escape(form),
+      () => escape(form),
+      () => decline.click(),
+      () => answer.click(),
     );
 
     expect(withdrawals).toEqual(["withdrawn"]);
+    expect(resolutions).toEqual([]);
+    expect(host.querySelector("[role='status']")?.textContent).toBe("Stopped turn");
+  });
+});
+
+describe("Escape delivery and recovery on a question", () => {
+  for (const failure of ["false", "reject", "throw"] as const) {
+    it(`releases a failed ${failure} exit for retry, preserving the draft`, async () => {
+      const delivery = Promise.withResolvers<boolean>();
+      let attempts = 0;
+      const resolutions: SessionInteractionResolution[] = [];
+      const host = mount(
+        <InteractionCard
+          interaction={ask([askPrompt()])}
+          onResolve={({ resolution }) => {
+            resolutions.push(resolution);
+          }}
+          onWithdraw={() => {
+            attempts += 1;
+            if (attempts > 1) return Promise.resolve(true);
+            if (failure === "throw") throw new Error("delivery failed");
+            return delivery.promise;
+          }}
+        />,
+      );
+      press(row(host, "Detailed"));
+      const form = host.querySelector("form")!;
+      const decline = control(host, "Decline to answer");
+      const answer = control(host, "Answer");
+      burst(
+        () => escape(form),
+        // Throw releases the latch synchronously; pending promises hold it.
+        ...(failure === "throw"
+          ? []
+          : [() => escape(form), () => decline.click(), () => answer.click()]),
+      );
+      expect(attempts).toBe(1);
+      expect(resolutions).toEqual([]);
+      if (failure === "false") delivery.resolve(false);
+      if (failure === "reject") delivery.reject(new Error("delivery failed"));
+      await flush();
+
+      expect(host.querySelector("[role='alert']")?.textContent).toBe("Not delivered");
+      expect(host.querySelector("[role='status']")).toBeNull();
+      expect(row(host, "Detailed").getAttribute("aria-checked")).toBe("true");
+      expect(() => control(host, "Withdraw question")).toThrow();
+      const retry = host.querySelector("form")!;
+      burst(
+        () => escape(retry),
+        () => escape(retry),
+      );
+      await flush();
+      expect(attempts).toBe(2);
+      expect(host.querySelector("[role='alert']")).toBeNull();
+      expect(host.querySelector("[role='status']")?.textContent).toBe("Stopped turn");
+      expect(resolutions).toEqual([]);
+    });
+  }
+
+  it("lets a decline hold the latch against Escape", async () => {
+    const harness = slowResolver();
+    let exits = 0;
+    const host = mount(
+      <InteractionCard
+        interaction={ask([askPrompt()])}
+        onResolve={harness.resolve}
+        onWithdraw={() => {
+          exits += 1;
+        }}
+      />,
+    );
+    const form = host.querySelector("form")!;
+    const decline = control(host, "Decline to answer");
+    burst(
+      () => decline.click(),
+      () => escape(form),
+    );
+    expect(harness.calls).toHaveLength(1);
+    expect(harness.calls[0]?.optionIds).toEqual([]);
+    expect(exits).toBe(0);
+    await harness.land(true);
+  });
+
+  it("keeps the same Escape exit when the question is minimized", () => {
+    let exits = 0;
+    const host = mount(
+      <InteractionCard
+        interaction={ask([askPrompt()])}
+        onResolve={() => undefined}
+        onWithdraw={() => {
+          exits += 1;
+        }}
+      />,
+    );
+    press(host.querySelector<HTMLButtonElement>("[aria-label='Minimize question']")!);
+    expect(host.querySelector("[aria-label='Expand question']")).not.toBeNull();
+    const form = host.querySelector("form")!;
+    burst(
+      () => expect(escape(form).defaultPrevented).toBe(true),
+      () => escape(form),
+    );
+    expect(exits).toBe(1);
+    expect(host.querySelector("[role='status']")?.textContent).toBe("Stopped turn");
+  });
+
+  it("leaves Escape unclaimed without an exit handler", () => {
+    const host = mount(
+      <InteractionCard interaction={ask([askPrompt()])} onResolve={() => undefined} />,
+    );
+    burst(() => expect(escape(host.querySelector("form")!).defaultPrevented).toBe(false));
+    expect(host.querySelector("[role='status']")).toBeNull();
+  });
+
+  it("does not stop the turn during IME composition or external resolution", () => {
+    let exits = 0;
+    const props = {
+      interaction: ask([askPrompt()]),
+      onResolve: () => undefined,
+      onWithdraw: () => {
+        exits += 1;
+      },
+    };
+    const host = mount(<InteractionCard {...props} />);
+    burst(() => expect(escape(host.querySelector("form")!, true).defaultPrevented).toBe(false));
+    act(() => mounted?.root.render(<InteractionCard {...props} resolving />));
+    burst(() => expect(escape(host.querySelector("form")!).defaultPrevented).toBe(false));
+    expect(exits).toBe(0);
   });
 });
 

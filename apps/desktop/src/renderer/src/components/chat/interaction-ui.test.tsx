@@ -164,10 +164,8 @@ function labelledControl(html: string, label: string): string | null {
 }
 
 describe("the card's controls", () => {
-  it("draws request withdrawal and refusal at different weights", () => {
-    // Withdrawing the request and rejecting it are different durable acts. Both
-    // as `ghost size="sm"` said they were the same kind of act, in the one place
-    // a reader is deciding between them.
+  it("offers refusal without a question withdrawal button, even with an exit handler", () => {
+    // Escape owns the exit; the footer keeps only refusal and answer actions.
     const html = renderToStaticMarkup(
       <InteractionCard
         interaction={asked()}
@@ -175,14 +173,12 @@ describe("the card's controls", () => {
         onWithdraw={() => undefined}
       />,
     );
-    expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
+    expect(buttonVariant(html, "Withdraw question")).toBeNull();
+    expect(html).not.toContain("Withdraw");
     expect(buttonVariant(html, "Decline to answer")).toBe("outline");
   });
 
-  it("names each act by what it does to the question", () => {
-    // "Cancel request" and "Reject" named the mechanism and the verdict; beside
-    // a changing primary control they read as three ways to say no. Each one
-    // now says what happens to the question if it is pressed.
+  it("names the answer controls by what they do to the question", () => {
     const html = renderToStaticMarkup(
       <InteractionCard
         interaction={asked()}
@@ -190,7 +186,7 @@ describe("the card's controls", () => {
         onWithdraw={() => undefined}
       />,
     );
-    expect(html).toContain(">Withdraw question</button>");
+    expect(html).not.toContain(">Withdraw question</button>");
     expect(html).toContain(">Decline to answer</button>");
     expect(html).toContain(">Answer</button>");
     expect(html).not.toContain("Cancel request");
@@ -389,7 +385,7 @@ describe("the ask-user card", () => {
         />,
       );
       expect(buttonVariant(html, "Decline to answer")).toBe("outline");
-      expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
+      expect(buttonVariant(html, "Withdraw question")).toBeNull();
     }
   });
 
@@ -538,8 +534,7 @@ describe("the question that stands out of the transcript's way", () => {
   });
 
   it("keeps it a view control rather than one more answer", () => {
-    // Ghost and muted, beneath withdrawal in the same way withdrawal is beneath
-    // the verdict: how much room a card takes up is not a decision about the
+    // Ghost and muted: how much room a card takes up is not an answer to the
     // question, and a control at the weight of one would say it was.
     const html = renderToStaticMarkup(
       <InteractionCard
@@ -550,8 +545,8 @@ describe("the question that stands out of the transcript's way", () => {
     );
 
     expect(labelledControl(html, "Minimize question")).toContain('data-variant="ghost"');
-    // And it changed neither of the acts it now stands beside.
-    expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
+    // The exit remains keyboard-only; the refusal keeps its answer weight.
+    expect(buttonVariant(html, "Withdraw question")).toBeNull();
     expect(buttonVariant(html, "Decline to answer")).toBe("outline");
   });
 
@@ -778,7 +773,7 @@ describe("the receipt the card itself shows once a response is sent", () => {
     expect(html).toContain('role="status"');
   });
 
-  it("gives a decline and a withdrawal receipts a reader can tell apart", () => {
+  it("gives decline and stopped-turn receipts a reader can tell apart", () => {
     const declined = renderToStaticMarkup(
       <QuestionSentReceipt
         heading="How much detail do you want?"
@@ -795,15 +790,15 @@ describe("the receipt the card itself shows once a response is sent", () => {
         heading="How much detail do you want?"
         receipt={{
           kind: "withdrawn",
-          lead: "Withdrew question",
+          lead: "Stopped turn",
           value: null,
-          line: "Withdrew question",
+          line: "Stopped turn",
         }}
       />,
     );
     expect(declined).toContain("Declined to answer");
     expect(declined).not.toContain("Sent");
-    expect(withdrawn).toContain("Withdrew question");
+    expect(withdrawn).toContain("Stopped turn");
     expect(withdrawn).not.toContain("Declined");
   });
 
@@ -945,8 +940,8 @@ describe("the footer at a pane's narrowest", () => {
     // one line, so a footer on two lines is not a different card.
     //
     // Read structurally rather than by label — what each act is CALLED is
-    // VC-289's, and this is a claim about arrangement: the acts that touch the
-    // request itself lead, and the cluster that answers it is last and whole.
+    // VC-289's, and this is a claim about arrangement: minimization leads,
+    // and the cluster that answers is last and whole.
     const footer = footerMarkup(
       renderToStaticMarkup(
         <InteractionCard
@@ -959,7 +954,7 @@ describe("the footer at a pane's narrowest", () => {
     const cluster = footer.indexOf('data-slot="interaction-actions"');
     const buttons = [...footer.matchAll(/<button/g)].map((match) => match.index);
     expect(buttons.length).toBeGreaterThanOrEqual(3);
-    // At least one control stands before the cluster (withdrawal), and every
+    // At least one control stands before the cluster (minimization), and every
     // remaining one stands inside it rather than trailing after its close.
     expect(buttons.filter((at) => at < cluster).length).toBeGreaterThanOrEqual(1);
     expect(buttons.filter((at) => at > cluster).length).toBeGreaterThanOrEqual(2);

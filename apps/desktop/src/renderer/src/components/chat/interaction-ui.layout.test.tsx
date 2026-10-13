@@ -9,8 +9,8 @@
  * or by the card's own requirement, and both are state written by an event.
  *
  * That state is exactly where the clipping was worst, because the notice is a
- * fourth thing on a row that already held three: at a 320px pane the footer had
- * to draw a warning, a withdrawal, a refusal and the control that retries, and
+ * further thing on a row that already held several: at a 320px pane the footer
+ * draws a warning, minimize, navigation, refusal and the retry control, and
  * the retry is the one a `nowrap` row put past the edge. So what is asserted
  * here is reachability rather than pixels — jsdom lays nothing out, but it does
  * know whether a control is in the document, inside the footer, and able to
@@ -136,7 +136,8 @@ describe("the footer once a press has been refused", () => {
     );
 
     const before = footerButtons();
-    expect(before.length).toBeGreaterThanOrEqual(4);
+    expect(before.length).toBe(3);
+    expect(before.map((button) => button.textContent)).not.toContain("Withdraw question");
     expect(before.every(reachable)).toBe(true);
 
     // Nothing chosen, so the press is refused by the card's own requirement:
@@ -224,9 +225,9 @@ describe("the footer at the acceptance widths", () => {
       );
 
       const buttons = footerButtons();
-      // Withdraw, minimise, Skip and the control that advances: the row that
-      // could not be drawn on one line at any of these widths.
-      expect(buttons.length).toBeGreaterThanOrEqual(4);
+      // Minimize, decline and Next are live; Previous is disabled on step one.
+      expect(buttons.length).toBe(3);
+      expect(buttons.map((button) => button.textContent)).not.toContain("Withdraw question");
       for (const button of buttons) {
         expect(reachable(button)).toBe(true);
         expect(ringed(button)).toBe(true);
