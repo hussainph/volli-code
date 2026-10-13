@@ -79,6 +79,7 @@ import { insertProject } from "./projects-repo";
 import { MIN_READER_VERSION_KEY, readMinReaderVersion } from "./schema-compatibility";
 import { hasSecret, writeSecret } from "./secrets-repo";
 import { testProject } from "./test-helpers";
+import { recoveredPiQuestion } from "./fixtures/recovered-pi-question";
 import { listTicketsByProject } from "./tickets-repo";
 
 interface N1Manifest {
@@ -635,6 +636,107 @@ describe.skipIf(manifest === null)(
         db.close();
       }
     });
+
+    it.each(["flat", "questions"] as const)(
+      "opens and reattaches a head-recovered %s ask in N−1 without resurrecting a question or inventing an answer",
+      async (shape) => {
+        await headProfile();
+        const { head, guarded } = await probe();
+        if (guarded && headFloor() > head) return;
+        const sessionId = "session-head";
+        const fixture = await recoveredPiQuestion({
+          root,
+          dbPath,
+          sessionId,
+          projectId: PROJECT_ID,
+          shape,
+        });
+        const run = await n1(dbPath, [
+          {
+            kind: "recoveredQuestion",
+            sessionId,
+            workspace: join(root, "repo"),
+            sessionDataDir: fixture.sessionDataDir,
+            sidecarPath: fixture.sidecarPath,
+            askUserQuestions: shape === "questions",
+            transcriptsRoot: sessionTranscriptsRoot(root),
+          },
+        ]);
+        const recovered = value(run, 0);
+        expect(recovered).toMatchObject({
+          activeCount: 0,
+          activeAfter: 0,
+          turnActive: false,
+          cancellationReason: "abandoned",
+          questionTitle: "Which scope should survive?",
+          attachStatus: "open",
+          deliveryStatus: "accepted",
+          turnOpened: 1,
+          realAttachCount: 1,
+          attachContinuity: "native_resume",
+          recoveredSidecar: fixture.sidecarPath,
+          providerRequests: 1,
+          answers: 0,
+          acceptedNextMessages: 1,
+        });
+        expect(JSON.stringify(recovered.messages)).toContain("Which scope should survive?");
+        expect(JSON.stringify(recovered.messages)).toContain("Continue without an answer");
+        if (shape === "questions") {
+          expect(recovered.questionPrompts).toEqual([
+            "Which scope should survive?",
+            "When should it ship?",
+          ]);
+          expect(JSON.stringify(recovered.messages)).toContain("When should it ship?");
+        }
+        const failedResult = [
+          expect.objectContaining({
+            toolName: "ask_user",
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+              },
+            ],
+          }),
+        ];
+        expect(recovered.results).toEqual(failedResult);
+        expect(recovered.sidecarResults).toEqual(failedResult);
+        expect(JSON.stringify(recovered.results)).not.toContain("Chose:");
+        assertHeadReads(dbPath);
+        const read = openVolliDb(dbPath);
+        try {
+          expect(
+            await createSqliteSessionFollowUpLedger(read).transaction(
+              sessionId,
+              (state) => state.entries,
+            ),
+          ).toMatchObject([{ id: "head-follow-up", state: "queued" }]);
+          const events = await headEngine(read).listEvents({ sessionId });
+          expect(
+            events
+              .filter(({ payload }) => payload.kind === "interaction.opened")
+              .map(({ payload }) => payload),
+          ).toEqual([{ kind: "interaction.opened", interaction: fixture.question }]);
+          expect(
+            events.filter(({ payload }) => payload.kind === "interaction.cancelled"),
+          ).toHaveLength(1);
+          expect(
+            events.filter(({ payload }) => payload.kind === "interaction.resolved"),
+          ).toHaveLength(0);
+          expect(events.filter(({ payload }) => payload.kind === "turn.started")).toHaveLength(2);
+          expect(
+            events.filter(
+              ({ payload }) =>
+                payload.kind === "command.receipt.recorded" &&
+                payload.receipt.commandId === "head-question-message",
+            ),
+          ).toHaveLength(1);
+        } finally {
+          read.close();
+        }
+      },
+    );
 
     it("shows and answers all three head-written ask_user prompts without erasing the birth marker", async () => {
       await headProfile();

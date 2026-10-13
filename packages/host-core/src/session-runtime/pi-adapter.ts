@@ -777,6 +777,7 @@ function piNativeAdapter(
           "configuration_invalid",
         );
       }
+      const mcpTools = context.mcpTools ?? [];
       const binding = new PiBinding({
         spec,
         sink,
@@ -804,14 +805,14 @@ function piNativeAdapter(
         }),
         resolveSecretPort: options.resolveSecretPort,
         mcp:
-          (context.mcpTools?.length ?? 0) === 0
+          mcpTools.length === 0
             ? undefined
             : options.resolveMcpPort?.({
                 projectId: context.projectId,
                 sessionId: spec.sessionId,
                 attachmentId: spec.attachmentId,
                 workspacePath: spec.directory,
-                mcpTools: context.mcpTools ?? [],
+                mcpTools,
               }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
@@ -896,8 +897,8 @@ interface PiBindingOptions {
   mcp: AttachmentMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
-  /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
-  workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
+  /** The workspace's package state, always measured by the attach path. */
+  workspaceEnvironment: RuntimeWorkspaceEnvironment;
 }
 
 class PiBinding implements BindingHandle {
@@ -915,7 +916,7 @@ class PiBinding implements BindingHandle {
   readonly #mcp: AttachmentMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
-  readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
+  readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment;
   readonly #abort = new AbortController();
   /** Questions the runtime is parked on, by the interaction id they were asked under. */
   readonly #asked = new Map<string, ParkedAsk>();
@@ -1118,13 +1119,8 @@ class PiBinding implements BindingHandle {
       venue: "local",
       model: this.#context.model,
       brief: { text: this.#context.brief },
-      // Spread, not assigned, for the same reason `promptResources` is: an
-      // unmeasured workspace must reach the prompt as an ABSENT field rather
-      // than one set to undefined, so "nobody measured" and "measured, nothing
-      // to say" stay the same silent prompt and neither poses as the other.
-      ...(this.#workspaceEnvironment === undefined
-        ? {}
-        : { workspaceEnvironment: this.#workspaceEnvironment }),
+      // Every attach measures the workspace; carry that same measurement.
+      workspaceEnvironment: this.#workspaceEnvironment,
       // The seam `composeSystemPrompt` renders as delimited RESOURCE sections.
       // Omitted rather than empty when the Session named no skills, so a spec
       // with no resources is a spec with no resources field — same shape the
@@ -1278,7 +1274,7 @@ class PiBinding implements BindingHandle {
         try {
           const outcome = await handle.retry(command.commandId);
           return outcome.kind === "delivered"
-            ? this.#accepted(command.commandId)
+            ? this.#accepted(command.commandId, undefined, undefined, outcome.acceptedAt)
             : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
         } catch (error) {
           return this.#unknown(command.commandId, error);
@@ -1483,7 +1479,12 @@ class PiBinding implements BindingHandle {
         command.targetTurnId,
       );
       return outcome.kind === "delivered"
-        ? this.#accepted(command.commandId, outcome.delivery, outcome.turnOpened)
+        ? this.#accepted(
+            command.commandId,
+            outcome.delivery,
+            outcome.turnOpened,
+            outcome.acceptedAt,
+          )
         : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
     } catch (error) {
       // The prompt reached Pi and something after it failed. "Unknown" is the
@@ -1738,11 +1739,12 @@ class PiBinding implements BindingHandle {
     commandId: string,
     delivery?: Extract<DeliveryReceipt, { status: "accepted" }>["delivery"],
     turnOpened?: boolean,
+    acceptedAt?: number,
   ): DeliveryReceipt {
     return {
       commandId,
       status: "accepted",
-      acceptedAt: this.#now(),
+      acceptedAt: acceptedAt ?? this.#now(),
       native: this.#native,
       // Both fields are transport answers only. The durable Receipt still says
       // that the Command was accepted; the live caller learns how it landed.

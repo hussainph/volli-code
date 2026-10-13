@@ -1961,6 +1961,12 @@ export type DeliveryOutcome =
       kind: "delivered";
       delivery: "prompt" | "queue" | "steer" | "retry";
       /**
+       * Timestamp of the durable command acceptance marker, when one exists.
+       * Live receipts and recovery must name the same acceptance. Absent for
+       * volatile queue admission and callers without a command identity.
+       */
+      acceptedAt?: number;
+      /**
        * True only when this delivery OPENED a turn that is still running
        * (VC-324) — the `settle: "opened"` answer on an idle target.
        *

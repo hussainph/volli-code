@@ -1913,6 +1913,44 @@ async function attachSession(
       nativeRoute,
     );
     const recoveredPath = replayable.path;
+    // The host can retire a question card, but the lost process cannot finish
+    // its ask_user tool call. Pair every replayable unanswered ask with a
+    // durable failed result before another provider request sees it. This is
+    // not a resolution: no choice or reply was obtained. Ordinary Pi messages
+    // keep the repair readable by older runtimes, and a second attach finds
+    // the result instead of repairing the same call again.
+    const unansweredQuestions = new Set<string>();
+    for (const message of contextMessages(recoveredPath)) {
+      if (message.role === "assistant") {
+        for (const block of (message as AssistantMessage).content) {
+          if (block.type === "toolCall" && block.name === "ask_user")
+            unansweredQuestions.add(block.id);
+        }
+      } else if (message.role === "toolResult") {
+        unansweredQuestions.delete(message.toolCallId);
+      }
+    }
+    for (const toolCallId of unansweredQuestions) {
+      const message: AgentMessage = {
+        role: "toolResult",
+        toolCallId,
+        toolName: "ask_user",
+        content: [
+          {
+            type: "text",
+            text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+          },
+        ],
+        isError: true,
+        timestamp: host.now(),
+      };
+      const entryId = await mainBranch.appendMessage(message, attachContext);
+      const entry = await sidecar.getEntry(entryId, attachContext);
+      /* v8 ignore next -- appendMessage promises the message entry it returned. */
+      if (entry?.type !== "message")
+        throw new Error("Pi question recovery result was not persisted.");
+      recoveredPath.push(entry);
+    }
     const recoveredCompaction = recoveredPath.findLast((entry) => entry.type === "compaction");
     let nativeCompactionState =
       recoveredCompaction?.type === "compaction"
@@ -1943,7 +1981,9 @@ async function attachSession(
       if (observation.state === "raised") activeAttentionReasons.add(observation.reason);
       else activeAttentionReasons.delete(observation.reason);
     }
-    const persistObservation = async <T extends RecoverableMarker>(observation: T): Promise<T> => {
+    const persistObservation = async <T extends RecoverableMarker>(
+      observation: T,
+    ): Promise<T & { occurredAt: number; recoveryCursor: string }> => {
       const durable = JSON.parse(JSON.stringify(observation)) as T;
       // Refused at the write, not discovered at the read — with the same
       // predicate recovery applies, so writer and validator cannot drift. A
@@ -2023,13 +2063,19 @@ async function attachSession(
       activeAttentionReasons.add("runtime-failure");
     }
     for (const recoveredTurnId of openTurnIds) {
-      await persistObservation({
-        kind: "attention",
-        state: "raised",
-        reason: "partial-turn",
-        message: "A recovered Pi turn ended before its completion marker was committed.",
-      });
-      activeAttentionReasons.add("partial-turn");
+      // Attention identity is frozen per attachment/reason, not per notice.
+      // A generic restart warning must not replace an active diagnostic (such
+      // as conflicting settled history) with a warning the host may retire.
+      // Still interrupt every open turn even when its warning is already held.
+      if (!activeAttentionReasons.has("partial-turn")) {
+        await persistObservation({
+          kind: "attention",
+          state: "raised",
+          reason: "partial-turn",
+          message: "A recovered Pi turn ended before its completion marker was committed.",
+        });
+        activeAttentionReasons.add("partial-turn");
+      }
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
     }
     // A notice that the last process was reconnecting describes a wait no
@@ -2302,6 +2348,15 @@ async function attachSession(
           : [],
       ),
     );
+    const acceptedCommandTimes = new Map(
+      recoveredMarkers.flatMap((marker) =>
+        marker.kind === "command-accepted" ? [[marker.commandId, marker.occurredAt] as const] : [],
+      ),
+    );
+    const acceptanceTime = (commandId: string | undefined): { acceptedAt?: number } => {
+      const acceptedAt = commandId === undefined ? undefined : acceptedCommandTimes.get(commandId);
+      return acceptedAt === undefined ? {} : { acceptedAt };
+    };
     const persistAcceptedDelivery = async (
       delivery: PendingDelivery | undefined,
       acceptedTurnId: string,
@@ -2313,7 +2368,7 @@ async function attachSession(
         return false;
       }
       if (delivery.operation === "message.submit") {
-        await persistObservation({
+        const marker = await persistObservation({
           kind: "command-accepted",
           commandId: delivery.commandId,
           operation: delivery.operation,
@@ -2324,16 +2379,18 @@ async function attachSession(
           // distinguish typed absence from a user-authored delimiter lookalike.
           resources: delivery.resources,
         });
+        acceptedCommandTimes.set(delivery.commandId, marker.occurredAt);
         acceptedMessageCommands.set(delivery.commandId, delivery.delivery);
         delivery.accepted?.();
       } else {
-        await persistObservation({
+        const marker = await persistObservation({
           kind: "command-accepted",
           commandId: delivery.commandId,
           operation: delivery.operation,
           delivery: delivery.delivery,
           turnId: acceptedTurnId,
         });
+        acceptedCommandTimes.set(delivery.commandId, marker.occurredAt);
       }
       return true;
     };
@@ -3464,7 +3521,12 @@ async function attachSession(
         const accepted =
           commandId === undefined ? undefined : acceptedMessageCommands.get(commandId);
         if (accepted !== undefined)
-          return { kind: "delivered", delivery: accepted, turnOpened: false };
+          return {
+            kind: "delivered",
+            delivery: accepted,
+            turnOpened: false,
+            ...acceptanceTime(commandId),
+          };
         // Host queue release waits for durable acceptance, not Pi's volatile
         // followUp array. Projected turn end arrives while agent_end observers
         // are still awaited; wait out that closing window before prompting.
@@ -3516,7 +3578,7 @@ async function attachSession(
           }
           // No `turnOpened`: this message joined a turn that was already
           // running, which is the distinction a supervisor reads (VC-324).
-          return { kind: "delivered", delivery };
+          return { kind: "delivered", delivery, ...acceptanceTime(commandId) };
         }
         consumeRunFailure();
         // Before the message is composed, not after: compaction can change what
@@ -3587,14 +3649,19 @@ async function attachSession(
           if (failed !== undefined) {
             throw failed;
           }
-          return { kind: "delivered", delivery: "prompt", turnOpened: opening.opened };
+          return {
+            kind: "delivered",
+            delivery: "prompt",
+            turnOpened: opening.opened,
+            ...acceptanceTime(commandId),
+          };
         }
         await run();
         const failed = consumeRunFailure();
         if (failed !== undefined) {
           throw failed;
         }
-        return { kind: "delivered", delivery: "prompt" };
+        return { kind: "delivered", delivery: "prompt", ...acceptanceTime(commandId) };
       },
 
       async selectModel(selection) {
@@ -3698,7 +3765,9 @@ async function attachSession(
         await settleRun();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
-        return outcome;
+        return outcome.kind === "delivered"
+          ? { ...outcome, ...acceptanceTime(commandId) }
+          : outcome;
       },
 
       /**
