@@ -1086,57 +1086,66 @@ describe("Pi native adapter attach", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it("hands a surface frozen with the hold pair the whole port, and ends its holds when the turn does (VC-239)", async () => {
-    const turnEnded = vi.fn();
-    const { runtime, sink } = await attached({
-      resolveRuntimeContext: async () => ({
-        ...context,
-        toolSurface: [
-          "read",
-          "edit",
-          "write",
-          "execute",
-          "browser_tabs",
-          "browser_navigate",
-          "browser_snapshot",
-          "browser_act",
-          "browser_screenshot",
-          "browser_console",
-          "browser_acquire",
-          "browser_release",
-        ],
-      }),
-      resolveBrowserPort: () => ({
-        tabs: async () => ({ tabs: [] }),
-        navigate: unusedPortMethod,
-        snapshot: unusedPortMethod,
-        act: unusedPortMethod,
-        screenshot: unusedPortMethod,
-        console: unusedPortMethod,
-        acquire: async (input) => ({ kind: "held", tabId: input.tabId }),
-        release: async (input) => ({ tabId: input.tabId }),
-        find: unusedPortMethod,
-        turnEnded,
-      }),
-    });
+  it.each(["ticket", "subagent"] as const)(
+    "hands a surface frozen with the hold pair the whole port, and ends its holds when the %s turn does (VC-239)",
+    async (role) => {
+      const turnEnded = vi.fn();
+      const { runtime, sink } = await attached({
+        resolveRuntimeContext: async () => ({
+          ...context,
+          role,
+          parentSessionId: "session-parent",
+          toolSurface: [
+            "read",
+            "edit",
+            "write",
+            "execute",
+            "browser_tabs",
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_act",
+            "browser_screenshot",
+            "browser_console",
+            "browser_acquire",
+            "browser_release",
+          ],
+        }),
+        resolveBrowserPort: () => ({
+          tabs: async () => ({ tabs: [] }),
+          navigate: unusedPortMethod,
+          snapshot: unusedPortMethod,
+          act: unusedPortMethod,
+          screenshot: unusedPortMethod,
+          console: unusedPortMethod,
+          acquire: async (input) => ({ kind: "held", tabId: input.tabId }),
+          release: async (input) => ({ tabId: input.tabId }),
+          find: unusedPortMethod,
+          turnEnded,
+        }),
+      });
 
-    expect(runtime.spec.browser?.acquire).toBeDefined();
-    expect(runtime.spec.browser?.release).toBeDefined();
-    // Frozen before browser_find existed (VC-364): the port reaches the
-    // runtime without `find`, so the surface binds eight and not nine.
-    expect(runtime.spec.browser?.find).toBeUndefined();
+      expect(runtime.spec.browser?.acquire).toBeDefined();
+      expect(runtime.spec.browser?.release).toBeDefined();
+      // Frozen before browser_find existed (VC-364): the port reaches the
+      // runtime without `find`, so the surface binds eight and not nine.
+      expect(runtime.spec.browser?.find).toBeUndefined();
 
-    // A turn starting ends nothing; a turn completing or interrupted ends
-    // every hold — told BEFORE the fact reaches the sink, so no hold outlives
-    // its turn by even one write.
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    expect(turnEnded).not.toHaveBeenCalled();
-    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
-    expect(turnEnded).toHaveBeenCalledTimes(1);
-    await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-2" });
-    expect(turnEnded).toHaveBeenCalledTimes(2);
-    expect(sink.observations.filter((one) => one.kind === "turn")).toHaveLength(3);
-  });
+      // A turn starting ends nothing; a turn completing or interrupted ends
+      // every hold — told BEFORE the fact reaches the sink, so no hold outlives
+      // its turn by even one write.
+      await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
+      expect(turnEnded).not.toHaveBeenCalled();
+      await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
+      expect(turnEnded).toHaveBeenCalledTimes(1);
+      if (role === "subagent")
+        expect(turnEnded).toHaveBeenNthCalledWith(1, { closeHeadlessOwned: true });
+      else expect(turnEnded).toHaveBeenNthCalledWith(1);
+      await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-2" });
+      expect(turnEnded).toHaveBeenCalledTimes(2);
+      expect(turnEnded).toHaveBeenNthCalledWith(2);
+      expect(sink.observations.filter((one) => one.kind === "turn")).toHaveLength(3);
+    },
+  );
 
   it("hands a surface frozen with browser_find the port's find (VC-364)", async () => {
     const { runtime } = await attached({
