@@ -40,7 +40,7 @@ function short(id: string): string {
   return id.replace(/:[0-9a-f]{12}:/u, ":");
 }
 
-/** A real 1×1 PNG, which the sandbox's `image()` checks before it accepts it. */
+/** A real 1×1 PNG, held host-side while the sandbox receives only its handle. */
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
@@ -756,16 +756,48 @@ describe("replay", () => {
     f.host.surface = { ...f.host.surface, descriptionVersion: undefined };
     f.tool = createCodeModeTool(f.host);
     const result = await f.tool.execute("legacy-image", {
-      code: `image("data:image/png;base64,${PNG}"); return await tools.read({});`,
+      code: "return await tools.read({});",
     });
     expect(result.content).toHaveLength(1);
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("Code Mode returns no images."),
+      text: expect.stringContaining(
+        "1 image was left out: This Session started before Code Mode could return images (Volli 0.2.2). Start a new Session to see images from programs.",
+      ),
     });
     expect(result.content[0]).toMatchObject({
       text: expect.stringContaining(
-        "Returned: [image image/png left out: Code Mode passes no images to programs]",
+        "Returned: [image image/png left out: This Session started before Code Mode could return images (Volli 0.2.2). Start a new Session to see images from programs.]",
+      ),
+    });
+  });
+
+  it("explains legacy omissions even with no return, including replay", async () => {
+    const halt = halter();
+    const execute = vi.fn(async () => ({
+      content: [{ type: "image" as const, data: PNG, mimeType: "image/png" }],
+      details: undefined,
+    }));
+    const f = fixture({
+      tools: [{ ...textTool("read", () => ""), execute }, halt.tool],
+    });
+    f.host.surface = { ...f.host.surface, descriptionVersion: undefined };
+    f.tool = createCodeModeTool(f.host);
+    const code = "await tools.read({}); await tools.halt({});";
+    const first = await f.tool.execute("legacy-no-return", { code }, halt.state.controller.signal);
+    expect(first.content[0]).toMatchObject({
+      text: expect.stringContaining(
+        "1 image was left out: This Session started before Code Mode could return images (Volli 0.2.2). Start a new Session to see images from programs.",
+      ),
+    });
+    halt.state.halting = false;
+    const replay = await createCodeModeTool(f.host).execute("legacy-no-return", { code });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(replay.details.replayedCalls).toBe(1);
+    expect(replay.content).toHaveLength(1);
+    expect(replay.content[0]).toMatchObject({
+      text: expect.stringContaining(
+        "1 image was left out: This Session started before Code Mode could return images (Volli 0.2.2). Start a new Session to see images from programs.",
       ),
     });
   });
@@ -1252,6 +1284,71 @@ describe("results", () => {
     ]);
   });
 
+  it.each([
+    "image(shot.images[0]);",
+    "image(shot.images[0].handle);",
+    "return { nested: [shot.images[0]] };",
+    "return shot;",
+  ])("attaches a current-run image through %s", async (emission) => {
+    const f = fixture({
+      tools: [
+        resultTool("read", {
+          content: [{ type: "image", data: PNG, mimeType: "image/png" }],
+          details: undefined,
+        }),
+      ],
+    });
+    const result = await f.tool.execute("image-forms", {
+      code: `const shot = await tools.read({}); ${emission}`,
+    });
+    expect(result.details.status).toBe("completed");
+    expect(result.content.filter((block) => block.type === "image")).toEqual([
+      { type: "image", data: PNG, mimeType: "image/png" },
+    ]);
+    expect(result.details.imageCaptions).toEqual([
+      "Image from read (call 1) (Session workspace content).",
+    ]);
+  });
+
+  it("does not emit images through text(shot) and refuses handles from another run", async () => {
+    const f = fixture({
+      tools: [
+        resultTool("read", {
+          content: [{ type: "image", data: PNG, mimeType: "image/png" }],
+          details: undefined,
+        }),
+      ],
+    });
+    const first = await run(
+      f,
+      "const shot = await tools.read({}); text(shot); return shot.images[0].handle;",
+    );
+    const handle = first.text.match(/Returned: ([0-9a-f-]+)/u)![1]!;
+    expect(first.details).not.toHaveProperty("imageCaptions");
+    const next = await run(f, `image(${JSON.stringify(handle)}); image("unknown");`);
+    expect(next.text).toContain("2 images were left out");
+    expect(next.text).toContain("unavailable handle");
+    expect(next.details).not.toHaveProperty("imageCaptions");
+  });
+
+  it.each([
+    "null",
+    "undefined",
+    "42",
+    "{}",
+    '{type:"image",handle:42}',
+    '{url:"data:image/png;base64,AAAA"}',
+    '"data:image/png;base64,AAAA"',
+    '"https://example.com/picture.png"',
+  ])("rejects invalid image input %s with Volli's working calls", async (value) => {
+    const f = fixture({ tools: [] });
+    const result = await run(f, `image(${value});`);
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("Volli image() expects an image handle.");
+    expect(result.text).toContain("image(shot.images[0]) or return shot");
+    expect(result.text).not.toContain("Pass a base64 data URI");
+  });
+
   it("takes image captions only from host framing, never printed or returned program metadata", async () => {
     const f = fixture({
       tools: [
@@ -1362,8 +1459,23 @@ describe("results", () => {
       ).text,
     ).toContain("2 images were left out");
     expect((await run(f, `image("data:image/png;base64,${PNG}");`)).text).toContain(
-      "1 image was left out",
+      "Volli image() expects an image handle.",
     );
+  });
+
+  it("still omits raw image bytes received over the worker transport", async () => {
+    const f = fixture({
+      tools: [],
+      sandbox: { workerUrl: new URL("./fixtures/raw-image-worker.mjs", import.meta.url) },
+    });
+    const result = await f.tool.execute("raw-worker-output", { code: "return;" });
+    expect(result.details.status).toBe("completed");
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining(
+        "1 image was left out: image bound exceeded, unavailable handle, or non-handle image output.",
+      ),
+    });
   });
 
   it("preserves capture omissions after nine screenshots emit, cancel and replay", async () => {

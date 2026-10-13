@@ -49,13 +49,13 @@ the tools its Session already has, and nothing else:
   `shell_output`, `shell_kill`). It cannot call `codemode` itself. Browser
   screenshots and tab holds, Session controls, Automations and MCP management
   are callable when the Session holds them.
-- Images from nested calls become opaque handles; their bytes stay outside
-  the sandbox. A program can pass a handle to `image(handle)` or include it
-  in its returned value. Images appear after the text, with their source and
-  trust notice, in both the model's tool result and the chat card. One run
-  keeps at most 8 images and 16 MiB of base64 image data; the result names
-  anything left out. Saved pictures use the screenshot store's existing
-  400-picture, 30-day retention limit; an expired picture is named as unavailable.
+- Images from nested calls reach the program as handles, and their bytes stay
+  outside the sandbox. Images from a program, below, shows how to attach one.
+  Images appear after the text, with their source and trust notice, in both the
+  model's tool result and the chat card. One run keeps at most 8 images and 16 MiB
+  of base64 image data; the result names anything left out. Saved pictures use the
+  screenshot store's existing 400-picture, 30-day retention limit; an expired
+  picture is named as unavailable.
 - Each run is limited to 200 calls, 5 minutes of running time (time spent
   waiting for your answer does not count), and about 20 KB of output. Longer
   output is shortened, and the full text is saved where the Session can read
@@ -65,6 +65,24 @@ the tools its Session already has, and nothing else:
   direct results are.
 
 Stopping the turn stops the program and every call it has in flight.
+
+## Images from a program
+
+A nested call that returns an image, such as `browser_screenshot` or an MCP tool
+that returns a picture, gives the program a list of image handles in `images`,
+not the image itself. Attach one with `image()`, or return the result and every
+image in it is attached:
+
+```js
+const shot = await tools.browser_screenshot({ tabId: "tab-1" }); // a tab id from browser_tabs
+image(shot.images[0]);        // attaches the first image
+image(shot.images[0].handle); // attaches the same image, given its handle string
+return shot;                  // attaches every image in the result
+```
+
+`text(shot)` prints the result as text and attaches no image. A Session started
+before Volli 0.2.2 cannot attach images from a program at all; start a new
+Session to use them.
 
 ## Modes
 

@@ -92,17 +92,47 @@ index 637bb9f78a5d5a50e2de0a64061ecefe7f190819..69da44adcd5901889241dcdaa6ba569e
              wasm: this.wasm === undefined ? loadQuickJSWasm() : Promise.resolve(this.wasm),
              workerUrl: this.workerUrl,
 diff --git a/dist/runtime/prelude-source.js b/dist/runtime/prelude-source.js
-index 78d92b1c9d745198b8069d80382ce35b715599e3..bfc881ca16f4ad761caad1e399fa42b92d438c57 100644
+index 78d92b1c9d745198b8069d80382ce35b715599e3..72d8ce6bf99beab9a34d369a615b178063e943b8 100644
 --- a/dist/runtime/prelude-source.js
 +++ b/dist/runtime/prelude-source.js
-@@ -269,1 +269,6 @@ export const PRELUDE_SOURCE = `(function (bridge, toolsJson, globalsJson, storeJ
--	function image(value) {
-+	function image(value) {
-+		// VC-748: only an opaque reference crosses the VM; the host owns its bytes.
-+		if (value && value.type === "image" && typeof value.handle === "string") {
-+			if (!finished) bridge("output", "image", value.handle, "application/x-volli-image-handle");
-+			return;
-+		}
+@@ -267,31 +267,13 @@ export const PRELUDE_SOURCE = `(function (bridge, toolsJson, globalsJson, storeJ
+ 	];
+ 
+ 	function image(value) {
+-		const url = imageUrl(value);
+-		if (url === "") throw new TypeErrorCtor(${JSON.stringify(IMAGE_HELPER_EXPECTS)});
+-		const colon = url.indexOf(":");
+-		const scheme = colon === -1 ? "" : url.slice(0, colon).toLowerCase();
+-		if (scheme === "http" || scheme === "https") {
+-			throw new TypeErrorCtor("remote image URLs are not supported in tool outputs. Pass a base64 data URI instead");
++		// Volli: only an opaque reference crosses the VM; the current run owns its bytes.
++		const handle = typeof value === "string" ? value
++			: value && value.type === "image" && typeof value.handle === "string" ? value.handle : undefined;
++		if (handle === undefined || /^(?:data|https?):/i.test(handle)) {
++			throw new TypeErrorCtor("Volli image() expects an image handle. Use image(shot.images[0]) or return shot; image bytes and URLs are not supported.");
+ 		}
+-		const comma = url.indexOf(",");
+-		const header = comma === -1 ? [] : url.slice(colon + 1, comma).split(";");
+-		if (scheme !== "data" || comma === -1 || header.slice(1).every((part) => part.toLowerCase() !== "base64")) {
+-			throw new TypeErrorCtor("invalid image output. Pass a base64 data URI instead");
+-		}
+-		// Providers reject the whole request on a bad image, and a persisted image block would be
+-		// resent on every later turn. Line breaks from wrapped base64 are dropped. The declared type
+-		// is ignored in favor of the detected one, as providers also reject mismatches.
+-		const data = url.slice(comma + 1).replace(/\\s+/g, "");
+-		if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+-			throw new TypeErrorCtor("invalid image output. The image data is not valid base64 (truncated or corrupted?)");
+-		}
+-		const head = data.slice(0, 16);
+-		const signature = IMAGE_SIGNATURES.find(([, pattern]) => pattern.test(head));
+-		if (!signature) {
+-			throw new TypeErrorCtor("invalid image output. The image data is not a PNG, JPEG, GIF, or WebP image");
+-		}
+-		if (!finished) bridge("output", "image", data, signature[0]);
++		if (!finished) bridge("output", "image", handle, "application/x-volli-image-handle");
+ 	}
+ 
+ 	function exit() {
 diff --git a/dist/runtime/worker.js b/dist/runtime/worker.js
 index aa77a8acc0dd7525d5e7605a1cccb57fb4b42196..c3817f60f6a7ea368c005333fa7f7429319575e5 100644
 --- a/dist/runtime/worker.js

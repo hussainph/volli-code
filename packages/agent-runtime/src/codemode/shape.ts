@@ -132,6 +132,10 @@ const imageResultSchema = {
   required: ["text", "images", "omittedImages"],
 };
 
+/** Result-only recovery copy; frozen descriptions and declarations are unchanged. */
+export const LEGACY_IMAGE_OMISSION =
+  "This Session started before Code Mode could return images (Volli 0.2.2). Start a new Session to see images from programs.";
+
 /** A tool's text and opaque image references; no payload enters QuickJS. */
 function textOf(
   content: readonly Block[],
@@ -148,7 +152,7 @@ function textOf(
       if (handle === undefined) {
         omittedImages += 1;
         parts.push(
-          `[image ${block.mimeType} left out: ${legacy ? "Code Mode passes no images to programs" : "Code Mode image bound"}]`,
+          `[image ${block.mimeType} left out: ${legacy ? LEGACY_IMAGE_OMISSION : "Code Mode image bound"}]`,
         );
       } else images.push(handle);
     }
