@@ -22,6 +22,7 @@ import {
   BROWSER_CONSOLE_MAX_CHARS,
   BROWSER_TITLE_MAX_CHARS,
   BrowserTraceStore,
+  browserAgentPort,
   type BrowserTraceStepInput,
 } from "@volli/host-core/browser";
 
@@ -2185,6 +2186,48 @@ describe("BrowserTabHost lifecycle (VC-238)", () => {
       sibling.tabId,
     ]);
     expect(views[0]?.webContents.close).toHaveBeenCalledWith({ waitForBeforeUnload: false });
+  });
+
+  it("uses the shared delegate-completion lifecycle without destroying protected desktop views", async () => {
+    const session = { sessionId: "session-a", attachmentId: "attachment-a" };
+    const port = browserAgentPort({
+      backend: host,
+      scope: { projectId: "project-1", ticketId: "ticket-1" },
+      session,
+      cursorFor: undefined,
+    });
+    const free = agentTab(session.sessionId, "ticket-1", 0);
+    const held = agentTab(session.sessionId, "ticket-1", 1);
+    const previewed = agentTab(session.sessionId, "ticket-1", 2);
+    const promoted = agentTab(session.sessionId, "ticket-1", 3);
+    const personHeld = agentTab(session.sessionId, "ticket-1", 4);
+    const otherHeld = agentTab(session.sessionId, "ticket-1", 5);
+    host.setPresentation(previewed.tabId, "preview");
+    host.setPresentation(promoted.tabId, "tab");
+    host.takeOver(personHeld.tabId);
+    host.hold(otherHeld.tabId, { sessionId: "session-b", attachmentId: "attachment-b" });
+    const personal = host.open({
+      url: "https://person.example.com",
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      createdBy: "user",
+    });
+    await port.acquire({ tabId: held.tabId, signal: new AbortController().signal });
+    port.turnEnded({ closeHeadlessOwned: true });
+    expect(host.list({ projectId: "project-1" }).map((tab) => tab.tabId)).toEqual([
+      previewed.tabId,
+      promoted.tabId,
+      personHeld.tabId,
+      otherHeld.tabId,
+      personal.tabId,
+    ]);
+    expect(views[0]?.webContents.close).toHaveBeenCalledOnce();
+    expect(views[1]?.webContents.close).toHaveBeenCalledOnce();
+    expect(published).toContainEqual({ closedTabId: free.tabId });
+    for (const view of views.slice(2)) expect(view.webContents.close).not.toHaveBeenCalled();
+    port.dispose();
+    port.dispose();
+    expect(host.list({ projectId: "project-1" })).toHaveLength(5);
   });
 
   it("closes a Ticket's headless agent tabs when the Ticket is archived, whoever owned them", () => {

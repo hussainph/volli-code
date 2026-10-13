@@ -724,13 +724,20 @@ export abstract class BrowserTabRegistry<
   }
 
   /**
-   * Closes the headless tabs one Session owns, when its attachment ends
-   * (VC-238). A tab a person has shown — previewed or promoted — is theirs to
-   * close and survives the Session, the trade Claude Code's Chrome integration
-   * makes too: pages you may still be reading stay open. Returns what closed.
+   * Closes unheld, headless agent tabs one Session owns on attachment disposal
+   * or delegated task completion. Shown tabs and anybody else's hold survive.
+   * A turn end passes its captured ids so later turns' tabs cannot be swept.
+   * Callers serialize behind input and release their own holds first.
    */
-  closeHeadlessOwnedBy(sessionId: string): string[] {
-    return this.closeHeadlessWhere((state) => state.ownerSessionId === sessionId);
+  closeHeadlessOwnedBy(sessionId: string, tabIds?: readonly string[]): string[] {
+    const captured = tabIds === undefined ? null : new Set(tabIds);
+    return this.closeHeadlessWhere(
+      (state) =>
+        state.createdBy === "session" &&
+        state.ownerSessionId === sessionId &&
+        state.heldBy === null &&
+        (captured === null || captured.has(state.tabId)),
+    );
   }
 
   /** Closes every headless agent tab of one Ticket, when the Ticket is archived. */
