@@ -122,8 +122,8 @@ export interface AgentBrowserBackend {
   capturePicture(tabId: string, signal?: AbortSignal): Promise<string | null>;
   /** Keeps a model-requested screenshot for the person; answers the picture's id. */
   keepScreenshot(tabId: string, base64Png: string): string;
-  /** Closes the headless tabs one Session owns; a shown tab is the person's and stays. */
-  closeHeadlessOwnedBy(sessionId: string): string[];
+  /** Closes unheld headless tabs one Session owns, optionally limited to captured ids. */
+  closeHeadlessOwnedBy(sessionId: string, tabIds?: readonly string[]): string[];
   /** The hold doors (VC-239); see `BrowserTabRegistry.hold` and its siblings. */
   hold(tabId: string, holder: BrowserSessionHolder): BrowserHoldOutcome;
   releaseHold(tabId: string, holder: BrowserSessionHolder, why?: BrowserHoldEnd): void;
@@ -146,8 +146,8 @@ export interface AgentBrowserPort extends RuntimeBrowserPort {
   release(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
   /** Always carried here; the adapter strips it for a surface frozen before it (VC-364). */
   find(input: { tabId: string; query: string; signal: AbortSignal }): Promise<RuntimeBrowserFind>;
-  /** The Session's turn completed or was interrupted: every hold it has ends now. */
-  turnEnded(): void;
+  /** Ends holds; a completed delegate also closes its captured headless tabs. */
+  turnEnded(options?: { closeHeadlessOwned: boolean }): void;
   dispose(): void;
 }
 
@@ -671,14 +671,34 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         return { tabId: tab.tabId };
       });
     },
-    turnEnded: () => {
-      // Put each release behind work already queued for that tab. A new turn's
-      // work queues behind this barrier and therefore takes a fresh hold.
-      const ending = [...heldTabs];
+    turnEnded: (endingOptions) => {
+      if (lifetime.signal.aborted) return;
+      // Capture now, before the completion observation can start another turn.
+      // Never sweep the Session later: that would include a resumed turn's tabs.
+      const closing = new Set(
+        endingOptions?.closeHeadlessOwned === true
+          ? visible()
+              .filter(
+                (tab) =>
+                  tab.createdBy === "session" &&
+                  tab.ownerSessionId === session.sessionId &&
+                  tab.presentation === "headless",
+              )
+              .map((tab) => tab.tabId)
+          : [],
+      );
+      const ending = new Set([...heldTabs, ...closing]);
       heldTabs.clear();
       for (const tabId of ending) {
+        // Release and destruction share the tab's host-wide input barrier.
+        // Eligibility is checked again there: a person may show or take it
+        // while a key-up or mouse-up is still finishing.
         options.host.agentOperations.afterCurrent(tabId, () => {
           options.host.releaseHold(tabId, session, "turn-end");
+          if (closing.has(tabId)) {
+            const closed = options.host.closeHeadlessOwnedBy(session.sessionId, [tabId]);
+            if (closed.length > 0) releaseWake(tabId);
+          }
         });
       }
     },
@@ -692,10 +712,10 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         // Holds go with the attachment, and the Session leaves the colour
         // wheel; the host does both in one door.
         options.host.forgetSession(session);
-        // Then the tabs themselves. A headless tab's life is bound to the
-        // attachment (VC-238): nobody can see it, so nothing but this Session
-        // could ever close it. Shown tabs are the person's and outlive it.
-        // After forgetSession, so a closing tab's hold is already gone.
+        // Then eligible tabs themselves. Shown tabs and tabs held by the
+        // person or another attachment outlive this attachment. Completed
+        // delegates may have already retired their unheld headless tabs.
+        // After forgetSession, so this attachment's holds are already gone.
         options.host.closeHeadlessOwnedBy(session.sessionId);
       });
     },

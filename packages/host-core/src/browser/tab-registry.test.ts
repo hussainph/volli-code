@@ -162,6 +162,61 @@ function sessionTab(owner: string, url = "https://example.com/"): BrowserTabCrea
 }
 
 describe("BrowserTabRegistry (VC-561)", () => {
+  it("delegate completion closes released owned tabs but preserves shown, personal and held tabs", async () => {
+    const backend = new MemoryBackend();
+    const port = browserAgentPort({ backend, scope: SCOPE, session: ME, cursorFor: undefined });
+    const free = backend.open(sessionTab(ME.sessionId));
+    const held = backend.open(sessionTab(ME.sessionId));
+    const preview = backend.open(sessionTab(ME.sessionId));
+    backend.setPresentation(preview.tabId, "preview");
+    const promoted = backend.open(sessionTab(ME.sessionId));
+    backend.setPresentation(promoted.tabId, "tab");
+    const personal = backend.open({ ...SCOPE, url: "https://example.com/", createdBy: "user" });
+    const personHeld = backend.open(sessionTab(ME.sessionId));
+    backend.takeOver(personHeld.tabId);
+    const otherHeld = backend.open(sessionTab(ME.sessionId));
+    backend.hold(otherHeld.tabId, OTHER);
+    const otherOwned = backend.open(sessionTab(OTHER.sessionId));
+    const signal = new AbortController().signal;
+    await port.acquire({ tabId: free.tabId, signal });
+    await port.release({ tabId: free.tabId, signal });
+    await port.acquire({ tabId: held.tabId, signal });
+
+    port.turnEnded({ closeHeadlessOwned: true });
+    expect(backend.list(SCOPE).map((tab) => tab.tabId)).toEqual([
+      preview.tabId,
+      promoted.tabId,
+      personal.tabId,
+      personHeld.tabId,
+      otherHeld.tabId,
+      otherOwned.tabId,
+    ]);
+    expect(backend.entry(personHeld.tabId).state.heldBy).toEqual({ kind: "person" });
+    expect(backend.entry(otherHeld.tabId).state.heldBy).toMatchObject({
+      sessionId: OTHER.sessionId,
+    });
+    // A repeated completion and stop/dispose close nothing else.
+    port.turnEnded({ closeHeadlessOwned: true });
+    port.dispose();
+    port.dispose();
+    expect(backend.list(SCOPE)).toHaveLength(6);
+    backend.closeAll();
+  });
+
+  it("bounds ownership cleanup to captured ids and tolerates tabs already closed", () => {
+    const backend = new MemoryBackend();
+    const old = backend.open(sessionTab(ME.sessionId));
+    const gone = backend.open(sessionTab(ME.sessionId));
+    backend.close(gone.tabId);
+    const resumed = backend.open(sessionTab(ME.sessionId));
+    expect(backend.closeHeadlessOwnedBy(ME.sessionId, [old.tabId, gone.tabId])).toEqual([
+      old.tabId,
+    ]);
+    expect(backend.closeHeadlessOwnedBy(ME.sessionId, [old.tabId, gone.tabId])).toEqual([]);
+    expect(backend.list(SCOPE).map((tab) => tab.tabId)).toEqual([resumed.tabId]);
+    backend.closeAll();
+  });
+
   it("decides ownership at birth, and reads the engine's chrome on every publish", () => {
     const backend = new MemoryBackend();
     const agent = backend.open(sessionTab(ME.sessionId));

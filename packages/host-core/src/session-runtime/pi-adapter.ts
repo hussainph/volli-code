@@ -251,7 +251,9 @@ export type PiRuntimeContext =
  * optional: it is the one door that keeps a hold from outliving its turn, and
  * a port built without it would keep holds silently.
  */
-export type AttachmentBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
+export type AttachmentBrowserPort = RuntimeBrowserPort & {
+  turnEnded: (options?: { closeHeadlessOwned: boolean }) => void;
+};
 
 /**
  * The runtime's shell port with the one lifecycle door the adapter drives
@@ -1786,7 +1788,14 @@ class PiBinding implements BindingHandle {
     // than after: a hold outliving its turn by even the sink's write would be
     // a hold with nobody driving, and the person's pill would say otherwise.
     if (observation.kind === "turn" && observation.state !== "started") {
-      this.#browser?.turnEnded();
+      // Only completed delegates retire their own headless pages. Board and
+      // Ticket turns (and interrupted delegates) retain theirs for continuation.
+      // Capture at this boundary, before stream delivery can resume the child.
+      if (this.#context.role === "subagent" && observation.state === "completed") {
+        this.#browser?.turnEnded({ closeHeadlessOwned: true });
+      } else {
+        this.#browser?.turnEnded();
+      }
     }
     return this.#sink.emit(observation);
   }
