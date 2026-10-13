@@ -287,7 +287,13 @@ async function submit(f: Awaited<ReturnType<typeof fixture>>, text: string) {
 // Only provider replies are scripted. Discovery, stdio child process, MCP
 // codecs, image fitting, QuickJS, Pi, adapter, ledger and artifact storage are real.
 describe("deferred MCP Code Mode images (VC-748)", () => {
-  it.each(["return", "image"] as const)(
+  it.each([
+    "return picture;",
+    "return result;",
+    "return { nested: [picture] };",
+    "image(picture);",
+    "image(picture.handle);",
+  ])(
     "passes a screenshot via %s to the model and the same transcript blocks after restart",
     async (handoff) => {
       const f = await fixture();
@@ -304,7 +310,7 @@ describe("deferred MCP Code Mode images (VC-748)", () => {
                     typeof picture.handle !== "string" || "data" in picture) {
                   throw new Error("Expected an opaque image handle, never PNG bytes");
                 }
-                ${handoff === "return" ? "return picture;" : "image(picture);"}
+                ${handoff}
               `,
             },
           },

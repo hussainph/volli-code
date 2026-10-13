@@ -65,13 +65,14 @@ describe("outputSchemaFor", () => {
 });
 
 describe("image shaping", () => {
-  it("keeps legacy image placeholders, string reads and MCP omission counts unchanged", () => {
+  it("explains legacy images while keeping string reads and MCP omission counts", () => {
     const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
     const result = { content: [image], details: undefined };
     const capture = () => {
       throw new Error(`legacy ${image.mimeType} bytes must not be captured`);
     };
-    const placeholder = "[image image/png left out: Code Mode passes no images to programs]";
+    const placeholder =
+      "[image image/png left out: This Session started before Code Mode could return images (Volli 0.2.2). Start a new Session to see images from programs.]";
     expect(shapeResult("text", result, false, capture, true)).toEqual({
       ok: true,
       value: placeholder,

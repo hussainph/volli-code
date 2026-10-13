@@ -20,10 +20,16 @@ Reattaching a Session replays that exact record or fails; it never re-derives
 one. So:
 
 - Installing a server, enabling it, or selecting more of its tools changes what
-  the **next Session created** is handed. It changes nothing about any Session
-  that already exists, including the one that made the call.
+  a **new root Session** is handed: one started with `session_start`, or from a
+  fresh Board Session. It changes nothing about any Session that already exists,
+  including the one that made the call.
+- A **delegated helper** is not a new root Session. `session_delegate` hands the
+  helper its parent's frozen tools, MCP tools included, so a helper delegated from
+  a Session born before the install does not have the new tools. Start a new
+  Session before delegating work that needs them.
 - Disabling a server or deselecting a tool likewise cannot take a tool away from
-  a Session that already has it.
+  a Session that already has it, and a helper delegated from that Session still
+  inherits it.
 - **Deleting** a server is the exception, and it is destructive in a way the
   others are not. A Session born holding one of its tools needs that server's
   transport in order to reattach. With the configuration gone, reattachment
@@ -588,8 +594,9 @@ audit record contains the transport needed to do it — and reattachment works
 again.
 
 To avoid this entirely, prefer **`server_disable`**. It keeps the configuration, so
-existing Sessions still reattach, while Sessions created afterwards are not
-offered the tools. That is what most callers actually mean.
+existing Sessions still reattach, while new root Sessions are not offered the
+tools. A helper delegated from a Session that already holds them still inherits
+them. That is what most callers actually mean.
 
 ## Where installs are recorded
 
@@ -745,9 +752,21 @@ Nested MCP results are shaped as
 `{ text, structuredContent?, isError, images, omittedImages }`. `images`
 contains opaque handles, not image bytes; `omittedImages` counts images the
 program could not obtain. Browser screenshots also carry handles. The output
-schemas rendered by `describeTool()` give each tool's exact shape. Programs
-send images with `image(handle)` or by including handles in the returned
-value; image bytes remain host-side, outside the QuickJS heap.
+schemas rendered by `describeTool()` give each tool's exact shape.
+
+A program attaches a picture with `image()`, or by returning the result that
+holds it. Image bytes remain host-side, outside the QuickJS heap:
+
+```js
+const shot = await tools.browser_screenshot({ tabId: "tab-1" }); // a tab id from browser_tabs
+image(shot.images[0]);        // attaches the first picture
+image(shot.images[0].handle); // attaches the same picture, given its handle string
+return shot;                  // attaches every picture in the result
+```
+
+`text(shot)` prints the result as text and attaches no picture. A Session born
+before Volli 0.2.2 cannot attach pictures from a program; start a new Session to
+use them.
 
 Images follow text, in emission/return order, including repeated emissions,
 with at most 8 images and 16 MiB of base64 data per run (the direct MCP result
