@@ -70,6 +70,7 @@ import {
   type CodeModeJournal,
   type RunJournal,
 } from "./journal";
+import { RunImages } from "./images";
 import { checkScript } from "./script";
 import { ExecutionSlots, Mutex, RunClock } from "./schedule";
 import { outputSchemaFor, shapeResult, toolKind, type ShapedOutcome, type ToolKind } from "./shape";
@@ -296,6 +297,7 @@ export function createCodeModeTool(
       outputSchema: outputSchemaFor(
         kinds.get(entry.tool.name)!,
         entry.mcp?.outputSchema ?? entry.detailsSchema ?? entry.tool.outputSchema,
+        host.surface.descriptionVersion === undefined,
       ),
       ...(kinds.get(entry.tool.name) === "structured" ? { nativeStructuredOutput: true } : {}),
       namespace: namespaceOf(entry),
@@ -322,12 +324,15 @@ export function createCodeModeTool(
   const untrustedSources = new Set(
     callable
       .filter((entry) =>
-        entry.verb ? UNTRUSTED_VERBS.has(entry.id) : isUntrustedSource(entry.tool.name),
+        entry.verb
+          ? UNTRUSTED_VERBS.has(entry.id) || entry.id.startsWith("mcp.")
+          : isUntrustedSource(entry.tool.name),
       )
       .map((entry) => entry.tool.name),
   );
   const search = new ToolSearch(listing);
   const description = describeCodeMode({
+    legacy: host.surface.descriptionVersion === undefined,
     tools: listing,
     directOnly: host.tools
       .filter(
@@ -464,6 +469,8 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   const slots = new ExecutionSlots(limits.maxConcurrency);
   const records: CallRecord[] = [];
   const untrusted = new Map<string, number>();
+  const images = new RunImages();
+  let omittedImages = 0;
   const inflight = new Set<Promise<unknown>>();
   let issued = 0;
   let replayed = 0;
@@ -536,6 +543,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       }
       // A remembered answer from an untrusted source is still one.
       if (remembered.untrusted === true) markUntrusted(tool.name);
+      images.restore(remembered.images ?? []);
       replayed += 1;
       return deliver(remembered.outcome);
     }
@@ -593,7 +601,23 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       result: outcome.result,
       isError: outcome.isError,
     });
-    const shaped = shapeResult(input.kinds.get(tool.name)!, outcome.result, outcome.isError);
+    const captured: string[] = [];
+    const shaped = shapeResult(
+      input.kinds.get(tool.name)!,
+      outcome.result,
+      outcome.isError,
+      (image) => {
+        const handle = images.capture(
+          image,
+          `${tool.name} (call ${position})`,
+          input.untrustedSources.has(tool.name),
+        );
+        if (handle === undefined) omittedImages += 1;
+        else captured.push(handle.handle);
+        return handle;
+      },
+      host.surface.descriptionVersion === undefined,
+    );
     if (outcome.isError && signal.aborted) {
       // Cancelled under it: nothing says the call completed, so it is neither
       // journaled nor reported as an answer. A call that SUCCEEDED after its
@@ -614,6 +638,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       name: tool.name,
       argumentsDigest,
       outcome: shaped,
+      images: captured.map((handle) => images.held.get(handle)!),
       ...(savedOutput || input.untrustedSources.has(tool.name) ? { untrusted: true } : {}),
     });
     return deliver(shaped);
@@ -718,6 +743,9 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
   }
   return assemble({
     result,
+    images,
+    omittedImages,
+    legacy: host.surface.descriptionVersion === undefined,
     stopped,
     records,
     untrusted,
@@ -785,14 +813,21 @@ function callSummary(records: readonly CallRecord[], replayed: number): string {
   return `${parts[0]}: ${detail.join(", ")}`;
 }
 
-function outputText(items: readonly CodemodeOutputItem[]): { text: string; images: number } {
+function outputText(items: readonly CodemodeOutputItem[]): {
+  text: string;
+  handles: unknown[];
+  images: number;
+} {
+  const handles: unknown[] = [];
   let images = 0;
   const texts: string[] = [];
   for (const item of items) {
     if (item.type === "text") texts.push(item.text);
+    else if (item.mimeType === "application/x-volli-image-handle")
+      handles.push({ type: "image", handle: item.data });
     else images += 1;
   }
-  return { text: texts.join("\n"), images };
+  return { text: texts.join("\n"), handles, images };
 }
 
 function returned(value: unknown): string | undefined {
@@ -802,6 +837,9 @@ function returned(value: unknown): string | undefined {
 
 async function assemble(input: {
   result: CodemodeResult;
+  images: RunImages;
+  omittedImages: number;
+  legacy: boolean;
   stopped: RunStop | undefined;
   records: readonly CallRecord[];
   untrusted: ReadonlyMap<string, number>;
@@ -816,6 +854,8 @@ async function assemble(input: {
   const { result, stopped } = input;
   const ok = result.ok && stopped === undefined;
   const printed = outputText(result.output);
+  const emitted = input.images.output([...printed.handles, ...(result.ok ? [result.value] : [])]);
+  const omitted = input.omittedImages + printed.images + emitted.omitted;
   const body: string[] = [];
   if (printed.text.length > 0) body.push(printed.text);
   if (result.ok) {
@@ -872,12 +912,18 @@ async function assemble(input: {
       ? ` (plus ${seconds(input.pausedMs)} paused on questions and Volli verbs)`
       : "",
     ` · ${callSummary(input.records, input.replayed)}.`,
-    printed.images > 0
-      ? ` ${printed.images} image${printed.images === 1 ? " was" : "s were"} left out: Code Mode returns no images.`
+    emitted.content.length > 0
+      ? ` ${emitted.content.length / 2} image(s) attached (display requires Volli 0.2.2 or newer).`
+      : "",
+    omitted > 0
+      ? ` ${omitted} image${omitted === 1 ? " was" : "s were"} left out: ${input.legacy ? "Code Mode returns no images." : "image bound exceeded, unavailable handle, or non-handle image output."}`
       : "",
   ].join("");
   return {
-    content: [{ type: "text", text: text.length === 0 ? header : `${header}\n${text}` }],
+    content: [
+      { type: "text", text: text.length === 0 ? header : `${header}\n${text}` },
+      ...emitted.content,
+    ],
     details,
     ...(ok ? {} : { isError: true }),
   };

@@ -91,6 +91,18 @@ index 637bb9f78a5d5a50e2de0a64061ecefe7f190819..69da44adcd5901889241dcdaa6ba569e
              store: serializeStore(options.store),
              wasm: this.wasm === undefined ? loadQuickJSWasm() : Promise.resolve(this.wasm),
              workerUrl: this.workerUrl,
+diff --git a/dist/runtime/prelude-source.js b/dist/runtime/prelude-source.js
+index 78d92b1c9d745198b8069d80382ce35b715599e3..bfc881ca16f4ad761caad1e399fa42b92d438c57 100644
+--- a/dist/runtime/prelude-source.js
++++ b/dist/runtime/prelude-source.js
+@@ -269,1 +269,6 @@ export const PRELUDE_SOURCE = `(function (bridge, toolsJson, globalsJson, storeJ
+-	function image(value) {
++	function image(value) {
++		// VC-748: only an opaque reference crosses the VM; the host owns its bytes.
++		if (value && value.type === "image" && typeof value.handle === "string") {
++			if (!finished) bridge("output", "image", value.handle, "application/x-volli-image-handle");
++			return;
++		}
 diff --git a/dist/runtime/worker.js b/dist/runtime/worker.js
 index aa77a8acc0dd7525d5e7605a1cccb57fb4b42196..c3817f60f6a7ea368c005333fa7f7429319575e5 100644
 --- a/dist/runtime/worker.js

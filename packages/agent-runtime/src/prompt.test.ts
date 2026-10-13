@@ -560,6 +560,13 @@ describe("the Code Mode paragraph", () => {
     }
   });
 
+  it("new Sessions invite only callable reads while legacy Cache Prefixes keep their wording", () => {
+    const modern = execution("ticket", { ...surface(true), descriptionVersion: 2 });
+    expect(modern).toContain("a loop of read calls");
+    expect(modern).not.toContain("a loop of bash");
+    expect(execution("ticket", surface(true))).toContain("a loop of bash or read calls");
+  });
+
   it("is absent without the record's say-so, Code Mode or not", () => {
     expect(execution("ticket", surface(false))).toBe(execution("ticket"));
     expect(execution("ticket")).not.toContain("codemode");

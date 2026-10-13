@@ -246,6 +246,7 @@ const command = z.object({
   route: z.object({ attachmentId: nullableText }).nullable(),
 });
 const codeMode = z.object({
+  descriptionVersion: z.literal(2).optional(),
   routes: z.record(text, z.enum(TOOL_ROUTES)),
   limits: z.object({
     timeoutMs: integer,

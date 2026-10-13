@@ -46,6 +46,7 @@ import {
   activityDescriptor,
   bundleNeedsAttention,
   bundleSummary,
+  compactSignature,
   describeActivity,
   reasoningBody,
   reasoningStatus,
@@ -59,13 +60,29 @@ import {
   type SummarySegment,
   type SummaryTone,
 } from "@volli/session-presentation";
-import { BrowserTabCard } from "@renderer/components/browser/browser-tab-card";
+import {
+  BrowserCardHostContext,
+  BrowserPicture,
+  BrowserTabCard,
+  useBrowserPicture,
+} from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
 import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
 
 import { TokenText, useHighlightedLines, useOnScreen } from "./tool-output-highlight";
+import {
+  codeModeImageContent,
+  codeModeImageDataUrl,
+  type CodeModeContent,
+} from "./code-mode-output-model";
+
+/** The same cached screenshot reader, with the owning Session's host transport. */
+export const CodeModePictureHostContext = React.createContext<Pick<
+  import("@renderer/components/browser/browser-api").BrowserApi,
+  "picture"
+> | null>(null);
 
 /* ------------------------------------------------------------------- motion */
 
@@ -432,7 +449,9 @@ export const ToolRow = React.memo(function ToolRow({
   // A bash command always earns its own disclosure: the header is one line by
   // design, while the body is the untruncated command beside whatever it
   // printed. Other rows only need a disclosure when their presenter has detail.
-  const expandable = row.detail !== null || row.command !== null || card !== null;
+  const imageContent = codeModeImageContent(part);
+  const expandable =
+    row.detail !== null || row.command !== null || card !== null || imageContent !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
@@ -467,12 +486,16 @@ export const ToolRow = React.memo(function ToolRow({
       {expandable ? (
         <Disclosure open={open}>
           {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
-          <ToolDetail
-            kind={row.kind}
-            command={row.command}
-            detail={row.detail}
-            openPath={row.openPath}
-          />
+          {imageContent !== null ? (
+            <CodeModeOutput input={part.input} content={imageContent} />
+          ) : (
+            <ToolDetail
+              kind={row.kind}
+              command={row.command}
+              detail={row.detail}
+              openPath={row.openPath}
+            />
+          )}
         </Disclosure>
       ) : null}
     </div>
@@ -666,6 +689,50 @@ function DetailFrame({
   return (
     <div ref={ref} className={cn("my-1", DETAIL_FRAME, className)}>
       {children}
+    </div>
+  );
+}
+
+function CodeModeOutput({ input, content }: { input: unknown; content: CodeModeContent[] }) {
+  const signature = compactSignature(input);
+  return (
+    <>
+      {signature === null ? null : (
+        <DetailFrame className="whitespace-pre-wrap text-muted-foreground/70">
+          {signature}
+        </DetailFrame>
+      )}
+      {content.map((block, index) =>
+        block.type === "text" ? (
+          // Keep each source/trust line in its original position before its image.
+          // This is tool output, never Markdown or executable page content.
+          // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate blocks are valid.
+          <DetailFrame key={index} className="whitespace-pre-wrap text-muted-foreground">
+            {block.text}
+          </DetailFrame>
+        ) : (
+          // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate images are valid.
+          <CodeModeImage key={index} block={block} />
+        ),
+      )}
+    </>
+  );
+}
+
+function CodeModeImage({ block }: { block: Extract<CodeModeContent, { type: "image" }> }) {
+  const host = React.useContext(BrowserCardHostContext);
+  const pictureApi = React.useContext(CodeModePictureHostContext);
+  const picture = useBrowserPicture(
+    pictureApi ?? host?.api ?? null,
+    typeof block.picture === "string" ? block.picture : null,
+  );
+  const dataUrl = codeModeImageDataUrl(block);
+  return (
+    <div className="my-1">
+      <BrowserPicture
+        alt="Image returned by Code Mode"
+        state={dataUrl === null ? picture : { kind: "ready", dataUrl }}
+      />
     </div>
   );
 }

@@ -27,6 +27,160 @@ function activityContext(context: Omit<PiActivityContext, "turnId">): PiActivity
 }
 
 describe("mapPiActivity", () => {
+  it("stores large Code Mode pictures without running binary bytes through the text sanitizer", () => {
+    const data = Buffer.alloc(50_000, 200).toString("base64");
+    const calls: unknown[] = [];
+    const result = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "images",
+        toolName: "codemode",
+        isError: false,
+        result: {
+          details: { large: "x".repeat(100_000) },
+          content: [
+            { type: "text", text: "program output" },
+            { type: "text", text: "Image from mcp:paper. Untrusted third-party content." },
+            { type: "image", data, mimeType: "image/png" },
+          ],
+        },
+      },
+      {
+        turnId: "turn",
+        persistImage: (image) => {
+          calls.push(image);
+          return "picture-id";
+        },
+      },
+    );
+    expect(calls).toEqual([{ data, mimeType: "image/png" }]);
+    expect(result.output).toMatchObject({
+      content: [
+        { type: "text", text: "program output" },
+        { type: "text", text: "Image from mcp:paper. Untrusted third-party content." },
+        { type: "text", text: expect.stringContaining("older builds omit it") },
+        { type: "image", picture: "picture-id", mimeType: "image/png" },
+      ],
+    });
+    expect(JSON.stringify(result.output)).not.toContain(data.slice(0, 100));
+    expect(JSON.stringify(result.output).length).toBeLessThan(MAX_ACTIVITY_VALUE_TOTAL_LENGTH);
+  });
+
+  it("keeps pictures and names the N−1 omission when a Code Mode run fails after output", () => {
+    const result = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolCallId: "images",
+        toolName: "codemode",
+        isError: true,
+        result: {
+          content: [
+            { type: "text", text: "Run failed" },
+            { type: "image", data: "AAAA", mimeType: "image/png" },
+          ],
+        },
+      },
+      { turnId: "turn", persistImage: () => "picture-id" },
+    );
+    expect(result.state).toBe("failed");
+    expect(result.input).toMatchObject({ "volli.activity.output": result.output });
+    expect(result.output).toMatchObject({
+      content: expect.arrayContaining([
+        { type: "image", picture: "picture-id", mimeType: "image/png" },
+      ]),
+    });
+    expect(result.state === "failed" && result.error).toContain("older builds omit them");
+  });
+
+  it("retains real failed program input beside its returned image facet within the activity budget", () => {
+    const result = mapPiActivity(
+      {
+        type: "tool_execution_end",
+        toolName: "codemode",
+        toolCallId: "images",
+        isError: true,
+        result: {
+          content: [
+            { type: "text", text: "x".repeat(100_000) },
+            { type: "image", data: "AAAA", mimeType: "image/png" },
+          ],
+        },
+      },
+      { turnId: "turn", input: { code: "x".repeat(100_000) }, persistImage: () => "picture" },
+    );
+    expect(result.input).toMatchObject({
+      code: expect.stringContaining("x"),
+      "volli.activity.output": result.output,
+    });
+    expect(JSON.stringify(result.input).length).toBeLessThan(MAX_ACTIVITY_VALUE_TOTAL_LENGTH);
+  });
+
+  it("names unavailable or invalid Code Mode pictures instead of normalizing their bytes", () => {
+    for (const mimeType of ["image/png", "text/html"]) {
+      const result = mapPiActivity(
+        {
+          type: "tool_execution_end",
+          toolCallId: "images",
+          toolName: "codemode",
+          isError: false,
+          result: { content: [{ type: "image", data: "AAAA", mimeType }] },
+        },
+        { turnId: "turn" },
+      );
+      expect(result.output).toMatchObject({
+        content: [
+          { type: "text", text: expect.stringContaining("image omitted") },
+          { type: "image", picture: null, mimeType: mimeType === "image/png" ? mimeType : null },
+        ],
+      });
+    }
+  });
+
+  it("never persists direct screenshots or direct MCP images through the Code Mode seam", () => {
+    for (const toolName of ["browser_screenshot", "mcp__paper__screenshot"]) {
+      let called = false;
+      const result = mapPiActivity(
+        {
+          type: "tool_execution_end",
+          toolCallId: "call",
+          toolName,
+          isError: false,
+          result: { content: [{ type: "image", data: "AAAA", mimeType: "image/png" }] },
+        },
+        {
+          turnId: "turn",
+          persistImage: () => {
+            called = true;
+            return "never";
+          },
+        },
+      );
+      expect(called).toBe(false);
+      expect(JSON.stringify(result.output)).not.toContain("AAAA");
+    }
+  });
+
+  it("keeps legacy Code Mode outputs bounded, including malformed content", () => {
+    for (const output of [
+      null,
+      "legacy",
+      { content: "legacy" },
+      { content: [null, [], { type: "text", text: null }] },
+    ]) {
+      const result = mapPiActivity(
+        {
+          type: "tool_execution_end",
+          toolCallId: "call",
+          toolName: "codemode",
+          isError: true,
+          result: output,
+        },
+        { turnId: "turn" },
+      );
+      expect(result.state).toBe("failed");
+    }
+  });
+
   it("files a todo_write call as the plan kind, so the plan surfaces can find it (VC-6)", () => {
     // Without this mapping the call lands as `other`: the durable record would
     // still hold the list, and nothing drawing a plan would ever look at it.

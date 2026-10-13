@@ -46,6 +46,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { HeldImage } from "./images";
 import type { ShapedOutcome } from "./shape";
 
 /** One completed nested call, as the journal remembers it. */
@@ -57,6 +58,8 @@ export interface JournaledCall {
   outcome: ShapedOutcome | null;
   /** Its answer came from outside the Session, so a replay of it is marked too. */
   untrusted?: true;
+  /** Host-side payloads count toward the existing journal byte cap. */
+  images?: readonly HeldImage[];
 }
 
 /** One unfinished program's record. */
@@ -120,12 +123,22 @@ export function runKey(outerId: string, source: string): string {
 export function remember(
   run: RunJournal,
   position: number,
-  call: { name: string; argumentsDigest: string; outcome: ShapedOutcome; untrusted?: true },
+  call: {
+    name: string;
+    argumentsDigest: string;
+    outcome: ShapedOutcome;
+    untrusted?: true;
+    images?: readonly HeldImage[];
+  },
 ): void {
-  const size = Buffer.byteLength(JSON.stringify(call.outcome), "utf8");
+  const size = Buffer.byteLength(JSON.stringify([call.outcome, call.images]), "utf8");
   const keep = run.bytes + size <= RUN_JOURNAL_MAX_BYTES;
   if (keep) run.bytes += size;
-  run.calls.set(position, { ...call, outcome: keep ? call.outcome : null });
+  run.calls.set(position, {
+    ...call,
+    outcome: keep ? call.outcome : null,
+    images: keep ? call.images : undefined,
+  });
 }
 
 export function digest(text: string): string {

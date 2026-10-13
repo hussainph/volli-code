@@ -611,6 +611,225 @@ const variant = (discriminator, values, value = z.string()) =>
 const openUnion = (discriminator, branches) =>
   z.toJSONSchema(z.discriminatedUnion(discriminator, branches).meta({ [marker]: discriminator }));
 
+const closedSurface = (extra = {}) =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("runtime-brief"), text: z.string() }),
+    z.object({
+      kind: z.literal("tool-surface"),
+      codeMode: z.object({ mode: z.enum(["off", "both", "only"]), ...extra }).optional(),
+    }),
+  ]);
+
+test("closed discriminator unions allow only optional field additions in existing alternatives (real Zod)", () => {
+  for (const wrap of [
+    (schema) => schema,
+    (schema) => z.union(schema.options),
+    (schema) => z.union(schema.options).nullable(),
+    (schema) => z.array(schema).nullable(),
+    (schema) => z.object({ frames: z.array(schema) }),
+    (schema) => z.union([schema, z.null()]),
+    (schema) =>
+      z.discriminatedUnion("op", [
+        z.object({ op: z.literal("input"), input: schema }),
+        z.object({ op: z.literal("other"), value: z.string() }),
+      ]),
+  ]) {
+    const old = z.toJSONSchema(wrap(closedSurface()));
+    const next = z.toJSONSchema(
+      wrap(closedSurface({ descriptionVersion: z.literal(2).optional() })),
+    );
+    for (const direction of ["input", "output"])
+      assert.deepEqual(schemaChanges(old, next, "", direction), [], `${direction}: ${wrap}`);
+  }
+  const before = protocol(shape, z.toJSONSchema(closedSurface()));
+  const after = protocol(
+    shape,
+    z.toJSONSchema(closedSurface({ descriptionVersion: z.literal(2).optional() })),
+  );
+  before.tiers.desktop.read.output = before.tiers.public["session.snapshot"].output;
+  after.tiers.desktop.read.output = after.tiers.public["session.snapshot"].output;
+  assert.deepEqual(
+    unapprovedChanges(before, after),
+    [],
+    "public and host-command outputs are additive without exceptions",
+  );
+});
+
+test("closed unions preserve grouped discriminator sets and support reordering/ref renumbering", () => {
+  const old = openUnion("category", [variant("category", ["a"]), variant("category", ["b", "c"])]);
+  delete old[marker];
+  const next = structuredClone(old);
+  next.oneOf.reverse();
+  next.oneOf[0].properties.extra = { type: "object", properties: { data: text } };
+  assert.deepEqual(schemaChanges(old, next, "", "output"), []);
+  const referenced = (name, added) => ({
+    oneOf: [{ $ref: `#/$defs/${name}` }],
+    $defs: {
+      [name]: {
+        type: "object",
+        properties: {
+          tag: { $ref: "#/$defs/tag" },
+          child: { $ref: "#/$defs/child" },
+        },
+        required: ["tag", "child"],
+      },
+      tag: { type: "string", const: "a" },
+      child: {
+        type: "object",
+        properties: {
+          value: text,
+          self: { $ref: "#/$defs/child" },
+          ...(added ? { extra: text } : {}),
+        },
+        required: ["value"],
+      },
+    },
+  });
+  assert.deepEqual(
+    schemaChanges(referenced("old", false), referenced("new", true), "", "output"),
+    [],
+  );
+  const narrowed = referenced("new", true);
+  narrowed.$defs.child.properties.value = { ...text, maxLength: 5 };
+  assert.ok(schemaChanges(referenced("old", false), narrowed, "", "output").length);
+});
+
+test("closed discriminator field additions never open variants, enums, requirements or assertions", () => {
+  const old = z.toJSONSchema(closedSurface());
+  const additive = z.toJSONSchema(closedSurface({ descriptionVersion: z.literal(2).optional() }));
+  for (const mutate of [
+    (s) => {
+      s.oneOf.push({
+        type: "object",
+        properties: { kind: { const: "future" } },
+        required: ["kind"],
+      });
+    },
+    (s) => {
+      s.oneOf.pop();
+    },
+    (s) => {
+      s.oneOf[0].properties.kind = { type: "string", enum: ["runtime-brief", "future"] };
+    },
+    (s) => {
+      s.oneOf[0].properties.kind.const = "changed";
+    },
+    (s) => {
+      s.oneOf[0].properties.text = { type: ["string", "null"] };
+    },
+    (s) => {
+      s.oneOf[0].properties.text.maxLength = 5;
+    },
+    (s) => {
+      s.oneOf[0].properties.text = { enum: ["a"] };
+    },
+    (s) => {
+      delete s.oneOf[0].properties.text;
+    },
+    (s) => {
+      s.oneOf[0].required = ["kind"];
+    },
+    (s) => {
+      s.oneOf[0].required.push("extra");
+      s.oneOf[0].properties.extra = text;
+    },
+    (s) => {
+      s.oneOf[0].additionalProperties = true;
+    },
+    (s) => {
+      s.oneOf[0].maxProperties = 3;
+    },
+    (s) => {
+      s.oneOf[0].allOf = [text];
+    },
+    (s) => {
+      s.oneOf[1].properties.codeMode.properties.mode.enum.push("future");
+    },
+    (s) => {
+      s.oneOf[1].properties.codeMode.required.push("descriptionVersion");
+    },
+  ]) {
+    const next = structuredClone(additive);
+    mutate(next);
+    for (const direction of ["input", "output"])
+      assert.ok(schemaChanges(old, next, "", direction).length, `${direction}: ${mutate}`);
+  }
+});
+
+test("optional field additions never bypass XOR without unchanged required disjoint tags", () => {
+  const old = z.toJSONSchema(closedSurface());
+  const next = z.toJSONSchema(closedSurface({ descriptionVersion: z.literal(2).optional() }));
+  for (const mutate of [
+    (s) => {
+      s.oneOf[1].properties.kind.const = "runtime-brief";
+    },
+    (s) => {
+      s.oneOf[1].required = [];
+    },
+    (s) => {
+      delete s.oneOf[1].properties.kind;
+    },
+    (s) => {
+      s.oneOf[1].properties.kind = text;
+    },
+    (s) => {
+      s.oneOf[1].properties.kind = { enum: [] };
+    },
+    (s) => {
+      s.oneOf[1].properties.kind = { const: 2 };
+    },
+  ]) {
+    const before = structuredClone(old);
+    const after = structuredClone(next);
+    mutate(before);
+    mutate(after);
+    assert.ok(schemaChanges(before, after, "", "output").length, `${mutate}`);
+  }
+  // An old valid untagged object matches both alternatives after optional
+  // fields are added: a generic branch-wise additive check would break XOR.
+  const before = z.xor([
+    z.strictObject({ a: z.string() }),
+    z.strictObject({ b: z.string().optional() }),
+  ]);
+  const after = z.xor([
+    z.strictObject({ a: z.string(), b: z.string().optional() }),
+    z.strictObject({ b: z.string().optional(), a: z.string().optional() }),
+  ]);
+  assert.equal(before.safeParse({ a: "a" }).success, true);
+  assert.equal(after.safeParse({ a: "a" }).success, false);
+  assert.ok(schemaChanges(z.toJSONSchema(before), z.toJSONSchema(after), "", "output").length);
+});
+
+test("anyOf optional additions retain every alternative and never earn scalar/branch growth", () => {
+  const old = z.toJSONSchema(z.union([closedSurface(), z.null()]));
+  const additive = z.toJSONSchema(
+    z.union([closedSurface({ descriptionVersion: z.literal(2).optional() }), z.null()]),
+  );
+  for (const mutate of [
+    (s) => {
+      s.anyOf.push({ type: "string" });
+    },
+    (s) => {
+      s.anyOf.pop();
+    },
+    (s) => {
+      s.anyOf[1] = { type: "string" };
+    },
+    (s) => {
+      s.anyOf[1] = { type: ["null", "string"] };
+    },
+    (s) => {
+      s.anyOf[1] = s.anyOf[0];
+    },
+  ]) {
+    const next = structuredClone(additive);
+    mutate(next);
+    assert.ok(schemaChanges(old, next, "", "output").length, `${mutate}`);
+  }
+  additive.anyOf.reverse();
+  assert.deepEqual(schemaChanges(old, additive, "", "output"), []);
+});
+
 test("only explicitly open output discriminated unions permit disjoint additions (real Zod meta)", () => {
   for (const discriminator of ["kind", "status", "op"]) {
     const branches = [variant(discriminator, ["a"]), variant(discriminator, ["b", "c"])];

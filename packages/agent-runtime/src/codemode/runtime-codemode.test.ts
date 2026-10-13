@@ -252,7 +252,7 @@ function activities(h: Harness) {
 }
 
 describe("Code Mode through the real Session path", () => {
-  it("runs a bash/read loop and returns only what the program returns", async () => {
+  it("keeps a legacy bash/read loop and returns only what the program returns", async () => {
     const h = harness();
     for (let index = 0; index < 6; index += 1) {
       writeFileSync(
@@ -269,7 +269,7 @@ describe("Code Mode through the real Session path", () => {
       }
       return hits;
     `;
-    await runTurn(h, specFor(h), [
+    await runTurn(h, specFor(h, { routes: { execute: "both" } }), [
       { calls: [{ id: "cm-1", name: "codemode", args: { code: program } }] },
       { text: "done" },
     ]);
@@ -423,6 +423,7 @@ describe("Code Mode through the real Session path", () => {
     await runTurn(
       h,
       specFor(h, {
+        routes: { execute: "both" }, // Legacy records retain nested bash cancellation.
         observer: async (observation) => {
           h.observations.push(observation);
           if (

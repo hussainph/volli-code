@@ -706,8 +706,8 @@ A server is **large** when it has more than 20 tools
 (`LARGE_MCP_SERVER_TOOLS`) or its declarations are estimated past 3,000 tokens
 (`LARGE_MCP_SERVER_TOKENS`, at four characters a token). A large server's tools
 are routed `deferred` **whatever the model's mode**: a Session whose mode is
-`off` still gets `codemode`, for its large servers alone, with every other tool
-declared as before. Smaller servers follow the mode — `both` declares and lists
+`off` still gets `codemode`, with every other tool declared as before and its
+callable tools also available from programs. Smaller servers follow the mode — `both` declares and lists
 them, `only` routes each server's tools `code` as one group. Measured at 120
 tools (o200k, `bench/codemode/prompt-cost.bench.test.ts`): 17,297 declaration
 tokens declared directly against 2,217 deferred.
@@ -719,6 +719,48 @@ untrusted-content markers. Routes are frozen with the Session like the tool
 definitions, so changing the setting, or a server growing past the threshold,
 changes only Sessions created afterwards. With the Code Mode switch off, no new
 Session gets routes at all and every tool is declared, as before.
+
+### Programs and images (VC-748)
+
+New Sessions with `codemode` can call every held tool except `execute` (wire
+name `bash`), `ask_user`, `request_secret`, `todo_write`, `shell_start`,
+`shell_output` and `shell_kill`; `codemode` cannot call itself. This applies
+in `off` with a large MCP server, `both` and `only`. Each nested call still
+uses the direct-call checks. Model defaults do not change.
+
+Birth routing and read-time admission are deliberately separate:
+`defaultToolRoute` excludes bash for new records; `isCodeCallable` honors a
+legacy bash route of `both` or `code`. Safety exclusions apply even to damaged
+records. Existing Sessions keep their recorded routes, declared array and
+frozen descriptions. New records carry `descriptionVersion: 2`; records
+without it keep the pre-0.2.2 wording, output declarations and image-omission
+behavior. N−1 ignores this additive marker. Under `only`, a group containing bash stays declared
+whole. Screenshots, tab holds and verbs newly callable in this release also
+stay `both`, and keep their groups declared whole: 0.2.1 and 0.2.2-canary.1
+cannot call them from programs but can still call them directly. This ceiling
+can be removed when the N−1 floor passes this release.
+
+Nested MCP results are shaped as
+`{ text, structuredContent?, isError, images, omittedImages }`. `images`
+contains opaque handles, not image bytes; `omittedImages` counts images the
+program could not obtain. Browser screenshots also carry handles. The output
+schemas rendered by `describeTool()` give each tool's exact shape. Programs
+send images with `image(handle)` or by including handles in the returned
+value; image bytes remain host-side, outside the QuickJS heap.
+
+Images follow text, in emission/return order, including repeated emissions,
+with at most 8 images and 16 MiB of base64 data per run (the direct MCP result
+bounds). The header names images left out. The existing 4 MiB replay journal
+also counts held image payloads; a replay stops explicitly rather than
+repeating a completed call whose image was too large to keep. Each untrusted image has a text line naming its
+source call and warning that it is third-party content, in addition to the
+run's untrusted envelope. Model image-input support, transcript persistence
+and storage follow the direct-image path, not a second policy. Transcript
+images use the existing screenshot store (400 pictures / 30 days); bounded
+Session-owned picture reads resolve them without placing base64 into activity
+frames. Reload and replay retain references, including images emitted before
+a program error. An older card sees a named image fallback instead of corrupt
+base64; reopening in a newer build displays the picture while it is retained.
 
 The user guide is `apps/docs/src/content/docs/guides/code-mode.mdx`; the design
 and the measurements are `docs/research/code-mode-vc-471.md`.

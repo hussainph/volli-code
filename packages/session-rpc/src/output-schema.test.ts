@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import {
   CATALOG_ENTRIES,
+  DEFAULT_CODE_MODE_LIMITS,
   BOARD_ENTRIES,
   HOST_WORKSPACE_ENTRIES,
   scrubSessionEvent,
@@ -249,6 +250,24 @@ function commandRouter(schema: z.ZodType | undefined): AppRouter {
     },
   } as unknown as AppRouter;
 }
+
+it("preserves the additive Code Mode description generation on wire output", () => {
+  for (const generation of [undefined, 2] as const) {
+    const input = frame({
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "codemode"],
+        codeMode: {
+          routes: { read: "both" },
+          limits: DEFAULT_CODE_MODE_LIMITS,
+          ...(generation === undefined ? {} : { descriptionVersion: generation }),
+        },
+      },
+    });
+    expect(frameSchema.parse(input)).toEqual(input);
+  }
+});
 
 describe("publishable Session procedure schemas", () => {
   it("publishes every catalog entry, without unrepresentable fallback", () => {
