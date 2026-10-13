@@ -269,6 +269,7 @@ describe("the remote hosts port's sign-in (VC-702)", () => {
       "sessions.subscribe",
       "sessions.queue",
       "sessions.history",
+      "sessions.pictures",
       "sessions.listing",
     ]);
   });

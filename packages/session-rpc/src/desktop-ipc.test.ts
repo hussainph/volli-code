@@ -40,6 +40,7 @@ describe("the desktop's IPC exposure", () => {
       "sessions.attach",
       "session.snapshot",
       "session.history",
+      "session.picture",
       "session.projection",
       "session.subscribe",
       "session.command",

@@ -3791,6 +3791,17 @@ export const VERB_REGISTRY = [
     catalog: { scope: "workspace", idempotency: "read" },
   },
   {
+    key: "session.picture",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.picture" },
+    listed: false,
+    group: "Session",
+    summary: "Read a bounded chunk of one Session's saved transcript picture.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  },
+  {
     key: "session.projection",
     accessModes: ["hostApi"],
     actor: "user",

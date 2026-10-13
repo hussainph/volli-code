@@ -194,12 +194,14 @@ const codecs = {
   "session.input.recorded": {
     decode: (record, context) =>
       decodeSessionInputRecord(record, context, decodeMcpToolDefinitions),
-    scrub: (payload) => payload,
+    scrub: scrubSessionInputRecord,
     // The host validates MCP schemas at discovery and durable replay. Ajv's
     // lazy meta-schema compilation is forbidden by renderer CSP; presentation
     // checks the wire shape, never re-compiles those host-validated schemas.
     decodeRenderer: (record, context) =>
-      decodeSessionInputRecord(record, context, decodeRendererMcpToolDefinitions),
+      scrubSessionInputRecord(
+        decodeSessionInputRecord(record, context, decodeRendererMcpToolDefinitions),
+      ),
   },
   "session.signaled": {
     decode: (record, context) => ({
@@ -1275,6 +1277,17 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
       text: readString(row.text, `${context}[${index}].text`),
     };
   });
+}
+
+function scrubSessionInputRecord(payload: PayloadOf<"session.input.recorded">) {
+  const { input } = payload;
+  if (input.kind !== "tool-surface") return { kind: payload.kind, input };
+  // Birth-only declaration state stays durable on the host, never on the
+  // renderer/public wire. Keep all tool-surface markers in this one scrub path.
+  const { codeMode: frozenCodeMode, ...surface } = input;
+  if (frozenCodeMode === undefined) return { kind: payload.kind, input: surface };
+  const { descriptionVersion: _descriptionVersion, ...codeMode } = frozenCodeMode;
+  return { kind: payload.kind, input: { ...surface, codeMode } };
 }
 
 function decodeSessionInputRecord(

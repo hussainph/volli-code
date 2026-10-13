@@ -28,6 +28,7 @@ import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { listProjects } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
+import { BrowserPictureStore } from "../browser/picture-store";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
 import { runGitCapturing, runGitCapturingAsync } from "../worktree/git";
@@ -114,6 +115,32 @@ function sealedMap(options: Partial<HostHandlerOptions> = {}) {
     },
   );
 }
+
+it("serves saved Session pictures in bounded chunks and names absence without changing the transcript", async () => {
+  const pictures = new BrowserPictureStore({ createId: () => "picture", now: () => 0 });
+  const id = pictures.put({
+    tabId: "code",
+    generation: 0,
+    ownerSessionId: "session",
+    mime: "image/png",
+    bytes: Buffer.from("picture bytes"),
+    persist: false,
+  });
+  const map = handlers({ pictures });
+  expect(await map["session.picture"]({ sessionId: "session", pictureId: id }, USER)).toEqual({
+    data: Buffer.from("picture bytes").toString("base64"),
+    mimeType: "image/png",
+    nextOffset: null,
+  });
+  expect(await map["session.picture"]({ sessionId: "other", pictureId: id }, USER)).toEqual({
+    data: null,
+    mimeType: null,
+    nextOffset: null,
+  });
+  expect(
+    await handlers()["session.picture"]({ sessionId: "session", pictureId: id }, USER),
+  ).toEqual({ data: null, mimeType: null, nextOffset: null });
+});
 
 async function unavailable(run: () => unknown): Promise<string> {
   try {
