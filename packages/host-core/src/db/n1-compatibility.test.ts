@@ -207,6 +207,15 @@ function value(run: N1Run, index: number): Record<string, unknown> {
   return result.value;
 }
 
+/** Birth inputs must survive N-1 byte-for-byte, even if its codec ignores a marker. */
+function storedInputs(db: Database.Database, sessionId: string): { payload: string }[] {
+  return (
+    db
+      .prepare("SELECT payload FROM session_events WHERE session_id = ? ORDER BY sequence")
+      .all(sessionId) as { payload: string }[]
+  ).filter(({ payload }) => JSON.parse(payload).kind === "session.input.recorded");
+}
+
 function sha256(path: string): string | null {
   return existsSync(path) ? createHash("sha256").update(readFileSync(path)).digest("hex") : null;
 }
@@ -737,16 +746,10 @@ describe.skipIf(manifest === null)(
       } finally {
         writer.close();
       }
-      const storedInputs = (db: Database.Database) =>
-        (
-          db
-            .prepare("SELECT payload FROM session_events WHERE session_id = ? ORDER BY sequence")
-            .all(sessionId) as { payload: string }[]
-        ).filter(({ payload }) => JSON.parse(payload).kind === "session.input.recorded");
       const before = new Database(dbPath, { readonly: true });
       let rawInputs: { payload: string }[];
       try {
-        rawInputs = storedInputs(before);
+        rawInputs = storedInputs(before, sessionId);
         expect(rawInputs.map(({ payload }) => JSON.parse(payload))).toEqual([
           { kind: "session.input.recorded", input: birthInput },
         ]);
@@ -757,7 +760,7 @@ describe.skipIf(manifest === null)(
       const run = await n1(dbPath, [{ kind: "askUser", sessionId, interactionId, answers }]);
       expect(value(run, 0)).toEqual({
         prompts,
-        toolSurface: { kind: "tool-surface", tools: ["read", "ask_user"] },
+        tools: ["read", "ask_user"],
         rendererNative: { id: null, detail: null },
         // The shipped card holds submit until all questions have an answer.
         submitStates: [false, false, false, true],
@@ -778,9 +781,9 @@ describe.skipIf(manifest === null)(
         expect(readInteractionAnswers(resolved!.interaction, resolved!.resolution)).toEqual(
           answers,
         );
-        // N-1 ignores the unknown marker in its decoded input, but must never
-        // rewrite the raw birth event (or the new declaration would be lost).
-        expect(storedInputs(reopened)).toEqual(rawInputs!);
+        // N-1 may ignore or understand the marker. Either way, answering must
+        // never rewrite the raw birth event (or the declaration would be lost).
+        expect(storedInputs(reopened, sessionId)).toEqual(rawInputs!);
         expect(
           await engine.getOrRecordSessionInput({ sessionId, input: birthInput, provenance }),
         ).toEqual(birthInput);
@@ -805,12 +808,17 @@ describe.skipIf(manifest === null)(
         askUserQuestions: true,
       } as const;
       const writer = openVolliDb(dbPath);
+      let rawInputs: { payload: string }[];
       try {
         await headEngine(writer, "flat-birth").getOrRecordSessionInput({
           sessionId,
           input: birthInput,
           provenance,
         });
+        rawInputs = storedInputs(writer, sessionId);
+        expect(rawInputs.map(({ payload }) => JSON.parse(payload))).toEqual([
+          { kind: "session.input.recorded", input: birthInput },
+        ]);
       } finally {
         writer.close();
       }
@@ -818,10 +826,11 @@ describe.skipIf(manifest === null)(
         await n1(dbPath, [{ kind: "pendingFlatAsk", sessionId, interactionId }]),
         0,
       );
-      expect(pending.surface).toEqual({ kind: "tool-surface", tools: ["ask_user"] });
+      expect(pending.tools).toEqual(["ask_user"]);
       expect(pending.activeCount).toBe(1);
       const upgraded = openVolliDb(dbPath);
       try {
+        expect(storedInputs(upgraded, sessionId)).toEqual(rawInputs!);
         const engine = headEngine(upgraded, "upgraded-flat");
         expect(
           await engine.getOrRecordSessionInput({ sessionId, input: birthInput, provenance }),
@@ -868,6 +877,7 @@ describe.skipIf(manifest === null)(
           interaction: pending.interaction,
           resolution,
         });
+        expect(storedInputs(upgraded, sessionId)).toEqual(rawInputs!);
       } finally {
         upgraded.close();
       }
@@ -914,8 +924,8 @@ describe.skipIf(manifest === null)(
               : tool,
         );
         expect(attached.declared).toEqual(declared);
-        // Older Code Mode cannot call these from a program, but it still
-        // declares every one for a direct call: no lost tools on downgrade.
+        // Whether N-1 can call these from a program or not, every tool must
+        // remain directly declared: no lost tools on downgrade.
         for (const tool of NEW_CODE_CALLABLE) {
           expect(attached.declared).toContain(
             tool === "browser_screenshot" ||
@@ -924,9 +934,6 @@ describe.skipIf(manifest === null)(
               ? tool
               : verbToolWireName(tool),
           );
-          if (["v0.2.1", "v0.2.2-canary.1"].includes(manifest!.ref)) {
-            expect(attached.callable).not.toContain(tool);
-          }
         }
         assertHeadReads(dbPath);
       },

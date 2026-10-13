@@ -204,7 +204,7 @@ const steps = {
         interaction,
       });
       const pending = await engine.getSession({ sessionId: step.sessionId });
-      return { surface, interaction, activeCount: pending.interactions.active.length };
+      return { tools: surface.tools, interaction, activeCount: pending.interactions.active.length };
     } finally {
       db.close();
     }
@@ -257,8 +257,8 @@ const steps = {
           payload.kind === "interaction.opened" && payload.interaction.id === interaction.id,
       );
       if (!opened) throw new Error("Head-written interaction event is missing in N-1");
-      // N-1 keeps original membership but ignores the new schema marker in
-      // its decoded birth input. Reading/answering must not rewrite its bytes.
+      // N-1 keeps original membership whether it ignores or understands the
+      // schema marker. Reading/answering must not rewrite the birth event.
       const toolSurface = await engine.getOrRecordSessionInput({
         sessionId: step.sessionId,
         input: { kind: "tool-surface", tools: ["write"] },
@@ -329,7 +329,7 @@ const steps = {
       }
       return {
         prompts,
-        toolSurface,
+        tools: toolSurface.tools,
         rendererNative: card.native,
         submitStates,
         resolution,
