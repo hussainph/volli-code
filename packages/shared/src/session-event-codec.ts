@@ -55,7 +55,7 @@ import { isSessionToolId } from "./agent-tool-surface";
 import type { SessionToolId } from "./authority";
 import { CODE_MODE_TOOL_ID, parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
-import type { McpToolDefinition } from "./mcp";
+import type { McpJsonObject, McpToolDefinition } from "./mcp";
 import { errorMessage } from "./errors";
 import type { PresentedScheduledResume } from "./scheduled-resume";
 import type { SecretRequestMetadata } from "./secrets";
@@ -137,8 +137,8 @@ interface SessionEventKindCodec<Kind extends SessionEventKind, Safe = unknown> {
   scrub(payload: PayloadOf<Kind>): Safe;
   /**
    * Renderer-safe JSON → typed renderer payload, for the read back on the
-   * renderer's side of the edge. Only needed when the scrub *removes* keys —
-   * `decode` then rejects the scrubbed JSON — so most kinds omit it and the
+   * renderer's side of the edge. Needed when the scrub *removes* keys or the
+   * durable decoder performs host-only validation — most kinds omit it and the
    * renderer parse runs `scrub(decode(…))` instead, which both validates the
    * shape and re-nulls anything an unscrubbed value could be leaking. The
    * table checks its return against this kind's own scrub result.
@@ -192,32 +192,16 @@ const codecs = {
     scrub: (payload) => payload,
   },
   "session.input.recorded": {
-    decode: (record, context) => {
-      const input = asRecord(record.input, `${context}.input`);
-      const kind = enumValue(
-        input.kind,
-        ["runtime-brief", "prompt-resources", "tool-surface"],
-        `${context}.input.kind`,
-      );
-      const decoded =
-        kind === "runtime-brief"
-          ? { kind, text: readString(input.text, `${context}.input.text`) }
-          : kind === "prompt-resources"
-            ? {
-                kind,
-                resources: decodePromptResources(input.resources, `${context}.input.resources`),
-              }
-            : decodeToolSurfaceInput(input, kind, `${context}.input`);
-      return { kind: "session.input.recorded", input: decoded };
-    },
-    scrub: (payload) => {
-      const { input } = payload;
-      if (input.kind !== "tool-surface") return { kind: payload.kind, input };
-      // The declaration revision is attach-only host state, not a renderer
-      // capability. Keep it durable without widening the public Session wire.
-      const { askUserQuestions: _askUserQuestions, ...surface } = input;
-      return { kind: payload.kind, input: surface };
-    },
+    decode: (record, context) =>
+      decodeSessionInputRecord(record, context, decodeMcpToolDefinitions),
+    scrub: scrubSessionInputRecord,
+    // The host validates MCP schemas at discovery and durable replay. Ajv's
+    // lazy meta-schema compilation is forbidden by renderer CSP; presentation
+    // checks the wire shape, never re-compiles those host-validated schemas.
+    decodeRenderer: (record, context) =>
+      scrubSessionInputRecord(
+        decodeSessionInputRecord(record, context, decodeRendererMcpToolDefinitions),
+      ),
   },
   "session.signaled": {
     decode: (record, context) => ({
@@ -742,7 +726,7 @@ export function decodeRendererSessionEventPayload(
   // `scrub(decode(…))` where the scrubbed JSON is still durable-decodable:
   // one parse per kind, and re-scrubbing on read means an unscrubbed leak is
   // nulled here rather than trusted. The kinds whose scrub removes keys carry
-  // their own renderer decode instead, because `decode` would refuse them.
+  // their own renderer decode instead, as do host-only validation paths.
   return codec.decodeRenderer === undefined
     ? codec.scrub(codec.decode(record, context))
     : codec.decodeRenderer(record, context);
@@ -1295,6 +1279,75 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
   });
 }
 
+function scrubSessionInputRecord(payload: PayloadOf<"session.input.recorded">) {
+  const { input } = payload;
+  if (input.kind !== "tool-surface") return { kind: payload.kind, input };
+  // The declaration revision is attach-only host state, not a renderer
+  // capability. Keep it durable without widening the public Session wire.
+  const { askUserQuestions: _askUserQuestions, ...surface } = input;
+  return { kind: payload.kind, input: surface };
+}
+
+function decodeSessionInputRecord(
+  record: JsonRecord,
+  context: string,
+  decodeMcpTools: typeof decodeMcpToolDefinitions,
+): PayloadOf<"session.input.recorded"> {
+  const input = asRecord(record.input, `${context}.input`);
+  const kind = enumValue(
+    input.kind,
+    ["runtime-brief", "prompt-resources", "tool-surface"],
+    `${context}.input.kind`,
+  );
+  const decoded =
+    kind === "runtime-brief"
+      ? { kind, text: readString(input.text, `${context}.input.text`) }
+      : kind === "prompt-resources"
+        ? {
+            kind,
+            resources: decodePromptResources(input.resources, `${context}.input.resources`),
+          }
+        : decodeToolSurfaceInput(input, kind, `${context}.input`, decodeMcpTools);
+  return { kind: "session.input.recorded", input: decoded };
+}
+
+/** Host-validated schema data, not executable validators, crosses the renderer edge. */
+function decodeRendererMcpToolDefinitions(
+  value: unknown,
+  context: string,
+): readonly McpToolDefinition[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((entry, index): McpToolDefinition => {
+    const path = `${context}[${index}]`;
+    const row = asRecord(entry, path);
+    const serverId = readString(row.serverId, `${path}.serverId`);
+    const toolName = readString(row.toolName, `${path}.toolName`);
+    const providerName = readString(row.providerName, `${path}.providerName`);
+    const description = readString(row.description, `${path}.description`);
+    if (!isMcpToolId(providerName)) throw new Error(`${path}.providerName is invalid`);
+    if (row.parallelRead !== undefined && row.parallelRead !== true) {
+      throw new Error(`${path}.parallelRead must be true when present`);
+    }
+    return {
+      serverId,
+      toolName,
+      providerName,
+      description,
+      inputSchema: decodeRendererMcpSchema(row.inputSchema, `${path}.inputSchema`),
+      ...(row.outputSchema === undefined
+        ? {}
+        : { outputSchema: decodeRendererMcpSchema(row.outputSchema, `${path}.outputSchema`) }),
+      ...(row.parallelRead === true ? { parallelRead: true as const } : {}),
+    };
+  });
+}
+
+function decodeRendererMcpSchema(value: unknown, context: string): McpJsonObject {
+  const schema = asRecord(value, context);
+  assertJsonValue(schema, context);
+  return schema as McpJsonObject;
+}
+
 function decodeMcpToolDefinitions(value: unknown, context: string): readonly McpToolDefinition[] {
   if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
   const definitions = value.map((entry, index): McpToolDefinition => {
@@ -1339,6 +1392,7 @@ function decodeToolSurfaceInput(
   input: Record<string, unknown>,
   kind: "tool-surface",
   context: string,
+  decodeMcpTools: typeof decodeMcpToolDefinitions,
 ): {
   kind: "tool-surface";
   tools: readonly SessionToolId[];
@@ -1359,7 +1413,7 @@ function decodeToolSurfaceInput(
   const mcpTools =
     input.mcpTools === undefined
       ? undefined
-      : decodeMcpToolDefinitions(input.mcpTools, `${context}.mcpTools`);
+      : decodeMcpTools(input.mcpTools, `${context}.mcpTools`);
   const mcpNames = tools.filter(isMcpToolId);
   const definitionNames = (mcpTools ?? []).map((definition) => definition.providerName);
   if (JSON.stringify(mcpNames) !== JSON.stringify(definitionNames)) {
