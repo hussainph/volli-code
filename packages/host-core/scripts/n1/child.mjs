@@ -302,7 +302,9 @@ const steps = {
         sessionId: step.sessionId,
         command: {
           kind: "message.submit",
-          settle: "opened",
+          // Wait for the scripted continuation to finish before inspecting its
+          // provider context/sidecar or closing the attachment.
+          settle: "turn",
           message: {
             id: "n1-recovery-message",
             role: "user",
@@ -331,6 +333,7 @@ const steps = {
       return {
         activeCount: before.interactions.active.length,
         activeAfter: after.interactions.active.length,
+        turnActive: after.turnActive,
         cancellationReason: cancellation?.reason,
         questionTitle: question?.title,
         questionPrompts: question?.prompts?.map((prompt) => prompt.label),

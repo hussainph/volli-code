@@ -666,6 +666,7 @@ describe.skipIf(manifest === null)(
         expect(recovered).toMatchObject({
           activeCount: 0,
           activeAfter: 0,
+          turnActive: false,
           cancellationReason: "abandoned",
           questionTitle: "Which scope should survive?",
           attachStatus: "open",

@@ -47,7 +47,10 @@ export async function recoveredPiQuestion(input: {
                     ? { questions }
                     : {
                         question: questions[0]!.question,
-                        options: [{ id: "keep", label: "Keep it" }],
+                        options: [
+                          { id: "keep", label: "Keep it" },
+                          { id: "replace", label: "Replace it" },
+                        ],
                       },
               },
             },
@@ -138,7 +141,17 @@ export async function recoveredPiQuestion(input: {
       },
     });
     if (submitted.receipt?.status !== "accepted") throw new Error(JSON.stringify(submitted));
-    await first.asked.promise;
+    let askTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        first.asked.promise,
+        new Promise<never>((_resolve, reject) => {
+          askTimer = setTimeout(() => reject(new Error("Pi ask did not park")), 10_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(askTimer);
+    }
     const initial = (await first.runtime.snapshot({ sessionId })).projection;
     if (initial.interactions.active.length !== 1 || !initial.turnActive)
       throw new Error("No live pending question before crash");
