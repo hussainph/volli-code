@@ -339,15 +339,13 @@ describe("scripted Responses function calls", () => {
     {
       name: "ask_user",
       arguments: {
-        question: 'Which path: "small" or full? 🌱',
-        options: [
-          { id: "small", label: "Small" },
-          { id: "full", label: "Full" },
-        ],
-        allowOther: false,
+        questions: [{ question: 'Which path: "small" or full? 🌱', choices: ["Small", "Full"] }],
       },
     },
-    { name: "ask_user", arguments: JSON.stringify({ question: "Keep this pending?" }) },
+    {
+      name: "ask_user",
+      arguments: JSON.stringify({ questions: [{ question: "Keep this pending?", choices: [] }] }),
+    },
   ];
   test("nonstream tool-only replies contain function_call items, not synthetic text", async () => {
     const provider = await startFakeProvider({ script: [{ toolCalls: calls }], chunkDelayMs: 0 });
@@ -624,14 +622,18 @@ if (process.env.RUN_TURN === "1") {
   };
 }
 if (process.env.RUN_ASK_TOOL === "1") {
-  // The production tool and schema, with an automated host-port resolution;
-  // no Electron, interaction UI, or real person participates in this test.
+  // Exercise both frozen marker-less and new-birth declarations, with an
+  // automated host-port resolution; no Electron or real person participates.
   const { createAskUserTool } = await import(src("tools.ts"));
+  const batch = process.env.ASK_USER_QUESTIONS === "1";
   const asked = [];
   const tool = createAskUserTool(async (request) => {
     asked.push(request);
-    return { optionIds: ["small"], response: "fixture answer" };
-  });
+    return batch
+      ? { optionIds: ["choice:0"], response: null,
+          answers: [{ promptId: "prompt:0", optionIds: ["choice:0"], response: null }] }
+      : { optionIds: ["small"], response: "fixture answer" };
+  }, undefined, batch ? true : undefined);
   const model = access.models.getModel(providerId, modelId);
   const messages = [{ role: "user", content: "ask, answer, then ask again", timestamp: Date.now() }];
   const turn = async () => {
@@ -715,78 +717,103 @@ describe("(d) Volli's piOwnedModelAccess + inspectPiModelAccess, env-only creden
     assert.deepEqual(out.blocked, []);
   });
 
-  test("real Azure parser and runtime ask_user tool replay an answer before a second question", async () => {
-    const firstArgs = {
-      question: "Small patch or full migration?",
-      options: [
-        { id: "small", label: "Small patch" },
-        { id: "full", label: "Full migration" },
-      ],
-      allowOther: false,
-    };
-    const secondArgs = { question: "Leave this second decision pending?" };
-    const seen = [];
-    const scriptedProvider = await startFakeProvider({
-      chunkDelayMs: 0,
-      script: async (turn) => {
-        seen.push(turn);
-        assert.ok(turn.body.tools.some((tool) => tool.name === "ask_user"));
-        const outputs = turn.body.input.filter((item) => item.type === "function_call_output");
-        if (outputs.length === 0) {
-          assert.equal(turn.index, 0);
-          return {
-            text: "One decision first.",
-            toolCalls: [{ name: "ask_user", arguments: firstArgs }],
+  for (const batch of [false, true]) {
+    test(`real Azure parser replays ${batch ? "new-birth questions" : "legacy unmarked flat"} ask_user before a second question`, async () => {
+      const firstArgs = batch
+        ? {
+            questions: [
+              {
+                question: "Small patch or full migration?",
+                choices: ["Small patch", "Full migration"],
+              },
+            ],
+          }
+        : {
+            question: "Small patch or full migration?",
+            options: [
+              { id: "small", label: "Small patch" },
+              { id: "full", label: "Full migration" },
+            ],
+            allowOther: false,
           };
+      const secondArgs = batch
+        ? { questions: [{ question: "Leave this second decision pending?", choices: [] }] }
+        : { question: "Leave this second decision pending?" };
+      const answerText = batch
+        ? JSON.stringify([{ question: firstArgs.questions[0].question, answer: "Small patch" }])
+        : "Chose: small\n\nfixture answer";
+      const seen = [];
+      const scriptedProvider = await startFakeProvider({
+        chunkDelayMs: 0,
+        script: async (turn) => {
+          seen.push(turn);
+          assert.ok(turn.body.tools.some((tool) => tool.name === "ask_user"));
+          const outputs = turn.body.input.filter((item) => item.type === "function_call_output");
+          if (outputs.length === 0) {
+            assert.equal(turn.index, 0);
+            return {
+              text: "One decision first.",
+              toolCalls: [{ name: "ask_user", arguments: firstArgs }],
+            };
+          }
+          assert.equal(turn.index, 1);
+          assert.equal(outputs.length, 1);
+          assert.equal(outputs[0].output, answerText);
+          const replayedCall = turn.body.input.find((item) => item.type === "function_call");
+          assert.equal(replayedCall.call_id, outputs[0].call_id);
+          assert.match(replayedCall.id, /^fc_\w+$/);
+          assert.deepEqual(JSON.parse(replayedCall.arguments), firstArgs);
+          return { toolCalls: [{ name: "ask_user", arguments: JSON.stringify(secondArgs) }] };
+        },
+      });
+      try {
+        const env = isolatedEnv({
+          ...scriptedProvider.env,
+          RUN_ASK_TOOL: "1",
+          ASK_USER_QUESTIONS: batch ? "1" : "0",
+        });
+        const out = await runChild(env);
+        const { first, second, asked, result } = out.askTurns;
+        assert.equal(first.message.stopReason, "toolUse", first.message.errorMessage);
+        assert.equal(collectText(first.message), "One decision first.");
+        assert.equal(second.message.stopReason, "toolUse", second.message.errorMessage);
+        assert.equal(collectText(second.message), "", "tool-only turn has no echo text");
+        const firstCall = first.message.content.find((block) => block.type === "toolCall");
+        const secondCall = second.message.content.find((block) => block.type === "toolCall");
+        assert.equal(firstCall.name, "ask_user");
+        assert.equal(secondCall.name, "ask_user");
+        assert.deepEqual(firstCall.arguments, firstArgs);
+        assert.deepEqual(secondCall.arguments, secondArgs);
+        assert.match(firstCall.id, /^call_\w+\|fc_\w+$/);
+        assert.notEqual(firstCall.id, secondCall.id);
+        assert.equal(
+          seen[1].body.input.find((item) => item.type === "function_call_output").call_id,
+          firstCall.id.split("|")[0],
+        );
+        for (const turn of [first, second]) {
+          assert.equal(turn.events.filter((type) => type === "toolcall_start").length, 1);
+          assert.ok(turn.events.filter((type) => type === "toolcall_delta").length >= 2);
+          assert.equal(turn.events.filter((type) => type === "toolcall_end").length, 1);
+          assert.equal(turn.events.at(-1), "done");
+          assert.ok(turn.message.usage.totalTokens > 0);
+          assert.ok(turn.message.content.every((block) => !("partialJson" in block)));
         }
-        assert.equal(turn.index, 1);
-        assert.equal(outputs.length, 1);
-        assert.match(JSON.stringify(outputs[0].output), /Chose: small/);
-        assert.match(JSON.stringify(outputs[0].output), /fixture answer/);
-        const replayedCall = turn.body.input.find((item) => item.type === "function_call");
-        assert.equal(replayedCall.call_id, outputs[0].call_id);
-        assert.match(replayedCall.id, /^fc_\w+$/);
-        assert.deepEqual(JSON.parse(replayedCall.arguments), firstArgs);
-        return { toolCalls: [{ name: "ask_user", arguments: JSON.stringify(secondArgs) }] };
-      },
-    });
-    try {
-      const env = isolatedEnv({ ...scriptedProvider.env, RUN_ASK_TOOL: "1" });
-      const out = await runChild(env);
-      const { first, second, asked, result } = out.askTurns;
-      assert.equal(first.message.stopReason, "toolUse", first.message.errorMessage);
-      assert.equal(collectText(first.message), "One decision first.");
-      assert.equal(second.message.stopReason, "toolUse", second.message.errorMessage);
-      assert.equal(collectText(second.message), "", "tool-only turn has no echo text");
-      const firstCall = first.message.content.find((block) => block.type === "toolCall");
-      const secondCall = second.message.content.find((block) => block.type === "toolCall");
-      assert.equal(firstCall.name, "ask_user");
-      assert.equal(secondCall.name, "ask_user");
-      assert.deepEqual(firstCall.arguments, firstArgs);
-      assert.deepEqual(secondCall.arguments, secondArgs);
-      assert.match(firstCall.id, /^call_\w+\|fc_\w+$/);
-      assert.notEqual(firstCall.id, secondCall.id);
-      assert.equal(
-        seen[1].body.input.find((item) => item.type === "function_call_output").call_id,
-        firstCall.id.split("|")[0],
-      );
-      for (const turn of [first, second]) {
-        assert.equal(turn.events.filter((type) => type === "toolcall_start").length, 1);
-        assert.ok(turn.events.filter((type) => type === "toolcall_delta").length >= 2);
-        assert.equal(turn.events.filter((type) => type === "toolcall_end").length, 1);
-        assert.equal(turn.events.at(-1), "done");
-        assert.ok(turn.message.usage.totalTokens > 0);
-        assert.ok(turn.message.content.every((block) => !("partialJson" in block)));
+        assert.deepEqual(asked, [
+          {
+            toolCallId: firstCall.id,
+            ...(batch ? { question: firstArgs.questions[0].question } : {}),
+            ...firstArgs,
+          },
+        ]);
+        assert.equal(result.content[0].text, answerText);
+        assert.equal(seen.length, 2, "no model continuation for the unanswered second call");
+        assert.deepEqual(out.blocked, []);
+        assert.ok(!out.agentDirEntries.includes("auth.json"));
+      } finally {
+        await scriptedProvider.close();
       }
-      assert.deepEqual(asked, [{ toolCallId: firstCall.id, ...firstArgs }]);
-      assert.equal(result.content[0].text, "Chose: small\n\nfixture answer");
-      assert.equal(seen.length, 2, "no model continuation for the unanswered second call");
-      assert.deepEqual(out.blocked, []);
-      assert.ok(!out.agentDirEntries.includes("auth.json"));
-    } finally {
-      await scriptedProvider.close();
-    }
-  });
+    });
+  }
 
   test("with ONLY the fake provider env, the pinned model is available and a turn completes", async () => {
     const env = isolatedEnv({ ...provider.env, RUN_TURN: "1" });

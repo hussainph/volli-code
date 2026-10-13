@@ -1379,7 +1379,7 @@ export function ChatPlane({
    * The boolean is what releases the card's submission latch when nothing
    * happened: a cancellation the client refused (it toasts and resolves
    * `false`, never throws) leaves the question standing, and a card that had
-   * latched shut on "Withdrew question" would be claiming an act that did not
+   * latched shut on "Stopped turn" would be claiming an act that did not
    * occur — with no way to press anything again. The rejection arm is for the
    * one road that could still throw, and reads the same way.
    */

@@ -14,6 +14,7 @@ import {
   decodeSessionCommandIntent,
   decodeSessionCommandRoute,
   decodeSessionEventPayload,
+  decodeRendererSessionEventPayload,
   decodeSessionEventProvenance,
   encodeSessionJson,
   UnknownSessionEventKindError,
@@ -167,6 +168,11 @@ const payloads = samples(
       kind: "tool-surface",
       tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
     },
+  },
+  // New births opt into the multi-question declaration without changing names.
+  {
+    kind: "session.input.recorded",
+    input: { kind: "tool-surface", tools: ["read", "ask_user"], askUserQuestions: true },
   },
   // Old surfaces keep the historical mcp_* wire projection; the new marker is
   // durable so reattachment and a model switch never change the tool names.
@@ -1067,6 +1073,17 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.mcpManagementNames has an unsupported value");
+    for (const askUserQuestions of [false, null, "true", 1]) {
+      expect(() =>
+        decodeSessionEventPayload(
+          {
+            kind: "session.input.recorded",
+            input: { kind: "tool-surface", tools: ["ask_user"], askUserQuestions },
+          },
+          "payload",
+        ),
+      ).toThrow("payload.input.askUserQuestions must be true when present");
+    }
     // Code Mode's name and its record travel together, and the record routes
     // exactly the surface it was frozen with (VC-471).
     expect(() =>
@@ -1659,6 +1676,64 @@ describe("the renderer-safe scrub", () => {
       kind: "attachment.failed",
       failure: { code: "spawn", detail: "no binary", diagnostic: null },
     });
+  });
+
+  it("keeps the ask_user declaration revision durable and behind the renderer edge", () => {
+    const payload: SessionEventPayload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["ask_user"],
+        askUserQuestions: true,
+      },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+    const scrubbed = {
+      kind: "session.input.recorded",
+      input: { kind: "tool-surface", tools: ["ask_user"] },
+    };
+    expect(scrubSessionEventPayload(payload)).toEqual(scrubbed);
+    expect(decodeRendererSessionEventPayload(payload, "payload")).toEqual(scrubbed);
+    expect(parseRendererSessionEvent(rendererEvent({ payload }), "event")).toMatchObject({
+      ok: true,
+      event: { payload: scrubbed },
+    });
+  });
+
+  it("scrubs both ask_user and Code Mode birth markers from the same renderer record", () => {
+    const payload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "ask_user", "codemode"],
+        askUserQuestions: true,
+        codeMode: {
+          routes: { read: "both", ask_user: "direct" },
+          limits: { ...DEFAULT_CODE_MODE_LIMITS },
+          descriptionVersion: 2,
+        },
+      },
+    } satisfies SessionEventPayload;
+    const safe = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "ask_user", "codemode"],
+        codeMode: {
+          routes: { read: "both", ask_user: "direct" },
+          limits: DEFAULT_CODE_MODE_LIMITS,
+        },
+      },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+    expect(scrubSessionEventPayload(payload)).toEqual(safe);
+    expect(decodeRendererSessionEventPayload(payload, "payload")).toEqual(safe);
+    expect(parseRendererSessionEvent(rendererEvent({ payload }), "event")).toMatchObject({
+      ok: true,
+      event: { payload: safe },
+    });
+    expect(payload.input.askUserQuestions).toBe(true);
+    expect(payload.input.codeMode.descriptionVersion).toBe(2);
   });
 
   // Usage is metadata about a request, never any of its content. There is no

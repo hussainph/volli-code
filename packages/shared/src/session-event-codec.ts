@@ -1284,7 +1284,7 @@ function scrubSessionInputRecord(payload: PayloadOf<"session.input.recorded">) {
   if (input.kind !== "tool-surface") return { kind: payload.kind, input };
   // Birth-only declaration state stays durable on the host, never on the
   // renderer/public wire. Keep all tool-surface markers in this one scrub path.
-  const { codeMode: frozenCodeMode, ...surface } = input;
+  const { askUserQuestions: _askUserQuestions, codeMode: frozenCodeMode, ...surface } = input;
   if (frozenCodeMode === undefined) return { kind: payload.kind, input: surface };
   const { descriptionVersion: _descriptionVersion, ...codeMode } = frozenCodeMode;
   return { kind: payload.kind, input: { ...surface, codeMode } };
@@ -1399,10 +1399,15 @@ function decodeToolSurfaceInput(
   kind: "tool-surface";
   tools: readonly SessionToolId[];
   mcpManagementNames?: "server";
+  askUserQuestions?: true;
   mcpTools?: readonly McpToolDefinition[];
   codeMode?: CodeModeSurface;
 } {
   const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
+  // Birth-only declaration marker: historical absence must not become a default.
+  if (input.askUserQuestions !== undefined && input.askUserQuestions !== true) {
+    throw new Error(`${context}.askUserQuestions must be true when present`);
+  }
   const mcpManagementNames =
     input.mcpManagementNames === undefined
       ? undefined
@@ -1430,6 +1435,7 @@ function decodeToolSurfaceInput(
     kind,
     tools,
     ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
+    ...(input.askUserQuestions === true ? { askUserQuestions: true as const } : {}),
     ...(mcpTools === undefined ? {} : { mcpTools }),
     ...(codeMode === undefined ? {} : { codeMode }),
   };

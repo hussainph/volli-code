@@ -61,6 +61,19 @@ function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" |
   return undefined;
 }
 
+/** ask_user's declaration version is a birth fact, not today's host default (VC-749). */
+function recordedAskUserQuestions(events: readonly SessionEvent[]): true | undefined {
+  for (const event of events) {
+    if (
+      event.payload.kind === "session.input.recorded" &&
+      event.payload.input.kind === "tool-surface"
+    ) {
+      return event.payload.input.askUserQuestions;
+    }
+  }
+  return undefined;
+}
+
 /** Code Mode's routes and limits, frozen beside the names they route (VC-471). */
 function recordedCodeMode(events: readonly SessionEvent[]): CodeModeSurface | undefined {
   for (const event of events) {
@@ -107,6 +120,7 @@ export function createRuntimeContextResolver(options: {
     // allowlist (VC-454): a tool taken off it stops overlapping.
     let mcpTools = mcpDispatch.forAttach(recordedMcpTools(events));
     let mcpManagementNames = recordedMcpManagementNames(events);
+    let askUserQuestions = recordedAskUserQuestions(events);
     let codeModeSurface = recordedCodeMode(events);
     if (toolSurface === null) {
       // Legacy backfill: the first attach under VC-164 freezes whatever
@@ -139,6 +153,7 @@ export function createRuntimeContextResolver(options: {
       toolSurface = frozen.tools;
       mcpTools = mcpDispatch.forAttach(frozen.mcpTools ?? []);
       mcpManagementNames = frozen.mcpManagementNames;
+      askUserQuestions = frozen.askUserQuestions;
       codeModeSurface = frozen.codeMode;
     }
     const shared = {
@@ -147,6 +162,7 @@ export function createRuntimeContextResolver(options: {
       model: projection.modelSelection,
       toolSurface,
       ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
+      ...(askUserQuestions === undefined ? {} : { askUserQuestions }),
       ...(mcpTools.length === 0 ? {} : { mcpTools }),
       ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
       // The skills this Session was started with, as recorded ahead of

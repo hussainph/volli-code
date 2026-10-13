@@ -52,6 +52,9 @@ import {
   type TranslatedObservation,
 } from "../../../session-engine/src/observation-translation";
 import {
+  askUserInteractionId,
+  readInteractionAnswers,
+  type SessionInteractionPrompt,
   codeModeSurfaceFor,
   NON_CODING_TOOL_IDS,
   verbToolWireName,
@@ -621,6 +624,252 @@ describe.skipIf(manifest === null)(
         }
       } finally {
         db.close();
+      }
+    });
+
+    it("shows and answers all three head-written ask_user prompts without erasing the birth marker", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return; // N-1 refuses a breaking profile.
+      const sessionId = "session-head";
+      const attachmentId = "head-pi-attachment";
+      const interactionId = askUserInteractionId("n1-multi-question");
+      const adapterProvenance = {
+        source: { kind: "adapter", id: "pi", detail: null },
+        venue: null,
+      } as const;
+      // The simplified Pi mapping: generated positional ids, single choice,
+      // and custom answers on every prompt. Flat fields mirror prompt:0.
+      const prompts: readonly SessionInteractionPrompt[] = [
+        {
+          id: "prompt:0",
+          label: "Which storage should I use?",
+          detail: null,
+          options: [
+            { id: "choice:0", label: "SQLite", description: null },
+            { id: "choice:1", label: "Postgres", description: null },
+          ],
+          multiple: false,
+          custom: true,
+        },
+        {
+          id: "prompt:1",
+          label: "Which checks should I run?",
+          detail: null,
+          options: [
+            { id: "choice:0", label: "Unit tests", description: null },
+            { id: "choice:1", label: "Typecheck", description: null },
+          ],
+          multiple: false,
+          custom: true,
+        },
+        {
+          id: "prompt:2",
+          label: "What else should I preserve?",
+          detail: null,
+          options: [],
+          multiple: false,
+          custom: true,
+        },
+      ];
+      const answers = [
+        { promptId: "prompt:0", optionIds: ["choice:0"], response: null },
+        { promptId: "prompt:1", optionIds: ["choice:1"], response: "Only focused checks" },
+        { promptId: "prompt:2", optionIds: [], response: "Keep existing changes" },
+      ];
+      const resolution = {
+        optionIds: ["choice:0", "choice:1"],
+        response: "Only focused checks\n\nKeep existing changes",
+        answers,
+      };
+      const birthInput = {
+        kind: "tool-surface",
+        tools: ["read", "ask_user"],
+        askUserQuestions: true,
+      } as const;
+      const first = prompts[0]!;
+      const interaction = {
+        id: interactionId,
+        attachmentId,
+        kind: "question" as const,
+        title: first.label,
+        detail: null,
+        options: first.options,
+        multiple: first.multiple,
+        prompts,
+        native: {
+          id: "head-native-session",
+          detail: {
+            runtime: "pi",
+            sessionId: "head-native-session",
+            sessionFilePath: join(root, "head-native-session.jsonl"),
+          },
+        },
+      };
+      const writer = openVolliDb(dbPath);
+      try {
+        const engine = headEngine(writer, "head-ask-user");
+        await engine.getOrRecordSessionInput({ sessionId, input: birthInput, provenance });
+        await engine.observe({
+          id: "head-pi-opened",
+          sessionId,
+          occurredAt: NOW,
+          provenance: adapterProvenance,
+          kind: "attachment.opened",
+          attachment: {
+            id: attachmentId,
+            sessionId,
+            adapterId: "pi",
+            venue: { id: "n1-local", kind: "local" },
+            continuity: "fresh",
+            native: interaction.native,
+            authority: null,
+          },
+        });
+        await engine.observe({
+          id: "head-ask-user-opened",
+          sessionId,
+          occurredAt: NOW,
+          provenance: adapterProvenance,
+          kind: "interaction.opened",
+          interaction,
+        });
+      } finally {
+        writer.close();
+      }
+      const storedInputs = (db: Database.Database) =>
+        (
+          db
+            .prepare("SELECT payload FROM session_events WHERE session_id = ? ORDER BY sequence")
+            .all(sessionId) as { payload: string }[]
+        ).filter(({ payload }) => JSON.parse(payload).kind === "session.input.recorded");
+      const before = new Database(dbPath, { readonly: true });
+      let rawInputs: { payload: string }[];
+      try {
+        rawInputs = storedInputs(before);
+        expect(rawInputs.map(({ payload }) => JSON.parse(payload))).toEqual([
+          { kind: "session.input.recorded", input: birthInput },
+        ]);
+      } finally {
+        before.close();
+      }
+
+      const run = await n1(dbPath, [{ kind: "askUser", sessionId, interactionId, answers }]);
+      expect(value(run, 0)).toEqual({
+        prompts,
+        toolSurface: { kind: "tool-surface", tools: ["read", "ask_user"] },
+        rendererNative: { id: null, detail: null },
+        // The shipped card holds submit until all questions have an answer.
+        submitStates: [false, false, false, true],
+        resolution,
+        answers,
+        activeCount: 0,
+        route: { adapterId: "pi", attachmentId },
+      });
+
+      assertHeadReads(dbPath);
+      const reopened = openVolliDb(dbPath);
+      try {
+        const engine = headEngine(reopened);
+        const session = await engine.getSession({ sessionId });
+        expect(session?.interactions.active).toEqual([]);
+        const resolved = session?.interactions.resolved[0];
+        expect(resolved).toMatchObject({ interaction, resolution });
+        expect(readInteractionAnswers(resolved!.interaction, resolved!.resolution)).toEqual(
+          answers,
+        );
+        // N-1 ignores the unknown marker in its decoded input, but must never
+        // rewrite the raw birth event (or the new declaration would be lost).
+        expect(storedInputs(reopened)).toEqual(rawInputs!);
+        expect(
+          await engine.getOrRecordSessionInput({ sessionId, input: birthInput, provenance }),
+        ).toEqual(birthInput);
+        const events = await engine.listEvents({ sessionId });
+        expect(
+          events.find(({ payload }) => payload.kind === "interaction.resolved")?.payload,
+        ).toEqual({ kind: "interaction.resolved", attachmentId, interactionId, resolution });
+      } finally {
+        reopened.close();
+      }
+    });
+
+    it("replays and records an answer to a flat ask left pending by N-1 in a new-birth Session", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      const sessionId = "session-head";
+      const interactionId = askUserInteractionId("downgraded-flat");
+      const birthInput = {
+        kind: "tool-surface",
+        tools: ["ask_user"],
+        askUserQuestions: true,
+      } as const;
+      const writer = openVolliDb(dbPath);
+      try {
+        await headEngine(writer, "flat-birth").getOrRecordSessionInput({
+          sessionId,
+          input: birthInput,
+          provenance,
+        });
+      } finally {
+        writer.close();
+      }
+      const pending = value(
+        await n1(dbPath, [{ kind: "pendingFlatAsk", sessionId, interactionId }]),
+        0,
+      );
+      expect(pending.surface).toEqual({ kind: "tool-surface", tools: ["ask_user"] });
+      expect(pending.activeCount).toBe(1);
+      const upgraded = openVolliDb(dbPath);
+      try {
+        const engine = headEngine(upgraded, "upgraded-flat");
+        expect(
+          await engine.getOrRecordSessionInput({ sessionId, input: birthInput, provenance }),
+        ).toEqual(birthInput);
+        const before = await engine.getSession({ sessionId });
+        expect(before?.interactions.active).toEqual([pending.interaction]);
+        const resolution = {
+          optionIds: ["keep"],
+          response: "Keep this answer",
+          answers: [{ promptId: "prompt:0", optionIds: ["keep"], response: "Keep this answer" }],
+        };
+        const submitted = await engine.submit({
+          commandId: "upgraded-flat-answer",
+          sessionId,
+          provenance,
+          intent: {
+            kind: "interaction.resolve",
+            attachmentId: "n1-flat-attachment",
+            interactionId,
+            resolution,
+            reference: { id: "upgraded-flat-answer-artifact", mediaType: null, digest: null },
+          },
+        });
+        // The engine persists and routes intent; the adapter's resolution
+        // observation below is the durable completion, as in the N-1 lane.
+        expect(submitted.receipt).toBeNull();
+        expect(submitted.command.route).toEqual({
+          adapterId: "pi",
+          attachmentId: "n1-flat-attachment",
+        });
+        await engine.observe({
+          id: "upgraded-flat-resolved",
+          sessionId,
+          occurredAt: NOW,
+          provenance: { source: { kind: "adapter", id: "pi", detail: null }, venue: null },
+          kind: "interaction.resolved",
+          attachmentId: "n1-flat-attachment",
+          interactionId,
+          resolution,
+        });
+        const after = await engine.getSession({ sessionId });
+        expect(after?.interactions.active).toEqual([]);
+        expect(after?.interactions.resolved[0]).toMatchObject({
+          interaction: pending.interaction,
+          resolution,
+        });
+      } finally {
+        upgraded.close();
       }
     });
 
