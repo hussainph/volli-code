@@ -333,9 +333,13 @@ describe("closeStaleAttachments", () => {
             event.kind === "interaction.cancelled" && event.interactionId === "budget-ask:lost",
         ),
       ).toBe(true);
-      expect(target.observed).toContainEqual(expect.objectContaining({
-        kind: "interaction.cancelled", interactionId: "ask-user:lost", reason: "abandoned",
-      }));
+      expect(target.observed).toContainEqual(
+        expect.objectContaining({
+          kind: "interaction.cancelled",
+          interactionId: "ask-user:lost",
+          reason: "abandoned",
+        }),
+      );
     },
   );
 

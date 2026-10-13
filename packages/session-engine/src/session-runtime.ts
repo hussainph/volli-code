@@ -1210,8 +1210,18 @@ class DefaultSessionRuntime implements SessionRuntime {
         }
       });
     };
-    const operation = previous ? previous.then(run) : run();
+    // Bound a queued command's wait BEFORE it starts admission. Waiting on
+    // previous.then(run) would both hide a stalled predecessor and execute
+    // the supposedly timed-out command later. Only run after the bounded
+    // predecessor wait succeeds, so timeout here is definitely unsent.
+    const operation = previous
+      ? this.#queueAdmissionWait(request.commandId, previous, "previous command admission").then(
+          run,
+        )
+      : run();
     const promise = operation.finally(async () => {
+      // A predecessor timeout never reached run's release path.
+      admission?.resolve();
       endStart?.();
       this.#inFlight.delete(request.commandId);
       // A queue held behind this start (VC-675) is released once the start is
@@ -1229,12 +1239,15 @@ class DefaultSessionRuntime implements SessionRuntime {
     this.#inFlight.set(request.commandId, { signature, promise });
     if (serializesAdmission && "sessionId" in request) {
       const sessionId = request.sessionId;
-      const tail =
+      const ownTail =
         admission?.promise ??
         promise.then(
           () => undefined,
           () => undefined,
         );
+      // A timed-out queued wait must not unlock a still-running predecessor
+      // for later commands. Keep that predecessor in the serialization chain.
+      const tail = previous ? previous.then(() => ownTail) : ownTail;
       this.#sessionAdmissionTails.set(sessionId, tail);
       void tail.finally(() => {
         if (this.#sessionAdmissionTails.get(sessionId) === tail) {
@@ -1340,11 +1353,30 @@ class DefaultSessionRuntime implements SessionRuntime {
     ) {
       throw new FollowUpBoundaryMovedError();
     }
-    const location = await this.#queueAdmissionWait(
-      request.commandId,
-      this.ports.locations.resolve(projection.session),
-      "workspace resolution",
-    );
+    let location: SessionLocation;
+    try {
+      location = await this.#queueAdmissionWait(
+        request.command.kind === "adapter.attach"
+          ? `follow-up:${request.commandId}`
+          : request.commandId,
+        this.ports.locations.resolve(projection.session),
+        "workspace resolution",
+      );
+    } catch (error) {
+      if (
+        request.command.kind === "adapter.attach" &&
+        !request.commandId.startsWith("follow-up:") &&
+        error instanceof NativeAttachmentError &&
+        error.code === "queue_admission_timeout"
+      ) {
+        await this.reportMessageDeliveryFailure({
+          sessionId: request.sessionId,
+          commandId: request.commandId,
+          detail: error.message,
+        });
+      }
+      throw error;
+    }
     const existed = this.#commandExists(projection, request.commandId);
 
     switch (request.command.kind) {
@@ -1610,7 +1642,7 @@ class DefaultSessionRuntime implements SessionRuntime {
     let site: SessionLocation;
     try {
       site = await this.#queueAdmissionWait(
-        request.commandId,
+        `follow-up:${request.commandId}`,
         this.ports.locations.prepare(projection.session),
         "workspace preparation",
       );
@@ -1660,14 +1692,20 @@ class DefaultSessionRuntime implements SessionRuntime {
     let handle: BindingHandle;
     try {
       const attaching = adapter.attach(spec, sink);
-      handle = await this.#queueAdmissionWait(request.commandId, attaching, "executor attach", () => {
-        sink.discard();
-        // A timed-out attach must never publish or become a second binding.
-        void attaching.then(
-          (late) => late.release("adapter_failure").catch((error) => this.#followUpFailure(error)),
-          () => undefined,
-        );
-      });
+      handle = await this.#queueAdmissionWait(
+        `follow-up:${request.commandId}`,
+        attaching,
+        "executor attach",
+        () => {
+          sink.discard();
+          // A timed-out attach must never publish or become a second binding.
+          void attaching.then(
+            (late) =>
+              late.release("adapter_failure").catch((error) => this.#followUpFailure(error)),
+            () => undefined,
+          );
+        },
+      );
     } catch (error) {
       sink.discard();
       const nativeFailure =
@@ -2212,13 +2250,21 @@ class DefaultSessionRuntime implements SessionRuntime {
   async #acknowledgeBootInterruption(projection: SessionProjection): Promise<SessionProjection> {
     if (projection.turnActive || projection.status !== "open") return projection;
     const warnings = projection.attention.active.filter(
-      ({ id, kind, attachmentId }) =>
+      ({ id, kind, attachmentId, detail }) =>
         kind === "partial_turn_interrupted" &&
-        // This id is the frozen boot-recovery identity. A genuine runtime
-        // partial-turn failure is not an obsolete restart warning.
-        id === `${attachmentId}:boot-recovery` &&
         projection.attachments.some(
-          (attachment) => attachment.id === attachmentId && attachment.status === "closed",
+          (attachment) =>
+            attachment.id === attachmentId &&
+            // Host recovery closes a binding it could not reconstruct.
+            ((id === `${attachmentId}:boot-recovery` && attachment.status === "closed") ||
+              // Successful Pi recovery keeps the binding and interrupts the old
+              // turn. Match its frozen id AND legacy recovery sentence, never a
+              // genuine partial-turn failure (e.g. conflicting sidecar history).
+              (attachment.adapterId === this.ports.executor.id &&
+                id ===
+                  `${this.ports.executor.durableIdNamespace}:attention:${attachmentId}:partial-turn` &&
+                detail ===
+                  "A recovered Pi turn ended before its completion marker was committed.")),
         ),
     );
     if (warnings.length === 0) return projection;
@@ -2252,7 +2298,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         onTimeout?.();
         reject(
           new NativeAttachmentError(
-            `queue_admission_timeout: ${stage} did not finish. Retry the queued message.`,
+            `queue_admission_timeout: ${stage} did not finish. Check the transcript before retrying.`,
             "queue_admission_timeout",
             "adapter_unrecoverable",
           ),
@@ -2492,11 +2538,27 @@ class DefaultSessionRuntime implements SessionRuntime {
       /* v8 ignore next 2 -- an unrouted message is atomically saved with a terminal rejection by the engine. */
       if (!prior.route?.attachmentId)
         throw new SessionRuntimeConflictError("Queued delivery has no recoverable route");
+      const recovery = this.reconcile({ sessionId, attachmentId: prior.route.attachmentId });
       try {
-        await this.reconcile({ sessionId, attachmentId: prior.route.attachmentId });
+        await this.#queueAdmissionWait(
+          entry.deliveryCommandId,
+          recovery,
+          "delivery reconciliation",
+          () => {
+            void recovery.then(
+              () => this.#scheduleFollowUps(sessionId),
+              (error) => this.#followUpFailure(error),
+            );
+          },
+        );
       } catch (error) {
         // An executor that cannot answer is no evidence either way.
         await this.#followUpFailure(error);
+        if (error instanceof NativeAttachmentError && error.code === "queue_admission_timeout") {
+          current = await this.#requireSession(sessionId);
+          await this.#settleFromEvidence(sessionId, entry, prior, current, error.message);
+          return;
+        }
       }
       current = await this.#requireSession(sessionId);
       receipt = current.receipts.findLast(({ commandId }) => commandId === prior.id);
@@ -2518,14 +2580,18 @@ class DefaultSessionRuntime implements SessionRuntime {
     entry: StoredSessionFollowUp,
     command: SessionCommand,
     projection: SessionProjection,
+    timeoutDetail?: string,
   ): Promise<void> {
     const evidence = await this.#deliveryEvidence(sessionId, command, projection);
     if (evidence === null) {
       const receipt = projection.receipts.findLast(({ commandId }) => commandId === command.id);
+      const detail =
+        timeoutDetail ??
+        (receipt?.status === "unreconciled" && receipt.detail?.includes("queue_admission_timeout")
+          ? receipt.detail
+          : undefined);
       throw new FollowUpAmbiguousError(
-        receipt?.status === "unreconciled" && receipt.detail?.includes("queue_admission_timeout")
-          ? `${receipt.detail} ${FOLLOW_UP_AMBIGUOUS_DETAIL}`
-          : undefined,
+        detail ? `${detail} ${FOLLOW_UP_AMBIGUOUS_DETAIL}` : undefined,
       );
     }
     await this.#settleFollowUp(sessionId, entry.commandId, command, evidence);
@@ -2730,6 +2796,7 @@ class DefaultSessionRuntime implements SessionRuntime {
         if (!entry) return false;
         entry.state = "queued";
         entry.refused = true;
+        entry.refusedDetail = `Queued delivery refused: ${receipt.code}${receipt.detail ? `: ${receipt.detail}` : ""}`;
         if (entry.steer)
           Object.defineProperty(state.commands, command.id, {
             value: {
@@ -2752,7 +2819,9 @@ class DefaultSessionRuntime implements SessionRuntime {
       if (!retained) return;
       this.#notifyFollowUps(sessionId);
       if (!returnRefusal)
-        throw new SessionRuntimeConflictError(`Queued delivery refused: ${receipt.code}`);
+        throw new SessionRuntimeConflictError(
+          `Queued delivery refused: ${receipt.code}${receipt.detail ? `: ${receipt.detail}` : ""}`,
+        );
       return;
     }
     await this.ports.followUps!.transaction(sessionId, (state) => {
@@ -2824,20 +2893,22 @@ class DefaultSessionRuntime implements SessionRuntime {
     let binding: BindingRecord;
     try {
       if (!existed) {
-        const unavailable = await this.#queueAdmissionWait(
-          request.commandId,
-          this.#rejectUnavailableLocation(request.sessionId, submitted.command, projection, location),
-          "workspace validation",
+        const unavailable = await this.#rejectUnavailableLocation(
+          request.sessionId,
+          submitted.command,
+          projection,
+          location,
         );
         if (unavailable) return this.#result(request.sessionId, submitted.command, unavailable);
       }
 
-      binding = await this.#queueAdmissionWait(
-        request.commandId,
-        this.#bindingForCommand(submitted.command, projection, location, !existed),
-        "binding recovery",
-      );
-      const recovered = await this.#recoverAdapterDelivery({ request, submitted, binding, existed });
+      binding = await this.#bindingForCommand(submitted.command, projection, location, !existed);
+      const recovered = await this.#recoverAdapterDelivery({
+        request,
+        submitted,
+        binding,
+        existed,
+      });
       if (recovered) return recovered;
 
       // A replay reconciles before it attempts delivery: the earlier invocation
@@ -2858,7 +2929,20 @@ class DefaultSessionRuntime implements SessionRuntime {
         attachment.id,
         this.ports.executor,
         attachment.venue,
-        { commandId: request.commandId, status: "unknown", detail: error.message, native: null },
+        !existed
+          ? {
+              commandId: request.commandId,
+              status: "rejected",
+              code: "queue_admission_timeout",
+              detail: error.message,
+              native: null,
+            }
+          : {
+              commandId: request.commandId,
+              status: "unknown",
+              detail: error.message,
+              native: null,
+            },
         "message.submitted",
       );
       return this.#result(request.sessionId, submitted.command, receipt);
@@ -2917,20 +3001,22 @@ class DefaultSessionRuntime implements SessionRuntime {
         () => {
           // Dispatch may already have reached the executor. Never resend it.
           // Preserve late evidence and wake reconciliation of the retained row.
-          void dispatch.then(
-            async (late) => {
-              await this.#recordDelivery(
-                request.sessionId,
-                binding.spec.attachmentId,
-                binding.adapter,
-                binding.venue,
-                late,
-                "message.submitted",
-              );
-              this.#scheduleFollowUps(request.sessionId);
-            },
-            (error) => this.#followUpFailure(error),
-          ).catch((error) => this.#followUpFailure(error));
+          void dispatch
+            .then(
+              async (late) => {
+                await this.#recordDelivery(
+                  request.sessionId,
+                  binding.spec.attachmentId,
+                  binding.adapter,
+                  binding.venue,
+                  late,
+                  "message.submitted",
+                );
+                this.#scheduleFollowUps(request.sessionId);
+              },
+              (error) => this.#followUpFailure(error),
+            )
+            .catch((error) => this.#followUpFailure(error));
         },
       );
     } catch (error) {
@@ -4333,7 +4419,12 @@ class DefaultSessionRuntime implements SessionRuntime {
     // persisting intent. Do not repeat that check here: a second failure would
     // escape after persistence and recreate the receipt-less command hole. All
     // other cold-binding callers still receive the rehydration guarantee here.
-    if (!locationReaffirmed) await this.ports.locations.reaffirm(projection.session, directory);
+    if (!locationReaffirmed)
+      await this.#queueAdmissionWait(
+        `follow-up:${attachmentId}:recovery`,
+        this.ports.locations.reaffirm(projection.session, directory),
+        "binding workspace validation",
+      );
     const spec: NativeAttachmentSpec = {
       sessionId: projection.session.id,
       attachmentId,
@@ -4346,7 +4437,20 @@ class DefaultSessionRuntime implements SessionRuntime {
     const { translator, sink } = this.#pipeline(adapter, spec, attachment.venue);
     let handle: BindingHandle;
     try {
-      handle = await adapter.attach(spec, sink);
+      const attaching = adapter.attach(spec, sink);
+      handle = await this.#queueAdmissionWait(
+        `follow-up:${attachmentId}:recovery`,
+        attaching,
+        "binding recovery",
+        () => {
+          sink.discard();
+          void attaching.then(
+            (late) =>
+              late.release("adapter_failure").catch((error) => this.#followUpFailure(error)),
+            () => undefined,
+          );
+        },
+      );
     } catch (error) {
       sink.discard();
       throw error;
@@ -4521,9 +4625,10 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     const binding = unwrapNativeBinding(attachment.native);
     try {
-      await this.ports.locations.reaffirm(
-        projection.session,
-        binding.directory ?? location.directory,
+      await this.#queueAdmissionWait(
+        command.id,
+        this.ports.locations.reaffirm(projection.session, binding.directory ?? location.directory),
+        "workspace validation",
       );
       return null;
     } catch (error) {
@@ -4536,7 +4641,10 @@ class DefaultSessionRuntime implements SessionRuntime {
         {
           commandId: command.id,
           status: "rejected",
-          code: "location_unavailable",
+          code:
+            error instanceof NativeAttachmentError && error.code === "queue_admission_timeout"
+              ? "queue_admission_timeout"
+              : "location_unavailable",
           detail: errorMessage(error),
           native: null,
         },

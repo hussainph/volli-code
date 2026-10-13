@@ -636,6 +636,163 @@ describe.skipIf(manifest === null)(
       }
     });
 
+    it.each(["flat", "questions"] as const)(
+      "opens and reattaches a head-recovered %s ask in N−1 without resurrecting a question or inventing an answer",
+      async (shape) => {
+        await headProfile();
+        const { head, guarded } = await probe();
+        if (guarded && headFloor() > head) return;
+        const writer = openVolliDb(dbPath);
+        const sessionId = "session-head";
+        const attachmentId = "head-recovered-attachment";
+        const interactionId = "head-recovered-question";
+        const adapter = {
+          source: { kind: "adapter" as const, id: "pi", detail: null },
+          venue: null,
+        };
+        try {
+          const engine = headEngine(writer, "head-recovery");
+          await engine.getOrRecordSessionInput({
+            sessionId,
+            input: { kind: "tool-surface", tools: ["read", "ask_user"] },
+            provenance,
+          });
+          await engine.observe({
+            id: "recovery-open",
+            sessionId,
+            occurredAt: NOW,
+            provenance: adapter,
+            kind: "attachment.opened",
+            attachment: {
+              id: attachmentId,
+              sessionId,
+              adapterId: "pi",
+              venue: { id: "local", kind: "local" },
+              continuity: "fresh",
+              native: null,
+              authority: null,
+            },
+          });
+          const options = [{ id: "keep", label: "Keep it", description: null }];
+          await engine.observe({
+            id: "recovery-question",
+            sessionId,
+            attachmentId,
+            occurredAt: NOW,
+            provenance: adapter,
+            kind: "interaction.opened",
+            interaction: {
+              id: interactionId,
+              attachmentId,
+              kind: "question",
+              title: "Which scope should survive?",
+              detail: null,
+              options,
+              multiple: false,
+              native: { id: null, detail: null },
+              ...(shape === "questions"
+                ? {
+                    prompts: [
+                      {
+                        id: "scope",
+                        label: "Which scope should survive?",
+                        detail: null,
+                        options,
+                        multiple: false,
+                        custom: true,
+                      },
+                      {
+                        id: "timing",
+                        label: "When should it ship?",
+                        detail: null,
+                        options: [],
+                        multiple: false,
+                        custom: true,
+                      },
+                    ],
+                  }
+                : {}),
+            },
+          });
+          await engine.observe({
+            id: "recovery-abandoned",
+            sessionId,
+            attachmentId,
+            occurredAt: NOW,
+            provenance,
+            kind: "interaction.cancelled",
+            interactionId,
+            reason: "abandoned",
+          });
+          await engine.observe({
+            id: "recovery-warning",
+            sessionId,
+            attachmentId,
+            occurredAt: NOW,
+            provenance,
+            kind: "attention.raised",
+            attention: {
+              id: `${attachmentId}:boot-recovery`,
+              attachmentId,
+              kind: "partial_turn_interrupted",
+              detail: "Prior process ended",
+              diagnostic: null,
+            },
+          });
+          await engine.observe({
+            id: "recovery-closed",
+            sessionId,
+            attachmentId,
+            occurredAt: NOW,
+            provenance,
+            kind: "attachment.closed",
+            outcome: "interrupted",
+          });
+          await engine.observe({
+            id: "recovery-acknowledged",
+            sessionId,
+            occurredAt: NOW,
+            provenance,
+            kind: "attention.cleared",
+            attentionId: `${attachmentId}:boot-recovery`,
+          });
+        } finally {
+          writer.close();
+        }
+        const run = await n1(dbPath, [
+          { kind: "recoveredQuestion", sessionId, workspace: join(root, "repo") },
+        ]);
+        expect(value(run, 0)).toEqual({
+          activeCount: 0,
+          cancellationReason: "abandoned",
+          questionTitle: "Which scope should survive?",
+          attachStatus: "accepted",
+          deliveryStatus: "accepted",
+          turnActive: true,
+          answers: 0,
+        });
+        assertHeadReads(dbPath);
+        const read = openVolliDb(dbPath);
+        try {
+          expect(
+            await createSqliteSessionFollowUpLedger(read).transaction(
+              sessionId,
+              (state) => state.entries,
+            ),
+          ).toMatchObject([{ id: "head-follow-up", state: "queued" }]);
+          const events = await headEngine(read).listEvents({ sessionId });
+          expect(
+            events.filter(({ payload }) => payload.kind === "interaction.cancelled"),
+          ).toHaveLength(1);
+          expect(
+            events.filter(({ payload }) => payload.kind === "interaction.resolved"),
+          ).toHaveLength(0);
+        } finally {
+          read.close();
+        }
+      },
+    );
+
     it("shows and answers all three head-written ask_user prompts without erasing the birth marker", async () => {
       await headProfile();
       const { head, guarded } = await probe();

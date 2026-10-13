@@ -1,4 +1,8 @@
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { requestAgent } from "../../../cli/src/client";
+import { runCli } from "../../../cli/src/run";
+import { startAgentSocket } from "../agent-socket";
 import type {
   AgentCommand,
   AgentResponse,
@@ -253,22 +257,80 @@ describe("session roster and detail", () => {
         ],
       },
     ];
-    for (const verb of ["session.show", "session.peek"] as const) {
-      const shown = data(await f.read(verb, { id: id.slice(0, 8), lines: 1 }));
-      expect(shown["pendingQuestions"]).toEqual(expected);
-      const json = JSON.stringify(shown["pendingQuestions"]);
-      for (const secret of [
-        "route_private",
-        "private-value",
-        "option-private",
-        "prompt-private",
-        "dev_private",
-        "native-private",
-        "native-detail-private",
-        "attachmentId",
-      ]) {
-        expect(json).not.toContain(secret);
+    // The actual socket codec and CLI runner must preserve all prompts, not
+    // only the handler's in-process shape. No provider or app is launched.
+    const socketPath = join(dirname(db.dbPath), "questions.sock");
+    const socket = await startAgentSocket({
+      socketPath,
+      execute: (request) => f.service.execute(request),
+    });
+    try {
+      for (const verb of ["session.show", "session.peek"] as const) {
+        const shown = data(
+          await requestAgent(
+            socketPath,
+            {
+              v: 1,
+              cmd: verb,
+              args: { id: id.slice(0, 8), lines: 1 },
+              ctx: { cwd: "/repo/volli", env: {} },
+            },
+            { timeoutMs: 2000 },
+          ),
+        );
+        expect(shown["pendingQuestions"]).toEqual(expected);
+        const stdout: string[] = [];
+        const stderr: string[] = [];
+        expect(
+          await runCli(["session", verb === "session.show" ? "show" : "peek", id.slice(0, 8)], {
+            env: { VOLLI_SOCKET: socketPath },
+            cwd: "/repo/volli",
+            stdout: (text) => stdout.push(text),
+            stderr: (text) => stderr.push(text),
+            request: (path, request) => requestAgent(path, request, { timeoutMs: 2000 }),
+            readText: async () => {
+              throw new Error("No file argument expected");
+            },
+            launch: async () => {
+              throw new Error("No app launch expected");
+            },
+            observe: async () => ({}),
+          }),
+        ).toBe(0);
+        expect(stderr).toEqual([]);
+        const rendered = stdout.join("");
+        for (const text of [
+          "Which route?",
+          "Yes",
+          "Proceed",
+          "Pick a region",
+          "Then a zone",
+          "Select environments",
+          "Full question text. ".repeat(20).trim(),
+          "Dev",
+          "Prod",
+          "Line one",
+          "Line two",
+        ]) {
+          expect(rendered).toContain(text);
+        }
+        const json = JSON.stringify(shown["pendingQuestions"]);
+        for (const secret of [
+          "route_private",
+          "private-value",
+          "option-private",
+          "prompt-private",
+          "dev_private",
+          "native-private",
+          "native-detail-private",
+          "attachmentId",
+        ]) {
+          expect(json).not.toContain(secret);
+          expect(rendered).not.toContain(secret);
+        }
       }
+    } finally {
+      await socket.close();
     }
   });
 

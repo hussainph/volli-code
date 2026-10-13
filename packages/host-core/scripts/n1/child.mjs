@@ -210,6 +210,107 @@ const steps = {
     }
   },
 
+  /** Reads head's restart cancellation and admits a new turn using N-1's real runtime/ledger. */
+  recoveredQuestion: async (step) => {
+    const { createSessionEngine, createSessionRuntime, createInMemoryTranscriptArtifactStore } =
+      await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const db = openVolliDb(command.dbPath);
+    let runtime;
+    try {
+      let next = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `recovery-${kind}-${++next}` },
+      });
+      const before = await engine.getSession({ sessionId: step.sessionId });
+      const history = await engine.listEvents({ sessionId: step.sessionId });
+      const question = history.find(({ payload }) => payload.kind === "interaction.opened")?.payload
+        .interaction;
+      const cancellation = history.find(
+        ({ payload }) => payload.kind === "interaction.cancelled",
+      )?.payload;
+      // Only the executor boundary is scripted. N-1's admission, event codec,
+      // frozen input read, receipt and turn projection are shipped production.
+      runtime = createSessionRuntime({
+        engine,
+        artifacts: createInMemoryTranscriptArtifactStore(),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `recovery-runtime-${kind}-${++next}` },
+        locations: {
+          resolve: async () => ({
+            directory: step.workspace,
+            venue: { id: "local", kind: "local" },
+          }),
+          prepare: async () => ({
+            directory: step.workspace,
+            venue: { id: "local", kind: "local" },
+          }),
+          reaffirm: async () => undefined,
+        },
+        executor: {
+          id: "pi",
+          durableIdNamespace: "pi",
+          adapterVersion: "fixture",
+          runtime: { path: "/fixture", version: "1", fingerprint: "fixture" },
+          attach: async (_spec, sink) => ({
+            native: { id: "recovered-native", detail: null },
+            dispatch: async (delivery) => {
+              if (delivery.kind === "message.submit")
+                await sink.emit({
+                  kind: "turn",
+                  state: "started",
+                  turnId: `turn:${delivery.commandId}`,
+                  occurredAt: NOW,
+                });
+              return {
+                commandId: delivery.commandId,
+                status: "accepted",
+                acceptedAt: NOW,
+                native: null,
+              };
+            },
+            reconcile: async () => ({ cursor: null, observations: [], receipts: [] }),
+            release: async () => undefined,
+          }),
+        },
+      });
+      const attached = await runtime.command({
+        commandId: "n1-recovery-attach",
+        sessionId: step.sessionId,
+        command: { kind: "adapter.attach", continuity: "context_replay" },
+      });
+      const delivered = await runtime.command({
+        commandId: "n1-recovery-message",
+        sessionId: step.sessionId,
+        command: {
+          kind: "message.submit",
+          message: {
+            id: "n1-recovery-message",
+            role: "user",
+            parts: [{ type: "text", text: "Continue without an answer" }],
+          },
+        },
+      });
+      const after = await engine.getSession({ sessionId: step.sessionId });
+      return {
+        activeCount: before.interactions.active.length,
+        cancellationReason: cancellation?.reason,
+        questionTitle: question?.title,
+        attachStatus: attached.receipt?.status,
+        deliveryStatus: delivered.receipt?.status,
+        turnActive: after.turnActive,
+        answers: (await engine.listEvents({ sessionId: step.sessionId })).filter(
+          ({ payload }) => payload.kind === "interaction.resolved",
+        ).length,
+      };
+    } finally {
+      await runtime?.close();
+      db.close();
+    }
+  },
+
   /** Reads and answers a head-written card through N-1's codec, UI rules and ledger. */
   askUser: async (step) => {
     const { createSessionEngine } = await n1("@volli/session-engine");

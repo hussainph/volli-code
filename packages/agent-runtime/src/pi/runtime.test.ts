@@ -60,6 +60,7 @@ import {
   type RuntimeObservation,
   type RuntimeVerbCall,
   type SessionRuntimeSpec,
+  type SessionInteractionResolution,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { attachRefreshableCatalog, piDevCatalogSource, PiFileModelsStore } from "./model-catalog";
@@ -2102,6 +2103,151 @@ describe("asking the driver", () => {
     const serialized = JSON.stringify(answered?.messages);
     expect(serialized).toContain("Chose: spike");
     expect(serialized).toContain("and time-box it to a day");
+  });
+
+  it("preserves redacted saved tool results while rebuilding recovery context", async () => {
+    const definition = batchDefinition("fixture", "saved_output");
+    const attachment = fixture({
+      tools: { tools: ["read"], mcp: [definition] },
+      credentialRedaction: { redact: (text) => text.replaceAll("fixture-secret", "[redacted]") },
+      mcp: {
+        call: async () => ({
+          content: [{ type: "text", text: `${"output ".repeat(10_000)}fixture-secret` }],
+          isError: false,
+        }),
+      },
+    });
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall(definition.providerName, {});
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Saved output.");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("Read output");
+    const recovery = first.recovery!;
+    await first.close();
+    const entries = entryRecords(recovery.sessionFilePath);
+    const result = entries.find((entry) => {
+      const message = entry["message"] as { role?: string; toolName?: string } | undefined;
+      return message?.role === "toolResult" && message.toolName === definition.providerName;
+    })?.["message"] as { details: { output: { fullOutputPath: string } } };
+    const outputPath = result.details.output.fullOutputPath;
+    expect(readFileSync(outputPath, "utf8")).toContain("[redacted]");
+    expect(readFileSync(outputPath, "utf8")).not.toContain("fixture-secret");
+    const reopened = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: outputPath });
+            emit.finish();
+          },
+          (emit, context) => {
+            expect(JSON.stringify(context.messages)).toContain("output output");
+            emit.text("Read recovered output.");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({ ...attachment.spec, recovery });
+    await reopened.submitUserMessage("Read the saved output after restart");
+    await reopened.close();
+  });
+
+  it("persists one failed result for an ask whose wait was lost, without inventing an answer", async () => {
+    const asked = Promise.withResolvers<void>();
+    const attachment = fixture({
+      askUser: async (_request, signal) => {
+        asked.resolve();
+        return new Promise<SessionInteractionResolution>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("The question was withdrawn.")), {
+            once: true,
+          });
+        });
+      },
+    });
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("ask_user", { question: "Which scope?" });
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    const delivered = await first.submitUserMessage(
+      "Plan this",
+      "queue",
+      "before-crash",
+      [],
+      [],
+      "opened",
+    );
+    await asked.promise;
+    const recovery = first.recovery!;
+    const beforeCrash = readFileSync(recovery.sessionFilePath, "utf8");
+    await first.close();
+    writeFileSync(recovery.sessionFilePath, beforeCrash);
+
+    let context: Context | undefined;
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, request) => {
+            context = request;
+            emit.text("Continued without an answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({ ...attachment.spec, recovery });
+    expect((await second.reconcile(null)).receipts).toEqual([
+      {
+        commandId: "before-crash",
+        acceptedAt: delivered.kind === "delivered" ? delivered.acceptedAt : undefined,
+      },
+    ]);
+    await second.submitUserMessage("Continue without the decision");
+    expect(JSON.stringify(context?.messages)).toContain("Which scope?");
+    const results = context?.messages.filter(
+      (message) => message.role === "toolResult" && message.toolName === "ask_user",
+    );
+    expect(results).toEqual([
+      expect.objectContaining({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+          },
+        ],
+      }),
+    ]);
+    expect(JSON.stringify(results)).not.toContain("Chose:");
+    await second.close();
+
+    const third = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    }).startSession({ ...attachment.spec, recovery });
+    const repaired = entryRecords(recovery.sessionFilePath).filter((entry) => {
+      const message = entry["message"] as { role?: string; toolName?: string } | undefined;
+      return message?.role === "toolResult" && message.toolName === "ask_user";
+    });
+    expect(repaired).toHaveLength(1);
+    await third.close();
   });
 
   it("reaches the person through the frozen ask_user tool", async () => {
@@ -4580,9 +4726,15 @@ describe("startSession", () => {
     });
     const first = await runtime.startSession(attachment.spec);
     const accepted = await first.submitUserMessage("once", "queue", "command-once");
-    expect(accepted).toEqual({ kind: "delivered", delivery: "prompt", acceptedAt: expect.any(Number) });
+    expect(accepted).toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      acceptedAt: expect.any(Number),
+    });
     const acceptedAt = accepted.kind === "delivered" ? accepted.acceptedAt : undefined;
-    expect((await first.reconcile(null)).receipts).toEqual([{ commandId: "command-once", acceptedAt }]);
+    expect((await first.reconcile(null)).receipts).toEqual([
+      { commandId: "command-once", acceptedAt },
+    ]);
     expect(
       await first.submitUserMessage("once", "queue", "command-once", [], [], "opened"),
     ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false, acceptedAt });
@@ -4658,7 +4810,12 @@ describe("startSession", () => {
     allowCompletion.resolve();
     await first;
     await secondStarted.promise;
-    expect(await second).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true, acceptedAt: expect.any(Number) });
+    expect(await second).toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      turnOpened: true,
+      acceptedAt: expect.any(Number),
+    });
     expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
       "first-command",
       "second-command",
@@ -5683,7 +5840,11 @@ describe("startSession", () => {
     ).not.toContain("host-steer");
     release.resolve();
     await steerStarted.promise;
-    await expect(steer).resolves.toEqual({ kind: "delivered", delivery: "steer", acceptedAt: expect.any(Number) });
+    await expect(steer).resolves.toEqual({
+      kind: "delivered",
+      delivery: "steer",
+      acceptedAt: expect.any(Number),
+    });
     const reconciled = await handle.reconcile(null);
     expect(reconciled.receipts?.map(({ commandId }) => commandId)).toContain("host-steer");
     expect(entryRecords(handle.recovery!.sessionFilePath)).toContainEqual(
@@ -5710,6 +5871,7 @@ describe("startSession", () => {
       kind: "delivered",
       delivery: "steer",
       turnOpened: false,
+      acceptedAt: expect.any(Number),
     });
     await handle.close();
   });
@@ -5938,7 +6100,11 @@ describe("startSession", () => {
       ).resolves.toEqual({ kind: "delivered", delivery });
 
       allowCompletion.resolve();
-      await expect(first).resolves.toEqual({ kind: "delivered", delivery: "prompt", acceptedAt: expect.any(Number) });
+      await expect(first).resolves.toEqual({
+        kind: "delivered",
+        delivery: "prompt",
+        acceptedAt: expect.any(Number),
+      });
 
       expect(contexts).toHaveLength(2);
       expect(JSON.stringify(contexts[1]?.messages)).toContain("take another route");
@@ -6591,7 +6757,12 @@ describe("settling a submit on the turn opening (VC-324)", () => {
       "opened",
     );
 
-    expect(delivered).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true, acceptedAt: expect.any(Number) });
+    expect(delivered).toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      turnOpened: true,
+      acceptedAt: expect.any(Number),
+    });
     // The run is still going: the answer came back on `turn:started` alone.
     await running.promise;
     expect(kinds(observations)).toEqual(["attachment:started", "turn:started"]);
@@ -6641,7 +6812,12 @@ describe("settling a submit on the turn opening (VC-324)", () => {
 
     await expect(
       handle.submitUserMessage("go", "steer", "command-doomed", [], [], "opened"),
-    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true, acceptedAt: expect.any(Number) });
+    ).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      turnOpened: true,
+      acceptedAt: expect.any(Number),
+    });
 
     await raised.promise;
     expect(attentions(observations)).toEqual([
@@ -6709,7 +6885,12 @@ describe("settling a submit on the turn opening (VC-324)", () => {
 
     await expect(
       handle.submitUserMessage("first", "steer", "command-detached", [], [], "opened"),
-    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true, acceptedAt: expect.any(Number) });
+    ).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      turnOpened: true,
+      acceptedAt: expect.any(Number),
+    });
     await detachedFailed.promise;
     await runEnded.promise;
     await new Promise((resolve) => setTimeout(resolve, 0));

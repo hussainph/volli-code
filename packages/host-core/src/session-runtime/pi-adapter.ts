@@ -1481,7 +1481,12 @@ class PiBinding implements BindingHandle {
         command.targetTurnId,
       );
       return outcome.kind === "delivered"
-        ? this.#accepted(command.commandId, outcome.delivery, outcome.turnOpened, outcome.acceptedAt)
+        ? this.#accepted(
+            command.commandId,
+            outcome.delivery,
+            outcome.turnOpened,
+            outcome.acceptedAt,
+          )
         : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
     } catch (error) {
       // The prompt reached Pi and something after it failed. "Unknown" is the

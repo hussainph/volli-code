@@ -1935,14 +1935,20 @@ async function attachSession(
         role: "toolResult",
         toolCallId,
         toolName: "ask_user",
-        content: [{ type: "text", text: "The question was abandoned when the runtime restarted. No answer was obtained." }],
+        content: [
+          {
+            type: "text",
+            text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+          },
+        ],
         isError: true,
         timestamp: host.now(),
       };
       const entryId = await mainBranch.appendMessage(message, attachContext);
       const entry = await sidecar.getEntry(entryId, attachContext);
       /* v8 ignore next -- appendMessage promises the message entry it returned. */
-      if (entry?.type !== "message") throw new Error("Pi question recovery result was not persisted.");
+      if (entry?.type !== "message")
+        throw new Error("Pi question recovery result was not persisted.");
       recoveredPath.push(entry);
     }
     const recoveredCompaction = recoveredPath.findLast((entry) => entry.type === "compaction");
@@ -3509,7 +3515,12 @@ async function attachSession(
         const accepted =
           commandId === undefined ? undefined : acceptedMessageCommands.get(commandId);
         if (accepted !== undefined)
-          return { kind: "delivered", delivery: accepted, turnOpened: false, ...acceptanceTime(commandId) };
+          return {
+            kind: "delivered",
+            delivery: accepted,
+            turnOpened: false,
+            ...acceptanceTime(commandId),
+          };
         // Host queue release waits for durable acceptance, not Pi's volatile
         // followUp array. Projected turn end arrives while agent_end observers
         // are still awaited; wait out that closing window before prompting.
@@ -3632,7 +3643,12 @@ async function attachSession(
           if (failed !== undefined) {
             throw failed;
           }
-          return { kind: "delivered", delivery: "prompt", turnOpened: opening.opened, ...acceptanceTime(commandId) };
+          return {
+            kind: "delivered",
+            delivery: "prompt",
+            turnOpened: opening.opened,
+            ...acceptanceTime(commandId),
+          };
         }
         await run();
         const failed = consumeRunFailure();
@@ -3743,7 +3759,9 @@ async function attachSession(
         await settleRun();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
-        return outcome.kind === "delivered" ? { ...outcome, ...acceptanceTime(commandId) } : outcome;
+        return outcome.kind === "delivered"
+          ? { ...outcome, ...acceptanceTime(commandId) }
+          : outcome;
       },
 
       /**
