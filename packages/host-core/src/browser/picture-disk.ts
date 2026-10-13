@@ -21,13 +21,26 @@
  * check here is a second lock on the same door, the way `blobRelPath` refuses
  * anything that is not a hash.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
-import type {
-  BrowserPictureMime,
-  BrowserPicturePersistence,
-  BrowserPictureRecord,
+import {
+  BROWSER_PICTURE_CHUNK_BYTES,
+  type BrowserPictureMime,
+  type BrowserPicturePersistence,
+  type BrowserPictureRecord,
 } from "./picture-store";
 
 /** The only shape a file name here may take; shared with the trace disk, which is the same door. */
@@ -37,6 +50,9 @@ const UUID = BROWSER_FILE_ID;
 const EXTENSION: Record<BrowserPictureMime, string> = {
   "image/jpeg": "jpg",
   "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/bmp": "bmp",
 };
 
 /** The pictures directory under a given Electron `userData` path. */
@@ -61,7 +77,8 @@ function readRecord(root: string, name: string): BrowserPictureRecord | null {
       typeof record["tabId"] !== "string" ||
       typeof record["generation"] !== "number" ||
       typeof record["capturedAt"] !== "number" ||
-      (mime !== "image/jpeg" && mime !== "image/png")
+      typeof mime !== "string" ||
+      !Object.hasOwn(EXTENSION, mime)
     ) {
       return null;
     }
@@ -72,7 +89,7 @@ function readRecord(root: string, name: string): BrowserPictureRecord | null {
       generation: record["generation"],
       capturedAt: record["capturedAt"],
       ownerSessionId: typeof owner === "string" ? owner : null,
-      mime,
+      mime: mime as BrowserPictureMime,
     };
   } catch {
     return null;
@@ -92,6 +109,37 @@ export function browserPictureDisk(root: string): BrowserPicturePersistence {
       for (const mime of Object.keys(EXTENSION) as BrowserPictureMime[]) {
         const path = join(root, `${id}.${EXTENSION[mime]}`);
         if (existsSync(path)) return { bytes: readFileSync(path), mime };
+      }
+      return null;
+    },
+    readChunk(id, offset) {
+      if (!UUID.test(id) || !Number.isSafeInteger(offset) || offset < 0 || offset % 3 !== 0)
+        return null;
+      for (const mime of Object.keys(EXTENSION) as BrowserPictureMime[]) {
+        let fd: number | undefined;
+        try {
+          // Validate the opened inode, not a path checked before open; never follow a
+          // leaf symlink or block the host on a FIFO/device in the pictures directory.
+          fd = openSync(
+            join(root, `${id}.${EXTENSION[mime]}`),
+            constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+          );
+          const stat = fstatSync(fd);
+          if (!stat.isFile() || offset >= stat.size) return null;
+          const bytes = Buffer.alloc(Math.min(BROWSER_PICTURE_CHUNK_BYTES, stat.size - offset));
+          let filled = 0;
+          while (filled < bytes.length) {
+            const count = readSync(fd, bytes, filled, bytes.length - filled, offset + filled);
+            // A concurrent truncation is unavailable, never padded/corrupt image data.
+            if (count === 0) return null;
+            filled += count;
+          }
+          return { bytes, byteLength: stat.size };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
+        } finally {
+          if (fd !== undefined) closeSync(fd);
+        }
       }
       return null;
     },

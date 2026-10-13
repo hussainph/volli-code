@@ -83,6 +83,7 @@ import {
   isConfirmCause,
   isCredentialConfirmCause,
   DEFAULT_INTERACTION_PROMPT_ID,
+  promptId,
   errorMessage,
   isMcpToolId,
   readSkillResources,
@@ -211,6 +212,8 @@ interface PiRuntimeContextFields {
   toolSurface: readonly SessionToolId[];
   /** Absent on historical sessions: rebind their original mcp_* wire spelling. */
   mcpManagementNames?: "server";
+  /** Absent on historical Sessions, whose single-question declaration stays unchanged. */
+  askUserQuestions?: true;
   /** Sanitized MCP definitions frozen beside their dynamic names. */
   mcpTools?: readonly McpToolDefinition[];
   /** Code Mode's frozen routes and limits, present exactly when `toolSurface` names `codemode` (VC-471). */
@@ -512,6 +515,7 @@ export interface PiAdapterOptions {
    * bundled (VC-471). Decides nothing about which Sessions have Code Mode.
    */
   codeModeSandbox?: PiRuntimeHostOptions["codeModeSandbox"];
+  persistActivityImage?: PiRuntimeHostOptions["persistActivityImage"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -719,6 +723,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
     ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
+    ...(options.persistActivityImage === undefined
+      ? {}
+      : { persistActivityImage: options.persistActivityImage }),
   });
 
   return {
@@ -1137,6 +1144,9 @@ class PiBinding implements BindingHandle {
         ...(context.mcpManagementNames === undefined
           ? {}
           : { mcpManagementNames: context.mcpManagementNames }),
+        ...(context.askUserQuestions === undefined
+          ? {}
+          : { askUserQuestions: context.askUserQuestions }),
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
         ...(wantsCodeMode ? { codeMode: context.codeMode! } : {}),
       },
@@ -1574,11 +1584,32 @@ class PiBinding implements BindingHandle {
       label: option.label,
       description: option.description ?? null,
     }));
-    const multiple = request.multiple === true;
-    // A closed question with nothing to choose between asks for an answer that
-    // cannot be given, so the model's `false` is overruled exactly there rather
-    // than opening a card no press can ever satisfy.
-    const custom = options.length === 0 || request.allowOther !== false;
+    const prompts =
+      request.questions === undefined
+        ? [
+            {
+              id: DEFAULT_INTERACTION_PROMPT_ID,
+              label: request.question,
+              detail: null,
+              options,
+              multiple: request.multiple === true,
+              // Preserve historical calls, including the closed prose-only override.
+              custom: options.length === 0 || request.allowOther !== false,
+            },
+          ]
+        : request.questions.map((question, index) => ({
+            id: promptId(index),
+            label: question.question,
+            detail: null,
+            options: question.choices.map((choice, choiceIndex) => ({
+              id: `choice:${choiceIndex}`,
+              label: choice,
+              description: null,
+            })),
+            multiple: false,
+            custom: true,
+          }));
+    const first = prompts[0]!;
     await this.#observe({
       kind: "interaction",
       state: "opened",
@@ -1586,20 +1617,11 @@ class PiBinding implements BindingHandle {
       interaction: {
         id: interactionId,
         kind: "question",
-        title: request.question,
+        title: first.label,
         detail: null,
-        options,
-        multiple,
-        prompts: [
-          {
-            id: DEFAULT_INTERACTION_PROMPT_ID,
-            label: request.question,
-            detail: null,
-            options,
-            multiple,
-            custom,
-          },
-        ],
+        options: first.options,
+        multiple: first.multiple,
+        prompts,
         native: this.#native,
       },
     });

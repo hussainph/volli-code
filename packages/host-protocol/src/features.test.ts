@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { REFUSING_CREDENTIAL_VERIFIER } from "./credentials";
 import {
   HOST_BASE_OPERATIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
   HOST_V1_FEATURES,
   hostOffersSignIns,
@@ -30,6 +31,7 @@ describe("the v1 feature table", () => {
       "host.logs": ["logs.tail", "logs.follow"],
       "sessions.subscribe": ["session.subscribe"],
       "sessions.history": ["session.history"],
+      "sessions.pictures": ["session.picture"],
       "session.read": ["session.list", "session.show", "session.peek", "session.answer"],
       "board.read": [
         "board.snapshot",
@@ -108,6 +110,7 @@ describe("the v1 feature table", () => {
       "host.logs",
       "sessions.subscribe",
       "sessions.history",
+      "sessions.pictures",
       "session.read",
       "board.read",
       "board.write",
@@ -128,6 +131,7 @@ describe("the v1 feature table", () => {
 
   it("grants the base set plus the granted features' operations, and nothing for unknown names", () => {
     expect([...operationsGrantedBy([])]).toStrictEqual(["protocol.welcome"]);
+    expect([...operationsGrantedBy([], "host")]).toStrictEqual([...HOST_SCOPE_BASE_OPERATIONS]);
     expect([
       ...operationsGrantedBy(["sessions.subscribe", "toString", "from-the-future"]),
     ]).toStrictEqual(["protocol.welcome", "session.subscribe"]);

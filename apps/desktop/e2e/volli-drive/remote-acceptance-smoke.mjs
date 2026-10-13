@@ -67,15 +67,13 @@ async function action(kind, role, name, extra = {}, options = {}) {
 const click = (role, name, options) => action("click", role, name, {}, options);
 const type = (name, text) => action("type", "textbox", name, { text });
 async function selectProceed() {
-  // Native radios are visually hidden beneath their label's custom disc.
-  // Space selects the real focused input without bypassing pointer checks.
+  // Space activates the focused question row without submitting the card.
   const selected = await action("press", "radio", "Proceed", { key: "Space" });
   assert.match(controls(selected.text, "radio", "Proceed")[0] ?? "", /\[checked\]/u);
 }
 async function submitProceed(question) {
-  await click("button", "Submit", { scope: { role: "form", name: question } });
-  // This fixture's declared Stop draws a verdict card. Its receipt is the
-  // durable transcript row, not the ask-user card's transient Sent line.
+  await click("button", "Answer", { scope: { role: "form", name: question } });
+  // The proof is the durable transcript row, not the card's transient receipt.
   await waitUntil(
     `durable Proceed receipt for ${question}`,
     async () => visibleAnswerReceipt((await snap()).text, question, "Proceed"),

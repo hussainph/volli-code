@@ -23,7 +23,7 @@ A Session with Code Mode has one extra tool, `codemode`. The model decides when
 to use it. It pays off when one step needs many calls whose raw results are
 mostly thrown away:
 
-- a loop of shell commands or file reads, keeping only what matches;
+- a loop of file reads, keeping only what matches;
 - the same check across many files;
 - several Browser Tabs or pages handled the same way;
 - starting several Sessions and watching them.
@@ -38,15 +38,24 @@ A program runs in a sandbox that starts fresh for every run. It can only call
 the tools its Session already has, and nothing else:
 
 - It has no file system, network, process, environment, timers or modules.
-  To read a file it calls `read`; to run a command it calls `bash`.
+  To read a file it calls `read`; commands use a direct `bash` call, outside
+  the program.
 - Every call it makes is checked exactly as if the model had made it directly,
   as the same Session. [Workspace and host-API boundaries](/guides/authority/)
   and budgets still apply. A budget question or existing confirmation pauses
   the program until you answer, and only one question is open at a time.
-- It cannot call a few tools at all: asking you a question, the todo list,
-  background shells, Browser screenshots, and taking or releasing a Browser
-  Tab's hold. The model calls those directly.
-- No image enters or leaves a program.
+- It can call every tool its Session holds except `bash`, `ask_user`,
+  `request_secret`, `todo_write`, and the background shells (`shell_start`,
+  `shell_output`, `shell_kill`). It cannot call `codemode` itself. Browser
+  screenshots and tab holds, Session controls, Automations and MCP management
+  are callable when the Session holds them.
+- Images from nested calls become opaque handles; their bytes stay outside
+  the sandbox. A program can pass a handle to `image(handle)` or include it
+  in its returned value. Images appear after the text, with their source and
+  trust notice, in both the model's tool result and the chat card. One run
+  keeps at most 8 images and 16 MiB of base64 image data; the result names
+  anything left out. Saved pictures use the screenshot store's existing
+  400-picture, 30-day retention limit; an expired picture is named as unavailable.
 - Each run is limited to 200 calls, 5 minutes of running time (time spent
   waiting for your answer does not count), and about 20 KB of output. Longer
   output is shortened, and the full text is saved where the Session can read
@@ -65,7 +74,7 @@ Each model gets a mode chosen from Volli's measurements of that model:
 | --- | --- |
 | **Off** | No `codemode` tool, except to reach a very large MCP server (see below). |
 | **Both** | `codemode` beside every normal tool. The model chooses per step. |
-| **Only** | Tools a program can call are reached only through `codemode`. Tool groups that include something a program cannot call, such as the Browser, stay available directly. This sends the model the fewest tool definitions. |
+| **Only** | Whole callable tool groups, such as web and small MCP servers, are reached through `codemode`. Groups containing a direct-only tool stay available directly too; the coding group includes `bash`. Browser and newly callable control groups also stay declared for older-build compatibility. |
 
 Claude Haiku and Claude Sonnet use **Both** by default. Every other model,
 including Claude Opus, GPT and GLM models, uses **Off**: in Volli's
@@ -83,7 +92,9 @@ very long, would otherwise add thousands of tokens to every request a Session
 sends. When Code Mode is on, such a server's tools are not sent to the model
 directly, whatever the model's mode. The model sees the server's name and how
 many tools it has, and a program searches for the tools it needs and calls
-them. This applies even to models whose mode is **Off**.
+them. This applies even to models whose mode is **Off**. When such a Session has
+`codemode`, its other callable tools are available from programs too, without
+removing their direct tools.
 
 ## Turn Code Mode off
 
@@ -97,5 +108,8 @@ modes are kept for when you turn it back on.
 <Aside type="note">
   A Session keeps the tools it was created with. Changing Code Mode, or a
   model's mode, affects only Sessions created afterwards; an existing Session
-  keeps working exactly as it began.
+  keeps working exactly as it began. Older Sessions can still call `bash` from
+  programs if their frozen routes allowed it; new Sessions cannot. Image
+  handles are available to Sessions created with Volli 0.2.2 or newer; older
+  Sessions retain their original image-omission behavior.
 </Aside>

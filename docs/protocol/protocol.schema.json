@@ -113,6 +113,9 @@
       "session.listing",
       "session.listingForTicket"
     ],
+    "sessions.pictures": [
+      "session.picture"
+    ],
     "sessions.queue": [
       "session.cancelQueued",
       "session.editQueued",
@@ -20536,6 +20539,83 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "session.picture": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "offset": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "multipleOf": 3,
+              "type": "integer"
+            },
+            "pictureId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sessionId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sessionId",
+            "pictureId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "anyOf": [
+                {
+                  "maxLength": 262144,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mimeType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "nextOffset": {
+              "anyOf": [
+                {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "data",
+            "mimeType",
+            "nextOffset"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "session.projection": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -37200,6 +37280,9 @@
                     "environment"
                   ],
                   "type": "string"
+                },
+                "visible": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -37256,6 +37339,9 @@
                     "environment"
                   ],
                   "type": "string"
+                },
+                "visible": {
+                  "type": "boolean"
                 }
               },
               "required": [

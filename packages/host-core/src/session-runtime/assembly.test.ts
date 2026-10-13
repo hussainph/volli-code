@@ -24,7 +24,10 @@ import * as pi from "./pi-adapter";
 import * as runtime from "./index";
 import * as browser from "../browser/agent-port";
 import type { BrowserBackend } from "../browser/backend";
-import { DEFAULT_CODE_MODE_POLICY } from "@volli/shared";
+import { DEFAULT_CODE_MODE_POLICY, decodeSessionEventPayload } from "@volli/shared";
+import { insertProject } from "../db/projects-repo";
+import { testProject } from "../db/test-helpers";
+import { createRuntimeContextResolver } from "./context";
 
 let core: LiveHostCore | undefined;
 let root: string;
@@ -194,6 +197,20 @@ describe("runtime attachment assembly", () => {
     },
   );
 
+  it("binds the shared bounded screenshot sink even on a headless host, and recovers its pictures", async () => {
+    const options = await fixture();
+    const first = createRuntimeAssembly(options);
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    const data = Buffer.alloc(50_000, 201).toString("base64");
+    const id = native.persistActivityImage!("session", { data, mimeType: "image/png" })!;
+    expect(first.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
+    const second = createRuntimeAssembly(options);
+    expect(second.pictures.dataUrl(id)).toBe(`data:image/png;base64,${data}`);
+    expect(createRuntimeAssembly({ ...options, pictures: second.pictures }).pictures).toBe(
+      second.pictures,
+    );
+  });
+
   it("binds the supplied browser before any recovery/attachment can run", async () => {
     const options = await fixture();
     // Only the factory's construction input is under test; it must not drive the engine.
@@ -220,6 +237,113 @@ describe("runtime attachment assembly", () => {
     expect(assembled.sessionToolSurface?.resolve("subagent", [])).toContain("browser_find");
     await assembled.sessionRuntime?.close();
   });
+
+  it.each([true, false])(
+    "freezes the ask_user declaration at new birth only when present (host capability %s)",
+    async (askUser) => {
+      const options = await fixture();
+      const engine = live().sessionEngine;
+      const db = live().database.db;
+      insertProject(db, testProject({ id: "project", path: root }));
+      const provenance = {
+        source: { kind: "system", id: "test", detail: null },
+        venue: options.venue,
+      } as const;
+      const { session } = await engine.createSession({
+        commandId: "birth",
+        projectId: "project",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+        provenance,
+      });
+      await engine.submit({
+        commandId: "model",
+        sessionId: session.id,
+        intent: {
+          kind: "model.select",
+          selection: { providerId: "scripted", modelId: "test", reasoningLevel: "off" },
+        },
+        provenance,
+      });
+      const assembled = createRuntimeAssembly({ ...options, askUser });
+      try {
+        const surface = assembled.sessionToolSurface!;
+        const tools = surface.resolve("project", []);
+        expect(tools.includes("ask_user")).toBe(askUser);
+        await surface.record(session.id, tools);
+        // Read the actual persisted JSON through the codec, not a mocked engine.
+        const rows = db
+          .prepare("SELECT payload FROM session_events WHERE session_id = ? ORDER BY sequence")
+          .all(session.id) as { payload: string }[];
+        const frozen = rows
+          .map(({ payload }) => decodeSessionEventPayload(JSON.parse(payload), "stored"))
+          .find(
+            (payload) =>
+              payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface",
+          );
+        expect(frozen).toMatchObject({
+          kind: "session.input.recorded",
+          input: { kind: "tool-surface", tools },
+        });
+        if (askUser) expect(frozen).toHaveProperty("input.askUserQuestions", true);
+        else expect(frozen).not.toHaveProperty("input.askUserQuestions");
+        const context = createRuntimeContextResolver({
+          db,
+          sessionEngine: engine,
+          venue: options.venue,
+          mcpDispatch: options.mcpDispatch,
+          waitForBirth: async () => {},
+          toolSurface: () => {
+            throw new Error("reattach must not resolve today's surface");
+          },
+        });
+        const attached = await context(session.id);
+        expect(attached?.toolSurface).toEqual(tools);
+        if (askUser) expect(attached).toHaveProperty("askUserQuestions", true);
+        else expect(attached).not.toHaveProperty("askUserQuestions");
+        // A record predating this marker wins even if today's birth writer is called.
+        const old = await engine.createSession({
+          commandId: "old-birth",
+          projectId: "project",
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: null,
+          provenance,
+        });
+        const oldInput = { kind: "tool-surface", tools: ["read", "ask_user"] } as const;
+        await engine.getOrRecordSessionInput({
+          sessionId: old.session.id,
+          input: oldInput,
+          provenance,
+        });
+        await surface.record(old.session.id, tools);
+        expect(
+          await engine.getOrRecordSessionInput({
+            sessionId: old.session.id,
+            input: oldInput,
+            provenance,
+          }),
+        ).toEqual(oldInput);
+        await engine.submit({
+          commandId: "old-model",
+          sessionId: old.session.id,
+          intent: {
+            kind: "model.select",
+            selection: { providerId: "scripted", modelId: "test", reasoningLevel: "off" },
+          },
+          provenance,
+        });
+        const oldAttach = await context(old.session.id);
+        expect(oldAttach?.toolSurface).toEqual(oldInput.tools);
+        expect(oldAttach).not.toHaveProperty("askUserQuestions");
+      } finally {
+        await assembled.sessionRuntime?.close();
+      }
+    },
+  );
 
   it("keeps an unavailable database inert instead of constructing an executor", async () => {
     const options = await fixture();

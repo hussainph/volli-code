@@ -18,6 +18,8 @@ import {
   toolGroupOf,
   type CodeModeSurface,
 } from "./code-mode";
+import { CAPABILITY_TOOL_IDS } from "./authority";
+import { VERB_TOOL_KEYS } from "./verb-registry";
 import { mcpProviderToolName, type McpToolDefinition } from "./mcp";
 
 const mcp = (toolName: string): McpToolDefinition => ({
@@ -48,22 +50,23 @@ describe("routes", () => {
     expect(isToolRoute(3)).toBe(false);
   });
 
-  it("keeps a person's question, the todo list, shells, screenshots and holds direct", () => {
+  it("keeps bash, questions, the todo list and shells direct at birth", () => {
     for (const tool of [
+      "execute",
       "ask_user",
+      "request_secret",
       "todo_write",
       "shell_start",
       "shell_output",
       "shell_kill",
-      "browser_screenshot",
-      "browser_acquire",
-      "browser_release",
     ] as const) {
       expect(defaultToolRoute(tool)).toBe("direct");
     }
     for (const tool of [
       "read",
-      "execute",
+      "browser_screenshot",
+      "browser_acquire",
+      "browser_release",
       "edit",
       "write",
       "web_fetch",
@@ -73,12 +76,12 @@ describe("routes", () => {
     }
   });
 
-  it("lets a program start, delegate and watch Sessions, and nothing else of the agent-control family", () => {
+  it("makes every held verb callable at birth", () => {
     for (const verb of ["session.start", "session.delegate", "watch", "mcp.list"] as const) {
       expect(defaultToolRoute(verb)).toBe("both");
     }
     for (const verb of ["session.stop", "session.send", "automation.run", "mcp.install"] as const) {
-      expect(defaultToolRoute(verb)).toBe("direct");
+      expect(defaultToolRoute(verb)).toBe("both");
     }
   });
 
@@ -90,15 +93,89 @@ describe("routes", () => {
 });
 
 describe("isCodeCallable", () => {
-  it("holds a damaged record to the rules: no direct-only tool, unlisted verb or codemode in a program", () => {
+  it("holds a damaged record to the rules: no safety-excluded tool or codemode in a program", () => {
     expect(isCodeCallable("read", "both")).toBe(true);
     expect(isCodeCallable("read", "direct")).toBe(false);
     expect(isCodeCallable("shell_start", "code")).toBe(false);
     expect(isCodeCallable("ask_user", "both")).toBe(false);
     expect(isCodeCallable("session.start", "code")).toBe(true);
-    expect(isCodeCallable("mcp.install", "both")).toBe(false);
+    expect(isCodeCallable("mcp.install", "both")).toBe(true);
     expect(isCodeCallable("codemode", "both")).toBe(false);
     expect(isCodeCallable(mcp("search").providerName, "deferred")).toBe(true);
+  });
+});
+
+const safetyExcluded = [
+  "ask_user",
+  "request_secret",
+  "todo_write",
+  "shell_start",
+  "shell_output",
+  "shell_kill",
+] as const;
+const previouslyCallableVerbs = new Set(["session.start", "session.delegate", "watch", "mcp.list"]);
+const previouslyDirect = new Set<string>([
+  "browser_screenshot",
+  "browser_acquire",
+  "browser_release",
+  ...safetyExcluded,
+]);
+const toolsAtBirth = [...CAPABILITY_TOOL_IDS, ...VERB_TOOL_KEYS];
+
+// Independent copy of the N−1 rule, not today's production predicate.
+function oldCallable(tool: string): boolean {
+  return (CAPABILITY_TOOL_IDS as readonly string[]).includes(tool)
+    ? !previouslyDirect.has(tool) && tool !== "codemode"
+    : previouslyCallableVerbs.has(tool);
+}
+
+describe("route compatibility matrix", () => {
+  for (const mode of ["off", "both", "only"] as const) {
+    it(`${mode}: new records keep every N−1-refused tool declared, and groups whole`, () => {
+      const surface = codeModeSurfaceFor({ tools: toolsAtBirth, mode });
+      const groups = new Map<string, boolean[]>();
+      for (const [tool, route] of Object.entries(surface.routes)) {
+        if (!oldCallable(tool)) expect(isDeclaredRoute(route), tool).toBe(true);
+        expect(isCodeCallable(tool, route), tool).toBe(
+          tool !== "execute" && !safetyExcluded.includes(tool as never),
+        );
+        const group = toolGroupOf(tool);
+        groups.set(group, [...(groups.get(group) ?? []), isDeclaredRoute(route)]);
+      }
+      for (const declared of groups.values()) expect(new Set(declared).size).toBe(1);
+    });
+
+    it(`${mode}: a legacy record retains its routes and callable set on read`, () => {
+      const mixed = new Set(
+        toolsAtBirth.filter((tool) => !oldCallable(tool)).map((tool) => toolGroupOf(tool)),
+      );
+      const routes = Object.fromEntries(
+        toolsAtBirth
+          .filter((tool) => tool !== "codemode")
+          .map((tool) => [
+            tool,
+            mode === "off" || !oldCallable(tool)
+              ? "direct"
+              : mode === "only" && !mixed.has(toolGroupOf(tool))
+                ? "code"
+                : "both",
+          ]),
+      );
+      const legacy = { routes, limits: DEFAULT_CODE_MODE_LIMITS, mode };
+      const read = parseCodeModeSurface(legacy, toolsAtBirth);
+      expect(read).toEqual(legacy);
+      for (const [tool, route] of Object.entries(read.routes)) {
+        expect(isCodeCallable(tool, route), tool).toBe(mode !== "off" && oldCallable(tool));
+      }
+    });
+  }
+
+  it("keeps legacy bash callable on both/code and safety exclusions refused on every route", () => {
+    for (const route of TOOL_ROUTES) {
+      expect(isCodeCallable("execute", route)).toBe(isCodeCallableRoute(route));
+      for (const tool of [...safetyExcluded, "codemode"])
+        expect(isCodeCallable(tool, route), tool).toBe(false);
+    }
   });
 });
 
@@ -121,7 +198,7 @@ describe("codeModeSurfaceFor", () => {
     expect(surface.routes).toEqual({
       read: "both",
       ask_user: "direct",
-      "session.stop": "direct",
+      "session.stop": "both",
       [search.providerName]: "deferred",
       [fetch.providerName]: "both",
     });
@@ -146,25 +223,27 @@ describe("codeModeSurfaceFor", () => {
     const only = codeModeSurfaceFor({ tools, mcpTools: [search], mode: "only" });
     expect(only.mode).toBe("only");
     expect(only.routes).toEqual({
-      read: "code",
-      execute: "code",
+      read: "both",
+      execute: "direct",
       web_fetch: "code",
-      // The Browser keeps its screenshot declared, so the whole group stays.
+      // N−1 cannot call screenshots, so the whole Browser stays declared.
       browser_snapshot: "both",
-      browser_screenshot: "direct",
+      browser_screenshot: "both",
       ask_user: "direct",
       // A Ticket Session's agent group is all callable, so it goes whole.
       "session.delegate": "code",
       watch: "code",
       [search.providerName]: "code",
     });
-    // In a Board Session the same verbs sit beside `session.stop`, which stays.
+    // N−1 cannot call `session.stop`, so the agent group stays whole.
     expect(
       codeModeSurfaceFor({ tools: ["session.start", "session.stop", "codemode"], mode: "only" })
         .routes,
-    ).toEqual({ "session.start": "both", "session.stop": "direct" });
+    ).toEqual({ "session.start": "both", "session.stop": "both" });
     const off = codeModeSurfaceFor({ tools, mcpTools: [search], mode: "off" });
-    expect(Object.values(off.routes).every((route) => route === "direct")).toBe(true);
+    expect(off.routes.execute).toBe("direct");
+    expect(off.routes.read).toBe("both");
+    expect(off.routes[search.providerName]).toBe("both");
     expect(codeModeSurfaceFor({ tools, mode: "both" }).routes["read"]).toBe("both");
     expect(codeModeSurfaceFor({ tools, mode: "both", nudge: true }).nudge).toBe(true);
     expect(codeModeSurfaceFor({ tools, mode: "both", nudge: false })).not.toHaveProperty("nudge");
@@ -217,6 +296,14 @@ describe("parseCodeModeSurface", () => {
 
   it("reads back a record that routes exactly its surface, with its mode when it has one", () => {
     expect(parseCodeModeSurface(good, tools)).toEqual(good);
+    expect(codeModeSurfaceFor({ tools: ["read", "codemode"] }).descriptionVersion).toBe(2);
+    expect(parseCodeModeSurface({ ...good, descriptionVersion: 2 }, tools)).toEqual({
+      ...good,
+      descriptionVersion: 2,
+    });
+    expect(() => parseCodeModeSurface({ ...good, descriptionVersion: 3 }, tools)).toThrow(
+      "descriptionVersion is 2 or absent",
+    );
     expect(parseCodeModeSurface({ ...good, mode: "only" }, tools)).toEqual({
       ...good,
       mode: "only",

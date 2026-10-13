@@ -221,6 +221,11 @@ const COMPACTION_WORK_REASON_VALUES: readonly CompactionWorkReason[] = PI_COMPAC
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
   sessionDataDir: string;
+  /** Code Mode transcript pictures use the host's bounded screenshot store. */
+  persistActivityImage?: (
+    sessionId: string,
+    image: { data: string; mimeType: string },
+  ) => string | null;
   /**
    * The Pi model collection this host runs on.
    *
@@ -345,6 +350,7 @@ export interface PiRuntimeHostOptions {
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
+  persistActivityImage: PiRuntimeHostOptions["persistActivityImage"];
   /** One bound across every attachment's saved tool output (VC-469). */
   toolOutputLedger: ToolOutputLedger;
   parallelMcpReads: boolean;
@@ -403,6 +409,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
+    persistActivityImage: options.persistActivityImage,
     toolOutputLedger: new ToolOutputLedger({ dataDirectory: options.sessionDataDir }),
     parallelMcpReads: options.parallelMcpReads === true,
     codeModeSandbox: options.codeModeSandbox,
@@ -3168,13 +3175,22 @@ async function attachSession(
       const observedAt = host.now();
       const retained = activityByToolCallId.get(event.toolCallId);
       const startedAt = retained?.startedAt ?? observedAt;
+      const persistActivityImage = host.persistActivityImage;
       const activity = mapPiActivity(
         event,
-        event.type === "tool_execution_end"
-          ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
-          : event.type === "tool_execution_start"
-            ? { turnId, observedAt }
-            : { turnId, startedAt, observedAt },
+        {
+          ...(event.type === "tool_execution_end"
+            ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
+            : event.type === "tool_execution_start"
+              ? { turnId, observedAt }
+              : { turnId, startedAt, observedAt }),
+          ...(persistActivityImage === undefined
+            ? {}
+            : {
+                persistImage: (image: { data: string; mimeType: string }) =>
+                  persistActivityImage(spec.identity.sessionId, image),
+              }),
+        },
         credentialRedaction,
       );
 
