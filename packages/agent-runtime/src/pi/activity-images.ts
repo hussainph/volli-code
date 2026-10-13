@@ -11,6 +11,12 @@ export function projectCodeModePictures(
   if (typeof output !== "object" || output === null || Array.isArray(output)) return output;
   const record = output as Record<string, unknown>;
   if (!Array.isArray(record.content)) return output;
+  const details = record.details;
+  const captions =
+    typeof details === "object" && details !== null && !Array.isArray(details)
+      ? (details as Record<string, unknown>).imageCaptions
+      : undefined;
+  let imageIndex = 0;
   let count = 0;
   let bytes = 0;
   const content: unknown[] = [];
@@ -24,6 +30,10 @@ export function projectCodeModePictures(
       content.push(block);
       continue;
     }
+    // Only the host's aligned details array can authorize a caption. Neither
+    // program text nor a tool-returned image's own caption establishes framing.
+    const caption = Array.isArray(captions) ? captions[imageIndex] : undefined;
+    imageIndex += 1;
     let picture: string | null = null;
     let reason = "picture storage is unavailable";
     if (
@@ -67,6 +77,12 @@ export function projectCodeModePictures(
           ? image.mimeType
           : null,
       picture,
+      ...(imageIndex <= MCP_RESULT_MAX_IMAGES &&
+      typeof caption === "string" &&
+      caption.length > 0 &&
+      caption.length <= 1024
+        ? { caption }
+        : {}),
     });
   }
   if (record.content.length > 64)

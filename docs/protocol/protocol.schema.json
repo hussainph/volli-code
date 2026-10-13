@@ -16156,10 +16156,6 @@
                                       "codeMode": {
                                         "additionalProperties": false,
                                         "properties": {
-                                          "descriptionVersion": {
-                                            "const": 2,
-                                            "type": "number"
-                                          },
                                           "limits": {
                                             "additionalProperties": false,
                                             "properties": {
@@ -24121,10 +24117,6 @@
                                       "codeMode": {
                                         "additionalProperties": false,
                                         "properties": {
-                                          "descriptionVersion": {
-                                            "const": 2,
-                                            "type": "number"
-                                          },
                                           "limits": {
                                             "additionalProperties": false,
                                             "properties": {
@@ -29973,10 +29965,6 @@
                                     "codeMode": {
                                       "additionalProperties": false,
                                       "properties": {
-                                        "descriptionVersion": {
-                                          "const": 2,
-                                          "type": "number"
-                                        },
                                         "limits": {
                                           "additionalProperties": false,
                                           "properties": {
@@ -34045,10 +34033,6 @@
                                     "codeMode": {
                                       "additionalProperties": false,
                                       "properties": {
-                                        "descriptionVersion": {
-                                          "const": 2,
-                                          "type": "number"
-                                        },
                                         "limits": {
                                           "additionalProperties": false,
                                           "properties": {

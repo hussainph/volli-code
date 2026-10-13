@@ -251,7 +251,7 @@ function commandRouter(schema: z.ZodType | undefined): AppRouter {
   } as unknown as AppRouter;
 }
 
-it("preserves the additive Code Mode description generation on wire output", () => {
+it("keeps Code Mode's host-only description generation off wire output", () => {
   for (const generation of [undefined, 2] as const) {
     const input = frame({
       kind: "session.input.recorded",
@@ -266,6 +266,7 @@ it("preserves the additive Code Mode description generation on wire output", () 
       },
     });
     expect(frameSchema.parse(input)).toEqual(input);
+    expect(JSON.stringify(input)).not.toContain("descriptionVersion");
   }
 });
 

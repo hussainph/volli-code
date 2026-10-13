@@ -156,6 +156,8 @@ export interface CodeModeDetails {
   /** Untrusted tools the run called, by name; present when the output was enveloped. */
   untrusted?: string[];
   output?: ToolOutputCut;
+  /** Host-authored framing, aligned with the emitted images; never program output. */
+  imageCaptions?: string[];
 }
 
 /**
@@ -164,8 +166,11 @@ export interface CodeModeDetails {
  */
 const NODE_API =
   /\b(?:require|process|fs|__dirname|fetch|setTimeout|setInterval|Buffer|module) is not defined/u;
-const NODE_API_HINT =
-  "A program has no Node APIs, network or timers: read files with `await tools.read({ path })`, list and search them with `await tools.bash({ command })`, and reach everything else through `tools`.";
+function nodeApiHint(bashCallable: boolean): string {
+  return bashCallable
+    ? "A program has no Node APIs, network or timers: read files with `await tools.read({ path })`, list and search them with `await tools.bash({ command })`, and reach everything else through `tools`."
+    : "A program has no Node APIs, network or timers: reach the Session's callable tools through `tools`, and find and describe them with `searchTools()` and `describeTool()`.";
+}
 
 /**
  * The most program output the host is sent, in characters — printed output,
@@ -544,6 +549,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       // A remembered answer from an untrusted source is still one.
       if (remembered.untrusted === true) markUntrusted(tool.name);
       images.restore(remembered.images ?? []);
+      omittedImages += remembered.omittedImages ?? 0;
       replayed += 1;
       return deliver(remembered.outcome);
     }
@@ -564,6 +570,8 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     const signal = AbortSignal.any([callSignal, run.signal]);
     const shared = input.overlapping.has(tool.name);
     await host.observe({ type: "tool_execution_start", toolCallId: id, toolName: tool.name, args });
+    // Volli configures no Pi beforeToolCall/afterToolCall hooks today. If any
+    // are added, they must be mirrored here so nested calls use the same door.
     const call = () =>
       runToolCall(
         { type: "toolCall", id, name: tool.name, arguments: (args ?? {}) as JsonObject },
@@ -602,6 +610,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       isError: outcome.isError,
     });
     const captured: string[] = [];
+    let captureOmissions = 0;
     const shaped = shapeResult(
       input.kinds.get(tool.name)!,
       outcome.result,
@@ -612,8 +621,10 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
           `${tool.name} (call ${position})`,
           input.untrustedSources.has(tool.name),
         );
-        if (handle === undefined) omittedImages += 1;
-        else captured.push(handle.handle);
+        if (handle === undefined) {
+          captureOmissions += 1;
+          omittedImages += 1;
+        } else captured.push(handle.handle);
         return handle;
       },
       host.surface.descriptionVersion === undefined,
@@ -639,6 +650,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
       argumentsDigest,
       outcome: shaped,
       images: captured.map((handle) => images.held.get(handle)!),
+      ...(captureOmissions > 0 ? { omittedImages: captureOmissions } : {}),
       ...(savedOutput || input.untrustedSources.has(tool.name) ? { untrusted: true } : {}),
     });
     return deliver(shaped);
@@ -745,6 +757,7 @@ async function runProgram(input: RunInput): Promise<AgentToolResult<CodeModeDeta
     result,
     images,
     omittedImages,
+    bashCallable: input.names.has("bash"),
     legacy: host.surface.descriptionVersion === undefined,
     stopped,
     records,
@@ -839,6 +852,7 @@ async function assemble(input: {
   result: CodemodeResult;
   images: RunImages;
   omittedImages: number;
+  bashCallable: boolean;
   legacy: boolean;
   stopped: RunStop | undefined;
   records: readonly CallRecord[];
@@ -873,7 +887,7 @@ async function assemble(input: {
         ? `Program error: ${result.error.stack ?? result.error.message}`
         : `Program stopped: ${result.error.message}`,
     );
-    if (NODE_API.test(result.error.message)) body.push(NODE_API_HINT);
+    if (NODE_API.test(result.error.message)) body.push(nodeApiHint(input.bashCallable));
   }
   let text = body.join("\n");
   const details: CodeModeDetails = {
@@ -884,6 +898,7 @@ async function assemble(input: {
     nestedCalls: nestedCalls(input.records),
     replayedCalls: input.replayed,
     peakConcurrency: input.peak,
+    ...(emitted.captions.length > 0 ? { imageCaptions: emitted.captions } : {}),
   };
   const cut = cutMiddle(text, input.maxOutputBytes);
   if (cut !== null) {

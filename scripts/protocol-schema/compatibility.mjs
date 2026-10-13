@@ -146,13 +146,9 @@ export function schemaChanges(before, after, path = "", direction = "input", con
       else changes.push(...compare(oldSchema, after[keyword][key], at));
     }
   }
-  // Closed oneOf may gain optional fields inside its EXISTING alternatives
-  // only when unchanged required discriminators still prove disjointness.
-  // Variant/vocabulary growth remains exclusive to explicitly open outputs.
-  if (
-    !same(before.oneOf, after.oneOf) &&
-    !closedUnionPropertyAdditions(before.oneOf, after.oneOf, state)
-  ) {
+  // oneOf is closed by default: additions may make an old value match TWO
+  // branches. Only explicitly tolerant output unions get a disjointness proof.
+  if (!same(before.oneOf, after.oneOf)) {
     const discriminator = before[openUnionMarker];
     const open =
       direction === "output" &&
@@ -207,9 +203,7 @@ export function schemaChanges(before, after, path = "", direction = "input", con
         fail(`${path}/anyOf`, "output union alternative added or widened");
       }
       for (const [index, branch] of newBranches.entries()) {
-        const match = compatibleChanges(oldBranches, (old) =>
-          optionalPropertyAdditions(old, branch, state) ? [] : compare(old, branch, path),
-        );
+        const match = compatibleChanges(oldBranches, (old) => compare(old, branch, path));
         if (!match) fail(`${path}/anyOf/${index}`, "output union alternative added or widened");
         else changes.push(...match);
       }
@@ -253,104 +247,6 @@ export function schemaChanges(before, after, path = "", direction = "input", con
     }
   }
   return changes;
-}
-
-/** A deliberately narrower relation than schemaChanges: existing assertions
- * stay equal, modulo annotations/ref labels, and only optional object fields
- * may be added. Never use general compatibility to justify a closed XOR edit.
- */
-function optionalPropertyAdditions(before, after, state, ancestors = []) {
-  before = resolveLocalRef(before, state.roots[0], state.caches[0]);
-  after = resolveLocalRef(after, state.roots[1], state.caches[1]);
-  if (resolvedEqual(before, after, state)) return true;
-  if (!object(before) || !object(after)) return false;
-  if (ancestors.some(([old, next]) => old === before && next === after)) return true;
-  const visited = [...ancestors, [before, after]];
-  const compare = (old, next) => optionalPropertyAdditions(old, next, state, visited);
-  const oldKeys = assertionKeys(before, "schema");
-  if (!isDeepStrictEqual(oldKeys, assertionKeys(after, "schema"))) return false;
-  return oldKeys.every((key) => {
-    if (key === "properties") {
-      if (!object(before.properties) || !object(after.properties)) return false;
-      const oldProperties = Object.keys(before.properties);
-      const added = Object.keys(after.properties).filter((name) => !oldProperties.includes(name));
-      if (
-        added.length &&
-        (before.type !== "object" ||
-          after.type !== "object" ||
-          // A named field may shadow (and widen) an existing catchall. Keep
-          // schema-valued catchalls closed to this optional-addition proof.
-          object(before.additionalProperties) ||
-          added.some((name) => list(after.required).includes(name)))
-      )
-        return false;
-      return oldProperties.every(
-        (name) =>
-          Object.hasOwn(after.properties, name) &&
-          compare(before.properties[name], after.properties[name]),
-      );
-    }
-    if (key === "oneOf")
-      return closedUnionPropertyAdditions(before.oneOf, after.oneOf, state, visited);
-    if (key === "anyOf") {
-      // OR wrappers (including nullable schemas) keep a one-to-one pairing;
-      // no new branch, reusable match, or scalar widening is earned here.
-      if (
-        !Array.isArray(before.anyOf) ||
-        !Array.isArray(after.anyOf) ||
-        before.anyOf.length !== after.anyOf.length
-      )
-        return false;
-      const remaining = [...after.anyOf];
-      return before.anyOf.every((branch) => {
-        const index = remaining.findIndex((next) => compare(branch, next));
-        if (index < 0) return false;
-        remaining.splice(index, 1);
-        return true;
-      });
-    }
-    if (key === "items" || key === "additionalProperties") return compare(before[key], after[key]);
-    // Maps and literal values are not schema nodes; retain their field names
-    // and wire data exactly, rather than treating them as annotations.
-    return resolvedEqual(
-      before[key],
-      after[key],
-      state,
-      [],
-      key === "enum" || key === "const" ? "literal" : schemaMaps.has(key) ? "map" : "schema",
-    );
-  });
-}
-
-/** Same alternatives and same finite tag sets, disjoint in BOTH documents.
- * Unlike the open-union policy, any required string discriminator can prove
- * this structural edit safe; it earns no new discriminator values or variants.
- */
-function closedUnionPropertyAdditions(before, after, state, ancestors = []) {
-  if (resolvedEqual(before, after, state)) return true;
-  if (
-    !Array.isArray(before) ||
-    !Array.isArray(after) ||
-    before.length !== after.length ||
-    !before.length
-  )
-    return false;
-  const first = resolveLocalRef(before[0], state.roots[0], state.caches[0]);
-  if (!object(first)) return false;
-  return list(first.required).some((discriminator) => {
-    const oldVariants = unionVariants(before, discriminator, state, 0);
-    const newVariants = unionVariants(after, discriminator, state, 1);
-    if (!oldVariants || !newVariants) return false;
-    return oldVariants.every((variant) => {
-      const next = newVariants.find(({ values }) =>
-        isDeepStrictEqual(variant.values.toSorted(), values.toSorted()),
-      );
-      return (
-        next !== undefined &&
-        optionalPropertyAdditions(variant.branch, next.branch, state, ancestors)
-      );
-    });
-  });
 }
 
 function compatibleChanges(candidates, compare) {

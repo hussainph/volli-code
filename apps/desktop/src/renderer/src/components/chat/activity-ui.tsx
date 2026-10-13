@@ -704,12 +704,17 @@ function CodeModeOutput({ input, content }: { input: unknown; content: CodeModeC
       )}
       {content.map((block, index) =>
         block.type === "text" ? (
-          // Keep each source/trust line in its original position before its image.
-          // This is tool output, never Markdown or executable page content.
-          // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate blocks are valid.
-          <DetailFrame key={index} className="whitespace-pre-wrap text-muted-foreground">
-            {block.text}
-          </DetailFrame>
+          // Suppress only framing equal to a structurally bound host caption.
+          // The mapper may insert an N−1 fallback between the framing and image.
+          content
+            .slice(index + 1, index + 3)
+            .some((next) => next.type === "image" && next.caption === block.text) ? null : (
+            // Program text remains plain output, even when it mimics host framing.
+            // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate blocks are valid.
+            <DetailFrame key={index} className="whitespace-pre-wrap text-muted-foreground">
+              {block.text}
+            </DetailFrame>
+          )
         ) : (
           // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate images are valid.
           <CodeModeImage key={index} block={block} />
@@ -728,12 +733,17 @@ function CodeModeImage({ block }: { block: Extract<CodeModeContent, { type: "ima
   );
   const dataUrl = codeModeImageDataUrl(block);
   return (
-    <div className="my-1">
+    <figure className="my-1">
       <BrowserPicture
         alt="Image returned by Code Mode"
         state={dataUrl === null ? picture : { kind: "ready", dataUrl }}
       />
-    </div>
+      {block.caption === undefined ? null : (
+        <figcaption className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
+          {block.caption}
+        </figcaption>
+      )}
+    </figure>
   );
 }
 

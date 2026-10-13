@@ -4,7 +4,7 @@ import { activityDescriptor } from "@volli/session-presentation";
 
 export type CodeModeContent =
   | { type: "text"; text: string }
-  | { type: "image"; data?: unknown; mimeType?: unknown; picture?: unknown };
+  | { type: "image"; data?: unknown; mimeType?: unknown; picture?: unknown; caption?: string };
 
 /** Read committed content, not CodeModeDetails or a live nested tool's card. */
 export function codeModeImageContent(part: DynamicToolUIPart): CodeModeContent[] | null {
@@ -27,6 +27,11 @@ export function codeModeImageContent(part: DynamicToolUIPart): CodeModeContent[]
         data: block.data,
         mimeType: block.mimeType,
         ...(Object.hasOwn(block, "picture") ? { picture: block.picture } : {}),
+        ...(typeof block.caption === "string" &&
+        block.caption.length > 0 &&
+        block.caption.length <= 1024
+          ? { caption: block.caption }
+          : {}),
       });
     }
   }

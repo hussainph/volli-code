@@ -577,6 +577,9 @@ function normalizeCodeModeOutput(
         type: "image",
         mimeType: cleanPayloadText(block.mimeType) ?? null,
         picture: cleanPayloadText(block.picture)?.slice(0, MAX_ACTIVITY_IDENTIFIER_LENGTH) ?? null,
+        ...(typeof block.caption === "string"
+          ? { caption: cleanPayloadText(block.caption) ?? "" }
+          : {}),
       });
     } else if (block?.type === "text") {
       const text = cleanPayloadText(block.text);

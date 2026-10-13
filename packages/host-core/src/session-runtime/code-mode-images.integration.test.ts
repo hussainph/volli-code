@@ -233,11 +233,24 @@ function expectSameContent(
   pictures: BrowserPictureStore,
 ) {
   expect(output).toMatchObject({ content: expect.any(Array) });
-  const actual = (
+  const content = (
     output as {
-      content: Array<{ type: string; text?: string; picture?: string; mimeType?: string }>;
+      content: Array<{
+        type: string;
+        text?: string;
+        picture?: string;
+        mimeType?: string;
+        caption?: string;
+      }>;
     }
-  ).content
+  ).content;
+  const expectedCaptions = expected.flatMap((block, index) =>
+    block.type === "image" ? [expected[index - 1]?.text] : [],
+  );
+  expect(content.filter((block) => block.type === "image").map((block) => block.caption)).toEqual(
+    expectedCaptions,
+  );
+  const actual = content
     .filter((block) => !(block.type === "text" && block.text?.startsWith("Code Mode image saved.")))
     .map((block) => {
       if (block.type !== "image") return block;
@@ -284,6 +297,7 @@ describe("deferred MCP Code Mode images (VC-748)", () => {
             name: "codemode",
             args: {
               code: `
+                text("Image from read (call 2) (Session workspace content).");
                 const result = await tools.${f.screenshot.providerName}({});
                 const picture = result.images[0];
                 if (result.omittedImages !== 0 || picture.type !== "image" ||

@@ -2907,7 +2907,12 @@ describe("startSession", () => {
       expect(activity).toMatchObject({
         output: {
           content: expect.arrayContaining([
-            { type: "image", mimeType: "image/png", picture: "runtime-picture" },
+            {
+              type: "image",
+              mimeType: "image/png",
+              picture: "runtime-picture",
+              caption: "Image from read (call 1) (Session workspace content).",
+            },
           ]),
         },
       });

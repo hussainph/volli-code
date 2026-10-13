@@ -60,6 +60,8 @@ export interface JournaledCall {
   untrusted?: true;
   /** Host-side payloads count toward the existing journal byte cap. */
   images?: readonly HeldImage[];
+  /** Images refused at capture for this call; absent in older records means zero. */
+  omittedImages?: number;
 }
 
 /** One unfinished program's record. */
@@ -129,6 +131,7 @@ export function remember(
     outcome: ShapedOutcome;
     untrusted?: true;
     images?: readonly HeldImage[];
+    omittedImages?: number;
   },
 ): void {
   const size = Buffer.byteLength(JSON.stringify([call.outcome, call.images]), "utf8");

@@ -2102,3 +2102,48 @@ describe("the renderer-side parse", () => {
     });
   });
 });
+
+it("keeps Code Mode's birth description version durable but host-only", () => {
+  for (const descriptionVersion of [undefined, 2] as const) {
+    const payload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "codemode"],
+        codeMode: {
+          routes: { read: "both" },
+          limits: { ...DEFAULT_CODE_MODE_LIMITS },
+          ...(descriptionVersion === undefined ? {} : { descriptionVersion }),
+        },
+      },
+    } satisfies SessionEventPayload;
+    expect(decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "payload")).toEqual(
+      payload,
+    );
+    const safe = scrubSessionEventPayload(payload);
+    expect(safe).toEqual({
+      kind: "session.input.recorded",
+      input: {
+        ...payload.input,
+        codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+      },
+    });
+    expect(payload.input.codeMode?.descriptionVersion).toBe(descriptionVersion);
+    const event: SessionEvent = {
+      id: "surface-event",
+      sessionId: "session-1",
+      sequence: 1,
+      occurredAt: 1,
+      recordedAt: 1,
+      provenance,
+      payload,
+    };
+    // Even raw host JSON is scrubbed on renderer decoding; no mutation of
+    // the durable record or attach-time declaration generation is needed.
+    expect(parseRendererSessionEvent(JSON.parse(encodeSessionJson(event)), "event")).toEqual({
+      ok: true,
+      event: scrubSessionEvent(event),
+    });
+    expect(JSON.stringify(scrubSessionEvent(event))).not.toContain("descriptionVersion");
+  }
+});

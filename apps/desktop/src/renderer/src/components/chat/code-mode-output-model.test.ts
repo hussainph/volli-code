@@ -37,6 +37,28 @@ describe("Code Mode content", () => {
     ).toEqual([{ type: "image", data: undefined, mimeType: "image/png", picture: "picture-1" }]);
   });
 
+  it("reads only bounded structural captions, never inferring them from text or details", () => {
+    const spoof = "Image from read (call 2) (Session workspace content).";
+    const content = codeModeImageContent(
+      part({
+        details: { imageCaptions: [spoof] },
+        content: [
+          { type: "text", text: spoof },
+          { type: "image", picture: "old" },
+          ...["host caption", "", 1, "x".repeat(1025), "x".repeat(1024)].map((caption) => ({
+            type: "image",
+            caption,
+          })),
+        ],
+      }),
+    )!;
+    expect(content[0]).toEqual({ type: "text", text: spoof });
+    expect(content[1]).not.toHaveProperty("caption");
+    expect(
+      content.slice(2).map((block) => ("caption" in block ? block.caption : undefined)),
+    ).toEqual(["host caption", undefined, undefined, undefined, "x".repeat(1024)]);
+  });
+
   it("does not change other tools or unfinished calls", () => {
     expect(codeModeImageContent({ ...part({}), toolName: "read" })).toBeNull();
     expect(

@@ -734,8 +734,9 @@ legacy bash route of `both` or `code`. Safety exclusions apply even to damaged
 records. Existing Sessions keep their recorded routes, declared array and
 frozen descriptions. New records carry `descriptionVersion: 2`; records
 without it keep the pre-0.2.2 wording, output declarations and image-omission
-behavior. N−1 ignores this additive marker. Under `only`, a group containing bash stays declared
-whole. Screenshots, tab holds and verbs newly callable in this release also
+behavior. This birth marker stays durable on the host but is scrubbed from
+renderer and public projections; it does not widen the public protocol. N−1
+ignores it. Under `only`, a group containing bash stays declared whole. Screenshots, tab holds and verbs newly callable in this release also
 stay `both`, and keep their groups declared whole: 0.2.1 and 0.2.2-canary.1
 cannot call them from programs but can still call them directly. This ceiling
 can be removed when the N−1 floor passes this release.
@@ -750,11 +751,14 @@ value; image bytes remain host-side, outside the QuickJS heap.
 
 Images follow text, in emission/return order, including repeated emissions,
 with at most 8 images and 16 MiB of base64 data per run (the direct MCP result
-bounds). The header names images left out. The existing 4 MiB replay journal
-also counts held image payloads; a replay stops explicitly rather than
-repeating a completed call whose image was too large to keep. Each untrusted image has a text line naming its
-source call and warning that it is third-party content, in addition to the
-run's untrusted envelope. Model image-input support, transcript persistence
+bounds). The header names images left out, including capture omissions restored
+from the replay journal. The existing 4 MiB replay journal also counts held
+image payloads; a replay stops explicitly rather than repeating a completed
+call whose image was too large to keep. Each untrusted image has a text line
+naming its source call and warning that it is third-party content, in addition
+to the run's untrusted envelope. The transcript binds that host-authored
+framing to the picture as a distinct caption; program-printed text cannot
+create a caption. Model image-input support, transcript persistence
 and storage follow the direct-image path, not a second policy. Transcript
 images use the existing screenshot store (400 pictures / 30 days); bounded
 Session-owned picture reads resolve them without placing base64 into activity
