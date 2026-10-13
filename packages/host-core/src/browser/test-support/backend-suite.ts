@@ -723,21 +723,21 @@ export function describeBrowserBackendSuite(name: string, create: BackendFactory
 
     it("cleans a completed delegate without closing shown, personal or other-held tabs", async () => {
       const delegate = portFor("completed-delegate");
-      const open = async () =>
+      const openDelegateTab = async () =>
         await delegate.navigate({
           navigation: { kind: "url", url: fixture.url("/second") },
           signal: signal(),
         });
-      const released = await open();
+      const released = await openDelegateTab();
       await delegate.release({ tabId: released.tabId, signal: signal() });
-      const held = await open();
-      const preview = await open();
+      const held = await openDelegateTab();
+      const preview = await openDelegateTab();
       backend.setPresentation(preview.tabId, "preview");
-      const promoted = await open();
+      const promoted = await openDelegateTab();
       backend.setPresentation(promoted.tabId, "tab");
-      const personHeld = await open();
+      const personHeld = await openDelegateTab();
       backend.takeOver(personHeld.tabId);
-      const otherHeld = await open();
+      const otherHeld = await openDelegateTab();
       await delegate.release({ tabId: otherHeld.tabId, signal: signal() });
       backend.hold(otherHeld.tabId, { sessionId: "another-session", attachmentId: "another-a" });
       const personal = backend.open({
@@ -756,7 +756,7 @@ export function describeBrowserBackendSuite(name: string, create: BackendFactory
       for (const tab of [preview, promoted, personHeld, otherHeld, personal]) {
         expect(remaining).toContain(tab.tabId);
       }
-      const resumed = await open();
+      const resumed = await openDelegateTab();
       expect(backend.list({ projectId: PROJECT }).map((tab) => tab.tabId)).toContain(resumed.tabId);
       delegate.dispose();
       delegate.dispose();
