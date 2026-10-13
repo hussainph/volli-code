@@ -159,8 +159,8 @@ const OPTION_MARK =
  * Three things a wall of text taught this paragraph (VC-265):
  *
  *  - **The breaks a question was composed with are its paragraphs.** The ask
- *    is plain text off the wire — `ask_user`'s `question` becomes the title
- *    and the prompt's label verbatim — and a model that wrote it in
+ *    is plain text off the wire — each question becomes a prompt label
+ *    verbatim, and the first also titles the card — and a model that wrote it in
  *    paragraphs sent newlines between them. A bare `<p>` folded every one
  *    into a space, so the paragraphs read as one unbroken run. `pre-line`
  *    keeps the breaks without signing up for `pre-wrap`'s preserved

@@ -242,7 +242,7 @@ describe("the footer at the acceptance widths", () => {
       expect(actions?.className).not.toContain("shrink-0");
 
       // And the break stays BETWEEN controls: `ui/button.tsx`'s global
-      // `whitespace-nowrap` is what keeps `Send answer` from hyphenating, and
+      // `whitespace-nowrap` keeps the answer controls from hyphenating, and
       // this footer's fix was deliberately local so that rule could stand.
       for (const button of buttons) {
         expect(button.className).toContain("whitespace-nowrap");
