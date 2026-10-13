@@ -313,6 +313,9 @@ async function until(condition: () => boolean, what: string): Promise<void> {
   throw new Error(`Timed out waiting for ${what}`);
 }
 
+// Several real socket requests and refusal handshakes share CI's CPU with the
+// other packages. Bound this integration path separately, not its assertions
+// or the suite's default: a five-second cold-run budget was flaky on Linux.
 it("reads large saved transcript pictures over the real codec without oversized response frames", async () => {
   const bytes = Buffer.alloc(500_000, 199);
   const { listener } = await serve({
@@ -355,7 +358,7 @@ it("reads large saved transcript pictures over the real codec without oversized 
   await expect(
     legacy.client.session.picture.query({ sessionId: SESSION, pictureId: "picture" }),
   ).rejects.toThrow();
-});
+}, 15_000);
 
 describe("the handshake, before any procedure", () => {
   it.each([{ features: [] }, { features: ["host.logs", "sessions"] }])(
