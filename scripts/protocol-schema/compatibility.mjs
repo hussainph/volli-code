@@ -278,6 +278,9 @@ function optionalPropertyAdditions(before, after, state, ancestors = []) {
         added.length &&
         (before.type !== "object" ||
           after.type !== "object" ||
+          // A named field may shadow (and widen) an existing catchall. Keep
+          // schema-valued catchalls closed to this optional-addition proof.
+          object(before.additionalProperties) ||
           added.some((name) => list(after.required).includes(name)))
       )
         return false;

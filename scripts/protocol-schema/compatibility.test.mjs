@@ -1263,3 +1263,30 @@ test("envelope fields beside a frame's id may be added, never removed or narrowe
     { path: "/envelope/volliTrace/required", reason: "optional input field made required" },
   ]);
 });
+
+const catchallBranch = (kind) => ({
+  type: "object",
+  properties: { kind: { const: kind } },
+  required: ["kind"],
+  additionalProperties: { type: "string", maxLength: 1 },
+});
+
+test("optional fields cannot shadow a schema-valued catchall inside closed unions or OR wrappers", () => {
+  const before = { oneOf: [catchallBranch("a"), catchallBranch("b")] };
+  const after = structuredClone(before);
+  after.oneOf[0].properties.picture = { type: "string" };
+  // This new named field would admit a long string rejected by the old
+  // catchall. The unchanged discriminator is not a proof of that edit.
+  for (const direction of ["input", "output"]) {
+    assert.notDeepEqual(schemaChanges(before, after, "", direction), []);
+    assert.notDeepEqual(
+      schemaChanges(
+        { anyOf: [before, { type: "null" }] },
+        { anyOf: [after, { type: "null" }] },
+        "",
+        direction,
+      ),
+      [],
+    );
+  }
+});
