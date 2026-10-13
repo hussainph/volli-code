@@ -81,6 +81,7 @@ import type {
   RuntimeBrowserSnapshot,
 } from "@volli/shared";
 
+import { hostLogger } from "../log/root";
 import type { BrowserAgentCoordinator } from "./agent-coordinator";
 import {
   BrowserSessionTabLimitError,
@@ -96,6 +97,8 @@ import {
 import type { BrowserTabController, CdpTransport, TabCursorDriver } from "./cdp-controller";
 import { traced } from "./trace-steps";
 import type { BrowserTraceStepInput } from "./trace-store";
+
+const log = hostLogger("browser");
 
 /**
  * What the port asks of the host — the registry and navigation surface, as a
@@ -345,6 +348,31 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     options.host
       .list({ projectId: options.scope.projectId })
       .filter((tab) => tab.createdBy === "user" || ownedHere(tab));
+
+  const headlessOwned = (): string[] =>
+    visible()
+      .filter(
+        (tab) =>
+          tab.createdBy === "session" &&
+          tab.ownerSessionId === session.sessionId &&
+          tab.presentation === "headless",
+      )
+      .map((tab) => tab.tabId);
+
+  const closeCaptured = (tabId: string): void => {
+    try {
+      const closed = options.host.closeHeadlessOwnedBy(session.sessionId, [tabId]);
+      if (closed.length > 0) releaseWake(tabId);
+    } catch (error) {
+      // Automatic resource cleanup must not cost the delegate its answer or
+      // turn a queued native failure into an unreported rejection.
+      log.warn("headless Browser tab cleanup failed", {
+        sessionId: session.sessionId,
+        tabId,
+        error,
+      });
+    }
+  };
 
   const resolve = (tabId: string): BrowserTabState => {
     const tab = visible().find((candidate) => candidate.tabId === tabId);
@@ -675,18 +703,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
       if (lifetime.signal.aborted) return;
       // Capture now, before the completion observation can start another turn.
       // Never sweep the Session later: that would include a resumed turn's tabs.
-      const closing = new Set(
-        endingOptions?.closeHeadlessOwned === true
-          ? visible()
-              .filter(
-                (tab) =>
-                  tab.createdBy === "session" &&
-                  tab.ownerSessionId === session.sessionId &&
-                  tab.presentation === "headless",
-              )
-              .map((tab) => tab.tabId)
-          : [],
-      );
+      const closing = new Set(endingOptions?.closeHeadlessOwned === true ? headlessOwned() : []);
       const ending = new Set([...heldTabs, ...closing]);
       heldTabs.clear();
       for (const tabId of ending) {
@@ -695,15 +712,13 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         // while a key-up or mouse-up is still finishing.
         options.host.agentOperations.afterCurrent(tabId, () => {
           options.host.releaseHold(tabId, session, "turn-end");
-          if (closing.has(tabId)) {
-            const closed = options.host.closeHeadlessOwnedBy(session.sessionId, [tabId]);
-            if (closed.length > 0) releaseWake(tabId);
-          }
+          if (closing.has(tabId)) closeCaptured(tabId);
         });
       }
     },
     dispose: () => {
       if (lifetime.signal.aborted) return;
+      const closing = headlessOwned();
       lifetime.abort(new Error("The Browser port was disposed with its Session attachment"));
       heldTabs.clear();
       options.host.agentOperations.releaseOwner(owner, () => {
@@ -716,7 +731,9 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         // person or another attachment outlive this attachment. Completed
         // delegates may have already retired their unheld headless tabs.
         // After forgetSession, so this attachment's holds are already gone.
-        options.host.closeHeadlessOwnedBy(session.sessionId);
+        for (const tabId of closing) {
+          options.host.agentOperations.afterCurrent(tabId, () => closeCaptured(tabId));
+        }
       });
     },
   };

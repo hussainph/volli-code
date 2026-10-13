@@ -1135,7 +1135,7 @@ describe("Browser port concurrent calls and teardown", () => {
   );
 
   it("does not detach the debugger or end the attachment during active input cleanup", async () => {
-    const shared = fakeHost([state({ tabId: "one", createdBy: "user" })]);
+    const shared = fakeHost([state({ tabId: "one", createdBy: "session" })]);
     const release = Promise.withResolvers<void>();
     const disposed = vi.fn();
     let releaseStarted = false;
@@ -1181,6 +1181,57 @@ describe("Browser port concurrent calls and teardown", () => {
     await vi.waitFor(() => expect(disposed).toHaveBeenCalledTimes(1));
     expect(shared.ended).toEqual(["attachment-end:one", "forget:ses-me"]);
     expect(shared.closedHeadlessFor).toEqual([ME.sessionId]);
+  });
+
+  it("completion then disposal drains shared work and cannot sweep a later attachment's tabs", async () => {
+    const shared = fakeHost([state({ tabId: "old", createdBy: "session" })]);
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const events: string[] = [];
+    let snapshots = 0;
+    const make = (session: BrowserSessionHolder) =>
+      createAgentBrowserPort({
+        host: shared.host,
+        scope: { projectId: "p1", ticketId: null },
+        session,
+        transportFor: (tabId) => ({
+          send: async (method) => {
+            if (method === "Accessibility.getFullAXTree") {
+              snapshots += 1;
+              if (snapshots === 2) {
+                started.resolve();
+                await finish.promise;
+                events.push("work finished");
+              }
+              return BUTTON_TREE;
+            }
+            return {};
+          },
+          dispose: () => events.push(`destroy ${tabId}`),
+        }),
+        waitForLoad: async () => undefined,
+        holdAwake: () => () => undefined,
+      });
+    const old = make(ME);
+    const newer = make({ ...ME, attachmentId: "att-newer" });
+    await old.snapshot({ tabId: "old", signal });
+    const reading = newer.snapshot({ tabId: "old", signal });
+    await started.promise;
+    old.turnEnded({ closeHeadlessOwned: true });
+    old.dispose();
+    expect(events).toEqual([]);
+    expect(shared.tabs.has("old")).toBe(true);
+    const fresh = await newer.navigate({
+      navigation: { kind: "url", url: "https://example.com/resumed" },
+      signal,
+    });
+    await newer.release({ tabId: fresh.tabId, signal });
+    finish.resolve();
+    await reading;
+    await vi.waitFor(() => expect(shared.tabs.has("old")).toBe(false));
+    expect(events).toEqual(["work finished", "destroy old"]);
+    expect(shared.tabs.has(fresh.tabId)).toBe(true);
+    newer.dispose();
   });
 
   it("disposal withdraws readiness and prevents later calls resurrecting the port", async () => {

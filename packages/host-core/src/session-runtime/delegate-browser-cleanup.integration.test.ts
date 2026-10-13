@@ -25,6 +25,7 @@ import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { installHostLog } from "../log/root";
 import { createDelegations, DELEGATION_ID_SUFFIXES } from "./delegate-session";
 import type { DelegateSessionPorts } from "./delegate-session";
 import { createPiNativeAdapter } from "./pi-adapter";
@@ -43,6 +44,7 @@ function deferred() {
 // snapshot formatting are the actual shared browser implementation.
 class MemoryBrowser extends BrowserTabRegistry<BrowserTabRecord> {
   readonly closed: string[] = [];
+  closeFailure: Error | null = null;
   loadGate: ReturnType<typeof deferred> | null = null;
   #next = 0;
 
@@ -70,6 +72,7 @@ class MemoryBrowser extends BrowserTabRegistry<BrowserTabRecord> {
   }
 
   close(tabId: string): void {
+    if (this.closeFailure !== null) throw this.closeFailure;
     this.closed.push(tabId);
     this.forgetEntry(tabId, this.requireTab(tabId));
   }
@@ -327,6 +330,64 @@ function fixture(role: "project" | "ticket") {
 
 // No Electron or network: only the model replies and page wire are scripted.
 describe("completed delegate browser cleanup (VC-754)", () => {
+  it("records completion and the answer even when native tab cleanup throws", async () => {
+    const f = fixture("project");
+    const parent = await f.start({
+      operationId: "parent",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Parent",
+    });
+    const child = await f.start({
+      operationId: "child",
+      projectId: "project-1",
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: parent.sessionId,
+      title: "Helper",
+    });
+    f.replies.splice(0, f.replies.length, openPage("child"), { text: "Answer survives cleanup" });
+    const lines: string[] = [];
+    const undoLog = installHostLog({
+      level: "warn",
+      sink: { write: (_record, line) => lines.push(line) },
+    });
+    f.browser.closeFailure = new Error("native close failed");
+    try {
+      await f.submitSessionMessage({
+        sessionId: child.sessionId,
+        commandId: "child:first",
+        messageId: "child:first-message",
+        text: "Open a page",
+      });
+      const { projection } = await f.host.projection({ sessionId: child.sessionId });
+      expect(projection.lastTurnOutcome).toBe("completed");
+      expect(projection.liveExecutor?.status).toBe("open");
+      expect(f.browser.list({ projectId: "project-1" })).toMatchObject([
+        { ownerSessionId: child.sessionId, heldBy: null },
+      ]);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("headless Browser tab cleanup failed");
+      const answer = await readSessionAnswer(
+        {
+          listEvents: (query) => f.engine.listEvents(query),
+          readArtifact: (ref) => f.artifacts.read(ref),
+        },
+        { sessionId: child.sessionId },
+      );
+      expect(answer.text).toBe("Answer survives cleanup");
+      expect(
+        (await f.engine.listEvents({ sessionId: child.sessionId })).filter(
+          ({ payload }) => payload.kind === "turn.completed",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      f.browser.closeFailure = null;
+      undoLog();
+    }
+  });
+
   it.each(["project", "ticket"] as const)(
     "closes delegate pages with its attachment open, but retains %s pages",
     async (role) => {
