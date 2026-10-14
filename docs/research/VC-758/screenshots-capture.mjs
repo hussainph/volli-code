@@ -25,7 +25,7 @@ if (phase === 'before') {
 const browser = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
 const evidence = [];
 const states = ['sending', 'steering', 'queued', 'working', 'error'];
-if (phase === 'after') states.push('error-scrolled');
+if (phase === 'after') states.push('error-scrolled', 'accepted-streaming');
 try {
   for (const theme of ['light', 'dark']) {
     for (const state of states) {
@@ -71,13 +71,37 @@ try {
         checks.workingStatus = await root.getByRole('status').filter({ hasText: 'Working' }).count() > 0;
         assert.equal(checks.workingStatus, phase === 'after');
       }
+      if (state === 'accepted-streaming') {
+        const prompt = root.locator('.is-user');
+        const reply = root.locator('.is-assistant');
+        const working = root.getByRole('status').filter({ hasText: 'Working' });
+        const label = prompt.locator('[data-slot="message-delivery"]');
+        assert.equal(await prompt.count(), 1);
+        assert.equal(await label.innerText(), 'Delivered');
+        assert.equal(await working.count(), 1);
+        assert.equal(await reply.innerText(), 'I’m checking the release notes and tests.');
+        checks.deliveredWhileStreaming = true;
+        checks.noPending = !text.includes('Pending');
+        assert(checks.noPending);
+        const promptBox = await prompt.boundingBox();
+        const replyBox = await reply.boundingBox();
+        const workingBox = await working.boundingBox();
+        checks.acceptanceGeometry = { prompt: promptBox, reply: replyBox, working: workingBox };
+        checks.deliveredAboveReplyAndWorking = promptBox !== null && replyBox !== null && workingBox !== null
+          && promptBox.y + promptBox.height <= replyBox.y
+          && promptBox.y + promptBox.height <= workingBox.y;
+        assert(checks.deliveredAboveReplyAndWorking);
+        checks.allInViewport = [promptBox, replyBox, workingBox].every(box => box !== null
+          && box.y >= 0 && box.y + box.height <= 780);
+        assert(checks.allInViewport);
+      }
       if (phase === 'after') {
         const oldMessage = root.locator('.is-user').filter({ hasText: 'Check the release notes before we ship.' });
-        if (state !== 'sending' && await oldMessage.count() > 0) {
+        if (state !== 'sending' && state !== 'accepted-streaming' && await oldMessage.count() > 0) {
           checks.oldHistoryHasNoFooter = await oldMessage.locator('[data-slot="message-delivery"]').count() === 0;
           assert(checks.oldHistoryHasNoFooter);
         }
-        if (state === 'sending' || state === 'steering') {
+        if (state === 'sending' || state === 'steering' || state === 'accepted-streaming') {
           const label = root.locator('[data-slot="message-delivery"]');
           const geometry = await label.evaluate(node => {
             const labelBox = node.getBoundingClientRect();

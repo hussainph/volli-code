@@ -204,7 +204,10 @@ type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["m
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
 
 export type RendererSessionCommand =
-  | Pick<Extract<SessionClientCommand, { kind: "message.submit" }>, "kind" | "message" | "delivery">
+  | Pick<
+      Extract<SessionClientCommand, { kind: "message.submit" }>,
+      "kind" | "message" | "delivery" | "settle"
+    >
   | Extract<
       SessionClientCommand,
       | { kind: "session.stop" }
@@ -874,6 +877,9 @@ const commandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("message.submit"),
     message: uiMessageSchema,
     delivery: z.enum(["queue", "steer", "replace"]).optional(),
+    // Runtime-only wait boundary, not part of durable intent. Without this
+    // codec field the client asks for opening acceptance but waits for finish.
+    settle: z.enum(["turn", "opened"]).optional(),
     model: z.object({ providerId: nonEmptyString, modelId: nonEmptyString }).nullable().optional(),
     agent: nullableString.optional(),
     variant: nullableString.optional(),

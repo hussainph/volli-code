@@ -81,6 +81,12 @@ import { hasSecret, writeSecret } from "./secrets-repo";
 import { testProject } from "./test-helpers";
 import { recoveredPiQuestion } from "./fixtures/recovered-pi-question";
 import { listTicketsByProject } from "./tickets-repo";
+import {
+  silentEndSession,
+  FATAL_DIAGNOSTIC,
+  SILENT_END_MESSAGE,
+  type SilentEndScenario,
+} from "./fixtures/silent-end-session";
 
 interface N1Manifest {
   ref: string;
@@ -141,6 +147,9 @@ function releasePolicyRemedy(ref: string): string {
 const HOOKS = new URL("../../scripts/n1/hooks.mjs", import.meta.url).href;
 const CHILD = new URL("../../scripts/n1/child.mjs", import.meta.url).pathname;
 const CODE_MODE_CHILD = new URL("./fixtures/n1-code-mode-child.mjs", import.meta.url).pathname;
+const SILENT_END_CHILD = new URL("../../scripts/n1/silent-end-child.mjs", import.meta.url).pathname;
+const SILENT_END_SCENARIOS: SilentEndScenario[] = ["fatal attachment", "Stop racing finish"];
+const NEXT_SILENT_END_MESSAGE = "Continue after the silent end";
 const NOW = 1_791_100_000_000;
 const PROJECT_ID = "proj-n1";
 const provenance = { source: { kind: "user", id: "n", detail: null }, venue: null } as const;
@@ -465,6 +474,78 @@ async function headProfile(): Promise<void> {
   }
 }
 
+function countUser(messages: unknown, text: string): number {
+  return (messages as { role: string; parts?: unknown; content?: unknown }[]).filter(
+    (message) =>
+      message.role === "user" && JSON.stringify(message.parts ?? message.content).includes(text),
+  ).length;
+}
+
+async function headSilentEnd(scenario: SilentEndScenario) {
+  await headProfile();
+  const fixture = await silentEndSession({
+    root,
+    dbPath,
+    sessionId: "session-head",
+    projectId: PROJECT_ID,
+    scenario,
+  });
+  const payloads = fixture.events.map((event) => event.payload);
+  expect(fixture.snapshot.projection.turnActive).toBe(false);
+  expect(
+    payloads.filter(
+      (payload) =>
+        payload.kind === "command.receipt.recorded" &&
+        payload.receipt.commandId === "silent-head-message" &&
+        payload.receipt.status === "accepted",
+    ),
+  ).toHaveLength(1);
+  if (scenario === "fatal attachment") {
+    const attention = payloads.findIndex((payload) => payload.kind === "attention.raised");
+    const close = payloads.findIndex(
+      (payload) => payload.kind === "attachment.closed" && payload.outcome === "failed",
+    );
+    expect(attention).toBeGreaterThan(-1);
+    expect(close).toBeGreaterThan(attention);
+    expect(payloads[attention]).toMatchObject({ attention: { detail: FATAL_DIAGNOSTIC } });
+    // This is the specific failure sequence, not a substituted provider rejection.
+    expect(payloads.filter((payload) => payload.kind === "turn.interrupted")).toHaveLength(0);
+  } else {
+    expect(payloads.filter((payload) => payload.kind === "attention.raised")).toHaveLength(0);
+    expect(payloads.filter((payload) => payload.kind === "turn.interrupted")).toHaveLength(1);
+    expect(payloads.filter((payload) => payload.kind === "turn.completed")).toHaveLength(0);
+    // Check HEAD's real Pi marker and normal provider finish before handing bytes to N−1.
+    const records = fixture.sidecar
+      .trim()
+      .split("\n")
+      .flatMap((line) => {
+        const record: unknown = JSON.parse(line);
+        return Array.isArray(record) ? record : [record];
+      });
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        customType: "volli.observation.v1",
+        data: expect.objectContaining({ kind: "turn", state: "interrupted" }),
+      }),
+    );
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ role: "assistant", stopReason: "stop" }),
+      }),
+    );
+  }
+  return fixture;
+}
+
+// These fixture provenance checks also run without a prepared N−1, in the package lane.
+it.each(SILENT_END_SCENARIOS)(
+  "writes the real head %s fixture before teardown",
+  async (scenario) => {
+    await headSilentEnd(scenario);
+  },
+  30_000,
+);
+
 /**
  * A copy of the head profile as a crash leaves it: `write` commits into the
  * WAL and the copy is taken before any checkpoint, so the file at `target`
@@ -732,6 +813,75 @@ describe.skipIf(manifest === null)(
                 payload.receipt.commandId === "head-question-message",
             ),
           ).toHaveLength(1);
+        } finally {
+          read.close();
+        }
+      },
+    );
+
+    it.each(SILENT_END_SCENARIOS)(
+      "opens, attaches, replays and continues a head %s without duplicating or stranding a message",
+      async (scenario) => {
+        const fixture = await headSilentEnd(scenario);
+        const { head, guarded } = await probe();
+        if (guarded && headFloor() > head) return; // The refusal test owns a raised floor.
+        const run = await n1(
+          dbPath,
+          [
+            {
+              kind: "silentEnd",
+              sessionId: "session-head",
+              workspace: join(root, "repo"),
+              sessionDataDir: fixture.sessionDataDir,
+              transcriptsRoot: sessionTranscriptsRoot(root),
+              nextText: NEXT_SILENT_END_MESSAGE,
+              ...(scenario === "fatal attachment" ? { diagnostic: FATAL_DIAGNOSTIC } : {}),
+            },
+          ],
+          SILENT_END_CHILD,
+        );
+        const continued = value(run, 0);
+        expect(continued).toMatchObject({
+          userVersion: SCHEMA_HEAD,
+          attached: true,
+          replayIdle: true,
+          attachedIdle: true,
+          idleAfter: true,
+          coldIdle: true,
+          queueAfter: [],
+          continuity: scenario === "fatal attachment" ? "context_replay" : "native_resume",
+          firstStatus: "accepted",
+          retryStatus: "accepted",
+          attachCount: 1,
+          acceptedNext: 1,
+        });
+        if (scenario === "fatal attachment") expect(continued.namedFailure).toBe(true);
+        // Assert observable messages/context, NOT exact N−1 decoded events or sidecar shapes.
+        for (const key of ["replayMessages", "attachedMessages", "afterMessages", "coldMessages"]) {
+          expect(countUser(continued[key], SILENT_END_MESSAGE), key).toBe(1);
+        }
+        for (const key of ["afterMessages", "coldMessages"]) {
+          expect(countUser(continued[key], NEXT_SILENT_END_MESSAGE), key).toBe(1);
+        }
+        const requests = continued.providerRequests as unknown[][];
+        expect(requests).toHaveLength(1);
+        expect(countUser(requests[0], SILENT_END_MESSAGE)).toBe(1);
+        expect(countUser(requests[0], NEXT_SILENT_END_MESSAGE)).toBe(1);
+        expect(JSON.stringify(continued.coldMessages)).toContain("N−1 continued successfully");
+        assertHeadReads(dbPath);
+        const read = openVolliDb(dbPath);
+        try {
+          const events = await headEngine(read).listEvents({ sessionId: "session-head" });
+          for (const commandId of ["silent-head-message", "silent-n1-next"]) {
+            expect(
+              events.filter(
+                ({ payload }) =>
+                  payload.kind === "command.receipt.recorded" &&
+                  payload.receipt.commandId === commandId &&
+                  payload.receipt.status === "accepted",
+              ),
+            ).toHaveLength(1);
+          }
         } finally {
           read.close();
         }

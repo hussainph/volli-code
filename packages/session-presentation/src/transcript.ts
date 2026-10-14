@@ -133,7 +133,8 @@ export interface ChatTranscriptState {
   latestReply: SessionLatestReply | null;
   turnActive: boolean;
   /**
-   * How many turn boundaries this Session has crossed.
+   * How many turn boundaries this Session has crossed, including executor
+   * retirement that ends a turn without an explicit turn-ending event.
    *
    * `turnActive` alone cannot say that a turn happened, only that one is open
    * now, and a batch is not one frame: a turn that opens and closes inside a
@@ -282,7 +283,15 @@ export function appendFrames(
   let settled: Map<string, number> | null = null;
   for (const frame of fresh) {
     const kind = frame.event?.payload.kind;
-    if (kind === "turn.started" || kind === "turn.completed" || kind === "turn.interrupted") {
+    if (
+      kind === "turn.started" ||
+      kind === "turn.completed" ||
+      kind === "turn.interrupted" ||
+      kind === "attachment.closed" ||
+      kind === "attachment.failed"
+    ) {
+      // A fatal executor loss need not write turn.interrupted. It still ends
+      // the live turn, even when open and close arrive in the same batch.
       turnActive = kind === "turn.started";
       turnEpoch += 1;
     }

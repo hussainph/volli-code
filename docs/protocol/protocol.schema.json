@@ -13651,6 +13651,13 @@
                         }
                       ]
                     },
+                    "settle": {
+                      "enum": [
+                        "turn",
+                        "opened"
+                      ],
+                      "type": "string"
+                    },
                     "variant": {
                       "anyOf": [
                         {

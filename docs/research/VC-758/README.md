@@ -6,6 +6,10 @@ The desktop now draws a submitted message immediately, keeps Working visible abo
 
 `volli session peek` now carries existing failure/Attention, stop actor/reason, watchdog signal, queue ownership, and per-message delivery proof. The CLI prints those facts rather than guessing a cause from elapsed time or assistant prose. Reasons and queued message bodies are bounded/redacted by the host and quoted as untrusted prose in text output. No Session tool array, description, Code Mode record, model prompt, cloud flag, migration, or new ledger event kind changes.
 
+## Review fix round
+
+[PR #865 fix-round evidence](fixround.md) adds fatal-close live-turn retirement, prompt delivery at opening acceptance (before the reply finishes), and targeted real-runtime N−1 continuation fixtures. Both fixed downgrade promises, 0.2.1 and 0.2.2-canary.1, now have explicit CI lanes alongside rolling release/canary/base.
+
 ## Measured audit
 
 Baseline was worktree birth `c0cfd4577`. Main including VC-753 was merged before integrated checks. Detailed locations, reproductions, initial failures and commands are in `runtime-audit.md`, `renderer-audit.md`, and `cli-audit.md` beside this file. `H` below means the real Pi → adapter → SessionRuntime → engine → SQLite/artifact integration suite, `silent-ends.integration.test.ts`; provider replies and host ports are scripted, not real sign-ins or network providers.
@@ -40,7 +44,7 @@ Baseline was worktree birth `c0cfd4577`. Main including VC-753 was merged before
 - No database migration or new durable row/Attention/queue vocabulary. Runtime fixes write existing `attention.raised`, `attachment.closed`, and `turn.interrupted` shapes. 0.2.1 and canary.1–3 already understand these facts and their existing recovery/replay.
 - Optional local draft hints are ignored by older readers. Both old and current conservative hydration recover the same words, skills and files as unsent; no blind resend.
 - Optional output-only `afterCurrentStep: true` retains the existing queued/releasing state and complete payload. Older clients ignore the hint and retain their existing queue presentation rather than dropping a frame/message. New peek keys are additive; old CLIs ignore them.
-- Public protocol schema was regenerated, not hand-edited. No output enum was expanded. Additive gate and real JSON codec tests pass locally. Actual 0.2.1/canary binaries are exercised by CI, not claimed as a local check.
+- Public protocol schema was regenerated, not hand-edited. No output enum was expanded. Opening settlement reuses an existing command field. Additive gate and real JSON codec tests pass locally. Older-checkout and CI results for the targeted runtime-written fixtures are recorded in `n1-fixround.md` and `validation.md`; fixtures assert continuation behavior rather than version-specific decoded event shapes.
 
 ## Decisions to confirm
 

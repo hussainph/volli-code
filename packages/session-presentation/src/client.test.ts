@@ -2168,6 +2168,23 @@ describe("submit", () => {
     });
   }
 
+  it.each([undefined, "steer", "replace"] as const)(
+    "asks for opening acceptance for immediate delivery=%s",
+    async (delivery) => {
+      const { client, rpc } = await ready();
+      await expect(client.submit({ id: "ordinary", text: "go" }, delivery)).resolves.toBe(
+        "delivered",
+      );
+      expect(overTheWire(rpc.submissions()[0]!.command)).toMatchObject({ settle: "opened" });
+    },
+  );
+
+  it("leaves queued acceptance with the host, not opening settlement", async () => {
+    const { client, rpc } = await ready();
+    await client.submit({ id: "queued", text: "later" }, "queue");
+    expect(rpc.submissions()[0]!.command).not.toHaveProperty("settle");
+  });
+
   it("keeps model policy out of message commands", async () => {
     const { client, rpc, sessionId } = await ready();
 
@@ -2187,6 +2204,7 @@ describe("submit", () => {
             parts: [{ type: "text", text: "ship it" }],
           },
           delivery: "steer",
+          settle: "opened",
         },
       },
     ]);
@@ -2194,6 +2212,7 @@ describe("submit", () => {
       "delivery",
       "kind",
       "message",
+      "settle",
     ]);
   });
 

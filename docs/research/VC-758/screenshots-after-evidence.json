@@ -93,6 +93,46 @@
   },
   {
     "phase": "after",
+    "state": "accepted-streaming",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-accepted-streaming-light.png",
+    "text": "Check the release notes before we ship.\n\nDelivered\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Delivered\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "deliveredWhileStreaming": true,
+      "noPending": true,
+      "acceptanceGeometry": {
+        "prompt": {
+          "x": 214,
+          "y": 20,
+          "width": 672,
+          "height": 67.796875
+        },
+        "reply": {
+          "x": 214,
+          "y": 111.796875,
+          "width": 672,
+          "height": 23.796875
+        },
+        "working": {
+          "x": 214,
+          "y": 159.59375,
+          "width": 672,
+          "height": 28
+        }
+      },
+      "deliveredAboveReplyAndWorking": true,
+      "allInViewport": true,
+      "deliveryGeometry": {
+        "labelRight": 886,
+        "bubbleRight": 886
+      },
+      "deliveryRightAligned": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
     "state": "sending",
     "theme": "dark",
     "file": "docs/research/VC-758/screenshots/after-sending-dark.png",
@@ -180,6 +220,46 @@
       "faultHintVisible": true,
       "faultHintInViewport": true,
       "hintNavigatesToRecovery": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "accepted-streaming",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-accepted-streaming-dark.png",
+    "text": "Check the release notes before we ship.\n\nDelivered\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Delivered\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "deliveredWhileStreaming": true,
+      "noPending": true,
+      "acceptanceGeometry": {
+        "prompt": {
+          "x": 214,
+          "y": 20,
+          "width": 672,
+          "height": 67.796875
+        },
+        "reply": {
+          "x": 214,
+          "y": 111.796875,
+          "width": 672,
+          "height": 23.796875
+        },
+        "working": {
+          "x": 214,
+          "y": 159.59375,
+          "width": 672,
+          "height": 28
+        }
+      },
+      "deliveredAboveReplyAndWorking": true,
+      "allInViewport": true,
+      "deliveryGeometry": {
+        "labelRight": 886,
+        "bubbleRight": 886
+      },
+      "deliveryRightAligned": true
     },
     "errors": []
   }

@@ -203,11 +203,10 @@ export interface ChatSessionWrites {
    * The harness took a message — optimistically, and only while the stream has
    * said nothing since it left.
    *
-   * `turnEpoch` is the transcript's count at submit. Pi answers a
-   * `message.submit` when the turn it started has ALREADY ENDED (the runtime
-   * awaits `agent.prompt`), so an unconditional latch here re-opens a turn the
-   * stream has closed. An unchanged epoch is the one case
-   * where nothing has been heard and optimism is all there is.
+   * `turnEpoch` is the transcript's count at submit. Even an opening receipt
+   * can reach the client after a fast turn has already ended, so an
+   * unconditional latch here re-opens a turn the stream has closed. An unchanged
+   * epoch is the one case where nothing has been heard and optimism is all there is.
    */
   delivered(sessionId: string, turnEpoch: number): void;
   /** A failure, or `null` to clear one and hand the Session back to its stream. */
@@ -253,6 +252,7 @@ type ChatCommand =
       kind: "message.submit";
       message: UIMessage;
       delivery?: ChatMessageDelivery;
+      settle?: "opened";
     }
   | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.interrupt"; attachmentId?: string }
@@ -898,16 +898,21 @@ export class ChatSessionClient {
         kind: "message.submit",
         message: wireMessage,
         ...(delivery === undefined ? {} : { delivery }),
+        // Acceptance belongs to the opening boundary, not the end of Pi's
+        // reply. The receipt carries command identity; turn-event order does
+        // not. Queue acceptance/release and targeted steering consumption
+        // remain the host's responsibility.
+        ...(delivery === "queue" ? {} : { settle: "opened" }),
       };
       const deliveryResult = this.#rpc.session.command.mutate({
         commandId: message.id,
         sessionId: this.sessionId,
         command,
       });
-      // Pi answers an opening prompt only after its whole turn settles. Its
-      // subject is already known when this message starts, so the detached
-      // title write cannot wait on that answer: a steering message can resolve
-      // first and would otherwise name the Session instead of this prompt.
+      // The subject is already known when this message starts, so the
+      // detached title write cannot wait even on opening acceptance: a
+      // steering message can resolve first and would otherwise name the
+      // Session instead of this prompt.
       //
       // So the moment a Session gains a subject is the first message it STARTS
       // delivering, no longer the first one accepted (VC-180). Firing ahead of

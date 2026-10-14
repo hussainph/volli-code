@@ -66,3 +66,46 @@ The final real-Pi integration additionally serializes the actual `session.peek` 
 - Final cold lab compilation needed a longer navigation allowance; the visual owner reran successfully. No baseline image was overwritten.
 
 No OS-process crash, external MCP process fault, live provider/sign-in, SSH, keychain/security, Docker or local Electron run is claimed. Exact-head CI gate, CodeQL and N−1 binary results are recorded on the unmerged PR at handoff.
+
+## PR #865 review fix round
+
+See `fixround.md`, `n1-fixround.md` and `screenshots.md`. All focused test commands still use the Session concurrency hint (1).
+
+```sh
+# packages/session-presentation
+vp test run src/transcript.test.ts src/client.test.ts --coverage \
+  --coverage.include=src/transcript.ts --coverage.include=src/client.ts \
+  --maxWorkers="$VOLLI_CONCURRENCY_HINT"
+# 208 passed; both protected production files 100% on all four axes.
+
+# packages/session-rpc — direct index codec/stream/caller tests, not the package suite
+vp test run src/index.test.ts src/protocol-schema.test.ts src/session-reads.test.ts \
+  src/session-listing.test.ts src/session-stop.test.ts src/sign-ins.test.ts \
+  src/handler-projection.test.ts src/queue-websocket.test.ts \
+  src/websocket-server.test.ts src/output-schema.test.ts --coverage \
+  --coverage.include=src/index.ts --maxWorkers="$VOLLI_CONCURRENCY_HINT"
+# 359 passed; protected index.ts 100% on all four axes.
+
+# packages/host-core — real default-client/Pi acceptance plus existing recovery coverage
+vp test run src/session-runtime/silent-ends.integration.test.ts \
+  src/session-runtime/boot-recovery.test.ts --coverage \
+  --coverage.include=src/session-runtime/boot-recovery.ts \
+  --maxWorkers="$VOLLI_CONCURRENCY_HINT" --testTimeout=20000
+# 37 passed; boot-recovery.ts 100% on all four axes.
+
+# apps/desktop — mounted real acceptance/fatal-close regressions and existing window tests
+vp test run src/renderer/src/components/chat/chat-plane.window.test.tsx \
+  src/renderer/src/components/chat/chat-plane.acceptance.test.tsx \
+  --maxWorkers="$VOLLI_CONCURRENCY_HINT" --testTimeout=20000
+# 41 passed, no skips.
+```
+
+Additional final commands: `vp check`; typecheck of desktop, session-presentation, session-rpc, host-core and agent-runtime; `node scripts/check-host-electron-imports.mjs`; `pnpm generate:protocol-schema`; `pnpm check:protocol-schema --base origin/main`; `git diff --check`. All passed. The generated schema adds only optional `settle` to message submission input; no public output enum changes.
+
+N−1: the exact extracted `v0.2.1` and `v0.2.2-canary.1` checkouts each passed all 21 focused compatibility/prepare assertions, without skips. A feature-containing previous checkout also passed all 21 assertions. The diagnostic coverage run explicitly targeting the new **test fixture** exited 1 against the unchanged 100% thresholds; its uncalled defensive/no-network branches are documented in `n1-fixround.md`. It is not a protected production coverage claim. The shared RPC transport fixture lives under `test-fixtures/`, not the production `src/**` coverage surface, and is exercised through the real host/mounted tests.
+
+Visual: 14/14 AFTER light/dark captures passed, zero page errors; the two new accepted-streaming images were visually inspected. BEFORE files are byte-identical. The lab server was stopped.
+
+Initial failures resolved in this round: the acceptance tests correctly exposed the RPC codec stripping `settle`; the optional input/type and generated schema now preserve it. The fatal test initially queried nonexistent aria labels rather than the actual status/button text. Direct Node-fixture imports pulled `.ts` storage imports into the browser type graph; test-runtime loading now keeps that boundary explicit. The first runtime-load path was relative to the Vite root rather than the test module; an absolute module-relative URL fixed it. Formatting was corrected before the final check. Two insufficient index-coverage selections passed their assertions but not the pre-existing 100% thresholds; the final direct caller/stream/schema selection above passes all metrics. No threshold was lowered.
+
+Exact verified fix-round head and CI/CodeQL links are posted on PR #865 and VC-758 after push, without mutating the verified commit just to embed its own hash. PR remains unmerged.

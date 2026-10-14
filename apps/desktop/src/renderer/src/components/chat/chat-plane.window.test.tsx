@@ -28,6 +28,7 @@ import {
   type BlobLinkView,
   type ModelAccessSnapshot,
   type ModelSelection,
+  type SessionEvent,
 } from "@volli/shared";
 import {
   appendFrames,
@@ -40,7 +41,11 @@ import {
   type ChatSessionRpc,
   type ChatSessionTransport,
 } from "@volli/session-presentation";
-import { createSessionEngine } from "@volli/session-engine";
+import {
+  createSessionEngine,
+  type SessionRuntime,
+  type SessionRuntimeCommandResult,
+} from "@volli/session-engine";
 import { openLegacySession } from "@renderer/chat/legacy-session.test-support";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
@@ -57,6 +62,8 @@ import { useExperimentsStore } from "@renderer/stores/experiments";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { remoteHost } from "@renderer/stores/host-sources";
 import { ChatPlane } from "./chat-plane";
+import { runtimeTransport } from "../../../../../../../packages/session-rpc/test-fixtures/runtime-transport";
+import { gatedProvider } from "../../../../../../../packages/agent-runtime/test-fixtures/gated-provider";
 import {
   forgetTranscriptViews,
   readTranscriptView,
@@ -333,11 +340,15 @@ function hostChatStore(
   return { store, cancel, commands, editElsewhere, hostRevision };
 }
 
-async function mountPlane(store: ReturnType<typeof chatStore>, modelAccess?: ModelAccessClient) {
+async function mountPlane(
+  store: ReturnType<typeof chatStore>,
+  modelAccess?: ModelAccessClient,
+  sessionId = SESSION,
+) {
   const plane = (
     <TooltipProvider delayDuration={0}>
       <ChatPlane
-        sessionId={SESSION}
+        sessionId={sessionId}
         projectId={PROJECT}
         ticketId={null}
         onOpenFile={() => {}}
@@ -1086,6 +1097,95 @@ describe("host-owned rows with cloud off", () => {
 });
 
 describe("a chat plane holding a long transcript", () => {
+  it("retires Working and live markdown after the runtime writes fatal Attention then closes", async () => {
+    const provider = gatedProvider("```ts\nexport const answer = 42;\n```");
+    // Keep Node/SQLite composition outside the browser type graph. Host-core
+    // typechecks this test-only helper; the real module is loaded at test time.
+    const path = decodeURIComponent(
+      new URL(
+        "../../../../../../../packages/host-core/src/session-runtime/silent-ends.test-support.ts",
+        import.meta.url,
+      ).pathname,
+    );
+    const module: {
+      silentEndsFixture(options: { provider: typeof provider }): Promise<{
+        runtime: SessionRuntime;
+        sessionId: string;
+        attach(): Promise<SessionRuntimeCommandResult>;
+        submit(
+          id: string,
+          delivery: "steer",
+          opened: boolean,
+        ): Promise<SessionRuntimeCommandResult>;
+        events(): Promise<SessionEvent[]>;
+        crash(): Promise<void>;
+        close(): Promise<void>;
+      }>;
+    } = await import(path);
+    const fixture = await module.silentEndsFixture({ provider });
+    const store = createChatSessionsStore(() => runtimeTransport(fixture.runtime));
+    try {
+      await fixture.attach();
+      store.getState().adoptChatSession(fixture.sessionId);
+      await vi.waitFor(() =>
+        expect(store.getState().sessions[fixture.sessionId]?.lifecycle).toBe("ready"),
+      );
+      await mountPlane(store, undefined, fixture.sessionId);
+      await act(async () => {
+        await fixture.submit("send", "steer", true);
+        await provider.entered;
+      });
+      await vi.waitFor(() => {
+        expect(store.getState().sessions[fixture.sessionId]?.transcript.turnActive).toBe(true);
+        expect(container?.textContent).toContain("export const answer = 42;");
+        expect(
+          [...container!.querySelectorAll('[role="status"]')].some((element) =>
+            element.textContent?.includes("Working"),
+          ),
+        ).toBe(true);
+      });
+      expect(container?.querySelector(TOKEN_SELECTOR)).toBeNull();
+      const epoch = store.getState().sessions[fixture.sessionId]!.transcript.turnEpoch;
+      await act(async () => {
+        await fixture.crash();
+      });
+      const events = await fixture.events();
+      const fatal = events.filter(
+        (event) =>
+          event.payload.kind === "attention.raised" ||
+          event.payload.kind === "attachment.closed" ||
+          event.payload.kind === "turn.interrupted",
+      );
+      expect(fatal.map((event) => event.payload.kind)).toEqual([
+        "attention.raised",
+        "attachment.closed",
+      ]);
+      await vi.waitFor(() => {
+        const slice = store.getState().sessions[fixture.sessionId]!;
+        expect(slice.transcript.turnActive).toBe(false);
+        expect(slice.transcript.turnEpoch).toBe(epoch + 1);
+        expect(slice.lifecycle).not.toBe("working");
+        expect(
+          [...container!.querySelectorAll('[role="status"]')].some((element) =>
+            element.textContent?.includes("Working"),
+          ),
+        ).toBe(false);
+        expect(container?.textContent).toContain("The runtime stopped unexpectedly");
+        expect(
+          [...container!.querySelectorAll("button")].filter(
+            (element) => element.textContent?.trim() === "Retry",
+          ),
+        ).toHaveLength(1);
+        expect(container?.querySelector(TOKEN_SELECTOR)).not.toBeNull();
+      });
+    } finally {
+      provider.release();
+      await unmountPlane();
+      store.getState().closeChatSession(fixture.sessionId);
+      await fixture.close();
+    }
+  }, 20_000);
+
   it("uses the stream Turn boundary when Session lifecycle fails and recovers", async () => {
     const source = "```ts\nexport const answer = 42;\n```";
     const message: UIMessage = {

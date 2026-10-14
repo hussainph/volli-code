@@ -1,5 +1,5 @@
 /** VC-758: production ChatPlane with frozen renderer/store inputs, not a drawn facsimile.
- * ?state=sending|steering|queued|working|error|error-scrolled selects one reproducible state.
+ * ?state=sending|accepted-streaming|steering|queued|working|error|error-scrolled selects a state.
  * No runtime or provider connection; these screenshots prove presentation only.
  */
 import * as React from "react";
@@ -8,9 +8,11 @@ import {
   DEFAULT_COMPACTION_POLICY,
   DEFAULT_MODEL_PICKER_VIEW,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  scrubSessionEventPayload,
+  type SessionEventPayload,
   type SessionPresentationProjection,
 } from "@volli/shared";
-import { seedSlice } from "@volli/session-presentation";
+import { appendFrames, seedSlice, type ChatSessionFrame } from "@volli/session-presentation";
 import type { UIMessage } from "ai";
 import { ChatPlane } from "@renderer/components/chat/chat-plane";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
@@ -98,8 +100,106 @@ export const api = {
   browser: { list: ok },
   shells: { list: ok },
 };
+// Fixture facts, not an actual send. The receipt names the command explicitly;
+// turn.started deliberately has no commandId, so event proximity proves nothing.
+function acceptedStreamingTranscript() {
+  const request: UIMessage = {
+    id: "request",
+    role: "user",
+    parts: [{ type: "text", text: "Check the release notes before we ship." }],
+  };
+  function frame(
+    sequence: number,
+    payload: SessionEventPayload,
+    message: UIMessage | null = null,
+  ): ChatSessionFrame {
+    return {
+      sessionId: SESSION,
+      sequence,
+      event: {
+        id: `fixture-event-${sequence}`,
+        sessionId: SESSION,
+        sequence,
+        occurredAt: sequence,
+        recordedAt: sequence,
+        attachmentId: "vc-758-fixture-attachment",
+        commandId: null,
+        provenance: {
+          source: { kind: "system", id: "runtime", detail: null },
+          venue: { id: "lab", kind: "local" },
+        },
+        payload: scrubSessionEventPayload(payload),
+      },
+      transcript: message === null ? null : { message },
+    };
+  }
+  return appendFrames(
+    seedSlice("ready").transcript,
+    [
+      frame(
+        1,
+        {
+          kind: "command.recorded",
+          command: {
+            id: "ordinary-send",
+            sessionId: SESSION,
+            createdAt: 0,
+            route: null,
+            intent: {
+              kind: "message.submit",
+              reference: { id: "request-artifact", mediaType: null, digest: null },
+            },
+          },
+        },
+        request,
+      ),
+      frame(2, {
+        kind: "turn.started",
+        attachmentId: "vc-758-fixture-attachment",
+        turnId: "reply-turn",
+      }),
+      frame(3, {
+        kind: "command.receipt.recorded",
+        receipt: {
+          id: "opening-receipt",
+          commandId: "ordinary-send",
+          recordedAt: 3,
+          sequence: 3,
+          status: "accepted",
+          acceptedAt: 3,
+          result: { kind: "message.submitted", sessionId: SESSION },
+        },
+      }),
+    ],
+    [
+      {
+        kind: "overlay",
+        sessionId: SESSION,
+        throughSequence: 3,
+        messageId: "reply",
+        delta: {
+          op: "reset",
+          message: {
+            id: "reply",
+            role: "assistant",
+            parts: [
+              {
+                key: "reply-text",
+                part: {
+                  type: "text",
+                  text: "I’m checking the release notes and tests.",
+                  state: "streaming",
+                },
+              },
+            ],
+          },
+        },
+      },
+    ],
+  );
+}
 export function seed() {
-  const working = ["steering", "queued", "working"].includes(state);
+  const working = ["steering", "queued", "working", "accepted-streaming"].includes(state);
   const error = state === "error" || state === "error-scrolled";
   const messages: UIMessage[] =
     state === "working" || state === "sending"
@@ -171,13 +271,16 @@ export function seed() {
       [SESSION]: {
         ...slice,
         projection,
-        transcript: {
-          ...slice.transcript,
-          messages,
-          durableMessages: messages,
-          turnActive: working,
-          turnEpoch: working ? 1 : 0,
-        },
+        transcript:
+          state === "accepted-streaming"
+            ? acceptedStreamingTranscript()
+            : {
+                ...slice.transcript,
+                messages,
+                durableMessages: messages,
+                turnActive: working,
+                turnEpoch: working ? 1 : 0,
+              },
         sessionError: error ? "Context assembly failed before the model could start." : null,
         queue:
           state === "queued"
