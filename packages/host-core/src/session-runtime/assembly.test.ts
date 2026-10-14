@@ -28,6 +28,8 @@ import {
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_CODE_MODE_LIMITS,
   decodeSessionEventPayload,
+  mcpProviderToolName,
+  createToolRefreshDelta,
 } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { testProject } from "../db/test-helpers";
@@ -382,6 +384,7 @@ describe("runtime attachment assembly", () => {
         sandboxAvailable: true,
       }),
       mcpSettings: {
+        surfaceRevision: () => selected.length,
         selectedTools: () => selected,
       } as unknown as RuntimeAssemblyOptions["mcpSettings"],
     };
@@ -437,8 +440,18 @@ describe("runtime attachment assembly", () => {
     expect(
       (await native.refreshRuntimeContext!(child, { trigger: "warm-turn", model }))?.mcpTools,
     ).toEqual([one]);
-    await native.refreshRuntimeContext!(parent, { trigger: "code-mode", model });
-    await native.refreshRuntimeContext!(child, { trigger: "warm-turn", model });
+    const desired = await native.refreshRuntimeContext!(parent, { trigger: "code-mode", model });
+    const reads = vi.spyOn(engine, "listEvents");
+    const projections = vi.spyOn(engine, "getSession");
+    const writes = vi.spyOn(engine, "recordToolRefresh");
+    for (let i = 0; i < 20; i++)
+      expect(await native.refreshRuntimeContext!(parent, { trigger: "code-mode", model })).toBe(
+        desired,
+      );
+    expect(reads).not.toHaveBeenCalled();
+    expect(projections).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
+    await native.refreshRuntimeContext!(child, { trigger: "code-mode", model });
     expect(await surface.recordedMcp!(child)).toEqual([one, two]);
     const cold = await native.refreshRuntimeContext!(parent, { trigger: "cold-turn", model });
     expect(cold?.toolSurface).toContain("edit");
@@ -457,6 +470,159 @@ describe("runtime attachment assembly", () => {
     ).resolves.toBeNull();
     await assembled.sessionRuntime?.close();
   });
+
+  it("measures a large-ledger steady Code Mode check without rereading history or rewriting schemas", async () => {
+    const options = await fixture();
+    const engine = live().sessionEngine;
+    const db = live().database.db;
+    insertProject(db, testProject({ id: "benchmark-project", path: root }));
+    const model = { providerId: "scripted", modelId: "test", reasoningLevel: "off" } as const;
+    const provenance = {
+      source: { kind: "system", id: "benchmark", detail: null },
+      venue: options.venue,
+    } as const;
+    const definitions = Array.from({ length: 100 }, (_, i) => ({
+      serverId: "large",
+      toolName: `tool${i}`,
+      providerName: mcpProviderToolName("large", "Large", `tool${i}`),
+      description: "Catalog text ".repeat(100),
+      inputSchema: {
+        type: "object",
+        properties: Object.fromEntries(
+          Array.from({ length: 20 }, (_property, j) => [
+            `property${j}`,
+            { type: "string", description: "Schema detail ".repeat(20) },
+          ]),
+        ),
+      },
+    }));
+    let revision = 0;
+    const assembledOptions = {
+      ...options,
+      codeMode: hostCodeMode({
+        env: { VOLLI_DEV_CODE_MODE: '{"mode":"only","mcp":{"large":"deferred"}}' },
+        packaged: false,
+        log: vi.fn(),
+        policy: () => DEFAULT_CODE_MODE_POLICY,
+        sandboxAvailable: true,
+      }),
+      mcpSettings: {
+        surfaceRevision: () => revision,
+        selectedTools: () => definitions,
+      } as unknown as RuntimeAssemblyOptions["mcpSettings"],
+    };
+    const assembled = createRuntimeAssembly(assembledOptions);
+    const surface = assembled.sessionToolSurface!;
+    assembledOptions.resolveRuntimeContext = createRuntimeContextResolver({
+      db,
+      sessionEngine: engine,
+      venue: options.venue,
+      mcpDispatch: options.mcpDispatch,
+      waitForBirth: async () => {},
+      toolSurface: () => surface,
+    });
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    const { session } = await engine.createSession({
+      commandId: "benchmark-create",
+      projectId: "benchmark-project",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      provenance,
+    });
+    await engine.submit({
+      commandId: "benchmark-model",
+      sessionId: session.id,
+      intent: { kind: "model.select", selection: model },
+      provenance,
+    });
+    const mode = surface.codeModeAt!(model, definitions);
+    const tools = surface.resolve("project", [], undefined, definitions, mode);
+    await surface.record(session.id, tools, definitions, { codeMode: mode });
+    const raw = db
+      .prepare(
+        "SELECT id, sequence FROM session_events WHERE session_id = ? ORDER BY sequence DESC LIMIT 1",
+      )
+      .get(session.id) as { id: string; sequence: number };
+    const append = db.prepare(
+      `INSERT INTO session_events (id,session_id,sequence,occurred_at,recorded_at,provenance_id,attachment_id,command_id,payload) SELECT ?,session_id,?,occurred_at,recorded_at,provenance_id,NULL,NULL,? FROM session_events WHERE id = ?`,
+    );
+    db.transaction(() => {
+      for (let i = 1; i <= 10_000; i++)
+        append.run(
+          `benchmark-history-${i}`,
+          raw.sequence + i,
+          JSON.stringify({
+            kind: "adapter.observed",
+            attachmentId: null,
+            name: "large ledger history",
+            native: null,
+          }),
+          raw.id,
+        );
+    })();
+    await native.refreshRuntimeContext!(session.id, { trigger: "warm-turn", model });
+    const measure = async (trigger: "warm-turn" | "code-mode", count: number) => {
+      const times: number[] = [];
+      for (let i = 0; i < count; i++) {
+        const start = performance.now();
+        await native.refreshRuntimeContext!(session.id, { trigger, model });
+        times.push(performance.now() - start);
+      }
+      times.sort((a, b) => a - b);
+      return {
+        samples: count,
+        p50Ms: times[Math.floor(count * 0.5)],
+        p95Ms: times[Math.floor(count * 0.95)],
+      };
+    };
+    // Both triggers use identical warm policy. warm-turn deliberately bypasses
+    // the new gate, measuring the old full-check path in the same implementation.
+    const before = await measure("warm-turn", 10);
+    const reads = vi.spyOn(engine, "listEvents");
+    const writes = vi.spyOn(engine, "recordToolRefresh");
+    const after = await measure("code-mode", 100);
+    expect(reads).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
+    revision++;
+    await native.refreshRuntimeContext!(session.id, { trigger: "code-mode", model });
+    expect(reads).toHaveBeenCalled();
+    expect(writes).toHaveBeenCalledOnce();
+    const birth = (await engine.listEvents({ sessionId: session.id })).find(
+      (event) =>
+        event.payload.kind === "session.input.recorded" &&
+        event.payload.input.kind === "tool-surface",
+    )!.payload;
+    if (birth.kind !== "session.input.recorded" || birth.input.kind !== "tool-surface")
+      throw new Error("Missing benchmark surface");
+    const next = { ...birth.input, refreshDescriptions: true as const };
+    const storage = {
+      fullSurfaceBytes: Buffer.byteLength(
+        JSON.stringify({
+          kind: "session.tools.refreshed",
+          trigger: "cold-turn",
+          added: [],
+          changed: ["mcp.tools"],
+          surface: next,
+        }),
+      ),
+      deltaBytes: Buffer.byteLength(
+        JSON.stringify({
+          kind: "session.tools.refreshed",
+          trigger: "cold-turn",
+          added: [],
+          changed: ["mcp.tools"],
+          delta: createToolRefreshDelta({ ...birth.input, refreshDescriptions: undefined }, next),
+        }),
+      ),
+    };
+    console.log(
+      "VC756_REFRESH_BENCHMARK",
+      JSON.stringify({ historyEvents: 10_000, mcpTools: 100, before, after, storage }),
+    );
+    await assembled.sessionRuntime?.close();
+  }, 60_000);
 
   it("keeps a removed MCP tool attached and returns its named unavailable result without opening a transport", async () => {
     const options = await fixture();

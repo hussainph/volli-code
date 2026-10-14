@@ -87,13 +87,32 @@ describe("shared attach context", () => {
     const f = fixture();
     const birth = { kind: "tool-surface", tools: ["read"] };
     const cold = { ...birth, tools: ["read", "write"], refreshDescriptions: true };
-    const warm = { ...cold, tools: ["read", "write", "edit"] };
+    const warm = { ...cold, tools: ["read", "edit", "write"] };
     f.listEvents.mockResolvedValue([
       inputEvent(birth),
-      { payload: { kind: "session.tools.refreshed", trigger: "cold-turn", surface: cold } },
-      { payload: { kind: "session.tools.refreshed", trigger: "warm-turn", surface: warm } },
+      {
+        id: "cold",
+        payload: {
+          kind: "session.tools.refreshed",
+          trigger: "cold-turn",
+          added: ["write"],
+          changed: [],
+          delta: { refreshDescriptions: true },
+        },
+      },
+      {
+        id: "warm",
+        payload: {
+          kind: "session.tools.refreshed",
+          trigger: "warm-turn",
+          added: ["edit"],
+          changed: [],
+          delta: {},
+        },
+      },
     ]);
     expect(await f.context("s")).toMatchObject({
+      toolRefreshAnnouncements: [{ id: "warm", namespaces: [{ name: "volli", count: 1 }] }],
       toolSurface: warm.tools,
       declarationSurface: cold,
       refreshDescriptions: true,

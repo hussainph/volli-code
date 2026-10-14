@@ -222,8 +222,8 @@ it("ships refreshed names under CSP with no MCP declarations or effective surfac
     payload: {
       kind: "session.tools.refreshed",
       trigger: "cold-turn",
-      surface: birth.payload.input,
-      added: ["mcp__paper__get_document"],
+      delta: { mcpTools: birth.payload.input.mcpTools },
+      added: birth.payload.input.mcpTools!.map((tool) => tool.providerName),
       changed: [],
     },
   };
@@ -233,5 +233,5 @@ it("ships refreshed names under CSP with no MCP declarations or effective surfac
   expect(safe).not.toContain("inputSchema");
   expect(safe).not.toContain("description");
   expect(safe).not.toContain("surface");
-  expect(safe).toContain("mcp__paper__get_document");
+  expect(safe).toContain(birth.payload.input.mcpTools![0]!.providerName);
 });

@@ -53,7 +53,14 @@ import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
 import { isSessionToolId } from "./agent-tool-surface";
 import type { SessionToolId } from "./authority";
-import { CODE_MODE_TOOL_ID, parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
+import {
+  CODE_MODE_TOOL_ID,
+  isToolRoute,
+  parseCodeModeSurface,
+  type CodeModeSurface,
+  type ToolRoute,
+} from "./code-mode";
+import type { SessionToolRefreshDelta } from "./tool-refresh-delta";
 import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonObject, McpToolDefinition } from "./mcp";
 import { errorMessage } from "./errors";
@@ -204,19 +211,16 @@ const codecs = {
       ),
   },
   "session.tools.refreshed": {
-    decode: (record, context) => ({
-      ...decodeToolRefreshNotice(record, context),
-      surface: decodeToolSurfaceInput(
-        asRecord(record.surface, `${context}.surface`),
-        "tool-surface",
-        `${context}.surface`,
-        decodeMcpToolDefinitions,
-        true,
-      ),
-    }),
-    // Definitions and the entire effective surface are host-only. The quiet
-    // transcript fact needs just names and why they changed.
-    scrub: ({ surface: _surface, ...notice }) => notice,
+    decode: (record, context) => {
+      const notice = decodeToolRefreshNotice(record, context);
+      return {
+        ...notice,
+        delta: decodeToolRefreshDelta(record.delta, notice.added, `${context}.delta`),
+      };
+    },
+    // Definitions and marker/route deltas are host-only. The quiet transcript
+    // fact still needs just names and why they changed.
+    scrub: ({ delta: _delta, ...notice }) => notice,
     decodeRenderer: decodeToolRefreshNotice,
   },
   "session.signaled": {
@@ -1426,7 +1430,72 @@ function decodeToolRefreshNotice(record: JsonRecord, context: string) {
 
 function readToolRefreshNames(value: unknown, context: string): readonly string[] {
   if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((name, index) => readString(name, `${context}[${index}]`));
+  const names = value.map((name, index) => readString(name, `${context}[${index}]`));
+  if (new Set(names).size !== names.length) throw new Error(`${context} must contain unique names`);
+  return names;
+}
+
+function decodeToolRefreshDelta(
+  value: unknown,
+  added: readonly string[],
+  context: string,
+): SessionToolRefreshDelta {
+  const row = asRecord(value, context);
+  const mcpTools =
+    row.mcpTools === undefined
+      ? undefined
+      : decodeMcpToolDefinitions(row.mcpTools, `${context}.mcpTools`);
+  if (
+    JSON.stringify(added.filter(isMcpToolId)) !==
+    JSON.stringify((mcpTools ?? []).map((tool) => tool.providerName))
+  )
+    throw new Error(`${context} MCP definitions must match exactly the added MCP names`);
+  for (const marker of ["askUserQuestions", "refreshDescriptions"] as const) {
+    if (row[marker] !== undefined && row[marker] !== true)
+      throw new Error(`${context}.${marker} must be true when present`);
+  }
+  if (row.askUserQuestions === true && !added.includes("ask_user"))
+    throw new Error(`${context}.askUserQuestions requires added ask_user`);
+  if (row.descriptionVersion !== undefined && row.descriptionVersion !== 2)
+    throw new Error(`${context}.descriptionVersion is 2 or absent`);
+  const routes: Record<string, ToolRoute> = {};
+  if (row.routes !== undefined) {
+    for (const [tool, route] of Object.entries(asRecord(row.routes, `${context}.routes`))) {
+      if (tool === CODE_MODE_TOOL_ID || !isToolRoute(route))
+        throw new Error(`${context}.routes.${tool} is not a route`);
+      if (row.codeMode === undefined && !added.includes(tool))
+        throw new Error(`${context}.routes must name only added tools`);
+      Object.defineProperty(routes, tool, { value: route, enumerable: true });
+    }
+  }
+  let codeMode: SessionToolRefreshDelta["codeMode"];
+  if (row.codeMode !== undefined) {
+    const declaration = asRecord(row.codeMode, `${context}.codeMode`);
+    if (
+      !added.includes(CODE_MODE_TOOL_ID) ||
+      row.descriptionVersion !== undefined ||
+      declaration.routes !== undefined
+    )
+      throw new Error(`${context}.codeMode is only for first acquisition, with routes separate`);
+    const { routes: _routes, ...parsed } = parseCodeModeSurface(
+      { ...declaration, routes },
+      [CODE_MODE_TOOL_ID, ...Object.keys(routes)],
+      `${context}.codeMode`,
+    );
+    codeMode = parsed;
+    if (added.some((tool) => tool !== CODE_MODE_TOOL_ID && !Object.hasOwn(routes, tool)))
+      throw new Error(`${context}.routes must cover added tools`);
+  } else if (added.includes(CODE_MODE_TOOL_ID)) {
+    throw new Error(`${context}.codeMode is required for added codemode`);
+  }
+  return {
+    ...(mcpTools === undefined ? {} : { mcpTools }),
+    ...(row.routes === undefined ? {} : { routes }),
+    ...(codeMode === undefined ? {} : { codeMode }),
+    ...(row.descriptionVersion === 2 ? { descriptionVersion: 2 as const } : {}),
+    ...(row.askUserQuestions === true ? { askUserQuestions: true as const } : {}),
+    ...(row.refreshDescriptions === true ? { refreshDescriptions: true as const } : {}),
+  };
 }
 
 function decodeToolSurfaceInput(
@@ -1434,7 +1503,6 @@ function decodeToolSurfaceInput(
   kind: "tool-surface",
   context: string,
   decodeMcpTools: typeof decodeMcpToolDefinitions,
-  refreshed = false,
 ): {
   kind: "tool-surface";
   tools: readonly SessionToolId[];
@@ -1444,12 +1512,8 @@ function decodeToolSurfaceInput(
   mcpTools?: readonly McpToolDefinition[];
   codeMode?: CodeModeSurface;
 } {
-  // Refresh names are an open durable vocabulary. Attachment selects the last
-  // bindable epoch; the quiet fact remains replayable even on a future downgrade.
-  // Birth remains strict because pre-feature builds read that known record.
-  const tools = refreshed
-    ? (readToolRefreshNames(input.tools, `${context}.tools`) as readonly SessionToolId[])
-    : decodeSessionToolIds(input.tools, `${context}.tools`);
+  // Birth remains strict because pre-feature builds read this known record.
+  const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
   // Birth-only declaration marker: historical absence must not become a default.
   if (input.askUserQuestions !== undefined && input.askUserQuestions !== true) {
     throw new Error(`${context}.askUserQuestions must be true when present`);

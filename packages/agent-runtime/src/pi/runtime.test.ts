@@ -8603,7 +8603,7 @@ describe("provider-native context persistence", () => {
     },
   );
 
-  it("round-trips the canonical OpenAI window across restart and restores original history on model switch", async () => {
+  it("round-trips the canonical OpenAI window across restart, preserves it on a rejected model switch and restores history on success", async () => {
     const attachment = fixture();
     const canonical = [
       {
@@ -8630,16 +8630,18 @@ describe("provider-native context persistence", () => {
         provider: "openai",
         models: [
           { id: "gpt-5.3-codex", contextWindow: 264_000 },
-          { id: "gpt-5.4", contextWindow: 264_000 },
+          { id: "gpt-5.4", contextWindow: 264_000, reasoning: true },
         ],
       });
       const requests: unknown[] = [];
+      const selectedPairs: { model: string; reasoning: string | undefined }[] = [];
       const projectors: ((payload: unknown) => unknown)[] = [];
       const script = scriptedStream([
         settles("original answer"),
         settlesHolding("recent answer", 250_000),
         settles("after checkpoint"),
         settles("after restart"),
+        settles("after rejected switch"),
         settles("after model switch"),
       ]);
       const models = createModels();
@@ -8650,6 +8652,7 @@ describe("provider-native context persistence", () => {
             .getModels()
             .map((model) => Object.assign({}, model, { baseUrl: "https://api.openai.com/v1" })),
         streamSimple: (async (model, context, options) => {
+          selectedPairs.push({ model: model.id, reasoning: options?.reasoning });
           const payload = { input: convertResponsesMessages(model, context, new Set(["openai"])) };
           projectors.push((value) => options?.onPayload?.(value, model));
           requests.push((await options?.onPayload?.(payload, model)) ?? payload);
@@ -8675,7 +8678,20 @@ describe("provider-native context persistence", () => {
         "opaque-checkpoint",
       );
       await first.close();
-      const second = await runtime.startSession({ ...spec, recovery });
+      let rejectSwitch = true;
+      const second = await runtime.startSession({
+        ...spec,
+        recovery,
+        toolRefreshAnnouncements: [],
+        refreshTools: async ({ trigger, model }) => {
+          if (trigger === "model-switch" && rejectSwitch) {
+            rejectSwitch = false;
+            expect(model.modelId).toBe("gpt-5.4");
+            throw new Error("model refresh failed");
+          }
+          return null;
+        },
+      });
       await second.submitUserMessage("resume");
       expect((requests[3] as { input: unknown[] }).input.slice(1, 3)).toEqual(canonical);
       expect(fetch).toHaveBeenCalledTimes(1);
@@ -8687,11 +8703,19 @@ describe("provider-native context persistence", () => {
         }),
       ).resolves.toEqual({ kind: "selected" });
       await expect(
+        second.selectModel({ providerId: "openai", modelId: "gpt-5.4", reasoningLevel: "high" }),
+      ).rejects.toThrow("model refresh failed");
+      await second.submitUserMessage("still the old model");
+      expect((requests[4] as { input: unknown[] }).input.slice(1, 3)).toEqual(canonical);
+      expect(JSON.stringify(requests[4])).not.toContain("original answer");
+      expect(selectedPairs[4]).toEqual(selectedPairs[3]);
+      expect(selectedPairs[4]?.model).toBe("gpt-5.3-codex");
+      await expect(
         second.selectModel({ providerId: "openai", modelId: "gpt-5.4", reasoningLevel: "off" }),
       ).resolves.toEqual({ kind: "selected" });
       await second.submitUserMessage("use the other model");
-      expect(JSON.stringify(requests[4])).not.toContain("opaque-checkpoint");
-      expect(JSON.stringify(requests[4])).toContain("original answer");
+      expect(JSON.stringify(requests[5])).not.toContain("opaque-checkpoint");
+      expect(JSON.stringify(requests[5])).toContain("original answer");
       // The native compaction was metered ONCE, and the restart did not buy it
       // again. A replayed maintenance bill is the failure this guards: the
       // record is named after the durable compaction entry precisely so a

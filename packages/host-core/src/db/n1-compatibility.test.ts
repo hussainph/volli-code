@@ -1080,14 +1080,7 @@ describe.skipIf(manifest === null)(
           trigger: "cold-turn",
           added: [future],
           changed: [],
-          surface: {
-            ...birth,
-            tools: [...tools, "write", future],
-            codeMode: {
-              ...birth.codeMode,
-              routes: { ...birth.codeMode.routes, write: "both", [future]: "both" },
-            },
-          },
+          delta: { routes: { [future]: "both" } },
         };
         writer
           .prepare(`INSERT INTO session_events
@@ -1108,6 +1101,7 @@ describe.skipIf(manifest === null)(
       // must read/replay the Session and bind every birth tool, never fail over
       // a future name embedded in a refresh. No exact old decoder shape.
       expect(attached.replayable).toBe(true);
+      expect(attached.startupWakeSafe).toBe(true);
       expect(attached.birthStillReadable).toBe(true);
       expect(attached.declared).toEqual(expect.arrayContaining(["read", "codemode"]));
       assertHeadReads(dbPath);
@@ -1123,7 +1117,8 @@ describe.skipIf(manifest === null)(
           .prepare("SELECT payload FROM session_events WHERE id = ?")
           .get("future-tool-refresh") as { payload: string };
         expect(JSON.parse(rawFuture.payload)).toMatchObject({
-          surface: { tools: expect.arrayContaining([future]) },
+          added: [future],
+          delta: { routes: { [future]: "both" } },
         });
         // Replay still reaches the compatible facts on either side of an
         // unbindable future refresh, rather than failing the whole history.

@@ -7,6 +7,8 @@ import {
   isVerbToolKey,
   isSessionToolId,
   routeOf,
+  applyToolRefreshDelta,
+  type RuntimeToolRefreshAnnouncement,
   REFRESH_DESCRIPTION_TOOL_IDS,
   type CodeModeSurface,
   type SessionEvent,
@@ -17,47 +19,63 @@ import {
 type Surface = Extract<SessionInput, { kind: "tool-surface" }>;
 type Trigger = "cold-turn" | "warm-turn" | "compaction" | "model-switch" | "code-mode";
 
-/** Read the latest effective fact without modifying the first, birth-only input. */
-export function effectiveToolSurface(events: readonly SessionEvent[]): Surface | null {
-  let surface: Surface | null = null;
+/** Keep folding unknown future additions, but bind only the last compatible epoch. */
+export function foldToolRefreshes(events: readonly SessionEvent[]): {
+  effective: Surface | null;
+  declared: Surface | null;
+  future: boolean;
+  announcements: readonly RuntimeToolRefreshAnnouncement[];
+} {
+  let folded: Surface | null = null;
+  let effective: Surface | null = null;
+  let declared: Surface | null = null;
+  const announcements: RuntimeToolRefreshAnnouncement[] = [];
   for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      surface ??= event.payload.input;
-    } else if (
-      event.payload.kind === "session.tools.refreshed" &&
-      event.payload.surface.tools.every(isSessionToolId)
-    ) {
-      // A future writer may add names this build cannot bind. Keep the last
-      // compatible epoch, rather than failing every read/attach of the Session.
-      surface = event.payload.surface;
+    const payload = event.payload;
+    if (payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface") {
+      folded ??= payload.input;
+      effective ??= payload.input;
+      declared ??= payload.input;
+    } else if (payload.kind === "session.tools.refreshed" && folded !== null) {
+      folded = applyToolRefreshDelta(folded, payload);
+      if (!folded.tools.every(isSessionToolId)) continue;
+      effective = folded;
+      if (["cold-turn", "compaction", "model-switch"].includes(payload.trigger)) declared = folded;
+      if (["warm-turn", "code-mode"].includes(payload.trigger) && payload.added.length > 0) {
+        const counts = new Map<string, number>();
+        for (const tool of payload.added) {
+          const definition = folded.mcpTools?.find((candidate) => candidate.providerName === tool);
+          const name = definition === undefined ? "volli" : `mcp:${definition.serverId}`;
+          counts.set(name, (counts.get(name) ?? 0) + 1);
+        }
+        announcements.push({
+          id: event.id,
+          namespaces: [...counts].map(([name, count]) => ({ name, count })),
+        });
+      }
     }
   }
-  return surface;
+  return {
+    effective,
+    declared,
+    future: folded !== null && !folded.tools.every(isSessionToolId),
+    announcements,
+  };
 }
 
-/** The last paid/cold epoch, independent of warm executable additions. */
+/** Birth is immutable; executable additions and paid declarations are distinct folds. */
+export function effectiveToolSurface(events: readonly SessionEvent[]): Surface | null {
+  return foldToolRefreshes(events).effective;
+}
+
 export function declarationToolSurface(events: readonly SessionEvent[]): Surface | null {
-  let surface: Surface | null = null;
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    )
-      surface ??= event.payload.input;
-    else if (
-      event.payload.kind === "session.tools.refreshed" &&
-      ["cold-turn", "compaction", "model-switch"].includes(event.payload.trigger) &&
-      event.payload.surface.tools.every(isSessionToolId)
-    )
-      surface = event.payload.surface;
-  }
-  return surface;
+  return foldToolRefreshes(events).declared;
 }
 
-/** Existing schemas and routes are retained; only the explicit image capability is widened. */
+/** Existing schemas and routes are retained; only the explicit image capability is widened.
+ * The engine guard independently proves this policy at the durable write door;
+ * tool-refresh.test.ts pins their agreement for every trigger and retained MCP copy.
+ */
 export function additiveToolRefresh(
   current: Surface,
   candidate: Surface,

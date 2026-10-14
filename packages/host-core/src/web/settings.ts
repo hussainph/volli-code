@@ -117,12 +117,18 @@ export class WebAccessSettings {
   readonly #credentials: Readonly<Record<KeyedWebAccessProvider, WebCredentialStore>>;
   readonly #mirror: WebCredentialMirror | null;
   readonly #now: () => number;
+  #surfaceRevision = 0;
 
   constructor(options: WebAccessSettingsOptions) {
     this.#db = options.db;
     this.#credentials = options.credentials;
     this.#mirror = options.mirror ?? null;
     this.#now = options.now ?? Date.now;
+  }
+
+  /** Membership invalidation without reading keys or resolving a provider. */
+  surfaceRevision(): number {
+    return this.#surfaceRevision;
   }
 
   /** The renderer's whole picture. */
@@ -165,6 +171,7 @@ export class WebAccessSettings {
       searxngUrl = admission.endpoint.url;
     }
     this.#write(input.provider, searxngUrl);
+    this.#surfaceRevision++;
     return this.view();
   }
 
@@ -178,6 +185,7 @@ export class WebAccessSettings {
    */
   saveKey(provider: KeyedWebAccessProvider, key: string): WebAccessSettingsView {
     this.#credentials[provider].save(key);
+    this.#surfaceRevision++;
     this.#reseal();
     return this.view();
   }
@@ -188,6 +196,7 @@ export class WebAccessSettings {
    */
   clearKey(provider: KeyedWebAccessProvider): WebAccessSettingsView {
     this.#credentials[provider].clear();
+    this.#surfaceRevision++;
     this.#reseal();
     return this.view();
   }

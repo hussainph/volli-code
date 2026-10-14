@@ -8,7 +8,7 @@
  * made directly.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
@@ -39,7 +39,15 @@ import {
   type SessionRuntimeSpec,
   type ToolRoute,
 } from "@volli/shared";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { StorageBackedSession } from "../pi/vendor/pi-harness/session/session";
+import { toolRefreshId } from "../pi/tool-refresh-announcements";
+import { MCP_UNTRUSTED_DATA_WARNING } from "../pi/tools";
+import * as sessionTools from "../pi/tools";
+import * as refreshComparisons from "../pi/refresh-tools";
+import { JsonlSessionRepo } from "../pi/harness-session";
+import { NodeExecutionEnv } from "../pi/harness-env";
+import { piContext } from "../pi/pi-context";
 import { McpServerBudget } from "../mcp/server-budget";
 import { createPiAgentRuntime, type PiRuntimeHostOptions } from "../pi/runtime";
 import { ScopedExecutionEnv } from "../pi/scoped-execution-env";
@@ -53,6 +61,10 @@ type Reply = (
   | { calls: { id: string; name: string; args: JsonObject }[]; text?: string }
   | { text: string }
 ) & { inputTokens?: number };
+
+function codeModeReply(id: string, code: string): Reply {
+  return { calls: [{ id, name: "codemode", args: { code } }] };
+}
 
 function scripted(
   replies: Reply[],
@@ -718,6 +730,396 @@ describe("Code Mode through the real Session path", () => {
 // Only the provider is scripted: refresh crosses the real Pi loop, the durable
 // sidecar, executable tool builders and QuickJS worker, not a registry mock.
 describe("additions-only surface refresh through Pi", () => {
+  it("skips serialization and rebuilding for cached Code Mode inputs, but still checks warm and cold boundaries", async () => {
+    const h = harness();
+    let clock = Date.now();
+    const birth = specFor(h, { tools: { tools: ["read"] }, toolRefreshAnnouncements: [] });
+    const code = "return 42;";
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      now: () => clock,
+      models: scripted(
+        [
+          codeModeReply("first", code),
+          codeModeReply("steady", code),
+          { text: "done" },
+          { text: "warm" },
+          { text: "cold" },
+        ],
+        h.seen,
+      ),
+    });
+    const codeModeChecks: number[] = [];
+    const handle = await runtime.startSession({
+      ...birth,
+      refreshTools: async ({ trigger }) => {
+        if (trigger === "code-mode") codeModeChecks.push(compare.mock.calls.length);
+        return birth;
+      },
+    });
+    const compare = vi.spyOn(refreshComparisons, "sameToolSpec");
+    const build = vi.spyOn(sessionTools, "createSessionTools");
+    try {
+      await handle.submitUserMessage("steady programs");
+      expect(resultText(h, "first")).toContain("42");
+      expect(resultText(h, "steady")).toContain("42");
+      expect(codeModeChecks).toEqual([1, 2]);
+      expect(compare).toHaveBeenCalledTimes(3); // The cold turn and two warm continuation boundaries only.
+      expect(build).not.toHaveBeenCalled();
+      clock++;
+      await handle.submitUserMessage("warm boundary");
+      expect(compare).toHaveBeenCalledTimes(4);
+      clock += 60 * 60_000;
+      await handle.submitUserMessage("cold boundary");
+      expect(compare).toHaveBeenCalledTimes(5);
+      expect(build).not.toHaveBeenCalled();
+    } finally {
+      compare.mockRestore();
+      build.mockRestore();
+      await handle.close();
+    }
+  });
+
+  it.each([
+    { committed: false, changed: false },
+    { committed: true, changed: false },
+    { committed: false, changed: true },
+    { committed: true, changed: true },
+  ])(
+    "retries the exact cached Code Mode input after an append failure ($committed committed, $changed surface changed)",
+    async ({ committed, changed }) => {
+      const h = harness();
+      writeFileSync(join(h.worktree, "identity.txt"), "cached input");
+      const birth = specFor(h, { tools: { tools: ["read"] }, toolRefreshAnnouncements: [] });
+      const desired = {
+        ...(changed
+          ? specFor(h, { tools: { tools: ["read", "write"] }, routes: { write: "code" } })
+          : birth),
+        toolRefreshAnnouncements: [
+          { id: "identity-first", namespaces: [{ name: "volli", count: 1 }] },
+          { id: "identity-second", namespaces: [{ name: "volli", count: 1 }] },
+        ],
+      };
+      const code = 'return await tools.read({path: "identity.txt"});';
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: h.sessions,
+        models: scripted(
+          [
+            codeModeReply("failed", code),
+            codeModeReply("retried", code),
+            codeModeReply("steady", code),
+            { text: "done" },
+          ],
+          h.seen,
+        ),
+      });
+      const checks: { comparisons: number; builds: number }[] = [];
+      const handle = await runtime.startSession({
+        ...birth,
+        refreshTools: async ({ trigger }) => {
+          if (trigger !== "code-mode") return null;
+          checks.push({ comparisons: compare.mock.calls.length, builds: build.mock.calls.length });
+          return desired; // The adapter adopted this object before the runtime failed.
+        },
+      });
+      const compare = vi.spyOn(refreshComparisons, "sameToolSpec");
+      const build = vi.spyOn(sessionTools, "createSessionTools");
+      const original = StorageBackedSession.prototype.appendToBranch;
+      let fail = true;
+      const append = vi
+        .spyOn(StorageBackedSession.prototype, "appendToBranch")
+        .mockImplementation(async function (this: StorageBackedSession, ...args) {
+          const entry = args[1];
+          if (
+            entry.type === "message" &&
+            toolRefreshId(entry.message) === "identity-second" &&
+            fail
+          ) {
+            fail = false;
+            if (committed) await original.apply(this, args);
+            throw new Error("cached append failed");
+          }
+          return original.apply(this, args);
+        });
+      try {
+        await handle.submitUserMessage("retry the cached object");
+        expect(resultText(h, "failed")).toContain("cached append failed");
+        expect(resultText(h, "retried")).toContain("cached input");
+        expect(resultText(h, "steady")).toContain("cached input");
+        expect(compare).toHaveBeenCalledTimes(2); // Failure and retry, no steady serialization.
+        expect(build).toHaveBeenCalledTimes(changed ? 4 : 0);
+        expect(checks).toHaveLength(3);
+        expect(checks[2]).toEqual({ comparisons: 2, builds: changed ? 4 : 0 });
+        for (const { id } of desired.toolRefreshAnnouncements) {
+          expect(
+            h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === id),
+          ).toHaveLength(1);
+        }
+        expect(
+          readFileSync(handle.recovery!.sessionFilePath, "utf8").match(/volliToolRefreshId/g),
+        ).toHaveLength(2);
+      } finally {
+        compare.mockRestore();
+        build.mockRestore();
+        append.mockRestore();
+        await handle.close();
+      }
+    },
+  );
+
+  it("retries the exact cached Code Mode input after a staged build failure", async () => {
+    const h = harness();
+    const birth = specFor(h, { tools: { tools: ["read"] }, toolRefreshAnnouncements: [] });
+    const desired = specFor(h, {
+      tools: { tools: ["read", "write"] },
+      routes: { write: "code" },
+      toolRefreshAnnouncements: [],
+    });
+    const code = 'return await tools.write({path: "built.txt", content: "retried build"});';
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      models: scripted(
+        [
+          codeModeReply("failed", code),
+          codeModeReply("retried", code),
+          codeModeReply("steady", code),
+          { text: "done" },
+        ],
+        h.seen,
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...birth,
+      refreshTools: async ({ trigger }) => (trigger === "code-mode" ? desired : null),
+    });
+    const compare = vi.spyOn(refreshComparisons, "sameToolSpec");
+    const original = sessionTools.createSessionTools;
+    const build = vi
+      .spyOn(sessionTools, "createSessionTools")
+      .mockImplementationOnce(original)
+      .mockImplementationOnce(() => {
+        throw new Error("cached build failed");
+      }); // After staging the new callable registry.
+    try {
+      await handle.submitUserMessage("retry the cached build");
+      expect(resultText(h, "failed")).toContain("cached build failed");
+      expect(resultText(h, "retried")).toContain("Successfully wrote to built.txt");
+      expect(resultText(h, "steady")).toContain("Successfully wrote to built.txt");
+      expect(readFileSync(join(h.worktree, "built.txt"), "utf8")).toBe("retried build");
+      expect(compare).toHaveBeenCalledTimes(2);
+      expect(build).toHaveBeenCalledTimes(4);
+    } finally {
+      compare.mockRestore();
+      build.mockRestore();
+      await handle.close();
+    }
+  });
+
+  it("replays the ledger-to-sidecar crash gap on attach and dedupes existing receipts without changing the warm prefix", async () => {
+    const h = harness();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      models: scripted([{ text: "before" }, { text: "after" }, { text: "again" }], h.seen),
+    });
+    const birth = specFor(h, { tools: { tools: ["read"] }, toolRefreshAnnouncements: [] });
+    const first = await runtime.startSession(birth);
+    await first.submitUserMessage("before ledger write");
+    const prefix = JSON.stringify(h.seen[0]!.messages[0]);
+    const recovery = first.recovery!;
+    await first.close();
+    // Simulate the durable host fact already existing when the old process
+    // disappeared, before it could append the corresponding discovery message.
+    const announcements = [
+      { id: "durable-refresh", namespaces: [{ name: "mcp:server", count: 1 }] },
+    ];
+    const added = {
+      serverId: "server",
+      toolName: "read",
+      providerName: mcpProviderToolName("server", "Server", "read"),
+      description: "Read new data.",
+      inputSchema: { type: "object" },
+    };
+    const attached = {
+      ...specFor(h, {
+        tools: { tools: ["read"], mcp: [added] },
+        mcp: { call: async () => ({ content: [], isError: false }) },
+      }),
+      declarationTools: birth.tools,
+      recovery,
+      toolRefreshAnnouncements: announcements,
+    };
+    const second = await runtime.startSession({ ...attached, refreshTools: async () => attached });
+    await second.submitUserMessage("after crash");
+    const recoveredMessages = h.seen.at(-1)!.messages;
+    expect(JSON.stringify(recoveredMessages[0])).toBe(prefix);
+    expect(
+      recoveredMessages.filter((message) => toolRefreshId(message) === "durable-refresh"),
+    ).toHaveLength(1);
+    expect(JSON.stringify(recoveredMessages)).toContain(MCP_UNTRUSTED_DATA_WARNING);
+    await second.close();
+    const third = await runtime.startSession(attached);
+    try {
+      await third.submitUserMessage("existing receipt");
+      expect(JSON.stringify(h.seen.at(-1)!.messages[0])).toBe(prefix);
+      expect(
+        h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === "durable-refresh"),
+      ).toHaveLength(1);
+      expect(
+        readFileSync(recovery.sessionFilePath, "utf8").match(/volliToolRefreshId/g),
+      ).toHaveLength(1);
+    } finally {
+      await third.close();
+    }
+  });
+
+  it.each([false, true])(
+    "retries a failed discovery append without duplicate receipts (commit before failure=%s)",
+    async (committed) => {
+      const h = harness();
+      const birth = specFor(h, { toolRefreshAnnouncements: [] });
+      const announcements = [
+        { id: "first-refresh", namespaces: [{ name: "volli", count: 1 }] },
+        { id: "second-refresh", namespaces: [{ name: "mcp:server", count: 2 }] },
+      ];
+      let desired: SessionRuntimeSpec | null = birth;
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: h.sessions,
+        models: scripted(
+          [{ text: "before" }, { text: "old context" }, { text: "retried" }],
+          h.seen,
+        ),
+      });
+      const handle = await runtime.startSession({ ...birth, refreshTools: async () => desired });
+      await handle.submitUserMessage("first turn");
+      desired = { ...birth, toolRefreshAnnouncements: announcements };
+      const original = StorageBackedSession.prototype.appendToBranch;
+      let fail = true;
+      const append = vi
+        .spyOn(StorageBackedSession.prototype, "appendToBranch")
+        .mockImplementation(async function (this: StorageBackedSession, ...args) {
+          const entry = args[1];
+          if (
+            entry.type === "message" &&
+            toolRefreshId(entry.message) === "second-refresh" &&
+            fail
+          ) {
+            fail = false;
+            if (committed) await original.apply(this, args);
+            throw new Error("sidecar append failed");
+          }
+          return original.apply(this, args);
+        });
+      try {
+        await expect(
+          handle.selectModel({ ...birth.model, modelId: `${MODEL}-other` }),
+        ).rejects.toThrow("sidecar append failed");
+        desired = null;
+        await handle.submitUserMessage("after rejected switch");
+        expect(
+          h.seen.at(-1)!.messages.some((message) => toolRefreshId(message) !== undefined),
+        ).toBe(false);
+        expect(JSON.stringify(h.seen.at(-1)!.messages[0])).toBe(
+          JSON.stringify(h.seen[0]!.messages[0]),
+        );
+        desired = { ...birth, toolRefreshAnnouncements: announcements };
+        await handle.submitUserMessage("retry");
+        for (const { id } of announcements) {
+          expect(
+            h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === id),
+          ).toHaveLength(1);
+        }
+        expect(
+          readFileSync(handle.recovery!.sessionFilePath, "utf8").match(/volliToolRefreshId/g),
+        ).toHaveLength(2);
+      } finally {
+        append.mockRestore();
+        await handle.close();
+      }
+    },
+  );
+
+  it("dedupes a Session refresh receipt carried into a new attachment", async () => {
+    const h = harness();
+    const fact = { id: "carried-refresh", namespaces: [{ name: "volli", count: 1 }] };
+    const birth = specFor(h, { toolRefreshAnnouncements: [fact] });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      models: scripted([{ text: "before" }, { text: "after" }], h.seen),
+    });
+    const first = await runtime.startSession(birth);
+    await first.submitUserMessage("before continuation");
+    const recovery = first.recovery!;
+    await first.close();
+    const second = await runtime.startSession({
+      ...birth,
+      identity: { ...birth.identity, attachmentId: "continuation" },
+      carry: { ...recovery, attachmentId: birth.identity.attachmentId, workspacePath: h.worktree },
+    });
+    try {
+      await second.submitUserMessage("continued");
+      expect(
+        h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === fact.id),
+      ).toHaveLength(1);
+      // Only the copy inside the carried-context marker, no fresh append.
+      expect(
+        readFileSync(second.recovery!.sessionFilePath, "utf8").match(/volliToolRefreshId/g),
+      ).toHaveLength(1);
+    } finally {
+      await second.close();
+    }
+  });
+
+  it("dedupes discovery messages outside the retained compaction context", async () => {
+    const h = harness();
+    const fact = { id: "compacted-refresh", namespaces: [{ name: "volli", count: 1 }] };
+    const birth = specFor(h, { toolRefreshAnnouncements: [fact] });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      models: scripted([{ text: "after" }], h.seen),
+    });
+    const first = await runtime.startSession(birth);
+    const recovery = first.recovery!;
+    await first.close();
+    const repo = new JsonlSessionRepo({
+      fileSystem: new NodeExecutionEnv({ cwd: h.sessions }),
+      sessionsRoot: h.sessions,
+    });
+    const metadata = (await repo.list({ cwd: h.worktree }, piContext())).find(
+      (entry) => entry.id === recovery.sessionId,
+    )!;
+    const sidecar = await repo.open(metadata, piContext());
+    const main = (await sidecar.branch("main", piContext()))!;
+    // The mutation below deliberately excludes the receipt from the retained tail.
+    const { insertEntry, setValue, branchTip } = await import("../pi/harness-session");
+    const entry = {
+      type: "compaction" as const,
+      id: sidecar.idGenerator.next(),
+      parentId: await main.getTipId(piContext()),
+      summary: "Discovery already summarized.",
+      retainedTail: [],
+      tokensBefore: 100,
+      fromHook: false,
+    };
+    await sidecar.mutate(
+      async (mutator, context) =>
+        mutator.commit([insertEntry(entry), setValue(branchTip("main"), entry.id)], context),
+      piContext(),
+    );
+    await sidecar.close(piContext());
+    const second = await runtime.startSession({ ...birth, recovery });
+    try {
+      await second.submitUserMessage("after compaction");
+      expect(
+        h.seen[0]!.messages.filter((message) => toolRefreshId(message) === fact.id),
+      ).toHaveLength(0);
+      expect(
+        readFileSync(recovery.sessionFilePath, "utf8").match(/volliToolRefreshId/g),
+      ).toHaveLength(1);
+    } finally {
+      await second.close();
+    }
+  });
+
   it("reattaches warm with byte-identical declarations and callable additions, then publishes their cold epoch without new IDs", async () => {
     const h = harness();
     let clock = Date.now();
@@ -1291,6 +1693,143 @@ describe("additions-only surface refresh through Pi", () => {
     } finally {
       await handle.close();
     }
+  });
+
+  it.each([false, true])(
+    "refuses adoption when close races a discovery append (surface changed=%s)",
+    async (changed) => {
+      const h = harness();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const birth = specFor(h, { toolRefreshAnnouncements: [] });
+      const updated = {
+        ...(changed ? specFor(h, { tools: { tools: ["read"], todoWrite: true } }) : birth),
+        toolRefreshAnnouncements: [
+          { id: "append-race", namespaces: [{ name: "volli", count: 1 }] },
+        ],
+      };
+      const env = new NodeExecutionEnv({ cwd: h.worktree });
+      const cleanup = vi.spyOn(env, "cleanup");
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: h.sessions,
+        executionEnvFactory: async () => env,
+        models: scripted([], h.seen),
+      });
+      const handle = await runtime.startSession({ ...birth, refreshTools: async () => updated });
+      const original = StorageBackedSession.prototype.appendToBranch;
+      const append = vi
+        .spyOn(StorageBackedSession.prototype, "appendToBranch")
+        .mockImplementation(async function (this: StorageBackedSession, ...args) {
+          if (args[1].type === "message" && toolRefreshId(args[1].message) === "append-race") {
+            entered.resolve();
+            await release.promise;
+          }
+          return original.apply(this, args);
+        });
+      try {
+        const selecting = handle.selectModel({ ...birth.model, modelId: `${MODEL}-other` });
+        const rejected = expect(selecting).rejects.toThrow("This attachment is closed.");
+        await entered.promise;
+        const closing = handle.close();
+        expect(cleanup).not.toHaveBeenCalled();
+        release.resolve();
+        await rejected;
+        await closing;
+        expect(cleanup).toHaveBeenCalledTimes(1);
+      } finally {
+        append.mockRestore();
+        await handle.close();
+      }
+    },
+  );
+
+  it("refuses a model switch when close precedes its queued refresh", async () => {
+    const h = harness();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const birth = specFor(h);
+    const refresh = vi.fn(async () => null);
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      models: scripted([{ text: "before" }], h.seen),
+    });
+    const handle = await runtime.startSession({ ...birth, refreshTools: refresh });
+    await handle.submitUserMessage("before");
+    refresh.mockClear();
+    const original = StorageBackedSession.prototype.scanBranch;
+    const scan = vi
+      .spyOn(StorageBackedSession.prototype, "scanBranch")
+      .mockImplementation(async function (this: StorageBackedSession, ...args) {
+        const entries = await original.apply(this, args);
+        entered.resolve();
+        await release.promise;
+        return entries;
+      });
+    try {
+      const selecting = handle.selectModel({ ...birth.model, modelId: `${MODEL}-other` });
+      const rejected = expect(selecting).rejects.toThrow("This attachment is closed.");
+      await entered.promise;
+      const closing = handle.close();
+      release.resolve();
+      await rejected;
+      await closing;
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      scan.mockRestore();
+      await handle.close();
+    }
+  });
+
+  it("drains a suspended refresh before cleanup and refuses its late result after close", async () => {
+    const h = harness();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const env = new NodeExecutionEnv({ cwd: h.worktree });
+    const cleanup = vi.spyOn(env, "cleanup");
+    const lateTools = vi.fn(() => {
+      throw new Error("late adoption attempted");
+    });
+    const birth = specFor(h, { toolRefreshAnnouncements: [] });
+    const late = {
+      ...birth,
+      get tools() {
+        return lateTools();
+      },
+    };
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      executionEnvFactory: async () => env,
+      models: scripted([], h.seen),
+    });
+    const handle = await runtime.startSession({
+      ...birth,
+      refreshTools: async () => {
+        entered.resolve();
+        await release.promise;
+        return late;
+      },
+    });
+    const selecting = handle.selectModel({ ...birth.model, modelId: `${MODEL}-other` });
+    // Install the rejection handler before close releases the suspended work.
+    const rejected = expect(selecting).rejects.toThrow("This attachment is closed.");
+    await entered.promise;
+    let closed = false;
+    const closing = handle.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    expect(cleanup).not.toHaveBeenCalled();
+    release.resolve();
+    await rejected;
+    await closing;
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(lateTools).not.toHaveBeenCalled();
+    await expect(handle.submitUserMessage("late request")).resolves.toMatchObject({
+      kind: "rejected",
+      reason: "closed",
+    });
   });
 
   it("surfaces a refresh failure without poisoning the next attempt", async () => {

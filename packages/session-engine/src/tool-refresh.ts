@@ -8,7 +8,10 @@ import {
 import { canonicalJson } from "./transcript-artifacts";
 
 type Surface = Extract<SessionInput, { kind: "tool-surface" }>;
-type Refresh = Extract<SessionEvent["payload"], { kind: "session.tools.refreshed" }>;
+export type ToolRefreshRequest = Omit<
+  Extract<SessionEvent["payload"], { kind: "session.tools.refreshed" }>,
+  "kind" | "delta"
+> & { surface: Surface };
 
 function same(a: unknown, b: unknown): boolean {
   return canonicalJson(a) === canonicalJson(b);
@@ -21,7 +24,7 @@ function fail(): never {
 /** Internal ledger guard. Runtime policy cannot weaken the additions-only contract. */
 export function assertAdditiveToolRefresh(
   current: Surface,
-  refresh: Refresh,
+  refresh: ToolRefreshRequest,
   declared: Surface = current,
 ): void {
   const next = refresh.surface;
@@ -58,14 +61,9 @@ export function assertAdditiveToolRefresh(
   }
   for (const old of current.mcpTools ?? []) {
     const replacement = next.mcpTools?.find((tool) => tool.providerName === old.providerName);
-    // Equal schemas are a conservative proof: description-only edits accept
-    // every old input. Arbitrary JSON Schema widening needs a separate proof.
-    if (!replacement || !same({ ...old, description: "" }, { ...replacement, description: "" }))
-      fail();
-    if (replacement!.description !== old.description) {
-      if (!cold) fail();
-      changed.add(old.providerName);
-    }
+    // Retained definitions are immutable, including descriptions. The planner
+    // must keep them; the delta never stores arbitrary edits to existing MCP.
+    if (!replacement || !same(old, replacement)) fail();
   }
   if (current.codeMode !== undefined) {
     if (next.codeMode === undefined) fail();

@@ -1078,6 +1078,12 @@ export interface RuntimeWorkspaceEnvironment {
 }
 
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
+export interface RuntimeToolRefreshAnnouncement {
+  /** Session Event id, never an attachment-local id. */
+  id: string;
+  namespaces: readonly { name: string; count: number }[];
+}
+
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
   /**
@@ -1106,6 +1112,8 @@ export interface SessionRuntimeSpec {
    * from the larger executable registry. Direct additions cannot happen warm.
    */
   declarationTools?: RuntimeToolBundle;
+  /** Durable warm refresh facts whose keyed discovery messages survive sidecar retries/recovery. */
+  toolRefreshAnnouncements?: readonly RuntimeToolRefreshAnnouncement[];
   /**
    * Recompute and durably record an additions-only compatible surface before
    * returning its full desired spec, including unchanged durable state on retry.

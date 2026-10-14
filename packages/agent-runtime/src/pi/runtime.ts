@@ -97,6 +97,7 @@ import {
 } from "./compaction";
 import { createContextTokenProjector } from "./token-counting";
 import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
+import { toolRefreshId, toolRefreshMessage } from "./tool-refresh-announcements";
 import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
@@ -2646,21 +2647,71 @@ async function attachSession(
         ? "cold-turn"
         : "warm-turn";
     };
+    // Scan the entire durable conversation, including carried messages, not
+    // just the retained compaction window: a discovery already summarized out
+    // of context must not recur on attach.
+    const announcedRefreshIds = new Set(
+      conversationPath(recoveredEntries, conversationReader).flatMap((entry) => {
+        if (entry.type !== "message") return [];
+        const id = toolRefreshId(entry.message);
+        return id === undefined ? [] : [id];
+      }),
+    );
+    const pendingAnnouncements: AgentMessage[] = [];
+    let announcementAppendFailed = false;
+    const announceRefreshes = async (input: SessionRuntimeSpec): Promise<void> => {
+      if (announcementAppendFailed) {
+        // An append may reject after its commit. Re-read receipts before retrying
+        // so even that ambiguous outcome cannot produce a duplicate message.
+        const entries = await mainBranch.findEntries({ order: "oldestFirst" }, piContext());
+        for (const entry of entries) {
+          if (entry.type !== "message") continue;
+          const id = toolRefreshId(entry.message);
+          if (id === undefined || announcedRefreshIds.has(id)) continue;
+          announcedRefreshIds.add(id);
+          pendingAnnouncements.push(entry.message);
+        }
+        announcementAppendFailed = false;
+      }
+      for (const announcement of input.toolRefreshAnnouncements ?? []) {
+        if (announcedRefreshIds.has(announcement.id)) continue;
+        const message = toolRefreshMessage(announcement.namespaces, host.now(), announcement.id);
+        try {
+          await mainBranch.appendMessage(message, piContext());
+        } catch (error) {
+          announcementAppendFailed = true;
+          throw error;
+        }
+        announcedRefreshIds.add(announcement.id);
+        pendingAnnouncements.push(message);
+      }
+      // Durable partial batches remain pending for a retry (or recovery).
+      // The caller publishes only after all writes and close checks succeeded.
+    };
+    // Replays the ledger-write/sidecar-append gap even when the effective bundle
+    // was already adopted by the previous process and therefore is unchanged.
+    await announceRefreshes(spec);
+    agent.state.messages.push(...pendingAnnouncements.splice(0));
     let refreshTail: Promise<unknown> = Promise.resolve();
+    // The host revision gate returns its cached desired object on steady checks.
+    // Remember only fully applied inputs: failed builds/appends must retry even
+    // when the adapter has already cached that same object. Boundary checks still
+    // compare declarations, since a cold epoch can advance with unchanged IDs.
+    let lastSuccessfulInput: SessionRuntimeSpec | undefined;
     const refreshTools = (
       trigger: Parameters<NonNullable<SessionRuntimeSpec["refreshTools"]>>[0]["trigger"],
+      refreshModel: SessionRuntimeSpec["model"] = {
+        providerId: agent.state.model.provider,
+        modelId: agent.state.model.id,
+        reasoningLevel: agent.state.thinkingLevel,
+      },
     ): Promise<boolean> => {
       const work = refreshTail.then(async () => {
-        if (spec.refreshTools === undefined) return false;
-        const next = await spec.refreshTools({
-          trigger,
-          model: {
-            providerId: agent.state.model.provider,
-            modelId: agent.state.model.id,
-            reasoningLevel: agent.state.thinkingLevel,
-          },
-        });
+        if (closed || spec.refreshTools === undefined) return false;
+        const next = await spec.refreshTools({ trigger, model: refreshModel });
+        if (closed) throw new Error("This attachment is closed.");
         if (next === null) return false;
+        if (trigger === "code-mode" && next === lastSuccessfulInput) return false;
         const warm = trigger === "warm-turn" || trigger === "code-mode";
         // Even a host returning its full durable desired state on every check
         // must not regenerate provider declarations or reannounce additions.
@@ -2669,7 +2720,13 @@ async function attachSession(
           refreshTools: next.refreshTools ?? spec.refreshTools,
           ...(warm ? { declarationTools: spec.declarationTools ?? spec.tools } : {}),
         };
-        if (sameToolSpec(spec, candidate)) return false;
+        if (sameToolSpec(spec, candidate)) {
+          await announceRefreshes(candidate);
+          if (closed) throw new Error("This attachment is closed.");
+          agent.state.messages.push(...pendingAnnouncements.splice(0));
+          lastSuccessfulInput = next;
+          return false;
+        }
         const previousIds = new Set(callableSurface.map((entry) => entry.id));
         const staged = rebuildTools(candidate, warm);
         const additions = staged.stagedCallable.filter((entry) => !previousIds.has(entry.id));
@@ -2686,23 +2743,26 @@ async function attachSession(
               }),
               merged,
             );
-        if (warm && additions.length > 0) {
+        await announceRefreshes(candidate);
+        // Standalone callers predating the host ledger still receive discovery.
+        // Production always supplies durable facts (including []), never fake IDs.
+        if (candidate.toolRefreshAnnouncements === undefined && warm && additions.length > 0) {
           const namespaces = new Map<string, number>();
           for (const entry of additions) {
             const namespace = entry.mcp === undefined ? "volli" : `mcp:${entry.mcp.serverId}`;
             namespaces.set(namespace, (namespaces.get(namespace) ?? 0) + 1);
           }
-          const message: AgentMessage = {
-            role: "system",
-            timestamp: host.now(),
-            content: `Tools added through Code Mode: ${[...namespaces]
-              .map(([name, count]) => `${name} (${count})`)
-              .join(", ")}. Find them with searchTools() and describeTool().`,
-          };
+          const message = toolRefreshMessage(
+            [...namespaces].map(([name, count]) => ({ name, count })),
+            host.now(),
+          );
           await mainBranch.appendMessage(message, piContext());
-          agent.state.messages.push(message);
+          pendingAnnouncements.push(message);
         }
+        // Close drains this work before cleanup, but must never adopt its result.
+        if (closed) throw new Error("This attachment is closed.");
         // Commit only after all builds and the durable discovery append succeed.
+        agent.state.messages.push(...pendingAnnouncements.splice(0));
         callableSurface = staged.stagedCallable;
         codeModeSurface = staged.stagedSurface;
         liveCodeMode = staged.stagedCodeMode;
@@ -2713,6 +2773,7 @@ async function attachSession(
           head = nextHead;
           agent.state.messages = withSystemHead(head, agent.state.messages.slice(1));
         }
+        lastSuccessfulInput = next;
         return true;
       });
       // Serialise parallel program starts without poisoning later attempts.
@@ -3915,15 +3976,20 @@ async function attachSession(
             selectedRoute,
           );
           const latest = path.findLast((entry) => entry.type === "compaction");
-          nativeCompactionState =
+          const nextNativeCompactionState =
             latest?.type === "compaction"
               ? providerCompactionFromDetails(latest.details)
               : undefined;
-          agent.state.messages = withSystemHead(head, contextMessages(path));
+          const messageCount = agent.state.messages.length;
+          // Stage the selected pair for the host without applying it to Pi. A
+          // rejected refresh leaves model, reasoning and opaque context intact.
+          await refreshTools(refreshTrigger, selection);
+          if (closed) throw new Error("This attachment is closed.");
+          const appended = agent.state.messages.slice(messageCount);
+          agent.state.messages = withSystemHead(head, [...contextMessages(path), ...appended]);
+          nativeCompactionState = nextNativeCompactionState;
           agent.state.model = selected;
           agent.state.thinkingLevel = selection.reasoningLevel;
-          // Re-selecting an unchanged pair does not purchase a new prefix.
-          await refreshTools(refreshTrigger);
         });
         return { kind: "selected" };
       },
@@ -4045,6 +4111,7 @@ async function attachSession(
         interruptTurn();
         await agent.waitForIdle();
         await detachedRunSettled;
+        await refreshTail;
         unsubscribe?.();
         unsubscribe = undefined;
         stopWatchingResume?.();

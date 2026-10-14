@@ -5,6 +5,7 @@ import { readSessionOrigin, type SessionOrigin } from "./session-origin";
  */
 
 import type { SessionStopDetail } from "./session-stop";
+import type { SessionToolRefreshDelta } from "./tool-refresh-delta";
 
 import type {
   CompactionReason,
@@ -663,11 +664,11 @@ export type SessionEventPayload =
    */
   | { kind: "model.selected"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
   | { kind: "session.input.recorded"; input: SessionInput }
-  /** Additive effective surface; a new outer kind lets older readers retain the immutable birth. */
+  /** Additive surface delta; a new outer kind lets older readers retain the immutable birth. */
   | {
       kind: "session.tools.refreshed";
       trigger: "cold-turn" | "warm-turn" | "compaction" | "model-switch" | "code-mode";
-      surface: Extract<SessionInput, { kind: "tool-surface" }>;
+      delta: SessionToolRefreshDelta;
       added: readonly string[];
       changed: readonly string[];
     }

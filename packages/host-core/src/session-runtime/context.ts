@@ -17,7 +17,7 @@ import { getTicket } from "../db/tickets-repo";
 import { listMaterializableLinks } from "../db/blobs-repo";
 import { composeProjectBrief, composeSubagentBrief, composeTicketBrief } from "../agent-commands";
 import { recordedToolSurface, recordedMcpTools } from "./assembly";
-import { effectiveToolSurface, declarationToolSurface } from "./tool-refresh";
+import { effectiveToolSurface, declarationToolSurface, foldToolRefreshes } from "./tool-refresh";
 
 /**
  * The recorded brief's text. `getOrRecordSessionInput` is keyed by the input's
@@ -134,6 +134,7 @@ export function createRuntimeContextResolver(options: {
       codeModeSurface = frozen.codeMode;
     }
     const shared = {
+      toolRefreshAnnouncements: foldToolRefreshes(events).announcements,
       projectId: project.id,
       rootThreadId: sessionRootThreadId(sessionId),
       model: projection.modelSelection,

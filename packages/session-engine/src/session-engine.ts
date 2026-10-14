@@ -1,6 +1,8 @@
 import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
 import {
   advanceSessionProjection,
+  applyToolRefreshDelta,
+  createToolRefreshDelta,
   createSessionProjectionCheckpoint,
   observationPayload,
   pendingScheduledResume,
@@ -46,7 +48,7 @@ import type {
   UnstampedCommandReceipt,
 } from "@volli/shared";
 
-import { assertAdditiveToolRefresh } from "./tool-refresh";
+import { assertAdditiveToolRefresh, type ToolRefreshRequest } from "./tool-refresh";
 import { canonicalJson } from "./transcript-artifacts";
 
 export interface CreateSessionRequest {
@@ -118,7 +120,7 @@ export interface SessionEngine {
   }): Promise<SessionInput>;
   /** Append an additive effective surface without changing the Session's birth input. */
   recordToolRefresh(
-    request: Omit<Extract<SessionEventPayload, { kind: "session.tools.refreshed" }>, "kind"> & {
+    request: ToolRefreshRequest & {
       sessionId: string;
       provenance: SessionEventProvenance;
     },
@@ -449,8 +451,8 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           ) {
             current ??= event.payload.input;
             declared ??= event.payload.input;
-          } else if (event.payload.kind === "session.tools.refreshed") {
-            current = event.payload.surface;
+          } else if (event.payload.kind === "session.tools.refreshed" && current !== undefined) {
+            current = applyToolRefreshDelta(current, event.payload);
             if (["cold-turn", "compaction", "model-switch"].includes(event.payload.trigger))
               declared = current;
           }
@@ -458,19 +460,24 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         if (current === undefined || declared === undefined)
           throw new Error("Tool refresh requires a recorded birth surface");
         const declarationOnly =
-          !["warm-turn", "code-mode"].includes(request.trigger) &&
+          ["cold-turn", "compaction", "model-switch"].includes(request.trigger) &&
           request.changed.includes("codemode") &&
           canonicalJson(declared) !== canonicalJson(request.surface);
         if (canonicalJson(current) === canonicalJson(request.surface) && !declarationOnly)
           return null;
+        assertAdditiveToolRefresh(current, request, declared);
         const payload: Extract<SessionEventPayload, { kind: "session.tools.refreshed" }> = {
           kind: "session.tools.refreshed",
           trigger: request.trigger,
-          surface: request.surface,
+          delta: createToolRefreshDelta(current, request.surface),
           added: request.added,
           changed: request.changed,
         };
-        assertAdditiveToolRefresh(current, payload, declared);
+        // No intended change may disappear when reduced to a minimal delta.
+        if (
+          canonicalJson(applyToolRefreshDelta(current, payload)) !== canonicalJson(request.surface)
+        )
+          throw new Error("Tool refresh delta must reproduce the desired canonical surface");
         const event: SessionEvent = {
           id: ports.ids.next("event"),
           sessionId: session.id,

@@ -20,7 +20,6 @@ import {
   shortSessionId,
   verbToolsOf,
   verbEntry,
-  isSessionToolId,
   type McpToolDefinition,
   type ObservabilitySink,
   type SessionEvent,
@@ -56,7 +55,13 @@ import {
 } from "./index";
 import { resolveHostToolSurface } from "./host-capabilities";
 import { wireSessionRuntime } from "../session-services";
-import { effectiveToolSurface, declarationToolSurface, additiveToolRefresh } from "./tool-refresh";
+import {
+  effectiveToolSurface,
+  declarationToolSurface,
+  additiveToolRefresh,
+  foldToolRefreshes,
+} from "./tool-refresh";
+import { codeModeRefreshGate } from "./tool-refresh-gate";
 
 export interface RuntimeAssemblyOptions {
   dbHandle: DbHandle;
@@ -127,6 +132,20 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
     shells,
     browser,
   } = options;
+  const refreshGate = codeModeRefreshGate<
+    NonNullable<Awaited<ReturnType<RuntimeAssemblyOptions["resolveRuntimeContext"]>>>
+  >({
+    revision: async ({ projectId, parentId }) =>
+      JSON.stringify([
+        mcpSettings?.surfaceRevision(projectId) ?? 0,
+        codeMode.revision(),
+        webAccess?.surfaceRevision() ?? 0,
+        (await hostDecisions?.offersClassify(projectId)) ?? false,
+        parentId === null
+          ? null
+          : await sessionEngine!.latestEventSequence({ sessionId: parentId }),
+      ]),
+  });
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
@@ -391,69 +410,66 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     dispose: bound.dispose,
                   };
                 },
-          refreshRuntimeContext: async (sessionId, { trigger, model }) => {
-            const projection = await sessionEngine.getSession({ sessionId });
-            const events = await sessionEngine.listEvents({ sessionId });
-            const current = effectiveToolSurface(events);
-            const latestRefresh = events.findLast(
-              (event) => event.payload.kind === "session.tools.refreshed",
-            )?.payload;
-            // Do not overwrite a newer build's unknown additions on downgrade.
-            if (
-              latestRefresh?.kind === "session.tools.refreshed" &&
-              !latestRefresh.surface.tools.every(isSessionToolId)
-            )
-              return null;
-            if (projection === null || current === null) return null;
-            const session = projection.session;
-            const parentId = session.role === "subagent" ? session.parentSessionId : null;
-            const parent =
-              parentId === null
-                ? null
-                : effectiveToolSurface(await sessionEngine.listEvents({ sessionId: parentId }));
-            // Delegates inherit their parent's effective definitions, never a
-            // project selection that the parent has not acquired yet.
-            const mcpTools =
-              parentId === null
-                ? (sessionToolSurface.resolveMcp?.(session.projectId) ?? [])
-                : (parent?.mcpTools ?? []);
-            const birth = codeMode.birth(model, mcpTools);
-            const grants = verbToolsOf(current.tools).filter(
-              (tool) => verbEntry(tool)?.retired === undefined,
-            );
-            const tools = sessionToolSurface.resolve(
-              session.role,
-              session.role === "subagent" ? [] : grants,
-              parentId === null ? undefined : (parent?.tools ?? []),
-              mcpTools,
-              birth,
-              await sessionToolSurface.resolveClassify?.(session.projectId),
-            );
-            const candidateCodeMode = codeMode.surfaceFor(birth, tools, mcpTools);
-            const candidate = {
-              kind: "tool-surface" as const,
-              tools,
-              ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
-              ...(mcpTools.length === 0 ? {} : { mcpTools }),
-              ...(candidateCodeMode === undefined ? {} : { codeMode: candidateCodeMode }),
-            };
-            const refresh = additiveToolRefresh(
-              current,
-              candidate,
-              trigger,
-              declarationToolSurface(events) ?? current,
-            );
-            await sessionEngine.recordToolRefresh({
-              sessionId,
-              trigger,
-              ...refresh,
-              provenance: { source: { kind: "system", id: "pi-runtime", detail: null }, venue },
-            });
-            // Return durable desired bindings even after a prior adoption
-            // failed. The runtime compares against its adopted spec to no-op.
-            const context = await options.resolveRuntimeContext(sessionId);
-            return context === null ? null : { ...context, model };
-          },
+          releaseRuntimeContext: (sessionId) => refreshGate.forget(sessionId),
+          refreshRuntimeContext: (sessionId, request) =>
+            refreshGate.check(sessionId, request, async (rememberIdentity) => {
+              const { trigger, model } = request;
+              const projection = await sessionEngine.getSession({ sessionId });
+              const events = await sessionEngine.listEvents({ sessionId });
+              const current = effectiveToolSurface(events);
+              // Do not overwrite a newer build's unknown additions on downgrade.
+              if (foldToolRefreshes(events).future) return null;
+              if (projection === null || current === null) return null;
+              const session = projection.session;
+              const parentId = session.role === "subagent" ? session.parentSessionId : null;
+              await rememberIdentity({ projectId: session.projectId, parentId });
+              const parent =
+                parentId === null
+                  ? null
+                  : effectiveToolSurface(await sessionEngine.listEvents({ sessionId: parentId }));
+              // Delegates inherit their parent's effective definitions, never a
+              // project selection that the parent has not acquired yet.
+              const mcpTools =
+                parentId === null
+                  ? (sessionToolSurface.resolveMcp?.(session.projectId) ?? [])
+                  : (parent?.mcpTools ?? []);
+              const birth = codeMode.birth(model, mcpTools);
+              const grants = verbToolsOf(current.tools).filter(
+                (tool) => verbEntry(tool)?.retired === undefined,
+              );
+              const tools = sessionToolSurface.resolve(
+                session.role,
+                session.role === "subagent" ? [] : grants,
+                parentId === null ? undefined : (parent?.tools ?? []),
+                mcpTools,
+                birth,
+                await sessionToolSurface.resolveClassify?.(session.projectId),
+              );
+              const candidateCodeMode = codeMode.surfaceFor(birth, tools, mcpTools);
+              const candidate = {
+                kind: "tool-surface" as const,
+                tools,
+                ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
+                ...(mcpTools.length === 0 ? {} : { mcpTools }),
+                ...(candidateCodeMode === undefined ? {} : { codeMode: candidateCodeMode }),
+              };
+              const refresh = additiveToolRefresh(
+                current,
+                candidate,
+                trigger,
+                declarationToolSurface(events) ?? current,
+              );
+              await sessionEngine.recordToolRefresh({
+                sessionId,
+                trigger,
+                ...refresh,
+                provenance: { source: { kind: "system", id: "pi-runtime", detail: null }, venue },
+              });
+              // Return durable desired bindings even after a prior adoption
+              // failed. The runtime compares against its adopted spec to no-op.
+              const context = await options.resolveRuntimeContext(sessionId);
+              return context === null ? null : { ...context, model };
+            }),
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
           // the tool array; this live answer supplies closures only. Missing a

@@ -1,16 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_CODE_MODE_LIMITS,
+  createToolRefreshDelta,
   decodeSessionEventPayload,
   type SessionEvent,
   type SessionInput,
 } from "@volli/shared";
 import { createSessionEngine, SessionEngineNotFoundError } from "./session-engine";
 import { createInMemorySessionLedger } from "./in-memory-ledger";
-import { assertAdditiveToolRefresh } from "./tool-refresh";
+import { assertAdditiveToolRefresh, type ToolRefreshRequest } from "./tool-refresh";
 
 type Surface = Extract<SessionInput, { kind: "tool-surface" }>;
-type Refresh = Extract<SessionEvent["payload"], { kind: "session.tools.refreshed" }>;
+type Refresh = ToolRefreshRequest & { kind: "session.tools.refreshed" };
+function fact(
+  current: Surface,
+  update: Refresh,
+): Extract<SessionEvent["payload"], { kind: "session.tools.refreshed" }> {
+  const { surface, ...notice } = update;
+  return { ...notice, delta: createToolRefreshDelta(current, surface) };
+}
 const provenance = { source: { kind: "system" as const, id: "host", detail: null }, venue: null };
 const birth: Surface = { kind: "tool-surface", tools: ["read"] };
 const code: Surface = {
@@ -60,6 +68,8 @@ async function fixture(input?: Surface) {
 describe("durable effective tool refresh", () => {
   it("transactionally dedupes concurrent refreshes against the latest fact and keeps birth immutable", async () => {
     const { engine, session, record } = await fixture(birth);
+    expect(await engine.getBaseSession({ sessionId: session.id })).toEqual(session);
+    expect(await engine.getBaseSession({ sessionId: "missing" })).toBeNull();
     const payload = refresh({ kind: "tool-surface", tools: ["read", "write"] }, ["write"]);
     const results = await Promise.all([record(payload), record(payload)]);
     expect(results.filter(Boolean)).toHaveLength(1);
@@ -67,7 +77,7 @@ describe("durable effective tool refresh", () => {
     expect(await record(refresh(payload.surface))).toBeNull();
     const latest = await record(
       refresh(
-        { kind: "tool-surface", tools: ["read", "write", "edit"] },
+        { kind: "tool-surface", tools: ["read", "edit", "write"] },
         ["edit"],
         [],
         "compaction",
@@ -112,7 +122,7 @@ describe("durable effective tool refresh", () => {
         occurredAt: 50,
         recordedAt: 50,
         provenance,
-        payload: refresh(birth, [], [], "warm-turn"),
+        payload: fact(birth, refresh(birth, [], [], "warm-turn")),
       }),
     );
     await expect(record(refresh(birth))).rejects.toThrow("birth surface");
@@ -124,11 +134,11 @@ describe("durable effective tool refresh", () => {
     const { record, ledger, session } = await fixture(code);
     const surface: Surface = {
       ...code,
-      tools: [...code.tools, "write"],
+      tools: ["read", "write", "codemode"],
       codeMode: { ...code.codeMode!, routes: { read: "both", write: "deferred" } },
     };
     expect((await record(refresh(surface, ["write"], [], "warm-turn")))?.payload).toEqual(
-      refresh(surface, ["write"], [], "warm-turn"),
+      fact(code, refresh(surface, ["write"], [], "warm-turn")),
     );
     // Unknown future triggers remain facts, not proof of declaration publication.
     await ledger.transaction((transaction) =>
@@ -139,16 +149,74 @@ describe("durable effective tool refresh", () => {
         occurredAt: 50,
         recordedAt: 50,
         provenance,
-        payload: refresh(surface, [], [], "future-trigger" as Refresh["trigger"]),
+        payload: fact(surface, refresh(surface, [], [], "future-trigger" as Refresh["trigger"])),
       }),
     );
     // The next cold boundary republishes a description with the new count,
     // even though no executable capability is new at that point.
+    expect(
+      await record(refresh(surface, [], ["codemode"], "future-trigger" as Refresh["trigger"])),
+    ).toBeNull();
     const cold = refresh(surface, [], ["codemode"]);
-    expect((await record(cold))?.payload).toEqual(cold);
+    expect((await record(cold))?.payload).toEqual(fact(surface, cold));
     expect(await record(cold)).toBeNull();
   });
-  it("adds questions only for a new tool, permits Code Mode images and description-only MCP edits", () => {
+  it("persists only new MCP schemas, new routes and marker flips across multiple epochs", async () => {
+    const { record, engine, session } = await fixture(dynamic);
+    const added = { ...mcp, toolName: "write", providerName: "mcp__server__write" as const };
+    const first: Surface = {
+      ...dynamic,
+      tools: [mcp.providerName, added.providerName],
+      mcpTools: [mcp, added],
+    };
+    const event = await record(refresh(first, [added.providerName]));
+    expect(event?.payload).toEqual({
+      kind: "session.tools.refreshed",
+      trigger: "cold-turn",
+      added: [added.providerName],
+      changed: [],
+      delta: { mcpTools: [added] },
+    });
+    expect(JSON.stringify(event?.payload)).not.toContain(mcp.providerName);
+    const marked = { ...first, refreshDescriptions: true as const };
+    expect((await record(refresh(marked)))?.payload).toMatchObject({
+      delta: { refreshDescriptions: true },
+    });
+    expect(await record(refresh(marked))).toBeNull();
+    const events = await engine.listEvents({ sessionId: session.id });
+    expect(events.filter((row) => row.payload.kind === "session.tools.refreshed")).toHaveLength(2);
+  });
+  it("folds first Code Mode acquisition and upgrades without persisting retained routes or limits", async () => {
+    const { record } = await fixture(birth);
+    const acquired: Surface = {
+      ...code,
+      codeMode: { ...code.codeMode!, routes: { read: "direct" }, mode: "only", nudge: true },
+    };
+    expect((await record(refresh(acquired, ["codemode"])))?.payload).toMatchObject({
+      delta: {
+        codeMode: { limits: DEFAULT_CODE_MODE_LIMITS, mode: "only", nudge: true },
+        routes: { read: "direct" },
+      },
+    });
+    const versioned: Surface = {
+      ...acquired,
+      codeMode: { ...acquired.codeMode!, descriptionVersion: 2 },
+    };
+    expect((await record(refresh(versioned, [], ["codemode"])))?.payload).toMatchObject({
+      delta: { descriptionVersion: 2 },
+    });
+    expect(await record(refresh(versioned))).toBeNull();
+  });
+  it("rejects noncanonical full surfaces or unrepresented extras instead of silently dropping edits", async () => {
+    const { record } = await fixture(birth);
+    await expect(
+      record(refresh({ ...birth, tools: ["write", "read"] }, ["write"])),
+    ).rejects.toThrow("canonical surface");
+    await expect(
+      record(refresh({ ...birth, tools: ["read", "write"], mcpTools: [mcp] }, ["write"])),
+    ).rejects.toThrow("delta");
+  });
+  it("adds questions only for a new tool, permits Code Mode images and rejects MCP description edits", () => {
     expect(() =>
       assertAdditiveToolRefresh(
         { ...birth, tools: ["ask_user"] },
@@ -168,14 +236,16 @@ describe("durable effective tool refresh", () => {
         "model-switch",
       ),
     );
-    assertAdditiveToolRefresh(
-      dynamic,
-      refresh(
-        { ...dynamic, mcpTools: [{ ...mcp, description: "Read safely" }] },
-        [],
-        [mcp.providerName],
+    expect(() =>
+      assertAdditiveToolRefresh(
+        dynamic,
+        refresh(
+          { ...dynamic, mcpTools: [{ ...mcp, description: "Read safely" }] },
+          [],
+          [mcp.providerName],
+        ),
       ),
-    );
+    ).toThrow("preserve");
     assertAdditiveToolRefresh(
       birth,
       refresh(

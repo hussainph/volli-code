@@ -18,7 +18,12 @@ import { insertProject } from "../db/projects-repo";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 import { createPiNativeAdapter, type PiRuntimeContext } from "./pi-adapter";
-import { additiveToolRefresh, effectiveToolSurface, declarationToolSurface } from "./tool-refresh";
+import {
+  additiveToolRefresh,
+  effectiveToolSurface,
+  declarationToolSurface,
+  foldToolRefreshes,
+} from "./tool-refresh";
 import { McpSessionHost } from "../mcp/session-host";
 import { createMcpProtocolClientOpener } from "../mcp/client";
 import { MemoryMcpCredentialStore } from "../mcp/credential-store";
@@ -64,6 +69,7 @@ async function fixture(birth: Surface, initial: Surface) {
     const surface = effectiveToolSurface(events);
     if (surface === null) throw new Error("Missing surface");
     return {
+      toolRefreshAnnouncements: foldToolRefreshes(events).announcements,
       role: "project",
       projectId: "project-refresh",
       ticketId: null,

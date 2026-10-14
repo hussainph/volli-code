@@ -132,10 +132,13 @@ describe("hostCodeMode", () => {
       policy: () => policy,
       sandboxAvailable: true,
     });
+    const revision = codeMode.revision();
+    expect(codeMode.revision()).toBe(revision);
     const born = codeMode.birth(sonnet, []);
     // The switch flips between the surface and its record: the record still
     // follows the one decision the surface was resolved from.
     policy = { enabled: false, models: {} };
+    expect(codeMode.revision()).not.toBe(revision);
     expect(codeMode.surfaceFor(born, tools, [search])?.routes["read"]).toBe("both");
   });
 

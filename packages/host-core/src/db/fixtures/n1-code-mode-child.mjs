@@ -56,6 +56,37 @@ async function attach(step) {
     const reader = existsSync(readerPath) ? await import(pathToFileURL(readerPath).href) : null;
     const record = reader?.effectiveToolSurface(events) ?? birth;
     const declaration = reader?.declarationToolSurface(events) ?? birth;
+    // The sequenced reader is strict about unknown kinds. Seed the OLD bus
+    // after historical refreshes, then prove its first post-start drain excludes them.
+    const wakePath = ["session-control/session-wake.ts", "session-wake.ts"]
+      .map((path) => join(process.env.VOLLI_N1_TREE, process.env.VOLLI_N1_HOST_SRC, path))
+      .find(existsSync);
+    if (!wakePath) throw new Error("N−1 has no production Session wake bus");
+    const { createSessionWakeBus } = await import(pathToFileURL(wakePath).href);
+    const wakeErrors = [];
+    const wakes = [];
+    const bus = createSessionWakeBus(engine, {
+      db,
+      onError: (error) => wakeErrors.push(String(error)),
+    });
+    const unsubscribe = bus.subscribe((wake) => wakes.push(wake));
+    await bus.engine.observe({
+      id: `n1-startup-wake-${step.sessionId}`,
+      sessionId: step.sessionId,
+      occurredAt: 1_791_100_000_001,
+      provenance: { source: { kind: "system", id: "n1-proof", detail: null }, venue: null },
+      kind: "adapter.observed",
+      attachmentId: null,
+      name: "N−1 startup wake proof",
+      native: null,
+    });
+    unsubscribe();
+    const startupWakeSafe =
+      wakeErrors.length === 0 &&
+      wakes.length === 1 &&
+      wakes[0].event.payload.kind === "adapter.observed";
+    if (!startupWakeSafe)
+      throw new Error(`N−1 wake replayed historical refreshes: ${JSON.stringify(wakeErrors)}`);
     let result;
     const browser = Object.fromEntries(
       [
@@ -110,6 +141,7 @@ async function attach(step) {
             bound,
             declared: declared.map((tool) => tool.name),
             replayable: projection?.session.id === step.sessionId,
+            startupWakeSafe,
             birthStillReadable: birth.tools.every((tool) =>
               shared.sessionToolIds(spec).includes(tool),
             ),

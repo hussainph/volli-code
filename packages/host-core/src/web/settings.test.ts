@@ -63,6 +63,29 @@ describe("WebAccessSettings — choosing Exa", () => {
 });
 
 describe("WebAccessSettings defaults", () => {
+  it("invalidates warm membership only after successful provider/key writes", () => {
+    expect(settings.surfaceRevision()).toBe(0);
+    settings.setProvider({ provider: "brave", searxngUrl: null });
+    expect(settings.surfaceRevision()).toBe(1);
+    settings.saveKey("brave", KEY);
+    expect(settings.surfaceRevision()).toBe(2);
+    settings.clearKey("brave");
+    expect(settings.surfaceRevision()).toBe(3);
+    expect(() => settings.saveKey("brave", "")).toThrow();
+    expect(() => settings.setProvider({ provider: "searxng", searxngUrl: null })).toThrow();
+    expect(settings.surfaceRevision()).toBe(3);
+  });
+  it("treats a future stored provider as off without invalidating membership on reads", () => {
+    settings.setProvider({ provider: "off", searxngUrl: null });
+    ctx.db.pragma("ignore_check_constraints = ON");
+    ctx.db
+      .prepare("UPDATE web_access_settings SET provider = 'future-provider' WHERE id = 1")
+      .run();
+    expect(settings.view().provider).toBe("off");
+    expect(settings.resolve()).toEqual({ configured: false, reason: "off" });
+    expect(settings.surfaceRevision()).toBe(1);
+  });
+
   it("is Off on a profile that never configured it", () => {
     expect(settings.view()).toEqual({
       provider: "off",

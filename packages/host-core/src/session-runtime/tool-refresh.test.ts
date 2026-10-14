@@ -1,13 +1,29 @@
+import { assertAdditiveToolRefresh } from "../../../session-engine/src/tool-refresh";
 import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_CODE_MODE_LIMITS,
+  createToolRefreshDelta,
   type SessionInput,
   type SessionEvent,
   type McpToolDefinition,
 } from "@volli/shared";
-import { additiveToolRefresh, effectiveToolSurface, declarationToolSurface } from "./tool-refresh";
+import {
+  additiveToolRefresh,
+  effectiveToolSurface,
+  declarationToolSurface,
+  foldToolRefreshes,
+} from "./tool-refresh";
 
-const event = (payload: unknown) => ({ payload }) as SessionEvent;
+const event = (payload: unknown) => ({ id: "refresh-id", payload }) as SessionEvent;
+function refreshFact(current: Surface, next: Surface, trigger: string) {
+  return event({
+    kind: "session.tools.refreshed",
+    trigger,
+    added: next.tools.filter((tool) => !current.tools.includes(tool)),
+    changed: [],
+    delta: createToolRefreshDelta(current, next),
+  });
+}
 
 type Surface = Extract<SessionInput, { kind: "tool-surface" }>;
 const mcp: McpToolDefinition = {
@@ -46,6 +62,80 @@ const candidate: Surface = {
 };
 
 describe("additions-only tool refresh", () => {
+  it("pins planner/transaction guard agreement for retained MCP definitions and all paid/warm triggers", () => {
+    const retained: Surface = {
+      ...birth,
+      tools: [...birth.tools, mcp.providerName],
+      mcpTools: [mcp],
+      codeMode: {
+        ...birth.codeMode!,
+        routes: { ...birth.codeMode!.routes, [mcp.providerName]: "both" },
+      },
+    };
+    for (const trigger of [
+      "cold-turn",
+      "compaction",
+      "model-switch",
+      "warm-turn",
+      "code-mode",
+    ] as const) {
+      for (const current of [
+        birth,
+        retained,
+        { kind: "tool-surface", tools: ["read"] } as Surface,
+      ]) {
+        const result = additiveToolRefresh(
+          current,
+          { ...candidate, mcpTools: [{ ...mcp, description: "new catalog copy" }] },
+          trigger,
+        );
+        expect(() => assertAdditiveToolRefresh(current, { trigger, ...result })).not.toThrow();
+        if (current.mcpTools) expect(result.surface.mcpTools).toEqual([mcp]);
+      }
+    }
+  });
+  it("replays durable warm discovery IDs and stops binding after future additions without dropping facts", () => {
+    const warm = additiveToolRefresh(birth, candidate, "code-mode");
+    const events = [
+      event({ kind: "session.tools.refreshed", added: [], delta: {}, trigger: "cold-turn" }),
+      event({ kind: "session.input.recorded", input: birth }),
+      refreshFact(birth, warm.surface, "code-mode"),
+    ];
+    expect(foldToolRefreshes(events).announcements).toEqual([
+      {
+        id: "refresh-id",
+        namespaces: [
+          { name: "volli", count: 1 },
+          { name: "mcp:paper", count: 1 },
+        ],
+      },
+    ]);
+    events.push(
+      event({ kind: "session.tools.refreshed", trigger: "future-trigger", added: [], delta: {} }),
+    );
+    expect(declarationToolSurface(events)).toBe(birth);
+    events.push(
+      event({
+        kind: "session.tools.refreshed",
+        trigger: "warm-turn",
+        added: ["future_tool"],
+        delta: { routes: { future_tool: "code" } },
+      }),
+    );
+    events.push(
+      event({
+        kind: "session.tools.refreshed",
+        trigger: "cold-turn",
+        added: ["future_tool_two"],
+        delta: { routes: { future_tool_two: "code" } },
+      }),
+    );
+    expect(foldToolRefreshes(events)).toMatchObject({
+      effective: warm.surface,
+      declared: birth,
+      future: true,
+    });
+  });
   it.each(["cold-turn", "compaction", "model-switch"] as const)(
     "adds the current surface on %s without replacing old routes, schemas or spellings",
     (trigger) => {
@@ -141,7 +231,7 @@ describe("additions-only tool refresh", () => {
     const events = [
       event({ kind: "session.input.recorded", input: birth }),
       event({ kind: "session.input.recorded", input: candidate }),
-      event({ kind: "session.tools.refreshed", ...warm, trigger: "warm-turn" }),
+      refreshFact(birth, warm.surface, "warm-turn"),
       event({ kind: "turn.completed" }),
     ];
     expect(declarationToolSurface([])).toBeNull();
@@ -149,8 +239,8 @@ describe("additions-only tool refresh", () => {
     const cold = additiveToolRefresh(warm.surface, warm.surface, "cold-turn", birth);
     expect(cold.added).toEqual([]);
     expect(cold.changed).toEqual(["codemode", "session.delegate"]);
-    events.push(event({ kind: "session.tools.refreshed", ...cold, trigger: "cold-turn" }));
-    expect(declarationToolSurface(events)).toBe(cold.surface);
+    events.push(refreshFact(warm.surface, cold.surface, "cold-turn"));
+    expect(declarationToolSurface(events)).toEqual(cold.surface);
     const modernBirth: Surface = {
       ...birth,
       refreshDescriptions: true,
@@ -168,11 +258,12 @@ describe("additions-only tool refresh", () => {
     events.push(
       event({
         kind: "session.tools.refreshed",
-        surface: { ...cold.surface, tools: [...cold.surface.tools, "future_tool"] },
+        added: ["future_tool"],
+        delta: { routes: { future_tool: "both" } },
         trigger: "model-switch",
       }),
     );
-    expect(declarationToolSurface(events)).toBe(cold.surface);
+    expect(declarationToolSurface(events)).toEqual(cold.surface);
   });
 
   it("reads effective refresh facts while retaining the first immutable birth", () => {
@@ -189,19 +280,26 @@ describe("additions-only tool refresh", () => {
     expect(
       effectiveToolSurface([
         event({ kind: "session.input.recorded", input: birth }),
-        event({ kind: "session.tools.refreshed", ...refreshed, trigger: "cold-turn" }),
+        refreshFact(birth, refreshed.surface, "cold-turn"),
       ]),
-    ).toBe(refreshed.surface);
+    ).toEqual(refreshed.surface);
     const future = {
       ...refreshed.surface,
       tools: [...refreshed.surface.tools, "future_builtin_from_next_release"],
+      codeMode: {
+        ...refreshed.surface.codeMode!,
+        routes: {
+          ...refreshed.surface.codeMode!.routes,
+          future_builtin_from_next_release: "both" as const,
+        },
+      },
     };
     expect(
       effectiveToolSurface([
         event({ kind: "session.input.recorded", input: birth }),
-        event({ kind: "session.tools.refreshed", ...refreshed, trigger: "cold-turn" }),
-        event({ kind: "session.tools.refreshed", surface: future, trigger: "cold-turn" }),
+        refreshFact(birth, refreshed.surface, "cold-turn"),
+        refreshFact(refreshed.surface, future as Surface, "cold-turn"),
       ]),
-    ).toBe(refreshed.surface);
+    ).toEqual(refreshed.surface);
   });
 });
