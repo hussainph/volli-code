@@ -112,4 +112,23 @@ The first fix-round CI run (`8e86b1b1c`, run `38498672490`) passed all five real
 
 A bounded second-opinion probe is recorded in `opened-race.md`. `vp test run src/pi/runtime.test.ts src/pi/opened-race.test.ts -t 'settling a submit|acknowledges supervisor steering immediately|opened delivery through host queue admission' --maxWorkers="$VOLLI_CONCURRENCY_HINT"` in agent-runtime passed 9 selected tests (317 unrelated tests filtered out). The real host-path serialization regression passes; direct concurrent attachment calls expose an existing raw-rejection defect, retained as an explicitly bounded follow-up rather than a speculative host-path fix. No production Pi delta remains.
 
+### Latest-main integration
+
+Merged `origin/main` at `36afefd4f` (VC-757 running-bash handoff) before the final push. The ChatPlane conflict keeps main's `RunningBashProvider`/Session binding and this ticket's delivered/pending rows, persistent Working, timeline blocker and scrolled-up failure hint. The generated schema retains both optional opening settlement and main's background-shell route.
+
+```sh
+# apps/desktop — directly covers the merged conversation and parallel bash rows
+vp test run src/renderer/src/components/chat/chat-plane.test.tsx \
+  src/renderer/src/components/chat/chat-plane.window.test.tsx \
+  src/renderer/src/components/chat/chat-plane.acceptance.test.tsx \
+  src/renderer/src/components/chat/chat-plane-model.test.ts \
+  src/renderer/src/components/chat/running-bash-control.test.tsx \
+  src/renderer/src/components/chat/activity-ui.test.tsx --coverage \
+  --coverage.include=src/renderer/src/components/chat/chat-plane-model.ts \
+  --maxWorkers="$VOLLI_CONCURRENCY_HINT" --testTimeout=20000
+# 191 passed, no skips; chat-plane-model.ts 100% on all four axes.
+```
+
+Reused each exact prepared old-tag manifest with `VOLLI_N1_MANIFEST` and reran `vp test run src/db/n1-compatibility.test.ts src/db/n1-prepare.test.ts --maxWorkers="$VOLLI_CONCURRENCY_HINT"`: **22/22 passed on each of 0.2.1 and canary.1**, including both silent-end scenarios and main's native bash-sidecar downgrade case. The root CI-contract tests passed 11/11 again. Typecheck passed for desktop, shared, cli, session-engine, session-presentation, session-rpc, host-core and agent-runtime. Host boundary, fresh generated schema/additive check (37 compatibility tests) and diff check passed against merged main. Screenshot revalidation after this merge is recorded in `screenshots.md`.
+
 Exact verified fix-round head and CI/CodeQL links are posted on PR #865 and VC-758 after push, without mutating the verified commit just to embed its own hash. PR remains unmerged.
