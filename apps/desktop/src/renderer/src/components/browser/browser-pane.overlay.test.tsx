@@ -317,6 +317,84 @@ describe("BrowserPane renderer overlays", () => {
     tooltip.remove();
   });
 
+  it.each([
+    ["transitionrun", "transitionend"],
+    ["transitionstart", "transitioncancel"],
+    ["animationstart", "animationend"],
+    ["animationstart", "animationcancel"],
+  ])(
+    "remeasures a marked overlay during %s without DOM or resize notifications",
+    async (start, end) => {
+      const capture = vi.fn(async () => captureResult("sliding"));
+      const { api, hide, show } = makeApi(capture as unknown as BrowserApi["capture"]);
+      await act(async () => {
+        root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
+      });
+      const overlay = openDialog();
+      overlay.setAttribute("data-native-plane-overlay", "");
+      let rect = new DOMRect(0, 0, 50, 50);
+      const measure = vi
+        .spyOn(overlay, "getClientRects")
+        .mockImplementation(() => [rect] as unknown as DOMRectList);
+      await settle();
+      expect(capture).not.toHaveBeenCalled();
+      overlay.dispatchEvent(new Event(start, { bubbles: true }));
+      await settle();
+      // Only the compositor's measured box changes. The transition has not
+      // ended, and no attributes, children or ResizeObserver callbacks change.
+      rect = new DOMRect(200, 200, 50, 50);
+      await settle();
+      expect(capture).toHaveBeenCalledOnce();
+      expect(hide).toHaveBeenCalledOnce();
+      overlay.dispatchEvent(new Event(end, { bubbles: true }));
+      await settle();
+      await settle();
+      measure.mockClear();
+      await settle();
+      expect(measure).not.toHaveBeenCalled();
+      overlay.remove();
+      await releaseOverlay();
+      expect(show).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("shares scans across panes and does zero geometry reads for streaming without overlays", async () => {
+    const capture = vi.fn(async () => captureResult("unused"));
+    const { api } = makeApi(capture as unknown as BrowserApi["capture"]);
+    await act(async () => {
+      root?.render(
+        <>
+          <BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />
+          <BrowserPane
+            tab={{ ...tab, tabId: "tab-2" }}
+            visible
+            api={api}
+            onTabState={() => undefined}
+          />
+        </>,
+      );
+    });
+    await settle();
+    await settle();
+    const scans = vi.spyOn(document, "querySelectorAll");
+    const bounds = vi.mocked(Element.prototype.getBoundingClientRect);
+    const rects = vi.mocked(Element.prototype.getClientRects);
+    bounds.mockClear();
+    rects.mockClear();
+    for (let word = 0; word < 30; word++) {
+      const token = document.createElement("span");
+      token.textContent = `word ${word}`;
+      container?.append(token);
+      await settle();
+    }
+    expect(bounds).not.toHaveBeenCalled();
+    expect(rects).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    expect(
+      scans.mock.calls.filter(([selector]) => selector.includes("data-native-plane-overlay")),
+    ).toHaveLength(30);
+  });
+
   it("ignores a capture that resolves after its overlay closed", async () => {
     let resolve!: (result: BrowserTabCaptureResult) => void;
     const capture = vi.fn(

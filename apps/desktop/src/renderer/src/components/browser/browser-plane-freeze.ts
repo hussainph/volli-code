@@ -58,18 +58,9 @@ export function hasVisibleNativePlane(doc: Document): boolean {
   return false;
 }
 
-/** Whether renderer chrome needs the tier over THIS plane, not its neighbours. */
-export function hasNativePlaneOverlay(doc: Document, plane: Element): boolean {
-  const bounds = plane.getBoundingClientRect();
+/** Find floating surfaces without reading any geometry (also shared by motion tracking). */
+export function nativePlaneOverlayCandidates(doc: Document): Element[] {
   const view = doc.defaultView!;
-  const left = Math.max(0, bounds.left);
-  const top = Math.max(0, bounds.top);
-  const right = Math.min(view.innerWidth, bounds.right);
-  const bottom = Math.min(view.innerHeight, bounds.bottom);
-  if (right <= left || bottom <= top || view.getComputedStyle(plane).visibility === "hidden") {
-    return false;
-  }
-
   const root = doc.getElementById(APP_ROOT_ID);
   const candidates = new Set(
     doc.querySelectorAll(`${EXPLICIT_OVERLAY_SELECTOR}, ${POSITIONED_OVERLAY_SELECTOR}`),
@@ -81,9 +72,8 @@ export function hasNativePlaneOverlay(doc: Document, plane: Element): boolean {
     candidates.add(child);
     for (const element of child.querySelectorAll("*")) candidates.add(element);
   }
+  const floatingElements: Element[] = [];
   for (const element of candidates) {
-    // Fixed layout containers and a plane's own descendants are not overlays.
-    if (element.contains(plane) || plane.contains(element)) continue;
     const style = view.getComputedStyle(element);
     if (
       style.display === "none" ||
@@ -98,7 +88,33 @@ export function hasNativePlaneOverlay(doc: Document, plane: Element): boolean {
       element.matches(`${EXPLICIT_OVERLAY_SELECTOR}, [data-sonner-toast]`) ||
       style.position === "fixed" ||
       (portaled && (style.position === "absolute" || element.matches(FLOATING_OVERLAY_SELECTOR)));
-    if (!floating) continue;
+    if (floating) floatingElements.push(element);
+  }
+  return floatingElements;
+}
+
+/** Whether renderer chrome needs the tier over THIS plane, not its neighbours. */
+export function hasNativePlaneOverlay(
+  doc: Document,
+  plane: Element,
+  candidates = nativePlaneOverlayCandidates(doc),
+): boolean {
+  // Streaming transcript changes are frequent. With no floating surface there
+  // is no reason to force layout, including for the plane's own rectangle.
+  const overlays = candidates.filter(
+    (element) => !element.contains(plane) && !plane.contains(element),
+  );
+  if (overlays.length === 0) return false;
+  const bounds = plane.getBoundingClientRect();
+  const view = doc.defaultView!;
+  const left = Math.max(0, bounds.left);
+  const top = Math.max(0, bounds.top);
+  const right = Math.min(view.innerWidth, bounds.right);
+  const bottom = Math.min(view.innerHeight, bounds.bottom);
+  if (right <= left || bottom <= top || view.getComputedStyle(plane).visibility === "hidden") {
+    return false;
+  }
+  for (const element of overlays) {
     // getClientRects excludes display:none ancestors. Do not reject opacity:0:
     // entry animations must start capturing before their first opaque frame.
     for (const rect of element.getClientRects()) {

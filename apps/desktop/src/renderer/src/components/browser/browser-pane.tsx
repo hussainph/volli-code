@@ -13,6 +13,7 @@ import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserPlaneController } from "@renderer/components/browser/browser-plane";
 import {
   hasNativePlaneOverlay,
+  nativePlaneOverlayCandidates,
   planeVisibility,
   shouldPaintPlanePixels,
   PLANE_CAPTURE_DEADLINE_MS,
@@ -30,6 +31,16 @@ import { toastError } from "@renderer/lib/toast";
  */
 function addressOf(url: string): string {
   return isBrowserStartUrl(url) ? "" : url;
+}
+
+// RAF timestamps are shared by every pane in a frame. Reuse the DOM/style
+// scan, but never the plane-specific geometry. Mutations invalidate it below.
+let overlayScan: { time: number; elements: Element[] } | undefined;
+function overlayCandidatesAtFrame(time: number): Element[] {
+  if (overlayScan?.time !== time) {
+    overlayScan = { time, elements: nativePlaneOverlayCandidates(document) };
+  }
+  return overlayScan.elements;
 }
 
 /**
@@ -56,8 +67,9 @@ function useRendererOverlayActive(
     let queued = 0;
     let release = 0;
     let holding = false;
-    const read = (): void => {
-      if (hasNativePlaneOverlay(document, anchor)) {
+    const motions = new Map<Element, Set<string>>();
+    const read = (candidates?: Element[]): void => {
+      if (hasNativePlaneOverlay(document, anchor, candidates)) {
         window.clearTimeout(release);
         release = 0;
         holding = true;
@@ -75,13 +87,60 @@ function useRendererOverlayActive(
         }, PLANE_OVERLAY_RELEASE_MS);
       }
     };
-    const schedule = (): void => {
+    const queue = (): void => {
       if (queued !== 0) return;
-      queued = window.requestAnimationFrame(() => {
+      queued = window.requestAnimationFrame((time) => {
         queued = 0;
-        read();
+        read(overlayCandidatesAtFrame(time));
+        for (const element of motions.keys()) {
+          if (!element.isConnected) motions.delete(element);
+        }
+        if (motions.size > 0) queue();
       });
     };
+    const schedule = (): void => {
+      overlayScan = undefined;
+      queue();
+    };
+    const motion = (event: Event): void => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const transition = event.type.startsWith("transition");
+      const key = transition
+        ? `transition:${(event as TransitionEvent).propertyName}`
+        : `animation:${(event as AnimationEvent).animationName}`;
+      if (event.type.endsWith("end") || event.type.endsWith("cancel")) {
+        const running = motions.get(target);
+        running?.delete(key);
+        if (running?.size === 0) motions.delete(target);
+        schedule();
+        return;
+      }
+      // A compositor-only translate writes no DOM attributes or layout sizes.
+      // Follow relevant entry/exit motion until it ends, including when its
+      // first rectangle is outside the plane. Unrelated transcript animations
+      // and perpetual spinners must not create a document-wide frame loop.
+      if (!transition && getComputedStyle(target).animationIterationCount === "infinite") return;
+      if (
+        !nativePlaneOverlayCandidates(document).some(
+          (element) => element.contains(target) || target.contains(element),
+        )
+      )
+        return;
+      const running = motions.get(target) ?? new Set<string>();
+      running.add(key);
+      motions.set(target, running);
+      schedule();
+    };
+    const motionEvents = [
+      "transitionrun",
+      "transitionstart",
+      "transitionend",
+      "transitioncancel",
+      "animationstart",
+      "animationend",
+      "animationcancel",
+    ];
     read();
     const observer = new MutationObserver(schedule);
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
@@ -90,15 +149,13 @@ function useRendererOverlayActive(
     resize.observe(document.body);
     window.addEventListener("resize", schedule);
     document.addEventListener("scroll", schedule, true);
-    document.addEventListener("animationend", schedule, true);
-    document.addEventListener("transitionend", schedule, true);
+    for (const event of motionEvents) document.addEventListener(event, motion, true);
     return () => {
       observer.disconnect();
       resize.disconnect();
       window.removeEventListener("resize", schedule);
       document.removeEventListener("scroll", schedule, true);
-      document.removeEventListener("animationend", schedule, true);
-      document.removeEventListener("transitionend", schedule, true);
+      for (const event of motionEvents) document.removeEventListener(event, motion, true);
       window.clearTimeout(release);
       if (queued !== 0) window.cancelAnimationFrame(queued);
     };
