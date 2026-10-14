@@ -653,12 +653,10 @@ const MULTI_SELECT_ASK = ask("ask-many", "What should I update along the way?", 
 /**
  * The one that has to be minimised to be got past (VC-84).
  *
- * Five stacked options with real descriptions and a box under them — more than
- * `ask_user`'s own guidance asks for, which is exactly why it is here: the tool
- * description says two to five and one or two sentences, and a model that
- * ignores it produces a card taller than the pane it is drawn in. This is the
- * only fixture that reaches that height, so it is the only one that shows the
- * minimise control doing anything, and the only one that would regress it.
+ * A historical flat ask_user card: five stacked options with descriptions
+ * and an answer box. New-birth questions have string choices, not option
+ * descriptions; this retained presentation fixture stresses older records
+ * that can still produce a card taller than the pane.
  *
  * Judge it stacked on the composer, not alone: the card and the composer
  * together are what the transcript has to clear, and the point of the control
@@ -726,9 +724,8 @@ const LONG_QUESTION = [
 /**
  * The ask composed in paragraphs (VC-265).
  *
- * A model that ignored `ask_user`'s one-or-two-sentence guidance twice over:
- * the question is several paragraphs long, and the line breaks between them
- * are the only structure it sent. This is the fixture for how that reads —
+ * A historical flat ask_user card whose question is several paragraphs long,
+ * with line breaks as its only structure. This fixture checks how that reads —
  * breaks kept rather than folded into one run, and capped at the pane's share
  * of the viewport with the rest one scroll away, so the card stops at a height
  * the transcript can still see past.

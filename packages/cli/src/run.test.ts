@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -10,7 +13,7 @@ import {
 import type { AgentRequest, AgentResponse, VerbEntry } from "@volli/shared";
 
 import { renderParseRefusal, runCli, teachingErrorForParseResult } from "./run";
-import { AgentClientError } from "./client";
+import { AgentClientError, requestAgent } from "./client";
 
 /** One `volli help` against an app whose optional read answers as scripted. */
 const helpWith = async (
@@ -87,7 +90,12 @@ describe("runCli", () => {
       parsed,
       {
         appVersion: "0.1.1",
-        surface: { sessionId: "s1", role: "project", tools: ["session.start"] },
+        surface: {
+          sessionId: "s1",
+          role: "project",
+          tools: ["session.start"],
+          routes: { "session.start": "direct" },
+        },
         surfaceUnknownReason: null,
       },
       lookup,
@@ -586,7 +594,9 @@ describe("runCli", () => {
     expect(requests).toHaveLength(2);
     expect(requests.every((request) => request.cmd === "identify")).toBe(true);
     expect(output[0]).toContain("Resolved Session Role: ticket");
-    expect(output[0]).toContain("Frozen Agent Tool Surface: read, edit, ask_user");
+    expect(output[0]).toContain("read — route unknown");
+    expect(output[0]).toContain("edit — route unknown");
+    expect(output[0]).toContain("ask_user — route unknown");
     expect(output[1]).toContain("Running app: 0.1.1");
   });
 
@@ -1390,4 +1400,149 @@ describe("runCli — doctor", () => {
 
     expect(requests[0]?.args["pathEntries"]).toBeUndefined();
   });
+});
+
+describe("route metadata at the CLI boundary", () => {
+  it("reads additive identify route metadata over the real newline-delimited socket transport", async () => {
+    const dir = await mkdtemp(join(process.cwd(), ".route-help-"));
+    // Relative spelling stays below Unix socket path limits in long Ticket worktrees.
+    const socketPath = join(basename(dir), "host.sock");
+    const received: AgentRequest[] = [];
+    const server = createServer({ allowHalfOpen: true }, (socket) => {
+      let input = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        input += chunk;
+      });
+      socket.on("end", () => {
+        received.push(JSON.parse(input.trim()) as AgentRequest);
+        socket.end(
+          `${JSON.stringify({
+            v: 1,
+            ok: true,
+            data: {
+              agentSurface: {
+                role: "project",
+                tools: ["session.start", "mcp__paper__shot", "mcp__files__read"],
+                routes: {
+                  "session.start": "code",
+                  mcp__paper__shot: "deferred",
+                  mcp__files__read: "hidden",
+                },
+                mcpServerIds: { mcp__paper__shot: "paper", mcp__files__read: "files" },
+              },
+            },
+          })}\n`,
+        );
+      });
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(socketPath, resolve);
+      });
+      const output: string[] = [];
+      const errors: string[] = [];
+      const dependencies = {
+        env: { VOLLI_SOCKET: socketPath, VOLLI_SESSION: "s" },
+        cwd: "/work",
+        stdout: (text: string) => output.push(text),
+        stderr: (text: string) => errors.push(text),
+        readText: async () => "",
+        observe: async () => ({}),
+        request: (path: string, request: AgentRequest) =>
+          requestAgent(path, request, { timeoutMs: 1000 }),
+        helpRequest: (path: string, request: AgentRequest) =>
+          requestAgent(path, request, { timeoutMs: 1000 }),
+        launch: async () => ({ alreadyRunning: true }),
+      };
+      expect(await runCli(["help"], dependencies)).toBe(0);
+      expect(output[0]).toContain("mcp:paper — through codemode only");
+      expect(output[0]).toContain("mcp__files__read — hidden (unavailable)");
+      expect(await runCli(["help", "session", "start"], dependencies)).toBe(0);
+      expect(output[1]).toContain("Tool: session_start — code (through codemode only)");
+      expect(await runCli(["session", "start", "VC-1", "--json"], dependencies)).toBe(2);
+      expect(JSON.parse(errors[0]!).error.next).toContain("Use codemode to call session_start");
+      expect(received).toHaveLength(3);
+      expect(
+        received.every(
+          (request) => request.cmd === "identify" && request.args["agentSurface"] === true,
+        ),
+      ).toBe(true);
+    } finally {
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) =>
+          server.close((error) => (error ? reject(error) : resolve())),
+        );
+      }
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("carries optional maps through identify into help without treating future routes as direct", async () => {
+    const text = await helpWith(async () => ({
+      v: 1,
+      ok: true,
+      data: {
+        agentSurface: {
+          role: "project",
+          tools: ["read", "mcp__paper__shot", "future"],
+          routes: { read: "both", mcp__paper__shot: "deferred", future: "future-route" },
+          mcpServerIds: { mcp__paper__shot: "paper" },
+        },
+      },
+    }));
+    expect(text).toContain("read — both (named tool or codemode)");
+    expect(text).toContain("mcp:paper — through codemode only");
+    expect(text).toContain("future — route unknown");
+  });
+
+  it.each([undefined, null, [], "bad", { read: 1 }].map((map) => [map]))(
+    "degrades absent or malformed optional maps (%j) to route unknown",
+    async (map) => {
+      const text = await helpWith(async () => ({
+        v: 1,
+        ok: true,
+        data: {
+          agentSurface: { role: "ticket", tools: ["read"], routes: map, mcpServerIds: map },
+        },
+      }));
+      expect(text).toContain("read — route unknown");
+      expect(text).not.toContain("read — direct");
+    },
+  );
+
+  it.each(["direct", "both", "code", "deferred", "hidden", "future", undefined])(
+    "recovers from the wrong door according to frozen route %s",
+    (route) => {
+      const error = teachingErrorForParseResult(
+        {
+          ok: false,
+          code: "WRONG_DOOR",
+          verb: "session.start",
+          message: "The CLI does not execute this verb.",
+        },
+        {
+          appVersion: "0.2.2",
+          surfaceUnknownReason: null,
+          surface: {
+            sessionId: "s",
+            role: "project",
+            tools: ["session.start"],
+            ...(route === undefined ? {} : { routes: { "session.start": route } }),
+          },
+        },
+      );
+      if (route === "direct" || route === "both") {
+        expect(error.next).toContain("Call the named session_start tool");
+      } else {
+        expect(error.next).not.toContain("Call the named");
+        if (route === "code" || route === "deferred") expect(error.next).toContain("Use codemode");
+        if (route === "deferred") expect(error.next).toContain("searchTools() and describeTool()");
+        if (route === "hidden") expect(error.reason).toContain("hidden (unavailable)");
+        if (route === undefined || route === "future")
+          expect(error.reason).toContain("route unknown");
+      }
+    },
+  );
 });

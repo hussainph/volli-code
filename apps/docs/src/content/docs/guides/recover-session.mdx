@@ -105,6 +105,7 @@ Repairing a provider connection does not silently switch you to another model.
 See [Models and usage](/guides/models/) for how to choose a model yourself.
 
 Reopening a Session keeps its recorded tools. If you have just added an MCP
-server, start a new Session to receive its tools. Removing a server required by
-an older Session can prevent that Session from reconnecting. See
+server, use `session_start` or a fresh Board Session to receive its tools before
+delegating: a helper inherits its parent's frozen MCP tools. Removing a server
+required by an older Session can prevent that Session from reconnecting. See
 [MCP servers](/guides/mcp-servers/) before deleting server configuration.

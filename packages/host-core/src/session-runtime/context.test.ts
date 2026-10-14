@@ -134,19 +134,52 @@ it("binds the durable winner when another first attach already recorded the surf
   };
   const frozen = {
     kind: "tool-surface",
-    tools: ["write"],
+    tools: ["write", "ask_user"],
     mcpTools: [tool],
     codeMode: { marker: "winner" },
+    askUserQuestions: true,
   };
   f.getOrRecordSessionInput.mockImplementation(async ({ input }) =>
     input.kind === "tool-surface" ? frozen : input,
   );
   expect(await f.context("s")).toMatchObject({
-    toolSurface: ["write"],
+    toolSurface: ["write", "ask_user"],
     mcpTools: [expect.objectContaining(tool)],
     codeMode: { marker: "winner" },
+    askUserQuestions: true,
   });
   expect(f.surface.resolveMcp).not.toHaveBeenCalled();
+});
+it.each([undefined, true] as const)(
+  "reattaches with the frozen ask_user declaration marker %s, not today's surface",
+  async (askUserQuestions) => {
+    const f = fixture();
+    f.listEvents.mockResolvedValue([
+      inputEvent({
+        kind: "tool-surface",
+        tools: ["read", "ask_user"],
+        ...(askUserQuestions === undefined ? {} : { askUserQuestions }),
+      }),
+    ]);
+    const attached = await f.context("s");
+    expect(attached?.toolSurface).toEqual(["read", "ask_user"]);
+    if (askUserQuestions === undefined) {
+      expect(attached).not.toHaveProperty("askUserQuestions");
+    } else {
+      expect(attached).toHaveProperty("askUserQuestions", true);
+    }
+    expect(f.resolve).not.toHaveBeenCalled();
+  },
+);
+it("backfills a legacy ask_user surface without opting into a new declaration", async () => {
+  const f = fixture();
+  f.resolve.mockReturnValue(["read", "ask_user", "codemode"]);
+  expect(await f.context("s")).not.toHaveProperty("askUserQuestions");
+  const frozen = f.getOrRecordSessionInput.mock.calls[0]![0].input;
+  expect(frozen.tools).toEqual(["read", "ask_user"]);
+  expect(frozen).not.toHaveProperty("askUserQuestions");
+  f.listEvents.mockResolvedValue([inputEvent(frozen)]);
+  expect(await f.context("s")).not.toHaveProperty("askUserQuestions");
 });
 it("cannot backfill an in-flight birth: the barrier must actually wait", async () => {
   const f = fixture();

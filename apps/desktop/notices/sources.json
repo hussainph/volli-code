@@ -16,7 +16,7 @@
   "platformNative": [
     {
       "name": "@img/sharp-darwin-arm64",
-      "version": "0.35.4",
+      "version": "0.35.5",
       "spdx": "Apache-2.0",
       "note": [
         "sharp's native addon for macOS arm64. electron-builder ships and unpacks the",
@@ -32,7 +32,7 @@
     },
     {
       "name": "@img/sharp-libvips-darwin-arm64",
-      "version": "1.3.3",
+      "version": "1.3.4",
       "spdx": "LGPL-3.0-or-later",
       "note": [
         "The prebuilt libvips-cpp dylib sharp's addon loads, shipped and unpacked with it.",
@@ -40,7 +40,13 @@
         "licensing notice, reproduced verbatim, listing every library inside the binary",
         "and the terms each is used under. Bundled library versions are in the package's",
         "versions.json. The LGPL entries in that table are declarations, not a compliance",
-        "conclusion — see section 10 and notices/README.md."
+        "conclusion — see section 10 and notices/README.md.",
+        "Cairo 1.18.6 is LGPL-2.1 or MPL-1.1, used under LGPL-2.1 (owner election 2026-10-13).",
+        "Upstream COPYING: https://gitlab.freedesktop.org/cairo/cairo/-/raw/1.18.6/COPYING",
+        "Its README row below reproduces upstream's MPL-1.1 declaration, not our election.",
+        "Cairo is part of the replaceable shared library. Cairo source, the build recipe and",
+        "the source offer are in licensing/LGPL-LIBVIPS.md; LGPL-2.1.txt and the relink",
+        "instructions ship beside it. Cairo was not permissive in the prior version either."
       ],
       "text": "texts/img-sharp-libvips-darwin-arm64.NOTICE.txt",
       "verify": {

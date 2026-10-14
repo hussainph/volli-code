@@ -21,7 +21,17 @@ const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const HOST = "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b";
 const DEVICE = "8a9b0c1d-2e3f-4a5b-9c6d-7e8f9a0b1c2d";
 const QUESTION = "Which release should ship?";
-const RESOLUTION = { optionIds: ["stable"], response: "Keep the stable release." };
+const RESOLUTION = {
+  optionIds: ["choice:0"],
+  response: "Keep the stable release.",
+  answers: [
+    {
+      promptId: "prompt:0",
+      optionIds: ["choice:0"],
+      response: "Keep the stable release.",
+    },
+  ],
+};
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
@@ -60,11 +70,7 @@ async function fixture() {
       tool: {
         name: "ask_user",
         args: {
-          question: QUESTION,
-          options: [
-            { id: "stable", label: "Stable" },
-            { id: "preview", label: "Preview" },
-          ],
+          questions: [{ question: QUESTION, choices: ["Stable", "Preview"] }],
         },
       },
     },
@@ -226,8 +232,13 @@ describe("hostd questions over a real host link", () => {
     expect(await f.kickoff).toEqual({ ok: true });
     expect(f.script.requests).toHaveLength(2);
     // The actual tool result reached the scripted provider's next request.
-    expect(JSON.stringify(f.script.requests[1])).toContain("Chose: stable");
-    expect(JSON.stringify(f.script.requests[1])).toContain(RESOLUTION.response);
+    const toolResult = f.script.requests[1]!.find((message) => message.role === "toolResult");
+    expect(toolResult?.content).toEqual([
+      {
+        type: "text",
+        text: JSON.stringify([{ question: QUESTION, answer: RESOLUTION.response }]),
+      },
+    ]);
     const answered = (await second.query("session.snapshot", {
       sessionId: f.sessionId,
     })) as Snapshot;

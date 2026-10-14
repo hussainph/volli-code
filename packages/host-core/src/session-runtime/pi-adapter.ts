@@ -83,6 +83,7 @@ import {
   isConfirmCause,
   isCredentialConfirmCause,
   DEFAULT_INTERACTION_PROMPT_ID,
+  promptId,
   errorMessage,
   isMcpToolId,
   readSkillResources,
@@ -211,6 +212,8 @@ interface PiRuntimeContextFields {
   toolSurface: readonly SessionToolId[];
   /** Absent on historical sessions: rebind their original mcp_* wire spelling. */
   mcpManagementNames?: "server";
+  /** Absent on historical Sessions, whose single-question declaration stays unchanged. */
+  askUserQuestions?: true;
   /** Sanitized MCP definitions frozen beside their dynamic names. */
   mcpTools?: readonly McpToolDefinition[];
   /** Code Mode's frozen routes and limits, present exactly when `toolSurface` names `codemode` (VC-471). */
@@ -251,7 +254,9 @@ export type PiRuntimeContext =
  * optional: it is the one door that keeps a hold from outliving its turn, and
  * a port built without it would keep holds silently.
  */
-export type AttachmentBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
+export type AttachmentBrowserPort = RuntimeBrowserPort & {
+  turnEnded: (options?: { closeHeadlessOwned: boolean }) => void;
+};
 
 /**
  * The runtime's shell port with the one lifecycle door the adapter drives
@@ -512,6 +517,7 @@ export interface PiAdapterOptions {
    * bundled (VC-471). Decides nothing about which Sessions have Code Mode.
    */
   codeModeSandbox?: PiRuntimeHostOptions["codeModeSandbox"];
+  persistActivityImage?: PiRuntimeHostOptions["persistActivityImage"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -719,6 +725,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
     ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
+    ...(options.persistActivityImage === undefined
+      ? {}
+      : { persistActivityImage: options.persistActivityImage }),
   });
 
   return {
@@ -768,6 +777,7 @@ function piNativeAdapter(
           "configuration_invalid",
         );
       }
+      const mcpTools = context.mcpTools ?? [];
       const binding = new PiBinding({
         spec,
         sink,
@@ -795,14 +805,14 @@ function piNativeAdapter(
         }),
         resolveSecretPort: options.resolveSecretPort,
         mcp:
-          (context.mcpTools?.length ?? 0) === 0
+          mcpTools.length === 0
             ? undefined
             : options.resolveMcpPort?.({
                 projectId: context.projectId,
                 sessionId: spec.sessionId,
                 attachmentId: spec.attachmentId,
                 workspacePath: spec.directory,
-                mcpTools: context.mcpTools ?? [],
+                mcpTools,
               }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
@@ -887,8 +897,8 @@ interface PiBindingOptions {
   mcp: AttachmentMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
-  /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
-  workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
+  /** The workspace's package state, always measured by the attach path. */
+  workspaceEnvironment: RuntimeWorkspaceEnvironment;
 }
 
 class PiBinding implements BindingHandle {
@@ -906,7 +916,7 @@ class PiBinding implements BindingHandle {
   readonly #mcp: AttachmentMcpPort | undefined;
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
-  readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
+  readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment;
   readonly #abort = new AbortController();
   /** Questions the runtime is parked on, by the interaction id they were asked under. */
   readonly #asked = new Map<string, ParkedAsk>();
@@ -1109,13 +1119,8 @@ class PiBinding implements BindingHandle {
       venue: "local",
       model: this.#context.model,
       brief: { text: this.#context.brief },
-      // Spread, not assigned, for the same reason `promptResources` is: an
-      // unmeasured workspace must reach the prompt as an ABSENT field rather
-      // than one set to undefined, so "nobody measured" and "measured, nothing
-      // to say" stay the same silent prompt and neither poses as the other.
-      ...(this.#workspaceEnvironment === undefined
-        ? {}
-        : { workspaceEnvironment: this.#workspaceEnvironment }),
+      // Every attach measures the workspace; carry that same measurement.
+      workspaceEnvironment: this.#workspaceEnvironment,
       // The seam `composeSystemPrompt` renders as delimited RESOURCE sections.
       // Omitted rather than empty when the Session named no skills, so a spec
       // with no resources is a spec with no resources field — same shape the
@@ -1137,6 +1142,9 @@ class PiBinding implements BindingHandle {
         ...(context.mcpManagementNames === undefined
           ? {}
           : { mcpManagementNames: context.mcpManagementNames }),
+        ...(context.askUserQuestions === undefined
+          ? {}
+          : { askUserQuestions: context.askUserQuestions }),
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
         ...(wantsCodeMode ? { codeMode: context.codeMode! } : {}),
       },
@@ -1266,7 +1274,7 @@ class PiBinding implements BindingHandle {
         try {
           const outcome = await handle.retry(command.commandId);
           return outcome.kind === "delivered"
-            ? this.#accepted(command.commandId)
+            ? this.#accepted(command.commandId, undefined, undefined, outcome.acceptedAt)
             : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
         } catch (error) {
           return this.#unknown(command.commandId, error);
@@ -1471,7 +1479,12 @@ class PiBinding implements BindingHandle {
         command.targetTurnId,
       );
       return outcome.kind === "delivered"
-        ? this.#accepted(command.commandId, outcome.delivery, outcome.turnOpened)
+        ? this.#accepted(
+            command.commandId,
+            outcome.delivery,
+            outcome.turnOpened,
+            outcome.acceptedAt,
+          )
         : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
     } catch (error) {
       // The prompt reached Pi and something after it failed. "Unknown" is the
@@ -1574,11 +1587,32 @@ class PiBinding implements BindingHandle {
       label: option.label,
       description: option.description ?? null,
     }));
-    const multiple = request.multiple === true;
-    // A closed question with nothing to choose between asks for an answer that
-    // cannot be given, so the model's `false` is overruled exactly there rather
-    // than opening a card no press can ever satisfy.
-    const custom = options.length === 0 || request.allowOther !== false;
+    const prompts =
+      request.questions === undefined
+        ? [
+            {
+              id: DEFAULT_INTERACTION_PROMPT_ID,
+              label: request.question,
+              detail: null,
+              options,
+              multiple: request.multiple === true,
+              // Preserve historical calls, including the closed prose-only override.
+              custom: options.length === 0 || request.allowOther !== false,
+            },
+          ]
+        : request.questions.map((question, index) => ({
+            id: promptId(index),
+            label: question.question,
+            detail: null,
+            options: question.choices.map((choice, choiceIndex) => ({
+              id: `choice:${choiceIndex}`,
+              label: choice,
+              description: null,
+            })),
+            multiple: false,
+            custom: true,
+          }));
+    const first = prompts[0]!;
     await this.#observe({
       kind: "interaction",
       state: "opened",
@@ -1586,20 +1620,11 @@ class PiBinding implements BindingHandle {
       interaction: {
         id: interactionId,
         kind: "question",
-        title: request.question,
+        title: first.label,
         detail: null,
-        options,
-        multiple,
-        prompts: [
-          {
-            id: DEFAULT_INTERACTION_PROMPT_ID,
-            label: request.question,
-            detail: null,
-            options,
-            multiple,
-            custom,
-          },
-        ],
+        options: first.options,
+        multiple: first.multiple,
+        prompts,
         native: this.#native,
       },
     });
@@ -1714,11 +1739,12 @@ class PiBinding implements BindingHandle {
     commandId: string,
     delivery?: Extract<DeliveryReceipt, { status: "accepted" }>["delivery"],
     turnOpened?: boolean,
+    acceptedAt?: number,
   ): DeliveryReceipt {
     return {
       commandId,
       status: "accepted",
-      acceptedAt: this.#now(),
+      acceptedAt: acceptedAt ?? this.#now(),
       native: this.#native,
       // Both fields are transport answers only. The durable Receipt still says
       // that the Command was accepted; the live caller learns how it landed.
@@ -1786,7 +1812,14 @@ class PiBinding implements BindingHandle {
     // than after: a hold outliving its turn by even the sink's write would be
     // a hold with nobody driving, and the person's pill would say otherwise.
     if (observation.kind === "turn" && observation.state !== "started") {
-      this.#browser?.turnEnded();
+      // Only completed delegates retire their own headless pages. Board and
+      // Ticket turns (and interrupted delegates) retain theirs for continuation.
+      // Capture at this boundary, before stream delivery can resume the child.
+      if (this.#context.role === "subagent" && observation.state === "completed") {
+        this.#browser?.turnEnded({ closeHeadlessOwned: true });
+      } else {
+        this.#browser?.turnEnded();
+      }
     }
     return this.#sink.emit(observation);
   }
