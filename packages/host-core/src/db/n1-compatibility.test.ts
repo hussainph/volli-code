@@ -79,6 +79,7 @@ import { insertProject } from "./projects-repo";
 import { MIN_READER_VERSION_KEY, readMinReaderVersion } from "./schema-compatibility";
 import { hasSecret, writeSecret } from "./secrets-repo";
 import { testProject } from "./test-helpers";
+import { movedPiBash, MOVED_BASH_TOOLS } from "./fixtures/moved-pi-bash";
 import { recoveredPiQuestion } from "./fixtures/recovered-pi-question";
 import { listTicketsByProject } from "./tickets-repo";
 
@@ -1052,6 +1053,74 @@ describe.skipIf(manifest === null)(
       // fallback text, errorText, the failed input facet, part order and ids;
       // digest equality proves N−1 will not insert a conflicting transcript.
       expect(value(run, 0).artifacts).toEqual(artifacts);
+    });
+
+    it("reattaches HEAD's moved bash sidecar in N−1 and shows the moved receipt in model history (VC-757)", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      // HEAD runs a real bash child, moves it while it runs, and writes the Pi sidecar.
+      const moved = await movedPiBash({
+        root,
+        dbPath,
+        sessionId: "session-head",
+        projectId: PROJECT_ID,
+        ticketId: "ticket-head",
+        workspace: join(root, "repo"),
+      });
+      const receipt = `Moved command to background shell ${moved.shellId}`;
+      // N-1's own Pi adapter reattaches that very sidecar; its provider sees the receipt.
+      const reattached = value(
+        await n1(dbPath, [
+          {
+            kind: "movedBash",
+            sessionId: "session-head",
+            workspace: join(root, "repo"),
+            sessionDataDir: moved.sessionDataDir,
+            transcriptsRoot: sessionTranscriptsRoot(root),
+          },
+        ]),
+        0,
+      );
+      // Behavior, never an exact decoded shape: future latest-canary/base may include this feature.
+      expect(reattached).toMatchObject({
+        attachStatus: "open",
+        deliveryStatus: "accepted",
+        realAttachCount: 1,
+        attachContinuity: "native_resume",
+        recoveredSidecar: moved.sessionFilePath,
+        providerRequests: 1,
+        turnActive: false,
+        acceptedNextMessages: 1,
+      });
+      expect(reattached.frozenTools).toEqual(MOVED_BASH_TOOLS);
+      expect(reattached.movedResults).toEqual([expect.objectContaining({ isError: false })]);
+      expect(JSON.stringify(reattached.movedResults)).toContain(receipt);
+      expect(JSON.stringify(reattached.movedResults)).toContain("before");
+      expect(JSON.stringify(reattached.messages)).not.toContain("Command timed out");
+      // The turn went on past the moved call, and HEAD's continuation is in the same history.
+      expect(JSON.stringify(reattached.messages)).toContain("The turn continued.");
+
+      // N-1's artifact reader replays the same head-written transcript frames, and
+      // reattaching left them intact.
+      const replayed = value(
+        await n1(dbPath, [
+          {
+            kind: "bashReplay",
+            sessionId: "session-head",
+            transcriptsRoot: sessionTranscriptsRoot(root),
+          },
+        ]),
+        0,
+      );
+      expect(replayed).toMatchObject({
+        sessionId: "session-head",
+        nativeToolName: "bash",
+        state: "output-available",
+      });
+      expect(replayed.frames).toBeGreaterThan(0);
+      expect(replayed.text).toContain(receipt);
+      assertHeadReads(dbPath);
     });
 
     it("makes a backup bundle of a head profile that both builds restore", async () => {

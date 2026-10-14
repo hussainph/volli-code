@@ -4,6 +4,9 @@
  * (`shell/background-shell-host.ts`); a client's IPC contract carries it, so
  * it lives here, where a client can name it without depending on host-core.
  */
+/** One running-shell cap for host admission, model results and person controls. */
+export const SHELL_MAX_PER_SESSION = 4;
+
 export interface BackgroundShellState {
   /** Host-minted opaque id, never a pid. */
   shellId: string;

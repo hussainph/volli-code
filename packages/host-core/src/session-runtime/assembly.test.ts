@@ -197,6 +197,86 @@ describe("runtime attachment assembly", () => {
     },
   );
 
+  it.each([true, false])(
+    "wires foreground execution only for a frozen surface with all shell tools (supported: %s)",
+    async (supported) => {
+      const options = await fixture();
+      const shells = new BackgroundShellHost({ publishState: vi.fn(), publishRemoved: vi.fn() });
+      const execute = vi.spyOn(agentRuntime, "piExecutionEnv");
+      const assembled = createRuntimeAssembly({
+        ...options,
+        shells,
+        resolveRuntimeContext: async () => ({
+          role: "project",
+          projectId: "project",
+          ticketId: null,
+          rootThreadId: "thread",
+          brief: "assembly fixture",
+          model: { providerId: "fixture", modelId: "fixture", reasoningLevel: "off" },
+          toolSurface: supported
+            ? ["execute", "shell_start", "shell_output", "shell_kill"]
+            : ["execute", "shell_start", "shell_output"],
+          promptResources: [],
+        }),
+      });
+      const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+      const scope = {
+        sessionId: "foreground-session",
+        attachmentId: "foreground-attachment",
+        rootThreadId: "thread",
+        role: "project" as const,
+        projectId: "project",
+        ticketId: null,
+      };
+      try {
+        await native.executionEnvFactory!(root, scope);
+        const executor = execute.mock.calls[0]![1]!.foregroundExecutor;
+        if (!supported) {
+          expect(executor).toBeUndefined();
+          return;
+        }
+        expect(executor).toBeTypeOf("function");
+        const chunks: Uint8Array[] = [];
+        const ready = vi.fn();
+        const run = vi.spyOn(shells, "runForeground");
+        const signal = new AbortController().signal;
+        expect(
+          await executor!({
+            command: "printf assembly-wired",
+            shellConfig: { shell: "/bin/sh", args: ["-c"] },
+            cwd: root,
+            env: {},
+            toolCallId: "foreground-call",
+            timeout: 1,
+            signal,
+            onOutput: (chunk) => chunks.push(chunk),
+            onReady: ready,
+          }),
+        ).toMatchObject({ code: 0 });
+        expect(Buffer.concat(chunks).toString()).toBe("assembly-wired");
+        expect(ready).toHaveBeenCalledOnce();
+        expect(run).toHaveBeenCalledWith(
+          {
+            sessionId: scope.sessionId,
+            attachmentId: scope.attachmentId,
+            projectId: "project",
+            ticketId: null,
+          },
+          expect.objectContaining({
+            command: "printf assembly-wired",
+            shellConfig: { shell: "/bin/sh", args: ["-c"] },
+            cwd: root,
+            env: {},
+          }),
+          expect.objectContaining({ toolCallId: "foreground-call", timeout: 1, signal }),
+        );
+      } finally {
+        await assembled.sessionRuntime?.close();
+        await shells.close();
+      }
+    },
+  );
+
   it("binds the shared bounded screenshot sink even on a headless host, and recovers its pictures", async () => {
     const options = await fixture();
     const first = createRuntimeAssembly(options);

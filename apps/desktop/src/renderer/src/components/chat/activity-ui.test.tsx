@@ -348,6 +348,64 @@ describe("ToolRow expanded detail colouring (VC-125)", () => {
   });
 });
 
+describe("moved bash receipt", () => {
+  const receipt =
+    "Moved command to background shell moved-1.\nIt keeps running. A notice will arrive when it exits; use shell_output to read it or shell_kill to end it.\nOutput so far:\nListening on localhost:5300";
+  const moved: DynamicToolUIPart = {
+    ...bashRow,
+    output: { content: [{ type: "text", text: receipt }] },
+  };
+  it("marks the collapsed settled header and preserves the original receipt on disclosure", () => {
+    act(() => root?.render(<ToolRow part={moved} />));
+    expect(container?.textContent).toContain("Moved to background");
+    expect(container?.textContent).not.toContain("It keeps running.");
+    expect(container?.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    act(() => container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]')?.click());
+    expect(container?.textContent).toContain(receipt);
+  });
+  it("recognizes no-output receipts from history too", () => {
+    const html = renderToStaticMarkup(
+      <ToolRow
+        part={{
+          ...moved,
+          output: {
+            content: [
+              {
+                type: "text",
+                text: receipt.replace(
+                  "Output so far:\nListening on localhost:5300",
+                  "No output so far.",
+                ),
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(html).toContain("Moved to background");
+  });
+  it("does not mark incidental, incomplete, preliminary, non-bash or malformed output", () => {
+    const cases: DynamicToolUIPart[] = [
+      {
+        ...moved,
+        output: { content: [{ type: "text", text: "Moved command to background shell moved-1." }] },
+      },
+      { ...moved, output: { content: [{ type: "text", text: `command log\n${receipt}` }] } },
+      { ...moved, preliminary: true },
+      { ...row, output: moved.output },
+      { ...moved, output: null },
+      { ...moved, output: { content: "wrong" } },
+      { ...moved, output: { content: [null] } },
+      { ...moved, output: { content: [{ type: "image", text: receipt }] } },
+    ];
+    for (const part of cases) {
+      expect(renderToStaticMarkup(<ToolRow part={part} />)).not.toContain("Moved to background");
+    }
+  });
+});
+
 describe("ToolRow copy control", () => {
   it("renders a copy control for an activity object", () => {
     const html = renderToStaticMarkup(<ToolRow part={row} />);

@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 
 import type { IpcResponse } from "@volli/host-protocol/ipc";
 import { listProjects, insertProject } from "@volli/host-core/db";
-import { admittedHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
+import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import { openTestDb, testHostHandlers, testProject, type TestDb } from "@volli/host-core/testing";
 import { getTrimSettings, setTrimSettings } from "@volli/host-core/worktree";
 import { SESSION_RPC_IPC_CHANNEL } from "@volli/shared";
@@ -118,5 +118,58 @@ describe("worktree.trimSettings (was volli:worktree-trim-settings-get)", () => {
       ok: true,
       data: saved,
     });
+  });
+});
+
+describe("shells.moveToBackground", () => {
+  it("passes the Session and call ids through main's real generic IPC bridge to the owning host", async () => {
+    await rpc.close();
+    const moveForeground = vi.fn(() => ({ shellId: "shell-1" }));
+    rpc = registerSessionRpcIpcHandlers({
+      handlers: admittedHandlers(
+        createHostHandlers(
+          {
+            events: { publish() {} },
+            attention: {
+              deliver: () => ({ delivered: true }),
+              focusedSessionIds: () => new Set<string>(),
+            },
+          },
+          {
+            db: ctx.db,
+            dataDir: "",
+            runtime: null,
+            sessions: null,
+            modelAccess: null,
+            experiments: null,
+            busyWorktreeSites: async () => [],
+            automations: { kind: "degraded", start() {}, stop() {}, settled: async () => {} },
+            backgroundShells: { moveForeground },
+          },
+        ),
+        ROUTER_POLICY,
+      ),
+    });
+    const input = { sessionId: randomUUID(), toolCallId: "bash-1" };
+    await expect(request("shells.moveToBackground", "mutation", input)).resolves.toEqual({
+      ok: true,
+      data: { shellId: "shell-1" },
+    });
+    expect(moveForeground).toHaveBeenCalledWith(input.sessionId, input.toolCallId);
+    moveForeground.mockImplementation(() => {
+      throw new Error("This command already exited");
+    });
+    await expect(request("shells.moveToBackground", "mutation", input)).resolves.toMatchObject({
+      ok: false,
+      error: { message: "This command already exited" },
+    });
+  });
+  it("reports an unavailable foreground registry without rerouting", async () => {
+    await expect(
+      request("shells.moveToBackground", "mutation", {
+        sessionId: randomUUID(),
+        toolCallId: "bash-1",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "NOT_IMPLEMENTED" } });
   });
 });

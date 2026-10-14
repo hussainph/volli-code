@@ -231,7 +231,10 @@ function createTool(tool: CodingToolId, env: ExecutionEnv, output?: ToolOutputSt
     case "write":
       return bindContext(createWriteTool(), env);
     case "execute":
-      return bindContext(createBashTool(), env);
+      return bindContext(
+        createBashTool({ isTopLevel: () => currentCallScope() === undefined }),
+        env,
+      );
   }
 }
 
