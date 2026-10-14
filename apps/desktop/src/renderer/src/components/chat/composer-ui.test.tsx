@@ -1202,7 +1202,10 @@ describe("the picker's place in the composer stack", () => {
   it("offers an opt-in contained overlay that contributes no flow height", () => {
     const html = renderStack("overlay");
     const stack = /<div data-slot="composer-picker-stack" class="([^"]*)"/.exec(html)?.[1];
-    const layer = /<div data-slot="composer-picker-overlay" class="([^"]*)"/.exec(html)?.[1];
+    const layer =
+      /<div data-slot="composer-picker-overlay" data-native-plane-overlay="true" class="([^"]*)"/.exec(
+        html,
+      )?.[1];
 
     expect(stack).toContain("relative");
     expect(stack).toContain("min-w-0");

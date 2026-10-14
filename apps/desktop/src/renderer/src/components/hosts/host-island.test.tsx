@@ -75,6 +75,7 @@ describe("connection Island", () => {
       hetzner: { link: { status: "offline", since: NOW, retryAt: NOW + 8_000 } },
     });
     await world.render(<HostIsland />);
+    expect(island()?.getAttribute("data-native-plane-overlay")).toBe("true");
     expect(island()?.textContent).toContain("Can’t reach hetzner-1 · Read-only");
     expect(island()?.textContent).toContain("Retrying in 8s");
 

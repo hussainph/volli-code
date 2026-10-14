@@ -9,26 +9,20 @@
  * in the coverage gate so each one has a test.
  */
 
-/** Where the React app mounts. Everything Radix portals lands outside it. */
+/** Where the React app mounts. Portals normally land outside it. */
 export const APP_ROOT_ID = "root";
 
 /**
- * Overlays that live in the portal layer. Matching these ANYWHERE was the
- * VC-251 bug: `[role="listbox"]` also describes a permanent list, and the
- * Ticket Change Set rendered one until VC-311 gave it a plain `list`, so a
- * Browser Tab beside it detached its plane forever and never came back. The
- * rule outlived that particular list — a composer's completion menu is a real
- * listbox, and Settings draws permanent ones. A floating overlay
- * is distinguished by WHERE it renders, not by its role alone — Radix portals
- * to `document.body`, outside the app root — so the role list only decides
- * what counts once the element is already outside the tree.
- *
- * `[role="tooltip"]` is deliberately ABSENT. A tooltip follows the pointer, so
- * brushing along a toolbar would swap the plane once per button. A tooltip that
- * overlaps a Browser Tab loses to it: the Ticket asked about dialogs and menus.
+ * Roles alone are not enough: permanent lists use listbox too, while hover
+ * peeks and link prompts need not have any of these roles. In the portal layer
+ * accept semantic surfaces OR positioned boxes. Within the app, accept fixed
+ * chrome (our utility/inline positioning conventions) and explicit opt-ins.
+ * This also covers new portal surfaces without patching their components.
  */
 const FLOATING_OVERLAY_SELECTOR =
-  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-sonner-toast]';
+  '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [role="tooltip"], [data-sonner-toast]';
+const POSITIONED_OVERLAY_SELECTOR =
+  '.fixed, [style*="position"], [data-radix-popper-content-wrapper], [data-sonner-toast]';
 
 /**
  * The opt-in for floating chrome the app draws INSIDE its own root, where the
@@ -64,15 +58,66 @@ export function hasVisibleNativePlane(doc: Document): boolean {
   return false;
 }
 
-/** Whether renderer chrome currently needs to paint above every native child view. */
-export function hasNativePlaneOverlay(doc: Document, appRoot?: Element | null): boolean {
-  if (doc.querySelector(EXPLICIT_OVERLAY_SELECTOR) !== null) return true;
-  const root = appRoot === undefined ? doc.getElementById(APP_ROOT_ID) : appRoot;
-  for (const element of doc.querySelectorAll(FLOATING_OVERLAY_SELECTOR)) {
-    if (root === null || !root.contains(element)) return true;
+/** Whether renderer chrome needs the tier over THIS plane, not its neighbours. */
+export function hasNativePlaneOverlay(doc: Document, plane: Element): boolean {
+  const bounds = plane.getBoundingClientRect();
+  const view = doc.defaultView!;
+  const left = Math.max(0, bounds.left);
+  const top = Math.max(0, bounds.top);
+  const right = Math.min(view.innerWidth, bounds.right);
+  const bottom = Math.min(view.innerHeight, bounds.bottom);
+  if (right <= left || bottom <= top || view.getComputedStyle(plane).visibility === "hidden") {
+    return false;
+  }
+
+  const root = doc.getElementById(APP_ROOT_ID);
+  const candidates = new Set(
+    doc.querySelectorAll(`${EXPLICIT_OVERLAY_SELECTOR}, ${POSITIONED_OVERLAY_SELECTOR}`),
+  );
+  // Only the small portal layer needs a general walk; never walk a transcript
+  // and compute styles for every token on each mutation.
+  for (const child of doc.body.children) {
+    if (child === root) continue;
+    candidates.add(child);
+    for (const element of child.querySelectorAll("*")) candidates.add(element);
+  }
+  for (const element of candidates) {
+    // Fixed layout containers and a plane's own descendants are not overlays.
+    if (element.contains(plane) || plane.contains(element)) continue;
+    const style = view.getComputedStyle(element);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse"
+    )
+      continue;
+    const portaled = root === null || !root.contains(element);
+    // Sonner mounts inside the app and positions its items via its stylesheet,
+    // not inline styles. Measure each toast, never its empty full-width host.
+    const floating =
+      element.matches(`${EXPLICIT_OVERLAY_SELECTOR}, [data-sonner-toast]`) ||
+      style.position === "fixed" ||
+      (portaled && (style.position === "absolute" || element.matches(FLOATING_OVERLAY_SELECTOR)));
+    if (!floating) continue;
+    // getClientRects excludes display:none ancestors. Do not reject opacity:0:
+    // entry animations must start capturing before their first opaque frame.
+    for (const rect of element.getClientRects()) {
+      if (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.left < right &&
+        rect.right > left &&
+        rect.top < bottom &&
+        rect.bottom > top
+      )
+        return true;
+    }
   }
   return false;
 }
+
+/** Keep one still across the small gaps between neighbouring hover surfaces. */
+export const PLANE_OVERLAY_RELEASE_MS = 150;
 
 /**
  * How long an overlay will wait for the true last frame before giving up.

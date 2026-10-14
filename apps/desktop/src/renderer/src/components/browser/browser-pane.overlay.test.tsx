@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { BrowserTabCaptureResult, BrowserTabState } from "../../../../ipc/contract";
 import type { BrowserApi } from "./browser-api";
 import { BrowserPane } from "./browser-pane";
-import { PLANE_CAPTURE_DEADLINE_MS } from "./browser-plane-freeze";
+import { PLANE_CAPTURE_DEADLINE_MS, PLANE_OVERLAY_RELEASE_MS } from "./browser-plane-freeze";
 
 class TestResizeObserver {
   observe(): void {}
@@ -36,7 +36,14 @@ let root: Root | null = null;
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(100, 100, 800, 600),
+  );
+  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(
+    () => [new DOMRect(100, 100, 800, 600)] as unknown as DOMRectList,
+  );
   container = document.createElement("div");
+  container.id = "root";
   document.body.append(container);
   root = createRoot(container);
 });
@@ -47,6 +54,7 @@ afterEach(() => {
   document.querySelectorAll('[role="dialog"]').forEach((dialog) => dialog.remove());
   root = null;
   container = null;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -101,6 +109,13 @@ function openDialog(): HTMLDivElement {
   return dialog;
 }
 
+async function releaseOverlay(): Promise<void> {
+  await settle();
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, PLANE_OVERLAY_RELEASE_MS + 20));
+  });
+}
+
 function shownPixels(): string | null {
   const img = container?.querySelector<HTMLImageElement>("[data-browser-plane-snapshot]");
   return img === null || img === undefined ? null : img.src;
@@ -140,7 +155,7 @@ describe("BrowserPane renderer overlays", () => {
     expect(shownPixels()).toBe("data:image/jpeg;base64,fresh");
   });
 
-  it("takes the tier back at once when the overlay goes, pixels still painted", async () => {
+  it("takes the tier back after the close grace, pixels still painted", async () => {
     const { api, show } = makeApi(
       vi.fn(async () => captureResult("fresh")) as unknown as BrowserApi["capture"],
     );
@@ -157,9 +172,11 @@ describe("BrowserPane renderer overlays", () => {
 
     act(() => dialog.remove());
     await settle();
+    expect(show).toHaveBeenCalledOnce();
+    await releaseOverlay();
 
-    // No second wait on the way back, and the stand-in stays painted under the
-    // reattached view so no frame is ever empty.
+    // No second capture on the way back, and the stand-in stays painted under
+    // the reattached view so no frame is ever empty.
     expect(show).toHaveBeenCalledTimes(2);
     expect(shownPixels()).toBe("data:image/jpeg;base64,fresh");
   });
@@ -200,7 +217,7 @@ describe("BrowserPane renderer overlays", () => {
     await settle();
     expect(shownPixels()).toBe("data:image/jpeg;base64,first");
     act(() => first.remove());
-    await settle();
+    await releaseOverlay();
 
     answer = { ok: false, error: "no such tab" };
     openDialog();
@@ -210,6 +227,114 @@ describe("BrowserPane renderer overlays", () => {
     // thing available, and the overlay still becomes operable.
     expect(shownPixels()).toBe("data:image/jpeg;base64,first");
     expect(hide).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps one still across back-to-back hovering surfaces", async () => {
+    const capture = vi.fn(async () => captureResult("hover"));
+    const { api, show, hide } = makeApi(capture as unknown as BrowserApi["capture"]);
+    await act(async () => {
+      root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
+    });
+    const first = openDialog();
+    first.style.position = "fixed";
+    first.removeAttribute("role");
+    await settle();
+    expect(hide).toHaveBeenCalledOnce();
+    act(() => first.remove());
+    await settle();
+    const second = openDialog();
+    second.setAttribute("role", "tooltip");
+    await settle();
+    expect(capture).toHaveBeenCalledOnce();
+    expect(show).toHaveBeenCalledOnce();
+    expect(shownPixels()).toBe("data:image/jpeg;base64,hover");
+    second.remove();
+    await releaseOverlay();
+    expect(show).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not release when a reopened hover still has its animation-frame read pending", async () => {
+    const capture = vi.fn(async () => captureResult("hover"));
+    const { api, show } = makeApi(capture as unknown as BrowserApi["capture"]);
+    await act(async () => {
+      root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
+    });
+    const first = openDialog();
+    await settle();
+    // Flush the mutation caused by painting the captured image before taking
+    // control of the next frame/deadline ordering.
+    await settle();
+    vi.useFakeTimers();
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    await act(async () => first.remove());
+    await act(async () => {
+      for (const callback of callbacks.splice(0)) callback(0);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(PLANE_OVERLAY_RELEASE_MS - 1);
+    });
+    openDialog();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(callbacks.length).toBeGreaterThan(0);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(show).toHaveBeenCalledOnce();
+    await act(async () => {
+      for (const callback of callbacks.splice(0)) callback(0);
+    });
+    expect(capture).toHaveBeenCalledOnce();
+    expect(show).toHaveBeenCalledOnce();
+  });
+
+  it("does not capture unrelated hover UI, and remeasures on scroll and resize", async () => {
+    const capture = vi.fn(async () => captureResult("hover"));
+    const { api, hide, show } = makeApi(capture as unknown as BrowserApi["capture"]);
+    await act(async () => {
+      root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
+    });
+    const tooltip = openDialog();
+    let rect = new DOMRect(0, 0, 50, 50);
+    vi.spyOn(tooltip, "getClientRects").mockImplementation(() => [rect] as unknown as DOMRectList);
+    tooltip.setAttribute("role", "tooltip");
+    await settle();
+    expect(capture).not.toHaveBeenCalled();
+    expect(hide).not.toHaveBeenCalled();
+    rect = new DOMRect(200, 200, 50, 50);
+    document.dispatchEvent(new Event("scroll"));
+    await settle();
+    expect(hide).toHaveBeenCalledOnce();
+    rect = new DOMRect(0, 0, 50, 50);
+    window.dispatchEvent(new Event("resize"));
+    await releaseOverlay();
+    expect(show).toHaveBeenCalledTimes(2);
+    tooltip.remove();
+  });
+
+  it("ignores a capture that resolves after its overlay closed", async () => {
+    let resolve!: (result: BrowserTabCaptureResult) => void;
+    const capture = vi.fn(
+      () =>
+        new Promise<BrowserTabCaptureResult>((answer) => {
+          resolve = answer;
+        }),
+    );
+    const { api } = makeApi(capture as unknown as BrowserApi["capture"]);
+    await act(async () => {
+      root?.render(<BrowserPane tab={tab} visible api={api} onTabState={() => undefined} />);
+    });
+    const dialog = openDialog();
+    await settle();
+    dialog.remove();
+    await releaseOverlay();
+    await act(async () => resolve(captureResult("late")));
+    expect(shownPixels()).toBeNull();
   });
 
   it("drops the pixels when the pane goes away, so nothing stale returns", async () => {

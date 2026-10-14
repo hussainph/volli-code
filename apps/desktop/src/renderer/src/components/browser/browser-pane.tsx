@@ -16,6 +16,7 @@ import {
   planeVisibility,
   shouldPaintPlanePixels,
   PLANE_CAPTURE_DEADLINE_MS,
+  PLANE_OVERLAY_RELEASE_MS,
 } from "@renderer/components/browser/browser-plane-freeze";
 import { toastError } from "@renderer/lib/toast";
 
@@ -41,11 +42,39 @@ function addressOf(url: string): string {
  * burst of them — answering each one with a document-wide query is work done
  * exactly when the app is busiest.
  */
-function useRendererOverlayActive(): boolean {
+function useRendererOverlayActive(
+  anchorRef: React.RefObject<HTMLDivElement | null>,
+  visible: boolean,
+): boolean {
   const [active, setActive] = React.useState(false);
   React.useEffect(() => {
+    const anchor = anchorRef.current;
+    if (!visible || anchor === null) {
+      setActive(false);
+      return;
+    }
     let queued = 0;
-    const read = (): void => setActive(hasNativePlaneOverlay(document));
+    let release = 0;
+    let holding = false;
+    const read = (): void => {
+      if (hasNativePlaneOverlay(document, anchor)) {
+        window.clearTimeout(release);
+        release = 0;
+        holding = true;
+        setActive(true);
+      } else if (holding && release === 0) {
+        // Entry already has the surface's own hover delay. Delay only release:
+        // a second hover reuses the still, rather than show/capture/hide again.
+        release = window.setTimeout(() => {
+          release = 0;
+          // A new hover can mount just before this deadline with its coalesced
+          // read still queued. Never restore over it for that intervening frame.
+          if (hasNativePlaneOverlay(document, anchor)) return;
+          holding = false;
+          setActive(false);
+        }, PLANE_OVERLAY_RELEASE_MS);
+      }
+    };
     const schedule = (): void => {
       if (queued !== 0) return;
       queued = window.requestAnimationFrame(() => {
@@ -56,11 +85,24 @@ function useRendererOverlayActive(): boolean {
     read();
     const observer = new MutationObserver(schedule);
     observer.observe(document.body, { attributes: true, childList: true, subtree: true });
+    const resize = new ResizeObserver(schedule);
+    resize.observe(anchor);
+    resize.observe(document.body);
+    window.addEventListener("resize", schedule);
+    document.addEventListener("scroll", schedule, true);
+    document.addEventListener("animationend", schedule, true);
+    document.addEventListener("transitionend", schedule, true);
     return () => {
       observer.disconnect();
+      resize.disconnect();
+      window.removeEventListener("resize", schedule);
+      document.removeEventListener("scroll", schedule, true);
+      document.removeEventListener("animationend", schedule, true);
+      document.removeEventListener("transitionend", schedule, true);
+      window.clearTimeout(release);
       if (queued !== 0) window.cancelAnimationFrame(queued);
     };
-  }, []);
+  }, [anchorRef, visible]);
   return active;
 }
 
@@ -89,7 +131,7 @@ export function BrowserPane({
   const [error, setError] = React.useState<string | null>(null);
   const [frames, setFrames] = React.useState<readonly BrowserTabCaptureFrame[]>([]);
   const [captureSettled, setCaptureSettled] = React.useState(false);
-  const overlayActive = useRendererOverlayActive();
+  const overlayActive = useRendererOverlayActive(anchorRef, visible);
   const planeVisible = planeVisibility({ visible, overlayActive, captureSettled });
   const paintPixels = shouldPaintPlanePixels({ visible, frameCount: frames.length });
 
@@ -137,8 +179,8 @@ export function BrowserPane({
       return;
     }
     if (!overlayActive) {
-      // The plane takes the tier back at once. The old frames stay painted
-      // underneath until it has actually reattached.
+      // After the overlay subscription's close grace, the plane takes the
+      // tier back. Old frames stay painted until it has actually reattached.
       setCaptureSettled(false);
       return;
     }
