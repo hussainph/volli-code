@@ -133,6 +133,8 @@ export interface CodeModeModel {
 }
 
 export interface HostCodeMode {
+  /** Small policy fingerprint; never reads a Session ledger or MCP catalog. */
+  revision(): string;
   /**
    * What Code Mode gives a Session born on `model` with `mcpTools`: whether
    * its surface names `codemode`, in which mode, with or without the prompt
@@ -190,6 +192,7 @@ export function hostCodeMode(options: {
             model === undefined ? {} : { [`${model.providerId}/${model.modelId}`]: config.mode },
         };
   return {
+    revision: () => JSON.stringify(config ?? options.policy()),
     birth: (model, mcpTools) =>
       options.sandboxAvailable
         ? codeModeBirth({ policy: policy(model), model: model ?? null, mcpTools })

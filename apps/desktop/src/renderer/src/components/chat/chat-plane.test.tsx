@@ -33,6 +33,33 @@ function turn(message: UIMessage): string {
 }
 
 describe("the desktop transcript-row mapping", () => {
+  it("draws the portable refresh fact as a quiet expandable system row", () => {
+    const [row] = projectTranscriptRows(
+      [],
+      [],
+      [],
+      [
+        {
+          sequence: 8,
+          afterMessageId: null,
+          trigger: "cold-turn",
+          added: ["write"],
+          changed: ["codemode"],
+        },
+      ],
+    );
+    if (row === undefined) throw new Error("expected a refresh row");
+    const html = renderToStaticMarkup(
+      <ChatTranscriptRow row={row} context={context} live={false} />,
+    );
+    expect(html).toContain("Tools updated: 1 added");
+    expect(html).toContain("Cold turn");
+    expect(html).toContain("codemode (updated)");
+    expect(html).toContain("<details");
+    expect(html).not.toContain("is-user");
+    expect(html).not.toContain('role="alert"');
+  });
+
   it("draws a projected host notice without entering the user-message component", () => {
     const modelText =
       '[Subagent Session child-1 ("Review tests") completed its task. Read its answer.]';

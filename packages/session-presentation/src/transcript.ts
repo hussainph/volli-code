@@ -92,6 +92,15 @@ export interface TranscriptReasoningDrop {
   causes: readonly ReasoningDropCause[];
 }
 
+/** A host-only refresh's safe transcript notice, anchored where it happened. */
+export interface TranscriptToolRefresh {
+  sequence: number;
+  afterMessageId: string | null;
+  trigger: Extract<RendererSessionEventPayload, { kind: "session.tools.refreshed" }>["trigger"];
+  added: readonly string[];
+  changed: readonly string[];
+}
+
 /**
  * What the stream alone can say, kept between batches.
  *
@@ -202,6 +211,7 @@ export interface ChatTranscriptState {
   compactions: readonly TranscriptCompaction[];
   /** Provider reasoning drops, oldest first, anchored in the transcript. */
   reasoningDrops: readonly TranscriptReasoningDrop[];
+  toolRefreshes: readonly TranscriptToolRefresh[];
 }
 
 const EMPTY_INTERACTION_INDEX: ReadonlyMap<string, RendererSessionInteraction> = new Map();
@@ -227,6 +237,7 @@ export const EMPTY_TRANSCRIPT: ChatTranscriptState = {
   promptResources: EMPTY_PROMPT_RESOURCES,
   compactions: EMPTY_COMPACTIONS,
   reasoningDrops: EMPTY_REASONING_DROPS,
+  toolRefreshes: [],
 };
 
 /**
@@ -269,6 +280,7 @@ export function appendFrames(
   // a fact that did not move.
   let landed: TranscriptCompaction[] | null = null;
   let landedReasoningDrops: TranscriptReasoningDrop[] | null = null;
+  let landedToolRefreshes: TranscriptToolRefresh[] | null = null;
   // What the transcript had said when the next context notice lands. The batch
   // starts wherever the last one left off — the durable list only ever grows at
   // its end, so its last entry IS the newest thing on screen — and moves inside
@@ -317,6 +329,15 @@ export function appendFrames(
         afterMessageId: anchorId,
         count: payload.count,
         causes: payload.causes,
+      });
+    }
+    if (payload?.kind === "session.tools.refreshed") {
+      (landedToolRefreshes ??= []).push({
+        sequence: frame.sequence,
+        afterMessageId: anchorId,
+        trigger: payload.trigger,
+        added: payload.added,
+        changed: payload.changed,
       });
     }
     if (payload?.kind === "attachment.closed") liveCompaction = null;
@@ -402,6 +423,10 @@ export function appendFrames(
         : new Map([...state.openedInteractions, ...opened]),
     promptResources,
     compactions: landed === null ? state.compactions : [...state.compactions, ...landed],
+    toolRefreshes:
+      landedToolRefreshes === null
+        ? state.toolRefreshes
+        : [...state.toolRefreshes, ...landedToolRefreshes],
     reasoningDrops:
       landedReasoningDrops === null
         ? state.reasoningDrops

@@ -5,6 +5,7 @@ import { readSessionOrigin, type SessionOrigin } from "./session-origin";
  */
 
 import type { SessionStopDetail } from "./session-stop";
+import type { SessionToolRefreshDelta } from "./tool-refresh-delta";
 
 import type {
   CompactionReason,
@@ -604,6 +605,8 @@ export type SessionInput =
       mcpManagementNames?: "server";
       /** Multi-question ask_user declaration, frozen at new birth only (VC-749). Absent keeps the historical single-question surface. */
       askUserQuestions?: true;
+      /** Cache-safe refresh wording; absent preserves the original tool descriptions. Host-only. */
+      refreshDescriptions?: true;
       /** Exact sanitized dynamic definitions corresponding to MCP names in tools. */
       mcpTools?: readonly McpToolDefinition[];
       /**
@@ -661,6 +664,14 @@ export type SessionEventPayload =
    */
   | { kind: "model.selected"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
   | { kind: "session.input.recorded"; input: SessionInput }
+  /** Additive surface delta; a new outer kind lets older readers retain the immutable birth. */
+  | {
+      kind: "session.tools.refreshed";
+      trigger: "cold-turn" | "warm-turn" | "compaction" | "model-switch" | "code-mode";
+      delta: SessionToolRefreshDelta;
+      added: readonly string[];
+      changed: readonly string[];
+    }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
   /**
@@ -861,6 +872,7 @@ export const SESSION_PROJECTION_EVENT_KINDS = [
   "session.retitled",
   "session.signaled",
   "session.stopped",
+  "session.tools.refreshed",
   "transcript.referenced",
   "turn.completed",
   "turn.interrupted",
@@ -1896,6 +1908,7 @@ function foldSessionProjection(
       event.payload.kind !== "command.recorded" &&
       event.payload.kind !== "command.receipt.recorded" &&
       event.payload.kind !== "session.input.recorded" &&
+      event.payload.kind !== "session.tools.refreshed" &&
       event.payload.kind !== "session.retitled" &&
       event.payload.kind !== "usage.recorded"
     ) {
@@ -1952,6 +1965,7 @@ function foldSessionProjection(
         modelAuto = event.payload.auto ?? null;
         break;
       case "session.input.recorded":
+      case "session.tools.refreshed":
         break;
       case "session.signaled":
         signal = {

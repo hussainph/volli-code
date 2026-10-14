@@ -273,6 +273,8 @@ export type ExecutionVenue = "local";
  * lets {@link SessionToolBinding} carry the right thing for each.
  */
 export interface RuntimeToolBundle {
+  /** Compatible versioned verb copy; absent preserves historical description bytes. */
+  refreshDescriptions?: true;
   /** Coding tools, in the order this venue offers them. */
   tools: readonly CodingToolId[];
   /**
@@ -1076,6 +1078,12 @@ export interface RuntimeWorkspaceEnvironment {
 }
 
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
+export interface RuntimeToolRefreshAnnouncement {
+  /** Session Event id, never an attachment-local id. */
+  id: string;
+  namespaces: readonly { name: string; count: number }[];
+}
+
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
   /**
@@ -1097,6 +1105,29 @@ export interface SessionRuntimeSpec {
   workspaceEnvironment?: RuntimeWorkspaceEnvironment;
   promptResources?: readonly PromptResource[];
   tools: RuntimeToolBundle;
+  /**
+   * Last cold provider-visible bundle. Omitted when equal to `tools`.
+   * Warm additions behind Code Mode change the executable bundle only; startup
+   * and recovery must render this subset, not regenerate the cached declaration
+   * from the larger executable registry. Direct additions cannot happen warm.
+   */
+  declarationTools?: RuntimeToolBundle;
+  /** Durable warm refresh facts whose keyed discovery messages survive sidecar retries/recovery. */
+  toolRefreshAnnouncements?: readonly RuntimeToolRefreshAnnouncement[];
+  /**
+   * Recompute and durably record an additions-only compatible surface before
+   * returning its full desired spec, including unchanged durable state on retry.
+   * Null also means unchanged; the runtime compares tool bundles and wired IDs.
+   * Warm/code-mode calls may add code-only tools, but must preserve provider declarations, routes and
+   * description bytes. Cold triggers may also upgrade compatible declarations.
+   * The model is the currently selected pair, not necessarily the birth model.
+   * The runtime awaits this before the next program or provider turn; failures
+   * propagate through that operation rather than silently losing an update.
+   */
+  refreshTools?: (request: {
+    trigger: "cold-turn" | "warm-turn" | "compaction" | "model-switch" | "code-mode";
+    model: ModelSelection;
+  }) => Promise<SessionRuntimeSpec | null>;
   /** Opaque Pi sidecar locator from the durable Session Attachment. */
   recovery?: RuntimeRecoveryRef;
   /**

@@ -1153,8 +1153,8 @@ Effects:
 
 Notes:
 - Previews by default: without confirm=apply nothing is deleted.
-- Older Sessions born holding one of this server's tools will fail to reattach once it is gone, because the transport their frozen tool needs no longer exists.
-- mcp_disable is the reversible alternative and keeps reattachment working.
+- Existing Sessions keep their tools and can reattach, but calls to the removed server return a named unavailable error.
+- mcp_disable is the reversible alternative and preserves the server configuration.
 
 ============================================================================
 volli help ticket

@@ -168,6 +168,7 @@ export function createSessionWakeBus(
     createSession: (request) => afterCommit(() => engine.createSession(request)),
     getOrRecordSessionInput: (request) =>
       afterCommit(() => engine.getOrRecordSessionInput(request)),
+    recordToolRefresh: (request) => afterCommit(() => engine.recordToolRefresh(request)),
     observe: (observation) => afterCommit(() => engine.observe(observation)),
     submit: (request) => afterCommit(() => engine.submit(request)),
     completeModelSelection: (request) => afterCommit(() => engine.completeModelSelection(request)),

@@ -209,3 +209,29 @@ describe("renderer MCP wire shape", () => {
     );
   });
 });
+
+it("ships refreshed names under CSP with no MCP declarations or effective surface", () => {
+  const birth = shippedEvent("https://json-schema.org/draft/2020-12/schema", true);
+  if (
+    birth.payload.kind !== "session.input.recorded" ||
+    birth.payload.input.kind !== "tool-surface"
+  )
+    throw new Error("Missing surface");
+  const event: SessionEvent = {
+    ...birth,
+    payload: {
+      kind: "session.tools.refreshed",
+      trigger: "cold-turn",
+      delta: { mcpTools: birth.payload.input.mcpTools },
+      added: birth.payload.input.mcpTools!.map((tool) => tool.providerName),
+      changed: [],
+    },
+  };
+  assertSessionEvent(event, "event");
+  expect(parseUnderCsp(event)).toEqual({ ok: true, event: scrubSessionEvent(event) });
+  const safe = JSON.stringify(scrubSessionEvent(event));
+  expect(safe).not.toContain("inputSchema");
+  expect(safe).not.toContain("description");
+  expect(safe).not.toContain("surface");
+  expect(safe).toContain(birth.payload.input.mcpTools![0]!.providerName);
+});

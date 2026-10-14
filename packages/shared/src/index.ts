@@ -13,6 +13,8 @@ export * from "./harness-command";
 export * from "./harness";
 export * from "./token-list";
 export * from "./verb-registry";
+export * from "./tool-refresh-copy";
+export * from "./tool-refresh-delta";
 export * from "./catalog-actor";
 export * from "./command-intent-conflict";
 export * from "./queue-revision-conflict";

@@ -46,6 +46,9 @@ import {
   errorMessage,
   isActivityKind,
   isMcpToolId,
+  isCodeCallable,
+  isDeclaredRoute,
+  routeOf,
   isPromptResource,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
@@ -95,6 +98,11 @@ import {
 import { createContextTokenProjector } from "./token-counting";
 import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
+  canAnnounceToolRefresh,
+  toolRefreshId,
+  toolRefreshMessage,
+} from "./tool-refresh-announcements";
+import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
   providerCompactionFromDetails,
@@ -128,12 +136,14 @@ import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools, type CodeModeBuilder } from "./tools";
+import { retainOmitted, sameToolSpec } from "./refresh-tools";
 import { privateSecretExecution } from "./secrets";
 import { CodeModeJournal } from "../codemode/journal";
 import {
   createCodeModeTool,
   type CodeModeSandboxAssets,
   type NestedToolEvent,
+  type SurfaceTool,
 } from "../codemode/tool";
 import {
   savedOutputDirectoriesIn,
@@ -2161,24 +2171,83 @@ async function attachSession(
     });
     // Nested calls reach the same tools, environment and host ports as direct calls.
     const codeModeJournal = new CodeModeJournal();
-    const buildCodeMode: CodeModeBuilder = (surface, surfaceTools) =>
+    let callableSurface: readonly SurfaceTool[] = [];
+    let liveCodeMode: ReturnType<typeof createCodeModeTool> | undefined;
+    let codeModeSurface = spec.tools.codeMode;
+    const codeModeFor = (
+      surface: NonNullable<SessionRuntimeSpec["tools"]["codeMode"]>,
+      surfaceTools: readonly SurfaceTool[],
+      input: SessionRuntimeSpec,
+    ) =>
       createCodeModeTool({
         surface,
         tools: surfaceTools,
         observe: (event) => observeToolActivity(event),
         journal: codeModeJournal,
-        // The same switch the Agent's own batches obey (VC-454).
         honourParallelReads: host.parallelMcpReads,
         output: toolOutput,
         sandbox: host.codeModeSandbox,
-        signal: spec.signal,
+        signal: input.signal,
         now: host.now,
       });
-    const { tools, toolExecution } = applyToolDispatch(
-      createSessionTools(spec, ownedToolEnv, toolOutput, buildCodeMode),
-      spec.tools.mcp ?? [],
-      host.parallelMcpReads,
-    );
+    const liveWrapper = (tool: ReturnType<typeof createCodeModeTool>) => ({
+      ...tool,
+      // The description belongs to the last cold subset, but execution always
+      // reaches the live effective registry, including additions between runs.
+      execute: async (id: string, params: unknown, signal?: AbortSignal) => {
+        await refreshTools("code-mode");
+        return liveCodeMode!.execute(id, params as { code: string }, signal);
+      },
+    });
+    const rebuildTools = (input: SessionRuntimeSpec, warm: boolean) => {
+      // Builders stage all changes locally. A declaration/dispatch failure must
+      // leave the applied spec and executable registry retryable together.
+      let stagedCallable = callableSurface;
+      let stagedSurface = codeModeSurface;
+      let stagedCodeMode = liveCodeMode;
+      const buildEffective: CodeModeBuilder = (surface, surfaceTools) => {
+        if (warm) {
+          const retained = new Map(callableSurface.map((entry) => [entry.id, entry]));
+          for (const entry of surfaceTools) {
+            if (
+              !retained.has(entry.id) &&
+              isCodeCallable(entry.id, routeOf(surface, entry.id)) &&
+              !isDeclaredRoute(routeOf(surface, entry.id))
+            )
+              retained.set(entry.id, entry);
+          }
+          stagedCallable = [...retained.values()];
+        } else {
+          stagedCallable = retainOmitted(callableSurface, surfaceTools, (entry) => entry.id);
+        }
+        stagedSurface = {
+          ...surface,
+          ...(warm && codeModeSurface !== undefined ? codeModeSurface : {}),
+          routes: warm
+            ? { ...surface.routes, ...codeModeSurface?.routes }
+            : { ...codeModeSurface?.routes, ...surface.routes },
+        };
+        stagedCodeMode = codeModeFor(stagedSurface, stagedCallable, input);
+        return liveWrapper(stagedCodeMode);
+      };
+      let declared = createSessionTools(input, ownedToolEnv, toolOutput, buildEffective);
+      if (input.declarationTools !== undefined) {
+        declared = createSessionTools(
+          input,
+          ownedToolEnv,
+          toolOutput,
+          (surface, surfaceTools) => liveWrapper(codeModeFor(surface, surfaceTools, input)),
+          input.declarationTools,
+        );
+      }
+      const rebuilt = applyToolDispatch(declared, input.tools.mcp ?? [], host.parallelMcpReads);
+      return { rebuilt, stagedCallable, stagedSurface, stagedCodeMode };
+    };
+    const initialTools = rebuildTools(spec, false);
+    callableSurface = initialTools.stagedCallable;
+    codeModeSurface = initialTools.stagedSurface;
+    liveCodeMode = initialTools.stagedCodeMode;
+    const { tools, toolExecution } = initialTools.rebuilt;
     // Composed here, once per attachment: the array is half of the Session's
     // Cache Prefix (VC-164), and a provider that orders tools ahead of the
     // system prompt throws the prompt away too when it changes. Reattachment
@@ -2449,6 +2518,7 @@ async function attachSession(
 
     let providerStop = new ProviderStopCapture(credentialRedaction);
     const streamWithCompaction: StreamFn = (requestModel, context, options) => {
+      lastProviderActivity = host.now();
       const capture = new ProviderStopCapture(credentialRedaction);
       providerStop = capture;
       const maxTokens = outputCeiling(requestModel, context);
@@ -2498,10 +2568,10 @@ async function attachSession(
     // back at the head of every array this runtime rebuilds from the sidecar
     // (compaction, model switch), so the prefix is the same bytes on every
     // request of the attachment and the projector's memo hits on it.
-    const head = systemHead(
+    let head = systemHead(
       composeSystemPrompt({
         role: spec.identity.role,
-        tools: spec.tools,
+        tools: spec.declarationTools ?? spec.tools,
         promptResources: spec.promptResources,
       }),
       tools,
@@ -2562,6 +2632,193 @@ async function attachSession(
       // converts identically under both.
       convertToLlm,
     });
+    // Provider caches have no reliable expiry observation. Anthropic's Pi
+    // adapter supports both 5m and 1h retention (including an environment
+    // override), so use its longest lifetime, not an assumed 5m default.
+    // OpenAI extended retention is 24h; routers/unknown providers use the same
+    // conservative window. This is an eligibility rule, never a cache-hit claim.
+    // Recovery includes the last durable activity, not the attach wall clock.
+    let lastProviderActivity =
+      recoveredEntries.length === 0
+        ? undefined
+        : recoveredEntries.reduce((latest, entry) => Math.max(latest, entry.timestamp), 0);
+    const turnRefreshTrigger = (): "cold-turn" | "warm-turn" => {
+      const ttl =
+        agent.state.model.provider === "anthropic" && agent.state.model.api === "anthropic-messages"
+          ? 60 * 60_000
+          : 24 * 60 * 60_000;
+      return lastProviderActivity === undefined || host.now() - lastProviderActivity >= ttl
+        ? "cold-turn"
+        : "warm-turn";
+    };
+    // Scan the entire durable conversation, including carried messages, not
+    // just the retained compaction window: a discovery already summarized out
+    // of context must not recur on attach.
+    const announcedRefreshIds = new Set(
+      conversationPath(recoveredEntries, conversationReader).flatMap((entry) => {
+        if (entry.type !== "message") return [];
+        const id = toolRefreshId(entry.message);
+        return id === undefined ? [] : [id];
+      }),
+    );
+    const pendingAnnouncements: AgentMessage[] = [];
+    const deferredRefreshes = new Map<
+      string,
+      NonNullable<SessionRuntimeSpec["toolRefreshAnnouncements"]>[number]
+    >();
+    // Standalone pre-ledger callers have no durable ID; do not let their legacy
+    // discovery message rewrite a warm prefix either. Production always has IDs.
+    const deferredLegacyAnnouncements: AgentMessage[] = [];
+    let announcementAppendFailed = false;
+    const announceRefreshes = async (
+      input: SessionRuntimeSpec,
+      allowed: boolean,
+    ): Promise<void> => {
+      for (const fact of input.toolRefreshAnnouncements ?? []) deferredRefreshes.set(fact.id, fact);
+      // Do not append a sidecar receipt until the message can really be sent.
+      // The host ledger re-supplies these facts on recovery; same-bundle/null
+      // refresh results must not lose the pending IDs in this attachment either.
+      if (!allowed) return;
+      while (deferredLegacyAnnouncements.length > 0) {
+        const message = deferredLegacyAnnouncements[0]!;
+        await mainBranch.appendMessage(message, piContext());
+        deferredLegacyAnnouncements.shift();
+        pendingAnnouncements.push(message);
+      }
+      if (announcementAppendFailed) {
+        // An append may reject after its commit. Re-read receipts before retrying
+        // so even that ambiguous outcome cannot produce a duplicate message.
+        const entries = await mainBranch.findEntries({ order: "oldestFirst" }, piContext());
+        for (const entry of entries) {
+          if (entry.type !== "message") continue;
+          const id = toolRefreshId(entry.message);
+          if (id === undefined || announcedRefreshIds.has(id)) continue;
+          announcedRefreshIds.add(id);
+          pendingAnnouncements.push(entry.message);
+        }
+        announcementAppendFailed = false;
+      }
+      for (const announcement of deferredRefreshes.values()) {
+        if (announcedRefreshIds.has(announcement.id)) continue;
+        const message = toolRefreshMessage(announcement.namespaces, host.now(), announcement.id);
+        try {
+          await mainBranch.appendMessage(message, piContext());
+        } catch (error) {
+          announcementAppendFailed = true;
+          throw error;
+        }
+        announcedRefreshIds.add(announcement.id);
+        pendingAnnouncements.push(message);
+      }
+      // Durable partial batches remain pending for a retry (or recovery).
+      // The caller publishes only after all writes and close checks succeeded.
+    };
+    // Replays the ledger-write/sidecar-append gap even when the effective bundle
+    // was already adopted by the previous process and therefore is unchanged.
+    await announceRefreshes(
+      spec,
+      canAnnounceToolRefresh(agent.state.model, turnRefreshTrigger() === "warm-turn"),
+    );
+    agent.state.messages.push(...pendingAnnouncements.splice(0));
+    let refreshTail: Promise<unknown> = Promise.resolve();
+    // The host revision gate returns its cached desired object on steady checks.
+    // Remember only fully applied inputs: failed builds/appends must retry even
+    // when the adapter has already cached that same object. Boundary checks still
+    // compare declarations, since a cold epoch can advance with unchanged IDs.
+    let lastSuccessfulInput: SessionRuntimeSpec | undefined;
+    const refreshTools = (
+      trigger: Parameters<NonNullable<SessionRuntimeSpec["refreshTools"]>>[0]["trigger"],
+      refreshModel: SessionRuntimeSpec["model"] = {
+        providerId: agent.state.model.provider,
+        modelId: agent.state.model.id,
+        reasoningLevel: agent.state.thinkingLevel,
+      },
+      announcementModel = agent.state.model,
+    ): Promise<boolean> => {
+      const work = refreshTail.then(async () => {
+        if (closed) return false;
+        const next = (await spec.refreshTools?.({ trigger, model: refreshModel })) ?? null;
+        if (closed) throw new Error("This attachment is closed.");
+        const warm = trigger === "warm-turn" || trigger === "code-mode";
+        const allowed = canAnnounceToolRefresh(announcementModel, warm);
+        if (next === null) {
+          if (!warm) {
+            await announceRefreshes(spec, allowed);
+            if (closed) throw new Error("This attachment is closed.");
+            agent.state.messages.push(...pendingAnnouncements.splice(0));
+          }
+          return false;
+        }
+        if (trigger === "code-mode" && next === lastSuccessfulInput) return false;
+        // Even a host returning its full durable desired state on every check
+        // must not regenerate provider declarations or reannounce additions.
+        const candidate = {
+          ...next,
+          refreshTools: next.refreshTools ?? spec.refreshTools,
+          ...(warm ? { declarationTools: spec.declarationTools ?? spec.tools } : {}),
+        };
+        if (sameToolSpec(spec, candidate)) {
+          await announceRefreshes(candidate, allowed);
+          if (closed) throw new Error("This attachment is closed.");
+          agent.state.messages.push(...pendingAnnouncements.splice(0));
+          lastSuccessfulInput = next;
+          return false;
+        }
+        const previousIds = new Set(callableSurface.map((entry) => entry.id));
+        const staged = rebuildTools(candidate, warm);
+        const additions = staged.stagedCallable.filter((entry) => !previousIds.has(entry.id));
+        const merged = warm
+          ? agent.state.tools
+          : retainOmitted(agent.state.tools, staged.rebuilt.tools, (tool) => tool.name);
+        const nextHead = warm
+          ? head
+          : systemHead(
+              composeSystemPrompt({
+                role: candidate.identity.role,
+                tools: candidate.declarationTools ?? candidate.tools,
+                promptResources: candidate.promptResources,
+              }),
+              merged,
+            );
+        await announceRefreshes(candidate, allowed);
+        // Standalone callers predating the host ledger still receive discovery.
+        // Production always supplies durable facts (including []), never fake IDs.
+        if (candidate.toolRefreshAnnouncements === undefined && warm && additions.length > 0) {
+          const namespaces = new Map<string, number>();
+          for (const entry of additions) {
+            const namespace = entry.mcp === undefined ? "volli" : `mcp:${entry.mcp.serverId}`;
+            namespaces.set(namespace, (namespaces.get(namespace) ?? 0) + 1);
+          }
+          const message = toolRefreshMessage(
+            [...namespaces].map(([name, count]) => ({ name, count })),
+            host.now(),
+          );
+          if (allowed) {
+            await mainBranch.appendMessage(message, piContext());
+            pendingAnnouncements.push(message);
+          } else deferredLegacyAnnouncements.push(message);
+        }
+        // Close drains this work before cleanup, but must never adopt its result.
+        if (closed) throw new Error("This attachment is closed.");
+        // Commit only after all builds and the durable discovery append succeed.
+        agent.state.messages.push(...pendingAnnouncements.splice(0));
+        callableSurface = staged.stagedCallable;
+        codeModeSurface = staged.stagedSurface;
+        liveCodeMode = staged.stagedCodeMode;
+        spec = candidate;
+        if (!warm) {
+          agent.state.tools = merged;
+          agent.toolExecution = staged.rebuilt.toolExecution;
+          head = nextHead;
+          agent.state.messages = withSystemHead(head, agent.state.messages.slice(1));
+        }
+        lastSuccessfulInput = next;
+        return true;
+      });
+      // Serialise parallel program starts without poisoning later attempts.
+      refreshTail = work.catch(() => undefined);
+      return work;
+    };
     // Interrupting, closing and cancelling the attachment all arrive here, which
     // is why one flag answers for all three downstream.
     interruptTurn = () => {
@@ -2731,6 +2988,7 @@ async function attachSession(
         operation: "executor.retry" as const,
         delivery: "retry" as const,
       };
+      await refreshTools(turnRefreshTrigger());
       await agent.continue();
       return { kind: "delivered", delivery: "retry" };
     };
@@ -2993,7 +3251,10 @@ async function attachSession(
           // Already whole: the summary, the restored resources and the kept
           // turns without their reasoning, all read off the entry just written
           // — behind the head, which the entry never holds.
-          agent.state.messages = withSystemHead(head, outcome.messages);
+          const messageCount = agent.state.messages.length;
+          await refreshTools("compaction");
+          const announcements = agent.state.messages.slice(messageCount);
+          agent.state.messages = withSystemHead(head, [...outcome.messages, ...announcements]);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
@@ -3107,8 +3368,17 @@ async function attachSession(
     // loop owns a separate context snapshot: replacing Agent.state alone would
     // appear to compact while the next request still sent the entire history.
     agent.prepareNextTurnWithContext = async ({ context }, signal) => {
+      const refreshed = await refreshTools(turnRefreshTrigger());
       const changed = await compactBeforeTurn([...pendingQueuedDeliveries.keys()], signal);
-      return changed ? { context: { ...context, messages: [...agent.state.messages] } } : undefined;
+      return changed || refreshed || spec.refreshTools !== undefined
+        ? {
+            context: {
+              ...context,
+              tools: [...agent.state.tools],
+              messages: [...agent.state.messages],
+            },
+          }
+        : undefined;
     };
 
     /**
@@ -3283,6 +3553,7 @@ async function attachSession(
       }
 
       if (event.type === "message_end") {
+        if (event.message.role === "assistant") lastProviderActivity = host.now();
         if (event.message.role === "user") {
           const delivery = pendingQueuedDeliveries.get(event.message);
           if (delivery !== undefined) {
@@ -3599,16 +3870,17 @@ async function attachSession(
         // rather than admitted onto a context this turn is already composing
         // against; everything from here to `prompt` is synchronous, so there is
         // no gap between releasing it and Pi owning the array itself.
-        await rewritingTheContext(() =>
-          compactBeforeTurn([
+        await rewritingTheContext(async () => {
+          await refreshTools(turnRefreshTrigger());
+          return compactBeforeTurn([
             queuedUserMessage(
               conversationIsEmpty(agent.state.messages)
                 ? composeFirstUserMessage(spec, framedText)
                 : framedText,
               images,
             ),
-          ]),
-        );
+          ]);
+        });
         // Asked of the conversation, not of the array: the array is never empty
         // now that the system head lives in it (see `transcript-context.ts`).
         const delivered = conversationIsEmpty(agent.state.messages)
@@ -3743,6 +4015,13 @@ async function attachSession(
         // reached through OAuth or an endpoint override cannot replay a
         // checkpoint the metered public API minted (VC-331).
         const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
+        const refreshTrigger =
+          selected.provider === agent.state.model.provider &&
+          selected.id === agent.state.model.id &&
+          selected.api === agent.state.model.api &&
+          selection.reasoningLevel === agent.state.thinkingLevel
+            ? turnRefreshTrigger()
+            : "model-switch";
         await rewritingTheContext(async () => {
           const { path } = compactionPathForModel(
             await conversationBranch(),
@@ -3750,11 +4029,18 @@ async function attachSession(
             selectedRoute,
           );
           const latest = path.findLast((entry) => entry.type === "compaction");
-          nativeCompactionState =
+          const nextNativeCompactionState =
             latest?.type === "compaction"
               ? providerCompactionFromDetails(latest.details)
               : undefined;
-          agent.state.messages = withSystemHead(head, contextMessages(path));
+          const messageCount = agent.state.messages.length;
+          // Stage the selected pair for the host without applying it to Pi. A
+          // rejected refresh leaves model, reasoning and opaque context intact.
+          await refreshTools(refreshTrigger, selection, selected);
+          if (closed) throw new Error("This attachment is closed.");
+          const appended = agent.state.messages.slice(messageCount);
+          agent.state.messages = withSystemHead(head, [...contextMessages(path), ...appended]);
+          nativeCompactionState = nextNativeCompactionState;
           agent.state.model = selected;
           agent.state.thinkingLevel = selection.reasoningLevel;
         });
@@ -3878,6 +4164,7 @@ async function attachSession(
         interruptTurn();
         await agent.waitForIdle();
         await detachedRunSettled;
+        await refreshTail;
         unsubscribe?.();
         unsubscribe = undefined;
         stopWatchingResume?.();

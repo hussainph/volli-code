@@ -4,7 +4,7 @@
 // validation and shipped provider-tool builder without a model, tool execution,
 // Electron, credentials, a sandbox worker or network access.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -40,11 +40,53 @@ async function attach(step) {
       ids: { next: unused },
     });
     const events = await engine.listEvents({ sessionId: step.sessionId });
-    const record = events.find(
+    const projection = await engine.getSession({ sessionId: step.sessionId });
+    const birth = events.find(
       ({ payload }) =>
         payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface",
     )?.payload.input;
-    if (!record?.codeMode) throw new Error("N−1 lost the durable Code Mode birth record");
+    if (!birth?.codeMode) throw new Error("N−1 lost the durable Code Mode birth record");
+    // Use this build's production epoch reader when it has shipped. Pre-feature
+    // readers have only the immutable birth and legitimately degrade to it.
+    const readerPath = join(
+      process.env.VOLLI_N1_TREE,
+      process.env.VOLLI_N1_HOST_SRC,
+      "session-runtime/tool-refresh.ts",
+    );
+    const reader = existsSync(readerPath) ? await import(pathToFileURL(readerPath).href) : null;
+    const record = reader?.effectiveToolSurface(events) ?? birth;
+    const declaration = reader?.declarationToolSurface(events) ?? birth;
+    // The sequenced reader is strict about unknown kinds. Seed the OLD bus
+    // after historical refreshes, then prove its first post-start drain excludes them.
+    const wakePath = ["session-control/session-wake.ts", "session-wake.ts"]
+      .map((path) => join(process.env.VOLLI_N1_TREE, process.env.VOLLI_N1_HOST_SRC, path))
+      .find(existsSync);
+    if (!wakePath) throw new Error("N−1 has no production Session wake bus");
+    const { createSessionWakeBus } = await import(pathToFileURL(wakePath).href);
+    const wakeErrors = [];
+    const wakes = [];
+    const bus = createSessionWakeBus(engine, {
+      db,
+      onError: (error) => wakeErrors.push(String(error)),
+    });
+    const unsubscribe = bus.subscribe((wake) => wakes.push(wake));
+    await bus.engine.observe({
+      id: `n1-startup-wake-${step.sessionId}`,
+      sessionId: step.sessionId,
+      occurredAt: 1_791_100_000_001,
+      provenance: { source: { kind: "system", id: "n1-proof", detail: null }, venue: null },
+      kind: "adapter.observed",
+      attachmentId: null,
+      name: "N−1 startup wake proof",
+      native: null,
+    });
+    unsubscribe();
+    const startupWakeSafe =
+      wakeErrors.length === 0 &&
+      wakes.length === 1 &&
+      wakes[0].event.payload.kind === "adapter.observed";
+    if (!startupWakeSafe)
+      throw new Error(`N−1 wake replayed historical refreshes: ${JSON.stringify(wakeErrors)}`);
     let result;
     const browser = Object.fromEntries(
       [
@@ -72,6 +114,8 @@ async function attach(step) {
         model: { providerId: "anthropic", modelId: "fixture", reasoningLevel: "off" },
         toolSurface: record.tools,
         codeMode: record.codeMode,
+        declarationSurface: declaration,
+        refreshDescriptions: record.refreshDescriptions,
         promptResources: [],
       }),
       resolveWebPorts: () => ({ webFetch: unused, webSearch: unused }),
@@ -96,6 +140,11 @@ async function attach(step) {
             routes: record.codeMode.routes,
             bound,
             declared: declared.map((tool) => tool.name),
+            replayable: projection?.session.id === step.sessionId,
+            startupWakeSafe,
+            birthStillReadable: birth.tools.every((tool) =>
+              shared.sessionToolIds(spec).includes(tool),
+            ),
             callable: bound.filter((tool) =>
               shared.isCodeCallable(tool, record.codeMode.routes[tool]),
             ),

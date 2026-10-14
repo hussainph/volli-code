@@ -97,6 +97,7 @@ import {
   CompactionProgress,
 } from "@renderer/components/chat/compaction-boundary-ui";
 import { ReasoningDropNotice } from "@renderer/components/chat/reasoning-drop-notice-ui";
+import { ToolRefreshNotice } from "@renderer/components/chat/tool-refresh-notice-ui";
 import {
   answerInteraction,
   composerModelSelection,
@@ -1489,8 +1490,14 @@ export function ChatPlane({
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
   const rows = React.useMemo(
-    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
-    [session.compactions, session.reasoningDrops, turns],
+    () =>
+      projectTranscriptRows(
+        turns,
+        session.compactions,
+        session.reasoningDrops,
+        session.toolRefreshes,
+      ),
+    [session.compactions, session.reasoningDrops, session.toolRefreshes, turns],
   );
   // An intent waiting to reach Pi is below Working, never above it. Keep its
   // durable identity and reuse the ordinary message renderer.
@@ -2656,6 +2663,8 @@ function transcriptRowKey(row: TranscriptRow): string {
       return `compaction:${row.compaction.sequence}`;
     case "reasoning-drop":
       return `reasoning-drop:${row.drop.sequence}`;
+    case "tool-refresh":
+      return `tool-refresh:${row.refresh.sequence}`;
   }
 }
 
@@ -2683,6 +2692,8 @@ export function ChatTranscriptRow({
       return <CompactionBoundary compaction={row.compaction} />;
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
+    case "tool-refresh":
+      return <ToolRefreshNotice refresh={row.refresh} />;
     case "turn":
       return <ChatTurn messages={row.messages} context={context} live={live} />;
   }

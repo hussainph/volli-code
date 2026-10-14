@@ -148,9 +148,9 @@ export async function closeAllMcpSessionHosts(): Promise<void> {
 /**
  * Bind an existing Session only to configuration for the servers in its frozen
  * definitions. Current enablement selects tools for new Sessions; it cannot
- * revoke an existing Session's durable surface. A removed server is different:
- * there is no transport left to bind, so attachment must fail rather than
- * advertise a tool that cannot run.
+ * revoke an existing Session's durable surface. Removed servers are omitted
+ * from transport configuration, not from the tool surface: calls return the
+ * named unavailable result instead of orphaning the whole attachment.
  */
 export function serversForFrozenMcpTools(
   configured: readonly McpServerDraft[],
@@ -163,11 +163,7 @@ export function serversForFrozenMcpTools(
     if (seen.has(definition.serverId)) continue;
     seen.add(definition.serverId);
     const server = byId.get(definition.serverId);
-    if (server === undefined) {
-      throw new Error(
-        "A required MCP server is missing. Restore its configuration and retry the attachment.",
-      );
-    }
+    if (server === undefined) continue;
     bound.push({
       id: server.id,
       name: server.name,

@@ -16371,6 +16371,45 @@
                           {
                             "additionalProperties": false,
                             "properties": {
+                              "added": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "changed": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "session.tools.refreshed",
+                                "type": "string"
+                              },
+                              "trigger": {
+                                "enum": [
+                                  "cold-turn",
+                                  "warm-turn",
+                                  "compaction",
+                                  "model-switch",
+                                  "code-mode"
+                                ],
+                                "type": "string",
+                                "x-volli-open-enum": true
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "trigger",
+                              "added",
+                              "changed"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
                               "kind": {
                                 "const": "session.signaled",
                                 "type": "string"
@@ -24336,6 +24375,45 @@
                           {
                             "additionalProperties": false,
                             "properties": {
+                              "added": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "changed": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "session.tools.refreshed",
+                                "type": "string"
+                              },
+                              "trigger": {
+                                "enum": [
+                                  "cold-turn",
+                                  "warm-turn",
+                                  "compaction",
+                                  "model-switch",
+                                  "code-mode"
+                                ],
+                                "type": "string",
+                                "x-volli-open-enum": true
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "trigger",
+                              "added",
+                              "changed"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
                               "kind": {
                                 "const": "session.signaled",
                                 "type": "string"
@@ -30188,6 +30266,45 @@
                         {
                           "additionalProperties": false,
                           "properties": {
+                            "added": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "changed": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "kind": {
+                              "const": "session.tools.refreshed",
+                              "type": "string"
+                            },
+                            "trigger": {
+                              "enum": [
+                                "cold-turn",
+                                "warm-turn",
+                                "compaction",
+                                "model-switch",
+                                "code-mode"
+                              ],
+                              "type": "string",
+                              "x-volli-open-enum": true
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "trigger",
+                            "added",
+                            "changed"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
                             "kind": {
                               "const": "session.signaled",
                               "type": "string"
@@ -34250,6 +34367,45 @@
                           "required": [
                             "kind",
                             "input"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "added": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "changed": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "kind": {
+                              "const": "session.tools.refreshed",
+                              "type": "string"
+                            },
+                            "trigger": {
+                              "enum": [
+                                "cold-turn",
+                                "warm-turn",
+                                "compaction",
+                                "model-switch",
+                                "code-mode"
+                              ],
+                              "type": "string",
+                              "x-volli-open-enum": true
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "trigger",
+                            "added",
+                            "changed"
                           ],
                           "type": "object"
                         },

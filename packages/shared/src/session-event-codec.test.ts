@@ -113,6 +113,13 @@ function samples<const T extends readonly SessionEventPayload[]>(...items: T): T
  * and one shared roster is what makes both questions ask about the same kinds.
  */
 const payloads = samples(
+  {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    delta: {},
+    added: ["write"],
+    changed: [],
+  },
   { kind: "command.recorded", command },
   {
     kind: "command.recorded",
@@ -2221,4 +2228,166 @@ it("keeps Code Mode's birth description version durable but host-only", () => {
     });
     expect(JSON.stringify(scrubSessionEvent(event))).not.toContain("descriptionVersion");
   }
+});
+
+it("round-trips refreshes with future tool names without corrupting birth or dropping their notice", () => {
+  const future = "write";
+  const raw = {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    delta: {
+      askUserQuestions: true,
+      refreshDescriptions: true,
+      routes: { read: "both", ask_user: "direct", [future]: "both", mcp__paper__read: "deferred" },
+      codeMode: {
+        limits: DEFAULT_CODE_MODE_LIMITS,
+        descriptionVersion: 2,
+      },
+      mcpTools: [
+        {
+          serverId: "paper",
+          toolName: "read",
+          providerName: "mcp__paper__read",
+          description: "Private declaration",
+          inputSchema: { type: "object", properties: { secret: { type: "string" } } },
+        },
+      ],
+    },
+    added: ["ask_user", "codemode", future, "mcp__paper__read"],
+    changed: [],
+  };
+  const decoded = decodeSessionEventPayload(JSON.parse(JSON.stringify(raw)), "payload");
+  expect(decoded).toEqual(raw);
+  const safe = { kind: raw.kind, trigger: raw.trigger, added: raw.added, changed: raw.changed };
+  expect(scrubSessionEventPayload(decoded)).toEqual(safe);
+  expect(decodeRendererSessionEventPayload(JSON.parse(JSON.stringify(raw)), "payload")).toEqual(
+    safe,
+  );
+  expect(decodeRendererSessionEventPayload(JSON.parse(JSON.stringify(safe)), "payload")).toEqual(
+    safe,
+  );
+  expect(
+    decodeRendererSessionEventPayload({ ...safe, trigger: "future-trigger" }, "payload"),
+  ).toMatchObject({ trigger: "future-trigger" });
+  expect(JSON.stringify(safe)).not.toContain("surface");
+  const unknown = "future_builtin_from_next_release";
+  const unbindable = {
+    ...raw,
+    added: [...raw.added, unknown],
+    delta: {
+      ...raw.delta,
+      routes: { ...raw.delta.routes, [unknown]: "both" },
+    },
+  };
+  expect(decodeSessionEventPayload(unbindable, "payload")).toMatchObject({
+    added: expect.arrayContaining([unknown]),
+  });
+  expect(() =>
+    decodeSessionEventPayload(
+      { ...raw, delta: { ...raw.delta, refreshDescriptions: false } },
+      "payload",
+    ),
+  ).toThrow("refreshDescriptions must be true");
+  expect(() =>
+    decodeSessionEventPayload(
+      {
+        kind: "session.input.recorded",
+        input: {
+          kind: "tool-surface",
+          tools: [unknown],
+        },
+      },
+      "payload",
+    ),
+  ).toThrow("unsupported");
+  expect(decodeRendererSessionEventPayload(unbindable, "payload")).toEqual({
+    ...safe,
+    added: unbindable.added,
+  });
+  for (const field of ["added", "changed"] as const) {
+    expect(() => decodeSessionEventPayload({ ...raw, [field]: {} }, "payload")).toThrow(
+      "must be an array",
+    );
+    expect(() => decodeRendererSessionEventPayload({ ...safe, [field]: [7] }, "payload")).toThrow(
+      "must be a string",
+    );
+  }
+  expect(() => decodeSessionEventPayload({ ...raw, delta: null }, "payload")).toThrow(
+    "must be an object",
+  );
+});
+
+it("validates refresh deltas independently of the renderer notice", () => {
+  const base = {
+    kind: "session.tools.refreshed",
+    trigger: "future-trigger",
+    added: [] as string[],
+    changed: [],
+    delta: {},
+  };
+  expect(decodeSessionEventPayload(base, "payload")).toEqual(base);
+  expect(
+    decodeSessionEventPayload(
+      {
+        ...base,
+        delta: { routes: {}, mcpTools: [], descriptionVersion: 2, refreshDescriptions: true },
+      },
+      "payload",
+    ),
+  ).toEqual({
+    ...base,
+    delta: { routes: {}, mcpTools: [], descriptionVersion: 2, refreshDescriptions: true },
+  });
+  const acquired = {
+    ...base,
+    added: ["codemode"],
+    delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS }, routes: {} },
+  };
+  expect(decodeSessionEventPayload(acquired, "payload")).toEqual(acquired);
+  const malformed = [
+    { delta: undefined },
+    { delta: [] },
+    { delta: { mcpTools: {} } },
+    { added: ["read", "read"] },
+    { changed: ["read", "read"] },
+    { delta: { askUserQuestions: false } },
+    { delta: { refreshDescriptions: false } },
+    { delta: { askUserQuestions: true } },
+    { delta: { descriptionVersion: 1 } },
+    { delta: { routes: [] } },
+    { delta: { routes: { codemode: "direct" } } },
+    { added: ["write"], delta: { routes: { write: "invalid" } } },
+    { delta: { routes: { write: "code" } } },
+    { added: ["mcp__paper__read"] },
+    { added: ["codemode"] },
+    { delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS } } },
+    { added: ["codemode"], delta: { codeMode: null } },
+    {
+      added: ["codemode"],
+      delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS }, descriptionVersion: 2 },
+    },
+    { added: ["codemode"], delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS, routes: {} } } },
+    { added: ["codemode"], delta: { codeMode: { limits: {} } } },
+    { added: ["codemode", "write"], delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS } } },
+  ];
+  for (const patch of malformed) {
+    expect(() => decodeSessionEventPayload({ ...base, ...patch }, "payload")).toThrow();
+  }
+  // The renderer cannot compile or leak a delta, even a malformed one.
+  expect(
+    decodeRendererSessionEventPayload({ ...base, delta: { mcpTools: "private" } }, "payload"),
+  ).toEqual({ kind: base.kind, trigger: base.trigger, added: [], changed: [] });
+});
+
+it("retains birth refresh wording markers without defaulting historical records", () => {
+  const old = { kind: "session.input.recorded", input: { kind: "tool-surface", tools: ["read"] } };
+  expect(decodeSessionEventPayload(old, "payload")).toEqual(old);
+  const modern = { ...old, input: { ...old.input, refreshDescriptions: true } };
+  expect(decodeSessionEventPayload(modern, "payload")).toEqual(modern);
+  expect(() =>
+    decodeSessionEventPayload(
+      { ...old, input: { ...old.input, refreshDescriptions: false } },
+      "payload",
+    ),
+  ).toThrow("must be true");
 });

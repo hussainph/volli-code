@@ -1477,6 +1477,27 @@ describe("web_search tool", () => {
 });
 
 describe("createVerbTool", () => {
+  it("opts into compatible refresh copy only when requested by the bundle", () => {
+    const binding = { verb: "mcp.install" as const, port: async () => ({ text: "" }) };
+    const legacy = createVerbTool(binding, undefined, "server");
+    expect(legacy.description).toContain("do NOT appear in this Session");
+    const modern = createVerbTool(binding, undefined, "server", true);
+    expect(modern.description).toContain("before the next program");
+    expect(modern.parameters).toEqual(legacy.parameters);
+    const built = createSessionTools(
+      {
+        tools: {
+          tools: [],
+          verbs: ["mcp.install"],
+          mcpManagementNames: "server",
+          refreshDescriptions: true,
+        },
+        callVerb: binding.port,
+      },
+      null as never,
+    );
+    expect(built[0]!.description).toBe(modern.description);
+  });
   it("compiles the registry's semantic schema into what the model is shown", () => {
     const tool = createVerbTool({
       verb: "session.start",
@@ -1725,6 +1746,42 @@ describe("createSessionTools with Code Mode (VC-471)", () => {
       codeMode: { ...codeMode, routes: { read: "code" as const, write: "both" as const } },
     },
   };
+
+  it("projects the last cold subset, including its old copy, from validated executable bindings", () => {
+    const birth = {
+      tools: [] as const,
+      verbs: ["mcp.install"] as const,
+      mcpManagementNames: "server" as const,
+      codeMode: codeModeSurfaceFor({ tools: ["mcp.install"] }),
+    };
+    const effective = {
+      tools: {
+        ...birth,
+        refreshDescriptions: true as const,
+        codeMode: codeModeSurfaceFor({ tools: ["mcp.install", "web_fetch"] }),
+      },
+      callVerb: async () => ({ text: "" }),
+      webFetch: async () => document(),
+    };
+    const handed: string[] = [];
+    const built = createSessionTools(
+      effective,
+      null as never,
+      undefined,
+      (surface, tools) => {
+        expect(surface).toEqual(birth.codeMode);
+        handed.push(...tools.map((entry) => entry.id));
+        expect(tools[0]!.tool.description).toContain("do NOT appear in this Session");
+        return createTodoWriteTool();
+      },
+      birth,
+    );
+    expect(handed).toEqual(["mcp.install"]);
+    expect(built.map((tool) => tool.name)).not.toContain("web_fetch");
+    expect(() =>
+      createSessionTools(effective, null as never, undefined, undefined, { tools: [] }),
+    ).toThrow("requires Code Mode");
+  });
 
   it("refuses to build a surface that names codemode with no Code Mode host", () => {
     expect(() => createSessionTools(spec, null as never)).toThrow(

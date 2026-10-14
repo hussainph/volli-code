@@ -13,30 +13,29 @@ client in VC-470.
 
 ## The one rule everything else follows
 
-**A Session's tool list is frozen when the Session is created.**
+**A Session's tools gain additions, never removals or renames.**
 
-It is resolved once, at birth, and written into a durable `tool-surface` record.
-Reattaching a Session replays that exact record or fails; it never re-derives
-one. So:
+The birth `tool-surface` record stays immutable. Additive refresh facts record
+new executable tools and the last-cold provider declaration epoch separately:
 
-- Installing a server, enabling it, or selecting more of its tools changes what
-  a **new root Session** is handed: one started with `session_start`, or from a
-  fresh Board Session. It changes nothing about any Session that already exists,
-  including the one that made the call.
-- A **delegated helper** is not a new root Session. `session_delegate` hands the
-  helper its parent's frozen tools, MCP tools included, so a helper delegated from
-  a Session born before the install does not have the new tools. Start a new
-  Session before delegating work that needs them.
-- Disabling a server or deselecting a tool likewise cannot take a tool away from
-  a Session that already has it, and a helper delegated from that Session still
-  inherits it.
-- **Deleting** a server is the exception, and it is destructive in a way the
-  others are not. A Session born holding one of its tools needs that server's
-  transport in order to reattach. With the configuration gone, reattachment
-  **fails**. See [Recovering](#recovering-from-a-failed-or-regretted-change).
+- Installing, enabling or selecting tools updates new root Sessions and makes
+  additions eligible for existing Sessions, including the caller.
+- Code-Mode-only additions become usable before the next program. Their
+  namespace/count announcement waits for a cold cache, compaction or model switch
+  unless the model supports mid-conversation system messages. Other additions
+  wait for those same boundaries. Warm declarations remain byte-identical, including
+  on reattachment. Each refresh has an expandable quiet transcript row.
+- A delegated helper inherits its parent's current recorded MCP definitions,
+  including refreshed additions, never the project's later selection. Running
+  delegates refresh by the same rules, bounded by their parent.
+- Disabling or deselecting tools does not remove an existing name or definition.
+  A removed server's tools remain named and return an unavailable error; restoring
+  its original ID restores calling. Older app builds may require that configuration
+  to reattach. See [Recovering](#recovering-from-a-failed-or-regretted-change).
 
-Every verb's result repeats the relevant half of this, because a model that has
-just installed a server will otherwise try to call its tools in the same turn.
+Older builds skip refresh facts and use the immutable birth surface. Existing
+MCP schemas, routes and descriptions remain frozen; arbitrary upstream changes
+are not assumed backward-compatible.
 
 ## Configuring a server by hand
 
@@ -403,8 +402,8 @@ server advertises.
 **A running Session picks up a sign-in.** Tokens are read on every request, so
 a Session already running uses a refreshed token, or the token from a sign-in
 a person just completed, on its very next call, without being reattached. Its
-frozen tool list does not change: signing in, like installing, affects which
-tools are offered only to Sessions created afterwards. A Session signs in only
+tool names do not change just because a token changed. Installing or selecting
+additional tools follows the cache-safe refresh rules above. A Session signs in only
 to the address it was started with: if the stored server has since been
 pointed elsewhere, its sign-in question is answered "this server's address
 changed since the Session started; review it in Settings" and neither address
@@ -586,12 +585,12 @@ tool works without it, and the main-process log says why. An output schema only
 describes the structured half of a result (see
 [What a call returns](#what-a-call-returns)); the model never sees it.
 
-### You removed a server and older Sessions now fail to reattach
+### You removed a server and its retained tools are unavailable
 
-`serversForFrozenMcpTools` throws when a frozen tool's server is gone, so those
-Sessions cannot reattach. **Re-add the server under the same id** — the removal's
-audit record contains the transport needed to do it — and reattachment works
-again.
+Sessions keep the tool names and can reattach, but calls return a named
+unavailable error. **Re-add the server under the same id** — the removal's audit
+record contains its transport — to restore calling. Pre-refresh app builds may
+also need that configuration restored before they can reattach.
 
 To avoid this entirely, prefer **`server_disable`**. It keeps the configuration, so
 existing Sessions still reattach, while new root Sessions are not offered the
@@ -723,8 +722,9 @@ A nested call from a program reaches the server through the same
 `RuntimeMcpPort`, the same per-server bound and the same trust notice as a
 direct call; a program's output after any MCP call comes back inside
 untrusted-content markers. Routes are frozen with the Session like the tool
-definitions, so changing the setting, or a server growing past the threshold,
-changes only Sessions created afterwards. With the Code Mode switch off, no new
+definitions. Changing the setting or a server growing past the threshold never
+reroutes an existing tool; new births and newly acquired additions use the
+current routing rules. With the Code Mode switch off, no new
 Session gets routes at all and every tool is declared, as before.
 
 ### Programs and images (VC-748)
@@ -738,12 +738,11 @@ uses the direct-call checks. Model defaults do not change.
 Birth routing and read-time admission are deliberately separate:
 `defaultToolRoute` excludes bash for new records; `isCodeCallable` honors a
 legacy bash route of `both` or `code`. Safety exclusions apply even to damaged
-records. Existing Sessions keep their recorded routes, declared array and
-frozen descriptions. New records carry `descriptionVersion: 2`; records
-without it keep the pre-0.2.2 wording, output declarations and image-omission
-behavior. This birth marker stays durable on the host but is scrubbed from
-renderer and public projections; it does not widen the public protocol. N−1
-ignores it. Under `only`, a group containing bash stays declared whole. Screenshots, tab holds and verbs newly callable in this release also
+records. Existing Sessions keep their recorded routes. New births carry
+`descriptionVersion: 2`; older records keep the pre-0.2.2 wording and
+image-omission behavior until a compatible cold refresh upgrades Code Mode.
+Warm refreshes never change that declaration. This marker stays durable on the
+host but is scrubbed from renderer and public projections. N−1 ignores it. Under `only`, a group containing bash stays declared whole. Screenshots, tab holds and verbs newly callable in this release also
 stay `both`, and keep their groups declared whole: 0.2.1 and 0.2.2-canary.1
 cannot call them from programs but can still call them directly. This ceiling
 can be removed when the N−1 floor passes this release.
@@ -764,9 +763,9 @@ image(shot.images[0].handle); // attaches the same picture, given its handle str
 return shot;                  // attaches every picture in the result
 ```
 
-`text(shot)` prints the result as text and attaches no picture. A Session born
-before Volli 0.2.2 cannot attach pictures from a program; start a new Session to
-use them.
+`text(shot)` prints the result as text and attaches no picture. An older
+Session gains program images when its Code Mode declaration is upgraded at a
+cold turn, compaction or model switch; a warm turn keeps the original behavior.
 
 Images follow text, in emission/return order, including repeated emissions,
 with at most 8 images and 16 MiB of base64 data per run (the direct MCP result
