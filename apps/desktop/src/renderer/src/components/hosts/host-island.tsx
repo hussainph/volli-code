@@ -71,6 +71,7 @@ function EnabledHostIsland() {
             <motion.div
               key="island"
               role="status"
+              data-native-plane-overlay
               layout
               initial={{ opacity: 0, y: 12, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
