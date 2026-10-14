@@ -15,6 +15,7 @@
   - Assert named failure diagnostic, idle/replayable/attached/continued behavior, exactly one original and next user message in replay and provider context, one provider request, one accepted next receipt, no pending queue, and no duplicate after retry or cold reopen. No exact older decoded-event/sidecar shape assertions. Exact marker assertions apply only to HEAD fixture provenance.
 - `.github/workflows/ci.yml`: adds fixed `v0.2.1` and `v0.2.2-canary.1` matrix entries beside rolling release/latest-canary/base. Each uses `--ref "$LANE"` and the existing complete N−1 test-file step. The existing `CI gate` still requires the aggregate `n1-compat` result to be `success`; no waiver/skip/continue-on-error was added.
 - `packages/host-core/src/db/n1-prepare.test.ts`: asserts fixed refs remain in that non-waived matrix, use the exact ref preparation branch, execute the compatibility test file, and stay required by `CI gate`.
+- `scripts/ci-host-lane.test.mjs`: the existing root workflow contract also checks the full five-entry matrix and fixed-ref preparation. The first fix-round CI exposed its stale three-entry expectation; after correction all 11 root contract tests passed. All five actual N−1 lanes had already passed on that run.
 
 No new ledger types, migrations, production exports, or production runtime changes in this subtask. Presentation/client/desktop tests and `silent-ends.integration.test.ts` were not edited by this subagent.
 
