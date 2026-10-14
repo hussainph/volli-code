@@ -18,6 +18,8 @@ import {
   QueueRevisionConflictError,
   shortSessionId,
   sanitizeSessionInteraction,
+  redactPayloadSecrets,
+  SESSION_FAILURE_ATTENTION_KINDS,
   turnQueueEvent,
 } from "@volli/shared";
 import type {
@@ -4053,6 +4055,40 @@ class DefaultSessionRuntime implements SessionRuntime {
     switch (observation.kind) {
       case "attachment.closed":
       case "attachment.failed":
+        if (observation.kind === "attachment.failed") {
+          // A native failure closes the binding, but a close has no prose.
+          // Keep its explanation on the Session before retiring the binding;
+          // otherwise a cold timeline/peek sees only an executor disappearing.
+          // Session-scoped recovery survives the close and is retired by the
+          // existing successful fresh-attach path (VC-220), not a new state.
+          const projection = await this.#requireSession(spec.sessionId);
+          if (sink.stopped) return;
+          const explained = projection.attention.active.some(
+            (attention) =>
+              attention.attachmentId === spec.attachmentId &&
+              SESSION_FAILURE_ATTENTION_KINDS.some((kind) => kind === attention.kind),
+          );
+          // A failure the runtime already explained keeps its one recovery.
+          if (!explained) {
+            const attention = await this.ports.engine.observe({
+              ...base,
+              id: `${base.id}:attention`,
+              kind: "attention.raised",
+              attention: {
+                id: `${spec.attachmentId}:failure`,
+                attachmentId: null,
+                kind: "adapter_unrecoverable",
+                detail: redactPayloadSecrets(
+                  observation.detail?.trim() || "The runtime stopped unexpectedly.",
+                ).slice(0, 400),
+                diagnostic: null,
+                resetsAt: null,
+              },
+            });
+            await this.#publish([attention]);
+          }
+          if (sink.stopped) return;
+        }
         event = await this.ports.engine.observe({
           ...base,
           kind: "attachment.closed",
@@ -4068,8 +4104,8 @@ class DefaultSessionRuntime implements SessionRuntime {
           turnId: observation.turnId,
           message: observation.message,
         });
-        // The one await in this method between accepting a fact and recording
-        // it, so the one place a release can land mid-fact. Artifacts are
+        // Like the fatal explanation above, this await can race a release
+        // between accepting a fact and recording it. Artifacts are
         // content-addressed and nothing yet points at these bytes, so
         // abandoning them costs an inert file, where recording the event would
         // be a fact about an attachment the ledger has already closed.

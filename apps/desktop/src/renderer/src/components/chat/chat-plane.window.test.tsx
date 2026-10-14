@@ -28,19 +28,25 @@ import {
   type BlobLinkView,
   type ModelAccessSnapshot,
   type ModelSelection,
+  type SessionEvent,
 } from "@volli/shared";
 import {
   appendFrames,
   disposeChatClient,
   EMPTY_TRANSCRIPT,
   getOrCreateChatClient,
+  messageDeliveryLabels,
   type ChatCommandRequest,
   type ChatSessionFrame,
   type ChatSessionProjection,
   type ChatSessionRpc,
   type ChatSessionTransport,
 } from "@volli/session-presentation";
-import { createSessionEngine } from "@volli/session-engine";
+import {
+  createSessionEngine,
+  type SessionRuntime,
+  type SessionRuntimeCommandResult,
+} from "@volli/session-engine";
 import { openLegacySession } from "@renderer/chat/legacy-session.test-support";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
@@ -57,6 +63,8 @@ import { useExperimentsStore } from "@renderer/stores/experiments";
 import { useHostConnectionStore } from "@renderer/stores/host-connection";
 import { remoteHost } from "@renderer/stores/host-sources";
 import { ChatPlane } from "./chat-plane";
+import { runtimeTransport } from "../../../../../../../packages/session-rpc/test-fixtures/runtime-transport";
+import { gatedProvider } from "../../../../../../../packages/agent-runtime/test-fixtures/gated-provider";
 import {
   forgetTranscriptViews,
   readTranscriptView,
@@ -333,11 +341,15 @@ function hostChatStore(
   return { store, cancel, commands, editElsewhere, hostRevision };
 }
 
-async function mountPlane(store: ReturnType<typeof chatStore>, modelAccess?: ModelAccessClient) {
+async function mountPlane(
+  store: ReturnType<typeof chatStore>,
+  modelAccess?: ModelAccessClient,
+  sessionId = SESSION,
+) {
   const plane = (
     <TooltipProvider delayDuration={0}>
       <ChatPlane
-        sessionId={SESSION}
+        sessionId={sessionId}
         projectId={PROJECT}
         ticketId={null}
         onOpenFile={() => {}}
@@ -1086,6 +1098,93 @@ describe("host-owned rows with cloud off", () => {
 });
 
 describe("a chat plane holding a long transcript", () => {
+  it("retires Working and live markdown after the runtime writes fatal Attention then closes", async () => {
+    const provider = gatedProvider("```ts\nexport const answer = 42;\n```");
+    // Keep Node/SQLite composition outside the browser type graph. Host-core
+    // typechecks this test-only helper; the real module is loaded at test time.
+    const path = decodeURIComponent(
+      new URL("../../../../../../../packages/host-core/src/testing/silent-ends.ts", import.meta.url)
+        .pathname,
+    );
+    const module: {
+      silentEndsFixture(options: { provider: typeof provider }): Promise<{
+        runtime: SessionRuntime;
+        sessionId: string;
+        attach(): Promise<SessionRuntimeCommandResult>;
+        submit(
+          id: string,
+          delivery: "steer",
+          opened: boolean,
+        ): Promise<SessionRuntimeCommandResult>;
+        events(): Promise<SessionEvent[]>;
+        crash(): Promise<void>;
+        close(): Promise<void>;
+      }>;
+    } = await import(path);
+    const fixture = await module.silentEndsFixture({ provider });
+    const store = createChatSessionsStore(() => runtimeTransport(fixture.runtime));
+    try {
+      await fixture.attach();
+      store.getState().adoptChatSession(fixture.sessionId);
+      await vi.waitFor(() =>
+        expect(store.getState().sessions[fixture.sessionId]?.lifecycle).toBe("ready"),
+      );
+      await mountPlane(store, undefined, fixture.sessionId);
+      await act(async () => {
+        await fixture.submit("send", "steer", true);
+        await provider.entered;
+      });
+      await vi.waitFor(() => {
+        expect(store.getState().sessions[fixture.sessionId]?.transcript.turnActive).toBe(true);
+        expect(container?.textContent).toContain("export const answer = 42;");
+        expect(
+          [...container!.querySelectorAll('[role="status"]')].some((element) =>
+            element.textContent?.includes("Working"),
+          ),
+        ).toBe(true);
+      });
+      expect(container?.querySelector(TOKEN_SELECTOR)).toBeNull();
+      const epoch = store.getState().sessions[fixture.sessionId]!.transcript.turnEpoch;
+      await act(async () => {
+        await fixture.crash();
+      });
+      const events = await fixture.events();
+      const fatal = events.filter(
+        (event) =>
+          event.payload.kind === "attention.raised" ||
+          event.payload.kind === "attachment.closed" ||
+          event.payload.kind === "turn.interrupted",
+      );
+      expect(fatal.map((event) => event.payload.kind)).toEqual([
+        "attention.raised",
+        "attachment.closed",
+      ]);
+      await vi.waitFor(() => {
+        const slice = store.getState().sessions[fixture.sessionId]!;
+        expect(slice.transcript.turnActive).toBe(false);
+        expect(slice.transcript.turnEpoch).toBe(epoch + 1);
+        expect(slice.lifecycle).not.toBe("working");
+        expect(
+          [...container!.querySelectorAll('[role="status"]')].some((element) =>
+            element.textContent?.includes("Working"),
+          ),
+        ).toBe(false);
+        expect(container?.textContent).toContain("The runtime stopped unexpectedly");
+        expect(
+          [...container!.querySelectorAll("button")].filter(
+            (element) => element.textContent?.trim() === "Retry",
+          ),
+        ).toHaveLength(1);
+        expect(container?.querySelector(TOKEN_SELECTOR)).not.toBeNull();
+      });
+    } finally {
+      provider.release();
+      await unmountPlane();
+      store.getState().closeChatSession(fixture.sessionId);
+      await fixture.close();
+    }
+  }, 20_000);
+
   it("uses the stream Turn boundary when Session lifecycle fails and recovers", async () => {
     const source = "```ts\nexport const answer = 42;\n```";
     const message: UIMessage = {
@@ -1615,4 +1714,196 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
     const writeText = await pressCopy(snapshot.latestReply);
     expect(writeText).toHaveBeenCalledWith("Current-turn reply");
   });
+});
+
+describe("VC-758 visible timeline regressions", () => {
+  afterEach(() => disposeChatClient(SESSION));
+  it("shows the message immediately while promotion is pending", async () => {
+    const { store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () => {
+      const box = composer();
+      if (box === null) throw new Error("expected composer");
+      type(box, "waiting on promotion");
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toHaveLength(1),
+    );
+    expect(container?.textContent).toContain("waiting on promotion");
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Pending");
+  });
+
+  it("removes Pending on acceptance and keeps the same quiet bubble through durable handoff", async () => {
+    const store = chatStore([], { lifecycle: "working", turnActive: true });
+    const message: UIMessage = {
+      id: "handoff",
+      role: "user",
+      parts: [{ type: "text", text: "keep these words" }],
+    };
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: message.id, text: "keep these words", delivery: "send" });
+    await mountPlane(store);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Pending");
+    const working = () =>
+      [...(container?.querySelectorAll('[role="status"]') ?? [])].find((node) =>
+        node.textContent?.includes("Working"),
+      )!;
+    expect(
+      working().compareDocumentPosition(container!.querySelector(".is-user")!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    await act(async () =>
+      drafts.amendHeldMessage(SESSION, message.id, (held) => ({ ...held, deliveryAccepted: true })),
+    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    const accepted = container?.querySelector(".is-user");
+    const bubble = accepted?.firstElementChild?.outerHTML;
+    const rowClass = accepted?.className;
+    expect(
+      accepted!.compareDocumentPosition(working()) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const frame: ChatSessionFrame = {
+      sessionId: SESSION,
+      sequence: 1,
+      event: {
+        id: "accepted-observation",
+        sessionId: SESSION,
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        attachmentId: null,
+        commandId: null,
+        provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
+        payload: {
+          kind: "transcript.referenced",
+          attachmentId: null,
+          turnId: null,
+          reference: { id: "artifact", mediaType: null, digest: null },
+        },
+      },
+      transcript: { message },
+    };
+    await act(async () =>
+      store.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [SESSION]: {
+            ...state.sessions[SESSION]!,
+            transcript: appendFrames(state.sessions[SESSION]!.transcript, [frame]),
+          },
+        },
+      })),
+    );
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+    );
+    expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
+    expect(container?.querySelector(".is-user")?.firstElementChild?.outerHTML).toBe(bubble);
+    expect(container?.querySelector(".is-user")?.className).toBe(rowClass);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(
+      container!.querySelector(".is-user")!.compareDocumentPosition(working()) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      messageDeliveryLabels(store.getState().sessions[SESSION]!.transcript.frames).get(message.id),
+    ).toBe("Delivered");
+    expect(container?.textContent).toContain("keep these words");
+  });
+
+  it("retains accepted steering from the recovery strip until host ownership is visible", async () => {
+    const store = chatStore(transcript(1), { lifecycle: "working", turnActive: true });
+    const slice = store.getState().sessions[SESSION]!;
+    store.setState({
+      sessions: {
+        [SESSION]: {
+          ...slice,
+          projection: {
+            ...slice.projection!,
+            modelSelection: DEFAULT_SELECTION,
+            liveExecutor: { id: "executor" },
+          },
+        },
+      },
+    } as never);
+    const result = Promise.withResolvers<unknown>();
+    const submit = vi.fn(() => result.promise);
+    getOrCreateChatClient(SESSION, {
+      rpc: { session: { command: { mutate: submit } } } as unknown as ChatSessionRpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "steer-command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "steer-recovery", text: "steer these words" });
+    drafts.markHeld(SESSION, "steer-recovery", "unsent");
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () =>
+      container
+        ?.querySelector<HTMLButtonElement>('[aria-label="Steer queued message: steer these words"]')
+        ?.click(),
+    );
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(container?.textContent).toContain("Pending · After the current step");
+    await act(async () => result.resolve({ sessionId: SESSION, receipt: { status: "accepted" } }));
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held[0]).toMatchObject({
+        id: "steer-recovery",
+        deliveryAccepted: true,
+      }),
+    );
+    expect(container?.textContent).toContain("steer these words");
+    expect(
+      container?.querySelector('[aria-label="Steer queued message: steer these words"]'),
+    ).toBeNull();
+  });
+
+  it("keeps Working when a turn starts before any transcript message", async () => {
+    const store = chatStore([], { lifecycle: "working", turnActive: true });
+    await mountPlane(store);
+    expect(container?.querySelector('[role="status"]')?.textContent).toContain("Working");
+  });
+
+  it("shows the failure in the timeline with one recovery", async () => {
+    const store = chatStore(transcript(1), {
+      lifecycle: "error",
+      sessionError: "Context assembly failed",
+    });
+    await mountPlane(store);
+    const row = container?.querySelector('[data-slot="session-blocker"]');
+    expect(row).not.toBeNull();
+    expect(row?.closest('[data-slot="chat-composer-dock"]')).toBeNull();
+    expect(row?.textContent).toContain("Retry");
+  });
+});
+
+it("VC-758 keeps Working above undelivered steering even while the stream reports an error", async () => {
+  const store = chatStore(transcript(1), {
+    lifecycle: "error",
+    turnActive: true,
+    sessionError: "Lost the Session stream",
+  });
+  useChatDraftsStore
+    .getState()
+    .holdMessage(SESSION, { id: "steer", text: "focus here", delivery: "steer" });
+  await mountPlane(store);
+  const status = container?.querySelector('[role="status"]');
+  const delivery = container?.querySelector('[data-slot="message-delivery"]');
+  expect(status?.textContent).toContain("Working");
+  // The current user message precedes the mark; the held steering follows it.
+  const pending = [...(container?.querySelectorAll('[data-slot="message-delivery"]') ?? [])].find(
+    (node) => node.textContent?.includes("After the current step"),
+  );
+  expect(pending).toBeDefined();
+  expect(status!.compareDocumentPosition(pending!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(delivery).not.toBeNull();
 });

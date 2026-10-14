@@ -6156,6 +6156,37 @@ describe("startSession", () => {
     expect(kinds(observations)).toContain("attachment:closed");
   });
 
+  it("honors Stop when the provider races the abort with a normal finish (VC-758)", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const running = Promise.withResolvers<void>();
+    const aborted = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          async (emit, _context, signal) => {
+            signal!.addEventListener("abort", () => aborted.resolve(), { once: true });
+            running.resolve();
+            await aborted.promise;
+            emit.text("last chunk raced Stop");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await running.promise;
+    await handle.interrupt();
+    await delivery;
+    expect(kinds(observations)).toContain("turn:interrupted");
+    expect(kinds(observations)).not.toContain("turn:completed");
+    expect(attentions(observations)).toEqual([]);
+    const replay = await handle.reconcile(null);
+    expect(kinds([...replay.observations])).toContain("turn:interrupted");
+    await handle.close();
+  });
+
   it("interrupts a running tool without calling the Session broken", async () => {
     const attachment = fixture({ tools: { tools: ["execute"] } });
     const running = Promise.withResolvers<void>();
