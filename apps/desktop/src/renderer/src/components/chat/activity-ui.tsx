@@ -116,10 +116,8 @@ const CARET_SPIN = "duration-150 ease-swift motion-reduce:transition-none";
  *
  * Three columns, three jobs: the left glyph says what happened, the caret hugs
  * the text it discloses, and the far right belongs to the number alone. Parked
- * at the right edge instead — as container rows and leaf rows each did in their
- * own way — the caret shares that edge with the meta, and durations come out on
- * as many different margins as there are row shapes. Perplexity's transcript
- * settles it the same way.
+ * at the right edge instead, the caret would share that edge with the meta, and
+ * durations would land on as many different margins as there are row shapes.
  *
  * Rotated, never swapped — a swapped glyph cannot animate, and reads as a
  * flicker. `hidden` keeps the slot so the meta column stays aligned across rows
@@ -1286,10 +1284,9 @@ const BundleRowView = React.memo(function BundleRowView({
  * Reasoning as an ordinary row.
  *
  * Same shell, same gutter, same caret as a tool call — the only difference is
- * the glyph. Cursor and t3code both render thinking through the identical row
- * component, and the reason is structural rather than aesthetic: a bespoke
- * reasoning block is a second kind of line in the same column, and two kinds of
- * line cannot share one left edge for long.
+ * the glyph. The reason is structural rather than aesthetic: a bespoke reasoning
+ * block is a second kind of line in the same column, and two kinds of line
+ * cannot share one left edge for long.
  *
  * The glyph is a Gauge, and it is the same one the composer's effort chip
  * wears. Reasoning has one vocabulary in this app now: the dial you set before

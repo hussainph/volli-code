@@ -758,9 +758,9 @@ export const SessionComposer = React.memo(function SessionComposer({
                 that sends. Outline rather than the muted fill because on the
                 dark canvases `--muted` is two steps off `--card` and a muted
                 disc on the card simply vanished; the hairline is what holds it
-                as a shape. Not destructive red, though T3 Code draws it so —
-                ending a turn is an outcome the person chose, not an error, and
-                this app keeps red for the latter. */}
+                as a shape. Not destructive red: ending a turn is an outcome the
+                person chose, not an error, and this app keeps red for the
+                latter. */}
             {working ? (
               <ComposerHint label="Stop turn">
                 <Button
@@ -1842,7 +1842,7 @@ export function ModelPill({
   // offers nothing to switch to.
   const frozen = disabled || models.length === 0;
 
-  // READING IS NOT CHOOSING (VC-288 review). `disabled` took the pill out of
+  // READING IS NOT CHOOSING (VC-288). `disabled` took the pill out of
   // the tab order, and the enabled pill's reveal is the list it opens — so in
   // the one state a person is most likely to ask what they are talking to,
   // mid-turn, the answer was a `title` and nothing else. A frozen pill draws

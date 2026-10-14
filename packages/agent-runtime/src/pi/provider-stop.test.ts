@@ -381,11 +381,11 @@ it.each([
     "private-request-sentinel",
   ],
   ["Request body: private-request-sentinel", "private-request-sentinel"],
-])("withholds secrets and echoed request material in %s (review item 2)", (raw, secret) => {
+])("withholds secrets and echoed request material in %s", (raw, secret) => {
   expect(safeStopMessage(raw)).not.toContain(secret);
 });
 
-it("terminal quota facts beat a recovered WebSocket diagnostic (review item 3)", () => {
+it("terminal quota facts beat a recovered WebSocket diagnostic", () => {
   const capture = new ProviderStopCapture();
   capture.event({ error: { code: "usage_limit_reached", message: "Limit used" } });
   const detail = capture.detail(

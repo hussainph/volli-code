@@ -427,7 +427,7 @@ export function ModelName({
   const full = [model.label, sayProvider ? providerLabel : null, trailing ?? null]
     .filter((term) => term !== null)
     .join(" · ");
-  // WHERE IT CLIPS, IT CAN BE ASKED (VC-288 re-review). The reveal rides the
+  // WHERE IT CLIPS, IT CAN BE ASKED (VC-288). The reveal rides the
   // Select trigger rather than bringing a stop of its own, on the tab strip's
   // reasoning: the trigger is already focusable, and a control nested inside
   // one is a second press between a person and the list they were opening.
@@ -446,7 +446,7 @@ export function ModelName({
       <TooltipProvider>
         <Tooltip open={reveal.open} onOpenChange={reveal.onOpenChange}>
           <TooltipTrigger asChild>
-            {/* IT WRAPS RATHER THAN TRUNCATES (VC-288 review). A `title` was the
+            {/* IT WRAPS RATHER THAN TRUNCATES (VC-288). A `title` was the
                 whole of the way out of a clipped name here, and a `title` is the
                 pointer's alone — on rows a keyboard walks, `Claude Son…` was
                 simply where the fact ended. Every surface drawing this is a row

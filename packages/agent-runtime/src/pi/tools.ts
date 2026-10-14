@@ -878,8 +878,8 @@ const askUserSchema = Type.Object({
   ),
 });
 
-// This birth marker is not shipped yet: owner review made its declaration
-// questions-only. Once released, changing these bytes needs a new marker.
+// This not-yet-shipped birth marker declares questions only. Once released,
+// changing these bytes needs a new marker.
 const askUserQuestionsSchema = Type.Object(
   {
     questions: Type.Array(

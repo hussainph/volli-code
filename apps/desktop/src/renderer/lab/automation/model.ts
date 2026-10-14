@@ -9,12 +9,11 @@
  * object the trigger surfaces fire.
  *
  * ── WHY A TRIGGER *KIND*, NOT A COLUMN LIST ───────────────────────────────
- * v1 has exactly one trigger: a ticket entering a column. Modelling that as a
- * bare `columnScope: TicketStatus[]` was the shortest path and it was wrong,
- * because the roadmap is explicitly meta-level — automations that create tickets,
- * that fire when checks go green, that pull from another tracker. Every one of
- * those is a different OPERAND behind the same question, and a field named after
- * v1's operand cannot grow a second one without a migration and a redesign.
+ * Available kinds are marked by {@link TRIGGER_KINDS}. A bare
+ * `columnScope: TicketStatus[]` can express column operands, but not manual or
+ * scheduled runs, nor the unavailable fixture kinds such as reacting to checks.
+ * A discriminated union keeps these operands distinct without overloading
+ * a column-specific field.
  *
  * So the trigger is a discriminated union keyed on {@link TriggerKind}, and
  * {@link TRIGGER_KINDS} carries the ones that are designed-for but not built. The
@@ -32,11 +31,9 @@
  * promise chaining we do not have. Sequencing across launches is a column move
  * (or a schedule), written as a separate automation.
  *
- * It is the third model this went through:
- *
- *   1. `join: "with" | "after"` — silently re-parented siblings.
- *   2. `after: <step id>` — bought a general tree that reads as branching.
- *   3. A flag on a flat list. The UI's only add affordance is "Add alongside".
+ * A flag on a flat list keeps sibling membership explicit without implicit
+ * re-parenting or a general branching tree. The UI's only add affordance is
+ * "Add alongside".
  *
  * {@link toStages} recovers the grouping for anything that still needs it.
  * ──────────────────────────────────────────────────────────────────────────
@@ -46,12 +43,8 @@
  * needs; resolving placeholders would require Volli to guess at author time
  * which slice of the ticket matters for a run that has not happened yet.
  *
- * That left placeholders as an opt-in second mode "for the cases where you
- * genuinely need to control ordering", which the two-opinion review seed was
- * written to demonstrate. Rewriting that seed as prose settled it: the prose
- * version is SHORTER and clearer than the one with `{{change_set}}` and
- * `{{brief}}` in it, because the ordering it was fighting to control was never
- * load-bearing. A mode whose only witness argues against it is a mode.
+ * Prose can express ordering without an additional placeholder mode or
+ * author-time substitution of `{{change_set}}` and `{{brief}}`.
  *
  * So there is one way to write a prompt: prose, appended with
  * {@link APPENDED_CLI_NOTE}, which tells the agent it has the `volli` CLI and
@@ -84,8 +77,7 @@ import { TICKET_STATUS_LABELS, type TicketStatus } from "@volli/shared";
 
 /**
  * The harnesses the lab renders. Deliberately a LAB list rather than
- * `@volli/shared`'s `HARNESS_IDS`: the shipped adapter layer is being reworked
- * on its own branch, and a design scratch has no business widening a vocabulary
+ * `@volli/shared`'s `HARNESS_IDS`: a design scratch must not widen a vocabulary
  * that main-process code and SQLite both read.
  */
 export const LAB_HARNESS_IDS = ["claude-code", "codex", "cursor", "opencode", "pi"] as const;
@@ -361,7 +353,8 @@ export interface TriggerKindUi {
 
 /**
  * Every trigger the surface is designed to hold, including the ones v1 does not
- * fire. The unavailable rows are not a roadmap tease — they are the load test.
+ * fire. The unavailable rows are not a preview of unbuilt triggers — they are
+ * the load test.
  * A picker that reads well with one entry and badly with eight is a picker that
  * has to be rebuilt the first time a trigger is added, and the whole reason the
  * kind is a union is to make sure that does not happen.

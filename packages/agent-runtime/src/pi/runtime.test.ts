@@ -4304,7 +4304,7 @@ describe("startSession", () => {
     expect(wire).not.toContain("original question");
   });
 
-  it("raises the fallback Attention when an earlier conversation exists but its binding cannot be read (VC-457 review)", async () => {
+  it("raises the fallback Attention when an earlier conversation exists but its binding cannot be read (VC-457)", async () => {
     const attachment = fixture();
     const seen: Context[] = [];
     const handle = await createPiAgentRuntime({
@@ -4331,7 +4331,7 @@ describe("startSession", () => {
     );
   });
 
-  it("keeps the history a native checkpoint replaced, so a model change after a carry still has it (VC-457 review)", async () => {
+  it("keeps the history a native checkpoint replaced, so a model change after a carry still has it (VC-457)", async () => {
     const attachment = fixture();
     const first = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -4409,7 +4409,7 @@ describe("startSession", () => {
     expect(wire).toContain("second answer");
   });
 
-  it("carries no tool result whose call was withheld (VC-457 review)", async () => {
+  it("carries no tool result whose call was withheld (VC-457)", async () => {
     const attachment = fixture();
     const first = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -4513,7 +4513,7 @@ describe("startSession", () => {
     expect(carried).not.toContain("call-1");
   });
 
-  it("bounds an oversized carry at a turn boundary, and flattens a carry of a carry (VC-457 review)", async () => {
+  it("bounds an oversized carry at a turn boundary, and flattens a carry of a carry (VC-457)", async () => {
     const attachment = fixture();
     const huge = "h".repeat(CONTEXT_CARRY_MAX_CHARS + 10_000);
     const runtimeWith = (steps: Parameters<typeof scriptedStream>[0]) =>
@@ -4569,7 +4569,7 @@ describe("startSession", () => {
     expect(JSON.stringify(flattened.entries)).not.toContain("context-carried");
   });
 
-  it("bounds a carry by the attaching model's window, so its first turn is sendable (VC-457 review)", async () => {
+  it("bounds a carry by the attaching model's window, so its first turn is sendable (VC-457)", async () => {
     const attachment = fixture();
     // Written by a model with a million-token window: three ~50k-token turns.
     const first = await createPiAgentRuntime({
@@ -12624,7 +12624,7 @@ it("keeps unsupported-fetch routes unchanged and records a refusal without a mes
   await handle.close();
 });
 
-it("redacts provider failures before sidecar, replay and observations (review items 1–2)", async () => {
+it("redacts provider failures before sidecar, replay and observations", async () => {
   const { spec, observations, sessionDataDir } = fixture();
   const stored = "stored-dummy-482";
   const request = "request-dummy-482";
@@ -12704,7 +12704,7 @@ it("redacts provider failures before sidecar, replay and observations (review it
   }
 });
 
-it("keeps Anthropic context recovery beside its truthful bad-request stop category (review item 5)", async () => {
+it("keeps Anthropic context recovery beside its truthful bad-request stop category", async () => {
   const { spec, observations, sessionDataDir } = fixture();
   const runtime = createPiAgentRuntime({
     sessionDataDir,

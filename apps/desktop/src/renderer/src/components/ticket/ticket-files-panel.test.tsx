@@ -192,7 +192,7 @@ describe("TicketFilesList inline edits (VC-191)", () => {
 });
 
 /**
- * VC-406 review: the panel WITHOUT a worktree, and the panel handed a different
+ * VC-406: the panel WITHOUT a worktree, and the panel handed a different
  * ticket — the two cases where the page used to answer with something that was
  * not about the Ticket in front of it.
  */

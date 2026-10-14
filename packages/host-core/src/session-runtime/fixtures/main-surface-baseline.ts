@@ -3,8 +3,11 @@
  *
  * Provenance: every value below was produced by main's own
  * `sessionToolSurface.resolve` closure as it shipped at bdc0e925b (the last
- * main commit before VC-622 lifted it), extracted verbatim using
- * `@volli/shared`'s resolver and `PI_TOOLS` over the exact
+ * main commit before VC-622 lifted it), extracted verbatim by the a1 verifier
+ * (reference-only scratch: .scratch/vc622a1-verify/verify-tests/
+ * zz-main-resolve.verify.ts, also pasted as .scratch/vc622a1-verify/
+ * main-resolve.txt) and run against this worktree's dependencies
+ * (`@volli/shared`'s resolver and `PI_TOOLS`) over the verifier's exact
  * 336-combination matrix, in its enumeration order: web unconfigured/
  * configured x Role x durable grants x parent bound present/absent x MCP
  * tools none/one x Code Mode birth undefined/unoffered/offered x classify

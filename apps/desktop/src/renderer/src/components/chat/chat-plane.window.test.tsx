@@ -1513,9 +1513,8 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
   const messageCount = (store: ReturnType<typeof chatStore>) =>
     store.getState().sessions[SESSION]!.transcript.messages.length;
 
-  // The review's B3 probe, kept: a height model alone (100 px a message), no
-  // anchor positions, which is the fallback the plane takes when it can see
-  // no anchor.
+  // A height model alone (100 px a message) and no anchor positions: the
+  // fallback the plane takes when it can see no anchor.
   it("holds the reader's place when a page completes the first turn instead of adding a row", async () => {
     const { store, scroller } = await splitTurn();
     Object.defineProperty(scroller, "scrollHeight", {
@@ -1645,9 +1644,9 @@ describe("a chat plane holding only the host's newest window (VC-315)", () => {
 });
 
 /**
- * `/copy` on a bounded open (VC-315; the verification review's B2 probe,
- * kept): the current turn's reply sits above 256 tool-only messages the
- * window holds, so the messages alone cannot say what it was.
+ * `/copy` on a bounded open (VC-315): the current turn's reply sits above 256
+ * tool-only messages the window holds, so the messages alone cannot say what
+ * it was.
  */
 describe("/copy on a Session holding only its newest window (VC-315)", () => {
   const tools: UIMessage[] = Array.from({ length: 256 }, (_value, index) => ({
@@ -1702,11 +1701,11 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
-  // The re-check review's legacy probe, kept: the reply was recorded before
-  // transcript digests, so no event says where it is. The host recovers it
-  // from history above the window (VC-315's legacy baseline), and `/copy`
-  // copies what that real snapshot answers.
-  it("VC-315 recheck: copies a legacy Session reply preceding a tool-only bounded tail", async () => {
+  // A legacy Session's reply was recorded before transcript digests, so no
+  // event says where it is. The host recovers it from history above the window
+  // (VC-315's legacy baseline), and `/copy` copies what that real snapshot
+  // answers.
+  it("VC-315: copies a legacy Session reply preceding a tool-only bounded tail", async () => {
     const snapshot = await openLegacySession(createSessionEngine, [
       { say: "Current-turn reply" },
       ...tools.map(() => ({ say: "   " })),

@@ -79,8 +79,7 @@ export type ChannelPlacement =
 export type PlacedChannel = VolliIpcChannel | VolliIpcEvent | CursorOverlayChannel;
 
 /** A project's theme follows it to every device. */
-export const THEME_OWNER_RULING =
-  "Owner ruling 2026-10-05: a project's theme follows the project to every device.";
+export const THEME_FOLLOWS_PROJECT = "A project's theme follows the project to every device.";
 
 /**
  * VC-574 E2 / VC-564 D8: a read or write that spans workspaces has no single
@@ -651,7 +650,7 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
   "volli:theme-set-project": {
     placement: "workspace",
     owner: "VC-565",
-    reason: THEME_OWNER_RULING,
+    reason: THEME_FOLLOWS_PROJECT,
   },
   "volli:theme-canvas-set-global": {
     placement: "client-local",
@@ -666,12 +665,12 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
   "volli:theme-canvas-set-project": {
     placement: "workspace",
     owner: "VC-565",
-    reason: THEME_OWNER_RULING,
+    reason: THEME_FOLLOWS_PROJECT,
   },
   "volli:theme-appearance-set-project": {
     placement: "workspace",
     owner: "VC-565",
-    reason: THEME_OWNER_RULING,
+    reason: THEME_FOLLOWS_PROJECT,
   },
   "volli:theme-first-paint-set": {
     placement: "client-local",

@@ -857,7 +857,7 @@ describe("each project's board client", () => {
   });
 });
 
-// VC-711 PR 2 review B1: where a write goes is decided when it is made.
+// VC-711: where a write goes is decided when it is made.
 describe("a facade write's host", () => {
   it("is fixed when the write is made, and owned by the Workspace it was made for", async () => {
     const first = fakeBoard();

@@ -45,7 +45,7 @@ import {
 import {
   BRIDGED_CHANNELS,
   CHANNEL_PLACEMENT,
-  THEME_OWNER_RULING,
+  THEME_FOLLOWS_PROJECT,
   type ChannelPlacement,
 } from "./placement";
 
@@ -293,7 +293,7 @@ describe("CHANNEL_PLACEMENT invariants", () => {
   });
 
   it("keeps the project-theme placement reason to the three per-project writes", () => {
-    const decided = ENTRIES.filter(([, entry]) => entry.reason === THEME_OWNER_RULING);
+    const decided = ENTRIES.filter(([, entry]) => entry.reason === THEME_FOLLOWS_PROJECT);
     expect(decided.map(([channel]) => channel).toSorted()).toEqual([
       "volli:theme-appearance-set-project",
       "volli:theme-canvas-set-project",

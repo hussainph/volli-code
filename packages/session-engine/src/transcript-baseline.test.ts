@@ -340,7 +340,7 @@ function outside(open: { snapshot: SessionRuntimeSnapshot; reads: readonly strin
 /** Silent messages enough to push everything before them above the window. */
 const BEYOND = SESSION_HISTORY_WINDOW.events + 4;
 
-describe("VC-315 recheck: legacy host snapshot", () => {
+describe("VC-315: legacy host snapshot", () => {
   it("recovers the legacy plan and reply above the bounded tail", async () => {
     const legacy = await record([{ say: "Current-turn reply", plan: PLAN }, { silent: BEYOND }]);
     try {

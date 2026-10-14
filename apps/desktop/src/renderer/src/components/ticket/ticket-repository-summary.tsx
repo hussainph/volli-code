@@ -855,7 +855,7 @@ export function TicketRepositorySummary({
     void refreshStatusAndDiff();
   }
 
-  // K4 (review): a data-changed broadcast used to be scopeless, so this rail had
+  // A data-changed broadcast used to be scopeless, so this rail had
   // to debounce a git refresh on EVERY bump (another ticket moving, a retention
   // toggle elsewhere) — wasteful, but undroppable since the broadcast is the only
   // path a CLI/rail-side commit/push has to reach this rail (issue #80). The
@@ -997,7 +997,7 @@ export function TicketRepositorySummary({
   /**
    * Keep / un-keep the worktree: the durable pin exempting BOTH retention paths.
    *
-   * The handler already broadcasts `data-changed` on success (K3, review), but that broadcast
+   * The handler already broadcasts `data-changed` on success, but that broadcast
    * drives `refreshPlanningData` (lib/boot.ts), which awaits a full `bootstrap()` re-fetch of
    * every project/ticket/label BEFORE it publishes `lastPlanningChange` — a materially slower round
    * trip than this direct, single-ticket `retention.state()` read. The explicit `reloadRetention()`

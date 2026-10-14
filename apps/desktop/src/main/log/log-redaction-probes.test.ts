@@ -1,8 +1,9 @@
 // @vitest-environment node
 /**
- * The VC-699 review's desktop probes, permanent (blockers 1, 2 and 3): each
- * showed a leak or a crash; each now asserts the fixed behaviour, through the
- * real renderer forwarder, main's ingress and the desktop log's startup.
+ * Desktop log guards for VC-699, through the real renderer forwarder, main's
+ * ingress and the desktop log's startup. Credentials and file content never
+ * leave the renderer or reach the log, error names and messages are scrubbed,
+ * and an unusable log directory never stops the app starting.
  */
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -76,8 +77,8 @@ function forwarded(
   return { records, sent };
 }
 
-describe("blocker 1: the renderer never forwards credentials or content", () => {
-  it("redacts a console object structurally before serialisation (the reviewer's probe)", () => {
+describe("the renderer never forwards credentials or content", () => {
+  it("redacts a console object structurally before serialisation", () => {
     const { records, sent } = forwarded(({ console }) => {
       console.warn({
         token: "opaque-review-token-123",
@@ -172,8 +173,8 @@ describe("blocker 1: the renderer never forwards credentials or content", () => 
   });
 });
 
-describe("blocker 2: errors are scrubbed", () => {
-  it("keeps neither a bearer in Error.name nor credentials in its message (the reviewer's probe)", () => {
+describe("errors are scrubbed", () => {
+  it("keeps neither a bearer in Error.name nor credentials in its message", () => {
     const error = new Error("Invalid file JSON: token=opaque-review-token-123");
     error.name = "Bearer opaque-review-token";
     const value = JSON.stringify(redactLogFields({ error }));
@@ -181,7 +182,7 @@ describe("blocker 2: errors are scrubbed", () => {
   });
 });
 
-describe("blocker 3: the desktop log never stops the app starting", () => {
+describe("the desktop log never stops the app starting", () => {
   it("starts with a file where the log directory should be, reports once, and keeps logging elsewhere", async () => {
     const userData = temp();
     writeFileSync(join(userData, "logs"), "a file occupies the log directory");

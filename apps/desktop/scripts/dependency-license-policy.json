@@ -60,7 +60,7 @@
       "summary": [
         "Prebuilt libvips and its dependency stack, as one dylib. LGPLv3 applies to libvips itself and",
         "to seven bundled components (fribidi, glib, libexif, libheif, librsvg, pango, proxy-libintl);",
-        "Cairo 1.18.6 is LGPL-2.1 or MPL-1.1, used under LGPL-2.1 by owner decision (2026-10-13).",
+        "Cairo 1.18.6 is LGPL-2.1 or MPL-1.1 (LGPL-2.1 elected 2026-10-13).",
         "Read cairo's upstream COPYING: every implementation file may use either license. Cairo",
         "was never permissive; the 1.3.3 README said MPL-2.0, while 1.3.4 correctly says MPL-1.1.",
         "Compared both manifests, README tables and versions.json: same LGPL package license, same",

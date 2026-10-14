@@ -484,7 +484,7 @@ async function recordedTurn(
   return { runtime, engine, sessionId };
 }
 
-describe("the current turn's latest reply on open (VC-315, review B2)", () => {
+describe("the current turn's latest reply on open (VC-315)", () => {
   it("records a digest beside each settled message", async () => {
     const { runtime, engine, sessionId } = await recordedTurn(1);
     try {

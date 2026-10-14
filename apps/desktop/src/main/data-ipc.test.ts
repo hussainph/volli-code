@@ -185,7 +185,7 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
     "../../../../packages/host-core/src/worktree/activity",
   )),
   // NOT mocked either: the deletion lease is the serialization the manual
-  // delete and the cleanup share (VC-284 review C4), and a stand-in would let
+  // delete and the cleanup share (VC-284), and a stand-in would let
   // this channel claim a lease discipline it does not have.
   ...(await vi.importActual<
     typeof import("../../../../packages/host-core/src/worktree/deletion-lease")
@@ -2248,7 +2248,7 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     });
   });
 
-  // The other door (review r2): an archive KEEPS the checkout, which makes an
+  // An archive KEEPS the checkout, which makes an
   // archived ticket the longest-lived carrier of a dead dependency tree, so the
   // wiring is held here and not only in the primitive's own suite.
   it("trims the ticket's worktree when the ticket is archived", () => {
@@ -4277,7 +4277,7 @@ describe("volli:worktree-orphans", () => {
           scanRevision: "rev-1",
           // The ids as the caller sent them, kept so a retry is decidable from
           // the durable record alone, and the window the proposal was measured
-          // against (re-review S1/C1).
+          // against.
           requestedItemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
           retentionDays: 14,
           source: "settings",
@@ -4377,7 +4377,7 @@ describe("volli:worktree-orphans", () => {
       expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
     });
 
-    // The gateway rule (re-review S1). A cleanup invalidates the scan it ran
+    // A cleanup invalidates the scan it ran
     // against, so a retry validated against the CURRENT scan is told its
     // command was superseded — a completed deletion reported as a failure, with
     // a second deletion the obvious next step. The durable record answers
@@ -4735,7 +4735,7 @@ describe("volli:worktree-orphan-delete", () => {
     );
 
     expect(result).toEqual({ ok: true });
-    // Asked TWICE, and the second time is the point (VC-284 re-review C4):
+    // Recheck occupancy after releasing the bindings (VC-284):
     // releasing the bindings takes time, and the answer from before that await
     // is not an answer about the instant of the delete.
     expect(asked).toEqual([canonical, canonical]);
@@ -4777,7 +4777,7 @@ describe("volli:worktree-orphan-delete", () => {
     const target = ownedPath("VC-7-contended");
     mkdirSync(target, { recursive: true });
     // A cleanup is mid-removal on this exact directory; the manual delete takes
-    // the same lease, so it skips rather than racing it (VC-284 re-review C4).
+    // the same lease, so it skips rather than racing it (VC-284).
     const held = acquireDeletionLease(realpathSync.native(target));
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(

@@ -246,7 +246,7 @@ describe("a replaced or cancelled run", () => {
     expect(controller.getSnapshot().flows["provider:xai"]?.kind).toBe("signing-in");
   });
 
-  it("an old answer failing late leaves the newer run's row alone (VC-702 review B5)", async () => {
+  it("an old answer failing late leaves the newer run's row alone (VC-702)", async () => {
     const source = fakeHostSignInSource({ status: STATUS });
     const held = Promise.withResolvers<unknown>();
     const signInOnHost = source.signInOnHost;

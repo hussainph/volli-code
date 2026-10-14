@@ -159,7 +159,7 @@ describe("useIslandPlan", () => {
 });
 
 /**
- * A bounded open (VC-315; the verification review's B1 probe, kept): the plan
+ * A bounded open (VC-315): the plan
  * call sits above the newest window, so the messages held say nothing about
  * it and the projection's `todoList` is the plan as it stands.
  */
@@ -201,10 +201,10 @@ describe("useIslandPlan on a Session holding only its newest window", () => {
     expect(seen.at(-1)).toEqual(whole);
   });
 
-  // The re-check review's legacy probe, kept: a Session whose plan call was
-  // recorded before transcript digests, so no event says what it was. The
-  // host recovers it from history above the window (VC-315's legacy baseline).
-  it("VC-315 recheck: preserves a legacy Session plan on bounded reopen without event digests", async () => {
+  // A Session whose plan call was recorded before transcript digests, so no
+  // event says what it was. The host recovers it from history above the window
+  // (VC-315's legacy baseline).
+  it("VC-315: preserves a legacy Session plan on bounded reopen without event digests", async () => {
     const store = createChatSessionsStore(noTransport);
     const plan = [{ content: "Finish legacy migration", status: "in_progress" as const }];
     seed(store, [todoCall(plan), ...later]);

@@ -121,7 +121,7 @@ describe("credentialHelperIssues", () => {
     ]);
   });
 
-  // The stock-Mac case the VC-94 review caught live: Apple's /usr/bin/git
+  // The stock-Mac case (VC-94): Apple's /usr/bin/git
   // (Apple Git-155) reports the Xcode-bundled gitconfig — the file that
   // enables osxkeychain by default — with scope `unknown`. Dropping
   // unclassified scopes would call exactly that setup safe while a Session

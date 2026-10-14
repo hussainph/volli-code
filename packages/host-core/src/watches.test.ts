@@ -505,7 +505,7 @@ describe("watching a Session", () => {
     expect(h.watches.watching(WATCHER)).toEqual({ sessions: [], tickets: [] });
   });
 
-  it("never holds a verdict raised mid-turn for a turn end that may not come (VC-457 review)", async () => {
+  it("never holds a verdict raised mid-turn for a turn end that may not come (VC-457)", async () => {
     const h = harness();
     watchTarget(h);
     h.session(TARGET, 0, { kind: "turn.started", attachmentId: "a", turnId: "t" });
@@ -653,7 +653,7 @@ describe("delivery", () => {
     expect(h.notices()).toHaveLength(1);
   });
 
-  it("delivers once when the watcher attached inside the park race (VC-457 review)", async () => {
+  it("delivers once when the watcher attached inside the park race (VC-457)", async () => {
     const h = harness({ live: false, raceOpened: true });
     watchTarget(h);
     h.session(TARGET, 1, { kind: "session.signaled", signal: "done", reason: null });

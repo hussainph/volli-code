@@ -183,7 +183,7 @@ export function relayConnection(
     /**
      * Opens once the project's link reads ready; until then, waits for it to.
      * An ended subscription opens nothing, however it got here: `settle` may
-     * run inside a handler this subscription called (VC-711 review B1).
+     * run inside a handler this subscription called (VC-711).
      */
     const attempt = (): void => {
       timer = undefined;
@@ -211,7 +211,7 @@ export function relayConnection(
     };
 
     function open(): void {
-      /* v8 ignore if -- every caller checks `ended` first; kept so no future caller can open an ended subscription on the host (VC-711 review B1). */
+      /* v8 ignore if -- every caller checks `ended` first; kept so no future caller can open an ended subscription on the host (VC-711). */
       if (ended) return;
       delivered = false;
       let self: { unsubscribe(): void } | null = null;
@@ -249,7 +249,7 @@ export function relayConnection(
                 if (event.error.reason === "subscription-limit") {
                   // Let go of the refused stream first: the view told of it may
                   // cancel this subscription from inside the callback, and then
-                  // nothing waits for a slot (VC-711 review B1).
+                  // nothing waits for a slot (VC-711).
                   current?.unsubscribe();
                   current = null;
                   options.onStreamLimited?.({ path, error: hostErrorOf(event.error) });

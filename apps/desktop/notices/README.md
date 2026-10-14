@@ -37,8 +37,8 @@ list whose claim is "these reach the artifact" should not carry them.
 The copyright holder is **read from the root `LICENSE`**, never chosen here. If
 the Apache-2.0 appendix still carries `[yyyy] [name of copyright owner]`, the
 document says the holder is not recorded; once it names one, the document
-reproduces that line (VC-414). Regeneration updates the shipped notice without
-a second copy of the copyright holder's name to drift.
+reproduces that line. VC-414's one-line edit therefore reaches the shipped
+notice by regenerating, with no second copy of the owner's name to drift.
 
 ## What this directory supplies
 
@@ -125,13 +125,19 @@ licensing review that reaches conclusions is tracked separately.
    is only whether reproducing the published constants carries an obligation of
    its own, which is part of the separate licensing review. Declared by
    `@volli/shared` as `unresolved`.
-2. **Terminal themes are not redistributed (VC-410, VC-413).**
-   A collection's licence does not establish the licence of each individual
-   theme. Volli ships **no** terminal theme: it reads themes from the user's
-   own Ghostty config on their machine, and derives the fallback palette from
-   this app's design tokens. `check:vendored-themes` fails any tracked file
-   that starts redistributing theme material. This is a distribution boundary,
-   not a licence finding about individual themes.
+2. **Terminal themes — CLOSED by removal (VC-413), not by a licence finding.**
+   The app used to ship a catalog of 463 third-party terminal themes, and
+   VC-410 chained it to iTerm2-Color-Schemes' MIT grant while recording that the
+   grant explicitly does **not** reach individual themes, that upstream issue
+   #638 is open on it, and that Monokai's terms forbid redistributing a
+   collective work containing Monokai Pro. Rather than answer a question nobody
+   here was entitled to answer, the owner removed the material: the catalog, its
+   generator, `THIRD-PARTY-THEMES.md` and the `check:theme-provenance` gate that
+   kept the two in step are all deleted. Volli now ships **no** terminal theme —
+   a theme is read from the user's own Ghostty config on their own machine, and
+   the fallback palette is derived from this app's design tokens.
+   `check:vendored-themes` fails any tracked file that starts redistributing
+   theme material again.
 3. **Declarations flagged for review.** The document's last section lists every
    declaration that is not a plain permissive grant — today the libvips binary's
    `LGPL-3.0-or-later`, DOMPurify's `(MPL-2.0 OR Apache-2.0)`, and node-forge's

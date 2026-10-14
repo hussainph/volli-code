@@ -2001,7 +2001,7 @@ describe("a burst of drags under latency (T5)", () => {
   });
 });
 
-// ---- the #810 review's interleavings (VC-565), each a guarantee ----------------------------
+// ---- #810 interleavings (VC-565), each a guarantee ----------------------------
 
 describe("interleavings: a newer write supersedes, any proof decides, the base is monotonic", () => {
   it("keeps the latest drag when an earlier unsent command would retry after it", async () => {
@@ -2704,9 +2704,9 @@ describe("edges of the rules", () => {
   });
 });
 
-// ---- the #810 re-check's interleavings (VC-565), each a guarantee ---------------------------
+// ---- #810 interleavings (VC-565), each a guarantee ---------------------------
 
-describe("re-check: per-aspect order, body freshness, generation-scoped reads", () => {
+describe("per-aspect order, body freshness, generation-scoped reads", () => {
   it("keeps the latest drag even when the superseded request reaches the host late", async () => {
     const { host, sync, last } = harness();
     await sync.open("p1");

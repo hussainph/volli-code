@@ -201,7 +201,7 @@ function revealTab(tab: HTMLElement, smooth: boolean): void {
 
 /**
  * Reveal the tab this strip is currently ABOUT — after something moved that is
- * neither a selection nor a focus (VC-288 review).
+ * neither a selection nor a focus (VC-288).
  *
  * The keyboard's tab wins over the selected one: if focus is inside this strip
  * then that is the tab a person is working with, and the two differ for the
@@ -367,7 +367,7 @@ export function TabStrip({
           ? current
           : next;
       });
-    // A VIEWPORT RESIZE IS ALSO A REVEAL (VC-288 review). The tab that matters
+    // A VIEWPORT RESIZE IS ALSO A REVEAL (VC-288). The tab that matters
     // was put in view against the width the strip had at the time; the chevrons
     // mounting, a divider drag, a rail opening and a window resize all hand it a
     // different one, and none of them is a selection or a focus, so nothing else
@@ -398,7 +398,7 @@ export function TabStrip({
     };
   }, []);
 
-  // AND THE AFFORDANCES THEMSELVES ARE A RESIZE (VC-288 review). Mounting two
+  // AND THE AFFORDANCES THEMSELVES ARE A RESIZE (VC-288). Mounting two
   // 24px controls at the ends of the strip takes that width out of the
   // scroller, which can put the tab that was just revealed back under one of
   // them. A browser reports that as a second `ResizeObserver` callback and the
@@ -422,7 +422,7 @@ export function TabStrip({
 
   const strip = (
     // A PROVIDER OF ITS OWN, so a tab's label reveal works wherever a strip is
-    // drawn (VC-288 review). `SidebarProvider` mounts one around the whole app,
+    // drawn (VC-288). `SidebarProvider` mounts one around the whole app,
     // but a strip is also rendered on its own by a good deal of the test suite
     // and by the fixture gallery, and a Radix tooltip with no provider above it
     // throws. Nesting is allowed and costs one context; what it changes is that
@@ -449,8 +449,8 @@ export function TabStrip({
           answer to what is drawn inside it. `flex-1 min-w-0` against the actions
           cluster beside it means this is the strip's width minus that cluster,
           full stop — a chevron mounting cannot change it, which is what lets the
-          chevrons be decided from it without deciding themselves (VC-288
-          review, `tabOverflow`). */}
+          chevrons be decided from it without deciding themselves (VC-288,
+          `tabOverflow`). */}
         <div
           ref={areaRef}
           data-slot="tab-scroll-area"
@@ -893,7 +893,7 @@ function TabShell({
   // inline edit are commit and cancel, and an × that blurs (committing) and
   // then closes is a destructive answer to a control reached for to dismiss.
   const showClose = closable && onClose !== undefined && !renamingNow;
-  // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288 review). The name below is
+  // THE WHOLE LABEL, ON HOVER AND ON FOCUS (VC-288). The name below is
   // capped at `max-w-40` and truncates, and until now the rest of it lived in
   // `aria-label` alone — an answer for a screen reader and for nothing else,
   // on tabs that do not all carry a `title` either. The reveal rides the tab

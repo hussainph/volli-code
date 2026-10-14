@@ -1,6 +1,6 @@
 /**
- * Which projects this window has known to be on a remote host (VC-713, review
- * B1), kept for the window's life whatever the host's link does next.
+ * Which projects this window has known to be on a remote host (VC-713), kept
+ * for the window's life whatever the host's link does next.
  *
  * Routing reads this, not the host source's current claim: a claim goes away
  * when a Workspace is forgotten, a host drops out or `cloud` turns off, and a

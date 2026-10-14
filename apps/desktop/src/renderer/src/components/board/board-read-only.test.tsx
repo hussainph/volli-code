@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * Every board create path stands down while the project's host cannot serve
- * (VC-576, review B4), through the one `useCanWrite` gate: the header's and
+ * (VC-576), through the one `useCanWrite` gate: the header's and
  * the empty board's New ticket, the list view's New, a column composer that
  * was already open (Enter and blur keep the draft and write nothing), a
  * collapsed column's expand, and an arming menu that was already open. With

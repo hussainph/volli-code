@@ -65,7 +65,7 @@ export type CallerActor = HostConnectionActor | LocalDeviceActor;
 /** Whether the caller is the in-process desktop, authorized for every Workspace. */
 export function isLocalDeviceActor(actor: CallerActor): actor is LocalDeviceActor {
   // By identity, never by shape: a lookalike must never inherit the
-  // desktop's reach (VC-564 re-check B3).
+  // desktop's reach (VC-564).
   return actor === LOCAL_DEVICE_ACTOR;
 }
 

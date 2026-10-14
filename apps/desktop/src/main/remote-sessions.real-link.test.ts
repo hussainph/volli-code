@@ -659,7 +659,7 @@ function cloudFlag(enabled: boolean) {
 }
 
 describe(
-  "the window's remote-Session binding, over a real link (VC-713 review)",
+  "the window's remote-Session binding, over a real link (VC-713)",
   {
     timeout: 15_000,
   },

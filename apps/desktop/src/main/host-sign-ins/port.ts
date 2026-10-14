@@ -154,7 +154,7 @@ export async function signInPreflight(service: HostSignInService, hostId: string
 
 const runKey = (hostId: string, providerId: string): string => `${hostId}\u0000${providerId}`;
 
-/** A running sign-in, and the identity its window gave it (VC-702 review B3). */
+/** A running sign-in, and the identity its window gave it (VC-702). */
 interface Running {
   readonly run: HostSignInRun;
   readonly runId: string | undefined;
@@ -171,8 +171,8 @@ export function remoteSignInsPort(service: HostSignInService): RemoteSignInsPort
   const latest = new Map<string, HostSignInRun>();
   /**
    * The flows each host and provider may still hold, kept apart from any one
-   * run (VC-702 review B3): a replacement that never got a flow, or gave up
-   * waiting, passes on the older flow still unwinding on the host.
+   * run (VC-702): a replacement that never got a flow, or gave up waiting,
+   * passes on the older flow still unwinding on the host.
    */
   const ledgers = new Map<string, HostFlowLedger>();
   /** The running sign-in a window's answer or cancel names: its own, never a newer one. */

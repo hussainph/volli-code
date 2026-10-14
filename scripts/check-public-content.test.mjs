@@ -88,6 +88,23 @@ test("the CI check lane runs the guard and its tests", () => {
   assert.match(checkLane, /node scripts\/check-public-content\.mjs/);
 });
 
+test("session peek screenshots default to ignored workspace output", () => {
+  const source = readFileSync(
+    new URL("../apps/desktop/e2e/session-peek-shots.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /const OUT_DIR = process\.argv\[2\] \?\? join\(REPO, "\.tmp", "session-peek-shots"\);/,
+  );
+  const ignored = spawnSync("git", ["check-ignore", ".tmp/session-peek-shots/capture.png"], {
+    cwd: fileURLToPath(new URL("../", import.meta.url)),
+    env: gitEnv,
+    encoding: "utf8",
+  });
+  assert.equal(ignored.status, 0, ignored.stderr);
+});
+
 test("fails closed outside a git repository", (t) => {
   const cwd = repository(t);
   rmSync(join(cwd, ".git"), { recursive: true, force: true });

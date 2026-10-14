@@ -183,7 +183,7 @@ describe("hostLinkSignIns", () => {
   });
 });
 
-describe("hostLinkSignIns' watch on the link (VC-702 review B2)", () => {
+describe("hostLinkSignIns' watch on the link (VC-702)", () => {
   it("says the connection is gone once, on the first state that is not ready, and stops watching", () => {
     for (const next of [
       { status: "unreachable", attempt: 1, error: {} as never, closeCode: 1006, retryAt: 0 },
@@ -323,7 +323,7 @@ describe("remoteSignInsPort", () => {
 /** A listener that keeps what it hears in `into`. */
 const heard = (into: HostSignInRunEvent[]) => (event: HostSignInRunEvent) => void into.push(event);
 
-describe("remoteSignInsPort's replacements over the real runner (VC-702 review B3)", () => {
+describe("remoteSignInsPort's replacements over the real runner (VC-702)", () => {
   afterEach(() => {
     vi.useRealTimers();
   });

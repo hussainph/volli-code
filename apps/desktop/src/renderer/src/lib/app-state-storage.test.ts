@@ -279,7 +279,7 @@ describe("VC577 forced-destroy draft durability", () => {
   });
 
   it("waits out an older write's slow ack and sends the newest draft before its window is destroyed", async () => {
-    // The VC-577 re-check's slow-write probe: the real renderer storage and
+    // VC-577's slow-write probe: the real renderer storage and
     // the real main-side barrier, with index.ts's rule that a menu-bar window
     // is destroyed only from its own ack, never at a timeout.
     let finishOlder!: (value: { ok: true }) => void;

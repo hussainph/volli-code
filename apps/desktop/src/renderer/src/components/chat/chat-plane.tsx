@@ -603,7 +603,7 @@ export function ChatPlane({
       setRevealed({ ...item });
       // A click naming a failure is a person asking to see it, and a dismissal
       // is a view choice that has now been reversed by a louder one: the row
-      // comes back for the exact problem the alert was about (round 5). A
+      // comes back for the exact problem the alert was about. A
       // question needs no such reset — cards are never dismissed.
       if (item.attentionId !== null) setDismissedBlockerKey(null);
     };
@@ -612,7 +612,7 @@ export function ChatPlane({
     return () => {
       off();
       // The override describes what THIS plane is drawing; a plane that is gone
-      // must not go on describing the window (VC-295 round 4).
+      // must not go on describing the window (VC-295).
       releaseSessionItemReveal(sessionId);
       setRevealed(null);
     };
@@ -2258,7 +2258,7 @@ const EARLIER_PREFETCH = "400px 0px 0px 0px";
  * reader's place kept exactly as for rows that were already here. A reveal that
  * leaves less than a page above it reads the next window ahead of the reader.
  *
- * A page does not always bring a row (VC-315 review, B3). When the window began
+ * A page does not always bring a row (VC-315). When the window began
  * partway through a turn, the page completes that turn instead: the first row
  * grows at its top, no row is added, and nothing above is left to reveal. So
  * the reader's place is held by what they can SEE rather than by rows: before

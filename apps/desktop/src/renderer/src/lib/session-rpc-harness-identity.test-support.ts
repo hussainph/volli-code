@@ -1,5 +1,5 @@
 /**
- * The contract harness's own router context, for tests only (VC-564 review B2).
+ * The contract harness's own router context, for tests only (VC-564).
  *
  * Production's IPC registration binds the desktop's own window,
  * `LOCAL_DESKTOP_CALLER`, and takes no caller option at all. To judge other

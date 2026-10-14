@@ -613,7 +613,7 @@ describe("a remote host's log in the one viewer, over the relay and real links (
   });
 });
 
-describe("the source's lifetime over real links (VC-712 review)", () => {
+describe("the source's lifetime over real links (VC-712)", () => {
   it("pagehide ends an active remote follow, and nothing late lands", async () => {
     const { host, main, page } = await remoteHost({});
     const viewer = read(remoteLogSources()[0]!);

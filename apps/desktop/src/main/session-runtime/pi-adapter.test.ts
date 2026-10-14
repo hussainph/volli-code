@@ -827,7 +827,7 @@ describe("Pi native adapter context carry", () => {
     });
   });
 
-  it("carries an unreadable earlier binding's reason from the engine to the runtime (VC-457 review)", async () => {
+  it("carries an unreadable earlier binding's reason from the engine to the runtime (VC-457)", async () => {
     // The two layers end to end: the Session Engine records this attach as
     // `fresh` — which is what it is — and the reason it could not carry must
     // still reach the runtime, which is what raises the Attention.

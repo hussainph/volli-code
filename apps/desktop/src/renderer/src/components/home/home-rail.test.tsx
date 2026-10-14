@@ -440,7 +440,7 @@ describe("HomeRail", () => {
     expect(markup).toContain("No sessions yet");
   });
 
-  // VC-406, the spec review's finding 6. Home mapped every open, non-ended
+  // VC-406: Home mapped every open, non-ended
   // terminal to `ready`/"Open": a pane blocked at a permission prompt read the
   // same as one printing a build log, and sorted wherever its record's age put
   // it. The rail reads the sessions store's own facts now — the same ones the

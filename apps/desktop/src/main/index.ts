@@ -2331,7 +2331,7 @@ const appStartup = app.whenReady().then(async () => {
     mainWindow.webContents.once("did-finish-load", () => {
       // Each announced-but-unsettled item is asked of git and disk before the
       // run is stamped, so an already-removed folder is recorded as removed
-      // rather than described as work nobody attempted (review C3). Read-only,
+      // rather than described as work nobody attempted. Read-only,
       // and never fatal to a launch.
       if (hostClosing) return;
       const reconcile = reconcileInterruptedCleanups({

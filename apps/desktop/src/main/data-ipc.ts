@@ -1195,7 +1195,7 @@ export function registerDataIpcHandlers(
         refresh,
         // Read-only, and the same supplier the destructive paths use: an
         // occupied checkout is reported as KEPT rather than proposed and then
-        // refused after the confirmation (review C5).
+        // refused after the confirmation.
         busyWorktreeSites: options.busyWorktreeSites,
       });
       // The durable history, so Storage can say who removed a directory and
@@ -1232,12 +1232,12 @@ export function registerDataIpcHandlers(
       input: WorktreeOrphanCleanupInput,
     ): Promise<WorktreeOrphanCleanupResult> => {
       // The confirmed half, and a transport adapter over a command — nothing
-      // more (review S1). The renderer names a scan revision and item ids; main
+      // more. The renderer names a scan revision and item ids; main
       // resolves them against the proposal IT minted, so no client can point
-      // this channel at a directory no completed scan offered (review C1).
+      // this channel at a directory no completed scan offered.
       const engine = orphanCleanupEngine(db);
       // FIRST, before any live fact is consulted: has this exact command id
-      // already been answered? (VC-284 re-review S1, the rule
+      // already been answered? (VC-284, the rule
       // `automations/service.ts` follows.) A completed cleanup invalidates the
       // scan it ran against, so validating a retry against the CURRENT scan
       // would tell a caller whose reply was lost that its command was
@@ -1289,7 +1289,7 @@ export function registerDataIpcHandlers(
             // The window the confirmation was MEASURED against, carried from the
             // scan itself rather than re-read here: if the setting has moved
             // since, the executor must skip rather than apply a policy nobody
-            // confirmed (review C1/C2).
+            // confirmed.
             retentionDays: plan.retentionDays,
             items: plan.items,
             source: "settings",
@@ -1329,7 +1329,7 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "That path is outside this project's worktree folder." };
       }
       // This is a destructive worktree act, so it takes the same lease the
-      // confirmed cleanup takes (VC-284 re-review C4). Without it, "serialized
+      // confirmed cleanup takes (VC-284). Without it, "serialized
       // against every start" was only true of one of the two routes that
       // delete a checkout — and two acts removing one directory, or a terminal
       // being born inside this one mid-delete, were both still possible.
@@ -1675,7 +1675,7 @@ export function registerDataIpcHandlers(
       const stored = setRetentionTtlDays(db, input.days, Date.now());
       // Every eligibility date the cached scan proposed was measured against the
       // OLD window, so that proposal no longer describes this app's policy
-      // (VC-284 re-review C1/C6). Dropping it supersedes the revision: a
+      // (VC-284). Dropping it supersedes the revision: a
       // confirmation still open from before the change is refused with
       // `scan-superseded` rather than silently applying a window nobody
       // reviewed, and the next read re-measures.

@@ -1095,7 +1095,7 @@ describe("Add a host: pending calls and owner replacement", () => {
   );
 });
 
-describe("Add a host: the review's probes", () => {
+describe("Add a host: password handling, a closed sheet, and read-only hosts", () => {
   const SUDO = {
     id: "q1",
     kind: "sudo-password",
@@ -1235,7 +1235,7 @@ describe("Add a host: the review's probes", () => {
   });
 });
 
-describe("Add a host: the visual review", () => {
+describe("Add a host: what each step shows", () => {
   const FULL_FINGERPRINT = "SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s";
 
   it("says what each done row found, and badges the ready tile with a check", async () => {
