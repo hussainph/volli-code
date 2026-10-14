@@ -146,6 +146,7 @@ export class McpSettingsService {
   readonly #store: McpCredentialStore;
   readonly #environment: () => Readonly<Record<string, string | undefined>>;
   readonly #oauth: McpOAuthBroker;
+  readonly #surfaceRevisions = new Map<string, number>();
 
   constructor(options: McpSettingsOptions) {
     this.#db = options.db;
@@ -216,6 +217,15 @@ export class McpSettingsService {
 
   selectedTools(projectId: string): readonly McpToolDefinition[] {
     return selectedMcpToolDefinitions(this.#db, projectId);
+  }
+
+  /** In-process invalidation only; a relaunch starts with no cached Session checks. */
+  surfaceRevision(projectId: string): number {
+    return this.#surfaceRevisions.get(projectId) ?? 0;
+  }
+
+  #surfaceChanged(projectId: string): void {
+    this.#surfaceRevisions.set(projectId, this.surfaceRevision(projectId) + 1);
   }
 
   /**
@@ -361,6 +371,7 @@ export class McpSettingsService {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       });
+      this.#surfaceChanged(input.projectId);
       this.#keepSecrets(saved, pending);
       return { ok: true, server: saved };
     } catch (error) {
@@ -516,14 +527,13 @@ export class McpSettingsService {
   setEnabled(input: { projectId: string; serverId: string; enabled: boolean }): McpServerResult {
     const existing = this.#owned(input.projectId, input.serverId);
     if (!existing.ok) return existing;
-    return {
-      ok: true,
-      server: putMcpServer(this.#db, {
-        ...existing.server,
-        enabled: input.enabled,
-        updatedAt: this.#now(),
-      }),
-    };
+    const server = putMcpServer(this.#db, {
+      ...existing.server,
+      enabled: input.enabled,
+      updatedAt: this.#now(),
+    });
+    this.#surfaceChanged(input.projectId);
+    return { ok: true, server };
   }
 
   setTools(input: {
@@ -540,18 +550,17 @@ export class McpSettingsService {
         return { ok: false, error: `Enabled MCP tool ${name} was not discovered.` };
       }
     }
-    return {
-      ok: true,
-      server: putMcpServer(this.#db, {
-        ...existing.server,
-        catalog: existing.server.catalog.map((tool) =>
-          Object.assign({}, tool, {
-            enabled: tool.definition !== null && selected.has(tool.name),
-          }),
-        ),
-        updatedAt: this.#now(),
-      }),
-    };
+    const server = putMcpServer(this.#db, {
+      ...existing.server,
+      catalog: existing.server.catalog.map((tool) =>
+        Object.assign({}, tool, {
+          enabled: tool.definition !== null && selected.has(tool.name),
+        }),
+      ),
+      updatedAt: this.#now(),
+    });
+    this.#surfaceChanged(input.projectId);
+    return { ok: true, server };
   }
 
   /**
@@ -566,6 +575,7 @@ export class McpSettingsService {
     if (!deleteMcpServer(this.#db, input.projectId, input.serverId)) {
       return { ok: false, error: "MCP server not found." };
     }
+    this.#surfaceChanged(input.projectId);
     this.#store.delete(input.serverId);
     return { ok: true };
   }

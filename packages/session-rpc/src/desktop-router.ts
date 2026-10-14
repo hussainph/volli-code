@@ -120,6 +120,10 @@ export type DesktopSubscriptionHandler<Input, Emission> = (
 
 /** The slice of the host's handler map the desktop router projects (D2: structural). */
 export interface DesktopRouterHandlers {
+  readonly "shells.moveToBackground": HostHandler<
+    { sessionId: string; toolCallId: string },
+    { shellId: string }
+  >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** Remote hosts this desktop added over SSH (VC-700 PR 2): desktop main's registry. */
@@ -216,7 +220,7 @@ export interface DesktopRouterContext extends CatalogCallerContext {
 
 export type DesktopRouterContextPorts = AssertNever<RouterContextPorts<DesktopRouterContext>>;
 
-const { hostProcedure, catalogRouter } = createCatalogBuilders<
+const { hostProcedure, workspaceProcedure, catalogRouter } = createCatalogBuilders<
   DesktopRouterContext,
   DesktopCatalogEntry
 >({ entries: DESKTOP_CATALOG_ENTRIES });
@@ -409,13 +413,22 @@ async function* desktopStream<Emission>(
 }
 
 /**
- * Every desktop-only command so far is host-placed (VC-574), so each is a
+ * Most desktop-only commands are host-placed (VC-574), each a
  * `hostProcedure`: device-as-user, no Workspace resource to name. A
  * workspace-placed command is a `workspaceProcedure` naming every resource
  * its input addresses, exactly as a public area's is.
  */
 export function createDesktopRouter() {
   return catalogRouter({
+    shells: {
+      moveToBackground: workspaceProcedure(
+        "shells.moveToBackground",
+        z.strictObject({ sessionId: z.uuid(), toolCallId: z.string().min(1).max(512) }),
+        ({ sessionId }) => ({ kind: "session", id: sessionId }),
+      )
+        .output(z.object({ shellId: z.string().min(1) }))
+        .mutation(({ ctx, input }) => ctx.handlers["shells.moveToBackground"](input, ctx.call)),
+    },
     project: {
       /** Was `volli:project-reorder`: the rail's order, across every Workspace. */
       reorder: hostProcedure("project.reorder")

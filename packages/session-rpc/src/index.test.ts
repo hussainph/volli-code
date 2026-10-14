@@ -623,6 +623,8 @@ describe("Session tRPC router", () => {
       cloud: { enabled: true, source: "storage" },
     });
     expect(writes).toEqual([{ id: "cloud", enabled: true }]);
+    experimentSnapshot = { cloud: { enabled: false, source: "default", visible: false } };
+    await expect(caller.settings.experiments()).resolves.toEqual(experimentSnapshot);
   });
 
   it("rejects unknown experiment ids, non-booleans, and non-JSON-safe snapshots", async () => {
@@ -2693,6 +2695,33 @@ describe("Session tRPC router", () => {
     expect(resolutions[2] && "answers" in resolutions[2]).toBe(false);
     expect(resolutions[2]).toEqual({ optionIds: ["reject"], response: null });
   });
+
+  it.each([undefined, "opened", "turn"] as const)(
+    "preserves the message submission wait boundary %s through the JSON codec",
+    async (settle) => {
+      const fixture = runtimeFixture();
+      const caller = createSessionRouter().createCaller(
+        sessionContext({
+          caller: LOCAL_DESKTOP_CALLER,
+          runtime: fixture.runtime,
+          diagnostics: new RpcDiagnosticLog(),
+        }),
+      );
+      const request = JSON.parse(
+        JSON.stringify({
+          commandId: "opening-command",
+          sessionId: "session-1",
+          command: {
+            kind: "message.submit",
+            message: { id: "prompt", role: "user", parts: [{ type: "text", text: "go" }] },
+            settle,
+          },
+        }),
+      );
+      await caller.session.command(request);
+      expect(fixture.calls.command[0]!.command).toEqual(request.command);
+    },
+  );
 
   it("calls the durable runtime without retaining client prompt payloads in diagnostics", async () => {
     const fixture = runtimeFixture();

@@ -25,6 +25,7 @@ import {
   sessionInterruptionDetail,
   shortSessionId,
   todoListMarkdown,
+  redactPayloadSecrets,
 } from "@volli/shared";
 import type {
   AgentRequest,
@@ -34,6 +35,7 @@ import type {
   SessionRecord,
   SessionTodoList,
   SessionUsageSummary,
+  SessionAttentionKind,
 } from "@volli/shared";
 import {
   readSessionAnswer,
@@ -44,6 +46,7 @@ import {
 import { createTicketCommentCommand } from "../ticket-commands";
 import { withTicketWake } from "../ticket-wake";
 import { getTicket } from "../db/tickets-repo";
+import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
 import {
   readSessionProvenance,
   readSessionProvenances,
@@ -55,6 +58,7 @@ import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
 import { positiveIntOr, projectForCreate, ticketForDisplayId } from "./resolution";
+import { pendingSessionQuestions } from "./pending-session-questions";
 import { publicSessionOrigin } from "./wire";
 import { hostLogger } from "../log/root";
 
@@ -432,6 +436,7 @@ export async function sessionShowVerb(
           status: terminal.endedAt === null ? "running" : "exited",
           harness: effectiveHarnessId(terminal),
           signal: publicSessionSignal(projection, observedAt),
+          pendingQuestions: pendingSessionQuestions(projection),
           startedBy: publicStartedBy(
             readSessionProvenance(options.db, {
               sessionId: terminal.id,
@@ -502,6 +507,7 @@ export async function sessionShowVerb(
         role: record.role,
         signal: publicSessionSignal(projection, observedAt),
         waitingOn: record.waitingOn,
+        pendingQuestions: pendingSessionQuestions(projection),
         interruptedReason: interruptedReason(record, projection),
         startedBy: publicStartedBy(provenance, true),
         parentSession:
@@ -585,6 +591,21 @@ function usageCells(usage: SessionUsageSummary | undefined): Record<string, unkn
   };
 }
 
+// Human copy, not a new output enum or durable Attention vocabulary.
+const PEEK_ATTENTION: Record<SessionAttentionKind, { message: string; recovery: string | null }> = {
+  auth_required: { message: "Sign-in required", recovery: "Open settings" },
+  configuration_invalid: { message: "Configuration invalid", recovery: "Open settings" },
+  transport_retrying: { message: "Reconnecting", recovery: null },
+  adapter_disconnected: { message: "Disconnected", recovery: "Retry" },
+  rate_limited: { message: "Rate limited", recovery: "Retry" },
+  quota_exhausted: { message: "Quota exhausted", recovery: null },
+  context_limit_reached: { message: "Context limit reached", recovery: null },
+  partial_turn_interrupted: { message: "Turn interrupted", recovery: null },
+  adapter_unrecoverable: { message: "Runtime stopped", recovery: "Retry" },
+  input_required: { message: "Waiting for an answer", recovery: null },
+  permission_required: { message: "Waiting for approval", recovery: null },
+};
+
 /** `volli session peek` — a terminal's trailing output, or a chat's tail. */
 export async function sessionPeekVerb(
   context: AgentCommandContext,
@@ -614,6 +635,7 @@ export async function sessionPeekVerb(
         session: shortSessionId(resolved.session.id),
         status: observation.status,
         output: observation.output,
+        pendingQuestions: pendingSessionQuestions(projection),
         startedBy: publicStartedBy(
           readSessionProvenance(options.db, {
             sessionId: resolved.session.id,
@@ -650,15 +672,79 @@ export async function sessionPeekVerb(
     },
   );
   const observedAt = now();
+  // The same durable queue used by the runtime, including fail-closed holds.
+  // A read-only queue transaction neither starts a runtime nor releases work.
+  const pendingMessages = await createSqliteSessionFollowUpLedger(options.db).transaction(
+    record.sessionId,
+    (state) =>
+      state.entries.map((entry) => ({
+        id: entry.id,
+        text: redactPayloadSecrets(
+          entry.message.parts
+            .flatMap((part) => (part.type === "text" ? [part.text] : []))
+            .join("\n"),
+        ).slice(0, 400),
+        label: entry.refused
+          ? "Blocked"
+          : entry.steer
+            ? "After the current step"
+            : entry.state === "releasing"
+              ? "Sending"
+              : "Queued",
+        detail: entry.refusedDetail
+          ? redactPayloadSecrets(entry.refusedDetail).slice(0, 400)
+          : null,
+      })),
+  );
+  const attention = chat.projection.attention.primary;
+  const stopped = chat.projection.stopped;
+  const signal = publicSessionSignal(chat.projection, observedAt);
   return {
     v: 1,
     ok: true,
     data: {
       session: shortSessionId(record.sessionId),
+      attention:
+        attention === null
+          ? null
+          : {
+              ...PEEK_ATTENTION[attention.kind],
+              detail:
+                attention.detail === null
+                  ? null
+                  : redactPayloadSecrets(attention.detail).slice(0, 400),
+            },
+      stopped:
+        stopped === null
+          ? null
+          : {
+              ...stopped,
+              reason:
+                stopped.reason === null ? null : redactPayloadSecrets(stopped.reason).slice(0, 400),
+              by:
+                stopped.by.kind === "session"
+                  ? { kind: "session", sessionId: shortSessionId(stopped.by.sessionId) }
+                  : stopped.by,
+            },
+      signal:
+        signal === null
+          ? null
+          : {
+              ...signal,
+              reason:
+                signal.reason === null ? null : redactPayloadSecrets(signal.reason).slice(0, 400),
+            },
+      pendingMessageCount: pendingMessages.length,
+      pendingMessages: pendingMessages.slice(
+        0,
+        positiveIntOr(request.args["lines"], CHAT_PEEK_ENTRIES),
+      ),
+      lastTurnOutcome: record.outcome,
       // The same words the app's own sidebar row says, so one vocabulary
       // describes a Session whichever surface asks.
       status: record.activity,
       waitingOn: record.waitingOn,
+      pendingQuestions: pendingSessionQuestions(chat.projection),
       // See `session list` — the state word's reason, on the same guard.
       interruptedReason: interruptedReason(record, chat.projection),
       ...sessionOrchestrationCells(
@@ -682,12 +768,22 @@ export async function sessionPeekVerb(
       // Ages, not timestamps: "when did it last do anything" is the
       // question, and every other session field here already answers in
       // elapsed milliseconds against the caller's own clock.
-      transcript: tail.entries.map((entry) => ({
-        ageMs: Math.max(0, observedAt - entry.at),
-        role: entry.role,
-        text: entry.text,
-        tools: entry.tools,
-      })),
+      transcript: tail.entries.map((entry) => {
+        const row: {
+          ageMs: number;
+          role: string;
+          text: string;
+          tools: readonly string[];
+          delivery?: string;
+        } = {
+          ageMs: Math.max(0, observedAt - entry.at),
+          role: entry.role,
+          text: entry.text,
+          tools: entry.tools,
+        };
+        if (entry.delivery !== undefined) row.delivery = entry.delivery;
+        return row;
+      }),
     },
   };
 }

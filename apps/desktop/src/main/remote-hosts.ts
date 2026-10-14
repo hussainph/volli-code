@@ -199,6 +199,7 @@ export const REMOTE_SESSION_LINK_FEATURES = [
   "sessions.subscribe",
   "sessions.queue",
   "sessions.history",
+  "sessions.pictures",
   "sessions.listing",
 ] as const;
 

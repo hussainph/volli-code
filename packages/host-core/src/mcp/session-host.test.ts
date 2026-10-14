@@ -32,7 +32,7 @@ function client(callTool: McpProtocolClient["callTool"]): McpProtocolClient {
 }
 
 describe("McpSessionHost", () => {
-  it("binds only servers required by frozen definitions and refuses a missing server before attach", () => {
+  it("binds retained configuration without letting a missing server orphan attachment", () => {
     const definition: McpToolDefinition = {
       serverId: server.id,
       toolName: "exact/name",
@@ -44,9 +44,7 @@ describe("McpSessionHost", () => {
     expect(serversForFrozenMcpTools([{ ...server, enabled: false }], [definition])).toEqual([
       server,
     ]);
-    expect(() => serversForFrozenMcpTools([], [definition])).toThrow(
-      /required MCP server.*restore.*retry/i,
-    );
+    expect(serversForFrozenMcpTools([], [definition])).toEqual([]);
   });
 
   it("opens one lazy client per server, reuses it for exact calls, and closes it with the attachment", async () => {

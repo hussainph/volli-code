@@ -207,6 +207,7 @@ async function serve(
     /** A source that keeps replaying after it was cancelled. */
     ignoresCancel?: boolean;
     requestScope?: HostProtocolRequestScope;
+    readPicture?: Parameters<typeof sessionHandlersFrom>[0]["readPicture"];
     /** The host's recent log (VC-699). */
     logs?: Pick<Parameters<typeof sessionHandlersFrom>[0], "readLogs" | "followLogs">;
   } = {},
@@ -237,6 +238,7 @@ async function serve(
         // The map over the ledger, as a root hands its router (VC-668).
         handlers: sessionHandlersFrom({
           runtime: changed?.runtime ?? source.runtime,
+          ...(options.readPicture === undefined ? {} : { readPicture: options.readPicture }),
           ...options.logs,
         }),
         diagnostics: new RpcDiagnosticLog(),
@@ -310,6 +312,53 @@ async function until(condition: () => boolean, what: string): Promise<void> {
   }
   throw new Error(`Timed out waiting for ${what}`);
 }
+
+// Several real socket requests and refusal handshakes share CI's CPU with the
+// other packages. Bound this integration path separately, not its assertions
+// or the suite's default: a five-second cold-run budget was flaky on Linux.
+it("reads large saved transcript pictures over the real codec without oversized response frames", async () => {
+  const bytes = Buffer.alloc(500_000, 199);
+  const { listener } = await serve({
+    readPicture: ({ pictureId, offset = 0 }) => {
+      if (pictureId !== "picture") return { data: null, mimeType: null, nextOffset: null };
+      const end = Math.min(offset + 192 * 1024, bytes.length);
+      return {
+        data: bytes.subarray(offset, end).toString("base64"),
+        mimeType: "image/png",
+        nextOffset: end === bytes.length ? null : end,
+      };
+    },
+  });
+  const { client } = connect(listener.url, { features: ["sessions.pictures"] });
+  const chunks: string[] = [];
+  let offset: number | null = 0;
+  do {
+    const read = await client.session.picture.query({
+      sessionId: SESSION,
+      pictureId: "picture",
+      offset,
+    });
+    chunks.push(read.data!);
+    expect(read.data!.length).toBeLessThanOrEqual(256 * 1024);
+    offset = read.nextOffset;
+  } while (offset !== null);
+  expect(Buffer.from(chunks.join(""), "base64")).toEqual(bytes);
+  expect(await client.session.picture.query({ sessionId: SESSION, pictureId: "missing" })).toEqual({
+    data: null,
+    mimeType: null,
+    nextOffset: null,
+  });
+  await expect(
+    client.session.picture.query({ sessionId: SESSION, pictureId: "picture", offset: 1 }),
+  ).rejects.toThrow();
+  await expect(
+    client.session.picture.query({ sessionId: "other", pictureId: "picture" }),
+  ).rejects.toThrow();
+  const legacy = connect(listener.url);
+  await expect(
+    legacy.client.session.picture.query({ sessionId: SESSION, pictureId: "picture" }),
+  ).rejects.toThrow();
+}, 15_000);
 
 describe("the handshake, before any procedure", () => {
   it.each([{ features: [] }, { features: ["host.logs", "sessions"] }])(

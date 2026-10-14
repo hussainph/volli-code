@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ACTIVITY_METADATA_KEY } from "@volli/shared";
-import type { SessionEvent, TranscriptReference } from "@volli/shared";
+import type { CommandReceipt, SessionEvent, TranscriptReference } from "@volli/shared";
 import type { UIMessage } from "ai";
 
+import { createInMemorySessionLedger } from "./in-memory-ledger";
 import { createInMemoryTranscriptArtifactStore } from "./transcript-artifacts";
 import type { SessionTranscriptArtifact } from "./transcript-artifacts";
 import {
@@ -80,6 +81,49 @@ function submitEvent(sequence: number, reference: TranscriptReference): SessionE
         intent: { kind: "message.submit", reference },
       },
     },
+  };
+}
+
+/** Writes use the durable ledger codec, not hand-waved projection fixtures. */
+async function ledgerPorts(events: readonly SessionEvent[]) {
+  const ledger = createInMemorySessionLedger();
+  await ledger.transaction((transaction) => {
+    transaction.insertSession({
+      id: "session-1",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      createdAt: 0,
+    });
+    for (const event of events) transaction.appendEvent(event);
+  });
+  return {
+    listEvents: (query: { sessionId: string }) =>
+      ledger.transaction((transaction) => transaction.listEvents(query)),
+  };
+}
+
+function receiptEvent(
+  sequence: number,
+  status: CommandReceipt["status"],
+  commandId = "command-1",
+): SessionEvent {
+  const base = { id: `receipt-${sequence}`, commandId, sequence, recordedAt: sequence * 10 };
+  const result = { kind: "message.submitted", sessionId: "session-1" } as const;
+  const receipt: CommandReceipt =
+    status === "accepted"
+      ? { ...base, status, acceptedAt: sequence * 10, result }
+      : status === "completed"
+        ? { ...base, status, result }
+        : status === "rejected"
+          ? { ...base, status, code: "not_available", detail: "No live executor" }
+          : { ...base, status, detail: "Runtime outcome could not be reconciled" };
+  return {
+    ...turnStarted(sequence),
+    commandId,
+    payload: { kind: "command.receipt.recorded", receipt },
   };
 }
 
@@ -380,5 +424,235 @@ describe("readSessionTranscriptTail", () => {
         },
       }),
     ).toBeNull();
+  });
+});
+
+describe("submitted message delivery evidence", () => {
+  it.each([
+    { status: null, expected: "Pending" },
+    { status: "accepted", expected: "Delivered" },
+    { status: "completed", expected: "Delivered" },
+    { status: "rejected", expected: "Not delivered" },
+    { status: "unreconciled", expected: "Delivery unconfirmed" },
+  ] as const)("labels receipt $status as $expected", async ({ status, expected }) => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const reference = await artifacts.write(
+      artifactOf({ id: "intent", role: "user", parts: [{ type: "text", text: "Change course" }] }),
+    );
+    const ports = await ledgerPorts([
+      submitEvent(1, reference),
+      ...(status === null ? [] : [receiptEvent(2, status)]),
+    ]);
+    const tail = await readSessionTranscriptTail(
+      { ...ports, readArtifact: (requested) => artifacts.read(requested) },
+      { sessionId: "session-1", limit: 1 },
+    );
+    expect(tail.entries).toEqual([
+      { at: 10, role: "user", text: "Change course", tools: [], delivery: expected },
+    ]);
+    expect(tail.unreadable).toBe(0);
+  });
+
+  it.each([undefined, null, "unknown-command", "command-1"])(
+    "only believes a turn start correlated to this command (%s)",
+    async (commandId) => {
+      const artifacts = createInMemoryTranscriptArtifactStore();
+      const reference = await artifacts.write(
+        artifactOf({ id: "intent", role: "user", parts: [] }),
+      );
+      const ports = await ledgerPorts([
+        submitEvent(1, reference),
+        { ...turnStarted(2), ...(commandId === undefined ? {} : { commandId }) },
+      ]);
+      const tail = await readSessionTranscriptTail(
+        { ...ports, readArtifact: (requested) => artifacts.read(requested) },
+        { sessionId: "session-1", limit: 1 },
+      );
+      expect(tail.entries[0]?.delivery).toBe(commandId === "command-1" ? "Delivered" : "Pending");
+    },
+  );
+
+  it.each(["accepted", "completed", "turn", "reference", "identity"] as const)(
+    "does not downgrade %s proof after an unreconciled receipt",
+    async (proof) => {
+      const artifacts = createInMemoryTranscriptArtifactStore();
+      const reference = await artifacts.write(
+        artifactOf({ id: "intent", role: "user", parts: [{ type: "text", text: "Prompt" }] }),
+      );
+      const observed = await artifacts.write(
+        artifactOf({
+          id: "intent",
+          role: "user",
+          parts: [{ type: "text", text: "Prompt enriched" }],
+        }),
+      );
+      const evidence =
+        proof === "accepted" || proof === "completed"
+          ? receiptEvent(2, proof)
+          : proof === "turn"
+            ? { ...turnStarted(2), commandId: "command-1" }
+            : transcriptEvent(2, proof === "reference" ? reference : observed);
+      const ports = await ledgerPorts([
+        submitEvent(1, reference),
+        evidence,
+        receiptEvent(3, "unreconciled"),
+      ]);
+      const reads: string[] = [];
+      const tail = await readSessionTranscriptTail(
+        {
+          ...ports,
+          readArtifact: (requested) => {
+            reads.push(requested.id);
+            return artifacts.read(requested);
+          },
+        },
+        { sessionId: "session-1", limit: 2 },
+      );
+      expect(tail.entries[0]?.delivery).toBe("Delivered");
+      expect(tail.entries[1]?.delivery).toBeUndefined();
+      expect(reads.length).toBe(proof === "identity" ? 2 : 1);
+      expect(tail.unreadable).toBe(0);
+    },
+  );
+
+  it("uses historical identical references without reading them or unrelated history", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const reference = await artifacts.write(artifactOf({ id: "intent", role: "user", parts: [] }));
+    const missing: TranscriptReference = {
+      ...reference,
+      id: "fnv1a64:0000000000000000",
+      digest: "fnv1a64:0000000000000000",
+    };
+    const ports = await ledgerPorts([
+      transcriptEvent(1, reference),
+      transcriptEvent(2, missing),
+      submitEvent(3, reference),
+    ]);
+    const reads: string[] = [];
+    const tail = await readSessionTranscriptTail(
+      {
+        ...ports,
+        readArtifact: (requested) => {
+          reads.push(requested.id);
+          return artifacts.read(requested);
+        },
+      },
+      { sessionId: "session-1", limit: 1 },
+    );
+    expect(tail.entries[0]?.delivery).toBe("Delivered");
+    expect(reads).toEqual([reference.id]);
+    expect(tail).toMatchObject({ messages: 3, unreadable: 0 });
+  });
+
+  it("does not mistake another message or an assistant's reused id for observation proof", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const reference = await artifacts.write(artifactOf({ id: "intent", role: "user", parts: [] }));
+    const unrelated = await artifacts.write(
+      artifactOf({ id: "unrelated", role: "user", parts: [] }),
+    );
+    const assistant = await artifacts.write(
+      artifactOf({ id: "intent", role: "assistant", parts: [] }),
+    );
+    const ports = await ledgerPorts([
+      submitEvent(1, reference),
+      transcriptEvent(2, unrelated),
+      transcriptEvent(3, assistant),
+      receiptEvent(4, "accepted", "unknown-command"),
+    ]);
+    const tail = await readSessionTranscriptTail(
+      { ...ports, readArtifact: (requested) => artifacts.read(requested) },
+      { sessionId: "session-1", limit: 3 },
+    );
+    expect(tail.entries.map((entry) => entry.delivery)).toEqual(["Pending", undefined, undefined]);
+  });
+
+  it("never labels an interaction answer or non-user submit as pending", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const answer = await artifacts.write(artifactOf({ id: "answer", role: "user", parts: [] }));
+    const assistant = await artifacts.write(
+      artifactOf({ id: "assistant", role: "assistant", parts: [] }),
+    );
+    const command = submitEvent(1, answer);
+    if (command.payload.kind !== "command.recorded") throw new Error("Expected command");
+    const ports = await ledgerPorts([
+      {
+        ...command,
+        payload: {
+          kind: "command.recorded",
+          command: {
+            ...command.payload.command,
+            intent: {
+              kind: "interaction.resolve",
+              attachmentId: "attachment-1",
+              interactionId: "interaction-1",
+              resolution: { optionIds: ["once"], response: null },
+              reference: answer,
+            },
+          },
+        },
+      },
+      submitEvent(2, assistant),
+      receiptEvent(3, "accepted"),
+    ]);
+    const tail = await readSessionTranscriptTail(
+      { ...ports, readArtifact: (requested) => artifacts.read(requested) },
+      { sessionId: "session-1", limit: 2 },
+    );
+    expect(tail.entries.map((entry) => entry.delivery)).toEqual([undefined, undefined]);
+  });
+
+  it("counts malformed tail bodies as unreadable while retaining readable messages", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const malformed = await artifacts.write(
+      artifactOf({ id: "broken", role: "user", parts: null } as unknown as UIMessage),
+    );
+    const readable = await artifacts.write(artifactOf({ id: "intent", role: "user", parts: [] }));
+    const ports = await ledgerPorts([submitEvent(1, malformed), submitEvent(2, readable)]);
+    const tail = await readSessionTranscriptTail(
+      { ...ports, readArtifact: (requested) => artifacts.read(requested) },
+      { sessionId: "session-1", limit: 2 },
+    );
+    expect(tail).toMatchObject({ messages: 2, unreadable: 1 });
+    expect(tail.entries).toEqual([
+      { at: 20, role: "user", text: "", tools: [], delivery: "Pending" },
+    ]);
+  });
+
+  it("rejects unknown receipt statuses at the ledger codec rather than inventing delivery evidence", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const reference = await artifacts.write(artifactOf({ id: "intent", role: "user", parts: [] }));
+    const receipt = receiptEvent(2, "unreconciled");
+    if (receipt.payload.kind !== "command.receipt.recorded") throw new Error("Expected receipt");
+    // Preserve a valid receipt envelope so the failure specifically names its status.
+    const unknown = { ...receipt, payload: { ...receipt.payload } };
+    Object.assign(unknown.payload, { receipt: { ...receipt.payload.receipt, status: "unknown" } });
+    await expect(ledgerPorts([submitEvent(1, reference), unknown])).rejects.toThrow(
+      "status is not a known receipt status",
+    );
+  });
+
+  it("still returns counts without a store and reports unreadable intents without faking labels", async () => {
+    const reference: TranscriptReference = {
+      id: "fnv1a64:0000000000000000",
+      mediaType: "application/vnd.volli.ui-message+json",
+      digest: "fnv1a64:0000000000000000",
+    };
+    const ports = await ledgerPorts([submitEvent(1, reference), receiptEvent(2, "unreconciled")]);
+    await expect(
+      readSessionTranscriptTail(ports, { sessionId: "session-1", limit: 1 }),
+    ).resolves.toEqual({
+      entries: [],
+      messages: 1,
+      unreadable: 0,
+      turns: 0,
+      turnDepth: 1,
+    });
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    await expect(
+      readSessionTranscriptTail(
+        { ...ports, readArtifact: (requested) => artifacts.read(requested) },
+        { sessionId: "session-1", limit: 1 },
+      ),
+    ).resolves.toEqual({ entries: [], messages: 1, unreadable: 1, turns: 0, turnDepth: 1 });
   });
 });

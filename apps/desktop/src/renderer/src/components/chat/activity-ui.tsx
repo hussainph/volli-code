@@ -46,6 +46,7 @@ import {
   activityDescriptor,
   bundleNeedsAttention,
   bundleSummary,
+  compactSignature,
   describeActivity,
   reasoningBody,
   reasoningStatus,
@@ -59,13 +60,30 @@ import {
   type SummarySegment,
   type SummaryTone,
 } from "@volli/session-presentation";
-import { BrowserTabCard } from "@renderer/components/browser/browser-tab-card";
+import {
+  BrowserCardHostContext,
+  BrowserPicture,
+  BrowserTabCard,
+  useBrowserPicture,
+} from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
 import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
 
 import { TokenText, useHighlightedLines, useOnScreen } from "./tool-output-highlight";
+import { RunningBashCall, RunningBashControl, RunningBashReason } from "./running-bash-control";
+import {
+  codeModeImageContent,
+  codeModeImageDataUrl,
+  type CodeModeContent,
+} from "./code-mode-output-model";
+
+/** The same cached screenshot reader, with the owning Session's host transport. */
+export const CodeModePictureHostContext = React.createContext<Pick<
+  import("@renderer/components/browser/browser-api").BrowserApi,
+  "picture"
+> | null>(null);
 
 /* ------------------------------------------------------------------- motion */
 
@@ -407,7 +425,20 @@ function ObjectText({ value }: { value: string }) {
  * same immutable objects, so this is where re-rendering actually stops. Every
  * settled row above the live one skips entirely while a turn streams.
  */
-export const ToolRow = React.memo(function ToolRow({
+export const ToolRow = React.memo(function ToolRow(props: {
+  part: DynamicToolUIPart;
+  onOpenFile?(path: string): void;
+  onOpenSession?(sessionId: string): void;
+  className?: string;
+}) {
+  return (
+    <RunningBashCall part={props.part}>
+      <ToolRowContent {...props} />
+    </RunningBashCall>
+  );
+});
+
+const ToolRowContent = React.memo(function ToolRowContent({
   part,
   onOpenFile,
   onOpenSession,
@@ -432,7 +463,9 @@ export const ToolRow = React.memo(function ToolRow({
   // A bash command always earns its own disclosure: the header is one line by
   // design, while the body is the untruncated command beside whatever it
   // printed. Other rows only need a disclosure when their presenter has detail.
-  const expandable = row.detail !== null || row.command !== null || card !== null;
+  const imageContent = codeModeImageContent(part);
+  const expandable =
+    row.detail !== null || row.command !== null || card !== null || imageContent !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
@@ -447,6 +480,12 @@ export const ToolRow = React.memo(function ToolRow({
         ) : null}
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <RowActions row={row} />
+        {movedBashReceipt(part) ? (
+          <span className="shrink-0 text-label text-muted-foreground">Moved to background</span>
+        ) : null}
+        {row.kind === "run-command" && row.status === "running" ? (
+          <RunningBashControl key={part.toolCallId} part={part} />
+        ) : null}
         {row.meta ? (
           <span
             className={cn("shrink-0 font-mono tabular-nums", TONE_CLASS[row.metaTone])}
@@ -456,6 +495,7 @@ export const ToolRow = React.memo(function ToolRow({
           </span>
         ) : null}
       </div>
+      <RunningBashReason />
       {deniedReason ? (
         <p
           data-slot="refusal-explanation"
@@ -467,17 +507,55 @@ export const ToolRow = React.memo(function ToolRow({
       {expandable ? (
         <Disclosure open={open}>
           {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
-          <ToolDetail
-            kind={row.kind}
-            command={row.command}
-            detail={row.detail}
-            openPath={row.openPath}
-          />
+          {imageContent !== null ? (
+            <CodeModeOutput input={part.input} content={imageContent} />
+          ) : (
+            <ToolDetail
+              kind={row.kind}
+              command={row.command}
+              detail={row.detail}
+              openPath={row.openPath}
+            />
+          )}
         </Disclosure>
       ) : null}
     </div>
   );
 });
+
+/** Recognize the complete durable plain-text receipt, not a phrase in command output.
+ * This is presentation only: the receipt never authorizes a move or a shell lookup.
+ */
+function movedBashReceipt(part: DynamicToolUIPart): boolean {
+  if (
+    part.state !== "output-available" ||
+    part.preliminary === true ||
+    activityDescriptor(part).nativeToolName !== "bash"
+  )
+    return false;
+  const output: unknown = part.output;
+  if (
+    typeof output !== "object" ||
+    output === null ||
+    !("content" in output) ||
+    !Array.isArray(output.content) ||
+    output.content.length !== 1
+  )
+    return false;
+  const first: unknown = output.content[0];
+  if (
+    typeof first !== "object" ||
+    first === null ||
+    !("type" in first) ||
+    first.type !== "text" ||
+    !("text" in first) ||
+    typeof first.text !== "string"
+  )
+    return false;
+  return /^Moved command to background shell [^\s.]+\.\nIt keeps running\. A notice will arrive when it exits; use shell_output to read it or shell_kill to end it\.\n(?:Output so far:\n|No output so far\.(?:\n|$))/.test(
+    first.text,
+  );
+}
 
 const OBJECT_LINK_CLASS =
   "min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -667,6 +745,60 @@ function DetailFrame({
     <div ref={ref} className={cn("my-1", DETAIL_FRAME, className)}>
       {children}
     </div>
+  );
+}
+
+function CodeModeOutput({ input, content }: { input: unknown; content: CodeModeContent[] }) {
+  const signature = compactSignature(input);
+  return (
+    <>
+      {signature === null ? null : (
+        <DetailFrame className="whitespace-pre-wrap text-muted-foreground/70">
+          {signature}
+        </DetailFrame>
+      )}
+      {content.map((block, index) =>
+        block.type === "text" ? (
+          // Suppress only framing equal to a structurally bound host caption.
+          // The mapper may insert an N−1 fallback between the framing and image.
+          content
+            .slice(index + 1, index + 3)
+            .some((next) => next.type === "image" && next.caption === block.text) ? null : (
+            // Program text remains plain output, even when it mimics host framing.
+            // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate blocks are valid.
+            <DetailFrame key={index} className="whitespace-pre-wrap text-muted-foreground">
+              {block.text}
+            </DetailFrame>
+          )
+        ) : (
+          // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate images are valid.
+          <CodeModeImage key={index} block={block} />
+        ),
+      )}
+    </>
+  );
+}
+
+function CodeModeImage({ block }: { block: Extract<CodeModeContent, { type: "image" }> }) {
+  const host = React.useContext(BrowserCardHostContext);
+  const pictureApi = React.useContext(CodeModePictureHostContext);
+  const picture = useBrowserPicture(
+    pictureApi ?? host?.api ?? null,
+    typeof block.picture === "string" ? block.picture : null,
+  );
+  const dataUrl = codeModeImageDataUrl(block);
+  return (
+    <figure className="my-1">
+      <BrowserPicture
+        alt="Image returned by Code Mode"
+        state={dataUrl === null ? picture : { kind: "ready", dataUrl }}
+      />
+      {block.caption === undefined ? null : (
+        <figcaption className="mt-1 whitespace-pre-wrap text-ui text-muted-foreground">
+          {block.caption}
+        </figcaption>
+      )}
+    </figure>
   );
 }
 
@@ -921,9 +1053,10 @@ export const ActivityBundle = React.memo(
     const list = (
       <div className="space-y-1">
         {rows.map((row) => (
-          <BundleRowView
+          <RegisteredBundleRow
             key={row.key}
             row={row}
+            open={summary.length === 0 || open}
             onOpenFile={onOpenFile}
             onOpenSession={onOpenSession}
           />
@@ -953,15 +1086,14 @@ export const ActivityBundle = React.memo(
           <Summary segments={summary} />
           <Caret open={open} pinned />
         </button>
-        <Disclosure open={open}>
-          {/* No `overscroll-contain`: at the bundle's edges the wheel must chain
+        {/* Call owners stay mounted; only each row's disclosed UI unmounts.
+            No `overscroll-contain`: at the bundle's edges the wheel must chain
               to the transcript, or the feed reads as dead under the cursor for
               the whole height of the open bundle (VC-32). And no bottom scrim
               over the window — it covered the last tool call whole, including at
               the end of the scroll: see "NO SCRIM AT THE BOTTOM OF A CAPPED
               WINDOW" above (VC-60). */}
-          <div className={cn(BUNDLE_CAP, "overflow-auto")}>{list}</div>
-        </Disclosure>
+        <div className={cn(open && BUNDLE_CAP, open && "overflow-auto")}>{list}</div>
       </div>
     );
   },
@@ -995,6 +1127,38 @@ function sameBundleRows(previous: readonly BundleRow[], next: readonly BundleRow
     return other.part === row.part;
   });
 }
+
+const RegisteredBundleRow = React.memo(
+  function RegisteredBundleRow({
+    row,
+    open,
+    onOpenFile,
+    onOpenSession,
+  }: {
+    row: BundleRow;
+    open: boolean;
+    onOpenFile?(path: string): void;
+    onOpenSession?(sessionId: string): void;
+  }) {
+    const content = (
+      <Disclosure open={open}>
+        <BundleRowView row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
+      </Disclosure>
+    );
+    return row.kind === "tool" ? (
+      <RunningBashCall part={row.part}>{content}</RunningBashCall>
+    ) : (
+      content
+    );
+  },
+  // Segmentation creates fresh row wrappers, not fresh parts. Keep settled call
+  // owners from rendering or registering again while another call streams.
+  (previous, next) =>
+    previous.open === next.open &&
+    previous.onOpenFile === next.onOpenFile &&
+    previous.onOpenSession === next.onOpenSession &&
+    sameBundleRows([previous.row], [next.row]),
+);
 
 const BundleRowView = React.memo(function BundleRowView({
   row,

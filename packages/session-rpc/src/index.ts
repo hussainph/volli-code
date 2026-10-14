@@ -204,7 +204,10 @@ type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["m
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
 
 export type RendererSessionCommand =
-  | Pick<Extract<SessionClientCommand, { kind: "message.submit" }>, "kind" | "message" | "delivery">
+  | Pick<
+      Extract<SessionClientCommand, { kind: "message.submit" }>,
+      "kind" | "message" | "delivery" | "settle"
+    >
   | Extract<
       SessionClientCommand,
       | { kind: "session.stop" }
@@ -355,6 +358,10 @@ export interface SessionRouterHandlers extends SignInRouterHandlers {
   readonly "session.history": HostHandler<
     { sessionId: string; before: number },
     SessionHistoryPage
+  >;
+  readonly "session.picture": HostHandler<
+    { sessionId: string; pictureId: string; offset?: number },
+    { data: string | null; mimeType: string | null; nextOffset: number | null }
   >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
@@ -717,6 +724,7 @@ const experimentIdSchema = z.enum(EXPERIMENTS.map(({ id }) => id));
 const experimentFlagSchema = z.object({
   enabled: z.boolean(),
   source: z.enum(["default", "storage", "environment"]),
+  visible: z.boolean().optional(),
 });
 const experimentSnapshotSchema = z.object(
   Object.fromEntries(EXPERIMENTS.map(({ id }) => [id, experimentFlagSchema])) as Record<
@@ -869,6 +877,9 @@ const commandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("message.submit"),
     message: uiMessageSchema,
     delivery: z.enum(["queue", "steer", "replace"]).optional(),
+    // Runtime-only wait boundary, not part of durable intent. Without this
+    // codec field the client asks for opening acceptance but waits for finish.
+    settle: z.enum(["turn", "opened"]).optional(),
     model: z.object({ providerId: nonEmptyString, modelId: nonEmptyString }).nullable().optional(),
     agent: nullableString.optional(),
     variant: nullableString.optional(),
@@ -1523,6 +1534,27 @@ export function createSessionRouter() {
         .query(async ({ ctx, input }) =>
           rendererHistoryPage(await ctx.handlers["session.history"](input, ctx.call)),
         ),
+      // Pictures use their own optional feature and never enlarge transcript frames.
+      picture: workspaceProcedure(
+        "session.picture",
+        z.object({
+          sessionId: nonEmptyString,
+          pictureId: nonEmptyString,
+          offset: z.number().int().nonnegative().multipleOf(3).optional(),
+        }),
+        sessionResource,
+      )
+        .output(
+          z.object({
+            data: z
+              .string()
+              .max(256 * 1024)
+              .nullable(),
+            mimeType: z.string().nullable(),
+            nextOffset: z.number().int().nonnegative().nullable(),
+          }),
+        )
+        .query(({ ctx, input }) => ctx.handlers["session.picture"](input, ctx.call)),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per

@@ -920,7 +920,12 @@ export function createSessions(options: SessionsOptions): Sessions {
     const mcpTools =
       input.parentSessionId === undefined
         ? (options.toolSurface.resolveMcp?.(input.projectId) ?? [])
-        : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []);
+        : ((await options.toolSurface.recordedMcp?.(input.parentSessionId)) ?? []).filter(
+            // A parent may refresh between these two reads. Its definitions
+            // are additions-only; retain only the IDs in the captured bound so
+            // a child's birth never records an unmatched MCP definition.
+            (tool) => within?.includes(tool.providerName) === true,
+          );
     const classify = (await options.toolSurface.resolveClassify?.(input.projectId)) ?? false;
 
     const createIdentity = () =>

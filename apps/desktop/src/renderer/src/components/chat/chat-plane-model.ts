@@ -329,6 +329,7 @@ export function heldStrip(
     rows.push({
       id: entry.id,
       text: entry.text,
+      ...(entry.state === "unsent" ? { localUnsent: true as const } : {}),
       ...(entry.resources === undefined ? {} : { resources: entry.resources }),
       ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
     });
@@ -455,6 +456,8 @@ export interface SessionBlockerState {
   /** The harness's own wording. It qualifies the headline; it is never it. */
   detail: string | null;
   tone: "error" | "waiting" | "unconfigured";
+  /** Runtime facts and failed sends belong in the conversation, not setup chrome. */
+  placement?: "timeline";
   /**
    * Null where nothing on this surface can fix it. A button that cannot help is
    * worse than no button: it spends the reader's one attempt at recovery and
@@ -536,9 +539,9 @@ export function terminalCompanionTabId(
 /**
  * What actually stops you typing, and what to do about it — nothing else.
  *
- * It sits on the composer rather than in the transcript because it is about
- * whether you can write, not about what happened in the conversation, and a
- * failure that scrolls away with the history is one nobody can act on.
+ * Setup sits on the composer. Runtime failures and waits are conversation
+ * facts, so their placement is the transcript tail, including before any
+ * model output exists.
  *
  * Four sources, in the order they answer:
  *
@@ -584,6 +587,7 @@ export function sessionBlocker(
         message: input.sessionError,
         detail: null,
         action: retry,
+        placement: "timeline",
       },
       dismissKey,
       () => {
@@ -636,14 +640,16 @@ export function sessionBlocker(
     revealedSessionAttention(input.attention.active, input.revealedAttentionId) ??
     input.attention.primary;
   if (attention) {
-    return asked && answeredByCard(attention.kind)
-      ? null
-      : attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss, {
-          scheduled: input.scheduledResume,
-          now: input.now,
-          schedule: acts.scheduleResume,
-          cancel: acts.cancelScheduledResume,
-        });
+    if (asked && answeredByCard(attention.kind)) return null;
+    return {
+      ...attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss, {
+        scheduled: input.scheduledResume,
+        now: input.now,
+        schedule: acts.scheduleResume,
+        cancel: acts.cancelScheduledResume,
+      }),
+      placement: "timeline",
+    };
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
@@ -731,8 +737,7 @@ function attentionDismissKey(attention: SessionAttention): string {
 }
 
 /**
- * A provider-owned recovery: where to fix it, and the exact retry of the run it
- * broke, beside it.
+ * A provider-owned recovery: one route to fix sign-in or configuration.
  *
  * A signed-out provider reaches this surface twice — as the harness's own
  * `auth_required` after a run died, and as the Session's pinned model reading
@@ -742,16 +747,14 @@ function attentionDismissKey(attention: SessionAttention): string {
  * Board chat and a Ticket chat get the same answer and neither is sent to a
  * terminal to finish a Settings task.
  *
- * That is also why Retry is unconditional here. It used to be withheld from a
- * Board chat, on the honest ground that retrying a run whose sign-in could
- * not be reached was offering a button that could not work. The sign-in is
- * reachable from both now, so the run is retryable from both.
+ * Retry cannot repair an expired account or invalid configuration. The row
+ * offers Open settings alone instead of asking the person to diagnose which
+ * of two competing recoveries will work.
  */
 function providerRecovery(input: {
   message: string;
   detail: string | null;
   settings: SessionBlockerAction;
-  retryRuntime: SessionBlockerAction;
   dismissKey: string;
   dismiss(): void;
 }): SessionBlockerState {
@@ -759,8 +762,7 @@ function providerRecovery(input: {
     {
       message: input.message,
       detail: input.detail,
-      action: input.settings,
-      secondaryAction: input.retryRuntime,
+      action: { ...input.settings, label: "Open settings" },
     },
     input.dismissKey,
     input.dismiss,
@@ -768,8 +770,8 @@ function providerRecovery(input: {
 }
 
 /**
- * One line and one recovery action per attention kind, except Pi auth/config:
- * its existing terminal handoff and exact Retry are intentionally adjacent.
+ * One line and one immediate recovery per attention kind. Scheduled resumes
+ * retain their existing explicit scheduling/cancellation controls.
  *
  * The switch is total over the union and has no `default`: a kind added later
  * has to be answered here, not silently absorbed into whichever branch was
@@ -779,11 +781,8 @@ function providerRecovery(input: {
  * also carries a local Dismiss, which hides the current report without claiming
  * it is repaired.
  *
- * - **Settings + Retry** — Pi auth/configuration recovery sends you to Model
- *   Access, where signing in now happens, and then retries the exact failed run
- *   without submitting the user's message again. Both halves are offered to
- *   every Session: the sign-in no longer depends on a manual Ticket terminal
- *   being there to hand off to, so neither does the Retry that follows it.
+ * - **Open settings** — Pi auth/configuration recovery sends you to Model
+ *   Access, where signing in now happens, without a competing Retry.
  * - **Retry** — `adapter_disconnected` and `rate_limited`. The first is a
  *   connection to re-establish, which is exactly what `recover` does. A rate
  *   limit gets one because the wait is the whole fix; the provider's own time is
@@ -826,7 +825,6 @@ function attentionBlocker(
           : "Sign-in required",
         detail,
         settings,
-        retryRuntime,
         dismissKey,
         dismiss: dismissAttention,
       });
@@ -835,7 +833,6 @@ function attentionBlocker(
         message: "Configuration invalid",
         detail,
         settings,
-        retryRuntime,
         dismissKey,
         dismiss: dismissAttention,
       });
@@ -1028,6 +1025,8 @@ export function sameQueuedMessage(left: QueuedMessage, right: QueuedMessage): bo
     left.resources === right.resources &&
     left.attachments === right.attachments &&
     left.commandId === right.commandId &&
-    left.queueState === right.queueState
+    left.queueState === right.queueState &&
+    left.localUnsent === right.localUnsent &&
+    left.afterCurrentStep === right.afterCurrentStep
   );
 }

@@ -5,6 +5,7 @@ import {
   requireExperimentId,
   resolveExperiments,
   serializeExperimentUpdate,
+  type ExperimentBuildKind,
   type ExperimentId,
   type ExperimentSnapshot,
   type ExperimentValues,
@@ -30,6 +31,7 @@ export class ExperimentalSettings {
   constructor(
     private readonly db: Database.Database | null,
     environment: string | undefined,
+    private readonly buildKind: ExperimentBuildKind,
     private readonly now: () => number = Date.now,
   ) {
     const parsed = parseExperimentEnvironment(environment);
@@ -43,7 +45,7 @@ export class ExperimentalSettings {
   }
 
   snapshot(): ExperimentSnapshot {
-    return resolveExperiments(this.#stored, this.#environment);
+    return resolveExperiments(this.#stored, this.#environment, this.buildKind);
   }
 
   isEnabled(id: ExperimentId): boolean {
@@ -55,6 +57,9 @@ export class ExperimentalSettings {
     requireExperimentId(id);
     if (typeof enabled !== "boolean") throw new Error("Experiment enabled must be a boolean");
     if (this.#environment.includes(id)) throw new Error("Experiment is set by environment");
+    if (this.snapshot()[id].visible === false) {
+      throw new Error(`Experiment ${id} is unavailable on ${this.buildKind} builds`);
+    }
     const db = this.db;
     if (db === null) throw new Error("Experimental settings storage is unavailable");
     const stored = withTransaction(db, () => {
@@ -71,7 +76,7 @@ export class ExperimentalSettings {
   }
 }
 
-let current = new ExperimentalSettings(null, undefined);
+let current = new ExperimentalSettings(null, undefined, "stable");
 
 /** Bind once at the composition root, after the database opens and before feature consumers. */
 export function installExperimentalSettings(settings: ExperimentalSettings): () => void {

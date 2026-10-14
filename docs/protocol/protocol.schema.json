@@ -113,6 +113,9 @@
       "session.listing",
       "session.listingForTicket"
     ],
+    "sessions.pictures": [
+      "session.picture"
+    ],
     "sessions.queue": [
       "session.cancelQueued",
       "session.editQueued",
@@ -4924,6 +4927,48 @@
         "output": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
           "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "shells.moveToBackground": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "sessionId": {
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+              "type": "string"
+            },
+            "toolCallId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sessionId",
+            "toolCallId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "shellId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "shellId"
+          ],
+          "type": "object"
         },
         "outputValidation": "network-and-tests",
         "voidOutput": false
@@ -13648,6 +13693,13 @@
                         }
                       ]
                     },
+                    "settle": {
+                      "enum": [
+                        "turn",
+                        "opened"
+                      ],
+                      "type": "string"
+                    },
                     "variant": {
                       "anyOf": [
                         {
@@ -16313,6 +16365,45 @@
                             "required": [
                               "kind",
                               "input"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "added": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "changed": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "session.tools.refreshed",
+                                "type": "string"
+                              },
+                              "trigger": {
+                                "enum": [
+                                  "cold-turn",
+                                  "warm-turn",
+                                  "compaction",
+                                  "model-switch",
+                                  "code-mode"
+                                ],
+                                "type": "string",
+                                "x-volli-open-enum": true
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "trigger",
+                              "added",
+                              "changed"
                             ],
                             "type": "object"
                           },
@@ -20536,6 +20627,83 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "session.picture": {
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "properties": {
+            "offset": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "multipleOf": 3,
+              "type": "integer"
+            },
+            "pictureId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "sessionId": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "sessionId",
+            "pictureId"
+          ],
+          "type": "object"
+        },
+        "kind": "query",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "anyOf": [
+                {
+                  "maxLength": 262144,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mimeType": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "nextOffset": {
+              "anyOf": [
+                {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "data",
+            "mimeType",
+            "nextOffset"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "session.projection": {
         "input": {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -22376,6 +22544,10 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "afterCurrentStep": {
+                        "const": true,
+                        "type": "boolean"
+                      },
                       "commandId": {
                         "type": "string"
                       },
@@ -24197,6 +24369,45 @@
                             "required": [
                               "kind",
                               "input"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "added": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "changed": {
+                                "items": {
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              "kind": {
+                                "const": "session.tools.refreshed",
+                                "type": "string"
+                              },
+                              "trigger": {
+                                "enum": [
+                                  "cold-turn",
+                                  "warm-turn",
+                                  "compaction",
+                                  "model-switch",
+                                  "code-mode"
+                                ],
+                                "type": "string",
+                                "x-volli-open-enum": true
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "trigger",
+                              "added",
+                              "changed"
                             ],
                             "type": "object"
                           },
@@ -28258,6 +28469,10 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "afterCurrentStep": {
+                        "const": true,
+                        "type": "boolean"
+                      },
                       "commandId": {
                         "type": "string"
                       },
@@ -30045,6 +30260,45 @@
                           "required": [
                             "kind",
                             "input"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "added": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "changed": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "kind": {
+                              "const": "session.tools.refreshed",
+                              "type": "string"
+                            },
+                            "trigger": {
+                              "enum": [
+                                "cold-turn",
+                                "warm-turn",
+                                "compaction",
+                                "model-switch",
+                                "code-mode"
+                              ],
+                              "type": "string",
+                              "x-volli-open-enum": true
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "trigger",
+                            "added",
+                            "changed"
                           ],
                           "type": "object"
                         },
@@ -34119,6 +34373,45 @@
                         {
                           "additionalProperties": false,
                           "properties": {
+                            "added": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "changed": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "kind": {
+                              "const": "session.tools.refreshed",
+                              "type": "string"
+                            },
+                            "trigger": {
+                              "enum": [
+                                "cold-turn",
+                                "warm-turn",
+                                "compaction",
+                                "model-switch",
+                                "code-mode"
+                              ],
+                              "type": "string",
+                              "x-volli-open-enum": true
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "trigger",
+                            "added",
+                            "changed"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
                             "kind": {
                               "const": "session.signaled",
                               "type": "string"
@@ -36658,6 +36951,10 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "afterCurrentStep": {
+                        "const": true,
+                        "type": "boolean"
+                      },
                       "commandId": {
                         "type": "string"
                       },
@@ -37200,6 +37497,9 @@
                     "environment"
                   ],
                   "type": "string"
+                },
+                "visible": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -37256,6 +37556,9 @@
                     "environment"
                   ],
                   "type": "string"
+                },
+                "visible": {
+                  "type": "boolean"
                 }
               },
               "required": [

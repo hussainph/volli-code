@@ -23,7 +23,7 @@
  * layer that reaches for a Session field does not compile.
  */
 
-import { promptResourceBlock, verbToolWireName } from "@volli/shared";
+import { promptResourceBlock, routeOf, verbToolWireName } from "@volli/shared";
 import type {
   PromptResource,
   RuntimeBrief,
@@ -200,7 +200,13 @@ const CODE_MODE_PARAGRAPH = [
 ].join("\n");
 
 function executionLayer(role: RuntimeSessionRole, tools: RuntimeToolBundle): string {
-  const codeMode = tools.codeMode?.nudge === true ? `\n\n${CODE_MODE_PARAGRAPH}` : "";
+  // The birth marker protects old Cache Prefixes while new Sessions no longer
+  // invite bash calls their programs cannot make (VC-748).
+  const paragraph =
+    tools.codeMode?.descriptionVersion === 2
+      ? CODE_MODE_PARAGRAPH.replace("a loop of bash or read calls", "a loop of read calls")
+      : CODE_MODE_PARAGRAPH;
+  const codeMode = tools.codeMode?.nudge === true ? `\n\n${paragraph}` : "";
   if (role === "subagent" || !(tools.verbs ?? []).includes("session.delegate")) {
     return `${EXECUTION_CORE}${codeMode}`;
   }
@@ -571,22 +577,44 @@ export function composeToolSurfaceBlock(
   tools: RuntimeToolBundle,
 ): string {
   const verbs = tools.verbs ?? [];
+  const hasRoutedVerbs = verbs.some((verb) => routeOf(tools.codeMode, verb) !== "direct");
   const named = verbs.map((verb) => {
     const wire = verbToolWireName(verb, tools.mcpManagementNames);
     // A key with no projection cannot reach a tool array, so it cannot reach
     // here either — `sessionToolBindings` would already have refused to build
     // the surface. Printing the bare key is the honest fallback rather than a
     // second throw on a path the first one owns.
+    const route = routeOf(tools.codeMode, verb);
+    const name = wire ?? verb;
+    if (route === "hidden") return `  ${verb} — hidden (unavailable)`;
+    if (route === "code" || route === "deferred") {
+      return `  ${verb} — ${name} through codemode only${route === "deferred" ? "; find it with searchTools() and describeTool()" : ""}`;
+    }
+    if (route === "both") return `  ${verb} — call it as ${name}, or through codemode`;
     return wire === undefined ? `  ${verb}` : `  ${verb} — call it as ${wire}`;
   });
   return [
     `--- BEGIN ${TOOL_SURFACE_DELIMITER} ---`,
     ...(named.length === 0
       ? [`${TOOL_SURFACE_SUBJECT[role]} holds no Volli verbs as named tools.`]
-      : [`${TOOL_SURFACE_SUBJECT[role]} holds these Volli verbs as named tools:`, ...named]),
-    ...(named.length === 0 ? [] : ["Use any of them whenever the work calls for it."]),
+      : [
+          `${TOOL_SURFACE_SUBJECT[role]} holds these Volli verbs${hasRoutedVerbs ? " (routes below)" : " as named tools"}:`,
+          ...named,
+        ]),
+    ...(verbs.some((verb) => routeOf(tools.codeMode, verb) !== "hidden")
+      ? [
+          hasRoutedVerbs
+            ? "Use the available verbs through their listed routes whenever the work calls for it."
+            : "Use any of them whenever the work calls for it.",
+        ]
+      : []),
     "Membership was fixed when this Session was created and does not change while",
-    "it runs; a Volli verb not named here is not in this Session's tool array, so",
+    ...(!hasRoutedVerbs
+      ? ["it runs; a Volli verb not named here is not in this Session's tool array, so"]
+      : [
+          "it runs. Code-only verbs are not direct named tools; hidden verbs are unavailable.",
+          "A Volli verb not listed here is not available to this Session, so",
+        ]),
     "do not reach for an equivalent another way. Where the `volli` CLI still offers",
     "a verb, the shell remains its door.",
     `--- END ${TOOL_SURFACE_DELIMITER} ---`,

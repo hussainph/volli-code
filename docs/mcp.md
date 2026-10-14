@@ -11,24 +11,29 @@ configuration, credential routing, bounded calls and frozen Session definitions.
 
 ## The one rule everything else follows
 
-**A Session's tool list is frozen when the Session is created.**
+**A Session's tools gain additions, never removals or renames.**
 
-It is resolved once, at birth, and written into a durable `tool-surface` record.
-Reattaching a Session replays that exact record or fails; it never re-derives
-one. So:
+The birth `tool-surface` record stays immutable. Additive refresh facts record
+new executable tools and the last-cold provider declaration epoch separately:
 
-- Installing a server, enabling it, or selecting more of its tools changes what
-  the **next Session created** is handed. It changes nothing about any Session
-  that already exists, including the one that made the call.
-- Disabling a server or deselecting a tool likewise cannot take a tool away from
-  a Session that already has it.
-- **Deleting** a server is the exception, and it is destructive in a way the
-  others are not. A Session born holding one of its tools needs that server's
-  transport in order to reattach. With the configuration gone, reattachment
-  **fails**. See [Recovering](#recovering-from-a-failed-or-regretted-change).
+- Installing, enabling or selecting tools updates new root Sessions and makes
+  additions eligible for existing Sessions, including the caller.
+- Code-Mode-only additions become usable before the next program. Their
+  namespace/count announcement waits for a cold cache, compaction or model switch
+  unless the model supports mid-conversation system messages. Other additions
+  wait for those same boundaries. Warm declarations remain byte-identical, including
+  on reattachment. Each refresh has an expandable quiet transcript row.
+- A delegated helper inherits its parent's current recorded MCP definitions,
+  including refreshed additions, never the project's later selection. Running
+  delegates refresh by the same rules, bounded by their parent.
+- Disabling or deselecting tools does not remove an existing name or definition.
+  A removed server's tools remain named and return an unavailable error; restoring
+  its original ID restores calling. Older app builds may require that configuration
+  to reattach. See [Recovering](#recovering-from-a-failed-or-regretted-change).
 
-Every verb's result repeats the relevant half of this, because a model that has
-just installed a server will otherwise try to call its tools in the same turn.
+Older builds skip refresh facts and use the immutable birth surface. Existing
+MCP schemas, routes and descriptions remain frozen; arbitrary upstream changes
+are not assumed backward-compatible.
 
 ## Configuring a server by hand
 
@@ -393,8 +398,8 @@ server advertises.
 **A running Session picks up a sign-in.** Tokens are read on every request, so
 a Session already running uses a refreshed token, or the token from a sign-in
 a person just completed, on its very next call, without being reattached. Its
-frozen tool list does not change: signing in, like installing, affects which
-tools are offered only to Sessions created afterwards. A Session signs in only
+tool names do not change just because a token changed. Installing or selecting
+additional tools follows the cache-safe refresh rules above. A Session signs in only
 to the address it was started with: if the stored server has since been
 pointed elsewhere, its sign-in question is answered "this server's address
 changed since the Session started; review it in Settings" and neither address
@@ -573,16 +578,17 @@ tool works without it, and the main-process log says why. An output schema only
 describes the structured half of a result (see
 [What a call returns](#what-a-call-returns)); the model never sees it.
 
-### You removed a server and older Sessions now fail to reattach
+### You removed a server and its retained tools are unavailable
 
-`serversForFrozenMcpTools` throws when a frozen tool's server is gone, so those
-Sessions cannot reattach. **Re-add the server under the same id** — the removal's
-audit record contains the transport needed to do it — and reattachment works
-again.
+Sessions keep the tool names and can reattach, but calls return a named
+unavailable error. **Re-add the server under the same id** — the removal's audit
+record contains its transport — to restore calling. Pre-refresh app builds may
+also need that configuration restored before they can reattach.
 
 To avoid this entirely, prefer **`server_disable`**. It keeps the configuration, so
-existing Sessions still reattach, while Sessions created afterwards are not
-offered the tools. That is what most callers actually mean.
+existing Sessions still reattach, while new root Sessions are not offered the
+tools. A helper delegated from a Session that already holds them still inherits
+them. That is what most callers actually mean.
 
 ## Where installs are recorded
 
@@ -699,8 +705,8 @@ A server is **large** when it has more than 20 tools
 (`LARGE_MCP_SERVER_TOOLS`) or its declarations are estimated past 3,000 tokens
 (`LARGE_MCP_SERVER_TOKENS`, at four characters a token). A large server's tools
 are routed `deferred` **whatever the model's mode**: a Session whose mode is
-`off` still gets `codemode`, for its large servers alone, with every other tool
-declared as before. Smaller servers follow the mode — `both` declares and lists
+`off` still gets `codemode`, with every other tool declared as before and its
+callable tools also available from programs. Smaller servers follow the mode — `both` declares and lists
 them, `only` routes each server's tools `code` as one group. Measured at 120
 tools (o200k, `bench/codemode/prompt-cost.bench.test.ts`): 17,297 declaration
 tokens declared directly against 2,217 deferred.
@@ -709,9 +715,67 @@ A nested call from a program reaches the server through the same
 `RuntimeMcpPort`, the same per-server bound and the same trust notice as a
 direct call; a program's output after any MCP call comes back inside
 untrusted-content markers. Routes are frozen with the Session like the tool
-definitions, so changing the setting, or a server growing past the threshold,
-changes only Sessions created afterwards. With the Code Mode switch off, no new
+definitions. Changing the setting or a server growing past the threshold never
+reroutes an existing tool; new births and newly acquired additions use the
+current routing rules. With the Code Mode switch off, no new
 Session gets routes at all and every tool is declared, as before.
+
+### Programs and images (VC-748)
+
+New Sessions with `codemode` can call every held tool except `execute` (wire
+name `bash`), `ask_user`, `request_secret`, `todo_write`, `shell_start`,
+`shell_output` and `shell_kill`; `codemode` cannot call itself. This applies
+in `off` with a large MCP server, `both` and `only`. Each nested call still
+uses the direct-call checks. Model defaults do not change.
+
+Birth routing and read-time admission are deliberately separate:
+`defaultToolRoute` excludes bash for new records; `isCodeCallable` honors a
+legacy bash route of `both` or `code`. Safety exclusions apply even to damaged
+records. Existing Sessions keep their recorded routes. New births carry
+`descriptionVersion: 2`; older records keep the pre-0.2.2 wording and
+image-omission behavior until a compatible cold refresh upgrades Code Mode.
+Warm refreshes never change that declaration. This marker stays durable on the
+host but is scrubbed from renderer and public projections. N−1 ignores it. Under `only`, a group containing bash stays declared whole. Screenshots, tab holds and verbs newly callable in this release also
+stay `both`, and keep their groups declared whole: 0.2.1 and 0.2.2-canary.1
+cannot call them from programs but can still call them directly. This ceiling
+can be removed when the N−1 floor passes this release.
+
+Nested MCP results are shaped as
+`{ text, structuredContent?, isError, images, omittedImages }`. `images`
+contains opaque handles, not image bytes; `omittedImages` counts images the
+program could not obtain. Browser screenshots also carry handles. The output
+schemas rendered by `describeTool()` give each tool's exact shape.
+
+A program attaches a picture with `image()`, or by returning the result that
+holds it. Image bytes remain host-side, outside the QuickJS heap:
+
+```js
+const shot = await tools.browser_screenshot({ tabId: "tab-1" }); // a tab id from browser_tabs
+image(shot.images[0]);        // attaches the first picture
+image(shot.images[0].handle); // attaches the same picture, given its handle string
+return shot;                  // attaches every picture in the result
+```
+
+`text(shot)` prints the result as text and attaches no picture. An older
+Session gains program images when its Code Mode declaration is upgraded at a
+cold turn, compaction or model switch; a warm turn keeps the original behavior.
+
+Images follow text, in emission/return order, including repeated emissions,
+with at most 8 images and 16 MiB of base64 data per run (the direct MCP result
+bounds). The header names images left out, including capture omissions restored
+from the replay journal. The existing 4 MiB replay journal also counts held
+image payloads; a replay stops explicitly rather than repeating a completed
+call whose image was too large to keep. Each untrusted image has a text line
+naming its source call and warning that it is third-party content, in addition
+to the run's untrusted envelope. The transcript binds that host-authored
+framing to the picture as a distinct caption; program-printed text cannot
+create a caption. Model image-input support, transcript persistence
+and storage follow the direct-image path, not a second policy. Transcript
+images use the existing screenshot store (400 pictures / 30 days); bounded
+Session-owned picture reads resolve them without placing base64 into activity
+frames. Reload and replay retain references, including images emitted before
+a program error. An older card sees a named image fallback instead of corrupt
+base64; reopening in a newer build displays the picture while it is retained.
 
 The user guide is `apps/docs/src/content/docs/guides/code-mode.mdx`.
 Executable measurement harnesses live in `packages/agent-runtime/bench/codemode/`.

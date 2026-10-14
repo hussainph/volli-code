@@ -859,18 +859,15 @@ export function mcpEndpointSecretRefusal(): string {
  * The sentence a caller must read before a server is removed (VC-380).
  *
  * Removal is worse than it looks, and the warning says the part a caller could
- * not guess: a Session's MCP tools are frozen at its birth, and
- * `serversForFrozenMcpTools` THROWS when a frozen tool's server is gone — so
- * deleting a row breaks reattachment for older Sessions that were using it.
- * Disabling leaves the row in place and only changes what NEW Sessions get,
- * which is what most callers actually mean, so it is named here rather than
- * left to be discovered.
+ * not guess: Sessions retain their tools, but removal deletes the transport
+ * and makes calls unavailable. Disabling keeps configuration and credentials,
+ * so it is the reversible alternative.
  */
 export function mcpRemovalWarning(serverName: string): string {
   return [
     `Removing ${serverName} deletes its configuration.`,
-    `Any older Session that was born holding one of ${serverName}'s tools will fail to reattach afterwards, because the transport its frozen tool needs no longer exists.`,
-    "That is not reversible by re-adding the server under a new id. If the intent is only to keep the tools out of NEW Sessions, call server_disable instead: it leaves every existing Session able to reattach.",
+    `Sessions keep ${serverName}'s tool names and can reattach, but calls return a named unavailable error because its transport was removed.`,
+    "That is not reversible by re-adding the server under a new id. If the intent is only to stop offering additions, call server_disable instead: it keeps the configuration for existing Sessions.",
     "A server holding credentials a person set up \u2014 a header, an environment value, a stored secret or a sign-in \u2014 cannot be removed by an agent at all: removing it deletes them, so only a person can, in Settings \u2192 Configure \u2192 MCP Servers.",
   ].join(" ");
 }

@@ -2634,3 +2634,32 @@ describe("a Session's transport follows its project (VC-713)", () => {
     }
   });
 });
+
+it("VC-758 keeps an accepted message visible until its delayed host projection lands", async () => {
+  const { store, transport } = fixture();
+  store.getState().adoptChatSession("durable-9");
+  await vi.waitFor(() => expect(store.getState().sessions["durable-9"]?.projection).not.toBeNull());
+  const original = transport.rpc.session.projection.query;
+  let publish!: () => void;
+  const gate = new Promise<void>((resolve) => (publish = resolve));
+  transport.rpc.session.projection.query = async (input) => {
+    await gate;
+    return original(input);
+  };
+  await store.getState().enqueue("durable-9", { id: "q1", text: "visible through handoff" });
+  expect(store.getState().sessions["durable-9"]?.queue).toEqual([]);
+  expect(useChatDraftsStore.getState().drafts["durable-9"]?.held).toMatchObject([
+    {
+      id: "q1",
+      text: "visible through handoff",
+      state: "sending",
+      deliveryAccepted: true,
+      delivery: "queue",
+    },
+  ]);
+  publish();
+  await vi.waitFor(() =>
+    expect(store.getState().sessions["durable-9"]?.queue.map((entry) => entry.id)).toEqual(["q1"]),
+  );
+  expect(useChatDraftsStore.getState().drafts["durable-9"]?.held ?? []).toEqual([]);
+});

@@ -164,10 +164,8 @@ function labelledControl(html: string, label: string): string | null {
 }
 
 describe("the card's controls", () => {
-  it("draws request withdrawal and refusal at different weights", () => {
-    // Withdrawing the request and rejecting it are different durable acts. Both
-    // as `ghost size="sm"` said they were the same kind of act, in the one place
-    // a reader is deciding between them.
+  it("offers refusal without a question withdrawal button, even with an exit handler", () => {
+    // Escape owns the exit; the footer keeps only refusal and answer actions.
     const html = renderToStaticMarkup(
       <InteractionCard
         interaction={asked()}
@@ -175,14 +173,12 @@ describe("the card's controls", () => {
         onWithdraw={() => undefined}
       />,
     );
-    expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
+    expect(buttonVariant(html, "Withdraw question")).toBeNull();
+    expect(html).not.toContain("Withdraw");
     expect(buttonVariant(html, "Decline to answer")).toBe("outline");
   });
 
-  it("names each act by what it does to the question", () => {
-    // "Cancel request" and "Reject" named the mechanism and the verdict; beside
-    // a changing primary control they read as three ways to say no. Each one
-    // now says what happens to the question if it is pressed.
+  it("names the answer controls by what they do to the question", () => {
     const html = renderToStaticMarkup(
       <InteractionCard
         interaction={asked()}
@@ -190,9 +186,9 @@ describe("the card's controls", () => {
         onWithdraw={() => undefined}
       />,
     );
-    expect(html).toContain(">Withdraw question</button>");
+    expect(html).not.toContain(">Withdraw question</button>");
     expect(html).toContain(">Decline to answer</button>");
-    expect(html).toContain(">Send answer</button>");
+    expect(html).toContain(">Answer</button>");
     expect(html).not.toContain("Cancel request");
     expect(html).not.toContain(">Reject</button>");
   });
@@ -305,25 +301,27 @@ describe("the ask-user card", () => {
   });
 
   it("counts the questions only where there is more than one to count", () => {
-    expect(drawn(ask([askPrompt()]))).not.toContain("Question 1 of");
+    expect(drawn(ask([askPrompt()]))).not.toContain("1 of");
     const walk = drawn(ask([askPrompt(), askPrompt({ id: "prompt:1", label: "Which remote?" })]));
-    expect(walk).toContain("Question 1 of 2");
-    expect(walk).toContain("Previous question");
+    expect(walk).toContain("1 of 2");
+    expect(walk).toContain("Previous");
   });
 
-  it("offers a skip only while there is somewhere to skip to", () => {
-    // Skipping is movement, not an answer, so the last question has nothing to
-    // step to — and a single question is its own last.
-    expect(drawn(ask([askPrompt(), askPrompt({ id: "prompt:1" })]))).toContain(">Skip<");
-    expect(drawn(ask([askPrompt()]))).not.toContain(">Skip<");
+  it("uses Previous / Next without a redundant Skip control", () => {
+    const html = drawn(ask([askPrompt(), askPrompt({ id: "prompt:1" })]));
+    expect(html).toContain(">Previous</button>");
+    expect(html).toContain(">Next</button>");
+    expect(html).not.toContain(">Skip<");
+    expect(drawn(ask([askPrompt()]))).not.toContain(">Previous</button>");
   });
 
-  it("names each row with the numeral that presses it", () => {
+  it("numbers only the selectable choices and gives the input its own name", () => {
     const html = drawn(ask([askPrompt()]));
     expect(html).toContain(">1</span>");
     expect(html).toContain(">2</span>");
-    // And the box is the row after the last option, so its number continues.
-    expect(html).toContain(">3</span>");
+    expect(html).not.toContain(">3</span>");
+    expect(html).toContain('aria-label="Another answer"');
+    expect(html).toContain('placeholder="Type another answer…"');
   });
 
   it("opens the box beside the options only where the harness takes words", () => {
@@ -361,13 +359,13 @@ describe("the ask-user card", () => {
     ]) {
       const html = drawn(ask([shape]));
       expect(html).toContain('type="submit"');
-      expect(html).toContain(">Send answer</button>");
+      expect(html).toContain(">Answer</button>");
     }
     // Mid-walk the same control steps, and says so.
     const walk = drawn(ask([askPrompt(), askPrompt({ id: "prompt:1" })]));
     expect(walk).toContain('type="submit"');
     expect(walk).toContain(">Next</button>");
-    expect(walk).not.toContain(">Send answer</button>");
+    expect(walk).not.toContain(">Answer</button>");
   });
 
   it("names the group with the question it is asking", () => {
@@ -387,7 +385,7 @@ describe("the ask-user card", () => {
         />,
       );
       expect(buttonVariant(html, "Decline to answer")).toBe("outline");
-      expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
+      expect(buttonVariant(html, "Withdraw question")).toBeNull();
     }
   });
 
@@ -536,8 +534,7 @@ describe("the question that stands out of the transcript's way", () => {
   });
 
   it("keeps it a view control rather than one more answer", () => {
-    // Ghost and muted, beneath withdrawal in the same way withdrawal is beneath
-    // the verdict: how much room a card takes up is not a decision about the
+    // Ghost and muted: how much room a card takes up is not an answer to the
     // question, and a control at the weight of one would say it was.
     const html = renderToStaticMarkup(
       <InteractionCard
@@ -548,8 +545,8 @@ describe("the question that stands out of the transcript's way", () => {
     );
 
     expect(labelledControl(html, "Minimize question")).toContain('data-variant="ghost"');
-    // And it changed neither of the acts it now stands beside.
-    expect(buttonVariant(html, "Withdraw question")).toBe("ghost");
+    // The exit remains keyboard-only; the refusal keeps its answer weight.
+    expect(buttonVariant(html, "Withdraw question")).toBeNull();
     expect(buttonVariant(html, "Decline to answer")).toBe("outline");
   });
 
@@ -576,7 +573,7 @@ describe("the question that stands out of the transcript's way", () => {
 });
 
 describe("the two cards as one family", () => {
-  it("draws both lists of answers with the same row", () => {
+  it("shares row rhythm while framing only the questionnaire choices", () => {
     // The guarantee this test exists for: the shared row is a string in one
     // place, and the two cards are different elements around it. Nothing stops
     // a class being added to one of them and not the other except this.
@@ -587,7 +584,7 @@ describe("the two cards as one family", () => {
       "Allow once",
     );
     const answer = optionRow(drawn(ask([askPrompt()])), "main");
-    for (const shared of ["gap-2", "rounded-lg", "px-2", "py-2", "transition-colors"])
+    for (const shared of ["gap-2", "py-2", "transition-colors"])
       expect([shared, verdict.includes(shared), answer.includes(shared)]).toEqual([
         shared,
         true,
@@ -613,11 +610,7 @@ describe("the two cards as one family", () => {
     expect(once.includes("text-ui font-medium")).toBe(always.includes("text-ui font-medium"));
   });
 
-  it("leaves the only border to the card, on every box either card opens", () => {
-    // One border per surface. A field drawing its own edge inside a bordered
-    // card is two frames around one thing, and it read as a foreign control in
-    // a card whose rows are washes rather than boxes. What says a box takes
-    // words is its placeholder and the caret — the composer's own answer.
+  it("frames the questionnaire field while leaving the permission field unchanged", () => {
     const cases: readonly (readonly [string, string])[] = [
       ["the lone answer", drawn(ask([askPrompt({ options: [], custom: true })]))],
       ["the box beside the options", drawn(ask([askPrompt({ custom: true })]))],
@@ -626,7 +619,10 @@ describe("the two cards as one family", () => {
     for (const [what, html] of cases) {
       const drawnBoxes = boxes(html);
       expect([what, drawnBoxes.length]).toEqual([what, 1]);
-      expect([what, drawnBoxes[0]?.includes("border-0")]).toEqual([what, true]);
+      expect([what, drawnBoxes[0]?.includes("border-0")]).toEqual([
+        what,
+        what === "the verdict card's words",
+      ]);
       expect([what, drawnBoxes[0]?.includes("shadow-raised")]).toEqual([what, false]);
     }
   });
@@ -678,8 +674,8 @@ describe("where a question's words are typed", () => {
     // The answer field is the one above the composer's own slot.
     const card = html.slice(0, html.indexOf("composer-interaction-origin"));
     expect(card.match(/<textarea/g)).toHaveLength(1);
-    expect(card).toContain('placeholder="Your answer"');
-    expect(card).toContain(">Send answer</button>");
+    expect(card).toContain('placeholder="Type another answer…"');
+    expect(card).toContain(">Answer</button>");
   });
 
   it("keeps the composer a message box for every shape of question", () => {
@@ -754,7 +750,7 @@ describe("where a question's words are typed", () => {
     const several = stacked(
       ask([askPrompt({ custom: true }), askPrompt({ id: "prompt:1", custom: true })]),
     );
-    expect(several).toContain("Question 1 of 2");
+    expect(several).toContain("1 of 2");
     expect(several.match(/<textarea/g)).toHaveLength(2);
   });
 });
@@ -777,7 +773,7 @@ describe("the receipt the card itself shows once a response is sent", () => {
     expect(html).toContain('role="status"');
   });
 
-  it("gives a decline and a withdrawal receipts a reader can tell apart", () => {
+  it("gives decline and stopped-turn receipts a reader can tell apart", () => {
     const declined = renderToStaticMarkup(
       <QuestionSentReceipt
         heading="How much detail do you want?"
@@ -794,15 +790,15 @@ describe("the receipt the card itself shows once a response is sent", () => {
         heading="How much detail do you want?"
         receipt={{
           kind: "withdrawn",
-          lead: "Withdrew question",
+          lead: "Stopped turn",
           value: null,
-          line: "Withdrew question",
+          line: "Stopped turn",
         }}
       />,
     );
     expect(declined).toContain("Declined to answer");
     expect(declined).not.toContain("Sent");
-    expect(withdrawn).toContain("Withdrew question");
+    expect(withdrawn).toContain("Stopped turn");
     expect(withdrawn).not.toContain("Declined");
   });
 
@@ -934,8 +930,8 @@ describe("the footer at a pane's narrowest", () => {
     const html = renderToStaticMarkup(
       <InteractionCard interaction={walk()} onResolve={() => undefined} />,
     );
-    const skip = html.split("<button").find((fragment) => fragment.includes(">Skip"));
-    expect(skip).toContain("whitespace-nowrap");
+    const previous = html.split("<button").find((fragment) => fragment.includes(">Previous"));
+    expect(previous).toContain("whitespace-nowrap");
   });
 
   it("keeps every action in the footer, in the order the keyboard walks them", () => {
@@ -944,8 +940,8 @@ describe("the footer at a pane's narrowest", () => {
     // one line, so a footer on two lines is not a different card.
     //
     // Read structurally rather than by label — what each act is CALLED is
-    // VC-289's, and this is a claim about arrangement: the acts that touch the
-    // request itself lead, and the cluster that answers it is last and whole.
+    // VC-289's, and this is a claim about arrangement: minimization leads,
+    // and the cluster that answers is last and whole.
     const footer = footerMarkup(
       renderToStaticMarkup(
         <InteractionCard
@@ -958,11 +954,11 @@ describe("the footer at a pane's narrowest", () => {
     const cluster = footer.indexOf('data-slot="interaction-actions"');
     const buttons = [...footer.matchAll(/<button/g)].map((match) => match.index);
     expect(buttons.length).toBeGreaterThanOrEqual(3);
-    // At least one control stands before the cluster (withdrawal), and every
+    // At least one control stands before the cluster (minimization), and every
     // remaining one stands inside it rather than trailing after its close.
     expect(buttons.filter((at) => at < cluster).length).toBeGreaterThanOrEqual(1);
     expect(buttons.filter((at) => at > cluster).length).toBeGreaterThanOrEqual(2);
-    expect(footer.indexOf("Skip")).toBeGreaterThan(cluster);
+    expect(footer.indexOf("Previous")).toBeGreaterThan(cluster);
   });
 
   it("gives a wrapped footer the same rhythm down as across", () => {
@@ -987,6 +983,19 @@ describe("the co-mounted request announcement", () => {
     expect(html).toContain("Request pending: Which branch?");
     expect(html).not.toContain("tabindex");
     expect(html).not.toContain("autofocus");
+  });
+
+  it("announces the whole batch, not just its first question", () => {
+    const html = renderToStaticMarkup(
+      <PendingInteractionAnnouncement
+        interaction={ask([
+          askPrompt(),
+          askPrompt({ id: "prompt:1" }),
+          askPrompt({ id: "prompt:2" }),
+        ])}
+      />,
+    );
+    expect(html).toContain("Request pending: 3 questions");
   });
 
   it("keeps the live region mounted while there is nothing to announce", () => {

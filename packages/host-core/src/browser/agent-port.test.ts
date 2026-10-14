@@ -206,10 +206,17 @@ function fakeHost(
         return options.declineCapture === true ? null : `live:${tabId}:${captures.length}`;
       },
       keepScreenshot: (tabId, base64Png) => `kept:${tabId}:${base64Png}`,
-      closeHeadlessOwnedBy: (sessionId) => {
+      closeHeadlessOwnedBy: (sessionId, tabIds) => {
         closedHeadlessFor.push(sessionId);
         const closing = [...tabs.values()]
-          .filter((one) => one.ownerSessionId === sessionId && one.presentation === "headless")
+          .filter(
+            (one) =>
+              one.createdBy === "session" &&
+              one.ownerSessionId === sessionId &&
+              one.presentation === "headless" &&
+              !holds.has(one.tabId) &&
+              (tabIds === undefined || tabIds.includes(one.tabId)),
+          )
           .map((one) => one.tabId);
         for (const tabId of closing) {
           tabs.delete(tabId);
@@ -1027,8 +1034,108 @@ describe("Browser port concurrent calls and teardown", () => {
     browser.dispose();
   });
 
+  it.each(["mouseReleased", "keyUp"])(
+    "delegate cleanup waits for %s and cannot sweep a resumed turn's tabs",
+    async (releaseType) => {
+      const shared = fakeHost([state({ tabId: "old", createdBy: "session" })]);
+      const inputStarted = Promise.withResolvers<void>();
+      const releaseInput = Promise.withResolvers<void>();
+      const events: string[] = [];
+      const wakeReleased = vi.fn();
+      const browser = createAgentBrowserPort({
+        host: shared.host,
+        scope: { projectId: "p1", ticketId: null },
+        session: ME,
+        transportFor: () => ({
+          send: async (method, params) => {
+            if (method === "Accessibility.getFullAXTree") return BUTTON_TREE;
+            if (method === "DOM.getBoxModel") return BUTTON_BOX;
+            const type = (params as { type?: string } | undefined)?.type;
+            if (type === releaseType) {
+              inputStarted.resolve();
+              await releaseInput.promise;
+              events.push(releaseType);
+            }
+            return {};
+          },
+          dispose: () => events.push("destroy"),
+        }),
+        waitForLoad: async () => undefined,
+        holdAwake: () => wakeReleased,
+      });
+      const snapshot = await browser.snapshot({ tabId: "old", signal });
+      const acting = browser.act({
+        tabId: "old",
+        generation: snapshot.generation,
+        ...(releaseType === "mouseReleased"
+          ? { kind: "click" as const, ref: refIn(snapshot.snapshotText) }
+          : { kind: "press" as const, key: "Enter" }),
+        signal,
+      });
+      await inputStarted.promise;
+      browser.turnEnded({ closeHeadlessOwned: true });
+      expect(shared.tabs.has("old")).toBe(true);
+      expect(events).toEqual([]);
+      // The attachment stays alive. A resumed turn can open another tab even
+      // while the earlier turn's destruction waits on its input barrier.
+      const resumed = await browser.navigate({
+        navigation: { kind: "url", url: "https://example.com/resumed" },
+        signal,
+      });
+      releaseInput.resolve();
+      await acting;
+      await vi.waitFor(() => expect(shared.tabs.has("old")).toBe(false));
+      expect(events).toEqual([releaseType, "destroy"]);
+      expect(wakeReleased).toHaveBeenCalledOnce();
+      expect(shared.tabs.has(resumed.tabId)).toBe(true);
+      expect(shared.holds.get(resumed.tabId)).toEqual({ kind: "session", holder: ME });
+      browser.dispose();
+      browser.dispose();
+      browser.turnEnded({ closeHeadlessOwned: true });
+      expect(shared.tabs.size).toBe(0);
+      expect(shared.ended.filter((end) => end === `forget:${ME.sessionId}`)).toHaveLength(1);
+    },
+  );
+
+  it.each(["preview", "person", "other"])(
+    "rechecks %s protection after in-flight work at delegate completion",
+    async (protection) => {
+      const started = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      // Keep the shared host queue busy through an outstanding load.
+      const shared = fakeHost([state({ tabId: "old", createdBy: "session" })]);
+      const browser = createAgentBrowserPort({
+        host: shared.host,
+        scope: { projectId: "p1", ticketId: null },
+        session: ME,
+        transportFor,
+        waitForLoad: async () => {
+          started.resolve();
+          await finish.promise;
+        },
+        holdAwake: () => () => undefined,
+      });
+      const reading = browser.snapshot({ tabId: "old", signal });
+      await started.promise;
+      browser.turnEnded({ closeHeadlessOwned: true });
+      if (protection === "preview") {
+        shared.tabs.set("old", { ...shared.tabs.get("old")!, presentation: "preview" });
+      } else {
+        shared.holds.set(
+          "old",
+          protection === "person" ? { kind: "person" } : { kind: "session", holder: OTHER },
+        );
+      }
+      finish.resolve();
+      await reading;
+      await vi.waitFor(() => expect(shared.closedHeadlessFor).toHaveLength(1));
+      expect(shared.tabs.has("old")).toBe(true);
+      browser.dispose();
+    },
+  );
+
   it("does not detach the debugger or end the attachment during active input cleanup", async () => {
-    const shared = fakeHost([state({ tabId: "one", createdBy: "user" })]);
+    const shared = fakeHost([state({ tabId: "one", createdBy: "session" })]);
     const release = Promise.withResolvers<void>();
     const disposed = vi.fn();
     let releaseStarted = false;
@@ -1074,6 +1181,57 @@ describe("Browser port concurrent calls and teardown", () => {
     await vi.waitFor(() => expect(disposed).toHaveBeenCalledTimes(1));
     expect(shared.ended).toEqual(["attachment-end:one", "forget:ses-me"]);
     expect(shared.closedHeadlessFor).toEqual([ME.sessionId]);
+  });
+
+  it("completion then disposal drains shared work and cannot sweep a later attachment's tabs", async () => {
+    const shared = fakeHost([state({ tabId: "old", createdBy: "session" })]);
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const events: string[] = [];
+    let snapshots = 0;
+    const make = (session: BrowserSessionHolder) =>
+      createAgentBrowserPort({
+        host: shared.host,
+        scope: { projectId: "p1", ticketId: null },
+        session,
+        transportFor: (tabId) => ({
+          send: async (method) => {
+            if (method === "Accessibility.getFullAXTree") {
+              snapshots += 1;
+              if (snapshots === 2) {
+                started.resolve();
+                await finish.promise;
+                events.push("work finished");
+              }
+              return BUTTON_TREE;
+            }
+            return {};
+          },
+          dispose: () => events.push(`destroy ${tabId}`),
+        }),
+        waitForLoad: async () => undefined,
+        holdAwake: () => () => undefined,
+      });
+    const old = make(ME);
+    const newer = make({ ...ME, attachmentId: "att-newer" });
+    await old.snapshot({ tabId: "old", signal });
+    const reading = newer.snapshot({ tabId: "old", signal });
+    await started.promise;
+    old.turnEnded({ closeHeadlessOwned: true });
+    old.dispose();
+    expect(events).toEqual([]);
+    expect(shared.tabs.has("old")).toBe(true);
+    const fresh = await newer.navigate({
+      navigation: { kind: "url", url: "https://example.com/resumed" },
+      signal,
+    });
+    await newer.release({ tabId: fresh.tabId, signal });
+    finish.resolve();
+    await reading;
+    await vi.waitFor(() => expect(shared.tabs.has("old")).toBe(false));
+    expect(events).toEqual(["work finished", "destroy old"]);
+    expect(shared.tabs.has(fresh.tabId)).toBe(true);
+    newer.dispose();
   });
 
   it("disposal withdraws readiness and prevents later calls resurrecting the port", async () => {

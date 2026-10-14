@@ -370,12 +370,22 @@ test("workspace globs discover a newly added host package and require its covera
   }
 });
 
-test("N-1 compatibility runs the release, the latest canary and the base, from full history", () => {
+test("N-1 compatibility runs rolling and fixed downgrade promises from full history", () => {
   const job = jobs["n1-compat"];
-  assert.deepEqual(job.strategy.matrix.lane, ["release", "latest-canary", "base"]);
+  assert.deepEqual(job.strategy.matrix.lane, [
+    "release",
+    "latest-canary",
+    "base",
+    "v0.2.1",
+    "v0.2.2-canary.1",
+  ]);
   const prepare = job.steps.find((step) => step.id === "prepare").run;
   assert.match(prepare, /"\$LANE" == "release" \]\]; then\s+args=\(--release\)/);
   assert.match(prepare, /"\$LANE" == "latest-canary" \]\]; then\s+args=\(--canary\)/);
+  assert.match(
+    prepare,
+    /"\$LANE" == "v0\.2\.1" \|\| "\$LANE" == "v0\.2\.2-canary\.1" \]\]; then\s+args=\(--ref "\$LANE"\)/,
+  );
   assert.equal(job.strategy["fail-fast"], false);
   assert.equal(job.steps.find((step) => step.name === "Checkout").with["fetch-depth"], 0);
   const run = job.steps.at(-1).run;

@@ -101,6 +101,7 @@ import {
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
 import { withLogContext } from "../log/context";
 import type { LogRing } from "../log/ring";
@@ -197,6 +198,10 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
     { sessionId: string; before: number },
     SessionHistoryPage
   >;
+  readonly "session.picture": HostHandler<
+    { sessionId: string; pictureId: string; offset?: number },
+    { data: string | null; mimeType: string | null; nextOffset: number | null }
+  >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
     SessionRuntimeProjectionSnapshot
@@ -275,8 +280,12 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "logs.follow": HostSubscriptionHandler<HostLogsRead, HostLogsBatch>;
   /**
    * The desktop-only tier (`DESKTOP_ENTRIES`, VC-608): the same map, under
-   * placement-derived policy (both host-placed: device-as-user).
+   * placement-derived policy: the person only, on no network door.
    */
+  readonly "shells.moveToBackground": HostHandler<
+    { sessionId: string; toolCallId: string },
+    { shellId: string }
+  >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /**
@@ -414,6 +423,8 @@ export interface HostHandlerOptions {
   readonly db: Database.Database | null;
   /** The host's data directory: where a worktree's attachment bytes live. */
   readonly dataDir: string;
+  /** The same screenshot store Code Mode writes; absent means an explicit unavailable picture. */
+  readonly pictures?: BrowserPictureStore;
   /** The recovered Session runtime, or null when this launch has none. */
   readonly runtime: SessionRuntime | null;
   /** The recovered Sessions facade, or null when this launch has none. */
@@ -470,6 +481,10 @@ export interface HostHandlerOptions {
   readonly boardFeed?: BoardChangeFeed;
   /** The Session ledger's latest outcome per ticket, or null on a host without one. */
   readonly ticketSignals?: ((projectId: string) => Promise<readonly LatestSessionSignal[]>) | null;
+  /** The host's foreground-shell registry. Absent on hosts without this UI operation. */
+  readonly backgroundShells?: {
+    moveForeground(sessionId: string, toolCallId: string): { shellId: string };
+  } | null;
   /** Where Pi keeps saved tool output, which an archive or delete releases (VC-469). */
   readonly piSessionsDirectory?: string;
   /**
@@ -696,6 +711,12 @@ function hostHandlerEntries(
     "modelAccess.setPickerView": (view) => writeModelPickerView(preferences(), view, now()),
     "session.snapshot": (input) => runtime().snapshot(input),
     "session.history": (input) => runtime().history(input),
+    "session.picture": ({ sessionId, pictureId, offset }) =>
+      options.pictures?.readActivityImage(sessionId, pictureId, offset) ?? {
+        data: null,
+        mimeType: null,
+        nextOffset: null,
+      },
     "session.projection": (input) => runtime().projection(input),
     "session.subscribe": (input, _call, sink) =>
       runtime().subscribe(
@@ -780,6 +801,13 @@ function hostHandlerEntries(
       logs().follow(query, (batch) => void sink.emit(batch)),
     // The desktop-only tier: the bodies `volli:project-reorder` and
     // `volli:worktree-trim-settings-get` had in `data-ipc.ts`, moved, not copied.
+    "shells.moveToBackground": ({ sessionId, toolCallId }) =>
+      joined({ sessionId, toolCallId }, () =>
+        present(
+          options.backgroundShells ?? null,
+          "Moving commands to the background is unavailable on this host",
+        ).moveForeground(sessionId, toolCallId),
+      ),
     "project.reorder": ({ orderedIds }) => {
       reorderProjects(board(), orderedIds, now());
       return null;

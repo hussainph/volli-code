@@ -114,6 +114,43 @@ describe("Sessions", () => {
     expect(commands[2]?.origin).toEqual(origin);
     expect(commands[3]?.origin).toEqual(origin);
   });
+  it("bounds inherited definitions to one parent epoch if it refreshes between the two birth reads", async () => {
+    const one: McpToolDefinition = {
+      serverId: "server",
+      toolName: "one",
+      providerName: mcpProviderToolName("server", "Fixture", "one"),
+      description: "One",
+      inputSchema: { type: "object" },
+    };
+    const two: McpToolDefinition = {
+      ...one,
+      toolName: "two",
+      providerName: mcpProviderToolName("server", "Fixture", "two"),
+    };
+    const record = vi.fn(async () => {});
+    const { sessions: door } = sessions({
+      readModelAnchor: async () => ({ selection: null, tier: null }),
+      toolSurface: {
+        resolve: (_role, _grants, _within, definitions = []) => [
+          "read",
+          ...definitions.map((tool) => tool.providerName),
+        ],
+        recorded: async () => ["read", one.providerName],
+        recordedMcp: async () => [one, two],
+        record,
+      },
+    });
+    await door.create({
+      operationId: "child-refresh-race",
+      projectId: "project-1",
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: "parent",
+      title: null,
+    });
+    expect(record).toHaveBeenCalledWith("session-1", ["read", one.providerName], [one], {});
+  });
+
   it("freezes selected MCP definitions at root birth and gives a child its parent's exact frozen definitions", async () => {
     const parentTool: McpToolDefinition = {
       serverId: "server-1",

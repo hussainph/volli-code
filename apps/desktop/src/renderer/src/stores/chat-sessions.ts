@@ -281,6 +281,20 @@ export function createChatSessionsStore(
       });
     };
 
+    const retireAcceptedHeld = (sessionId: string) => {
+      const slice = get().sessions[sessionId];
+      if (slice === undefined) return;
+      const accepted = new Set([
+        ...slice.queue.map((message) => message.id),
+        ...slice.transcript.durableMessages.map((message) => message.id),
+      ]);
+      const drafts = useChatDraftsStore.getState();
+      for (const message of drafts.drafts[sessionId]?.held ?? []) {
+        if (message.deliveryAccepted && accepted.has(message.id))
+          drafts.dropHeld(sessionId, message.id);
+      }
+    };
+
     const attach = (sessionId: string) =>
       getOrCreateChatClient(sessionId, {
         ...transport(projectOfSession(sessionId)),
@@ -606,10 +620,12 @@ export function createChatSessionsStore(
         update(sessionId, (slice) =>
           foldStreamBatch(slice, frames, overlays, progress, clearLiveCompaction),
         );
+        retireAcceptedHeld(sessionId);
       },
 
       applySnapshot(sessionId, window, projection) {
         update(sessionId, (slice) => applySnapshotWindow(slice, window, projection));
+        retireAcceptedHeld(sessionId);
       },
 
       prependHistory(sessionId, requested, page) {
@@ -618,6 +634,7 @@ export function createChatSessionsStore(
 
       setProjection(sessionId, projection) {
         update(sessionId, (slice) => applyProjection(slice, projection));
+        retireAcceptedHeld(sessionId);
       },
 
       attaching(sessionId) {
@@ -648,12 +665,20 @@ export function createChatSessionsStore(
         }
         const outcome = await client.submit(message, "queue");
         if (outcome === "refused") drafts.markHeld(sessionId, message.id, "unsent");
-        else drafts.dropHeld(sessionId, message.id);
+        else {
+          drafts.amendHeldMessage(sessionId, message.id, (held) => ({
+            ...held,
+            delivery: "queue",
+            deliveryAccepted: true,
+          }));
+          retireAcceptedHeld(sessionId);
+        }
         await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         return outcome;
       },
       setQueue(sessionId, queue, revision) {
         update(sessionId, (slice) => applyQueue(slice, queue, revision));
+        retireAcceptedHeld(sessionId);
       },
 
       retitle(sessionId, title) {

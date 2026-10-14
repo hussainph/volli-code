@@ -17,8 +17,8 @@
  * `deferred` whatever the model's mode: none of its tools is declared, the
  * `codemode` description names the server and how many tools it has, and a
  * program finds the ones it needs with `searchTools()`. That holds for a model
- * whose mode is `off` too — such a Session gets `codemode` for its large
- * servers alone, with every other tool declared as before. Turning the switch
+ * whose mode is `off` too — such a Session gets `codemode` with every other tool declared as before. Its callable tools
+ * are also callable from programs, just as in the other modes. Turning the switch
  * off turns this off with it: a Session born with Code Mode off declares every
  * tool, exactly as before Code Mode existed.
  */

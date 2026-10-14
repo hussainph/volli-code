@@ -15,6 +15,9 @@
 // line and exits 0. A step that throws is reported, not fatal: the refusal
 // step is supposed to throw. Never prints a secret value.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { registerHooks } from "node:module";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const n1 = (path) => import(`n1:${path}`);
 
@@ -131,6 +134,560 @@ const steps = {
       const read = await engine.getSession({ sessionId: created.session.id });
       return { sessionId: created.session.id, readBack: read?.session?.id ?? null };
     } finally {
+      db.close();
+    }
+  },
+
+  /** Leaves a flat Pi-style card pending while a new-birth Session is downgraded. */
+  pendingFlatAsk: async (step) => {
+    const { createSessionEngine } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const shared = await n1("@volli/shared");
+    const db = openVolliDb(command.dbPath);
+    try {
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `pending-flat-${kind}` },
+      });
+      const surface = await engine.getOrRecordSessionInput({
+        sessionId: step.sessionId,
+        input: { kind: "tool-surface", tools: ["ask_user"] },
+        provenance,
+      });
+      const attachmentId = "n1-flat-attachment";
+      const native = { id: null, detail: null };
+      const adapter = { source: { kind: "adapter", id: "pi", detail: null }, venue: null };
+      await engine.observe({
+        id: "n1-flat-attached",
+        sessionId: step.sessionId,
+        occurredAt: NOW,
+        provenance: adapter,
+        kind: "attachment.opened",
+        attachment: {
+          id: attachmentId,
+          sessionId: step.sessionId,
+          adapterId: "pi",
+          venue: { id: "n1-local", kind: "local" },
+          continuity: "fresh",
+          native,
+          authority: null,
+        },
+      });
+      const options = [{ id: "keep", label: "Keep it", description: null }];
+      const interaction = {
+        id: step.interactionId,
+        attachmentId,
+        kind: "question",
+        title: "Keep the downgraded change?",
+        detail: null,
+        options,
+        multiple: false,
+        native,
+        prompts: [
+          {
+            id: shared.DEFAULT_INTERACTION_PROMPT_ID,
+            label: "Keep the downgraded change?",
+            detail: null,
+            options,
+            multiple: false,
+            custom: true,
+          },
+        ],
+      };
+      await engine.observe({
+        id: "n1-flat-opened",
+        sessionId: step.sessionId,
+        occurredAt: NOW,
+        provenance: adapter,
+        kind: "interaction.opened",
+        interaction,
+      });
+      const pending = await engine.getSession({ sessionId: step.sessionId });
+      return { tools: surface.tools, interaction, activeCount: pending.interactions.active.length };
+    } finally {
+      db.close();
+    }
+  },
+
+  /** Replays HEAD's repaired Pi sidecar through N−1's shipped adapter AND Pi runtime. */
+  recoveredQuestion: async (step) => {
+    const { createSessionEngine, createSessionRuntime, sessionRootThreadId } =
+      await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const { createPiNativeAdapter } = await n1("./session-runtime/pi-adapter");
+    const { createFileTranscriptArtifactStore } = await n1(
+      "./session-runtime/transcript-artifacts",
+    );
+    // This helper and all its Pi dependencies are the PREVIOUS tree's own
+    // source/lockfile, just like the runtime. Only provider output is scripted.
+    const { scriptedProvider } = await n1(
+      pathToFileURL(
+        join(
+          process.env.VOLLI_N1_TREE,
+          "packages/agent-runtime/test-fixtures/scripted-provider.ts",
+        ),
+      ).href,
+    );
+    const script = scriptedProvider([{ text: "Continued without an answer." }]);
+    const db = openVolliDb(command.dbPath);
+    let runtime;
+    try {
+      let next = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW + ++next },
+        ids: { next: (kind) => `recovery-${kind}-${++next}` },
+      });
+      const before = await engine.getSession({ sessionId: step.sessionId });
+      const history = await engine.listEvents({ sessionId: step.sessionId });
+      const question = history.find(({ payload }) => payload.kind === "interaction.opened")?.payload
+        .interaction;
+      const cancellation = history.find(
+        ({ payload }) => payload.kind === "interaction.cancelled",
+      )?.payload;
+      const adapter = createPiNativeAdapter({
+        sessionDataDir: step.sessionDataDir,
+        models: script.models,
+        now: () => NOW + ++next,
+        readWorkspaceEnvironment: () => undefined,
+        usageLimits: {
+          fetch: async () => {
+            throw new Error("Fixture has no network");
+          },
+        },
+        resolveRuntimeContext: async () => ({
+          role: "ticket",
+          projectId: before.session.projectId,
+          ticketId: before.session.ticketId,
+          rootThreadId: sessionRootThreadId(step.sessionId),
+          brief: "N−1 recovered question fixture",
+          model: { providerId: "scripted-fixture", modelId: "scripted", reasoningLevel: "off" },
+          toolSurface: ["read", "ask_user"],
+          ...(step.askUserQuestions ? { askUserQuestions: true } : {}),
+          promptResources: [],
+        }),
+      });
+      const attachSpecs = [];
+      runtime = createSessionRuntime({
+        engine,
+        artifacts: createFileTranscriptArtifactStore(step.transcriptsRoot),
+        clock: { now: () => NOW + ++next },
+        ids: { next: (kind) => `recovery-runtime-${kind}-${++next}` },
+        locations: {
+          resolve: async () => ({
+            directory: step.workspace,
+            venue: { id: "local", kind: "local" },
+          }),
+          prepare: async () => ({
+            directory: step.workspace,
+            venue: { id: "local", kind: "local" },
+          }),
+          reaffirm: async () => undefined,
+        },
+        executor: {
+          ...adapter,
+          attach: (spec, sink) => {
+            attachSpecs.push(spec);
+            return adapter.attach(spec, sink);
+          },
+        },
+      });
+      // The host's real cold-recovery path calls the adapter with native_resume
+      // and the durable binding's locator, then replays its receipts/markers.
+      await runtime.reconcile({ sessionId: step.sessionId, attachmentId: before.liveExecutor.id });
+      const attached = await engine.getSession({ sessionId: step.sessionId });
+      const delivered = await runtime.command({
+        commandId: "n1-recovery-message",
+        sessionId: step.sessionId,
+        command: {
+          kind: "message.submit",
+          // Wait for the scripted continuation to finish before inspecting its
+          // provider context/sidecar or closing the attachment.
+          settle: "turn",
+          message: {
+            id: "n1-recovery-message",
+            role: "user",
+            parts: [{ type: "text", text: "Continue without an answer" }],
+          },
+        },
+      });
+      const after = await engine.getSession({ sessionId: step.sessionId });
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      const messages = script.requests[0] ?? [];
+      const results = messages.filter(
+        (message) => message.role === "toolResult" && message.toolName === "ask_user",
+      );
+      const sidecarResults = readFileSync(step.sidecarPath, "utf8")
+        .trimEnd()
+        .split("\n")
+        .flatMap((line) => {
+          const record = JSON.parse(line);
+          return Array.isArray(record) ? record : [record];
+        })
+        .filter(
+          (record) =>
+            record.message?.role === "toolResult" && record.message.toolName === "ask_user",
+        )
+        .map((record) => record.message);
+      return {
+        activeCount: before.interactions.active.length,
+        activeAfter: after.interactions.active.length,
+        turnActive: after.turnActive,
+        cancellationReason: cancellation?.reason,
+        questionTitle: question?.title,
+        questionPrompts: question?.prompts?.map((prompt) => prompt.label),
+        attachStatus: attached.liveExecutor?.status,
+        deliveryStatus: delivered.receipt?.status,
+        realAttachCount: attachSpecs.length,
+        attachContinuity: attachSpecs[0]?.continuity,
+        recoveredSidecar: attachSpecs[0]?.native?.detail?.sessionFilePath,
+        turnOpened:
+          events.filter(({ payload }) => payload.kind === "turn.started").length -
+          history.filter(({ payload }) => payload.kind === "turn.started").length,
+        providerRequests: script.requests.length,
+        messages,
+        results,
+        sidecarResults,
+        answers: events.filter(({ payload }) => payload.kind === "interaction.resolved").length,
+        acceptedNextMessages: events.filter(
+          ({ payload }) =>
+            payload.kind === "command.receipt.recorded" &&
+            payload.receipt.commandId === "n1-recovery-message" &&
+            payload.receipt.status === "accepted",
+        ).length,
+      };
+    } finally {
+      await runtime?.close();
+      db.close();
+    }
+  },
+
+  /** Reads and answers a head-written card through N-1's codec, UI rules and ledger. */
+  askUser: async (step) => {
+    const { createSessionEngine } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const shared = await n1("@volli/shared");
+    // prepare.mjs installs the host's dependency closure only. Presentation is
+    // shipped in both tags, but after the host extraction it is outside that
+    // closure. Import its exact shipped helper file, resolving its sole import
+    // to the SAME N-1 shared package the host uses, without linking or rewriting
+    // any extracted source (and without falling back to head's implementation).
+    const helperUrl = pathToFileURL(
+      join(process.env.VOLLI_N1_TREE, "packages/session-presentation/src/interaction.ts"),
+    ).href;
+    const helperImports = registerHooks({
+      resolve(specifier, context, nextResolve) {
+        return nextResolve(
+          context.parentURL === helperUrl && specifier === "@volli/shared"
+            ? "n1:@volli/shared"
+            : specifier,
+          context,
+        );
+      },
+    });
+    let ui;
+    try {
+      ui = await n1(helperUrl);
+    } finally {
+      helperImports.deregister();
+    }
+    const db = openVolliDb(command.dbPath);
+    try {
+      let next = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `${step.sessionId}-n1-answer-${kind}-${++next}` },
+      });
+      // getSession folds persisted events with N-1's real stored codec.
+      const before = await engine.getSession({ sessionId: step.sessionId });
+      const interaction = before?.interactions.active.find((ask) => ask.id === step.interactionId);
+      if (!interaction) throw new Error("Head-written ask_user card is not pending in N-1");
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      const opened = events.find(
+        ({ payload }) =>
+          payload.kind === "interaction.opened" && payload.interaction.id === interaction.id,
+      );
+      if (!opened) throw new Error("Head-written interaction event is missing in N-1");
+      // N-1 keeps original membership whether it ignores or understands the
+      // schema marker. Reading/answering must not rewrite the birth event.
+      const toolSurface = await engine.getOrRecordSessionInput({
+        sessionId: step.sessionId,
+        input: { kind: "tool-surface", tools: ["write"] },
+        provenance,
+      });
+      const renderer = shared.decodeRendererSessionEventPayload(
+        opened.payload,
+        "N-1 ask_user card",
+      );
+      const card = renderer.interaction;
+      const prompts = shared.readInteractionPrompts(card);
+      let draft = ui.emptyInteractionDraft(card);
+      const submitStates = [ui.canSubmitInteraction(card, draft)];
+      for (const answer of step.answers) {
+        const prompt = prompts.find((candidate) => candidate.id === answer.promptId);
+        if (!prompt) throw new Error(`N-1 did not render prompt ${answer.promptId}`);
+        for (const optionId of answer.optionIds) draft = ui.selectOption(draft, prompt, optionId);
+        if (answer.response !== null) {
+          draft = ui.setPromptResponse(draft, prompt.id, answer.response);
+        }
+        submitStates.push(ui.canSubmitInteraction(card, draft));
+      }
+      if (!submitStates.at(-1)) throw new Error("N-1 UI cannot submit the fully answered card");
+      const resolution = ui.interactionResolution(card, draft);
+      const submitted = await engine.submit({
+        commandId: `${step.sessionId}-n1-answer-command`,
+        sessionId: step.sessionId,
+        intent: {
+          kind: "interaction.resolve",
+          attachmentId: interaction.attachmentId,
+          interactionId: interaction.id,
+          resolution,
+          reference: { id: `${step.sessionId}-n1-answer-artifact`, mediaType: null, digest: null },
+        },
+        provenance,
+      });
+      if (submitted.receipt?.status === "rejected") {
+        throw new Error(`N-1 rejected the answer: ${submitted.receipt.code}`);
+      }
+      // No executor/provider is needed: report the adapter's durable fact as
+      // the real engine does once its resolution endpoint has accepted it.
+      await engine.observe({
+        id: `${step.sessionId}-n1-answer-observation`,
+        sessionId: step.sessionId,
+        attachmentId: interaction.attachmentId,
+        occurredAt: NOW,
+        provenance: { source: { kind: "adapter", id: "pi", detail: null }, venue: null },
+        kind: "interaction.resolved",
+        interactionId: interaction.id,
+        resolution,
+      });
+      const after = await engine.getSession({ sessionId: step.sessionId });
+      const resolved = after.interactions.resolved.find(
+        (ask) => ask.interaction.id === interaction.id,
+      );
+      const resolvedEvents = await engine.listEvents({ sessionId: step.sessionId });
+      const resolvedEvent = resolvedEvents.find(
+        ({ payload }) =>
+          payload.kind === "interaction.resolved" && payload.interactionId === interaction.id,
+      );
+      if (!resolvedEvent) throw new Error("N-1 did not persist the card answer");
+      const rendererAnswer = shared.decodeRendererSessionEventPayload(
+        resolvedEvent.payload,
+        "N-1 ask_user answer",
+      );
+      if (JSON.stringify(rendererAnswer.resolution) !== JSON.stringify(resolved.resolution)) {
+        throw new Error("N-1 renderer codec changed the stored answer");
+      }
+      return {
+        prompts,
+        tools: toolSurface.tools,
+        rendererNative: card.native,
+        submitStates,
+        resolution,
+        answers: shared.readInteractionAnswers(card, rendererAnswer.resolution),
+        activeCount: after.interactions.active.length,
+        route: submitted.command.route,
+      };
+    } finally {
+      db.close();
+    }
+  },
+
+  /** Replays a moved bash row through N-1's own ledger and artifact reader. */
+  bashReplay: async (step) => {
+    const { createSessionEngine } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const { createFileTranscriptArtifactStore } = await n1(
+      "./session-runtime/transcript-artifacts",
+    );
+    const { projectSession } = await n1("@volli/shared");
+    const db = openVolliDb(command.dbPath);
+    try {
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `${step.sessionId}-${kind}` },
+      });
+      const snapshot = await engine.getSession({ sessionId: step.sessionId });
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      // Projection must tolerate every head-written event; read the known row's body.
+      projectSession(snapshot.session, events);
+      const references = events.filter((event) => event.payload.kind === "transcript.referenced");
+      const store = createFileTranscriptArtifactStore(step.transcriptsRoot);
+      const rows = await Promise.all(
+        references.map((event) => store.read(event.payload.reference)),
+      );
+      const parts = rows.flatMap((row) => row.message.parts);
+      // HEAD records a tool call as an activity row (`volli.activity`), whose
+      // reserved descriptor names the native tool; a bash row is `bash` there.
+      const bashParts = parts.filter(
+        (part) =>
+          part.type === "dynamic-tool" &&
+          (part.toolName === "bash" ||
+            part.toolMetadata?.["volli.activity"]?.nativeToolName === "bash"),
+      );
+      const bash = bashParts.findLast((part) => part.state === "output-available");
+      const text =
+        bash?.output?.content
+          ?.filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n") ?? "";
+      return {
+        sessionId: snapshot.session.id,
+        frames: rows.length,
+        nativeToolName:
+          bash?.toolMetadata?.["volli.activity"]?.nativeToolName ?? bash?.toolName ?? null,
+        state: bash?.state ?? null,
+        text,
+      };
+    } finally {
+      db.close();
+    }
+  },
+
+  /**
+   * Reattaches HEAD's Pi sidecar, whose bash call was moved to the background
+   * (VC-757), through N-1's own Pi adapter and scripted provider. The host's
+   * cold path calls the adapter with native_resume and the durable binding's
+   * locator; the provider's first request must carry the moved receipt.
+   */
+  movedBash: async (step) => {
+    const { createSessionEngine, createSessionRuntime, sessionRootThreadId } =
+      await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const { createPiNativeAdapter } = await n1("./session-runtime/pi-adapter");
+    const { createFileTranscriptArtifactStore } = await n1(
+      "./session-runtime/transcript-artifacts",
+    );
+    // Only the provider is scripted; N-1's Pi and its scripted provider are its own.
+    const { scriptedProvider } = await n1(
+      pathToFileURL(
+        join(
+          process.env.VOLLI_N1_TREE,
+          "packages/agent-runtime/test-fixtures/scripted-provider.ts",
+        ),
+      ).href,
+    );
+    const script = scriptedProvider([{ text: "Continued after the moved command." }]);
+    const { BackgroundShellHost } = await n1("./shell/background-shell-host");
+    const { createAgentShellPort } = await n1("./shell/agent-port");
+    const shells = new BackgroundShellHost({ publishState() {}, publishRemoved() {} });
+    const db = openVolliDb(command.dbPath);
+    let runtime;
+    try {
+      let next = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW + ++next },
+        ids: { next: (kind) => `moved-n1-${kind}-${++next}` },
+      });
+      const before = await engine.getSession({ sessionId: step.sessionId });
+      if (!before?.liveExecutor) throw new Error("Head's moved attachment is not open in N-1");
+      const history = await engine.listEvents({ sessionId: step.sessionId });
+      const birth = history.find(
+        ({ payload }) =>
+          payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface",
+      )?.payload;
+      if (!birth) throw new Error("Head's moved Session has no frozen tool surface");
+      const adapter = createPiNativeAdapter({
+        sessionDataDir: step.sessionDataDir,
+        models: script.models,
+        now: () => NOW + ++next,
+        usageLimits: {
+          fetch: async () => {
+            throw new Error("Fixture has no network");
+          },
+        },
+        resolveRuntimeContext: async () => ({
+          role: "ticket",
+          projectId: before.session.projectId,
+          ticketId: before.session.ticketId,
+          rootThreadId: sessionRootThreadId(step.sessionId),
+          brief: "N−1 moved bash fixture",
+          model: { providerId: "scripted-fixture", modelId: "scripted", reasoningLevel: "off" },
+          toolSurface: birth.input.tools,
+          promptResources: [],
+        }),
+        resolveShellPort: (scope) =>
+          createAgentShellPort({
+            host: shells,
+            scope,
+            session: scope,
+            workspacePath: step.workspace,
+            identity: { sessionId: scope.sessionId, ticketDisplayId: null },
+            pathPrefixes: [],
+          }),
+      });
+      const attachSpecs = [];
+      runtime = createSessionRuntime({
+        engine,
+        artifacts: createFileTranscriptArtifactStore(step.transcriptsRoot),
+        clock: { now: () => NOW + ++next },
+        ids: { next: (kind) => `moved-n1-runtime-${kind}-${++next}` },
+        locations: {
+          resolve: async () => ({
+            directory: step.workspace,
+            venue: { id: "local", kind: "local" },
+          }),
+          prepare: async () => ({
+            directory: step.workspace,
+            venue: { id: "local", kind: "local" },
+          }),
+          reaffirm: async () => undefined,
+        },
+        executor: {
+          ...adapter,
+          attach: (spec, sink) => {
+            attachSpecs.push(spec);
+            return adapter.attach(spec, sink);
+          },
+        },
+      });
+      await runtime.reconcile({ sessionId: step.sessionId, attachmentId: before.liveExecutor.id });
+      const attached = await engine.getSession({ sessionId: step.sessionId });
+      const delivered = await runtime.command({
+        commandId: "n1-moved-message",
+        sessionId: step.sessionId,
+        command: {
+          kind: "message.submit",
+          // Settle the turn so the provider's request and the reply are both done.
+          settle: "turn",
+          message: {
+            id: "n1-moved-message",
+            role: "user",
+            parts: [{ type: "text", text: "Read the earlier result." }],
+          },
+        },
+      });
+      const after = await engine.getSession({ sessionId: step.sessionId });
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      const messages = script.requests[0] ?? [];
+      return {
+        attachStatus: attached.liveExecutor?.status,
+        deliveryStatus: delivered.receipt?.status,
+        realAttachCount: attachSpecs.length,
+        attachContinuity: attachSpecs[0]?.continuity,
+        recoveredSidecar: attachSpecs[0]?.native?.detail?.sessionFilePath,
+        providerRequests: script.requests.length,
+        turnActive: after.turnActive,
+        messages,
+        frozenTools: birth.input.tools,
+        movedResults: messages
+          .filter((message) => message.role === "toolResult" && message.toolName === "bash")
+          .map((message) => ({ isError: message.isError, content: message.content })),
+        acceptedNextMessages: events.filter(
+          ({ payload }) =>
+            payload.kind === "command.receipt.recorded" &&
+            payload.receipt.commandId === "n1-moved-message" &&
+            payload.receipt.status === "accepted",
+        ).length,
+      };
+    } finally {
+      await runtime?.close();
+      shells.disposeSession(step.sessionId);
+      await shells.close?.();
       db.close();
     }
   },

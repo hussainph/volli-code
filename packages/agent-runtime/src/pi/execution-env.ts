@@ -14,6 +14,7 @@
  */
 
 import { addAbortListener } from "node:events";
+import type { ForegroundShellExecutor } from "./vendor/pi-harness/types";
 
 import {
   NodeExecutionEnv,
@@ -49,6 +50,8 @@ export interface PiSessionEnvIdentity {
 }
 
 export interface PiExecutionEnvOptions {
+  /** Host-owned bash processes which a person can move beside the turn. */
+  foregroundExecutor?: ForegroundShellExecutor;
   /**
    * Directories prepended onto the sanitized environment's `PATH`, in order,
    * before every `exec`. See {@link piExecutionEnv} for why this exists.
@@ -277,7 +280,7 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
   #cleaned = false;
 
   constructor(options: PiExecutionEnvOptions & { cwd: string }) {
-    super({ cwd: options.cwd });
+    super({ cwd: options.cwd, foregroundExecutor: options.foregroundExecutor });
     this.#pathPrefixes = options.pathPrefixes ?? [];
     this.#identity = options.identity;
     this.#environment = options.environment;
@@ -352,10 +355,11 @@ class SanitizedEnvExecutionEnv extends NodeExecutionEnv {
  * `ScopedExecutionEnv` remains available to hosts injecting a scoped boundary,
  * with the stricter {@link scopedEnvironment}; this default path does not use it.
  *
- * NO SPAWN LEDGER ROW ON THIS PATH, and the omission is a measurement rather
- * than an oversight (VC-341). Pi's `NodeExecutionEnv` owns the spawn here and
- * exposes no child, no pid and no spawn hook — `exec` resolves only once the
- * command has finished — so there is no honest moment at which this class could
+ * With `foregroundExecutor` (VC-757), the host owns the spawn and writes the
+ * normal shell ledger row before returning its handoff control. The standalone
+ * fallback has NO SPAWN LEDGER ROW (VC-341): `NodeExecutionEnv` owns its spawn and
+ * exposes no child or pid to this class — `exec` resolves only once the
+ * command has finished — so there is no honest moment at which this fallback could
  * write `(pid, pgid, startTime)`. Inventing one from a process-table scan would
  * be a guess written into a ledger whose whole value is that it is not a guess.
  * `ScopedExecutionEnv`, which does own its spawn, takes the ledger port; what
@@ -386,6 +390,7 @@ export async function piExecutionEnv(
 ): Promise<ExecutionEnv> {
   return new SanitizedEnvExecutionEnv({
     cwd: workspacePath,
+    foregroundExecutor: options?.foregroundExecutor,
     pathPrefixes: options?.pathPrefixes,
     identity: options?.identity,
     environment: options?.environment,
