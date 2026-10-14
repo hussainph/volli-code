@@ -35,6 +35,7 @@ import {
   disposeChatClient,
   EMPTY_TRANSCRIPT,
   getOrCreateChatClient,
+  messageDeliveryLabels,
   type ChatCommandRequest,
   type ChatSessionFrame,
   type ChatSessionProjection,
@@ -1731,6 +1732,84 @@ describe("VC-758 visible timeline regressions", () => {
     );
     expect(container?.textContent).toContain("waiting on promotion");
     expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Pending");
+  });
+
+  it("removes Pending on acceptance and keeps the same quiet bubble through durable handoff", async () => {
+    const store = chatStore([], { lifecycle: "working", turnActive: true });
+    const message: UIMessage = {
+      id: "handoff",
+      role: "user",
+      parts: [{ type: "text", text: "keep these words" }],
+    };
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: message.id, text: "keep these words", delivery: "send" });
+    await mountPlane(store);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Pending");
+    const working = () =>
+      [...(container?.querySelectorAll('[role="status"]') ?? [])].find((node) =>
+        node.textContent?.includes("Working"),
+      )!;
+    expect(
+      working().compareDocumentPosition(container!.querySelector(".is-user")!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    await act(async () =>
+      drafts.amendHeldMessage(SESSION, message.id, (held) => ({ ...held, deliveryAccepted: true })),
+    );
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    const accepted = container?.querySelector(".is-user");
+    const bubble = accepted?.firstElementChild?.outerHTML;
+    const rowClass = accepted?.className;
+    expect(
+      accepted!.compareDocumentPosition(working()) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const frame: ChatSessionFrame = {
+      sessionId: SESSION,
+      sequence: 1,
+      event: {
+        id: "accepted-observation",
+        sessionId: SESSION,
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        attachmentId: null,
+        commandId: null,
+        provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
+        payload: {
+          kind: "transcript.referenced",
+          attachmentId: null,
+          turnId: null,
+          reference: { id: "artifact", mediaType: null, digest: null },
+        },
+      },
+      transcript: { message },
+    };
+    await act(async () =>
+      store.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [SESSION]: {
+            ...state.sessions[SESSION]!,
+            transcript: appendFrames(state.sessions[SESSION]!.transcript, [frame]),
+          },
+        },
+      })),
+    );
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+    );
+    expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
+    expect(container?.querySelector(".is-user")?.firstElementChild?.outerHTML).toBe(bubble);
+    expect(container?.querySelector(".is-user")?.className).toBe(rowClass);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(
+      container!.querySelector(".is-user")!.compareDocumentPosition(working()) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      messageDeliveryLabels(store.getState().sessions[SESSION]!.transcript.frames).get(message.id),
+    ).toBe("Delivered");
+    expect(container?.textContent).toContain("keep these words");
   });
 
   it("retains accepted steering from the recovery strip until host ownership is visible", async () => {

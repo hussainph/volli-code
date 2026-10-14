@@ -30,4 +30,10 @@ See `n1-fixround.md` for the older-checkout evidence and `screenshots.md` for re
 - PR #865 remains unmerged for owner review.
 - A second-opinion review found a false-delivered result under concurrent direct Pi-attachment calls, but its alleged client/host overlap did not reproduce: the real host admission tail holds Retry until the queued message opens durably, then rejects Retry as busy. `opened-race.test.ts` pins that real-host serialization; `opened-race.md` records both experiments and the bounded direct-attachment concurrency follow-up. No speculative production runtime fix or supervisor-steering redesign is included.
 
+## 4. Quiet successful delivery (owner follow-up)
+
+The desktop transcript now hides `Delivered` for both accepted held copies and durable user rows, and suppresses the generic `Recorded` fallback. Successful acceptance remains a model/peek fact, not a permanent transcript footer. Pending (including After the current step), Queued, Sending, Delivery unconfirmed and Not delivered remain explanatory labels; no runtime, client, receipt, queue or CLI semantics changed in this follow-up.
+
+Static render tests pin all explanatory labels, quiet accepted send/steer copies (even before durable proof arrives), retained accepted queue ownership, and quiet durable Delivered/history rows. A mounted transition pins immediate Pending → quiet accepted held copy → one durable bubble with identical bubble markup and row classes. The actual gated Pi/runtime/SQLite/RPC ordinary Send regression still proves command-correlated delivery in the presentation model and peek before completion, now with no desktop footer. The lab adds light/dark browser geometry evidence for the held-to-durable handoff; it is seeded presentation evidence, not another runtime acceptance claim.
+
 Exact local commands/results are in `validation.md`; exact verified head and CI/CodeQL links are posted on PR #865 and VC-758 at handoff.

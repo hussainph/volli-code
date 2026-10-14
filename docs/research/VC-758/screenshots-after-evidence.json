@@ -96,38 +96,144 @@
     "state": "accepted-streaming",
     "theme": "light",
     "file": "docs/research/VC-758/screenshots/after-accepted-streaming-light.png",
-    "text": "Check the release notes before we ship.\n\nDelivered\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
-    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Delivered\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "text": "Check the release notes before we ship.\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
     "checks": {
-      "deliveredWhileStreaming": true,
+      "acceptedWhileStreamingHasNoFooter": true,
+      "noDeliveredOrRecorded": true,
       "noPending": true,
       "acceptanceGeometry": {
         "prompt": {
           "x": 214,
           "y": 20,
           "width": 672,
-          "height": 67.796875
+          "height": 39.796875
         },
         "reply": {
           "x": 214,
-          "y": 111.796875,
+          "y": 83.796875,
           "width": 672,
           "height": 23.796875
         },
         "working": {
           "x": 214,
-          "y": 159.59375,
+          "y": 131.59375,
           "width": 672,
           "height": 28
         }
       },
-      "deliveredAboveReplyAndWorking": true,
-      "allInViewport": true,
-      "deliveryGeometry": {
-        "labelRight": 886,
-        "bubbleRight": 886
+      "acceptedAboveReplyAndWorking": true,
+      "allInViewport": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "handoff-pending",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-handoff-pending-light.png",
+    "text": "Seeded lab presentation proof\npending\nAdvance handoff\nWorking\nWorking\nWorking\n\nCheck the release notes before we ship.\n\nPending\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- complementary:\n  - text: Seeded lab presentation proof pending\n  - button \"Advance handoff\"\n- log:\n  - status: Working\n  - paragraph: Check the release notes before we ship.\n  - text: Pending\n  - button \"Copy\":\n    - img\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "seededPresentationOnly": true,
+      "noSuccessFooter": true,
+      "pending": true,
+      "geometry": {
+        "row": {
+          "x": 214,
+          "y": 72,
+          "width": 672,
+          "height": 67.796875
+        },
+        "bubble": {
+          "x": 600.140625,
+          "y": 72,
+          "width": 285.859375,
+          "height": 39.796875
+        },
+        "working": {
+          "x": 214,
+          "y": 20,
+          "width": 672,
+          "height": 28
+        }
+      }
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "handoff-accepted-held",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-handoff-accepted-held-light.png",
+    "text": "Seeded lab presentation proof\naccepted-held\nAdvance handoff\n\nCheck the release notes before we ship.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- complementary:\n  - text: Seeded lab presentation proof accepted-held\n  - button \"Advance handoff\"\n- log:\n  - paragraph: Check the release notes before we ship.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "seededPresentationOnly": true,
+      "noSuccessFooter": true,
+      "pending": false,
+      "geometry": {
+        "row": {
+          "x": 214,
+          "y": 20,
+          "width": 672,
+          "height": 39.796875
+        },
+        "bubble": {
+          "x": 600.140625,
+          "y": 20,
+          "width": 285.859375,
+          "height": 39.796875
+        },
+        "working": {
+          "x": 214,
+          "y": 83.796875,
+          "width": 672,
+          "height": 28
+        }
+      }
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "handoff-durable-delivered",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-handoff-durable-delivered-light.png",
+    "text": "Seeded lab presentation proof\ndurable-delivered\nAdvance handoff\n\nCheck the release notes before we ship.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- complementary:\n  - text: Seeded lab presentation proof durable-delivered\n  - button \"Advance handoff\" [disabled]\n- log:\n  - paragraph: Check the release notes before we ship.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "seededPresentationOnly": true,
+      "noSuccessFooter": true,
+      "pending": false,
+      "geometry": {
+        "row": {
+          "x": 214,
+          "y": 20,
+          "width": 672,
+          "height": 39.796875
+        },
+        "bubble": {
+          "x": 600.140625,
+          "y": 20,
+          "width": 285.859375,
+          "height": 39.796875
+        },
+        "working": {
+          "x": 214,
+          "y": 83.796875,
+          "width": 672,
+          "height": 28
+        }
       },
-      "deliveryRightAligned": true
+      "handoffDelta": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "sameBubbleBounds": true,
+      "sameRowHeight": true
     },
     "errors": []
   },
@@ -228,38 +334,144 @@
     "state": "accepted-streaming",
     "theme": "dark",
     "file": "docs/research/VC-758/screenshots/after-accepted-streaming-dark.png",
-    "text": "Check the release notes before we ship.\n\nDelivered\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
-    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Delivered\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "text": "Check the release notes before we ship.\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
     "checks": {
-      "deliveredWhileStreaming": true,
+      "acceptedWhileStreamingHasNoFooter": true,
+      "noDeliveredOrRecorded": true,
       "noPending": true,
       "acceptanceGeometry": {
         "prompt": {
           "x": 214,
           "y": 20,
           "width": 672,
-          "height": 67.796875
+          "height": 39.796875
         },
         "reply": {
           "x": 214,
-          "y": 111.796875,
+          "y": 83.796875,
           "width": 672,
           "height": 23.796875
         },
         "working": {
           "x": 214,
-          "y": 159.59375,
+          "y": 131.59375,
           "width": 672,
           "height": 28
         }
       },
-      "deliveredAboveReplyAndWorking": true,
-      "allInViewport": true,
-      "deliveryGeometry": {
-        "labelRight": 886,
-        "bubbleRight": 886
+      "acceptedAboveReplyAndWorking": true,
+      "allInViewport": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "handoff-pending",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-handoff-pending-dark.png",
+    "text": "Seeded lab presentation proof\npending\nAdvance handoff\nWorking\nWorking\nWorking\n\nCheck the release notes before we ship.\n\nPending\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- complementary:\n  - text: Seeded lab presentation proof pending\n  - button \"Advance handoff\"\n- log:\n  - status: Working\n  - paragraph: Check the release notes before we ship.\n  - text: Pending\n  - button \"Copy\":\n    - img\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "seededPresentationOnly": true,
+      "noSuccessFooter": true,
+      "pending": true,
+      "geometry": {
+        "row": {
+          "x": 214,
+          "y": 72,
+          "width": 672,
+          "height": 67.796875
+        },
+        "bubble": {
+          "x": 600.140625,
+          "y": 72,
+          "width": 285.859375,
+          "height": 39.796875
+        },
+        "working": {
+          "x": 214,
+          "y": 20,
+          "width": 672,
+          "height": 28
+        }
+      }
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "handoff-accepted-held",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-handoff-accepted-held-dark.png",
+    "text": "Seeded lab presentation proof\naccepted-held\nAdvance handoff\n\nCheck the release notes before we ship.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- complementary:\n  - text: Seeded lab presentation proof accepted-held\n  - button \"Advance handoff\"\n- log:\n  - paragraph: Check the release notes before we ship.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "seededPresentationOnly": true,
+      "noSuccessFooter": true,
+      "pending": false,
+      "geometry": {
+        "row": {
+          "x": 214,
+          "y": 20,
+          "width": 672,
+          "height": 39.796875
+        },
+        "bubble": {
+          "x": 600.140625,
+          "y": 20,
+          "width": 285.859375,
+          "height": 39.796875
+        },
+        "working": {
+          "x": 214,
+          "y": 83.796875,
+          "width": 672,
+          "height": 28
+        }
+      }
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "handoff-durable-delivered",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-handoff-durable-delivered-dark.png",
+    "text": "Seeded lab presentation proof\ndurable-delivered\nAdvance handoff\n\nCheck the release notes before we ship.\n\nWorking\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- complementary:\n  - text: Seeded lab presentation proof durable-delivered\n  - button \"Advance handoff\" [disabled]\n- log:\n  - paragraph: Check the release notes before we ship.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "seededPresentationOnly": true,
+      "noSuccessFooter": true,
+      "pending": false,
+      "geometry": {
+        "row": {
+          "x": 214,
+          "y": 20,
+          "width": 672,
+          "height": 39.796875
+        },
+        "bubble": {
+          "x": 600.140625,
+          "y": 20,
+          "width": 285.859375,
+          "height": 39.796875
+        },
+        "working": {
+          "x": 214,
+          "y": 83.796875,
+          "width": 672,
+          "height": 28
+        }
       },
-      "deliveryRightAligned": true
+      "handoffDelta": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0
+      },
+      "sameBubbleBounds": true,
+      "sameRowHeight": true
     },
     "errors": []
   }

@@ -232,7 +232,8 @@ it("shows a normal delivered prompt above Working and its streaming reply, then 
     expect(
       prompt!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(prompt?.textContent).toContain("Delivered");
+    expect(prompt?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(prompt?.textContent).not.toContain("Delivered");
     const transcript = chat.getState().sessions[f.sessionId]!.transcript;
     expect(
       messageDeliveryLabels(transcript.frames).get(
@@ -256,7 +257,8 @@ it("shows a normal delivered prompt above Working and its streaming reply, then 
         element.textContent?.includes("Working"),
       ),
     ).toBe(false);
-    expect(container.querySelector(".is-user")?.textContent).toContain("Delivered");
+    expect(container.querySelector(".is-user")?.textContent).toContain("Ordinary prompt");
+    expect(container.querySelector('.is-user [data-slot="message-delivery"]')).toBeNull();
     expect(container.querySelector(".is-assistant")?.textContent).toContain("Streaming reply");
   });
 });

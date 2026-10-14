@@ -1,5 +1,5 @@
 /** VC-758: production ChatPlane with frozen renderer/store inputs, not a drawn facsimile.
- * ?state=sending|accepted-streaming|steering|queued|working|error|error-scrolled selects a state.
+ * ?state=sending|accepted-streaming|handoff|steering|queued|working|error|error-scrolled selects a state.
  * No runtime or provider connection; these screenshots prove presentation only.
  */
 import * as React from "react";
@@ -102,7 +102,7 @@ export const api = {
 };
 // Fixture facts, not an actual send. The receipt names the command explicitly;
 // turn.started deliberately has no commandId, so event proximity proves nothing.
-function acceptedStreamingTranscript() {
+function acceptedStreamingTranscript(includeReply = true) {
   const request: UIMessage = {
     id: "request",
     role: "user",
@@ -171,38 +171,42 @@ function acceptedStreamingTranscript() {
         },
       }),
     ],
-    [
-      {
-        kind: "overlay",
-        sessionId: SESSION,
-        throughSequence: 3,
-        messageId: "reply",
-        delta: {
-          op: "reset",
-          message: {
-            id: "reply",
-            role: "assistant",
-            parts: [
-              {
-                key: "reply-text",
-                part: {
-                  type: "text",
-                  text: "I’m checking the release notes and tests.",
-                  state: "streaming",
-                },
+    includeReply
+      ? [
+          {
+            kind: "overlay",
+            sessionId: SESSION,
+            throughSequence: 3,
+            messageId: "reply",
+            delta: {
+              op: "reset",
+              message: {
+                id: "reply",
+                role: "assistant",
+                parts: [
+                  {
+                    key: "reply-text",
+                    part: {
+                      type: "text",
+                      text: "I’m checking the release notes and tests.",
+                      state: "streaming",
+                    },
+                  },
+                ],
               },
-            ],
+            },
           },
-        },
-      },
-    ],
+        ]
+      : [],
   );
 }
 export function seed() {
-  const working = ["steering", "queued", "working", "accepted-streaming"].includes(state);
+  const working = ["steering", "queued", "working", "accepted-streaming", "handoff"].includes(
+    state,
+  );
   const error = state === "error" || state === "error-scrolled";
   const messages: UIMessage[] =
-    state === "working" || state === "sending"
+    state === "working" || state === "sending" || state === "handoff"
       ? []
       : [
           {
@@ -297,12 +301,12 @@ export function seed() {
         attachments: [],
         touchedAt: 0,
         held:
-          state === "sending" || state === "steering"
+          state === "sending" || state === "steering" || state === "handoff"
             ? [
                 {
-                  id: "pending",
+                  id: state === "handoff" ? "request" : "pending",
                   text:
-                    state === "sending"
+                    state !== "steering"
                       ? "Check the release notes before we ship."
                       : "Focus on the compatibility section first.",
                   state: "sending",
@@ -318,6 +322,28 @@ export function seed() {
   useProjectSessionsStore.setState({ byProject: { [PROJECT]: EMPTY_PROJECT_SESSION_ROWS } });
 }
 export default function SilentEndsScratch() {
+  const [handoff, setHandoff] = React.useState("pending");
+  function advanceHandoff() {
+    if (handoff === "pending") {
+      // Seed the same acknowledgement bit the client sets when its receipt arrives
+      // before the stream. This is a presentation fixture, not a real send.
+      useChatDraftsStore.getState().amendHeldMessage(SESSION, "request", (message) => ({
+        ...message,
+        deliveryAccepted: true,
+      }));
+      setHandoff("accepted-held");
+    } else if (handoff === "accepted-held") {
+      // Preserve the mounted plane and active turn; only stream ownership lands.
+      // The real ChatPlane reconciliation effect retires the matching held copy.
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: { ...sessions[SESSION]!, transcript: acceptedStreamingTranscript(false) },
+        },
+      }));
+      setHandoff("durable-delivered");
+    }
+  }
   const Plane = before ? BeforePlane : ChatPlane;
   if (Plane === null)
     return <p>Run the screenshot capture script to materialize the baseline renderer.</p>;
@@ -325,7 +351,24 @@ export default function SilentEndsScratch() {
     <React.Suspense>
       <TooltipProvider>
         <ModelAccessProvider client={client}>
-          <div className="flex h-svh flex-col bg-background" data-vc-758-state={state}>
+          <div
+            className="flex h-svh flex-col bg-background"
+            data-vc-758-state={state}
+            data-vc-758-handoff={handoff}
+          >
+            {state === "handoff" ? (
+              <aside className="absolute top-4 left-2 z-10 flex w-40 flex-col gap-2 text-ui text-muted-foreground">
+                <span>Seeded lab presentation proof</span>
+                <span>{handoff}</span>
+                <button
+                  type="button"
+                  disabled={handoff === "durable-delivered"}
+                  onClick={advanceHandoff}
+                >
+                  Advance handoff
+                </button>
+              </aside>
+            ) : null}
             <Plane
               sessionId={SESSION}
               projectId={PROJECT}

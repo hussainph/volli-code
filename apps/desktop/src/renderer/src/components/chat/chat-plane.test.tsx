@@ -185,8 +185,8 @@ describe("VC-758 message and work status rows", () => {
       if (delivery === "queue") expect(html).toContain("Queued");
     },
   );
-  it("marks runtime-accepted words Delivered and rejected words Not delivered", () => {
-    for (const label of ["Delivered", "Not delivered", "Delivery unconfirmed"] as const) {
+  it("keeps durable non-delivered states visible", () => {
+    for (const label of ["Pending", "Not delivered", "Delivery unconfirmed"] as const) {
       const html = renderToStaticMarkup(
         <ChatTurn
           messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
@@ -196,5 +196,81 @@ describe("VC-758 message and work status rows", () => {
       );
       expect(html).toContain(`>${label}</span>`);
     }
+  });
+  it.each([
+    "Pending",
+    "Pending · After the current step",
+    "Queued",
+    "Sending",
+    "Delivery unconfirmed",
+    "Not delivered",
+  ])("keeps the explicit %s explanation visible", (label) => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+        context={context}
+        live={false}
+        deliveryLabel={label}
+      />,
+    );
+    expect(html).toContain(`>${label}</span>`);
+  });
+  it.each(["Delivered", "Recorded"])("does not draw a successful %s footer", (label) => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+        context={{ ...context, deliveryLabels: new Map([["user", "Delivered"]]) }}
+        live={false}
+        deliveryLabel={label}
+      />,
+    );
+    expect(html).not.toContain("message-delivery");
+    expect(html).not.toContain(label);
+  });
+  it.each(["send", "steer"] as const)(
+    "keeps accepted held %s quiet even before durable proof arrives",
+    (delivery) => {
+      const html = renderToStaticMarkup(
+        <PendingMessage
+          message={{
+            id: "user",
+            text: "hello",
+            state: "sending",
+            delivery,
+            deliveryAccepted: true,
+          }}
+          context={{ ...context, deliveryLabels: new Map([["user", "Pending"]]) }}
+        />,
+      );
+      expect(html).toContain("hello");
+      expect(html).not.toContain("message-delivery");
+      expect(html).not.toContain("Delivered");
+      expect(html).not.toContain("Pending");
+    },
+  );
+  it("keeps accepted held queue ownership visible", () => {
+    const html = renderToStaticMarkup(
+      <PendingMessage
+        message={{
+          id: "queued",
+          text: "later",
+          state: "sending",
+          delivery: "queue",
+          deliveryAccepted: true,
+        }}
+        context={context}
+      />,
+    );
+    expect(html).toContain(">Queued</span>");
+  });
+  it("does not draw a durable Delivered footer without a local override", () => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+        context={{ ...context, deliveryLabels: new Map([["user", "Delivered"]]) }}
+        live={false}
+      />,
+    );
+    expect(html).not.toContain("message-delivery");
   });
 });

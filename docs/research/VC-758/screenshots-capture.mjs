@@ -25,7 +25,7 @@ if (phase === 'before') {
 const browser = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
 const evidence = [];
 const states = ['sending', 'steering', 'queued', 'working', 'error'];
-if (phase === 'after') states.push('error-scrolled', 'accepted-streaming');
+if (phase === 'after') states.push('error-scrolled', 'accepted-streaming', 'handoff');
 try {
   for (const theme of ['light', 'dark']) {
     for (const state of states) {
@@ -39,6 +39,50 @@ try {
       if (state === 'queued') await page.getByText('Also check the migration notes.', { exact: true }).waitFor();
       await page.waitForTimeout(500);
       const root = page.locator('[data-vc-758-state]');
+      if (state === 'handoff') {
+        const stages = [];
+        for (const stage of ['pending', 'accepted-held', 'durable-delivered']) {
+          await root.locator(`:scope[data-vc-758-handoff="${stage}"]`).waitFor();
+          await page.waitForTimeout(300);
+          const prompt = root.locator('.is-user');
+          assert.equal(await prompt.count(), 1);
+          assert.equal(await prompt.getByText('Check the release notes before we ship.', { exact: true }).count(), 1);
+          const footer = prompt.locator('[data-slot="message-delivery"]');
+          assert.equal(await footer.count(), stage === 'pending' ? 1 : 0);
+          if (stage === 'pending') assert.equal(await footer.innerText(), 'Pending');
+          const text = await root.innerText();
+          assert(!text.includes('Delivered') && !text.includes('Recorded'));
+          if (stage !== 'pending') assert(!text.includes('Pending'));
+          const working = root.getByRole('status').filter({ hasText: 'Working' });
+          assert.equal(await working.count(), 1);
+          const geometry = {
+            row: await prompt.boundingBox(),
+            bubble: await prompt.locator(':scope > :first-child').boundingBox(),
+            working: await working.boundingBox(),
+          };
+          assert(geometry.row !== null && geometry.bubble !== null && geometry.working !== null);
+          const checks = { seededPresentationOnly: true, noSuccessFooter: true, pending: stage === 'pending', geometry };
+          if (stage === 'durable-delivered') {
+            const accepted = stages[1].checks.geometry;
+            checks.handoffDelta = Object.fromEntries(['x', 'y', 'width', 'height'].map(key => [key, geometry.bubble[key] - accepted.bubble[key]]));
+            checks.sameBubbleBounds = Object.values(checks.handoffDelta).every(value => Math.abs(value) <= 1);
+            checks.sameRowHeight = Math.abs(geometry.row.height - accepted.row.height) <= 1;
+            assert(checks.sameRowHeight);
+            assert(checks.sameBubbleBounds);
+            assert.equal(geometry.bubble.width, accepted.bubble.width);
+            assert.equal(geometry.bubble.height, accepted.bubble.height);
+          }
+          const file = `docs/research/VC-758/screenshots/${phase}-handoff-${stage}-${theme}.png`;
+          await root.screenshot({ path: file, animations: 'disabled' });
+          assert.deepEqual(errors, []);
+          stages.push({ phase, state: `handoff-${stage}`, theme, file, text, accessibility: await root.ariaSnapshot(), checks, errors: [...errors] });
+          if (stage !== 'durable-delivered') await root.getByRole('button', { name: 'Advance handoff' }).click();
+        }
+        evidence.push(...stages);
+        console.log(`${phase}/handoff/${theme}: ${errors.length} page errors; ${JSON.stringify(stages[2].checks)}`);
+        await page.close();
+        continue;
+      }
       if (state === 'error-scrolled') {
         await root.getByRole('log').hover({ position: { x: 400, y: 200 } });
         await page.mouse.wheel(0, -1600);
@@ -77,20 +121,22 @@ try {
         const working = root.getByRole('status').filter({ hasText: 'Working' });
         const label = prompt.locator('[data-slot="message-delivery"]');
         assert.equal(await prompt.count(), 1);
-        assert.equal(await label.innerText(), 'Delivered');
+        assert.equal(await label.count(), 0);
         assert.equal(await working.count(), 1);
         assert.equal(await reply.innerText(), 'I’m checking the release notes and tests.');
-        checks.deliveredWhileStreaming = true;
+        checks.acceptedWhileStreamingHasNoFooter = true;
+        checks.noDeliveredOrRecorded = !text.includes('Delivered') && !text.includes('Recorded');
+        assert(checks.noDeliveredOrRecorded);
         checks.noPending = !text.includes('Pending');
         assert(checks.noPending);
         const promptBox = await prompt.boundingBox();
         const replyBox = await reply.boundingBox();
         const workingBox = await working.boundingBox();
         checks.acceptanceGeometry = { prompt: promptBox, reply: replyBox, working: workingBox };
-        checks.deliveredAboveReplyAndWorking = promptBox !== null && replyBox !== null && workingBox !== null
+        checks.acceptedAboveReplyAndWorking = promptBox !== null && replyBox !== null && workingBox !== null
           && promptBox.y + promptBox.height <= replyBox.y
           && promptBox.y + promptBox.height <= workingBox.y;
-        assert(checks.deliveredAboveReplyAndWorking);
+        assert(checks.acceptedAboveReplyAndWorking);
         checks.allInViewport = [promptBox, replyBox, workingBox].every(box => box !== null
           && box.y >= 0 && box.y + box.height <= 780);
         assert(checks.allInViewport);
@@ -101,7 +147,7 @@ try {
           checks.oldHistoryHasNoFooter = await oldMessage.locator('[data-slot="message-delivery"]').count() === 0;
           assert(checks.oldHistoryHasNoFooter);
         }
-        if (state === 'sending' || state === 'steering' || state === 'accepted-streaming') {
+        if (state === 'sending' || state === 'steering') {
           const label = root.locator('[data-slot="message-delivery"]');
           const geometry = await label.evaluate(node => {
             const labelBox = node.getBoundingClientRect();

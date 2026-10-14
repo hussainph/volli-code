@@ -132,3 +132,32 @@ vp test run src/renderer/src/components/chat/chat-plane.test.tsx \
 Reused each exact prepared old-tag manifest with `VOLLI_N1_MANIFEST` and reran `vp test run src/db/n1-compatibility.test.ts src/db/n1-prepare.test.ts --maxWorkers="$VOLLI_CONCURRENCY_HINT"`: **22/22 passed on each of 0.2.1 and canary.1**, including both silent-end scenarios and main's native bash-sidecar downgrade case. The root CI-contract tests passed 11/11 again. Typecheck passed for desktop, shared, cli, session-engine, session-presentation, session-rpc, host-core and agent-runtime. Host boundary, fresh generated schema/additive check (37 compatibility tests) and diff check passed against merged main. Screenshot revalidation after this merge is recorded in `screenshots.md`.
 
 Exact verified fix-round head and CI/CodeQL links are posted on PR #865 and VC-758 after push, without mutating the verified commit just to embed its own hash. PR remains unmerged.
+
+### Quiet successful delivery follow-up
+
+Owner requested hiding desktop Delivered/Recorded footers while retaining explanatory waits/refusals. No peek/runtime/protocol behavior changed.
+
+```sh
+# apps/desktop — exact focused selection
+vp test run src/renderer/src/components/chat/chat-plane.test.tsx \
+  src/renderer/src/components/chat/chat-plane.window.test.tsx \
+  src/renderer/src/components/chat/chat-plane.acceptance.test.tsx \
+  src/renderer/src/components/chat/chat-plane-model.test.ts \
+  src/renderer/src/components/chat/running-bash-control.test.tsx \
+  src/renderer/src/components/chat/activity-ui.test.tsx --coverage \
+  --coverage.include=src/renderer/src/components/chat/chat-plane-model.ts \
+  --maxWorkers="$VOLLI_CONCURRENCY_HINT" --testTimeout=20000
+# 204 passed, no skips; protected chat-plane-model.ts 100% on all four axes.
+vp run typecheck
+# All four desktop TypeScript configurations passed.
+```
+
+The mounted handoff test pins Pending disappearance on acceptance, then identical accepted-held/durable bubble markup and row classes with one copy of the words. It also asserts undelivered words below Working and accepted held/durable words above it; the durable fold remains Delivered. Browser geometry is recorded separately in `screenshots.md`. The mounted real runtime test still asserts Delivered in the model and `session.peek` before completion, but no delivery footer in the desktop.
+
+The first browser capture correctly exposed a 52px ownership-handoff jump: accepted held words were still below Working while their durable replacement moved above it. Accepted non-queue held copies now move to the delivered side at acceptance, before ownership handoff; queue placement is unchanged. Reran the exact 204-test/typecheck selection above after this correction: all passed with unchanged 100% model coverage. The runner now asserts matching accepted-held/durable bounds instead of merely recording the jump.
+
+`vp check` passed with no lint warnings/errors; `node scripts/check-host-electron-imports.mjs` passed (1643 modules); `pnpm check:protocol-schema --base origin/main` passed all 37 compatibility assertions and the fresh/additive schema check; `node --check docs/research/VC-758/screenshots-capture.mjs` and `git diff --check` passed. No production schema, runtime, CLI or frozen-tool change in this follow-up. `git merge origin/main` returned Already up to date at `36afefd4f`.
+
+Final browser revalidation: 20/20 AFTER captures passed, zero page errors; accepted-held and durable bubble/row/Working rectangles match exactly in both themes (all handoff deltas zero). Eight affected PNGs were visually inspected. BEFORE evidence remains byte-identical (11/11 files); owned lab server on 5368 stopped. Pending → accepted intentionally promotes the message above Working, as documented; there is no further durable-handoff shift.
+
+Fetched and merged latest `origin/main` again immediately before push; the new main-only changes are in the remote-acceptance drive harness, with no renderer conflict. Final repository/schema/boundary/diff checks were repeated after that merge. Exact merge and verified PR head are named in the handoff comment.

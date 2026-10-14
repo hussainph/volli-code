@@ -1667,6 +1667,20 @@ export function ChatPlane({
                         onLoadOlder={controller.loadOlder}
                         {...(onOpenSession === undefined ? {} : { onOpenSession })}
                       >
+                        {/* Accepted words already belong above Working, even while
+                            their durable projection catches up. Moving them only
+                            at ownership handoff would jump the same bubble. */}
+                        {pendingMessages
+                          .filter(
+                            (message) => message.deliveryAccepted && message.delivery !== "queue",
+                          )
+                          .map((message) => (
+                            <PendingMessage
+                              key={message.id}
+                              message={message}
+                              context={turnContext}
+                            />
+                          ))}
                         {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
                         {turnRunning ? <TurnRunningMark /> : null}
                         {undeliveredRows.map((row) => (
@@ -1677,13 +1691,17 @@ export function ChatPlane({
                             live={false}
                           />
                         ))}
-                        {pendingMessages.map((message) => (
-                          <PendingMessage
-                            key={message.id}
-                            message={message}
-                            context={turnContext}
-                          />
-                        ))}
+                        {pendingMessages
+                          .filter(
+                            (message) => !message.deliveryAccepted || message.delivery === "queue",
+                          )
+                          .map((message) => (
+                            <PendingMessage
+                              key={message.id}
+                              message={message}
+                              context={turnContext}
+                            />
+                          ))}
                         {timelineBlocker ? <SessionBlocker blocker={timelineBlocker} /> : null}
                       </ChatTranscript>
                     )}
@@ -2758,6 +2776,17 @@ export const ChatTurn = React.memo(function ChatTurn({
   // Plan-only projections must not leave an empty bubble.
   if (segments && segments.length === 0) return null;
 
+  // Delivery facts remain in the model/peek. The transcript explains waits
+  // and refusals, not every successful send. The accepted held copy and its
+  // durable replacement use the same quiet markup at ownership handoff.
+  const delivery = deliveryLabel ?? context.deliveryLabels?.get(first.id);
+  const footer =
+    delivery === "Delivered" || delivery === "Recorded"
+      ? undefined
+      : delivery === "Pending" && context.steeringMessages?.has(first.id)
+        ? "Pending · After the current step"
+        : delivery;
+
   return (
     <Message from={role} className="relative max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
@@ -2796,16 +2825,12 @@ export const ChatTurn = React.memo(function ChatTurn({
           </div>
         ) : null}
       </MessageContent>
-      {role === "user" && (deliveryLabel !== undefined || context.deliveryLabels?.has(first.id)) ? (
+      {role === "user" && footer !== undefined ? (
         <span
           data-slot="message-delivery"
           className="self-end text-right text-ui text-muted-foreground"
         >
-          {deliveryLabel ??
-            (context.deliveryLabels?.get(first.id) === "Pending" &&
-            context.steeringMessages?.has(first.id)
-              ? "Pending · After the current step"
-              : (context.deliveryLabels?.get(first.id) ?? "Recorded"))}
+          {footer}
         </span>
       ) : null}
       {copyableText !== null ? <MessageCopyAction text={copyableText} from={role} /> : null}

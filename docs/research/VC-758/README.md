@@ -2,7 +2,7 @@
 
 ## Changes for the person and the model
 
-The desktop now draws a submitted message immediately, keeps Working visible above undelivered steering, labels queue ownership, and places existing runtime failures in the conversation. A reader scrolled into history gets a navigation hint naming the current failure, without a second recovery. Unlabelled historical messages keep their old appearance.
+The desktop now draws a submitted message immediately, keeps Working visible above undelivered steering, labels queue ownership, and places existing runtime failures in the conversation. A reader scrolled into history gets a navigation hint naming the current failure, without a second recovery. Successful sends have no Delivered/Recorded footer, including accepted held copies awaiting durable ownership. Explanatory waits and refusals remain visible. Unlabelled historical messages keep their old appearance.
 
 `volli session peek` now carries existing failure/Attention, stop actor/reason, watchdog signal, queue ownership, and per-message delivery proof. The CLI prints those facts rather than guessing a cause from elapsed time or assistant prose. Reasons and queued message bodies are bounded/redacted by the host and quoted as untrusted prose in text output. No Session tool array, description, Code Mode record, model prompt, cloud flag, migration, or new ledger event kind changes.
 
@@ -51,7 +51,7 @@ Baseline was worktree birth `c0cfd4577`. Main including VC-753 was merged before
 1. Keep visible Working throughout an actual open turn, including between steps; no new elapsed-time stall heuristic. Watchdog/provider-supervisor facts remain authoritative.
 2. Sign-in/configuration gets one Open settings recovery. Runtime failures retain existing Retry. Dismiss and Scroll to latest are view/navigation actions, not alternative recovery operations.
 3. Unknown delivery is not non-delivery. Keep the recorded words and explanation; never automatically resend uncertain work. Positive consumption/turn proof outranks a later unreconciled receipt.
-4. Delivery footers apply only where existing intent/receipt proof exists, not interaction answers or unlabelled history. Text CLI reset instants are UTC; JSON keeps the epoch.
+4. Delivery footers explain only non-delivered states with existing intent/receipt proof, not successful sends, interaction answers or unlabelled history. Text CLI reset instants are UTC; JSON keeps the epoch.
 5. Raw steering mode is not in the durable `message.submit` intent. After the local hint is lost, peek honestly says Pending rather than inventing a target step. Host-owned queued steering has durable target state and the additive wait hint.
 
 ## Follow-ups / explicit limits
