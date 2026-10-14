@@ -1,10 +1,28 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { MCP_UNTRUSTED_DATA_WARNING } from "./tools";
-import { toolRefreshId, toolRefreshMessage } from "./tool-refresh-announcements";
+import {
+  canAnnounceToolRefresh,
+  toolRefreshId,
+  toolRefreshMessage,
+} from "./tool-refresh-announcements";
 import { systemHead, withSystemHead } from "./transcript-context";
 
 describe("durable tool discovery messages", () => {
+  it("uses only Pi's model compatibility opt-in while warm; any cold boundary can publish", () => {
+    for (const compat of [
+      undefined,
+      {},
+      { supportsStrictMode: true },
+      { supportsMidConvoSystemMessages: false },
+    ]) {
+      expect(canAnnounceToolRefresh({ compat }, true)).toBe(false);
+      expect(canAnnounceToolRefresh({ compat }, false)).toBe(true);
+    }
+    expect(canAnnounceToolRefresh({ compat: { supportsMidConvoSystemMessages: true } }, true)).toBe(
+      true,
+    );
+  });
   it("stores the receipt on an ordinary Pi system message without touching the prefix", () => {
     const message = toolRefreshMessage([{ name: "volli", count: 2 }], 17, "event-1");
     const recovered = JSON.parse(JSON.stringify(message)) as AgentMessage;

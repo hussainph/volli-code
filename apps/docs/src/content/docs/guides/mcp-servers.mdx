@@ -30,8 +30,9 @@ to enable. Use **Refresh** to read its tool catalog again.
 The server’s **On** checkbox and each tool checkbox control what new root Sessions
 for this project can use. Existing Sessions keep every tool they already hold
 and can gain additions. Tools routed only through Code Mode become available
-before the next program, with a short appended announcement. Other additions
-wait for a cold prompt cache, compaction or a model switch. Each update appears
+before the next program. Their short announcement waits for a cold prompt cache,
+compaction or model switch unless the model supports mid-conversation system
+messages. Other additions wait for those same boundaries. Each update appears
 as an expandable “Tools updated” transcript row.
 
 Delegated helpers inherit their parent's current recorded MCP tools, including

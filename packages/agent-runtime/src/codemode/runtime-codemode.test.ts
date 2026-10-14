@@ -17,6 +17,7 @@ import {
   createModels,
   fauxProvider,
   getCurrentTools,
+  type Api,
   type AssistantMessage,
   type Context,
   type JsonObject,
@@ -40,6 +41,7 @@ import {
   type ToolRoute,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { normalizeContext, resolveTranscript } from "@earendil-works/pi-ai/utils/transcript";
 import { StorageBackedSession } from "../pi/vendor/pi-harness/session/session";
 import { toolRefreshId } from "../pi/tool-refresh-announcements";
 import { MCP_UNTRUSTED_DATA_WARNING } from "../pi/tools";
@@ -69,8 +71,9 @@ function codeModeReply(id: string, code: string): Reply {
 function scripted(
   replies: Reply[],
   seen: Context[],
-  modelOverrides: Partial<Model<string>> = {},
+  modelOverrides: Partial<Model<Api>> = {},
   providerId = PROVIDER,
+  otherOverrides: Partial<Model<Api>> = {},
 ): Models {
   let index = 0;
   const stream: StreamFn = (model, context) => {
@@ -134,7 +137,12 @@ function scripted(
     models: [{ id: MODEL }, { id: `${MODEL}-other` }],
   });
   const catalog = (faux.provider.getModels() as Model<string>[]).map((model) =>
-    Object.assign(model, modelOverrides),
+    Object.assign(
+      model,
+      { compat: { supportsMidConvoSystemMessages: true } },
+      modelOverrides,
+      model.id === `${MODEL}-other` ? otherOverrides : {},
+    ),
   );
   const models = createModels();
   models.setProvider({
@@ -730,6 +738,302 @@ describe("Code Mode through the real Session path", () => {
 // Only the provider is scripted: refresh crosses the real Pi loop, the durable
 // sidecar, executable tool builders and QuickJS worker, not a registry mock.
 describe("additions-only surface refresh through Pi", () => {
+  it.each([
+    { support: false, boundary: "cold-turn" },
+    { support: undefined, boundary: "cold-turn" },
+    { support: true, boundary: "cold-turn" },
+    { support: false, boundary: "compaction" },
+  ] as const)(
+    "keeps collapse-prone warm prefixes frozen, including recovery, and publishes once at $boundary (compat=$support)",
+    async ({ support, boundary }) => {
+      const h = harness();
+      let clock = Date.now();
+      const fact = { id: "deferred-refresh", namespaces: [{ name: "volli", count: 1 }] };
+      const birth = specFor(h, { tools: { tools: ["read"] }, toolRefreshAnnouncements: [] });
+      const effective = specFor(h, {
+        tools: { tools: ["read", "write"] },
+        routes: { write: "code" },
+        toolRefreshAnnouncements: [fact],
+      });
+      const warmSpec = { ...effective, declarationTools: birth.tools };
+      let added = false;
+      const program = codeModeReply(
+        "warm-write",
+        'text(await searchTools("write")); text(await describeTool("write")); await tools.write({path:"added.txt",content:"warm callable"}); return 42;',
+      );
+      const models = scripted(
+        [
+          { text: "before" },
+          program,
+          { text: "warm done" },
+          { text: "warm recovery" },
+          ...(boundary === "compaction" ? [{ text: "## Goal\nKeep the new tool." }] : []),
+          { text: "cold delivery" },
+          { text: "still once" },
+        ],
+        h.seen,
+        { compat: support === undefined ? {} : { supportsMidConvoSystemMessages: support } },
+      );
+      const runtime = createPiAgentRuntime({
+        sessionDataDir: h.sessions,
+        models,
+        now: () => clock,
+      });
+      const refreshTools: NonNullable<SessionRuntimeSpec["refreshTools"]> = async ({ trigger }) => {
+        if (!added) return birth;
+        // No new host fact at the paid boundary: pending IDs must still flush.
+        if (trigger === "cold-turn" || trigger === "compaction") return null;
+        return warmSpec;
+      };
+      let handle = await runtime.startSession({ ...birth, refreshTools });
+      const providerContext = (context: Context) =>
+        resolveTranscript(normalizeContext(context), support);
+      try {
+        await handle.submitUserMessage("before ".repeat(9_000));
+        const prefix = JSON.stringify(providerContext(h.seen[0]!).messages[0]);
+        const declarations = JSON.stringify(h.seen[0]!.tools);
+        added = true;
+        clock++;
+        await handle.submitUserMessage("Use the new tool without changing the cached head.");
+        expect(readFileSync(join(h.worktree, "added.txt"), "utf8")).toBe("warm callable");
+        expect(resultText(h, "warm-write")).toContain("write");
+        expect(resultText(h, "warm-write")).toContain("42");
+        for (const context of h.seen) {
+          expect(JSON.stringify(providerContext(context).messages[0])).toBe(prefix);
+          expect(JSON.stringify(context.tools)).toBe(declarations);
+        }
+        expect(
+          h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === fact.id),
+        ).toHaveLength(support ? 1 : 0);
+        const recovery = handle.recovery!;
+        expect(readFileSync(recovery.sessionFilePath, "utf8").includes("volliToolRefreshId")).toBe(
+          support === true,
+        );
+        await handle.close();
+        handle = await runtime.startSession({ ...warmSpec, recovery, refreshTools });
+        await handle.submitUserMessage("Still warm after restart.");
+        expect(JSON.stringify(providerContext(h.seen.at(-1)!).messages[0])).toBe(prefix);
+        expect(JSON.stringify(h.seen.at(-1)!.tools)).toBe(declarations);
+        expect(
+          h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === fact.id),
+        ).toHaveLength(support ? 1 : 0);
+        if (boundary === "compaction")
+          await expect(handle.compact()).resolves.toEqual({ kind: "compacted" });
+        else clock += 60 * 60_000 + 1;
+        await handle.submitUserMessage("At the paid boundary.");
+        const delivered = providerContext(h.seen.at(-1)!);
+        expect(
+          JSON.stringify(delivered.messages).match(/Tools added through Code Mode:/g),
+        ).toHaveLength(1);
+        expect(
+          h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === fact.id),
+        ).toHaveLength(1);
+        expect(
+          readFileSync(recovery.sessionFilePath, "utf8").match(/volliToolRefreshId/g),
+        ).toHaveLength(1);
+        const coldPrefix = JSON.stringify(delivered.messages[0]);
+        await handle.submitUserMessage("Already delivered.");
+        expect(JSON.stringify(providerContext(h.seen.at(-1)!).messages[0])).toBe(coldPrefix);
+        expect(
+          readFileSync(recovery.sessionFilePath, "utf8").match(/volliToolRefreshId/g),
+        ).toHaveLength(1);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it("defers standalone legacy discovery on a collapsing model until a cold boundary even when the host returns null", async () => {
+    const h = harness();
+    let clock = Date.now();
+    const birth = specFor(h, { tools: { tools: ["read"] } });
+    const effective = specFor(h, {
+      tools: { tools: ["read", "write"] },
+      routes: { write: "code" },
+    });
+    let added = false;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      now: () => clock,
+      models: scripted(
+        [
+          { text: "before" },
+          codeModeReply(
+            "legacy-warm",
+            'await tools.write({path:"legacy.txt",content:"usable"}); return 42;',
+          ),
+          { text: "warm" },
+          { text: "cold" },
+        ],
+        h.seen,
+        { compat: { supportsMidConvoSystemMessages: false } },
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...birth,
+      refreshTools: async ({ trigger }) =>
+        added && (trigger === "warm-turn" || trigger === "code-mode") ? effective : null,
+    });
+    try {
+      await handle.submitUserMessage("Before.");
+      const prefix = JSON.stringify(
+        resolveTranscript(normalizeContext(h.seen[0]!), false).messages[0],
+      );
+      added = true;
+      clock++;
+      await handle.submitUserMessage("Use the new standalone tool.");
+      expect(readFileSync(join(h.worktree, "legacy.txt"), "utf8")).toBe("usable");
+      expect(
+        JSON.stringify(resolveTranscript(normalizeContext(h.seen.at(-1)!), false).messages[0]),
+      ).toBe(prefix);
+      expect(JSON.stringify(h.seen.at(-1)!.messages)).not.toContain(
+        "Tools added through Code Mode:",
+      );
+      clock += 60 * 60_000 + 1;
+      await handle.submitUserMessage("Now cold.");
+      expect(
+        JSON.stringify(resolveTranscript(normalizeContext(h.seen.at(-1)!), false).messages).match(
+          /Tools added through Code Mode:/g,
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("drains a cold replay append before close even without a host refresh callback", async () => {
+    const h = harness();
+    const birth = specFor(h, { toolRefreshAnnouncements: [] });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      models: scripted([{ text: "before" }], h.seen, {
+        compat: { supportsMidConvoSystemMessages: false },
+      }),
+    });
+    const first = await runtime.startSession(birth);
+    await first.submitUserMessage("Before recovery.");
+    const recovery = first.recovery!;
+    await first.close();
+    const fact = { id: "cold-replay-close", namespaces: [{ name: "volli", count: 1 }] };
+    const handle = await runtime.startSession({
+      ...birth,
+      recovery,
+      toolRefreshAnnouncements: [fact],
+    });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const original = StorageBackedSession.prototype.appendToBranch;
+    const append = vi
+      .spyOn(StorageBackedSession.prototype, "appendToBranch")
+      .mockImplementation(async function (this: StorageBackedSession, ...args) {
+        if (args[1].type === "message" && toolRefreshId(args[1].message) === fact.id) {
+          entered.resolve();
+          await release.promise;
+        }
+        return original.apply(this, args);
+      });
+    try {
+      const selecting = handle.selectModel({ ...birth.model, modelId: `${MODEL}-other` });
+      const rejected = expect(selecting).rejects.toThrow("This attachment is closed.");
+      await entered.promise;
+      let closed = false;
+      const closing = handle.close().then(() => {
+        closed = true;
+      });
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      release.resolve();
+      await rejected;
+      await closing;
+    } finally {
+      append.mockRestore();
+      await handle.close();
+    }
+  });
+
+  it("flushes a still-pending supporting-model receipt once when switching to a collapsing model, then defers that model's next warm receipt", async () => {
+    const h = harness();
+    let clock = Date.now();
+    const firstFact = { id: "pending-before-switch", namespaces: [{ name: "volli", count: 1 }] };
+    const laterFact = { id: "deferred-after-switch", namespaces: [{ name: "volli", count: 1 }] };
+    const birth = specFor(h, { toolRefreshAnnouncements: [] });
+    const models = scripted(
+      [
+        codeModeReply("pending", "return 42;"),
+        { text: "pause" },
+        { text: "after switch" },
+        { text: "warm collapse" },
+        { text: "cold collapse" },
+      ],
+      h.seen,
+      {},
+      PROVIDER,
+      { compat: { supportsMidConvoSystemMessages: false } },
+    );
+    let supplied = false;
+    let later = false;
+    const runtime = createPiAgentRuntime({ sessionDataDir: h.sessions, models, now: () => clock });
+    const handle = await runtime.startSession({
+      ...birth,
+      refreshTools: async ({ trigger }) => {
+        if (trigger === "code-mode" && !supplied) {
+          supplied = true;
+          return { ...birth, toolRefreshAnnouncements: [firstFact] };
+        }
+        if (later) return { ...birth, toolRefreshAnnouncements: [firstFact, laterFact] };
+        return null;
+      },
+    });
+    const original = StorageBackedSession.prototype.appendToBranch;
+    let fail = true;
+    const append = vi
+      .spyOn(StorageBackedSession.prototype, "appendToBranch")
+      .mockImplementation(async function (this: StorageBackedSession, ...args) {
+        if (args[1].type === "message" && toolRefreshId(args[1].message) === firstFact.id && fail) {
+          fail = false;
+          throw new Error("receipt is still pending");
+        }
+        return original.apply(this, args);
+      });
+    try {
+      await handle.submitUserMessage("Attempt the announcement on a supporting model.");
+      expect(h.seen.at(-1)!.messages.some((message) => toolRefreshId(message) !== undefined)).toBe(
+        false,
+      );
+      expect(readFileSync(handle.recovery!.sessionFilePath, "utf8")).not.toContain(
+        "volliToolRefreshId",
+      );
+      await expect(
+        handle.selectModel({ ...birth.model, modelId: `${MODEL}-other` }),
+      ).resolves.toEqual({ kind: "selected" });
+      await handle.submitUserMessage("The model switch paid for pending discovery.");
+      expect(
+        h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === firstFact.id),
+      ).toHaveLength(1);
+      const collapsed = JSON.stringify(
+        resolveTranscript(normalizeContext(h.seen.at(-1)!), false).messages[0],
+      );
+      later = true;
+      clock++;
+      await handle.submitUserMessage("New discovery must now defer.");
+      expect(
+        JSON.stringify(resolveTranscript(normalizeContext(h.seen.at(-1)!), false).messages[0]),
+      ).toBe(collapsed);
+      expect(
+        h.seen.at(-1)!.messages.some((message) => toolRefreshId(message) === laterFact.id),
+      ).toBe(false);
+      clock += 60 * 60_000 + 1;
+      await handle.submitUserMessage("Cold again.");
+      for (const fact of [firstFact, laterFact])
+        expect(
+          h.seen.at(-1)!.messages.filter((message) => toolRefreshId(message) === fact.id),
+        ).toHaveLength(1);
+    } finally {
+      append.mockRestore();
+      await handle.close();
+    }
+  });
+
   it("skips serialization and rebuilding for cached Code Mode inputs, but still checks warm and cold boundaries", async () => {
     const h = harness();
     let clock = Date.now();

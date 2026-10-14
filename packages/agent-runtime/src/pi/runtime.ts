@@ -97,7 +97,11 @@ import {
 } from "./compaction";
 import { createContextTokenProjector } from "./token-counting";
 import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
-import { toolRefreshId, toolRefreshMessage } from "./tool-refresh-announcements";
+import {
+  canAnnounceToolRefresh,
+  toolRefreshId,
+  toolRefreshMessage,
+} from "./tool-refresh-announcements";
 import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
@@ -2658,8 +2662,29 @@ async function attachSession(
       }),
     );
     const pendingAnnouncements: AgentMessage[] = [];
+    const deferredRefreshes = new Map<
+      string,
+      NonNullable<SessionRuntimeSpec["toolRefreshAnnouncements"]>[number]
+    >();
+    // Standalone pre-ledger callers have no durable ID; do not let their legacy
+    // discovery message rewrite a warm prefix either. Production always has IDs.
+    const deferredLegacyAnnouncements: AgentMessage[] = [];
     let announcementAppendFailed = false;
-    const announceRefreshes = async (input: SessionRuntimeSpec): Promise<void> => {
+    const announceRefreshes = async (
+      input: SessionRuntimeSpec,
+      allowed: boolean,
+    ): Promise<void> => {
+      for (const fact of input.toolRefreshAnnouncements ?? []) deferredRefreshes.set(fact.id, fact);
+      // Do not append a sidecar receipt until the message can really be sent.
+      // The host ledger re-supplies these facts on recovery; same-bundle/null
+      // refresh results must not lose the pending IDs in this attachment either.
+      if (!allowed) return;
+      while (deferredLegacyAnnouncements.length > 0) {
+        const message = deferredLegacyAnnouncements[0]!;
+        await mainBranch.appendMessage(message, piContext());
+        deferredLegacyAnnouncements.shift();
+        pendingAnnouncements.push(message);
+      }
       if (announcementAppendFailed) {
         // An append may reject after its commit. Re-read receipts before retrying
         // so even that ambiguous outcome cannot produce a duplicate message.
@@ -2673,7 +2698,7 @@ async function attachSession(
         }
         announcementAppendFailed = false;
       }
-      for (const announcement of input.toolRefreshAnnouncements ?? []) {
+      for (const announcement of deferredRefreshes.values()) {
         if (announcedRefreshIds.has(announcement.id)) continue;
         const message = toolRefreshMessage(announcement.namespaces, host.now(), announcement.id);
         try {
@@ -2690,7 +2715,10 @@ async function attachSession(
     };
     // Replays the ledger-write/sidecar-append gap even when the effective bundle
     // was already adopted by the previous process and therefore is unchanged.
-    await announceRefreshes(spec);
+    await announceRefreshes(
+      spec,
+      canAnnounceToolRefresh(agent.state.model, turnRefreshTrigger() === "warm-turn"),
+    );
     agent.state.messages.push(...pendingAnnouncements.splice(0));
     let refreshTail: Promise<unknown> = Promise.resolve();
     // The host revision gate returns its cached desired object on steady checks.
@@ -2705,14 +2733,23 @@ async function attachSession(
         modelId: agent.state.model.id,
         reasoningLevel: agent.state.thinkingLevel,
       },
+      announcementModel = agent.state.model,
     ): Promise<boolean> => {
       const work = refreshTail.then(async () => {
-        if (closed || spec.refreshTools === undefined) return false;
-        const next = await spec.refreshTools({ trigger, model: refreshModel });
+        if (closed) return false;
+        const next = (await spec.refreshTools?.({ trigger, model: refreshModel })) ?? null;
         if (closed) throw new Error("This attachment is closed.");
-        if (next === null) return false;
-        if (trigger === "code-mode" && next === lastSuccessfulInput) return false;
         const warm = trigger === "warm-turn" || trigger === "code-mode";
+        const allowed = canAnnounceToolRefresh(announcementModel, warm);
+        if (next === null) {
+          if (!warm) {
+            await announceRefreshes(spec, allowed);
+            if (closed) throw new Error("This attachment is closed.");
+            agent.state.messages.push(...pendingAnnouncements.splice(0));
+          }
+          return false;
+        }
+        if (trigger === "code-mode" && next === lastSuccessfulInput) return false;
         // Even a host returning its full durable desired state on every check
         // must not regenerate provider declarations or reannounce additions.
         const candidate = {
@@ -2721,7 +2758,7 @@ async function attachSession(
           ...(warm ? { declarationTools: spec.declarationTools ?? spec.tools } : {}),
         };
         if (sameToolSpec(spec, candidate)) {
-          await announceRefreshes(candidate);
+          await announceRefreshes(candidate, allowed);
           if (closed) throw new Error("This attachment is closed.");
           agent.state.messages.push(...pendingAnnouncements.splice(0));
           lastSuccessfulInput = next;
@@ -2743,7 +2780,7 @@ async function attachSession(
               }),
               merged,
             );
-        await announceRefreshes(candidate);
+        await announceRefreshes(candidate, allowed);
         // Standalone callers predating the host ledger still receive discovery.
         // Production always supplies durable facts (including []), never fake IDs.
         if (candidate.toolRefreshAnnouncements === undefined && warm && additions.length > 0) {
@@ -2756,8 +2793,10 @@ async function attachSession(
             [...namespaces].map(([name, count]) => ({ name, count })),
             host.now(),
           );
-          await mainBranch.appendMessage(message, piContext());
-          pendingAnnouncements.push(message);
+          if (allowed) {
+            await mainBranch.appendMessage(message, piContext());
+            pendingAnnouncements.push(message);
+          } else deferredLegacyAnnouncements.push(message);
         }
         // Close drains this work before cleanup, but must never adopt its result.
         if (closed) throw new Error("This attachment is closed.");
@@ -3212,8 +3251,10 @@ async function attachSession(
           // Already whole: the summary, the restored resources and the kept
           // turns without their reasoning, all read off the entry just written
           // — behind the head, which the entry never holds.
+          const messageCount = agent.state.messages.length;
           await refreshTools("compaction");
-          agent.state.messages = withSystemHead(head, outcome.messages);
+          const announcements = agent.state.messages.slice(messageCount);
+          agent.state.messages = withSystemHead(head, [...outcome.messages, ...announcements]);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
@@ -3983,7 +4024,7 @@ async function attachSession(
           const messageCount = agent.state.messages.length;
           // Stage the selected pair for the host without applying it to Pi. A
           // rejected refresh leaves model, reasoning and opaque context intact.
-          await refreshTools(refreshTrigger, selection);
+          await refreshTools(refreshTrigger, selection, selected);
           if (closed) throw new Error("This attachment is closed.");
           const appended = agent.state.messages.slice(messageCount);
           agent.state.messages = withSystemHead(head, [...contextMessages(path), ...appended]);

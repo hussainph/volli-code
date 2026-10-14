@@ -20,9 +20,10 @@ new executable tools and the last-cold provider declaration epoch separately:
 
 - Installing, enabling or selecting tools updates new root Sessions and makes
   additions eligible for existing Sessions, including the caller.
-- Code-Mode-only additions become usable before the next program, announced by
-  an appended namespace/count message. Other additions wait for a cold cache,
-  compaction or a model switch. Warm declarations remain byte-identical, including
+- Code-Mode-only additions become usable before the next program. Their
+  namespace/count announcement waits for a cold cache, compaction or model switch
+  unless the model supports mid-conversation system messages. Other additions
+  wait for those same boundaries. Warm declarations remain byte-identical, including
   on reattachment. Each refresh has an expandable quiet transcript row.
 - A delegated helper inherits its parent's current recorded MCP definitions,
   including refreshed additions, never the project's later selection. Running
