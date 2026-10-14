@@ -215,7 +215,7 @@ describe("HomeFilesPanel", () => {
 
     expect(html).toContain('data-testid="home-files-panel"');
     // The checkout it is rooted in, and no second name for a page the Files
-    // tab has already named (VC-406, revision 06).
+    // tab has already named (VC-406).
     expect(html).toContain("Volli Code");
     expect(html).not.toContain("Project files");
     expect(html).toContain('aria-label="Loading files"');

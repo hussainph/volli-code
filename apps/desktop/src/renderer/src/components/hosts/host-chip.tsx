@@ -3,8 +3,7 @@
  * ported from the lab's `#host-health`).
  *
  * The chip names the machine the project in front of the person runs on —
- * where Zed puts a remote's name and Xcode its run destination — between the
- * history arrows and search. Its tile carries the host's state: a badge for
+ * between the history arrows and search. Its tile carries the host's state: a badge for
  * what needs attention (an update, an expired sign-in, a host that cannot
  * serve), a slow breath while the link is on its way back, the name greyed
  * while it is unreachable. The page itself only speaks for blocking states,

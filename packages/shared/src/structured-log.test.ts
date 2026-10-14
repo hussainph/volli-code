@@ -250,8 +250,7 @@ describe("the renderer's forwarded lines", () => {
 });
 
 /*
- * Review blockers 1 and 2 (VC-699), permanent: what the reviewer's probes
- * showed leaking, now shown not to.
+ * Redaction regressions for error fields and nested strings (VC-699).
  */
 describe("errors are scrubbed and bounded in every string (merge gate)", () => {
   const SECRETS = {
@@ -277,7 +276,7 @@ describe("errors are scrubbed and bounded in every string (merge gate)", () => {
       for (const leak of LEAKS) expect(out).not.toContain(leak);
       expect(out).toContain(LOG_REDACTED);
     }
-    // The reviewer's probe: Error.name = "Bearer …" survived whole.
+    // Error.name must not leak a bearer token.
     const probe = new Error("Invalid file JSON");
     probe.name = "Bearer opaque-review-token";
     expect(JSON.stringify(redactLogFields({ error: probe }))).not.toContain("opaque-review-token");

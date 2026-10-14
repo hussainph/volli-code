@@ -21,9 +21,8 @@ profile. Through the 0.99.2 session API it created:
 5. A session name, followed by closing the writer and copying its file unchanged.
 
 It has header `v: 4`, `storageVersion: 1`, sequences 1–16, and both object and
-array transaction lines. The original generator and synthetic profile remain
-under `.bench-tmp/pi-migration-vc496/` (`create-0992-fixture.mjs`). That script's
-former `.pi-migration` output path is historical, not needed by the new generator.
+array transaction lines. The original capture's generator is not committed;
+regeneration requires the saved patched 0.99.2 build.
 
 **This is storage compatibility evidence, not a valid product compaction.**
 Its `details.providerCompaction = { opaque: "compat-opaque" }` is unknown data

@@ -1,6 +1,6 @@
 /**
  * What the next launch does with a cleanup the app did not live through
- * (VC-284 review C3).
+ * (VC-284).
  *
  * The window: an item's mutation is announced, `git worktree remove` runs, and
  * the power goes out before the outcome is recorded. The folder is gone; the
@@ -9,7 +9,7 @@
  * that no longer exists, with no statement about whether it was removed.
  *
  * So every announced-but-unsettled item is ASKED, once, against the world — and
- * the answers are deliberately mean (re-review C3). This pass is not
+ * the answers are deliberately mean. This pass is not
  * re-deciding anything; it is a witness arriving after the fact, and a witness
  * that guesses is worse than one that says it does not know:
  *
@@ -130,8 +130,7 @@ function judgeMetadata(deps: WorktreePorts, path: string, projectPath: string | 
  *
  * "Every" is literal: `openRuns()` asks the store for accepted-and-never-closed
  * commands without a limit, so a run that stopped ten launches ago is still
- * reconciled rather than falling off the end of the display history
- * (re-review C3).
+ * reconciled rather than falling off the end of the display history.
  */
 export async function reconcileInterruptedCleanups(deps: {
   worktree: WorktreePorts;

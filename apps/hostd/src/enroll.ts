@@ -8,8 +8,7 @@
  * through, and reads back the host id it pins. That is pairing for a host
  * added over SSH: no code, because SSH already proved both ends.
  *
- * **Why SSH access is enough to enroll** (docs/plans/host-protocol.md,
- * "Enrollment over SSH"):
+ * **Why SSH access is enough to enroll**:
  * - The box is authenticated by its SSH host key, which the person accepted
  *   by fingerprint (never blind accept-new), so the host id that comes back
  *   is this box's, and the key that goes in reaches this box unaltered.

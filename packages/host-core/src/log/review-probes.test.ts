@@ -1,7 +1,6 @@
 /**
- * The VC-699 review's probes, permanent (blockers 5 and 6): each one showed
- * a defect; each now asserts the fixed behaviour, against the real Session
- * runtime and SQLite ledger where the probe used them.
+ * Log bounds and trace-correlation regressions (VC-699), tested against the
+ * real Session runtime and SQLite ledger.
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
@@ -61,7 +60,7 @@ describe("the line ceiling holds whatever the fields hold", () => {
       ),
     );
     logger.info("large identifiers", huge);
-    // The reviewer's probe: 42,221 bytes.
+    // Oversized identifiers must still fit the line ceiling.
     expect(Buffer.byteLength(lines[0]!)).toBeLessThanOrEqual(MAX_LOG_LINE_BYTES);
     const cut = JSON.parse(lines[0]!) as Record<string, unknown>;
     expect(cut).toMatchObject({ truncated: true, msg: "large identifiers" });
@@ -99,7 +98,7 @@ describe("background work does not inherit a request's trace", () => {
     ]);
     expect(seen).toEqual([A, B]);
     expect(currentTrace()).toBeNull();
-    // The reviewer's timer kept A on every tick; started detached, it holds its own ids only.
+    // A detached timer must hold only its own ids on every tick.
     const ticks: unknown[] = [];
     let done!: () => void;
     const finished = new Promise<void>((resolve) => (done = resolve));
@@ -256,7 +255,7 @@ describe("a Session's turns, under the real runtime and ledger", () => {
       await harness.submit();
       await emitted;
       const turn = harness.records.find((record) => record.msg === "session turn.started");
-      // The reviewer's probe: this line carried the attach's trace (aaaa…).
+      // This line must carry the command's trace, not the attach's (aaaa…).
       expect(turn).toBeDefined();
       expect(turn?.traceId).not.toBe(A.traceId);
       // No data joins this turn to the message, so it claims no trace at all.

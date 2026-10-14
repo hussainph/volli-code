@@ -356,7 +356,7 @@ describe("TicketFilesPanel", () => {
       expect(drawn('[data-testid="ticket-files-panel"]')).toHaveLength(1);
       expect(drawn('[data-testid="rail-attachments-trigger"]')).toHaveLength(1);
       // Nothing permanent: no eyebrow, no chip strip, no list until it is asked
-      // for (VC-406, revision 06).
+      // for (VC-406).
       expect(document.body.textContent).not.toContain("Ticket files");
       expect(drawn('[data-testid="rail-attachments-list"]')).toHaveLength(0);
       expect(drawn('button[aria-label="Attach files"]')).toHaveLength(0);

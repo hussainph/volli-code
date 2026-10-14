@@ -130,7 +130,7 @@ function boundedDialogText(message: string): string {
  * The permissions every context denies, by the names `Browser.setPermission`
  * knows. Desktop's session handler denies every request; CDP has no "deny
  * everything" call, so the list is spelled out. A name this Chromium does not
- * know is not fatal, but it is logged by name (security review N7): that
+ * know is not fatal, but it is logged by name: that
  * permission falls back to the browser's own default, and someone should see.
  */
 const DENIED_PERMISSIONS = [

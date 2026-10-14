@@ -9,9 +9,8 @@ connect → probe → deliver → install → start → enroll → link
 
 The step machine (`provision.ts`) is provider-neutral: a `HostProvider`
 answers each step. SSH (`ssh-provider.ts`) is the first and only adapter:
-deliver is an upload, link is an `ssh -L` tunnel. A bring-your-own-account
-provider (a Fly Sprite, a Cloudflare container) would deliver an image and
-link over its own route, plugging in without touching the engine.
+deliver is an upload and link is an `ssh -L` tunnel. The interface separates
+artifact delivery and routing from the step engine.
 
 Linux (systemd) and macOS (a launchd user agent, always as the person) are
 both first-class branches of the probe and the SSH steps. Which targets a
@@ -34,8 +33,8 @@ where it has no `sha256sum`.
 
 Every log line carries `component: "host-install"` and never a secret. The
 box-side commands and their idempotency and adopt rules: `apps/hostd/README.md`,
-"Managed install". The enrollment trust argument and the `vdc1` credential:
-`docs/plans/host-protocol.md`, "Enrollment over SSH".
+"Managed install". Enrollment uses the short-lived `vdc1` credential
+(`remote-hosts-device-key.ts`) over the SSH connection.
 
 **Host keys.** Trusting a host adds its key to your `~/.ssh/known_hosts`
 (the file your own `ssh` reads for that target), exactly as `ssh`'s own

@@ -810,7 +810,7 @@ export async function generateFixture(input) {
       }),
       BASE_TIME,
     );
-    // The owner's 373 MB file held 173 MB of session_events and ~200 MB the
+    // The 373 MB target includes 173 MB of session_events and ~200 MB the
     // fixture cannot attribute row-for-row (indexes, months of churn, deleted
     // history). The fixture reproduces the Session Event mass exactly and
     // reproduces the remaining physical file mass as free pages, which is what

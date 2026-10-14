@@ -499,7 +499,7 @@ export function prependTranscriptHistory(
 
 /**
  * What `/copy` copies: the current turn's latest reply, or `null` when the
- * current turn has said nothing yet (VC-315, the verification review's B2).
+ * current turn has said nothing yet (VC-315).
  *
  * Walks back over `messages` — the drawn list, live overlays included — for
  * the first assistant message that said something, and stops at the first

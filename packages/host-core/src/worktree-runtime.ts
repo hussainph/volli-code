@@ -70,7 +70,7 @@ export function worktreeDeps(
 }
 
 /**
- * The orphan-cleanup command core, one per database handle (VC-284 review S1).
+ * The orphan-cleanup command core, one per database handle (VC-284).
  *
  * Memoized on the handle rather than rebuilt per call, because the SQLite
  * ledger serializes its transactions through an instance-local promise tail: a

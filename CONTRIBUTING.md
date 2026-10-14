@@ -16,7 +16,9 @@ Start from an up-to-date `main` branch and make your change on a branch. Ticket 
 
 Keep each change focused. Do not include unrelated formatting, generated files, or refactors in the same pull request. Add or update tests when behavior changes.
 
-Open a pull request against `main`. Describe the user-facing change, link the related issue or Ticket when one exists, and list the checks you ran. Include screenshots or a recording for visual changes.
+Open a pull request against `main`. Describe the user-facing change, link the related issue or Ticket when one exists, and list the checks you ran. Attach screenshots or a recording to the pull request for visual changes; do not commit PR evidence to the repository.
+
+This repository is public. Keep internal plans, research notes, strategy, business material, and product comparisons out of commits. Describe behavior and technical reasons in pull requests, comments, and test names rather than internal process history. `node scripts/check-public-content.mjs` checks the restricted documentation directories.
 
 Maintainers review pull requests for product fit, implementation quality, and test coverage. Opening a pull request does not guarantee that it will be merged.
 
@@ -27,16 +29,14 @@ Contributions accepted into Volli are licensed under the [Apache License 2.0](LI
 Run the checks that cover your change before opening a pull request:
 
 ```bash
-pnpm run typecheck
-pnpm test
-pnpm run check
+vp check
+vp run --filter <touched-package> typecheck
+# From the touched package's directory:
+vp test run <focused-test-file> --maxWorkers="$VOLLI_CONCURRENCY_HINT"
+node scripts/check-public-content.mjs
 ```
 
-Run coverage when you add a branch or a renderer/store action:
-
-```bash
-pnpm run test:coverage
-```
+For changes to protected logic, run focused coverage with the package's configured thresholds intact. CI runs every package suite and the complete coverage and smoke gates. `CI gate` and CodeQL must be green on the pull request's current head; see [AGENTS.md](AGENTS.md) for the gate and compatibility rules.
 
 The desktop performance harness is intentionally outside the unit and coverage lane because its fixture test writes a real-scale migrated database. See [Desktop performance benchmark](docs/performance-benchmark.md) for the measurement command, and run its focused checks with:
 

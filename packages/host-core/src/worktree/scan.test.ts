@@ -302,8 +302,7 @@ describe("scanOrphans report", () => {
         branch: "orphan-clean",
         lastTouchedAt: NOW - 30 * DAY_MS,
         // The fixture ages the directory and the tip to the same instant, and
-        // a tie reads as the directory — the report says which either way
-        // (review C6).
+        // a tie reads as the directory — the report says which either way.
         ageBasis: "directory",
         removableAt: NOW - 30 * DAY_MS + 14 * DAY_MS,
       },
@@ -748,7 +747,7 @@ describe("scanOrphans report", () => {
     expect(report.removable).toEqual([]);
   });
 
-  // Review C5: a project whose listing fails used to be skipped in silence,
+  // A project whose listing fails used to be skipped in silence,
   // which made every checkout in its container read as "not registered with
   // git" — a different, and wrong, statement.
   it("REPORTS a project whose git can't be read instead of skipping it in silence", async () => {
@@ -808,7 +807,7 @@ describe("scanOrphans report", () => {
     expect(report.dirty).toEqual([]);
     expect(report.removable).toEqual([]);
   });
-  // Review C5: the sweep's activity guard used to live only in the destructive
+  // The sweep's activity guard used to live only in the destructive
   // half, so a checkout somebody was working in was PROPOSED and then refused
   // after the confirmation. The report is where that has to be said.
   describe("live work", () => {
@@ -895,7 +894,7 @@ describe("scanOrphans report", () => {
     });
   });
 
-  // Review C2: prunable records were collected before the ownership and ticket
+  // Prunable records were collected before the ownership and ticket
   // gates the directories go through, so the confirmation could offer to prune
   // a record that is not this flow's to touch.
   describe("stale git records", () => {

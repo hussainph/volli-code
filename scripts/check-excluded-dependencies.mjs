@@ -7,22 +7,14 @@
  *     node scripts/check-excluded-dependencies.mjs             # the gate
  *     node scripts/check-excluded-dependencies.mjs --self-test # the matchers' own tests
  *
- * WHY THIS EXISTS (VC-412). `apca-w3` was a devDependency of `@volli/desktop`
- * and `@volli/shared`, imported by three test paths as a second implementation
- * to cross-check this repository's own APCA math against. Its own manifest
- * declares `"license": "Limited W3 License"`, and it depends on `colorparsley`,
- * whose manifest declares `"license": "AGPL v3"`. The owner's decision for
- * VC-412 is that a project shipping as commercial OSS downstream carries
- * neither, so both are gone and the verification they carried is now owned
- * here: frozen reference vectors, a second transcription of the published
- * formula, and behavioural invariants in
+ * License policy (VC-412): `apca-w3` declares a Limited W3 License and
+ * depends on the AGPL-licensed `colorparsley`. Neither dependency is allowed.
+ * APCA verification uses frozen reference vectors, a separate transcription
+ * of the published formula, and behavioral invariants in
  * `packages/shared/src/theme/color.test.ts`.
  *
- * Removing them was a one-time edit. The risk this gate answers is the reverse
- * of the usual one: an `apca-w3` reached for in six months by someone solving
- * the same cross-checking problem, or dragged back in as a transitive
- * dependency of something else. Both land silently \u2014 a devDependency is not
- * visible in a diff unless you read the lockfile \u2014 so the check is mechanical.
+ * Check declared, transitive, and imported dependencies to catch additions
+ * that source review alone may miss.
  *
  * THREE ANGLES, because a package can arrive three ways:
  *

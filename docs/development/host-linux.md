@@ -1,6 +1,6 @@
 # Linux host development and CI
 
-## The host lane already exists
+## Linux host CI
 
 `.github/workflows/ci.yml`'s **Test (packages)** job runs on Ubuntu 24.04 using
 plain Node/Vitest at the exact `.nvmrc` version, not the Electron executable:
@@ -68,7 +68,6 @@ imports `broadcast` after each test to dispose the coalescer, after hoisted mock
 have taken effect. That teardown is relevant even for a test file whose own
 graph has no Electron edge. Filesystem,
 PTY, native-library and macOS-specific behavior still require their own checks.
-The VC-552 inventory comment records the module lists and test caveats.
 
 ## Development image
 
@@ -80,7 +79,7 @@ native compilation, fonts and Chromium runtime libraries. It contains neither
 Electron, Chromium itself, source code, installed workspace dependencies nor
 credentials. Apt lists and the npm cache are removed. It runs as non-root `node`.
 
-Build locally or on the Linux dogfood box from the repository root:
+Build on a development machine or Linux host from the repository root:
 
 ```sh
 docker build -f .devcontainer/host/Dockerfile -t volli-host-dev .
@@ -100,8 +99,8 @@ native postinstall must not run in this host-only checkout. The devcontainer kee
 the root dependency store in a named Docker volume. On Linux the bind mount must
 be writable by uid 1000 (`node`); adjust the container user/mount permissions
 for your own checkout if needed. No production secrets are baked or mounted.
-Standalone Chromium provisioning belongs to the browser/worker ticket; these
-libraries support it without installing another browser in every dev image.
+Standalone Chromium provisioning is separate from the development toolchain;
+these libraries support it without installing a browser in every dev image.
 
 The host lane/image use Node 24.21.0, and the root `engines.node` floor is
 ^24.16.0. Node 24.16.0 added libuv 1.52.1, including the Linux PTY premature-EOF

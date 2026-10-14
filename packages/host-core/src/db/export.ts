@@ -38,11 +38,9 @@ export const EXPORT_FORMAT = "volli-export";
  * Tables this document omits ON PURPOSE, because every fact in them is derived
  * from a table it does carry.
  *
- * A DECLARATION, not a note. VC-87's review asked for one of two things about
- * the usage projection — export it, or say plainly that rebuildable projections
- * are excluded — because the failure mode of neither is a user opening a rescue
- * document, finding no cost history, and having no way to tell whether that is
- * a design decision or a dropped table. `export.test.ts` holds every name here
+ * Rebuildable usage projections are explicitly excluded (VC-87), so a reader
+ * can distinguish intentionally omitted cost history from a dropped table.
+ * `export.test.ts` holds every name here
  * against the live schema, so an exemption cannot outlive the thing it exempts.
  *
  * `session_usage` is a fact INDEX over the `usage.recorded` events in

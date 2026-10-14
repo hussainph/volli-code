@@ -1,110 +1,36 @@
 name: Release
 
-# Release lane (VC-25): a `v*` tag produces a Developer ID-signed, notarized,
-# stapled build published to GitHub Releases, where the in-app updater (VC-24,
-# electron-updater) picks it up.
+# Release lane (VC-25): v* tags and explicit non-dry-run dispatches produce
+# signed, notarized desktop releases and verified hostd artifacts.
 #
-# Dispatch defaults to a SAFE DRY RUN: selected ref, hostd packaging for all
-# four targets (linux and darwin, x64 and arm64) and a desktop build with the
-# generated pin, workflow artifacts only. To release, the owner must
-# explicitly set dry_run=false. Dry runs never enter prepare or the macOS
-# signing/publishing job.
+# Dispatch defaults to a dry run: build all four hostd targets and desktop
+# with the generated pin, publishing workflow artifacts only. Dry runs never
+# bump versions, tag, sign desktop, or publish a release. Real dispatches bump
+# root and desktop versions together; tag pushes require that bump beforehand.
+# A tag pushed with GITHUB_TOKEN cannot trigger another workflow. Switching to
+# a PAT or deploy key would trigger both publishing paths and must be reviewed.
 #
-# There are two publishing doors into this workflow:
+# Build, staple, verify, then upload: uploading while the staple hook writes
+# can corrupt the distributed DMG even when the local file passes validation.
+# Keep the build and publication steps separate and verify uploaded artifacts.
+# Signing uses a workflow-owned keychain via CSC_KEYCHAIN, not CSC_LINK, to
+# avoid electron-builder 26.x passing the certificate password as the keychain
+# password. This explicit setup remains valid after the upstream fix.
 #
-#   1. BUTTON (workflow_dispatch) — the default. Actions -> Release -> Run
-#      workflow, pick patch/minor/major, or `gh workflow run release.yml -f
-#      bump=patch -f dry_run=false`. The `prepare` job bumps both package.json files on a
-#      runner, commits, tags and pushes, then hands off to the build job.
-#      Nothing is built, tested or tagged on a developer machine.
+# Required repository secrets:
+#   MAC_CERT_P12_BASE64: password-protected Developer ID certificate and key
+#   MAC_CERT_PASSWORD: certificate password
+#   APPLE_API_KEY_P8: App Store Connect API key
+#   APPLE_API_KEY_ID: API key identifier
+#   APPLE_API_ISSUER: API issuer identifier
+# Missing credentials fail preflight rather than falling back to ad-hoc signing.
 #
-#   2. TAG PUSH — the original path, still supported for a hand-made tag:
-#      git tag v0.x.y && git push origin v0.x.y
-#      This skips `prepare` entirely and goes straight to the build job, so
-#      the version bump has to already be committed.
-#
-# Why the button does the bump AND the build in ONE run, rather than pushing a
-# tag and letting door 2 catch it: a tag pushed with GITHUB_TOKEN does not
-# trigger further workflow runs (GitHub's loop-prevention rule). A `prepare`
-# job that only tagged would therefore sit there having released nothing. The
-# same rule is what stops this workflow from re-entering itself, so exactly
-# one release happens per press. IF ANYONE EVER SWAPS THE PUSH TO A PAT OR A
-# DEPLOY KEY, door 2 starts firing on the pushed tag and every button press
-# produces TWO release runs racing for the same release — see the header of
-# the pre-create step for what that race does.
-#
-# All signing/notarization/staple mechanics live in
-# apps/desktop/electron-builder.yml (VC-23) and scripts/staple-dmg.mjs; this
-# workflow supplies credentials, runs the dist pipeline with --publish never,
-# gates the result, and uploads the files itself once nothing is writing to
-# them any more. BUILD AND UPLOAD ARE DELIBERATELY TWO STEPS: electron-builder
-# publishes an artifact as soon as it exists, which means `--publish always`
-# streamed the dmg WHILE the staple hook rewrote that same file in place. The
-# 2026-09-30 run that cut v0.2.0 published a dmg with its 512-byte UDIF trailer
-# clobbered — hdiutil could not open it — and the gate passed anyway, because
-# it validates the local file, never the uploaded one. See the package and
-# publish steps for the shape, and keep them adjacent.
-#
-# The signing certificate is imported into a workflow-owned keychain HERE and
-# handed to electron-builder as CSC_KEYCHAIN, not as CSC_LINK. Since the
-# macos-26 runner image of 2026-08-31 (Darwin 25.6.0), `security` verifies
-# the password given to `set-key-partition-list -k`, and electron-builder
-# 26.15.x passes the .p12 import password there instead of its temporary
-# keychain's own password (electron-userland/electron-builder#10066). Every
-# CSC_LINK release failed at "SecKeychainUnlock: The user name or passphrase
-# you entered is not correct" from v0.2.0-canary.4's first attempt onward.
-# With CSC_KEYCHAIN set and CSC_LINK unset, electron-builder never builds a
-# keychain of its own: it runs `security find-identity` against ours (the
-# documented CI setup) and signs with the Developer ID Application identity
-# it finds. The upstream fix (#10101, backported to release/v26 in #10172)
-# had not shipped in any 26.x at the time; this arrangement stays correct
-# after it does, so there is nothing to retire.
-#
-# Required repo secrets (Settings -> Secrets and variables -> Actions):
-#   MAC_CERT_P12_BASE64  "Developer ID Application: Hussain Phalasiya
-#                        (Y54F649NH4)" cert + private key, exported from the
-#                        login keychain as a password-protected .p12, then
-#                        base64-encoded (`base64 -i cert.p12`).
-#   MAC_CERT_PASSWORD    Password on that .p12.
-#   APPLE_API_KEY_P8     Contents of the App Store Connect API key
-#                        (~/.appstoreconnect/private_keys/AuthKey_Volli.p8 on
-#                        the dev machine).
-#   APPLE_API_KEY_ID     Key ID of that API key.
-#   APPLE_API_ISSUER     Issuer ID of that API key.
-# A preflight step fails the run if any are missing: electron-builder would
-# otherwise fall back to ad-hoc signing and the dmg staple hook would skip
-# silently, shipping a build Gatekeeper rejects and Squirrel.Mac refuses to
-# apply as an update.
-#
-# Channels and release states (plan agreed on VC-24):
-#   - Canary: prerelease-suffixed tags (e.g. v0.2.0-canary.3). The version
-#     guard step sets EP_PRE_RELEASE=true for hyphenated tags, so these
-#     publish live immediately as GitHub pre-releases — only allowPrerelease
-#     installs (the dogfood build) follow them. (electron-builder does NOT
-#     infer this from the version: without EP_PRE_RELEASE everything defaults
-#     to draft, and its publisher reuses an existing draft as-is, so a
-#     drafted canary can never go live automatically — learned from the
-#     v0.1.0-canary.3 run.)
-#
-# The release itself is pre-created in a workflow step rather than left to
-# electron-builder, because the publish step uploads into an existing release
-# instead of creating one. It is also what stopped electron-publish from
-# racing its own publisher instances on release creation, which produced
-# duplicate drafts with the artifacts split across them (v0.1.0-canary.3) and
-# 422 already_exists failures for live prereleases (v0.1.0-canary.4).
-# Re-running a job needs no special handling now: the publish step replaces the
-# assets it owns and removes any it does not.
-#   - Stable: bare tags (e.g. v0.2.0). These land as drafts: edit the release
-#     notes, then publish the draft to put it on the updater feed
-#     (electron-updater ignores draft releases).
-#
-# Cadence (dogfooding-solo policy): tag whenever something meaningful merges,
-# roughly weekly, on a green main. Add real beta/stable discipline only when
-# someone besides the owner runs the app.
-#
-# The updater hits the feed unauthenticated, so releases must stay publicly
-# readable (the repo is public today; if it ever goes private, every update
-# check 404s until that is revisited).
+# Hyphenated tags are prereleases (EP_PRE_RELEASE=true); only canary-enabled
+# installs follow them. Bare tags produce drafts; publish the draft after
+# reviewing its release notes to put it on the updater feed. Pre-create the
+# release once, then upload into it to avoid races between publisher instances.
+# Reruns replace owned assets and remove stale ones.
+# The updater reads the release feed unauthenticated: keep it publicly readable.
 
 on:
   push:

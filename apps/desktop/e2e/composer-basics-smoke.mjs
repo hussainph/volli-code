@@ -1,9 +1,8 @@
 /**
- * Acceptance smoke for the Linear-style New-ticket composer — the *creation*
+ * Acceptance smoke for the New-ticket composer — the *creation*
  * half (kickoff/agent-launch lives in composer-kickoff-smoke.mjs).
  *
- * The composer being built (see the ui/ticket-creation-fix spec) replaces the
- * primitive New-ticket dialog with:
+ * The composer provides:
  *   • a header breadcrumb: a project chip (monogram + name,
  *     data-testid="composer-project-chip") → static "New ticket" text, plus
  *     Expand and Close buttons; clicking the chip opens a project menu that

@@ -203,7 +203,7 @@ describe("agent socket", () => {
   });
 
   // The Settings → CLI pane reads this at call time: it must track the server's
-  // actual ownership, not latch the boot's answer (VC-52 review N1).
+  // actual ownership, not latch the boot's answer (VC-52).
   it("measures liveness — false before a server is claimed, true while owned, false after shutdown", async () => {
     const close = vi.fn(async () => {});
     const lifecycle = createAgentSocketLifecycle({

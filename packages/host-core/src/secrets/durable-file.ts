@@ -1,6 +1,6 @@
 /**
- * The durable file contract for sealed credential files (VC-642;
- * `docs/plans/sealed-credential-store.md` §6). Callers hold the
+ * The durable file contract for sealed credential files (VC-642).
+ * Callers hold the
  * {@link CredentialLock} around both halves.
  *
  * READ. {@link readSealedFile} opens without following a symlink and without

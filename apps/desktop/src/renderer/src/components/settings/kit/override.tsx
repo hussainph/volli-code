@@ -15,9 +15,7 @@ import { Button } from "@renderer/components/ui/button";
 /**
  * The one inheritance idiom, and it costs **zero pills**.
  *
- * An earlier pass put an "Inherit | Custom" segmented pair on every scopeable
- * row — two pills and a value per row, a whole second control language spent
- * on a fact. This is what macOS and VS Code both settled on instead:
+ * A scopeable row shows its effective value without a separate mode switch:
  *
  *  - Inheriting? The control simply shows the inherited value. Touching it
  *    overrides. There is no mode to enter first, which was always the
@@ -73,9 +71,5 @@ export function OverrideControl({
   );
 }
 
-// There was a Settings-side counterpart here — `OverrideNote`, listing which
-// projects had diverged from a row. The owner cut the Settings-side signal
-// (precedence is published once, in a section's `(i)`, and the divergence
-// lives with its revert on the project's own Configure page), which left the
-// component with zero callers; it is gone rather than exported speculatively.
-// Git history has it if a per-row "overridden in …" ever earns its place.
+// Precedence is published once, in a section's `(i)`. Divergence and its
+// revert live on the project's Configure page, not beside the global value.

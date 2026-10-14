@@ -23,8 +23,7 @@
  * git signal at all) without regaining the card. Diffs is the change set
  * alone. ONE worktree object, in one place, reachable from every page.
  *
- * THE BODY OPENS UPWARD, and that is the owner's rule for every fold in the
- * rail: the thing the pointer is on does not move. The row is pinned at the
+ * THE BODY OPENS UPWARD, like every fold in the rail: the thing the pointer is on does not move. The row is pinned at the
  * bottom; the body takes the room the scroller gives back above it. The
  * fold is `railFolds.worktree`, a global preference — a reader who commits
  * often leaves it open and it stays open on the next Ticket too.
@@ -58,9 +57,7 @@
  *    re-labels itself — a row that vanishes the moment the tree goes clean takes
  *    "Push", "View PR" and the whole archive-ready wrap-up down with it.
  *  - The commit verbs are GATED by a confirmation dialog (`CommitGateDialog`),
- *    which partially reverses #45's "no gate" for this one action. The scratch
- *    drew that dialog, the owner ruled for it, and the reason is that a press
- *    here writes a commit that cannot be taken back — every other verb the card
+ *    because a press here writes a commit that cannot be taken back — every other verb the card
  *    offers is repeatable or reversible. BOTH roads to a commit go through it,
  *    the primary and the chevron menu's own Commit: a menu item is one press
  *    too, and the two would otherwise disagree about whether the message and

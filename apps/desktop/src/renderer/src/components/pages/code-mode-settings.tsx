@@ -2,9 +2,8 @@
  * Code Mode in the Models pane (VC-471): one switch, and behind an Advanced
  * disclosure a mode pinned per model.
  *
- * ONE SWITCH, ON BY DEFAULT. The owner's brief was that this pane is getting
- * too complicated, so the setting a person is asked about is the one they can
- * answer: whether the agent may write programs at all. Which models use Code
+ * ONE SWITCH, ON BY DEFAULT. The setting a person is asked about is the one
+ * they can answer: whether the agent may write programs at all. Which models use Code
  * Mode, and how far, is the benchmark's call (`CODE_MODE_MODEL_DEFAULTS` in
  * `@volli/shared`), not a ladder of choices on screen.
  *

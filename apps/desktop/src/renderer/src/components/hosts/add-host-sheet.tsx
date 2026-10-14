@@ -1,6 +1,5 @@
 /**
- * Add a host over SSH (VC-700 PR 3; VC-615 flow 1, ported from the lab's
- * `#host-add` in its "Checklist" direction, the owner's pick).
+ * Add a host over SSH (VC-700; VC-615 flow 1), with a live checklist of steps.
  *
  * Type `you@box` (or a `~/.ssh/config` alias) and Connect; desktop main
  * connects, checks the system, uploads and installs Volli host, starts it,

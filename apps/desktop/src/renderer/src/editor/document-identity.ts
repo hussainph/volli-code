@@ -122,8 +122,8 @@ const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
   less: "less",
   liquid: "liquid",
   lua: "lua",
-  // `.m` is Objective-C, not MATLAB: this is a macOS product and the grammar
-  // pair (`.m` / `.mm`) follows VS Code's own association.
+  // `.m` is Objective-C, not MATLAB: pair it with Objective-C++ (`.mm`)
+  // for the source files used by this macOS product.
   m: "objective-c",
   markdown: "markdown",
   md: "markdown",
@@ -225,8 +225,8 @@ export function languageForPath(relPath: string): string {
 }
 
 /**
- * Interpreter word on a `#!` line → language id. VS Code's first-line rules,
- * for the interpreters whose grammar is in the catalog. Matched anywhere on the
+ * Interpreter word on a `#!` line → language id, for the interpreters whose
+ * grammar is in the catalog. Matched anywhere on the
  * line, so `#!/usr/bin/env -S node --flags` still reads as node; a version
  * suffix (`python3`, `python2.7`) is allowed on python alone, where it is the
  * convention.

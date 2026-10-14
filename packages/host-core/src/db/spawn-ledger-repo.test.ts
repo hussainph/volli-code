@@ -107,7 +107,7 @@ describe("the spawn ledger's storage", () => {
     };
     expect(spawnLedgerEntryFrom(row)).toMatchObject({ kind: "shell", pid: 4242 });
     // `browser` was never a kind this ledger writes: a Browser Tab is a
-    // WebContentsView with no child process (VC-341 review B2).
+    // WebContentsView with no child process (VC-341).
     expect(spawnLedgerEntryFrom({ ...row, kind: "browser" })).toBeNull();
     expect(spawnLedgerEntryFrom({ ...row, pid: 0 })).toBeNull();
   });

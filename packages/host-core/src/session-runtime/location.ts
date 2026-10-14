@@ -30,7 +30,7 @@ const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
  * was, on the branch it was on, with the work that was committed to it intact.
  *
  * Both of them are also agent STARTS, so both take the worktree start lease
- * (VC-284 re-review C4). A Session can be bound to a directory this app now
+ * (VC-284). A Session can be bound to a directory this app now
  * calls an orphan — deleting a ticket only clears `sessions.ticket_id` — so
  * "an agent is about to work in here" and "a cleanup is about to remove here"
  * are two acts over one directory, and the lease is what serializes them. It is
@@ -39,7 +39,7 @@ const LOCAL: SessionLocation["venue"] = { id: "local", kind: "local" };
  */
 /**
  * Holds the worktree START lease across one materialization, or refuses
- * (VC-284 re-review C4). Starts do not exclude each other, so the nested
+ * (VC-284). Starts do not exclude each other, so the nested
  * acquisition `reaffirm` → `prepare` makes is free; only a destructive act
  * holding the path refuses one.
  */

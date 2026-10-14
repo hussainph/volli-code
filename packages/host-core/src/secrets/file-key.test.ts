@@ -245,7 +245,7 @@ describe("the file key round trip", () => {
     });
   });
 
-  it("adopts a key the owner wrote by hand", () => {
+  it("adopts a key written by hand", () => {
     const key = Buffer.alloc(32, 7).toString("base64");
     writeFileSync(keyPath, `  ${key}\n\n`, { mode: 0o600 });
     saveTwo(relaunch());

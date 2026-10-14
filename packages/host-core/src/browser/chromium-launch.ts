@@ -102,7 +102,7 @@ export function chromiumLaunchArgs(input: {
 
 /**
  * The environment Chromium is started with: these names, copied from the
- * host's environment when set, and nothing else (security review N1). The
+ * host's environment when set, and nothing else. The
  * browser needs to find its libraries and fonts, a home and a temp directory,
  * a locale and a time zone; it never needs a host secret, so an
  * `Environment=` added to the host's unit later cannot ride into it.
@@ -175,7 +175,7 @@ function processIsAlive(pid: number): boolean {
 
 /**
  * Removes the profiles a host that died without closing its browser left
- * behind (security review N10): every `volli-chromium-<pid>-*` directory under
+ * behind: every `volli-chromium-<pid>-*` directory under
  * `profileRoot` whose owning process is gone — or is this process, when no
  * browser of ours is using it (a host restarted into the same pid, as in a
  * container). Best-effort and quiet; returns what it removed.

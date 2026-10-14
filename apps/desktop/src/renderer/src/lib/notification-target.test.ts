@@ -3,7 +3,7 @@
  * (VC-295): what this window is showing (so main can suppress an alert for it)
  * and where a clicked alert has to take the person.
  *
- * Round 2 sharpened both. What a window reports now carries the ITEM it is
+ * What a window reports carries the ITEM it is
  * showing, because a Session id alone made one question swallow the alert about
  * the failure beside it; and a route now knows a terminal Session from a chat
  * one, because a harness that is waiting on a human is waiting in a terminal —

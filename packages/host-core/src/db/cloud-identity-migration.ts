@@ -1,16 +1,15 @@
 /**
- * VC-550: the Volli Cloud identity tables, named once in
- * `docs/plans/host-identity.md`.
+ * VC-550: host identity, Workspace epochs, workers and checkout leases.
  *
  * EXPAND ONLY. Five new tables, created empty: no existing table is altered, no
- * row is written, and nothing reads them while the `cloud` flag is off. Later
- * tickets write them (VC-562 hostd, VC-575 pairing, VC-580 workers, VC-581
- * leases, VC-591 promotion); the spec is the contract they follow.
+ * row is written, and nothing reads them while the `cloud` flag is off.
+ * Consumers include hostd (VC-562), pairing (VC-575), workers (VC-580),
+ * leases (VC-581) and promotion (VC-591).
  *
  * Two tables reside with the WORKSPACE: `workspace_epochs` and
  * `checkout_leases`. Epoch history travels in backups; live leases do not.
- * The other three are about THIS HOST and never leave it. VC-588 will put the
- * two halves in different files, so no foreign key crosses between them:
+ * The other three are about this host and never leave it. To support separate
+ * host and Workspace files (VC-588), no foreign key crosses between them:
  * `host_id` and `worker_id` below are plain UUID values, not references.
  *
  * Every statement is `IF NOT EXISTS`, so a lineage re-offered version 58 (a

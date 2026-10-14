@@ -233,12 +233,9 @@ describe("HomeRail", () => {
   });
 
   it("draws ONE block on Now — the roster — and no Session-identity card", () => {
-    // VC-406, revision 05. Now carried a Session-identity card (model, tier,
-    // effort) over a venue card over the usage card, and the roster arrived as
-    // a fourth thing between them. The approved page is the roster: the
-    // identity was a second answer to what the front tab and the composer's
-    // own pill already say, and it stood between the page's title and the block
-    // the page exists for.
+    // VC-406. Now presents the roster, not a second Session-identity card:
+    // the active tab and composer's pill already identify the Session, model,
+    // and effort. Duplicating them would separate the title from the roster.
     seedVenue();
     const slice = seedSlice("ready");
     slice.projection = {

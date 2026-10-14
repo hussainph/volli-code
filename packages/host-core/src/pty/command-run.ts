@@ -17,7 +17,7 @@
  *
  * What it deliberately does NOT do is own the terminal. The command is typed
  * into a live interactive shell, never spawned as the pane's primary process
- * (cmux #5032), so the user can watch it, interrupt it, and keep the shell
+ * so the user can watch it, interrupt it, and keep the shell
  * afterwards whatever it exited with.
  */
 import type { SetupFeedResult, SetupRun } from "../worktree";

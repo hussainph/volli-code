@@ -545,7 +545,7 @@ export default defineConfig(({ mode }) => ({
         // like every other glue module — and so does `notification-surface.ts`,
         // which is the store calls that carry that decision out.
         "src/lib/notification-target.ts",
-        // The click's ORDER and its terminal/chat fork (round 2): select the
+        // The click's ORDER and its terminal/chat fork: select the
         // project, open the Session, then reveal the item. Ported precisely so
         // the sequence is assertable, because the failure it prevents — a card
         // revealed in a Session nobody opened, or a harness alert opening a chat

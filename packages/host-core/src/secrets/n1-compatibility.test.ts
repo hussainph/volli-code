@@ -1,6 +1,6 @@
 /**
- * N-1 compatibility of persistent Session secrets (VC-642). External users run
- * releases cut from main, so after this upgrade an existing store must open
+ * N-1 compatibility of persistent Session secrets (VC-642). After upgrading,
+ * an existing store must open
  * with identical contents, and the release before it (N-1) must open, use and
  * write everything this build writes. `test-support/n1/` holds main's exact
  * store, codec and key adapter at the base commit (`3966e6233`); the first test

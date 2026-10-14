@@ -1,5 +1,5 @@
 /**
- * The viewer seam's races without a real browser (VC-619 review B4, B8):
+ * The viewer seam's races without a real browser (VC-619):
  * the screencast's serialized reconfiguration — a stop that answers late, a
  * last viewer leaving mid-start, a burst of resizes and scales — and a shown
  * tab's dialog waiting for the person, then falling back when nobody answers.

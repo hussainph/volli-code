@@ -1119,9 +1119,8 @@ async function failure(
 /**
  * An HTTP error is a fact about the URL, and the reason says what to do next.
  *
- * Measured before this existed: plain statuses were most of the web refusals in
- * the owner's transcripts — mostly 404s on guessed GitHub paths — and every one
- * was worded as a policy wall.
+ * A missing page is not a policy refusal; it must leave guarded retries and
+ * corrected URLs available to the caller.
  */
 describe("an HTTP error status", () => {
   it("is an outcome carrying the status, whatever the status is", async () => {

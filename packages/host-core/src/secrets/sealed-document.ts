@@ -1,6 +1,6 @@
 /**
- * One sealed credential file, shared safely between processes (VC-642;
- * `docs/plans/sealed-credential-store.md` §6). The engine under every sealed
+ * One sealed credential file, shared safely between processes (VC-642).
+ * The engine under every sealed
  * store: the legacy Session-secrets file (`store.ts`) and the typed
  * inventory (`inventory.ts`) differ only in the {@link SealedCodec} they pass.
  *

@@ -117,26 +117,21 @@ Two ways out, both a person's or local admin's intent, never an agent verb:
   `refused` key configuration is not reset: fix it, since the store it refuses
   may be perfectly good.
 
-This selects ticket option **(b)**: encrypted storage with a launch-cached
-keychain key. Signed release builds should normally avoid prompts; unsigned/dev
-builds can prompt when the key is first wrapped/unwrapped. Session storage
-remains the no-keychain choice. The research document named in the ticket is
-not present on the base commit (`f960412c`); the VC-470 store comments document
-the earlier prompt problem.
+Persistent storage uses a launch-cached keychain key. Signed release builds
+normally avoid prompts; unsigned/development builds can prompt on first wrap or
+unwrap. Session-only storage remains the no-keychain choice.
 
 ## The typed credential module (VC-642)
 
 `@volli/host-core/secrets` holds the one module every application credential
-family moves onto ([design](plans/sealed-credential-store.md) §3, §6, §7).
-No family is canonical in its typed inventory yet: each moves in with its own
-ticket and compatibility gate (web keys VC-643/644, MCP and persistent Session
-imports VC-645, Pi VC-646, rotation VC-649). The web search keys are mirrored
+family moves onto ([storage contract](sealed-credentials.md#typed-inventory-and-file-contract)).
+The typed inventory is not yet canonical for these families. A credential
+cutover requires an explicit compatibility gate, not merely a storage adapter. The web search keys are mirrored
 there now ([step E](#web-search-keys-step-e-vc-643)), with the database still
 their source. Persistent Session secrets already
 run on its lock and durable file engine, in their own file and format: the same
 `session-secrets.enc`, envelope (`VSF1`/`VSC1`) and `{ version: 1, secrets }`
-payload, so the release before this one opens, uses and writes everything this
-one writes (`n1-compatibility.test.ts`, against main's exact code).
+payload, so supported older readers can open, use and write the legacy format (`n1-compatibility.test.ts`, against a frozen previous implementation).
 
 - **The lock** (`credential-lock.ts`). `host-credentials.lock` beside the
   database: an empty 0600 file that desktop, hostd and `volli-hostd
@@ -198,8 +193,7 @@ one writes (`n1-compatibility.test.ts`, against main's exact code).
   without `getSelectedStorageBackend`, or a wrapping under Chromium's `v10`
   fallback key, a compiled-in constant); it never makes a new key while a
   sealed file exists.
-- **The typed store's keychain API is the asynchronous one** (VC-643
-  decision). Electron's synchronous `safeStorage` calls can block the thread
+- **The typed store's keychain API is the asynchronous one** (VC-643). Electron's synchronous `safeStorage` calls can block the thread
   that makes them to collect a keychain prompt, and on Electron's main thread
   no deadline or quit can interrupt that. So `host-credentials.key` is
   wrapped and unwrapped only with `isAsyncEncryptionAvailable`,
@@ -230,11 +224,11 @@ one writes (`n1-compatibility.test.ts`, against main's exact code).
 | `web-search` | provider | string | `WebAccessSettings` |
 | `mcp` | server id, endpoint | the whole MCP record (values, OAuth grant, registration) | MCP connection |
 | `pi-provider` | provider | Pi's tagged `Credential`, provider fields kept | Pi's `CredentialStore` adapter |
-| `host-private` | purpose | string | M2 pairing |
+| `host-private` | purpose | string | Device pairing |
 | `device-verifier` | host, workspace, device | string | device authentication |
 | `worker-verifier` | host, workspace, worker | string | worker authentication |
 
-Not families, by owner decision: VC-623's operator verifier (its integrity
+Not inventory families: VC-623's operator verifier (its integrity
 is a root-owned file a service-writable store cannot give) and a user's own
 Pi `auth.json`. No provider custody: every key is generated and kept on the
 host. The new files are excluded from backups (`host-credentials.enc*`,
@@ -273,7 +267,7 @@ This does not make Electron's legacy synchronous `safeStorage` calls asynchronou
 ## Web search keys: step E (VC-643)
 
 The Brave and Exa keys are the first family in the typed inventory, as a
-**mirror** ([plan](plans/sealed-credential-store.md) §4, "E"). The `secrets`
+**mirror** ([expand contract](sealed-credentials.md#expand)). The `secrets`
 table in `volli.db` stays their one source of truth, in the clear: every read
 (Settings, Session attach) still comes from it, and nothing ever reads the
 mirror back. The read switch is VC-644.
@@ -300,7 +294,7 @@ mirror back. The read switch is VC-644.
   main thread never waits on another process or the keychain. A copy sealed
   while the source moved on is reported `pending` (`moved`, naming the
   revision it sealed), never `sealed`.
-- **No new unattended keychain access** (VC-643 decision). The launch
+- **No new unattended keychain access** (VC-643). The launch
   reconcile runs with nobody at the keyboard, so it may fetch the keychain's
   key only if this launch has already used the keychain successfully (the
   Session-secrets store opened, or pre-023 web keys were carried out of it).
@@ -326,8 +320,8 @@ mirror back. The read switch is VC-644.
   open, with no sealed inventory beside it (a profile copied from another
   Mac), seals nothing, so it is moved aside (`host-credentials.key.unused-*`,
   never deleted) and a new key made. With a sealed inventory present it is
-  never replaced. Settings shows none of this yet (owner decision: the label
-  comes with VC-644); the view and the log carry it.
+  never replaced. The view and log carry this state; do not claim the pending
+  mirror is encrypted canonical storage.
 - **Older builds.** The release before this one opens a 059 database (floor
   58), and saves, clears, attaches, bundles and restores exactly as before;
   the triggers count its writes, and the next launch of this build reconciles
@@ -336,7 +330,7 @@ mirror back. The read switch is VC-644.
   mirror and nothing stale is merged back. `web/n1-compatibility.test.ts` runs
   main's exact code (pinned by git blob id) for all of this.
 
-Two windows stay open by decision ([plan](plans/sealed-credential-store.md) §6):
+Two freshness limits remain ([storage contract](sealed-credentials.md#cross-process-ownership-and-freshness)):
 a revocation committed between reading a command's environment and starting
 the command still reaches that one command (the next one is clean), and
 restoring an older `session-secrets.enc` sealed under the same key brings
@@ -476,8 +470,9 @@ To sign in on the box today, use one of the manual paths:
    of them out at its next refresh, so prefer signing in on the box or using an
    API key.
 
-A desktop-driven "Add a host" flow that forwards credentials from the Mac is
-pending an owner decision and does not exist yet.
+Remote sign-in uses the dedicated [host protocol](host-protocol.md#sign-ins-on-a-host-vc-702)
+service. API keys may be sent write-only; subscription login runs on the host.
+Never automatically copy rotating OAuth grants between machines.
 
 ## What redaction promises
 
@@ -501,10 +496,9 @@ and symlink aliases to them. Templates under `.env.*` are refused too; keep
 non-secret examples under another name. This makes a dedicated injection path
 useful instead of telling the agent to read a `.env` file. **This read-tool guard
 is not a kernel/shell boundary**: arbitrary programs in Full Access remain able
-to open files as you. The general VC-45 containment described in the ticket is
-not on this base and is not claimed here.
+to open files as you. Do not treat this read-tool guard as a general process sandbox.
 
-## Deferred
+## Unsupported credential paths
 
 - MCP credentials/OAuth migration and a unified inventory. VC-470's existing
   person-owned store and Settings editor are unchanged. They can adopt the same

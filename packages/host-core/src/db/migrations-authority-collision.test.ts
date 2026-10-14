@@ -130,7 +130,7 @@ describe("053 collision: decision models and remembered authority approvals", ()
     expect(schema("projects")).toEqual(projectSchema);
   });
 
-  it("repairs old dogfood stamped 53 while preserving approval and decision history and schemas", () => {
+  it("repairs a branch-lineage database stamped 53 while preserving approval and decision history and schemas", () => {
     const dbPath = fixture();
     base52(dbPath);
     db.exec(DOGFOOD_APPROVALS_053);
@@ -168,7 +168,7 @@ describe("053 collision: decision models and remembered authority approvals", ()
   });
 
   it.each(["authority_approvals", "authority_decisions"])(
-    "repairs a partial dogfood schema missing %s independently",
+    "repairs a partial branch-lineage schema missing %s independently",
     (missingTable) => {
       const dbPath = fixture();
       base52(dbPath);

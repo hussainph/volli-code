@@ -2,7 +2,7 @@
  * Harness mode's shell recorder (VC-703).
  *
  * In a `volli-drive` instance a click on an external link, "Reveal in Finder"
- * or "Move to Trash" must not reach the owner's browser, Finder or Trash. In
+ * or "Move to Trash" must not reach the user's browser, Finder or Trash. In
  * harness mode Electron's `shell` methods that hand something to the OS are
  * replaced by recorders: each request is appended to
  * `<VOLLI_HARNESS_DIR>/external-requests.jsonl` (evidence a driver can assert

@@ -172,8 +172,7 @@ describe("the rotating file sink", () => {
 });
 
 /*
- * Review blockers 3, 4 and 5 (VC-699), permanent: the reviewer's probes,
- * asserting the bounds now hold.
+ * Backlog, line and file bounds under oversized input (VC-699).
  */
 describe("bounds (strict, at the boundary)", () => {
   it("holds a synchronous burst to the backlog bound across rotations, and counts the rest", async () => {
@@ -182,7 +181,7 @@ describe("bounds (strict, at the boundary)", () => {
       directory,
       policy: { maxFileBytes: 200, maxBufferedBytes: 250, maxTotalBytes: 100_000 },
     });
-    // The reviewer's line: 138 bytes with its newline.
+    // A 138-byte line including its newline.
     const value: LogRecord = {
       ts: new Date().toISOString(),
       level: "info",
@@ -197,7 +196,7 @@ describe("bounds (strict, at the boundary)", () => {
       sink.write(value, line);
       peak = Math.max(peak, sink.pendingBytes());
     }
-    // The reviewer's probe accepted 5,520 bytes here; one line fits 250.
+    // Only one line fits the 250-byte backlog.
     expect(peak).toBeLessThanOrEqual(250);
     expect(sink.pendingBytes()).toBe(size);
     expect(sink.dropped()).toBe(39);
@@ -234,7 +233,7 @@ describe("bounds (strict, at the boundary)", () => {
     const sink = createRotatingFileSink({ directory, policy: { maxFileBytes: 200 } });
     sink.write(...record(`${day}T00:00:00.000Z`, "hello"));
     await sink.close();
-    // The reviewer's probe: 273 bytes against a 200-byte cap.
+    // A 273-byte line against a 200-byte cap.
     expect(statSync(join(directory, `volli-${day}.jsonl`)).size).toBe(190);
     expect(lines(join(directory, `volli-${day}.1.jsonl`)).map(({ msg }) => msg)).toEqual(["hello"]);
   });

@@ -865,7 +865,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             standing the remaining strip is thin enough that the user has to
             aim, and this is what they aim at. With the rail down the target is
             the zone below, which widens by one shell inset to answer the aiming
-            problem itself; the owner's call is that a hint there is not worth
+            problem itself; a hint there is not worth
             the ink. A hint, not a handle. */}
         {!pinned && !terminalFocused && !workspaceRailHidden ? (
           <div

@@ -32,9 +32,8 @@ import { chatTabId, parseChatTabId } from "@renderer/components/ticket/ticket-ch
  *
  * A Session id is not enough to open a terminal: the strip is keyed by the
  * TAB's root session, the pane inside it is a second id, and which container
- * holds it (a ticket's, or the project's Board strip) is a third fact. Round 1
- * turned every Session target into `chat:<sessionId>` and therefore opened a
- * chat tab that does not exist for a harness that was waiting in a terminal.
+ * holds it (a ticket's, or the project's Board strip) is a third fact. Using
+ * `chat:<sessionId>` for a harness would open a chat tab that does not exist.
  *
  * Resolved by the caller from `stores/sessions`, so this module stays pure and
  * `@volli/shared` never learns desktop tab grammar.
@@ -82,7 +81,7 @@ export function activeNotificationTarget(reading: ActiveTargetReading): Notifica
   const ticketId = reading.openTicketId;
   const activeTabId = ticketId === null ? reading.homeActiveTab : reading.activeTicketTabId;
   const chatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);
-  // A chat Session in front is reported WITH the item it is showing (round 2).
+  // A chat Session in front is reported WITH the item it is showing.
   // Reporting the Session alone made a person reading one question swallow the
   // alert about the failure that had just stopped it.
   if (chatSessionId !== null) {

@@ -317,7 +317,7 @@ describe("login PATH wiring", () => {
     expect(await readFile(join(root, ".zprofile"), "utf8")).toBe(edited);
   });
 
-  // B1 (VC-52 review): the cache that measured `loginPath` was warmed BEFORE
+  // VC-52: the cache that measured `loginPath` was warmed BEFORE
   // the profile changed. Without the drop, every reader for the rest of the
   // launch — the Settings → CLI pane's Login PATH row above all — reports the
   // PATH "missing" at the exact moment a new terminal resolves `volli` fine.

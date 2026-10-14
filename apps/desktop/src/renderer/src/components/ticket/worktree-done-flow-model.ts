@@ -97,7 +97,7 @@ export interface MenuAction {
   reason: string | null;
 }
 
-/** The three always-listed chevron-menu verbs (T3 Code's pattern — never hidden, disabled with reasons). */
+/** The three always-listed chevron-menu verbs (never hidden, disabled with reasons). */
 export interface DoneFlowMenu {
   commit: MenuAction;
   /** "Push & create draft PR" (no PR) or "Push updates" (PR exists). */

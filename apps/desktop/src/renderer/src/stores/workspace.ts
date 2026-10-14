@@ -124,7 +124,7 @@ export const WORKSPACE_UI_APP_STATE_KEY = "volli:workspace";
  */
 export type NavKey = "home" | "automations" | "configure";
 
-/** Kanban columns vs. Linear-style grouped list — same data, filter, selection. */
+/** Kanban columns vs. grouped list — same data, filter, selection. */
 export type BoardView = "board" | "list";
 
 /**

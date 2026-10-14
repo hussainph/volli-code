@@ -440,7 +440,7 @@ type Routed = { provided: true; note: string } | { provided: false; text: string
 /**
  * Put a connection blocked on a person in front of that person (VC-470).
  *
- * The owner's rule, applied: an agent never supplies, sees or stores a
+ * An agent never supplies, sees or stores a
  * credential. A sign-in is offered as a `confirm.mcp-sign-in` question; when
  * the person allows it, Volli opens the server's page in their browser and the
  * agent is told only that it worked or why not. A missing key is a

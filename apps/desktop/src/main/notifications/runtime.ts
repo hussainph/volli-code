@@ -51,7 +51,7 @@ export interface NotificationRuntime extends AttentionDeliveryPort {
    *
    * The outcome is RETURNED rather than swallowed because one caller is a
    * person's own request (`volli notify`), and a verb that reported success
-   * over a refused delivery would be lying to the agent that asked (round 2).
+   * over a refused delivery would be lying to the agent that asked.
    * Every other caller is a background observer and ignores it.
    */
   deliver(request: NotificationRequest): NotificationOutcome;

@@ -13,7 +13,6 @@
  *  2. `KeyboardEvent.location` distinguishes left/right ONLY on the Alt
  *     keydown itself, never on the chorded key — so sided config ("left" /
  *     "right") needs a tracker that remembers which Option keys are held.
- *     (cmux shipped a sided-modifier bug on exactly this key.)
  *
  * The `event.code` → character table is the US physical layout. Non-US
  * layouts fall through (return null) for punctuation that moved, which leaves

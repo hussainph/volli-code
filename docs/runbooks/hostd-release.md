@@ -41,7 +41,7 @@ pin, and builds the desktop with it. It uploads `hostd-linux-x64`,
 skipped. No local Docker, signing or keychain commands are needed.
 
 **A real button release requires `dry_run=false`**: uncheck `dry_run` in the
-Actions form. Only the owner may invoke the publishing path or push a release
+Actions form. Only an authorized maintainer may invoke the publishing path or push a release
 tag. The exact CLI equivalent for a patch release is:
 
 ```sh
@@ -52,15 +52,15 @@ The button's `prepare` job writes the resolved version into both root and
 desktop `package.json` files in the same commit before tagging. Stable tags
 still create drafts; canaries still publish as
 prereleases. The single desktop publisher uploads the complete Mac + hostd
-asset set, so rerun cleanup does not delete hostd assets. **VC-698 must land
-before any release or canary containing migration 061.**
+asset set, so rerun cleanup does not delete hostd assets. A release containing migration 061 must retain the corresponding database
+compatibility/rollback checks.
 
 A `hostd-assets` failure (including provenance signing) deliberately blocks the
 desktop release: the signed desktop pin requires matching assets on that same
 release. After a failure, use **“Re-run all jobs”**, not “re-run failed jobs”
 (actions/download-artifact#486 reports cross-attempt artifact-download 404s).
 Button-mode `prepare` is not idempotent and can bump again on a full rerun;
-the owner must account for that when choosing the retry/version. The artifact
+the release operator must account for that when choosing the retry/version. The artifact
 retention period is 14 days. Hostd inputs are downloaded and checked before
 pre-creating the release, so those failures cannot leave an empty live canary.
 

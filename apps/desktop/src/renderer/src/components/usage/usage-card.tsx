@@ -129,7 +129,7 @@ export function UsageCostFigure({
  * The Ticket rail's card used to open with the hero below — an 18px figure, the
  * bar and a caption, then a seamed row for the Sessions — and at ~120px it was
  * the tallest object on a page whose most-read block is a list of Sessions.
- * Cost is a fact the owner glances at, not a surface they work in, so the
+ * Cost is a fact the user glances at, not a surface they work in, so the
  * face is now the height of any other row in the rail and everything the hero
  * carried (the bar, its legend, the cached share, the basis sentence, the
  * per-Session ranking) is one press behind it, in one popover rather than two.

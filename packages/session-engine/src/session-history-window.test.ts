@@ -19,8 +19,7 @@ import {
 } from "./index";
 
 /**
- * A history window's two contracts, held against randomized Sessions (VC-315;
- * the verification review's paging probe and B5, kept as regression tests).
+ * A history window's two contracts, held against randomized Sessions (VC-315).
  *
  * Paging: a snapshot's window, then `history` until its cursor runs out, then
  * `subscribe` after the snapshot's cursor, reach every event exactly once and
@@ -430,7 +429,7 @@ describe("history windows (VC-315)", () => {
 
 /**
  * A live runtime recording a turn whose reply is followed by more silent
- * messages than a window holds: the review's B2 shape, end to end.
+ * messages than a window holds, end to end.
  */
 async function recordedTurn(
   silent: number,

@@ -169,7 +169,7 @@ export interface AgentCommandServiceOptions {
   }) => Promise<void>;
   /**
    * Fires one model-call title refinement (VC-81) behind a kickoff-derived
-   * heuristic title, on the owner's ladder — utility default, then the
+   * heuristic title, using the model ladder — utility default, then the
    * Session's own model, then the Role's default. Never fires for an
    * explicit `--title` (that is already a person's choice), and never
    * rejects: the heuristic is the fallback the titler keeps on failure.

@@ -104,7 +104,7 @@ async function addWorktree(
   try {
     await runAdd();
   } catch (first) {
-    // Vibe Kanban: a stale registration can defeat the first add; prune + one retry.
+    // A stale registration can defeat the first add; prune and retry once.
     try {
       await git(["worktree", "prune"], projectPath);
       await runAdd();

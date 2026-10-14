@@ -231,10 +231,9 @@ describe("isTransientTransportFailure", () => {
   });
 
   /**
-   * Every sentence the owner's ledger recorded dead-ending a turn as
-   * `adapter_unrecoverable` after 2026-09-15, verbatim as the provider SDK
-   * handed it to pi-ai — envelope, status and all — so what is pinned is the
-   * path from raw text through the sanitizer and the classifier (VC-443).
+   * Provider SDK transport failures, including their envelopes and statuses,
+   * exercise the path from raw text through the sanitizer and classifier
+   * (VC-443).
    */
   it.each([
     // The SDKs' own words for a socket that went away.

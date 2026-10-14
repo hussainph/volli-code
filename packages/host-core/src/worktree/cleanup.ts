@@ -4,14 +4,14 @@
  *
  * It is the EXECUTOR, not the record: `cleanup-engine.ts` owns the command, its
  * acceptance receipt and the immutable facts, and this file is what actually
- * runs git between them. The split is the review's S1 — a destructive product
- * act takes the command → event → projection shape, with the transport (and
+ * runs git between them. A destructive product act takes the command → event
+ * → projection shape, with the transport (and
  * this executor) as adapters around a core that knows nothing about either.
  *
  * What it acts on is never a list of paths from a client. A caller names a scan
  * revision and the ids of items in THAT scan's plan; main resolves them to the
- * proposal it minted itself (`orphan-scan.ts`), and anything else is refused
- * (review C1). So the confirmation, the accepted intent, and the work are the
+ * proposal it minted itself (`orphan-scan.ts`), and anything else is refused.
+ * So the confirmation, the accepted intent, and the work are the
  * same three lists by construction.
  *
  * Then it distrusts even that. A scan is a snapshot, and the seconds between
@@ -19,7 +19,7 @@
  * terminal, handed to an agent, claimed by a ticket, moved to another branch,
  * or measured against a retention window somebody just changed. So the last
  * thing before each mutation is a COMPLETE re-ask, and it is deliberately
- * shaped so nothing can happen inside it (VC-284 re-review C1/C2/C4):
+ * shaped so nothing can happen inside it (VC-284):
  *
  *  - everything asynchronous happens BEFORE the gate — the agent bindings are
  *    released, the activity supplier is asked, the durable `started` fact is
@@ -52,7 +52,7 @@
  * clean worktree directory is cache; a branch is data.
  *
  * `git worktree prune` cannot be aimed at one record, so metadata is handled as
- * a set (review C2): immediately before pruning, the project's current prunable
+ * a set: immediately before pruning, the project's current prunable
  * records are listed again, and the prune runs only if that set is EXACTLY the
  * set of confirmed records — in a repository whose path still matches the one
  * confirmed, with every confirmed record still owned by this database and
@@ -122,7 +122,7 @@ export interface OrphanCleanupPorts {
  * item.
  *
  * A release that never settles used to hold the deletion lease for the life of
- * the process (VC-284 re-review C4): the item never completed, and every later
+ * the process (VC-284): the item never completed, and every later
  * cleanup and every terminal start under that path was refused by a lease
  * nobody would ever release. Timing out is the honest end — the directory is
  * left alone, the reason says so, and the lease goes back.
@@ -191,7 +191,7 @@ interface Recheck {
 /**
  * Everything asked again, in the cheapest-first order — SYNCHRONOUSLY, so the
  * mutation that follows a clean verdict runs in the same turn as the verdict
- * (VC-284 re-review C1/C4). The one asynchronous input, what is live inside the
+ * (VC-284). The one asynchronous input, what is live inside the
  * directory, is fetched by the caller and handed in.
  *
  * Ownership, the confirmed project, the ticket link, the branch, the retention
@@ -382,7 +382,7 @@ export async function cleanupOrphans(
       await settle(item.id, "skipped", verdict.skip, verdict.branch);
       continue;
     }
-    // The lease closes the window the review named: from here until this item
+    // The lease closes the deletion race: from here until this item
     // settles, nothing may start a terminal or a harness inside this path — and
     // nothing that is already starting there could have let cleanup take it.
     const lease = acquireDeletionLease(verdict.gitPath);
@@ -406,7 +406,7 @@ export async function cleanupOrphans(
         await settle(item.id, "skipped", SKIP_STILL_BOUND, verdict.branch);
         continue;
       }
-      // Announced BEFORE the last look (review C3, re-review C1): if the app
+      // Announced BEFORE the last look: if the app
       // dies from here on, the run says this item was being executed and the
       // launch reconcile asks git and disk what actually happened. It is
       // written here rather than after the gate so that nothing awaits between
@@ -506,7 +506,7 @@ interface MetadataGate {
 
 /**
  * Whether this project's confirmed records are still this flow's to prune —
- * synchronously, from a fresh database read (VC-284 re-review C2).
+ * synchronously, from a fresh database read (VC-284).
  *
  * Set equality alone is not enough. A ticket that starts claiming a confirmed
  * record after the scan leaves the stale SET untouched while making the record
@@ -542,7 +542,7 @@ function metadataEligibility(
 
 /**
  * Prunes one project's stale records, or skips every confirmed record of that
- * project with the reason it was not safe to (review C2).
+ * project with the reason it was not safe to.
  *
  * `git worktree prune` takes no path argument: it drops every record the repo
  * currently calls prunable. So the only way to make it do exactly what was

@@ -41,7 +41,7 @@ name: CI
 #     Four measured repeat flakers run instead in smoke-quarantine.yml (nightly,
 #     non-gating, visibly reported): browser-recovery (VC-523), automations-picker
 #     (VC-524), bare-path-env (VC-525), browser-tab (VC-526). No smoke is deleted.
-#     Threshold/history: docs/research/smoke-flakes-2026-10.md. Core coverage is
+#     Quarantine policy: AGENTS.md (Smoke quarantine requirements). Core coverage is
 #     never blanket-quarantined; cheap contrast/animation/readiness fixes stay
 #     gating. Every failed smoke retries ONCE in a fresh profile. Retry-green
 #     is FLAKY in the job summary; both attempts/exit/signal/timing/native-window
@@ -215,6 +215,11 @@ jobs:
 
       - name: Check
         run: vp check
+
+      - name: Check public repository content
+        run: |
+          node --test scripts/check-public-content.test.mjs
+          node scripts/check-public-content.mjs
 
       - name: Check committed protocol schema and additive compatibility
         env:

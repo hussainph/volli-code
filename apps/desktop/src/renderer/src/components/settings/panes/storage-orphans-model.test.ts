@@ -514,8 +514,8 @@ describe("an interrupted run", () => {
       finishedAt: null,
       items: [item({ state: "indeterminate" })],
     });
-    // The shape the re-review found with no callout and no recovery anywhere:
-    // every item settled `failed`, then the app died before the run closed.
+    // An interrupted run needs a callout and recovery even when every item
+    // settled `failed` before the app died and the run never closed.
     // Nothing is pending, nothing is executing — and it is still a cleanup that
     // stopped, with failures nobody has been told about.
     const allFailedAndOpen = run({

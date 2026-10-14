@@ -750,7 +750,7 @@ describe("binding procedures to the catalog (D2)", () => {
     );
   });
 
-  // VC-564 review B1: metadata anyone can set is not provenance.
+  // VC-564: metadata anyone can set is not provenance.
   it("refuses a bare procedure that only claims its entry in metadata", () => {
     const readExperiments = vi.fn();
     const forged = initTRPC

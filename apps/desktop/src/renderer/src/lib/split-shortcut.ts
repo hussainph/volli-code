@@ -8,8 +8,7 @@
  * it (`hooks/use-split-shortcuts.ts`) is left holding nothing but the listener
  * and the store reads.
  *
- * WHY ⌘\. It is VS Code's Split Editor, Zed's and Sublime's neighbour, and the
- * chord this app's own terminal split already rhymes with (⌘D / ⇧⌘D inside a
+ * WHY ⌘\. The chord complements this app's own terminal split (⌘D / ⇧⌘D inside a
  * terminal tab). The surface-level split takes the editor chord and leaves the
  * terminal's alone: one is about the tab you are in, the other about the pane
  * the whole surface is drawn in, and a person who learns one has learned the
@@ -78,8 +77,7 @@ export function splitShortcutForKeyEvent(event: SplitKeyEvent): SplitShortcut | 
  *
  * Narrower than the Escape guard's list on purpose, and the difference is the
  * point: ⌘\ inserts no character, so there is nothing to protect a text field
- * from — VS Code splits the editor from inside the editor, and refusing the
- * chord while a file tab has focus would break it exactly where it is most
+ * from. Refusing the chord while a file tab has focus would break it where it is most
  * used. What a split must not happen BEHIND is modal chrome: a dialog, an alert
  * or an open menu is the only thing on screen, and rearranging the panes under
  * it is a change nobody can see.

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
- * The loud gate over one raw HTML block (VC-307, review round 2).
+ * The loud gate over one raw HTML block (VC-307).
  *
- * Round 1 scanned the block with regular expressions and round 1's review broke
- * that with valid HTML: `<div title=">" onclick=…>` hid the handler behind a
- * quoted delimiter, and `href="java&#x73;cript:…"` hid the scheme behind an
- * entity. Both are now judged on the PARSED document, which is the only reading
+ * Valid HTML can hide unsafe content from regular expressions:
+ * `<div title=">" onclick=…>` hides the handler behind a quoted delimiter,
+ * and `href="java&#x73;cript:…"` hides the scheme behind an entity. Both are
+ * judged on the PARSED document, which is the only reading
  * of untrusted markup that agrees with the browser's.
  */
 import { describe, expect, it } from "vite-plus/test";
@@ -42,8 +42,8 @@ describe("renderableHtmlBlock", () => {
     expect(renderableHtmlBlock('<svg>\n<image href="https://evil.example/x.png"/>\n</svg>')).toBe(
       false,
     );
-    // The gap review round 1 found by widening the sanitizer's own schema: a
-    // list derived from it would have followed it. This one does not.
+    // The gate's allowlist is independent of the sanitizer's schema, so
+    // widening that schema must not admit MathML here.
     expect(renderableHtmlBlock("<math>\n<mtext>x</mtext>\n</math>")).toBe(false);
   });
 
@@ -51,8 +51,7 @@ describe("renderableHtmlBlock", () => {
     expect(renderableHtmlBlock('<div onclick="steal()">hi</div>')).toBe(false);
     expect(renderableHtmlBlock("<img src='x.png' ONERROR=alert(1)>")).toBe(false);
     expect(renderableHtmlBlock('<p\n  onmouseover = "x()"\n>hi</p>')).toBe(false);
-    // A `>` inside a quoted value ends no tag. The regex scan this replaced
-    // stopped there and never saw the handler (review round 1).
+    // A `>` inside a quoted value ends no tag; the handler must still be seen.
     expect(renderableHtmlBlock('<div title=">" onclick="alert(1)">safe</div>')).toBe(false);
   });
 
@@ -103,8 +102,8 @@ describe("renderableHtmlBlock", () => {
 
   it("refuses a block that authors a document root, with or without a handler", () => {
     // A parser gives every fragment an html/head/body of its own, so the tree
-    // cannot tell an authored root from an invented one — which is how
-    // `<body onload>` reached the page unmarked (review round 2).
+    // cannot tell an authored root from an invented one. The source scan must
+    // detect `<body onload>` even when the parsed tree hides it.
     expect(renderableHtmlBlock('<body onload="alert(1)">body</body>')).toBe(false);
     expect(renderableHtmlBlock('<html onclick="alert(1)"><body>html</body></html>')).toBe(false);
     expect(renderableHtmlBlock("<body>plain</body>")).toBe(false);
@@ -234,8 +233,8 @@ describe("renderableHtmlBlock", () => {
   });
 
   it("refuses a style with any structure in it, rather than reading the CSS", () => {
-    // The escape below is what review round 2 walked past a `url(` pattern: a
-    // regular expression cannot read CSS, so nothing structural is admitted.
+    // An escaped function name bypasses a literal `url(` pattern. A regular
+    // expression cannot read CSS, so nothing structural is admitted.
     expect(
       renderableHtmlBlock(
         '<div style="background-image:u\\72l(https://tracker.invalid/x.png)">c</div>',

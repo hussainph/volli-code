@@ -292,7 +292,7 @@ describe("CHANNEL_PLACEMENT invariants", () => {
     }
   });
 
-  it("keeps the decided owner-ruling reason to the three per-project theme writes", () => {
+  it("keeps the project-theme placement reason to the three per-project writes", () => {
     const decided = ENTRIES.filter(([, entry]) => entry.reason === THEME_OWNER_RULING);
     expect(decided.map(([channel]) => channel).toSorted()).toEqual([
       "volli:theme-appearance-set-project",

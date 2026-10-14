@@ -19,7 +19,7 @@ export type { OrphanScanOptions, OrphanScanReport, WorktreeAge } from "./scan";
 export { cleanupOrphans, preservationRuleIds, OrphanCleanupRefused } from "./cleanup";
 export type { OrphanCleanupPorts, OrphanCleanupRequest } from "./cleanup";
 // The destructive act's durable core: a UUID-keyed command, an acceptance
-// receipt, immutable per-item facts, and one projection over them (review S1).
+// receipt, immutable per-item facts, and one projection over them.
 export { createOrphanCleanupEngine, foldCleanupRun, RECENT_CLEANUP_RUNS } from "./cleanup-engine";
 export type {
   OrphanCleanupEngine,
@@ -30,7 +30,7 @@ export type {
 export { SqliteOrphanCleanupLedger } from "./cleanup-ledger";
 export { reconcileInterruptedCleanups } from "./cleanup-recovery";
 // The serialization between a removal and anything that would start work in
-// the directory it is removing (review C4).
+// the directory it is removing.
 export {
   acquireDeletionLease,
   acquireWorktreeStartLease,

@@ -1632,7 +1632,7 @@ const appStartup = app.whenReady().then(async () => {
     settings: notifications.settings,
     takePendingActivation: () => notifications.takePendingActivation(),
     // A renderer asking for the parked click is a renderer that has just
-    // subscribed to them (VC-295 round 2): until then main parks rather than
+    // subscribed to them (VC-295): until then main parks rather than
     // pushes, because a window exists long before anything inside it listens.
     markRendererReady: (sender) => {
       const window = BrowserWindow.fromWebContents(sender);

@@ -177,8 +177,8 @@ export function normalizeLicenseText(text) {
  *     placeholder → `{ holder: null }`, and the document says so plainly;
  *   - the appendix names a holder → `{ holder: "<that line, verbatim>" }`.
  *
- * The consequence is that VC-414's edit to one line of LICENSE flows into the
- * shipped notice by regenerating it, with no second copy of the owner's name
+ * Regenerating the notice reads the copyright holder from LICENSE (VC-414),
+ * with no second copy of that name
  * anywhere in this pipeline to drift. A hardcoded holder here would be a
  * second source of truth for the one fact the LICENSE exists to state.
  *

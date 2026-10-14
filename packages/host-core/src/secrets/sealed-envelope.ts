@@ -1,6 +1,5 @@
 /**
- * The typed inventory's envelope, `host-credentials.enc` (VC-642;
- * `docs/plans/sealed-credential-store.md` §3):
+ * The typed inventory's envelope, `host-credentials.enc` (VC-642):
  *
  *     "VHC1" | backend (1) | key id (16) | nonce (12) | tag (16) | ciphertext
  *

@@ -563,7 +563,7 @@ export class ChatSessionClient {
    * never the transport's `started`. tRPC's WebSocket adapter sends `started`
    * as soon as the subscription's iterator exists, before its first `next()`
    * runs the replay that may refuse; a guard cleared there is cleared by
-   * every refusal it was meant to count (VC-315 review, B4).
+   * every refusal it was meant to count (VC-315).
    */
   #silentReloads = 0;
   #projectionRefresh: Promise<void> | null = null;

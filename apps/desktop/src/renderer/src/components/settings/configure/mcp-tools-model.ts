@@ -3,11 +3,8 @@
  * server's tools are found, grouped and selected in bulk, and what a server's
  * row says about its health. Pure, so the rules are tested as rules.
  *
- * THE SELECTION RULES, from the research behind this pane (VC-470). Every app
- * that let a person pick tools one at a time with no bulk control drew the
- * same complaint — a 40-tool GitHub server toggled by hand — and the two that
- * did it well (VS Code's tool picker, Claude's connector permissions) agree on
- * the shape:
+ * THE SELECTION RULES (VC-470). Bulk controls avoid toggling a large server's
+ * tools one at a time, while keeping filtered and hidden tools distinct:
  *
  *  1. **Select all acts on what is listed.** With a filter typed, "all" means
  *     the tools that match it, never the hidden rest: a control reading "these

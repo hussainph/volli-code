@@ -65,9 +65,8 @@ export function codeModeModelKey(model: { providerId: string; modelId: string })
  * reached through another provider — Claude on Bedrock, say — gets its
  * family's default). First match wins; a model no row matches is `off`.
  *
- * Each row is a benchmark finding, recorded in
- * `docs/research/code-mode-vc-471.md` (phase 2), not a guess: a mode is the
- * default only where it measured cheaper at the same correctness.
+ * Each row is a benchmark finding (VC-471): a mode is the default only where
+ * it measured cheaper at the same correctness.
  *
  * - Haiku 4.5 and Sonnet 4.6: `both`. Each wrote a program on the loop task
  *   every time (6/6), and Sonnet on the Browser and fan-out tasks too, at 24/24

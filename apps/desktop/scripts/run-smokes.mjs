@@ -191,8 +191,7 @@ export const CORE_E2E = new Set([
 
 /**
  * Measured repeat flakers, NOT silent exclusions. Run nightly with artifacts;
- * each has a Backlog owner and a measured return condition. Selection/threshold
- * evidence: docs/research/smoke-flakes-2026-10.md. Never quarantine sole core
+ * each exclusion needs a measured return condition. Never quarantine sole core
  * coverage, deterministic related failures, or credential-dependent probes.
  */
 export const SMOKE_QUARANTINE = new Map();
@@ -236,8 +235,7 @@ const SERIAL = new Set([
   // screenshot flake recurred with board/composer/theming peers; VC-635 measured
   // native starvation in this runner regime. Reduce that exposure by the same
   // narrow scheduling policy, not by changing paint/quit assertions or budgets.
-  // Current post-timeout samples do not establish the original native wait:
-  // docs/research/database-recovery-contention-vc638.md records that limit.
+  // Post-timeout samples do not establish the original native wait.
   "database-recovery-smoke.mjs",
 ]);
 

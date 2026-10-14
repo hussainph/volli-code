@@ -12,7 +12,7 @@
  * socket — the CLI never sends one beside a Session's environment, and the door
  * ignores one that arrives beside a Session token — and, underneath both, in who
  * can read the file: never the service account hostd and its Sessions run as.
- * See `docs/plans/host-identity.md` ("Operator token").
+ * See `apps/hostd/README.md` ("Operator token").
  *
  * Only names live here, because both ends must spell them the same way: the CLI
  * reads them and hostd writes them.

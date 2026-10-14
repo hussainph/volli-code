@@ -139,7 +139,7 @@ vi.mock("@dnd-kit/core", async (importActual) => {
 /* --------------------------------------------------------- the layout shim */
 
 /**
- * The owner's board in a window narrow enough to overflow, which is the
+ * A board in a window narrow enough to overflow, which is the
  * condition the loop needs: three standing columns plus the rail come to
  * 1104px of content in 1024px of canvas, so `over` has somewhere to flip.
  * jsdom's own `innerWidth`/`innerHeight` are these numbers, and dnd-kit reads

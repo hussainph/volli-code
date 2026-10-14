@@ -854,9 +854,8 @@ describe("a bounded transcript window (VC-315)", () => {
 });
 
 /**
- * `/copy`'s answer on a bounded transcript (VC-315; the verification review's
- * B2 probe, kept): a current turn whose reply sits above 256 tool-only
- * messages still has one.
+ * `/copy`'s answer on a bounded transcript (VC-315): a current turn whose
+ * reply sits above 256 tool-only messages still has one.
  */
 describe("the current turn's reply", () => {
   const reply: UIMessage = message("reply", "Current-turn reply");

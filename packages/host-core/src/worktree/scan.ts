@@ -46,8 +46,7 @@
  * remove` nor `--force` will touch a path git has forgotten), so naming it in
  * Settings is the only way out that does not need a terminal.
  *
- * Three things the first version of this file left to the cleanup to discover,
- * which the review sent back (C1, C2, C5):
+ * Three scan guarantees every mutation must preserve:
  *
  *  - Every scan mints an opaque REVISION and, with it, the exact plan a cleanup
  *    command may select from. A proposal a person reviewed is a thing with an
@@ -120,7 +119,7 @@ export function readOnlyGitAsync(git: RunGitAsync): RunGitAsync {
 /**
  * What a scan found. Every field is a statement about the world, never a change
  * to it — and `revision` is what makes the statement quotable: a cleanup command
- * names it, and main will only act on the plan THIS scan minted (review C1).
+ * names it, and main will only act on the plan THIS scan minted.
  */
 export interface OrphanScanReport {
   /** Opaque, minted per scan. A cleanup that names another one is refused. */
@@ -150,7 +149,7 @@ export interface OrphanScanOptions {
    * Live terminals and agent turns, the same supplier the manual Delete and the
    * cleanup use. Read-only: the scan only asks, so it can report an ACTIVE
    * checkout as kept instead of proposing a folder somebody is working in and
-   * leaving the refusal to be discovered after the confirmation (review C5).
+   * leaving the refusal to be discovered after the confirmation.
    */
   busyWorktreeSites?: BusyWorktreeSites;
   /** Test seam for the revision id. */
@@ -172,7 +171,7 @@ export interface WorktreeAge {
  * unreadable state stays in place.
  *
  * It answers with the BASIS as well as the timestamp, because a deadline nobody
- * can explain is a deadline nobody can argue with (review C6) — Storage says
+ * can explain is a deadline nobody can argue with — Storage says
  * which of the two clocks decided.
  *
  * Exported because the cleanup's immediate re-check has to ask the identical
@@ -245,7 +244,7 @@ async function listWorktrees(git: RunGitAsync, projectPath: string): Promise<Pro
 }
 
 /**
- * Whether a stale git record is this flow's to prune (review C2).
+ * Whether a stale git record is this flow's to prune.
  *
  * The eligibility rule for metadata is the eligibility rule for directories,
  * stated once: a record pointing INSIDE a container this database owns, that no
@@ -256,7 +255,7 @@ async function listWorktrees(git: RunGitAsync, projectPath: string): Promise<Pro
  * entirely (`cleanup.ts`), because `git worktree prune` cannot be aimed.
  *
  * Exported because the cleanup has to ask it AGAIN immediately before pruning
- * (VC-284 re-review C2): a ticket that started claiming a confirmed record
+ * (VC-284): a ticket that started claiming a confirmed record
  * after the scan changes nothing about the stale SET, so set equality alone
  * would let a repo-wide prune drop ticket-linked metadata the policy protects.
  * One definition, asked twice, is the only way the second answer can be trusted.
@@ -321,8 +320,8 @@ export async function scanOrphans(
 
     const listing = await listWorktrees(git, project.path);
     if (listing.error !== null) {
-      // A project whose git can't be read is REPORTED, not skipped in silence
-      // (review C5). Without the listing every checkout in its container is
+      // A project whose git can't be read is reported, not skipped in silence.
+      // Without the listing every checkout in its container is
       // unaccounted for, and the disk pass below would otherwise describe them
       // as "not registered with git" — a different, wrong statement.
       report.unreadableProjects.push({
@@ -342,7 +341,7 @@ export async function scanOrphans(
     // drop. Read straight off the listing git already gave us, with git's own
     // reason attached, so the confirmation can be specific about records rather
     // than saying "and some metadata" — and split by the SAME ownership and
-    // ticket gates the directories go through (review C2).
+    // ticket gates the directories go through.
     for (const entry of entries) {
       if (entry.prunable === null) continue;
       const kept = metadataKeptReason(container, knownPaths, entry.path);
@@ -445,7 +444,7 @@ export async function scanOrphans(
   // Tier 3: stale clean orphans — but only the ones nothing is working in.
   // Asking here rather than only in the cleanup is the difference between a
   // report a person can trust and one whose refusals arrive after they have
-  // already confirmed (review C5). It is a read, like everything else here.
+  // already confirmed. It is a read, like everything else here.
   for (const candidate of candidates) {
     const busy = await busySite(options.busyWorktreeSites, candidate.entry.path);
     if (busy !== null) {

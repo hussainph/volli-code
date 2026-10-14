@@ -3,8 +3,7 @@
  * "resnapshot" instead (HP § Commands, subscriptions and errors).
  *
  * The one place these numbers live: the WebSocket listener enforces them.
- * VC-315 sized them to replace D9's 128 events / 1 MiB (T3 Code's
- * precedent): the busiest measured Session-day was 2,796 events and 9.3 MB
+ * The VC-315 bounds cover a measured Session-day of 2,796 events and 9.3 MB
  * of frames, so a lid closed for a whole working day still resumes, with
  * ~1.7x headroom on bytes and ~1.5x on events. Bytes are the real bound; the
  * count caps floods of tiny events. Past either a subscription answers

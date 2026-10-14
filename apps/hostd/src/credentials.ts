@@ -1,6 +1,6 @@
 /**
  * `volli-hostd credentials reset`: give up saved credentials this host cannot
- * open (VC-641; `docs/plans/sealed-credential-store.md` §7).
+ * open (VC-641).
  *
  *   volli-hostd credentials reset --data-dir <dir> [--yes]
  *

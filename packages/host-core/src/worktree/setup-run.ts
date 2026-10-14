@@ -1,7 +1,7 @@
 /**
  * The sentinel-gated setup-command state machine (worktree-support §6). The
  * setup command runs in the session's live terminal AFTER the PTY spawns — never
- * as the pane's primary process (cmux #5032) — so `ensure` (ensure.ts) ends at
+ * as the pane's primary process — so `ensure` (ensure.ts) ends at
  * `ready` with the identity and deliberately does NOT run setup. Historically
  * pty.ts owned the whole machine inline: arming the watch, writing the sentinel
  * line, scanning output tails, driving `setting-up → ready | failed`, and

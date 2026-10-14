@@ -334,7 +334,7 @@ interface BoardListViewProps {
 }
 
 /**
- * Linear-style single-scroller list: a second projection of the board's data,
+ * Single-scroller list: a second projection of the board's data,
  * with the same filter, sort, selection, context menu, AND drag & drop. Renders
  * statuses in {@link TICKET_STATUSES} order — each a full section (shown) or a
  * slim drop row (empty-at-start, drag only); empty-and-not-dragging statuses

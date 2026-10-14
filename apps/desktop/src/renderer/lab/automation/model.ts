@@ -42,13 +42,9 @@
  * ──────────────────────────────────────────────────────────────────────────
  *
  * ── WHY THE PROMPT IS ONLY PROSE ──────────────────────────────────────────
- * The original design gave every Automation a set of `{{context}}` placeholders
- * that Volli resolved before handing the prompt to the agent. Research into the
- * category found that nobody else does this: every shipped agent tool either
- * dumps the whole issue into the prompt implicitly, or appends a plain string.
- * The reason is that it babysteps a model that can fetch what it needs — and
- * doing it well means Volli guessing, at author time, which slice of the ticket
- * matters for a run that has not happened yet.
+ * Prompts are prose, not `{{context}}` templates. The model can fetch what it
+ * needs; resolving placeholders would require Volli to guess at author time
+ * which slice of the ticket matters for a run that has not happened yet.
  *
  * That left placeholders as an opt-in second mode "for the cases where you
  * genuinely need to control ordering", which the two-opinion review seed was

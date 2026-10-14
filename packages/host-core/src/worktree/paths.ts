@@ -1,7 +1,7 @@
 /**
  * Path canonicalization for reconciliation and the copy-step guards. Every
  * cross-path comparison in this module runs on realpath-canonicalized paths so
- * macOS `/private` aliasing (a Vibe Kanban footgun — `/tmp` is a symlink to
+ * macOS `/private` aliasing (`/tmp` is a symlink to
  * `/private/tmp`) can never make an identical worktree read as two different
  * locations. Both sides of any comparison are always canonicalized.
  */

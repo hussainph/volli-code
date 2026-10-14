@@ -1,8 +1,7 @@
 # @volli/host-core
 
-The host's services, composed without Electron. Volli Cloud
-([ruling](../../docs/plans/volli-cloud.md)) runs one host program everywhere:
-Electron main and `apps/hostd` both call `createHostCore`, `start()` and
+The host's services, composed without Electron. Electron main and `apps/hostd`
+both call `createHostCore`, `start()` and
 `stop(reason)`. Electron main keeps the quit gates, deadline and native exit.
 
 ```ts
@@ -544,9 +543,8 @@ ledger and concurrency reader. Desktop builds it in `registerTerminalIpcHandlers
 with `desktopPtyPorts()`; `hostd` will build it with its own. A degraded
 database still yields a supervisor whose `create` answers with the open error.
 
-**The stream contract.** M2's terminal ticket (VC-568) exposes this over the
-host protocol's [binary framing](../../docs/plans/host-protocol.md#binary-framing);
-the supervisor is shaped for it but ships no transport.
+**The stream contract (VC-568).** The supervisor exposes terminal streams to
+host-protocol binary framing but owns no transport.
 
 - **One client per terminal.** A terminal's stream is attached to at most one
   `HostClientEventSink`. Only that client receives its output, exit and park
@@ -717,9 +715,9 @@ What the backend owns, beyond the registry's policy:
   interception rewrites every document's headers, is visible to the page
   (`securitypolicyviolation`) and still misses `srcdoc`; removing the frame
   element races the commit and changes the page's DOM. A test pins the
-  behavior (`chromium-backend.test.ts`, "guards frames"). **VC-571 must
-  enforce it, or keep the lent-view fallback, before persons use hostd's
-  browser** (`docs/plans/host-protocol.md`, parity bar).
+  behavior (`chromium-backend.test.ts`, "guards frames"). Viewers must account
+  for this engine difference rather than assuming desktop navigation parity
+  (VC-571).
 
 - **Popups never run.** Every new page is attached paused; one with an opener
   is closed, and its URL becomes a product tab under the opener's provenance
@@ -858,7 +856,7 @@ handler map".
 
 ## Moving a service cluster in
 
-This is the pattern for every later move (VC-554 onward). A move is a **pure
+Use this pattern when relocating a service cluster (VC-554). A move is a **pure
 move**: no behavior change, no migration, and the app is identical with the
 `cloud` flag off.
 
@@ -909,7 +907,7 @@ move**: no behavior change, no migration, and the app is identical with the
 7. **Fix every path reference.** `rg` the old directory across:
    - e2e and bench scripts (`ssrLoadModule("/apps/desktop/src/main/...")`, `load("src/main/...")`);
    - `apps/desktop/scripts`;
-   - docs (`BOUNDARIES.md`, `CLAUDE.md`/`AGENTS.md`, the cloud plans).
+   - contributor docs (`BOUNDARIES.md`, `CLAUDE.md`/`AGENTS.md`).
 8. **Lockfile.** A new dependency here uses the same specifier desktop
    already resolves. The `pnpm-lock.yaml` diff is importer entries only, with
    no version changes.

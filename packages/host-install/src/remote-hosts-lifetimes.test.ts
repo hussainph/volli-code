@@ -1,7 +1,7 @@
 /**
- * The remote hosts engine's lifetimes (VC-700 PR 2, the #815 review's
- * blockers): quit owns everything in flight, one finalization per host, a
- * finalization that fails can still finish, owned SSH children, bounded
+ * The remote hosts engine's lifetimes (VC-700): quit owns everything in
+ * flight, one finalization per host, a finalization that fails can still finish,
+ * owned SSH children, bounded
  * flow retention, answers that must fit the current question, the link cap,
  * waking on resume, and the sudo password forgotten at every stop.
  */

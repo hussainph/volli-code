@@ -2,14 +2,9 @@
  * An Automation, as a file on disk.
  *
  * ── WHY A FILE AT ALL ─────────────────────────────────────────────────────
- * Research into the category (July 2026) turned up one fact that decided this:
- * no shipping coding-agent product lets you author a repeated agent workflow on
- * a node canvas, and the ones with the most design budget — Devin, Codex,
- * Cursor, Copilot, Linear — all landed on the same substitute, a text artifact
- * you check in. Devin calls it a Playbook, OpenAI calls it AGENTS.md, GitHub
- * calls it a custom agent, Claude Code calls it a Skill. Same thing each time:
- * frontmatter for the parameters a machine reads, prose for the part a model
- * reads.
+ * A checked-in text artifact separates the parameters a machine reads from
+ * the prose a model reads. Frontmatter carries parameters; the body carries
+ * instructions. The file can be reviewed and versioned alongside the project.
  *
  * So an Automation is that file. The board is a view of it, never its home.
  * ──────────────────────────────────────────────────────────────────────────
@@ -661,11 +656,8 @@ export const APP_DATA_DIR = "~/Library/Application Support/Volli";
  * Where the file lives, relative to {@link APP_DATA_DIR}.
  *
  * ── WHY NOT IN THE REPO ───────────────────────────────────────────────────
- * The first draft put project automations at `.volli/automations/`, on the
- * argument every reference product makes: a Playbook or an AGENTS.md is checked
- * in, so it travels with the code and gets reviewed like anything else.
- *
- * Two things killed it. The small one: `.volli/` writes itself a `.gitignore`
+ * Project automations are stored outside the checkout. Two constraints make
+ * `.volli/automations/` unsuitable: first, `.volli/` writes itself a `.gitignore`
  * containing `*`, so nothing under it is committed — a format whose whole claim
  * is "check this in" cannot live in a directory that ignores itself, and the
  * alternative was teaching that gitignore an `!automations/` exception so one

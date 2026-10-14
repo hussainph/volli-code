@@ -1,7 +1,7 @@
 /**
  * Harness containment (VC-703): every home-derived path a volli-drive
  * instance's main process resolves sits inside its scratch root, or the app
- * refuses to boot. Temp dirs only; the owner's home is a string here, never
+ * refuses to boot. Temp dirs only; the user's home is a string here, never
  * read.
  */
 import {
@@ -107,7 +107,7 @@ describe("checkHarnessContainment", () => {
     expect(check({ ...env(), VOLLI_HARNESS_SCRATCH: undefined }).ok).toBe(false);
     expect(check({ ...env(), VOLLI_HARNESS_SCRATCH: "tmp/x" }).ok).toBe(false);
     expect(check({ ...env(), VOLLI_HARNESS_SCRATCH: join(scratch, "nope") }).ok).toBe(false);
-    // The owner's home inside scratch (scratch = an ancestor) or the reverse.
+    // The user's home inside scratch (scratch = an ancestor) or the reverse.
     expect(check(env(), { ownerHome: join(scratch, "home") }).ok).toBe(false);
     const nested = join(scratch, "inner");
     mkdirSync(nested);

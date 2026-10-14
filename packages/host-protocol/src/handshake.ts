@@ -86,7 +86,7 @@ export type HostNonce = string;
 const NONCE = /^[A-Za-z0-9_-]{22,128}$/u;
 const NONCE_BYTES = 32;
 
-/** Which host held a workspace, and under which epoch (`docs/plans/host-identity.md`). */
+/** Which host held a workspace, and under which epoch. */
 export interface WorkspaceAuthority {
   readonly epoch: WorkspaceEpoch;
   readonly hostId: HostId;

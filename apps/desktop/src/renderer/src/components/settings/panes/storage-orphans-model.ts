@@ -13,11 +13,10 @@
  * describe a cleanup as something a launch did, and never call a run a
  * success when something in it failed or is still uncertain.
  *
- * Review round two moved the confirmed cleanup onto a real command contract —
- * `{ commandId, scanRevision, itemIds }` — and split what used to be one loose
- * `status` field into `state` (with `executing`/`indeterminate` alongside
- * `pending`/`completed`/`skipped`/`failed`), gave every item an id and its own
- * `startedAt`/`settledAt`, and moved the preservation policy into
+ * Confirmed cleanup uses the command contract `{ commandId, scanRevision,
+ * itemIds }`. Each item's `state` distinguishes `executing`/`indeterminate`
+ * from `pending`/`completed`/`skipped`/`failed`, with an id and its own
+ * `startedAt`/`settledAt`. The preservation policy lives in
  * `@volli/shared`'s typed vocabulary. This module follows that contract
  * exactly; nothing here re-derives a policy sentence or a path main did not
  * already name.

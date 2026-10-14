@@ -1,6 +1,5 @@
 /**
- * The keys that seal the typed credential inventory (VC-642;
- * `docs/plans/sealed-credential-store.md` §3, §7).
+ * The keys that seal the typed credential inventory (VC-642).
  *
  * The legacy {@link SecretKeyPort} seals and opens a whole document and holds
  * one key per launch. A keyring instead names its keys: every sealed

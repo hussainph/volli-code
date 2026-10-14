@@ -3,9 +3,8 @@
  * worktrees are materialized by `git worktree add`, which carries every TRACKED
  * file. This step transports the files git DOESN'T carry — gitignored/untracked
  * local config (`.env`, harness local settings) — so an agent's checkout is
- * actually runnable. It reads a repo-root `.worktreeinclude` (the de-facto
- * standard Conductor and Claude Code converged on), layered over built-in
- * defaults.
+ * actually runnable. It reads a repo-root `.worktreeinclude`, layered over
+ * built-in defaults.
  *
  * ── Pattern subset (gitignore-style; implemented here, no new deps) ──
  *  - One pattern per line; blank lines and `#`-comment lines are ignored;

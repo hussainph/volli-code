@@ -496,11 +496,8 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
         origin: { kind: "automation", automationRunId: run.id, automationName: run.automationName },
       });
       if (attached.state !== "ready") {
-        // VC-220. This early return used to be wordless, and it is the whole of
-        // what the owner saw: a Run mints its Session, the attach is refused,
-        // and the only thing that would have delivered the Instructions gives
-        // up in silence — while the door has already answered `ok` and the Run
-        // row already links to a Session with nothing in it.
+        // VC-220. The door has already answered `ok` and the Run row links to
+        // its minted Session, so an attach refusal must be logged explicitly.
         //
         // The delivery intent is deliberately left pending: the attach is what
         // failed, so the next ready attach (the Session's own Retry, or the

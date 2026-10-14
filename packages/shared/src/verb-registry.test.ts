@@ -901,9 +901,8 @@ describe("the registry table", () => {
     ]);
   });
 
-  // VC-431: the delegate door offers the SAME rungs, for the reason the owner
-  // gave — "it gives a working session an anchor to the user's preferences for
-  // models and effort". A delegation that names neither a tier nor a model is
+  // VC-431: the delegate door offers the same model and effort preferences.
+  // A delegation that names neither a tier nor a model is
   // anchored to its parent's own, which is why `model` no longer speaks of a
   // utility default: nothing on a chat path resolves that row.
   it("lets session_delegate name the same model tiers, and never the Utility row", () => {

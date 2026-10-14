@@ -608,7 +608,7 @@ describe("pollRetention — F7: a failed PR-url stamp is isolated, surfaced, and
     expect(notifications[0]!.title).toBe("Couldn't save discovered PR");
     // Operational: a durable write that did not land is a fault with no other
     // surface, so no preference can silence it — and it still opens the ticket
-    // it is about, which is a target it genuinely has (round 2).
+    // it is about, which is a target it genuinely has.
     expect(notifications[0]!.producer).toBe("worktree-record-failed");
     expect(notifications[0]!.target).toEqual({
       kind: "ticket",
@@ -673,7 +673,7 @@ describe("RetentionWatcher — F4: schedule() never leaves a second timer chain"
   });
 });
 
-describe("getRetentionState — Keep exempts BOTH paths (the Vibe-Kanban bug)", () => {
+describe("getRetentionState — Keep exempts both merge and TTL paths", () => {
   it("keep=false: a merged PR is archive-ready (merge path fires)", async () => {
     seedProject();
     seedTicket({ status: "done", prUrl: "https://x/pull/7", doneAt: 0 });

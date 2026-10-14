@@ -1,6 +1,7 @@
 /**
- * VC-497 opt-in, branch-only AgentRuntime substrate. No desktop wiring, exports,
- * existing sidecars, or default runtime changes. This is NOT production parity.
+ * Fixture-only AgentRuntime substrate for durability benchmarks (VC-497).
+ * No production wiring or exports; it never changes existing sidecars or the
+ * default runtime. Its deliberately limited surface is not production parity.
  */
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";

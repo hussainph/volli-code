@@ -1,6 +1,5 @@
 /**
- * The typed sealed credential inventory, `host-credentials.enc` (VC-642;
- * `docs/plans/sealed-credential-store.md` §3, §6, §7).
+ * The typed sealed credential inventory, `host-credentials.enc` (VC-642).
  *
  * One authenticated file holds every family a host has moved in
  * (`credential-families.ts`), sealed under a named key from a
@@ -106,8 +105,7 @@ interface Inventory {
 }
 
 /**
- * Which state of its canonical source a mirrored family copies (step E of a
- * family's move, `docs/plans/sealed-credential-store.md` §4): the source's
+ * Which state of its canonical source a mirrored family copies: the source's
  * lineage id and its revision. Non-secret; it names no value.
  */
 export interface MirrorReceipt {
