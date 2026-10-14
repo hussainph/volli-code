@@ -715,9 +715,9 @@ What the backend owns, beyond the registry's policy:
   interception rewrites every document's headers, is visible to the page
   (`securitypolicyviolation`) and still misses `srcdoc`; removing the frame
   element races the commit and changes the page's DOM. A test pins the
-  behavior (`chromium-backend.test.ts`, "guards frames"). Viewers must account
-  for this engine difference rather than assuming desktop navigation parity
-  (VC-571).
+  behavior (`chromium-backend.test.ts`, "guards frames"). Before people use
+  hostd’s browser, enforce the iframe-navigation rule or retain the explicitly
+  attached lent-view fallback; do not assume desktop navigation parity (VC-571).
 
 - **Popups never run.** Every new page is attached paused; one with an opener
   is closed, and its URL becomes a product tab under the opener's provenance

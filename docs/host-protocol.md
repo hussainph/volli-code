@@ -898,8 +898,9 @@ requests and redirects, including out-of-process frames, are guarded before
 HTTP(S) navigation; main-frame external schemes are refused. These inner frames
 gain no privilege beyond the page (`blob:`/`srcdoc` share its origin, `data:` is
 opaque), but differ from desktop's stricter navigation guard. Preserve the
-`chromium-backend.test.ts` frame cases and require an enforced guard or a named
-viewer fallback before exposing that stronger contract. Never claim a network
+`chromium-backend.test.ts` frame cases. Before people use hostd’s browser, enforce
+the iframe-navigation rule or retain the explicitly attached lent-view fallback.
+Never claim a network
 interceptor refuses an in-process document it cannot observe.
 
 Host-key pinning, nonce-bound welcomes and short-lived key-proved principals

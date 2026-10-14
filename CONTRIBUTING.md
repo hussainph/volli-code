@@ -10,6 +10,9 @@ Use macOS, Node.js `^24.16.0`, and pnpm `11.10.0`. A `.nvmrc` carries the pin (`
 pnpm install
 ```
 
+Validation uses the repository's `vite-plus` CLI (`vp`). Use `pnpm exec vp` if
+`vp` is not already on your PATH.
+
 ## Workflow
 
 Start from an up-to-date `main` branch and make your change on a branch. Ticket worktree branches use `volli/<DISPLAY-ID>-<slug>`, such as `volli/VC-12-mcp-server`.
@@ -32,7 +35,7 @@ Run the checks that cover your change before opening a pull request:
 vp check
 vp run --filter <touched-package> typecheck
 # From the touched package's directory:
-vp test run <focused-test-file> --maxWorkers="$VOLLI_CONCURRENCY_HINT"
+vp test run <focused-test-file> --maxWorkers="${VOLLI_CONCURRENCY_HINT:-1}"
 node scripts/check-public-content.mjs
 ```
 
