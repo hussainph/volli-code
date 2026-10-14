@@ -25,7 +25,7 @@ import type {
 
 import { agentRequestEnv, AgentClientError, operatorTokenFor } from "./client";
 import type { OperatorTokenFileRead } from "./client";
-import { bareHelpText, resolveHelp } from "./help";
+import { bareHelpText, resolveHelp, toolRouteLabel } from "./help";
 import { parseCliArgs } from "./parser";
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
 import { materializeFileArguments } from "./runtime";
@@ -198,6 +198,13 @@ async function previewContractRefusal(
   );
 }
 
+function stringMap(value: unknown): Readonly<Record<string, string>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (!entries.every(([, entry]) => typeof entry === "string")) return undefined;
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
 function parsedHelpSurface(value: unknown, sessionId: string): AgentHelpSurface | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const surface = value as Record<string, unknown>;
@@ -210,7 +217,15 @@ function parsedHelpSurface(value: unknown, sessionId: string): AgentHelpSurface 
   ) {
     return null;
   }
-  return { sessionId, role, tools };
+  const routes = stringMap(surface["routes"]);
+  const mcpServerIds = stringMap(surface["mcpServerIds"]);
+  return {
+    sessionId,
+    role,
+    tools,
+    ...(routes === undefined ? {} : { routes }),
+    ...(mcpServerIds === undefined ? {} : { mcpServerIds }),
+  };
 }
 
 /**
@@ -298,12 +313,21 @@ export function teachingErrorForParseResult(
   if (runtime?.surface !== null && runtime?.surface !== undefined) {
     const carried = runtime.surface.tools.includes(entry.key);
     const roleName = SESSION_ROLE_NAMES[runtime.surface.role];
+    const route = runtime.surface.routes?.[entry.key];
     const roleReason = carried
-      ? ` This ${roleName}'s frozen tool surface carries ${entry.key}.`
+      ? ` This ${roleName}'s frozen tool surface carries ${entry.key}; ${toolRouteLabel(route)}.`
       : ` This ${roleName}'s frozen tool surface does not carry ${entry.key}.`;
-    const next = carried
-      ? `Call the named ${entry.key} tool through this Session's Agent Tool Surface.`
-      : `Use a Session whose frozen Agent Tool Surface carries ${entry.key}; do not bypass the refusal through process or database workarounds.`;
+    const name = entry.tool?.name ?? entry.key;
+    let next = `Use a Session whose frozen Agent Tool Surface makes ${entry.key} available; do not bypass the refusal through process or database workarounds.`;
+    if (carried) {
+      if (route === "code" || route === "deferred") {
+        next = `Use codemode to call ${name}${route === "deferred" ? " after searchTools() and describeTool()" : ""}; it is not a direct named tool in this Session.`;
+      } else if (route === "direct" || route === "both") {
+        next = `Call the named ${name} tool through this Session's Agent Tool Surface.`;
+      } else if (route !== "hidden") {
+        next = `Run \`volli help ${entry.key.replaceAll(".", " ")}\` and inspect this Session's tool declarations; the route is unknown, so no direct call is claimed.`;
+      }
+    }
     return makeAgentError("WRONG_DOOR", `${parsed.message}${roleReason}`, next);
   }
   const unknown = runtime?.surfaceUnknownReason;

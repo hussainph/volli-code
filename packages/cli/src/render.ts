@@ -599,6 +599,28 @@ function sessionSignalLine(signal: unknown): string {
   return `signal  ${signal["kind"]} · ${ageText(signal["ageMs"])} ago`;
 }
 
+function pendingQuestionLines(data: Record<string, unknown>): string[] {
+  const blocks = (recordsAt(data, "pendingQuestions") ?? []).map((question, index) => {
+    const lines = [String(question["title"] ?? "Question")];
+    if (typeof question["detail"] === "string") lines.push(question["detail"]);
+    for (const prompt of recordsAt(question, "prompts") ?? []) {
+      lines.push(String(prompt["label"] ?? "Question"));
+      if (typeof prompt["detail"] === "string") lines.push(prompt["detail"]);
+      for (const option of recordsAt(prompt, "options") ?? []) {
+        lines.push(
+          `- ${String(option["label"] ?? option["id"] ?? "Option")}${typeof option["description"] === "string" ? `: ${option["description"]}` : ""}`,
+        );
+      }
+      if (prompt["multiple"] === true) lines.push("Multiple choices allowed.");
+      if (prompt["custom"] === true) lines.push("A typed answer is allowed.");
+    }
+    return { label: `pending question ${index + 1}`, text: terminalSafeText(lines.join("\n")) };
+  });
+  return blocks.length === 0
+    ? []
+    : untrustedProseResponseLines({ response: "pending questions", blocks });
+}
+
 function renderSessionShow(data: Record<string, unknown>): string | null {
   if (typeof data["id"] !== "string" || typeof data["status"] !== "string") return null;
   const lines = [
@@ -657,6 +679,7 @@ function renderSessionShow(data: Record<string, unknown>): string | null {
       }),
     );
   }
+  lines.push(...pendingQuestionLines(data));
   return lines.join("\n");
 }
 
@@ -716,6 +739,7 @@ function renderChatPeek(data: Record<string, unknown>, transcript: readonly unkn
   return [
     header,
     ...sessionStopLines(data),
+    ...pendingQuestionLines(data),
     ...transcript.filter(isRecord).map(transcriptLine),
   ].join("\n");
 }

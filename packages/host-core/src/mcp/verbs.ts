@@ -137,9 +137,18 @@ function refusal(text: string): RuntimeVerbResult {
  * that has just installed a server will otherwise try to call its tools in this
  * turn, fail, and conclude the install did not work. Saying WHEN they become
  * usable is the difference between a correct result and a retry loop.
+ *
+ * WHO gets them is the part VC-752 made honest. A new root Session is born with
+ * the project's current tools. A delegated helper is born with its PARENT's
+ * frozen tools (`session_delegate`), so a helper started from this Session does
+ * not have them, however long ago the install happened.
  */
 const FROZEN_SURFACE_NOTE =
-  "These tools are not available in this Session: a Session's tool list is frozen when it is created, and this one's is unchanged. They become usable in the next Session created.";
+  "This Session's tools are unchanged: a Session's tool list is frozen when it is created. New root Sessions get the updated MCP tools; delegated helpers inherit their parent's frozen MCP tools. Use session_start or a fresh Board Session before delegating work that needs the update.";
+
+/** Disabling keeps inherited tools but stops offering them to new root Sessions. */
+const KEPT_ON_DISABLE_NOTE =
+  "This Session keeps the tools it was created with, and a delegated helper inherits them. New root Sessions are no longer offered them.";
 
 /** A list of tool names as the caller spelled it, each counted once. */
 function nameList(raw: unknown): readonly string[] {
@@ -1023,7 +1032,7 @@ async function setEnabledTool(
       `Turned ${result.server.name} ${enabled ? "on" : "off"}.`,
       enabled
         ? FROZEN_SURFACE_NOTE
-        : `Its configuration is kept, so Sessions already holding its tools can still reattach. ${FROZEN_SURFACE_NOTE}`,
+        : `Its configuration is kept, so Sessions already holding its tools can still reattach. ${KEPT_ON_DISABLE_NOTE}`,
     ].join(" "),
   };
 }

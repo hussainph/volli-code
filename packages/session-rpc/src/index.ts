@@ -356,6 +356,10 @@ export interface SessionRouterHandlers extends SignInRouterHandlers {
     { sessionId: string; before: number },
     SessionHistoryPage
   >;
+  readonly "session.picture": HostHandler<
+    { sessionId: string; pictureId: string; offset?: number },
+    { data: string | null; mimeType: string | null; nextOffset: number | null }
+  >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
     SessionRuntimeProjectionSnapshot
@@ -717,6 +721,7 @@ const experimentIdSchema = z.enum(EXPERIMENTS.map(({ id }) => id));
 const experimentFlagSchema = z.object({
   enabled: z.boolean(),
   source: z.enum(["default", "storage", "environment"]),
+  visible: z.boolean().optional(),
 });
 const experimentSnapshotSchema = z.object(
   Object.fromEntries(EXPERIMENTS.map(({ id }) => [id, experimentFlagSchema])) as Record<
@@ -1523,6 +1528,27 @@ export function createSessionRouter() {
         .query(async ({ ctx, input }) =>
           rendererHistoryPage(await ctx.handlers["session.history"](input, ctx.call)),
         ),
+      // Pictures use their own optional feature and never enlarge transcript frames.
+      picture: workspaceProcedure(
+        "session.picture",
+        z.object({
+          sessionId: nonEmptyString,
+          pictureId: nonEmptyString,
+          offset: z.number().int().nonnegative().multipleOf(3).optional(),
+        }),
+        sessionResource,
+      )
+        .output(
+          z.object({
+            data: z
+              .string()
+              .max(256 * 1024)
+              .nullable(),
+            mimeType: z.string().nullable(),
+            nextOffset: z.number().int().nonnegative().nullable(),
+          }),
+        )
+        .query(({ ctx, input }) => ctx.handlers["session.picture"](input, ctx.call)),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per

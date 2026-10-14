@@ -174,7 +174,9 @@ function connect(url: string): TRPCClient<AppRouter> {
 }
 
 type Emission = { id: string; data: unknown };
-const isQueue = (data: unknown): data is { kind: "queue"; revision: number; queue: unknown[] } =>
+const isQueue = (
+  data: unknown,
+): data is { kind: "queue"; revision: number; queue: unknown[]; throughSequence: number } =>
   typeof data === "object" && data !== null && (data as { kind?: unknown }).kind === "queue";
 
 describe("the host follow-up queue over the production WebSocket listener", () => {
@@ -244,10 +246,14 @@ describe("the host follow-up queue over the production WebSocket listener", () =
     expect(emission).toEqual({
       kind: "queue",
       sessionId,
-      throughSequence: read.throughSequence,
+      throughSequence: expect.any(Number),
       revision,
       queue: [row],
     });
+    // The emission names the durable head when this queue revision was
+    // published. A blocked-delivery Attention can advance the history before
+    // the projection query without changing the queue or its revision.
+    expect(emission.throughSequence).toBeLessThanOrEqual(read.throughSequence);
     exchanges.push({
       procedure: "session.subscribeQueue",
       input: { sessionId },

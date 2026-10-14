@@ -1,5 +1,15 @@
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import type { AgentCommand, AgentResponse, SessionOrigin, SessionRole } from "@volli/shared";
+import { requestAgent } from "../../../cli/src/client";
+import { runCli } from "../../../cli/src/run";
+import { startAgentSocket } from "../agent-socket";
+import type {
+  AgentCommand,
+  AgentResponse,
+  SessionInteraction,
+  SessionOrigin,
+  SessionRole,
+} from "@volli/shared";
 import { createAgentCommandService } from "../agent-commands";
 import { testHostHandlers } from "../testing/host-handlers";
 import { insertProject } from "../db/projects-repo";
@@ -8,12 +18,17 @@ import { recordSessionResumedOnce, recordTicketEvent } from "../db/events-repo";
 import { openTestDb, testProject, testSession, testTicket, type TestDb } from "../db/test-helpers";
 import { createTestSessionEngine } from "../testing/session-engine";
 import { insertSession } from "../session-control/test-support";
+import { pendingSessionQuestions } from "./pending-session-questions";
 
 let db: TestDb;
 afterEach(() => db?.cleanup());
 const DAY = 86400000;
 const provenance = {
   source: { kind: "user" as const, id: "test", detail: null },
+  venue: { id: "local" as const, kind: "local" as const },
+};
+const questionProvenance = {
+  source: { kind: "adapter" as const, id: "pi", detail: null },
   venue: { id: "local" as const, kind: "local" as const },
 };
 function data(response: AgentResponse): Record<string, unknown> {
@@ -122,6 +137,237 @@ function fixture(observeTerminal = false) {
 }
 
 describe("session roster and detail", () => {
+  it("reads every pending flat and multi-question prompt from the ledger, scrubbed and without tail truncation", async () => {
+    const f = fixture();
+    const id = await f.create("questions", DAY);
+    await f.active(id, 2 * DAY);
+    const attachmentId = `attachment-${id}`;
+    const flat: SessionInteraction = {
+      id: "ask-user:flat",
+      attachmentId,
+      kind: "question",
+      title: "Which route?\nUse sk-route_private?",
+      detail: "Keep this second line\nAuthorization: Bearer private-value",
+      options: [
+        { id: "yes", label: "Yes\nProceed", description: "token=option-private" },
+        { id: "no", label: "No", description: null },
+      ],
+      multiple: false,
+      native: { id: "native-private", detail: { token: "native-detail-private" } },
+    };
+    const multi: SessionInteraction = {
+      ...flat,
+      id: "ask-user:multi",
+      title: "Questions",
+      detail: null,
+      // The flat fallback must not hide the second prompt or add a phantom one.
+      options: [],
+      prompts: [
+        {
+          id: "prompt:0",
+          label: "Pick a region\nThen a zone",
+          detail: null,
+          options: [{ id: "west", label: "West", description: null }],
+          multiple: false,
+          custom: true,
+        },
+        {
+          id: "prompt:1",
+          label: `Select environments\n${"Full question text. ".repeat(20)}`,
+          detail: "Use password=prompt-private\nKeep the rest",
+          options: [
+            { id: "dev", label: "Dev sk-dev_private", description: "Line one\nLine two" },
+            { id: "prod", label: "Prod", description: null },
+          ],
+          multiple: true,
+          custom: false,
+        },
+      ],
+    };
+    for (const interaction of [
+      flat,
+      multi,
+      { ...flat, id: "permission", kind: "permission" as const },
+      { ...flat, id: "cancelled" },
+      { ...flat, id: "resolved" },
+    ]) {
+      await f.engine.observe({
+        id: `opened-${interaction.id}`,
+        kind: "interaction.opened",
+        sessionId: id,
+        attachmentId,
+        occurredAt: 3 * DAY,
+        provenance: questionProvenance,
+        interaction,
+      });
+    }
+    await f.engine.observe({
+      id: "cancel-question",
+      kind: "interaction.cancelled",
+      sessionId: id,
+      attachmentId,
+      occurredAt: 4 * DAY,
+      provenance: questionProvenance,
+      interactionId: "cancelled",
+      reason: "withdrawn",
+    });
+    await f.engine.observe({
+      id: "resolve-question",
+      kind: "interaction.resolved",
+      sessionId: id,
+      attachmentId,
+      occurredAt: 4 * DAY,
+      provenance: questionProvenance,
+      interactionId: "resolved",
+      resolution: { optionIds: ["yes"], response: null },
+    });
+    const expected = [
+      {
+        id: "ask-user:flat",
+        title: "Which route?\nUse [redacted]?",
+        detail: "Keep this second line\nAuthorization: Bearer [redacted]",
+        prompts: [
+          {
+            id: "prompt:0",
+            label: "Which route?\nUse [redacted]?",
+            detail: "Keep this second line\nAuthorization: Bearer [redacted]",
+            options: [
+              { id: "yes", label: "Yes\nProceed", description: "token= [redacted]" },
+              { id: "no", label: "No", description: null },
+            ],
+            multiple: false,
+            custom: false,
+          },
+        ],
+      },
+      {
+        id: "ask-user:multi",
+        title: "Questions",
+        detail: null,
+        prompts: [
+          multi.prompts![0],
+          {
+            ...multi.prompts![1],
+            detail: "Use password= [redacted]\nKeep the rest",
+            options: [
+              { id: "dev", label: "Dev [redacted]", description: "Line one\nLine two" },
+              { id: "prod", label: "Prod", description: null },
+            ],
+          },
+        ],
+      },
+    ];
+    // The actual socket codec and CLI runner must preserve all prompts, not
+    // only the handler's in-process shape. No provider or app is launched.
+    const socketPath = join(dirname(db.dbPath), "questions.sock");
+    const socket = await startAgentSocket({
+      socketPath,
+      execute: (request) => f.service.execute(request),
+    });
+    try {
+      for (const verb of ["session.show", "session.peek"] as const) {
+        const shown = data(
+          await requestAgent(
+            socketPath,
+            {
+              v: 1,
+              cmd: verb,
+              args: { id: id.slice(0, 8), lines: 1 },
+              ctx: { cwd: "/repo/volli", env: {} },
+            },
+            { timeoutMs: 2000 },
+          ),
+        );
+        expect(shown["pendingQuestions"]).toEqual(expected);
+        const stdout: string[] = [];
+        const stderr: string[] = [];
+        expect(
+          await runCli(["session", verb === "session.show" ? "show" : "peek", id.slice(0, 8)], {
+            env: { VOLLI_SOCKET: socketPath },
+            cwd: "/repo/volli",
+            stdout: (text) => stdout.push(text),
+            stderr: (text) => stderr.push(text),
+            request: (path, request) => requestAgent(path, request, { timeoutMs: 2000 }),
+            readText: async () => {
+              throw new Error("No file argument expected");
+            },
+            launch: async () => {
+              throw new Error("No app launch expected");
+            },
+            observe: async () => ({}),
+          }),
+        ).toBe(0);
+        expect(stderr).toEqual([]);
+        const rendered = stdout.join("");
+        for (const text of [
+          "Which route?",
+          "Yes",
+          "Proceed",
+          "Pick a region",
+          "Then a zone",
+          "Select environments",
+          "Full question text. ".repeat(20).trim(),
+          "Dev",
+          "Prod",
+          "Line one",
+          "Line two",
+        ]) {
+          expect(rendered).toContain(text);
+        }
+        const json = JSON.stringify(shown["pendingQuestions"]);
+        for (const secret of [
+          "route_private",
+          "private-value",
+          "option-private",
+          "prompt-private",
+          "dev_private",
+          "native-private",
+          "native-detail-private",
+          "attachmentId",
+        ]) {
+          expect(json).not.toContain(secret);
+          expect(rendered).not.toContain(secret);
+        }
+      }
+    } finally {
+      await socket.close();
+    }
+  });
+
+  it("keeps absent questions and an explicitly empty prompt list distinct", async () => {
+    expect(pendingSessionQuestions(undefined)).toEqual([]);
+    const f = fixture();
+    const id = await f.create("no questions", DAY);
+    for (const verb of ["session.show", "session.peek"] as const) {
+      expect(data(await f.read(verb, { id: id.slice(0, 8) }))["pendingQuestions"]).toEqual([]);
+    }
+    await f.active(id, 2 * DAY);
+    await f.engine.observe({
+      id: "empty-question",
+      kind: "interaction.opened",
+      sessionId: id,
+      attachmentId: `attachment-${id}`,
+      occurredAt: 3 * DAY,
+      provenance: questionProvenance,
+      interaction: {
+        id: "ask-user:empty",
+        attachmentId: `attachment-${id}`,
+        kind: "question",
+        title: "Empty card",
+        detail: null,
+        options: [],
+        prompts: [],
+        multiple: false,
+        native: { id: null, detail: null },
+      },
+    });
+    for (const verb of ["session.show", "session.peek"] as const) {
+      expect(data(await f.read(verb, { id: id.slice(0, 8) }))["pendingQuestions"]).toEqual([
+        { id: "ask-user:empty", title: "Empty card", detail: null, prompts: [] },
+      ]);
+    }
+  });
+
   it("defaults to active plus 24h activity, sorts by latest activity, and composes all/state/since/scope", async () => {
     const { read, create, active, ids } = fixture();
     const old = await create("old", DAY);
