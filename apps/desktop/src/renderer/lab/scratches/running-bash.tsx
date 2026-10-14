@@ -108,7 +108,7 @@ export default function RunningBashScratch() {
           part: bash("unsupported", true, false),
         },
         {
-          label: "Nested Code Mode shell · visible unsupported reason",
+          label: "Nested Code Mode shell · reason on disabled control",
           sessionId: BEFORE,
           part: bash("program/nested/bash", true, false),
         },

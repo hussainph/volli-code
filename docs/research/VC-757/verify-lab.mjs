@@ -31,11 +31,40 @@ try {
     await writeFile(resolve(evidence, `${name}.aria.txt`), await page.locator('body').ariaSnapshot());
     await page.screenshot({ path: resolve(evidence, `${name}.png`), fullPage: true });
   };
-  await page.goto(result.route, { waitUntil: 'networkidle', timeout: 120000 });
+  // Read-only DOM timing probe, not fixture state or a mocked clock. Start at the
+  // first rendered running heading, not networkidle (which can consume the delay).
+  await page.addInitScript(() => {
+    const timing = { renderedAt: null, chromeAt: null };
+    window.__vc757EvidenceTiming = timing;
+    new MutationObserver(() => {
+      if (timing.renderedAt === null && [...document.querySelectorAll('section h2')].some(node => node.textContent === 'Running · click Move to background')) {
+        timing.renderedAt = performance.now();
+      }
+      if (timing.renderedAt !== null && timing.chromeAt === null && [...document.querySelectorAll('section button')].some(node => node.textContent === 'Move to background')) {
+        timing.chromeAt = performance.now();
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
+  const elapsed = () => page.evaluate(() => performance.now() - window.__vc757EvidenceTiming.renderedAt);
+  const assertEarly = async () => {
+    assert.equal(await page.getByRole('button', { name: 'Move to background', exact: true }).count(), 0);
+    const ms = await elapsed();
+    assert.ok(ms < 2000, `Early evidence missed the 2s window: ${ms}ms`);
+    return Math.round(ms);
+  };
+  await page.goto(result.route, { waitUntil: 'domcontentloaded', timeout: 120000 });
   const running = section('Running · click Move to background');
   await running.waitFor();
+  await assertEarly();
+  await capture('early');
+  result.earlyOverviewCompletedMs = await assertEarly();
+  result.checks.push('Initial DOM-render overview has no Move to background chrome; snapshot and screenshot finish before 2s (real clock)');
   const move = running.getByRole('button', { name: 'Move to background', exact: true });
+  await move.waitFor({ state: 'visible' });
+  result.firstChromeObservedMs = await page.evaluate(() => Math.round(window.__vc757EvidenceTiming.chromeAt - window.__vc757EvidenceTiming.renderedAt));
+  assert.ok(result.firstChromeObservedMs >= 1900, 'Action appeared too early (100ms DOM-observer tolerance)');
   assert.equal(await move.isEnabled(), true);
+  result.checks.push('Move action becomes visible after the delay and is enabled; first chrome appearance timestamp recorded relative to initial DOM render');
   const capSection = section('At capacity · 4 running background shells');
   const cap = capSection.getByRole('button', { name: 'Move to background', exact: true });
   const capReason = 'This Session already has 4 running background shells. Stop one first.';
@@ -44,15 +73,22 @@ try {
     ['At capacity · 4 running background shells', capReason],
     ['Old frozen Session · no background-shell support', unsupportedReason],
     ['Unsupported foreground path', unsupportedReason],
-    ['Nested Code Mode shell · visible unsupported reason', unsupportedReason],
+    ['Nested Code Mode shell · reason on disabled control', unsupportedReason],
   ]) {
     const row = section(label);
     const control = row.getByRole('button', { name: 'Move to background', exact: true });
+    await control.waitFor({ state: 'visible' });
     assert.equal(await control.isDisabled(), true);
     assert.equal(await control.getAttribute('aria-description'), reason);
     assert.equal(await control.locator('..').getAttribute('title'), reason);
-    assert.equal(await row.getByText(reason, { exact: true }).isVisible(), true);
-    result.checks.push(`${label}: disabled action and persistent visible reason, matching aria-description/title`);
+    if (reason === capReason) {
+      assert.equal(await row.locator('p').filter({ hasText: reason }).isVisible(), true);
+      result.checks.push(`${label}: disabled action, matching aria-description/wrapper title, and preserved inline Stop one first paragraph`);
+    } else {
+      assert.equal(await row.getByText(reason, { exact: true }).count(), 0);
+      assert.equal(await row.locator('p').count(), 0);
+      result.checks.push(`${label}: disabled action with matching aria-description/wrapper title only; unsupported text and paragraph absent`);
+    }
   }
   const settled = section('Moved · settled receipt');
   assert.equal(await settled.getByRole('button', { name: 'Show details', exact: true }).getAttribute('aria-expanded'), 'false');
@@ -64,7 +100,16 @@ try {
   assert.equal(await collapsed.getByRole('button', { name: 'Show details', exact: true }).count(), 0);
   assert.equal(await collapsed.getByRole('button', { name: 'Move to background', exact: true }).count(), 0);
   await capture('before');
+  // Verify immediate shortcut eligibility on a separate fresh render, before the
+  // delayed controls appear, without waiting for network idle or opening a bundle.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await bundle.waitFor();
+  assert.equal(await bundle.getAttribute('aria-expanded'), 'false');
+  assert.equal(await collapsed.getByRole('button', { name: 'Show details', exact: true }).count(), 0);
+  await assertEarly();
+  await capture('early-shortcut-before');
   await collapsed.getByRole('textbox', { name: 'Composer', exact: true }).click();
+  result.shortcutPressedMs = await assertEarly();
   await page.keyboard.press('Control+Shift+B');
   const completedBundle = collapsed.getByRole('button', { name: 'Ran 1 command', exact: true });
   await completedBundle.waitFor();
@@ -75,6 +120,11 @@ try {
   assert.equal(await moved.getByRole('button', { name: 'Move to background', exact: true }).count(), 0);
   assert.equal(await moved.getByRole('button', { name: 'Show details', exact: true }).getAttribute('aria-expanded'), 'false');
   assert.equal(await moved.getByText('Moved to background', { exact: true }).isVisible(), true);
+  result.shortcutSettledMs = await assertEarly();
+  await capture('early-shortcut-after');
+  result.earlyShortcutCaptureCompletedMs = await assertEarly();
+  result.checks.push('Separate fresh-render Composer Ctrl+Shift+B settles the still-collapsed ActivityBundle before 2s and before any Move action chrome appears; real-clock timings and early screenshots saved');
+  await cap.waitFor({ state: 'visible' });
   assert.equal(await cap.isDisabled(), true);
   await capture('after');
   result.checks.push('Composer Ctrl+Shift+B changes genuine collapsed ActivityBundle from Running 1 command… to Ran 1 command; bundle never opened; fixture moves and standalone collapsed ToolRow displays marker');
@@ -90,8 +140,8 @@ try {
   await capture('after-receipt');
   result.checks.push('Expanding ToolRow displays fixture receipt: Moved command to background shell moved-shell.');
   // Separate fresh-page button path: do not let the shared fixture move conflate the two actions.
-  await page.reload({ waitUntil: 'networkidle' });
-  await move.waitFor();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await move.waitFor({ state: 'visible' });
   await move.click();
   await moved.waitFor();
   assert.equal(await moved.getByText('Moved to background', { exact: true }).isVisible(), true);

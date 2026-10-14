@@ -39,6 +39,7 @@ const part: DynamicToolUIPart = {
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  vi.useFakeTimers();
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   fixture.move.mockReset().mockResolvedValue({ shellId: "shell-1" });
   fixture.remote.mockReset().mockReturnValue(null);
@@ -51,8 +52,12 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.useRealTimers();
 });
-async function mount(next = part, active = true, provider = true) {
+async function reveal() {
+  await act(async () => vi.advanceTimersByTime(2_000));
+}
+async function mount(next = part, active = true, provider = true, waitForControl = true) {
   await act(async () =>
     root.render(
       provider ? (
@@ -64,6 +69,7 @@ async function mount(next = part, active = true, provider = true) {
       ),
     ),
   );
+  if (waitForControl) await reveal();
 }
 function shortcut() {
   return new KeyboardEvent("keydown", {
@@ -101,6 +107,43 @@ function shell(
 }
 
 describe("running bash control", () => {
+  it.each(["supported", "unsupported", "capacity"])(
+    "never flashes chrome for a short %s call",
+    async (mode) => {
+      if (mode === "capacity")
+        useBackgroundShellsStore.getState().receiveAll([1, 2, 3, 4].map((id) => shell(String(id))));
+      const next = mode === "unsupported" ? { ...part, output: { content: [] } } : part;
+      await mount(next, true, true, false);
+      expect(button()).toBeUndefined();
+      expect(container.querySelector("p")).toBeNull();
+      await act(async () => vi.advanceTimersByTime(1_999));
+      expect(button()).toBeUndefined();
+      await mount({ ...next, preliminary: false }, true, true, false);
+      await reveal();
+      expect(button()).toBeUndefined();
+      expect(container.querySelector("p")).toBeNull();
+    },
+  );
+  it("reveals chrome after two seconds without restarting on progress", async () => {
+    await mount(part, true, true, false);
+    await act(async () => vi.advanceTimersByTime(1_000));
+    await mount({ ...part }, true, true, false);
+    await act(async () => vi.advanceTimersByTime(999));
+    expect(button()).toBeUndefined();
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(button()?.disabled).toBe(false);
+  });
+  it("keeps the shortcut eligible before row chrome appears", async () => {
+    await mount(part, true, true, false);
+    expect(button()).toBeUndefined();
+    await act(async () =>
+      container.querySelector("[data-running-bash-session]")?.dispatchEvent(shortcut()),
+    );
+    expect(fixture.move).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SESSION,
+      toolCallId: "bash-1",
+    });
+  });
   it("moves the addressed call without disclosing the command and disappears on success", async () => {
     await mount();
     const disclosure = container.querySelector("[aria-expanded]");
@@ -183,6 +226,7 @@ describe("running bash control", () => {
       sessionId: SESSION,
       toolCallId: "bash-1",
     });
+    await reveal();
     await act(async () => disclosure.click());
     expect(container.textContent).toContain("Moving…");
     await act(async () => {
@@ -258,6 +302,7 @@ describe("running bash control", () => {
     await mount();
     expect(button()?.disabled).toBe(true);
     expect(button()?.getAttribute("aria-description")).toContain("Stop one first");
+    expect(container.querySelector("p")?.textContent).toContain("Stop one first");
     await act(async () =>
       button()?.parentElement?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "b", ctrlKey: true, shiftKey: true, bubbles: true }),
@@ -300,10 +345,12 @@ describe("running bash control", () => {
   it("explains unaddressed and inactive running calls", async () => {
     await mount(part, true, false);
     expect(button()?.disabled).toBe(true);
-    expect(container.textContent).toContain("isn’t attached to a Session");
+    expect(button()?.getAttribute("aria-description")).toContain("isn’t attached to a Session");
+    expect(container.querySelector("p")).toBeNull();
     await mount(part, false);
     expect(button()?.disabled).toBe(true);
-    expect(container.textContent).toContain("Activate this Session");
+    expect(button()?.getAttribute("aria-description")).toContain("Activate this Session");
+    expect(container.querySelector("p")).toBeNull();
   });
   it("explains unsupported, nested and old frozen running calls without enabling a move", async () => {
     for (const output of [
@@ -315,10 +362,11 @@ describe("running bash control", () => {
     ]) {
       await mount({ ...part, toolCallId: "program/nested/bash", output });
       expect(button()?.disabled).toBe(true);
-      expect(container.textContent).toContain(
+      expect(container.querySelector("p")).toBeNull();
+      expect(button()?.getAttribute("aria-description")).toContain("can’t move");
+      expect(button()?.parentElement?.title).toContain(
         "Nested commands and Sessions without background-shell support aren’t supported.",
       );
-      expect(button()?.getAttribute("aria-description")).toContain("can’t move");
       await act(async () => button()?.parentElement?.dispatchEvent(shortcut()));
     }
     expect(fixture.move).not.toHaveBeenCalled();

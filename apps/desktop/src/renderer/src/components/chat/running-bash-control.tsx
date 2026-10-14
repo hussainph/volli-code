@@ -92,6 +92,7 @@ type RunningBashCallValue = {
   visible: boolean;
   pending: boolean;
   reason: string | null;
+  inlineReason: string | null;
   move(): Promise<void>;
 };
 const RunningBashCallContext = React.createContext<RunningBashCallValue | null>(null);
@@ -129,9 +130,26 @@ function RunningBashCallOwner({
   );
   const [pending, setPending] = React.useState(false);
   const [moved, setMoved] = React.useState(false);
+  const [longRunning, setLongRunning] = React.useState(false);
+  // Short commands should never flash row chrome. Registration below stays immediate,
+  // and progress updates or disclosure toggles must not restart this delay.
+  React.useEffect(() => {
+    if (!live || moved) {
+      setLongRunning(false);
+      return;
+    }
+    const timer = setTimeout(() => setLongRunning(true), 2_000);
+    return () => clearTimeout(timer);
+  }, [live, moved]);
   const inFlight = React.useRef(false);
   const sessionId = context?.sessionId;
   const remote = sessionId === undefined ? null : remoteHostOfSession(sessionId);
+  const capacityBlocked =
+    backgroundable(part) &&
+    context !== null &&
+    context.active &&
+    remote === null &&
+    running >= SHELL_MAX_PER_SESSION;
   const reason = !backgroundable(part)
     ? "This command can’t move to the background. Nested commands and Sessions without background-shell support aren’t supported."
     : context === null
@@ -175,8 +193,15 @@ function RunningBashCallOwner({
     });
   }, [context, supported, reason, part.toolCallId, move]);
   const value = React.useMemo(
-    () => ({ toolCallId: part.toolCallId, visible: live && !moved, pending, reason, move }),
-    [part.toolCallId, live, moved, pending, reason, move],
+    () => ({
+      toolCallId: part.toolCallId,
+      visible: live && !moved && longRunning,
+      pending,
+      reason,
+      inlineReason: capacityBlocked ? reason : null,
+      move,
+    }),
+    [part.toolCallId, live, moved, longRunning, pending, reason, capacityBlocked, move],
   );
   return <RunningBashCallContext value={value}>{children}</RunningBashCallContext>;
 }
@@ -189,13 +214,13 @@ export function RunningBashControl({ part }: { part: DynamicToolUIPart }) {
   );
 }
 
-/** A blocked state stays readable without hovering a disabled control. */
+/** Only the actionable capacity block earns inline copy; other reasons stay on the control. */
 export function RunningBashReason() {
   const call = React.useContext(RunningBashCallContext);
-  if (call === null || !call.visible || call.reason === null) return null;
+  if (call === null || !call.visible || call.inlineReason === null) return null;
   return (
     <p className="py-1 text-label text-muted-foreground whitespace-pre-wrap break-words">
-      {call.reason}
+      {call.inlineReason}
     </p>
   );
 }
