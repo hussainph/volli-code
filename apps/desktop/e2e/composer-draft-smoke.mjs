@@ -1,9 +1,9 @@
 /**
- * RED-phase acceptance smoke for the New-ticket composer's DRAFT persistence —
- * Linear-style implicit save of in-progress work, so an accidental Escape /
+ * Acceptance smoke for the New-ticket composer's DRAFT persistence —
+ * implicit save of in-progress work, so an accidental Escape /
  * overlay click / app quit never destroys what was typed.
  *
- * Spec being built (follow-up to the ui/ticket-creation-fix composer):
+ * Persistence contract:
  *   • While composing, the full draft (target project, status, priority, title,
  *     body, labels, worktree toggle) is cached continuously through the
  *     app_state kv layer (SQLite-backed, debounced).

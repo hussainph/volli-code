@@ -1410,7 +1410,7 @@ describe("rearm — a child a person resumes reports again (VC-457)", () => {
   });
 });
 
-describe("the attach-vs-park race (VC-457 review)", () => {
+describe("the attach-vs-park race (VC-457)", () => {
   it("delivers a parked notice once when the parent attached between the read and the subscribe", async () => {
     const h = harness({ staleParent: true });
     await h.delegate("tc-1");

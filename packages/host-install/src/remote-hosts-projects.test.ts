@@ -851,7 +851,7 @@ describe("creating a project on a host", () => {
     expect(h.box.scripts.filter((entry) => entry.script.includes("project add"))).toEqual([]);
   });
 
-  // Review B2: a token rides in a query, or in a host's own words; neither may come back.
+  // A token rides in a query, or in a host's own words; neither may come back.
   it("never answers a token: a query URL is refused, and a host's words are scrubbed", async () => {
     const token = "VC710_QUERY_TOKEN_SENTINEL";
     const h = harness({
@@ -1035,7 +1035,7 @@ describe("a project script at quit", () => {
 });
 
 describe("a project script's ssh at quit, as a real process", () => {
-  // Review B4: the transport stays quit's while close runs, so a ControlMaster
+  // The transport stays quit's while close runs, so a ControlMaster
   // `-O exit` that ignores SIGTERM is still killed before quit returns.
   it(
     "is dead when close() resolves, though its -O exit would not end",

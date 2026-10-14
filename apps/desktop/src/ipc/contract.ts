@@ -632,7 +632,7 @@ export interface WorktreeOrphansInput {
 
 /**
  * The Storage pane's confirmed cleanup, as a COMMAND rather than a list of
- * paths (VC-284 review, S1/C1).
+ * paths (VC-284).
  *
  * It carries no paths at all. `scanRevision` names the read-only scan a person
  * reviewed, `itemIds` selects items out of the proposal main itself minted for
@@ -3185,8 +3185,7 @@ export type WorktreeRemoveResult = Result;
 export type WorktreeBranchesResult = Result<WorktreeBranchListing>;
 
 /**
- * The orphan scan/cleanup DOMAIN vocabulary is `@volli/shared`'s (VC-284
- * review S1): the run projection, its item states, the acceptance receipt and
+ * The orphan scan/cleanup DOMAIN vocabulary is `@volli/shared`'s (VC-284): the run projection, its item states, the acceptance receipt and
  * the rejection codes describe the act itself, not the wire it crosses, so the
  * core that mints and folds them never imports this catalog. They are
  * re-exported here because every desktop process reads the channel types from

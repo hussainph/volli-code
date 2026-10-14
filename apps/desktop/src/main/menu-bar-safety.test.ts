@@ -1,14 +1,14 @@
 /**
- * The VC-577 review's safety probes, made permanent — plus the cases the
- * final round added. Every test here drives the REAL host composition
- * (`createHostSessionServices` over a temporary SQLite database, the real
- * decorated Session Engine, a real Session runtime over a scripted executor)
- * into the REAL menu-bar controller and quit path. No Electron, no profile.
+ * Menu-bar quit and shutdown safety (VC-577), through the real host. Every
+ * test here drives the REAL host composition (`createHostSessionServices` over
+ * a temporary SQLite database, the real decorated Session Engine, a real
+ * Session runtime over a scripted executor) into the REAL menu-bar controller
+ * and quit path. No Electron, no profile.
  *
- * B1: the quit verdict reads an authoritative, synchronous count — committed
- * turn facts, running shells, and work accepted but not yet started — and an
- * idle exit takes the runtime's start latch in the same call.
- * B3: a noted system shutdown is never refused by an interactive confirm.
+ * The quit verdict reads an authoritative, synchronous count — committed turn
+ * facts, running shells, and work accepted but not yet started — and an idle
+ * exit takes the runtime's start latch in the same call. A noted system
+ * shutdown is never refused by an interactive confirm.
  */
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { UIMessage } from "ai";

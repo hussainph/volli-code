@@ -180,7 +180,7 @@ export default defineConfig(({ mode }) => ({
           // inherits nothing, and vitest refuses a run whose projects disagree
           // about `maxWorkers` while sharing a `sequence.groupOrder` — which is
           // exactly what a `--maxWorkers` flag on the command line produced
-          // (VC-339 review r2). Both projects say the same thing; the flag then
+          // (VC-339). Both projects say the same thing; the flag then
           // governs the pool they share.
           ...SHARED_MACHINE_TEST_WORKERS,
         },
@@ -524,7 +524,7 @@ export default defineConfig(({ mode }) => ({
         // not open on Home), and which store write a drop is.
         "src/components/split/split-drop.ts",
         // …and the routing between that meaning and the store twin that writes
-        // it, extracted from the two surfaces (review S2 on VC-202) so they
+        // it, shared by the two surfaces (VC-202) so they
         // cannot answer the same drop differently. Its wrong answer is a drop
         // that lands somewhere other than where the zone said it would.
         "src/components/split/split-surface-drop.ts",
@@ -545,7 +545,7 @@ export default defineConfig(({ mode }) => ({
         // like every other glue module — and so does `notification-surface.ts`,
         // which is the store calls that carry that decision out.
         "src/lib/notification-target.ts",
-        // The click's ORDER and its terminal/chat fork (round 2): select the
+        // The click's ORDER and its terminal/chat fork: select the
         // project, open the Session, then reveal the item. Ported precisely so
         // the sequence is assertable, because the failure it prevents — a card
         // revealed in a Session nobody opened, or a harness alert opening a chat

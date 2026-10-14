@@ -236,10 +236,9 @@ export type NotificationTarget =
  * The one KIND of target each producer can have.
  *
  * A total record, so a new producer must say where its alert points before it
- * compiles — and a producer cannot be given the wrong sort of target. Round 1
- * only distinguished "has a target" from "has none", which left a harness alert
- * free to carry a ticket target: a deep link that opens the board instead of the
- * terminal that is waiting, and nothing to catch it.
+ * compiles — and a producer cannot be given the wrong sort of target. A harness
+ * alert must open its waiting terminal, not carry a ticket target that opens
+ * the board instead.
  *
  * `null` is not an oversight where it appears. A free-form `volli notify` and a
  * dead CLI socket have nowhere to point, and an invented destination is worse
@@ -366,17 +365,12 @@ export function parseNotificationTarget(raw: unknown): NotificationTarget | null
  *    looking at exactly this", and anything looser silences an alert for work
  *    that is merely nearby.
  *  - **The SCOPE is part of the identity too.** Project and ticket are compared
- *    alongside the local ids (round 3). They are UUIDs today, so a collision is
- *    not reachable from this build — which is exactly why dropping them looked
- *    free, and exactly why it must not be: a scoped-id scheme, an import, or a
- *    fixture that reuses an id would turn a silent suppression in the wrong
- *    workspace into a bug nobody can see, because its only symptom is an alert
- *    that never arrives.
+ *    alongside the local ids. Even with UUIDs today, a scoped-id scheme, an
+ *    import, or a fixture that reuses an id must not suppress an alert in the
+ *    wrong workspace.
  *  - **The ITEM is part of the identity.** A Session match compares the open
- *    question and the failure as well as the Session id. Round 1 of this ticket
- *    compared only the id, which meant a person reading one question in a
- *    Session was never told about the failure that had just stopped it — the
- *    window was "showing the target", and the thing they needed was not on it.
+ *    question and the failure as well as the Session id. Reading one question
+ *    must not suppress an alert for a different failure in the same Session.
  *    Both sides derive the item with `sessionNotificationItem`, so this is a
  *    comparison between two answers to one question.
  *  - **`null` never matches.** An alert with no target has nowhere to be

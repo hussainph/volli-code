@@ -45,8 +45,8 @@ import { notAvailableOn, refuseRemoteTicket, remoteHostNow } from "@renderer/sto
  *
  * Mounted only while the dialog is open (Radix unmounts the content on close).
  * Field state seeds from the DRAFT CACHE (draft.ts) when one exists — an
- * accidental Escape/overlay-click/quit mid-compose is non-destructive, Linear
- * style — and from blank defaults otherwise (`target` then seeds from the
+ * accidental Escape/overlay-click/quit mid-compose is non-destructive —
+ * and from blank defaults otherwise (`target` then seeds from the
  * currently selected project). Every field change re-saves the draft; a
  * successful create clears it.
  *

@@ -692,12 +692,12 @@ export class PtyManager {
       }
     }
 
-    // A directory a destructive worktree act is holding right now (VC-284
-    // review C4). The orphan cleanup takes a lease over the exact path it is
+    // A directory a destructive worktree act is holding right now (VC-284).
+    // The orphan cleanup takes a lease over the exact path it is
     // about to remove and keeps it across its awaits, so a terminal cannot be
     // born inside a checkout that is mid-deletion.
     //
-    // TAKEN, not merely asked (re-review C4): everything between here and the
+    // TAKEN, not merely asked: everything between here and the
     // spawn awaits — harness files, the lazy `node-pty` import, a stat, a mkdir
     // — and a cleanup that acquires during those awaits would remove a
     // directory this terminal has already been cleared to start in. Holding a

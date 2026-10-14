@@ -12,8 +12,7 @@ import { cn } from "@renderer/lib/utils";
  * WHAT AN EMPTY PANE OFFERS (VC-202 §3).
  *
  * A pane opened by `⌘\` holds nothing, and the honest thing to put in it is the
- * list of surfaces it could hold — the same list Codex draws in its own empty
- * pane, including chats, terminals, browsers and files.
+ * list of surfaces it could hold: chats, terminals, browsers and files.
  *
  * NO PROSE. There is no heading, no "drag a tab here", no explanation of what a
  * split is: the rows are verbs and the chords beside them are the same chords

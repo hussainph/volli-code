@@ -601,7 +601,7 @@ describe("BrowserTabController", () => {
   it("releases the mouse button even when the press itself times out", async () => {
     // The bound can fall between the two halves of one click. A page left
     // holding a button down selects text on every move and starts drags, and
-    // the next Session to reach the tab inherits it (VC-252 review).
+    // the next Session to reach the tab inherits it (VC-252).
     const sent: { method: string; params?: object }[] = [];
     const controller = new BrowserTabController(
       {

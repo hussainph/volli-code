@@ -1,7 +1,6 @@
 /**
- * Step E for the web search keys (VC-643; `docs/plans/sealed-credential-store.md`
- * §4, "E — expand, compatible with the legacy writer"): a sealed mirror of
- * the `secrets` table, kept reconciled from it.
+ * A sealed mirror of web search keys (VC-643), kept reconciled from the
+ * `secrets` table and compatible with legacy writers.
  *
  * **`secrets` stays the one source of truth.** Every read still comes from
  * SQLite ({@link WebCredentialStore}); nothing here is ever read back into it

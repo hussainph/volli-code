@@ -440,7 +440,7 @@ async function runExtensionRow(row: ExtensionRow) {
   return { calls, exit, menuBar };
 }
 
-describe("the table's extension: system shutdown and agent Browser Tabs (VC-577 final round)", () => {
+describe("system shutdown and agent Browser Tabs (VC-577)", () => {
   const table = extensionRows();
 
   it("covers every combination", () => {

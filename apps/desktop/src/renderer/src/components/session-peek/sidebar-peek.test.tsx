@@ -342,10 +342,9 @@ describe("usePeekHold", () => {
   });
 
   it("takes the hold before a commit of the same render can land", async () => {
-    // A reviewer found moves landing as the pointer arrived: the hold was a
-    // passive effect, and `useHeldSessionOrder`'s commit is one too, so a band
-    // that began holding in the same commit committed first and moved a row out
-    // from under the pointer. Held first, the band commits nothing at all.
+    // The hold must precede passive effects: `useHeldSessionOrder` commits in
+    // one, and a passive-effect hold could let that commit move a row out from
+    // under the arriving pointer. Held first, the band commits nothing at all.
     await render(<Band holding order />);
 
     expect(useSessionOrderStore.getState().holds).toBe(1);

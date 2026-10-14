@@ -356,7 +356,7 @@ describe("desktop Session location resolver", () => {
     expect(ensureWorktree).not.toHaveBeenCalled();
   });
 
-  // VC-284 re-review C4. An agent start is the other side of the deletion
+  // VC-284. An agent start is the other side of the deletion
   // lease: a Session can still be bound to a directory this app now calls an
   // orphan (deleting a ticket only clears `sessions.ticket_id`), so "an agent is
   // about to work here" and "a cleanup is about to remove here" are two acts

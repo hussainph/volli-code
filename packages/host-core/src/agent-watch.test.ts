@@ -283,7 +283,7 @@ describe("watch", () => {
     ).toContain("when its next turn ends");
   });
 
-  it("arms nothing when one half of a combined call is refused by policy (VC-457 review)", async () => {
+  it("arms nothing when one half of a combined call is refused by policy (VC-457)", async () => {
     const h = harness({
       policy: resolveAuthorityPolicy({ actors: { session: { awaitable: [] } } }),
     });
@@ -339,7 +339,7 @@ describe("the automatic watch a Session-opening tool arms", () => {
     expect(sub.sessions).toEqual([]);
   });
 
-  it("judges a steered target by the watch tool's own bound (VC-457 review)", async () => {
+  it("judges a steered target by the watch tool's own bound (VC-457)", async () => {
     const h = harness();
     // A Ticket Session holding session_send steers a Session it did not
     // delegate: the explicit `watch` would refuse it, so the send arms nothing.

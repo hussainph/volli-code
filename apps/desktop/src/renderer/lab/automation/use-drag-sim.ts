@@ -16,11 +16,9 @@
  * actually do.
  *
  * ── TWO LAYERS, NOT FIVE VARIANTS ───────────────────────────────────────────
- * The owner rejected the earlier five-way comparison outright: the dragged
- * card's ghost sat on top of the very palette it asked you to read, and the
- * thin palette rows were "a needle in a haystack" to aim at holding a card. So
- * there is now exactly one baseline (always on, no modifier) and exactly one
- * modifier-gated layer:
+ * The picker stays within the hovered column so the dragged card does not
+ * obscure a separate palette or require aiming at thin rows mid-drag. There
+ * is one baseline (always on, no modifier) and one modifier-gated layer:
  *
  * Baseline — bare digits, scoped to the hovered column. A plain drop arms
  * whatever the target COLUMN is already armed with (an `arming` value this
@@ -60,9 +58,6 @@
  * screen honouring it — the exact "invisible modifier reads as a bug" failure
  * the rejected Option-alone design was thrown out for.
  *
- * Two other shapes (a centred `t9` dialpad and a `radial` wedge fan) were built
- * and compared here; the owner picked this one after using all three, and they
- * were deleted rather than left to rot as dead variants.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import * as React from "react";
@@ -363,22 +358,10 @@ export function useDragSim({ automationCountFor, defaultIndexFor }: UseDragSimOp
         if (down && !state.current.pickerOpen) {
           if (state.current.hovered !== null) openPicker(state.current.hovered);
         } else if (!down && state.current.pickerOpen) {
-          // HELD for `radial` and `expand`; sticky only for `t9`.
-          //
-          // radial — letting go of ⌥ mid-flick IS the commit gesture, folding
-          // the wedge under the cursor into `digitSelection` the way Escape
-          // does elsewhere.
-          //
-          // expand — the owner's rule: "if the user lets go of the Option key,
-          // it collapses back into a smaller option." It is the only shape
-          // where holding costs nothing, because the pointer never has to
-          // travel to a separate surface to use it — the column you are already
-          // over is the one that grew. Sticky would leave a column
-          // conspicuously enlarged with no modifier held to explain why.
-          //
-          // t9 stays sticky: it is a surface you navigate away from the board,
-          // and requiring a sustained second-hand modifier while steering to a
-          // tile would throw away the cell you had highlighted.
+          // Releasing Option collapses the picker and keeps the highlighted
+          // choice in `digitSelection`. The pointer stays over the same column,
+          // so there is no separate surface to navigate. Keeping it enlarged
+          // after release would leave no modifier held to explain its state.
           closePicker();
         }
       }

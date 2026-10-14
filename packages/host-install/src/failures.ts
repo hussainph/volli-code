@@ -1,12 +1,11 @@
 /**
  * Every way adding a host can stop (VC-700), typed, each with the one line a
- * person sees and the one recovery the lab designed (`#host-add`,
- * docs/research/vc-615-remote-host-ux.md, "Every failure state"). A
+ * person sees and one recovery action. A
  * **failure** is retried from the step that broke; a **question** waits for
  * the person's answer and then carries on.
  *
  * The copy lives here so a CLI and the desktop say the same thing; the
- * Checklist (PR 3) renders it. Details (stderr, a journal tail) go to the
+ * checklist renders it. Details (stderr, a journal tail) go to the
  * log under Details, never into the line.
  */
 import type { HostdFailureCode, InstallMode } from "./contract";

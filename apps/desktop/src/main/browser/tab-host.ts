@@ -854,8 +854,7 @@ export class BrowserTabHost extends BrowserTabRegistry<
    * It declines while the person is USING a shown tab, and for a window after
    * they stop: the password they just typed must not become a frame in the
    * transcript, and the agent's next action often lands a beat after their
-   * last keystroke. This is the takeover rule ChatGPT agent and Manus both
-   * settled on.
+   * last keystroke. The grace window keeps recent personal input out of captures.
    *
    * A recency stamp rather than `isFocused()`, deliberately. Instantaneous
    * focus is both too narrow and too brief: wheel-scrolling or hovering a

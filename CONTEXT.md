@@ -1,12 +1,12 @@
 # Volli
 
-Local-first planner and execution workspace. This glossary is the canonical project language. Some Session and Automation terms below describe planned architecture; code and tests remain authoritative for current behavior.
+Local-first planner and execution workspace. This glossary is the canonical project language. Definitions describe domain contracts; code and tests remain authoritative for implemented behavior.
 
 ## Language
 
 **Host**:
 The process that is the single authority for one or more Workspaces and serves
-the Host protocol. Volli Cloud direction: `hostd`, headless Node, no Electron.
+the Host protocol. `hostd` is the headless Node host and imports no Electron APIs.
 _Avoid_: Electron main (one current host, not the product API), relay
 
 **Worker**:
@@ -56,11 +56,6 @@ _Avoid_: Checkout epoch, database version
 work, pushed to the Host's git store, never the user's origin. Live processes
 and browser sockets do not migrate.
 _Avoid_: user branch, process snapshot
-
-**Control plane**:
-Closed hosted services only Volli Cloud needs: accounts, billing, provisioning,
-workspace and device registry, push delivery. Never the board authority.
-_Avoid_: Host, board store
 
 **Ticket**:
 A board card whose Ticket Body can scope a Ticket Session. Opening it shows the Ticket workspace; moving it to Doing records work state but does not start a Session.
@@ -226,7 +221,7 @@ cluster and is announced there, which is the only surface that can hand that
 wait to anyone. What a child SPENT is folded the same way — the Ticket's usage
 breakdown adds a child's cost to the Session that delegated it rather than
 naming it in a row of its own, while the per-model breakdown counts every call
-as made. Write-capable children in a shared tree are VC-266's question.
+as made. Concurrent children sharing a tree require explicit file ownership.
 _Avoid_: harness mode, agent mode, plan mode, scratch session, hidden thread,
 Project Session, project chat
 
@@ -928,7 +923,7 @@ end.
 _Avoid_: idle (for a failed interruption), error, crashed
 
 **Project**:
-A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). The design lineage is Arc's Spaces, but the word is not borrowed with it. Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
+A tracked codebase folder: name, path, ticket prefix, rail position. Removing one from Volli never touches the folder on disk. **The one user-facing word for a rail entry** (VC-57 ruling): every surface says "project" — "project switcher", "Project override", "Set by this project" — and it anchors the session language too (project-level vs ticket-level sessions). Internal identifiers (`useWorkspaceStore`, `workspaceRailHidden`) are wire format, not copy.
 _Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), space
 
 **Ticket worktree**:

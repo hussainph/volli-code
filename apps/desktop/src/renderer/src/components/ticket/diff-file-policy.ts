@@ -52,7 +52,7 @@ export function diffFilePolicy(input: DiffFilePolicyInput): DiffFilePolicy {
   const { file, base } = input;
   const previousPath = file.previousPath ?? null;
 
-  // v1 owner decision: conflicted paths are non-editor stubs (like binary).
+  // Conflicted paths are non-editor stubs (like binary).
   if (file.status === "conflicted") {
     return stubPolicy(file.path, previousPath, "Conflicted file");
   }

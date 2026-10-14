@@ -1440,9 +1440,8 @@ const queue = (runtime: Runtime, sessionId: string, id: string) =>
 const tick = () => new Promise((resolve) => setTimeout(resolve, 1));
 
 /**
- * VC-675 regressions for follow-ups that could get stuck with no exit (review
- * probes P1–P6, glm N3/N5/N6). Every probe that used to only log is an
- * assertion here.
+ * VC-675 regressions for follow-ups that could get stuck with no exit.
+ * Every path must settle or report a recoverable failure.
  */
 describe("host follow-ups never strand a row", () => {
   const AMBIGUOUS =

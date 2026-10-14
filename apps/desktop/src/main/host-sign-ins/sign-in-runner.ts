@@ -74,8 +74,8 @@ export type HostSignInEnd = "done" | "failed" | "cancelled" | "lost";
  * `cancelled`, its connection gone, or a start answering a fresh flow, which
  * the host gives only once it holds no other for that provider.
  *
- * One per host and provider, kept across every replacement (VC-702 review
- * B3): a run that never got a flow of its own, or gave up waiting, does not
+ * One per host and provider, kept across every replacement (VC-702):
+ * a run that never got a flow of its own, or gave up waiting, does not
  * make an older flow any less the host's.
  */
 export class HostFlowLedger {

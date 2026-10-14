@@ -1,14 +1,10 @@
 /**
  * E2e proof of the Pi-backed native adapter attaching a real TICKET chat,
- * against the BUILT app. New ticket chats attach the `pi` manifest
- * (`packages/host-core/src/session-runtime/pi-adapter.ts`) instead of OpenCode —
- * see that file's module doc comment. Nothing about the MODEL is pinned there:
- * the adapter runs whatever the Session recorded, so the model under test is
- * this file's own {@link MODEL_PIN} and nothing else. There is no fake server
- * anywhere in this probe (the retired `session-chat-smoke.mjs` had one): Pi
- * runs in-process in Electron main and this smoke drives ONE real
- * turn against a real provider, billed to a ChatGPT subscription ($0
- * marginal — keep it to one short prompt, never loop turns speculatively).
+ * against the BUILT app. Ticket chats attach the `pi` manifest through
+ * `packages/host-core/src/session-runtime/pi-adapter.ts`. The adapter runs the
+ * Session's recorded model; this probe explicitly chooses {@link MODEL_PIN}.
+ * Pi runs in Electron main with no fake server. Keep the real provider turn
+ * to one short prompt and never loop turns speculatively.
  *
  * One thing makes a real Pi turn possible at all, and it is set up before the
  * app ever launches: **credentials**. This smoke isolates `HOME` into a

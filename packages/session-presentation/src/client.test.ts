@@ -3174,7 +3174,7 @@ describe("bounded history (VC-315)", () => {
 
   // tRPC's WebSocket adapter answers `started` once the subscription's
   // iterator exists, before its first `next()` runs the replay that refuses.
-  // `started` therefore proves nothing about the replay (VC-315 review, B4).
+  // `started` therefore proves nothing about the replay (VC-315).
   it("reports repeated refusals even when the transport says started before the replay refuses", async () => {
     const { rpc, slice, stream, notifications } = await adopted();
     for (let attempt = 0; attempt < 2; attempt += 1) {

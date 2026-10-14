@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
- * A sign-in on a host, end to end over a real link (VC-702 PR 2, review B2
- * and B3): today's production `HostSignIns` behind the production listener,
+ * A sign-in on a host, end to end over a real link (VC-702): today's
+ * production `HostSignIns` behind the production listener,
  * `createHostLink` (Workspace) and `createHostScopeLink` (HOST, no Workspace)
  * reaching it through a loopback TCP relay this test can cut, and desktop
  * main's port, service and runner over those links (VC-722).

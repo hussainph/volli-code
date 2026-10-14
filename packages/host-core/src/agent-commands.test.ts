@@ -213,8 +213,8 @@ afterEach(() => resetWorktreeSnapshotsForTest());
 
 /**
  * The notification port, as a test records it: the WHOLE request (producer and
- * target included — VC-295 round 2 asks for both to be asserted, because a deep
- * link that opens the wrong surface is invisible in a title), answering that
+ * target included — VC-295). A deep link that opens the wrong surface is
+ * invisible in a title. The test port answers that
  * the alert was delivered.
  */
 function recordNotice(
@@ -2935,7 +2935,7 @@ describe("agent command service", () => {
   });
 
   it("reports a notification the system did not show, rather than claiming it did", async () => {
-    // VC-295 round 2. `volli notify` is an operation a caller ASKED for, so an
+    // VC-295. `volli notify` is an operation a caller ASKED for, so an
     // outcome of `unsupported` or `failed` is a failed operation — reporting
     // `{ notified: true }` over it is the silent swallow CLAUDE.md forbids.
     ctx = openTestDb();

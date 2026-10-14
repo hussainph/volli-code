@@ -6,9 +6,8 @@
  *
  *  - **The resolved token set is never stored.** This store holds
  *    `{canvas, appearance}` per scope and derives the rest at render time (see
- *    `theme/canvas-paint.ts`). VS Code's most-complained-about theming bug is
- *    auto-switching writing the *resolved* theme back over the user's authored
- *    intent; the shape here makes that unrepresentable.
+ *    `theme/canvas-paint.ts`). Auto-switching must not write the *resolved*
+ *    theme back over the user's authored intent; this shape prevents that.
  *  - **Preview is memory-only.** `startPreview` repaints the live DOM and writes
  *    NOTHING — not to SQLite, not to `app_state`, not anywhere. Only
  *    `commitPreview` persists, and `cancelPreview` restores the pre-preview look

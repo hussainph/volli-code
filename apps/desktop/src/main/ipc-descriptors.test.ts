@@ -1705,7 +1705,7 @@ describe("DATA_IPC descriptor table", () => {
       ).toBe(true);
     });
 
-    // The id a destructive command is REPLAYED under (VC-284 re-review S1).
+    // The id a destructive command is REPLAYED under (VC-284).
     // `"cmd-1"` is an id a second writer could mint too, and cross-writer
     // string equality has to mean "the same logical fact"
     // (docs/BOUNDARIES.md rule 1) — here, the same deletion.
@@ -2214,7 +2214,7 @@ describe("DATA_IPC descriptor table", () => {
       const { guard, invalidError } = DATA_IPC["volli:worktree-trim"];
       expect(guard([])).toBe(true);
       // There is nothing to vary, so anything at all is a caller that does not
-      // know what this channel is (review r2 removed an unused dry-run input).
+      // know what this channel is; even a dry-run option is invalid.
       expect(guard([{}])).toBe(false);
       expect(guard([{ dryRun: true }])).toBe(false);
       expect(guard(["nope"])).toBe(false);

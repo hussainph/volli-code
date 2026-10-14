@@ -1,6 +1,6 @@
 /**
  * The secret store, opened eagerly at boot (VC-559), and never a reason not
- * to boot (VC-641; `docs/plans/sealed-credential-store.md` §7).
+ * to boot (VC-641).
  *
  * `fileSecretKey` loads its key lazily, on the first save or open, which is
  * right for a desktop profile and wrong for a service: a key file with the

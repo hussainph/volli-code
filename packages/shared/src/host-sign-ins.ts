@@ -2,7 +2,7 @@
  * Sign-ins on a host, as a Client may see them over the host protocol (VC-702;
  * HP § Sign-ins on a host).
  *
- * Owner decision 2 (2026-10-07), per sign-in:
+ * Credential placement depends on the sign-in type:
  *
  * - **API keys and git push credentials are sent from a Client.** They travel
  *   once, write-only, over the authenticated host link, and the host keeps them

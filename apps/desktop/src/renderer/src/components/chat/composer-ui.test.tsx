@@ -530,8 +530,7 @@ describe("the effort control's place in the footer", () => {
   it("stands beside the model pill rather than inside its popover", () => {
     const html = renderFooter();
 
-    // Readable before the first keystroke, which is the whole complaint the
-    // redesign answers — it used to be two levels down, on one row of a list.
+    // Readable before the first keystroke, not two levels down in a list.
     expect(html).toContain('aria-label="Reasoning effort: Medium"');
   });
 
@@ -584,8 +583,9 @@ describe("the effort control's place in the footer", () => {
   it("keeps its chrome at one ink — no resting dim (VC-335)", () => {
     // The row rested at 70% and came up under focus. On the app's own
     // canvases that made a resting composer and a disabled one the same
-    // picture, and the field (T3 Code, OpenCode, ChatGPT, Cursor) draws the
-    // chrome at one ink and lets the muted tier say "chrome" by itself.
+    // picture. The chrome rests at one ink, and the muted tier alone says
+    // "chrome", so normal chrome and a disabled control read as different
+    // pictures.
     const html = renderFooter();
 
     expect(html).not.toContain("opacity-70");

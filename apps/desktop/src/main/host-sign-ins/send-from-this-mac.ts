@@ -1,5 +1,5 @@
 /**
- * "Send from this Mac" for an API key (VC-702, owner decision 2).
+ * "Send from this Mac" for an API key (VC-702).
  *
  * At the person's request, after the confirm "<host> keeps a copy of what this
  * Mac sends" and main's native Send/Cancel dialog, main reads this Mac's own

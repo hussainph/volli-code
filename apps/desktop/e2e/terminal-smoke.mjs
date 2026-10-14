@@ -322,9 +322,9 @@ async function main() {
   const consoleErrors = [];
   // The isolated profile owns the SQLite db in both development and packaged
   // runs. Its empty first-run state is what lets bootstrap import this smoke's
-  // localStorage project fixture without touching the owner's data.
+  // localStorage project fixture without touching the user's data.
   // An isolated Chromium profile, for the db's reason and one more: sharing
-  // <userData> with a Volli the owner already has open loses the
+  // <userData> with an open Volli instance loses the
   // single-instance lock, so this launch quits at exit code 0 before its first
   // window. That surfaces only as "Target page, context or browser has been
   // closed" from launch() — which reads like a crash in the app under test.
@@ -543,8 +543,7 @@ async function main() {
     );
 
     // === 7. Split panes: each leaf owns an independent shell + renderer ====
-    // This is the architecture boundary used by Ghostty/cmux: splitting a
-    // surface creates a fresh terminal surface/PTY. A second `.xterm` wired to
+    // Splitting a surface creates a fresh terminal surface/PTY. A second `.xterm` wired to
     // the original PTY is not a split — input/output from both panes aliases.
     await runInTerminal(page, `echo $$ > ${splitRootPid}`);
     await waitForFileContains(splitRootPid, "", 3000);

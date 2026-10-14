@@ -335,7 +335,7 @@ export function readyFacts(view: AddHostFlowView, host: RemoteHost | undefined):
   return facts;
 }
 
-/** The "agents share your account" state, in one place (VC-700, owner ruling). */
+/** The "agents share your account" state, in one place (VC-700). */
 export function agentsShareAccountLine(host: string): string {
   return `Agents on ${host} share your account`;
 }

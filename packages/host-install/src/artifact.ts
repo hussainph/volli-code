@@ -18,8 +18,8 @@
  *    `assets: []`, as local and CI builds do): only the dev source, local
  *    tarballs as `gh run download … -n volli-hostd-linux-x64` (or a Mac's
  *    `node apps/hostd/scripts/package.mjs`) leaves them, each checked
- *    against its own `.sha256` (dev builds only, the owner's 2026-10-07
- *    allowance: it guards against a torn copy, not a forger).
+ *    against its own `.sha256` (dev builds only: this guards against a torn
+ *    copy, not a forger).
  *
  * **What a build can install** (`supportedTargets`) follows from the same
  * sources: the pinned assets' targets (VC-701's manifest carries linux and,

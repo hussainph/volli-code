@@ -17,8 +17,8 @@
  *
  * The model knows what it has because every result here restates the
  * Session's live shells — id, state, age, command. The tool calls are the
- * durable record, and re-reading them is free (the owner ruled out a per-turn
- * prompt channel for this). What survives compaction is a named follow-up.
+ * durable record, and re-reading them is free; there is no per-turn prompt
+ * channel for shell state. What survives compaction is a named follow-up.
  *
  * Deliberately absent, as the port is deliberately narrow: no stdin, no PTY,
  * no restart verb, no filter on reads. A shell a person types into is the

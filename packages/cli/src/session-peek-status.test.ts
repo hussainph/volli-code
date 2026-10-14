@@ -6,8 +6,8 @@ import { runCli } from "./run";
  * VC-758: `volli session peek` for each state a chat or terminal can be in,
  * through the real command path (argv → parse → socket → render). Each reply
  * body is transcribed from a `session.peek` payload the host's agent-command
- * service returned for the same scripted engine events (captured against the
- * real session engine and ledger; see docs/research/VC-758/cli-audit.md §3).
+ * service returns for the same scripted engine events against the real
+ * session engine and ledger (VC-758).
  * The runtime fields (attention, stopped, signal, lastTurnOutcome and the
  * queued messages) are transcribed from the real-engine cases in
  * packages/host-core/src/agent-dispatch/session-verbs.test.ts. Only the fields

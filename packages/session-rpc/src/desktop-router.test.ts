@@ -1721,7 +1721,7 @@ describeContract<Host, DesktopRouter>(
       ] as const) {
         expect(() => remoteHostProjectsSchema.parse(value), what).toThrow();
       }
-      // Every output is bounded (review N2): no million-character line or command.
+      // Every output is bounded: no million-character line or command.
       const long = "x".repeat(REMOTE_PROJECT_FAILURE_TEXT_MAX + 1);
       for (const failure of [
         { code: "refused", message: long, command: null },

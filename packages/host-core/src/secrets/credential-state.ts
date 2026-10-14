@@ -1,6 +1,6 @@
 /**
  * Credential status: what a host can say about its sealed secrets without
- * opening them (VC-641; `docs/plans/sealed-credential-store.md` §7).
+ * opening them (VC-641; `docs/secrets.md`).
  *
  * Losing or damaging the key never stops a host. The store settles one of
  * these states the first time it is asked, and every credential consumer

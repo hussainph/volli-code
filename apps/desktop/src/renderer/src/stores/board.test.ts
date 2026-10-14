@@ -3145,7 +3145,7 @@ describe("the board store on the protocol path (cloud on)", () => {
   });
 });
 
-// ---- the #810 review's identity probes, kept (VC-447) ----------------------------------------
+// ---- #810 identity probes (VC-447) ----------------------------------------
 
 describe("VC-447: a refresh keeps every unchanged identity and drops no changed field (flag off and on)", () => {
   const base = ticket({ id: "a", status: "todo", labels: ["a", "b"] });

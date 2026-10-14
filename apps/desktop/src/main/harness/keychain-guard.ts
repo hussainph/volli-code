@@ -3,7 +3,7 @@
  *
  * `volli-drive` launches a live, isolated build of this app so an agent can
  * drive it and prove what a person would see. That build runs on a shared Mac
- * beside the owner's real Volli, so it must never reach the macOS keychain:
+ * beside the user's Volli, so it must never reach the macOS keychain:
  * no prompt, no item read, no item written. This module is the whole of that
  * promise, and it is **inert unless `VOLLI_HARNESS=1`** — set by `volli-drive`
  * and by nothing else.
@@ -251,7 +251,7 @@ export interface HarnessGuardDeps {
   readonly safeStorage: object;
   /** Electron's `shell`: its OS-reaching methods become recorders. */
   readonly shell: object;
-  /** The owner's passwd home, which no harness path may sit in. */
+  /** The user's passwd home, which no harness path may sit in. */
   readonly ownerHome?: string;
   readonly realpath?: (path: string) => string;
   readonly pid?: number;

@@ -832,8 +832,8 @@ describe("resumable subscriptions", () => {
     await until(() => listeners.size === 0, "the refused streams' listeners to go");
   });
 
-  // The ordering a Client's quiet-resnapshot guard is built on (VC-315 review,
-  // B4): tRPC's WebSocket adapter says `started` once the subscription's
+  // The ordering a Client's quiet-resnapshot guard is built on (VC-315):
+  // tRPC's WebSocket adapter says `started` once the subscription's
   // iterator exists, and the replay that refuses runs in its first `next()`.
   // `started` is therefore no proof that a resume was admitted; only an
   // emission is (`ChatSessionClient`'s `#silentReloads`).

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 /**
- * What this window tells main it is showing (VC-295 round 4), across the seam
- * that round 3 left open.
+ * What this window tells main it is showing (VC-295), including revealed items.
  *
  * Tested through the hook against the real stores and the real reveal slot,
  * because the seam IS the subject: the chat plane's blocker draws the Attention
@@ -169,7 +168,7 @@ describe("useNotificationTargetReport", () => {
     expect(lastReport()).toMatchObject({ attentionId: NEWER });
   });
 
-  it("follows a revealed question too, when several are open (round 5)", async () => {
+  it("follows a revealed question too, when several are open", async () => {
     // The plane draws the revealed question in the card slot (or scrolls to
     // its row), so the report names it — not the first open one — and an alert
     // about the first is still delivered.

@@ -4,7 +4,7 @@
  *
  * WHY ONE ROW. The card used to open with the hero: an 18px figure, the token
  * bar, a caption, then a seamed "N sessions" row with its own popover — about
- * 120px for a fact the owner glances at. On a page whose most-read block is a
+ * 120px for a fact the user glances at. On a page whose most-read block is a
  * roster of Sessions, that made cost the tallest object in the rail and the
  * roster the thing under it. Cost is worth one row of unprompted pixels: the
  * figure, the token count, and the caret. Everything else the hero carried is

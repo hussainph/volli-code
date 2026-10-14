@@ -1,6 +1,6 @@
 /**
  * hostd's execution venue: WHICH HOST a Session's attachments ran on, named
- * by this install's stable host id (VC-627, `docs/plans/host-identity.md`).
+ * by this install's stable host id (VC-627).
  *
  * Boot recovery closes only the attachments its own venue owns
  * (`closeStaleAttachments` in host-core). hostd used to name its venue after

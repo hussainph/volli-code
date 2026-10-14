@@ -1,8 +1,0 @@
-{
-  "fixtureVersion": "vc456-turn-real-path-v1",
-  "artifacts": [
-    "benchmark.json",
-    "benchmark.md",
-    "run-manifest.json"
-  ]
-}

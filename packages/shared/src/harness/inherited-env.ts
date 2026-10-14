@@ -3,13 +3,11 @@
  *
  * A session shell is spawned from the Electron process's own environment, and
  * that environment is whatever launched the app. Launch Volli from a terminal
- * that is itself inside an agent session — the ordinary case while dogfooding —
- * and every marker that session set is now ambient in EVERY Volli terminal,
- * including ones started days later. Two consequences were observed, not
- * theorised: `claude` sees an inherited child-session marker and turns
- * transcript saving off, and cmux's PATH shim sees an inherited surface id and
- * injects its own `--session-id`/`--settings` into a command line Volli is
- * already configuring — two managers writing the same invocation.
+ * that is itself inside an agent session and its markers become ambient in
+ * every Volli terminal, including ones started days later. An inherited child
+ * marker can disable Claude Code transcript saving; inherited surface markers
+ * can make a PATH shim inject `--session-id`/`--settings` into a command Volli
+ * is already configuring.
  *
  * The rule is one line long: a Volli terminal is a fresh top-level session, so
  * anything that claims a session is already running here is stale by
@@ -81,11 +79,8 @@ const VOLLI_SESSION_CONTRACT: readonly string[] = [
  * ANOTHER app's userData directory, which this Volli's wrappers would happily
  * prepend.
  *
- * `CMUX_*` is a different agent manager's surface markers, and belongs here for
- * the same reason our own do: a Volli terminal is not a cmux surface, and
- * saying it is makes cmux's `claude` shim inject a session id and a settings
- * file into a launch Volli is already configuring. cmux takes the same stance
- * from the other side — it unsets `CMUX_*` before exec'ing the real binary.
+ * Foreign surface markers are dropped so inherited PATH shims cannot inject
+ * a session id or settings file into a launch Volli is already configuring.
  */
 const DROPPED_PREFIXES: readonly string[] = ["VOLLI_HARNESS_", "CMUX_"];
 

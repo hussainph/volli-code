@@ -324,7 +324,7 @@ describe("Open a project on <host>…", () => {
     expect(isOpen()).toBe(false);
   });
 
-  // Review B3: a late answer belongs to its own opening; a newer one is never touched.
+  // A late answer belongs to its own opening; a newer one is never touched.
   it.each([
     ["dismissed", async () => useRemoteHostsStore.getState().closeProjectSheet()],
     [

@@ -1262,7 +1262,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
     return { call, stops, sends };
   }
 
-  it("confirms a delivered send even when arming its watch cannot read the target (VC-457 review)", async () => {
+  it("confirms a delivered send even when arming its watch cannot read the target (VC-457)", async () => {
     const watches = recordingWatches();
     // The send resolves its target on the first read; the watch's own
     // authorization read, after delivery, fails.

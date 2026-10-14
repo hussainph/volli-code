@@ -1035,7 +1035,7 @@ describe("BrowserTabHost wakefulness", () => {
   it("wakes the tab again when a fresh hold follows the last release", () => {
     // A Session that drives a tab, stops, and drives it again must get the
     // engine back. Restoring throttling has to leave the lease reusable, not
-    // spent (VC-252 review).
+    // spent (VC-252).
     const tab = host.open({
       url: "https://example.com",
       projectId: "project-1",

@@ -1,6 +1,5 @@
 /**
- * Sign-ins on a host, as its rows read them (VC-702; VC-615 flow 4, owner
- * decision 2: per sign-in). Pure: what a row says and offers, from the host's
+ * Sign-ins on a host, represented per sign-in (VC-702; VC-615 flow 4). Pure: what a row says and offers, from the host's
  * status and what this Mac holds. The controller (`host-sign-in-controller.ts`)
  * owns what changes; the rows (`host-sign-in-rows.tsx`) only draw it.
  *

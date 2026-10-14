@@ -1,10 +1,9 @@
 /**
  * Where every desktop IPC channel belongs once the desktop is a host-protocol
- * client (VC-574). This table is the inventory `docs/plans/host-protocol.md`
- * (§Host operations vs client-local) asks for, and the area tickets
- * (VC-565–573) copy their channel lists from it rather than re-deriving them.
+ * client (VC-574). This table is the channel inventory for host operations and
+ * client-local integrations (VC-565–573).
  *
- * The classification test is host-protocol.md's: durable workspace state or a
+ * The classification rule: durable workspace state or a
  * worker-owned resource is a host operation, even when it runs beside Electron
  * today; a presentation or native integration on the viewing device is
  * client-local and never needs a remote host's path. A mixed operation is
@@ -79,9 +78,8 @@ export type ChannelPlacement =
 /** Every channel the desktop speaks: invoke + send, push events, and the cursor overlay's wire. */
 export type PlacedChannel = VolliIpcChannel | VolliIpcEvent | CursorOverlayChannel;
 
-/** Owner ruling 2026-10-05: a project's theme follows it to every device. */
-export const THEME_OWNER_RULING =
-  "Owner ruling 2026-10-05: a project's theme follows the project to every device.";
+/** A project's theme follows it to every device. */
+export const THEME_FOLLOWS_PROJECT = "A project's theme follows the project to every device.";
 
 /**
  * VC-574 E2 / VC-564 D8: a read or write that spans workspaces has no single
@@ -652,7 +650,7 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
   "volli:theme-set-project": {
     placement: "workspace",
     owner: "VC-565",
-    reason: THEME_OWNER_RULING,
+    reason: THEME_FOLLOWS_PROJECT,
   },
   "volli:theme-canvas-set-global": {
     placement: "client-local",
@@ -667,12 +665,12 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
   "volli:theme-canvas-set-project": {
     placement: "workspace",
     owner: "VC-565",
-    reason: THEME_OWNER_RULING,
+    reason: THEME_FOLLOWS_PROJECT,
   },
   "volli:theme-appearance-set-project": {
     placement: "workspace",
     owner: "VC-565",
-    reason: THEME_OWNER_RULING,
+    reason: THEME_FOLLOWS_PROJECT,
   },
   "volli:theme-first-paint-set": {
     placement: "client-local",

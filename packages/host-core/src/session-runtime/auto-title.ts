@@ -14,13 +14,9 @@
  *
  * The model ladder itself is domain policy and lives in `@volli/shared`
  * ({@link resolveAutoTitleModel}); this file only reads the three rungs and
- * runs the winner. The order is the owner's, given in review on VC-81 and
- * recorded there: utility, then the model the chat already runs under, then
- * the Role's default — because a Role default is the expensive orchestration
- * tier, and reaching for it to write six words is the thing the utility slot
- * exists to avoid. Note that VC-81's scope bullets predate that clarification
- * and read as if the heuristic were the only fallback; the ticket comment is
- * the current word.
+ * runs the winner (VC-81): utility, then the model the chat already runs under,
+ * then the Role's default. The utility preference (VC-81) avoids using the
+ * orchestration tier for a six-word title when a cheaper model is available.
  *
  * Titling runs as cheaply as the chosen model allows: `off` where the model
  * offers it, otherwise the least reasoning it will do

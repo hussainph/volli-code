@@ -53,10 +53,10 @@ palette. The values come from two places, and both are upstream of this file:
 If either of those upstream palettes changes, update `volli.css` to match rather
 than letting the sites drift.
 
-The site is dark only. `src/components/ThemeSelect.astro` renders nothing, which
-removes Starlight's light/dark toggle, and `volli.css` declares the palette on
-both `:root` and `:root[data-theme="light"]` so a visitor whose system prefers
-light still gets the dark site.
+The site uses the dark brand palette. Starlight's light/dark toggle remains,
+but `volli.css` declares that palette on both `:root` and
+`:root[data-theme="light"]`, so a visitor whose system prefers light still
+gets the dark site.
 
 ## Fonts and licenses
 
@@ -80,24 +80,20 @@ it runs there too, and CI builds both sites.
 
 ## Writing
 
-Use both `product-docs` and `.agents/skills/google-developer-docs`. Before
-drafting, record the page's reader, goal, dominant type (tutorial, how-to,
-explanation, or reference), prerequisites, and product fact sources. Review the
-outline against that contract before writing.
+Before drafting, identify the page's reader, goal, dominant type (tutorial,
+how-to, explanation, or reference), prerequisites, and product fact sources.
+Review the outline against that scope before writing.
 
 Use second person, active voice, exact UI labels in bold, and sentence-case
 headings. Procedures name the location before the action. Keep alternatives
-out of the main tutorial path. Run the product-docs voice checklist and the
-Google reference checklist on every substantive rewrite. Do not add generic
+out of the main tutorial path. Check voice, procedure order, and reference
+accuracy on every substantive rewrite. Do not add generic
 warm-ups, marketing praise, synonym cycling, or repeated summaries.
 
 `CONTEXT.md` supplies terminology; implementation and tests establish current
-behavior. Record unverified facts as open questions in the audit rather than
-publishing guesses. Do not change screenshot alt text to disguise an outdated
+behavior. Verify uncertain facts before publishing. Do not change screenshot alt text to disguise an outdated
 control. Prefer one canonical procedure with links from related pages.
 
-The comparison, page contracts, source links, and follow-ups for the 0.2 pass
-are in `docs/research/docs-0-2-audit.md` at the repository root.
 
 ## Deployment
 

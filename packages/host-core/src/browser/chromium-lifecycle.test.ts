@@ -1,6 +1,6 @@
 /**
- * The Chromium backend's lifetimes without a real browser (VC-619 review
- * B1/B3/B5, N2, N10): one shutdown however the browser ends — against real
+ * The Chromium backend's lifetimes without a real browser (VC-619): one
+ * shutdown however the browser ends — against real
  * child processes with a survivor in their group — and nothing retained
  * across tab churn, cancelled attaches or a browser that stops answering.
  */

@@ -1069,12 +1069,12 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
   "volli:worktree-orphan-cleanup": {
     // A command id, the scan revision it was confirmed against, and at least
     // one item id from that scan's plan. NO PATHS: main resolves ids against
-    // the proposal it minted itself (VC-284 review C1), so this guard only has
+    // the proposal it minted itself (VC-284), so this guard only has
     // to say the shape is a cleanup command — whether the revision is current
     // and the ids are real is a question only the plan can answer.
     //
     // The command id is held to UUID syntax like every other command channel
-    // (VC-284 re-review S1). It is the identity a destructive act is replayed
+    // (VC-284). It is the identity a destructive act is replayed
     // under: a caller that may pick `"cmd-1"` can collide with another caller's
     // id and be answered with somebody else's deletion.
     guard: (args): args is IpcArgs<"volli:worktree-orphan-cleanup"> => {
@@ -1608,8 +1608,8 @@ function isModelSelectionShape(value: unknown): boolean {
  * rule 1). The renderer mints one so a retry can carry the exact same intent
  * through another host without deriving an id from this machine.
  *
- * Shared by every command channel rather than copied per feature (VC-284
- * re-review S1): the orphan cleanup transports a DELETION under this id, and a
+ * Shared by every command channel rather than copied per feature (VC-284):
+ * the orphan cleanup transports a DELETION under this id, and a
  * transport that accepts `"cmd-1"` accepts an id another writer could mint too,
  * which is exactly the cross-writer collision the rule exists to prevent.
  */

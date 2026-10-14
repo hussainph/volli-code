@@ -1637,7 +1637,7 @@ const appStartup = app.whenReady().then(async () => {
     settings: notifications.settings,
     takePendingActivation: () => notifications.takePendingActivation(),
     // A renderer asking for the parked click is a renderer that has just
-    // subscribed to them (VC-295 round 2): until then main parks rather than
+    // subscribed to them (VC-295): until then main parks rather than
     // pushes, because a window exists long before anything inside it listens.
     markRendererReady: (sender) => {
       const window = BrowserWindow.fromWebContents(sender);
@@ -2331,7 +2331,7 @@ const appStartup = app.whenReady().then(async () => {
     mainWindow.webContents.once("did-finish-load", () => {
       // Each announced-but-unsettled item is asked of git and disk before the
       // run is stamped, so an already-removed folder is recorded as removed
-      // rather than described as work nobody attempted (review C3). Read-only,
+      // rather than described as work nobody attempted. Read-only,
       // and never fatal to a launch.
       if (hostClosing) return;
       const reconcile = reconcileInterruptedCleanups({

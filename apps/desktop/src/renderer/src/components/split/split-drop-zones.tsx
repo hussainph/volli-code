@@ -6,8 +6,7 @@
  * an outer band down the right edge, an outer band across the bottom) are
  * invisible; what lights up is the rectangle the drop would leave behind — the
  * whole pane for a centre drop, the right half for a right split, the bottom
- * half for a down split. That is VS Code's `editorDropTarget` reading, and it
- * is the one that answers the question a person actually has mid-drag ("where
+ * half for a down split. This answers the question a person has mid-drag ("where
  * will this end up?") rather than the one the implementation has ("which
  * region am I over?").
  *

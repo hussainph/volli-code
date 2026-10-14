@@ -1,5 +1,5 @@
 /**
- * The connection Island (VC-576; the owner's VC-615 decision 5): a capsule
+ * The connection Island (VC-576; VC-615): a capsule
  * floating over the bottom of the content card while the current project's
  * host is in a state the page has to say — one line, at most one action, and
  * the board under it never moves.

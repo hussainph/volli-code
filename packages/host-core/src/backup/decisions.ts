@@ -324,7 +324,7 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason:
       "The append-only audit of MCP installs and removals (VC-380). Included because it is the only record of a server that was REMOVED, which is exactly the one a restored profile cannot reconstruct from configuration; it holds provenance notes and outcomes, never a credential.",
   },
-  // ---- Volli Cloud identity (VC-550, docs/plans/host-identity.md) ----------
+  // ---- Volli Cloud identity (VC-550) ---------------------------------------
   {
     table: "workspace_epochs",
     decision: "include",

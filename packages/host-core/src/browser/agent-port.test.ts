@@ -742,7 +742,7 @@ describe("createAgentBrowserPort", () => {
     // The screenshot path is the one that never reaches snapshotOf, so it is
     // the only caller whose hold is entirely its own. Frames are exactly what
     // a throttled engine stops producing, so losing this hold is the ticket's
-    // headline symptom coming straight back (VC-252 review).
+    // headline symptom coming straight back (VC-252).
     const driven = portWithHost({
       tabs: [state({ tabId: "user-1", createdBy: "user" })],
     });

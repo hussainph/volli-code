@@ -3,13 +3,11 @@
  *
  * Three rows, and the point is the two that are not "attach". The `/` and `@`
  * pickers open from what is typed, which is the right way to open them and
- * also invisible: nothing on the surface said the grammars existed, and the
- * first outside users found neither. The field converged on one answer —
- * OpenCode's `+` lists Attachments · Commands `/` · Context `@`, claude.ai's
- * lists files and `/` commands, Claude Code Desktop's lists files, skills and
- * connectors — a menu under one mark whose rows *are* the shortcut hints. The
- * trailing slot on each row carries the character that would have done the
- * same thing, so the menu teaches the keystroke that makes it unnecessary.
+ * also invisible: nothing on the surface says the grammars exist. So the `+`
+ * is one mark over the attachment, command, and file-context shortcuts, and its
+ * rows *are* the shortcut hints. The trailing slot on each row carries the
+ * character that would have done the same thing, so the menu teaches the
+ * keystroke that makes it unnecessary.
  *
  * A row writes the trigger at the caret through the picker stack's own
  * binding ({@link useComposerCaretBinding}), which is what makes the picker

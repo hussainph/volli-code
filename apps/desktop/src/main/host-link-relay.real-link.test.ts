@@ -831,8 +831,8 @@ describe("a remote project's board through the relay, over a real link", () => {
     expect(record.failures).toEqual([]);
   });
 
-  // VC-711 review B1: a view told its stream waits for a slot may close
-  // itself (and free another) from inside the callback. Nothing it closed may
+  // VC-711: a view told its stream waits for a slot may close itself (and
+  // free another) from inside the callback. Nothing it closed may
   // open on the box again, nor wait for a slot.
   it("opens nothing on the box for a stream its view cancelled inside onStreamLimited", async () => {
     const { host, link, win } = await remoteProject();
@@ -925,8 +925,8 @@ describe("a remote project's board through the relay, over a real link", () => {
     );
   });
 
-  // VC-711 PR 2 review B1: a write made for a remote Workspace keeps that
-  // Workspace's host for every retry and ends with the Workspace. Once it
+  // VC-711: a write made for a remote Workspace keeps that Workspace's host
+  // for every retry and ends with the Workspace. Once it
   // closes (its claim gone), nothing pending is ever sent to This Mac.
   it("never sends a pending remote write to This Mac after its Workspace closes", async () => {
     const { route, link, board } = await remoteProject();
@@ -996,9 +996,9 @@ describe("a remote project's board through the relay, over a real link", () => {
     expect(localCalls).toEqual([]);
   });
 
-  // VC-711 PR 2 review B2: an older host grants no `board.read`. Its board
-  // is asked once, said once in the host's name, and opened again only when
-  // the host changes (here: restarted on a newer hostd that offers it).
+  // VC-711: an older host grants no `board.read`. Its board is asked once,
+  // said once in the host's name, and opened again only when the host changes
+  // (here: restarted on a newer hostd that offers it).
   it("says once that an older host offers no board, and opens it once the host does", async () => {
     const older = await box([]);
     const route = await cuttableRoute(older.url);

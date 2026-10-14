@@ -192,7 +192,7 @@ describe("the footer once a press has been refused", () => {
 
 /**
  * THE ACCEPTANCE WIDTHS, AND WHAT THIS ENVIRONMENT CAN HONESTLY SAY ABOUT THEM
- * (VC-288 review).
+ * (VC-288).
  *
  * The acceptance names three pane widths and four zoom levels, and the second
  * list collapses into the first: browser zoom scales the CSS pixel, so a 480px

@@ -2,7 +2,7 @@
  * A Session recorded before transcript digests existed, opened through the real
  * host runtime (VC-315's legacy baseline).
  *
- * The renderer tests that hold the re-check review's plan and `/copy` probes
+ * The renderer tests that check the plan and `/copy` on a legacy Session
  * take the host half from here rather than from a hand-written projection, so
  * what they pin is the whole path: pre-digest history in the ledger, a bounded
  * open on a fresh host with no projection checkpoint, and what the surface

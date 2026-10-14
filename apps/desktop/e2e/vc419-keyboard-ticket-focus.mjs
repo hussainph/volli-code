@@ -1,8 +1,8 @@
 /**
  * VC-419 — keyboard ticket navigation keeps its focus and its list context.
  *
- * VC-322's release pass found the blocker this probe pins down: on the built
- * app, Enter on a focused board card or list row OPENS the ticket but drops
+ * Focus-handoff regression coverage (VC-322): on the built app, Enter on a
+ * focused board card or list row must not open the ticket and drop
  * `document.activeElement` to BODY, and Escape from the ticket's primary tab
  * RETURNS to the board but leaves focus on BODY rather than the card or row the
  * journey started from. Both keys work; the focus handoff and the return are

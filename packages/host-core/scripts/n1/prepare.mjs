@@ -7,7 +7,7 @@
  *   node packages/host-core/scripts/n1/prepare.mjs --ref <git ref> --out <dir>
  *
  * `--release` is the newest stable release tag (`vX.Y.Z`, no `-canary.N`
- * suffix): the build external users run and downgrade to. `--canary` is the
+ * suffix): the stable downgrade target. `--canary` is the
  * newest canary tag (`vX.Y.Z-canary.N`): the build a canary tester drops back
  * to when they hop between canaries. `--ref` is any
  * commit, which CI uses for the pull request's base (the build that knows

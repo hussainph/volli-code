@@ -171,7 +171,7 @@ describe("ticket.move: two resources", () => {
     }
   });
 
-  // VC-564 A2 re-review B1': the ticket a move lands after is a reference.
+  // VC-564: the ticket a move lands after is a reference.
   it("admits a Session to land after a ticket only someone else works on", async () => {
     const { client, move } = connect(coordinator);
     await expect(client.ticket.move({ ...input, afterTicketId: "theirs" })).resolves.toMatchObject({

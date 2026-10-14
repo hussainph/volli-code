@@ -229,7 +229,7 @@ const hostId = z.uuid();
 const providerId = z.string().min(1).max(256);
 /**
  * The window's name for one sign-in run, minted per run: an answer or cancel
- * naming an older run reaches nothing (VC-702 review B3). Optional, so a
+ * naming an older run reaches nothing (VC-702). Optional, so a
  * caller without one reaches the host and provider's current run.
  */
 const runId = identifier.optional();

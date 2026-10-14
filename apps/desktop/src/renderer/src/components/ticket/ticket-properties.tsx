@@ -6,13 +6,11 @@
  * It was a wrapping run of 24px pills with no eyebrow, and that run was the
  * one block on the page that was neither of its two object kinds: unmarked,
  * bordered at rest where every row is borderless until hovered, and two facts
- * to a line where the page sets one thing per line. Alone it read as Linear's
- * property strip; under the sections it was the odd block out.
+ * to a line where the page sets one thing per line. Under the sections it was
+ * the odd block out.
  *
- * **THE VALUE IS THE CONTROL** (revision 05's first correction). The second
- * pass made the whole row the target and hung a picker off it, which is the
- * shape the user rejected: a row that opens a side overlay is a row pretending
- * to be a field, and it puts the act one hop further away than the fact it is
+ * **THE VALUE IS THE CONTROL**. Making the whole row a target for a side
+ * overlay puts the act one hop further away than the fact it is
  * editing. A row here is NOT a target. It keeps the roster's grammar — a
  * glyph, then the value — and the value itself is the app's own 28px dropdown
  * trigger (`RAIL_CONTROL`, the recipe every button a rail page presses wears,
@@ -32,7 +30,7 @@
  *
  * The rows are 38px (28px trigger + 4px above and below + the row's 1px
  * transparent border) rather than the 36px of the page's other one-line rows —
- * the retained difference revision 05 records so it is not mistaken for drift.
+ * enough space for the trigger, padding, and border without compressing the control.
  *
  * **LABELS ARE ADDITIVE, LEFT TO RIGHT.** Each applied label is its own pill
  * carrying its own Remove, in the order it was added, wrapping when the run

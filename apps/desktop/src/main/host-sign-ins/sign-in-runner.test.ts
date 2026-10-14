@@ -551,7 +551,7 @@ describe("runHostSignIn", () => {
     host.emit({ kind: "done" });
     expect(await run.ended).toBe("cancelled");
   });
-  describe("cancelling here (VC-702 review B1)", () => {
+  describe("cancelling here (VC-702)", () => {
     it("ends the run at once, with no word from the host, and lets go of everything it held", async () => {
       for (const host of ["silent", "refuses"] as const) {
         const link = fakeLink();
@@ -653,7 +653,7 @@ describe("runHostSignIn", () => {
       expect(events).toEqual([{ kind: "cancelled" }]);
     });
   });
-  describe("the link's connection going (VC-702 review B2)", () => {
+  describe("the link's connection going (VC-702)", () => {
     it("ends lost at once, closes the relay and withdraws the stream, whatever the stream says after", async () => {
       const host = fakeLink();
       const relay = fakeBind("bound");
@@ -710,7 +710,7 @@ describe("runHostSignIn", () => {
     });
   });
 
-  describe("replacing a run (VC-702 review B3)", () => {
+  describe("replacing a run (VC-702)", () => {
     it("starts once the old run's flow is over, asking again while the host still holds it", async () => {
       vi.useFakeTimers();
       const host = fakeLink();
@@ -783,7 +783,7 @@ describe("runHostSignIn", () => {
     });
   });
 
-  describe("bounded in time (VC-702 review B4)", () => {
+  describe("bounded in time (VC-702)", () => {
     it("ends the run, here and on the host, at its deadline, and lets go of the relay", async () => {
       vi.useFakeTimers();
       const host = fakeLink();

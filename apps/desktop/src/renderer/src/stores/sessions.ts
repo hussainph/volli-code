@@ -8,9 +8,9 @@
  * get the full split tree, activity tracking, and rename.
  *
  * A split leaf is the ownership boundary: exactly one renderer engine and one
- * main-process PTY session. Layout nodes own geometry only. This mirrors
- * Ghostty/cmux, where a split inserts a fresh terminal surface instead of
- * asking one renderer instance to paint the same PTY into another canvas.
+ * main-process PTY session. Layout nodes own geometry only. A split inserts a
+ * fresh terminal surface instead of asking one renderer instance to paint the
+ * same PTY into another canvas.
  *
  * Containers live in `byOwner`, keyed by the scope's OWNER id — a projectId for
  * a Board Session, a ticketId for ticket sessions (distinct UUID spaces, so one flat
@@ -293,7 +293,7 @@ export function findTabBySessionId(
 
 /**
  * Where a Session lives in the terminal strips: its container, its TAB, and the
- * pane inside that tab — or null when no strip holds it (VC-295 round 2).
+ * pane inside that tab — or null when no strip holds it (VC-295).
  *
  * The null answer is load-bearing: it is how a caller tells a terminal Session
  * from a chat one without a second registry to consult. A harness alert names a

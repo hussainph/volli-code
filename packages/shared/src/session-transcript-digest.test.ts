@@ -1,6 +1,6 @@
 /**
- * The plan and the current reply as projection state (VC-315; the
- * verification review's B1 and B2). A Client holds only the newest window of
+ * The plan and the current reply as projection state (VC-315). A Client holds
+ * only the newest window of
  * a Session's transcript, so the facts these two answers depend on are folded
  * from each settled message's digest rather than from messages it may never
  * page in.

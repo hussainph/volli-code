@@ -9,7 +9,7 @@
  * the send.
  *
  * ── WHAT IT HAS TO RESOLVE BEFORE IT CAN ANSWER ───────────────────────────
- * Round 2 added the two facts that made the report honest:
+ * The report needs two facts:
  *
  *  - **Which Session a terminal tab is showing.** A terminal tab's id is a bare
  *    session uuid, indistinguishable by shape from a file or browser tab id, so
@@ -21,11 +21,10 @@
  *
  * ── AND WHICH ITEM, WHEN A CLICK HAS OVERRIDDEN THE PLANE ────────────────
  * A click can ask the blocker to draw an OLDER live Attention than the primary,
- * or the card slot to draw a question other than the first. Round 3 reported
- * the primary-derived item anyway, so the row showed one problem while this
- * told main another was visible — and the alert for the problem that was NOT
- * on screen got suppressed. There is now one record of what a plane was asked
- * to show (`chat/session-item-reveal.ts`) and one rule over it
+ * or the card slot to draw a question other than the first. Reporting the
+ * primary-derived item would tell main that a problem not on screen was
+ * visible, suppressing its alert. One record of what a plane was asked to show
+ * (`chat/session-item-reveal.ts`) and one rule over it
  * (`shownSessionNotificationItem`), read here and by the plane alike.
  *
  * The report is advisory and one-way. If it never arrives — a dropped send, a

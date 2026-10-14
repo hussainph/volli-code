@@ -5,8 +5,7 @@
  * the durable file contract, the key-id format and the typed inventory.
  * `SecretStore` takes a {@link SecretKeyPort}: desktop passes its keychain
  * adapter, a headless host passes {@link fileSecretKey}. See
- * `docs/secrets.md` ("Headless hosts") and
- * `docs/plans/sealed-credential-store.md`.
+ * `docs/secrets.md` ("Headless hosts").
  */
 export {
   isSecretKeyUnavailable,

@@ -421,7 +421,7 @@ describe("ownedProcesses (identity, never name or path)", () => {
     );
   });
 
-  // The re-check's repro (VC-703), kept: the whole original group exited, the
+  // Group-reuse protection (VC-703): the whole original group exited, the
   // number 31000 was reused by an unrelated group whose leader also exited,
   // and only that group's orphan is left. Fabricated rows and a recording
   // kill function: no real process is signalled.

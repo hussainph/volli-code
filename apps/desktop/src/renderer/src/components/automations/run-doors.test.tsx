@@ -393,7 +393,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
-    // The row INSPECTS (VC-406 revision 05); the Run inside the inspection is
+    // The row INSPECTS (VC-406); the Run inside the inspection is
     // the explicit act that reaches the seam.
     await press(control("Inspect Review sweep"));
     expect(run).not.toHaveBeenCalled();

@@ -334,7 +334,7 @@ function recorder(resolved: boolean) {
   };
 }
 
-describe("a notification click that named an Attention (VC-295 round 3)", () => {
+describe("a notification click that named an Attention (VC-295)", () => {
   /**
    * The row draws `attention.primary` — the newest active one — so a click on
    * an alert about an OLDER live failure used to open the Session and select
@@ -1762,7 +1762,7 @@ it("shows the provider's typed interruption cause in the blocker instead of gene
   }
 });
 
-it("keeps context recovery headline beside Anthropic invalid_request_error (review item 5)", () => {
+it("keeps context recovery headline beside Anthropic invalid_request_error", () => {
   const blocker = sessionBlocker(
     raised({
       ...attention("context_limit_reached", "prompt is too long"),

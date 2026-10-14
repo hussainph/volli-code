@@ -311,7 +311,7 @@ export function protocolBoardApi(
   comments: CommentTickets = commentTickets(),
 ): BoardApi {
   /**
-   * Where one call goes, decided ONCE, when it is made (VC-711 review B1):
+   * Where one call goes, decided ONCE, when it is made (VC-711):
    * the Workspace it was made for (its owner) and that Workspace's client. A
    * write keeps both for every retry, so it never changes hosts: a remote
    * write whose Workspace closes ends with it (`BoardSync.close`) rather than

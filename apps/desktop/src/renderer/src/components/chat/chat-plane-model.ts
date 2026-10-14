@@ -649,7 +649,7 @@ export function sessionBlocker(
   // which is what this row has always drawn.
   // `revealedSessionAttention` is the SAME call the window reporting what it
   // shows makes, so the row and that report cannot name different problems
-  // (VC-295 round 4).
+  // (VC-295).
   const attention =
     revealedSessionAttention(input.attention.active, input.revealedAttentionId) ??
     input.attention.primary;

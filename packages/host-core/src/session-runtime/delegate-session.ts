@@ -36,10 +36,9 @@
  *
  * ## The answer rides the notice, quoted as another author's prose
  *
- * Every harness worth copying (Claude Code's `Agent`, opencode's `task`)
- * hands the child's final message to the parent without a second call, and a
- * parent that must shell out for it spends a turn on bookkeeping. So the
- * notice carries Volli's facts — the child's handle, its state, the title the
+ * The child's final message reaches the parent without a second call, avoiding
+ * a turn spent fetching the answer. The notice carries Volli's facts — the
+ * child's handle, its state, the title the
  * parent gave it — AND the child's last message, inside the same quoted
  * untrusted-prose envelope `volli session answer` prints (VC-457). The
  * envelope is the trust boundary: the notice rides the `user` channel because
@@ -56,7 +55,7 @@
  * `session.stopped`, and a failed or closed attachment end the watch too, and
  * every one of them still notifies unless the parent itself stopped the child:
  * that stop is already the parent's own decision, not news to echo back.
- * There is no wall clock (VC-457, owner ruling): a long research child runs
+ * There is no wall clock (VC-457): a long research child runs
  * until it answers, and a person or the
  * parent stops it when it is wrong, not a timer when it is slow.
  *
@@ -83,7 +82,7 @@
  *
  * ## Bounds
  *
- * - No cap on live children (owner ruling): a shared worktree is the parent's
+ * - No cap on live children: a shared worktree is the parent's
  *   own coordination problem, and the tool description says so.
  * - Depth is structural: a subagent's bundle holds no `session.delegate`, so
  *   there is no grandchild to count and no counter here.

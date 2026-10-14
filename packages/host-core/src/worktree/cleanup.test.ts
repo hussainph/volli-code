@@ -107,7 +107,7 @@ function runRepoGit(cwd: string, args: readonly string[]): string {
 /**
  * The branch the fixture's listing reports for a container leaf. A plan item
  * carries the branch the scan SAW, and the cleanup compares it against the
- * branch git reports at mutation time (re-review C1), so a test item that
+ * branch git reports at mutation time, so a test item that
  * claims the wrong branch is correctly refused — which is why the helper
  * derives it rather than leaving each case to remember.
  */
@@ -232,7 +232,7 @@ function fixture(
 /**
  * The standard request wrapper — one command id per call unless a case reuses
  * one. `retentionDays` is the window the SCAN measured its proposal against;
- * the executor refuses if the setting has moved since (re-review C1).
+ * the executor refuses if the setting has moved since.
  */
 function request(items: OrphanCleanupPlanItem[], commandId = COMMAND_ID) {
   return {
@@ -391,7 +391,7 @@ describe("cleanupOrphans", () => {
     const f = fixture();
     // Nothing is live when the first check runs; a terminal appears while the
     // agent bindings are being released. The re-check after every await is what
-    // has to see it (review C4).
+    // has to see it.
     let releaseHappened = false;
     const { run } = await cleanupOrphans(
       {
@@ -413,10 +413,9 @@ describe("cleanupOrphans", () => {
     );
   });
 
-  // The seam the re-review named: a durable write used to sit between the last
-  // check and `git worktree remove`, so anything that changed the world inside
-  // that write was applied to a verdict taken before it. The `started` fact is
-  // now written BEFORE the last look, and these cases change the world from
+  // A durable write after the last check could invalidate its verdict before
+  // `git worktree remove`. The `started` fact is written before the last look,
+  // and these cases change the world from
   // inside that write to prove the gate still catches it.
   describe("the seam between announcing intent and mutating", () => {
     /** Every ordered act of one item, so the shape of the run is the assertion. */
@@ -650,7 +649,7 @@ describe("cleanupOrphans", () => {
     const f = fixture();
     // Moved, but still called the same thing — so the container name is
     // unchanged and the ownership gate cannot see it. Only comparing the
-    // project path the plan named can (re-review C1).
+    // project path the plan named can.
     const moved = movedProject(f.projectPath);
     ctx.db.prepare("UPDATE projects SET path = ? WHERE id = ?").run(moved, "proj-1");
 

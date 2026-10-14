@@ -2,9 +2,8 @@
  * Orphaned worktrees: what a scan may say, and what a cleanup durably records
  * (VC-284).
  *
- * Domain vocabulary, not transport (docs/BOUNDARIES.md). The review's S1 asked
- * for a host-neutral projection behind the destructive act, and this is the
- * half that has to be host-neutral for that to mean anything: a scan proposal,
+ * Domain vocabulary, not transport (docs/BOUNDARIES.md). The host-neutral
+ * projection behind the destructive act includes a scan proposal,
  * a cleanup command's plan, and the immutable outcome of every item it touched.
  * Electron's channel catalog re-exports these for its own transport; the core
  * that mints and folds them (`packages/host-core/src/worktree/cleanup-engine.ts`)
@@ -100,7 +99,7 @@ export interface OrphanCleanupPlanItem {
  * Whether a stored value is a plan item this build can act on.
  *
  * Used where a plan is read back out of durable storage rather than received
- * from the code that minted it (VC-284 re-review C3): a record whose JSON parses
+ * from the code that minted it (VC-284): a record whose JSON parses
  * but whose SHAPE is damaged must be a loud fault, not a silently emptied run —
  * "this deletion history is unreadable" and "nothing was ever deleted" are
  * different statements, and only one of them may be inferred from a bad row.
@@ -185,7 +184,7 @@ export interface OrphanCleanupItem {
    * the run itself.
    *
    * It exists because the two are different claims and only one of them carries
-   * a time (VC-284 re-review C3): a run's own outcome is stamped when the
+   * a time (VC-284): a run's own outcome is stamped when the
    * mutation returned, while a reconciled one is stamped when somebody looked.
    * The mutation itself happened somewhere between {@link startedAt} and this,
    * and no surface may print this instant as the moment a folder was removed.

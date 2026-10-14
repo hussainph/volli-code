@@ -12,7 +12,7 @@
  *    never suggest force-push, which would clobber it) and a missing remote —
  *    but still as human strings.
  *  - `ghCreateDraftPr`/`ghFindPr` return a structured {@link GhResult}: the IPC
- *    layer branches on `failure.kind` (Vibe Kanban's error-taxonomy model) to,
+ *    layer branches on `failure.kind` to,
  *    e.g., turn a `pr-exists` into a follow-up `ghFindPr` rather than an error
  *    dialog. Keeping the taxonomy typed (not a string) is what makes that
  *    re-entry possible.

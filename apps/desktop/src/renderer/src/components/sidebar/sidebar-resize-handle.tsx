@@ -159,9 +159,9 @@ export function SidebarResizeHandle({ onResizingChange }: SidebarResizeHandlePro
     // positioned sibling. z-index 999 on the thumb still lost. Nothing inside
     // that subtree can out-stack this grip, so the boxes have to stop
     // overlapping instead — 4px + the thumb's 4px tile exactly, and the trade is
-    // the owner's: a scrollbar you cannot grab is worse than a resize edge that
+    // deliberate: a scrollbar you cannot grab is worse than a resize edge that
     // wants a little more aim. The visible hairline below is unmoved; 4px is
-    // also what VS Code's sash and macOS window edges give you.
+    // enough for a narrow, aimable resize target.
     <div
       role="separator"
       aria-orientation="vertical"

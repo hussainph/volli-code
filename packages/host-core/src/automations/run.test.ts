@@ -1632,10 +1632,8 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
   });
 
   it("says so when the attach that would have delivered them is refused", async () => {
-    // The owner's Run, at the seam. Its Session was minted, its attach was
-    // rejected — an unpreparable worktree — and the boot half returned without
-    // a word: the door had already answered `ok`, the Run row linked to a
-    // Session with nothing in it, and there was no line anywhere saying why.
+    // The Run's Session exists but attach cannot prepare its worktree. The
+    // accepted Run must still report why no Instructions were delivered.
     //
     // The intent is deliberately still owed (the attach failed, not the
     // delivery), so the Session's own Retry and the next launch's recovery

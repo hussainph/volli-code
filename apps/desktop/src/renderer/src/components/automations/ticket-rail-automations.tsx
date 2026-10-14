@@ -35,7 +35,7 @@
  * says a Run started it (`session-provenance-mark.tsx`). This block never
  * lists Runs.
  *
- * **A ROW INSPECTS; ONLY RUN RUNS** (VC-406 revision 05). The row's press used
+ * **A ROW INSPECTS; ONLY RUN RUNS** (VC-406). The row's press used
  * to BE the launch, which made the block the one place in the app where a
  * single click spent a Session on work whose saved instructions were not on
  * screen — and made right-click the only route to the per-invocation model

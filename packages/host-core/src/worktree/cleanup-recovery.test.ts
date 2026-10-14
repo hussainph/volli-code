@@ -1,5 +1,5 @@
 /**
- * The window the review's C3 names: the folder is already gone and the outcome
+ * The crash window: the folder is already gone and the outcome
  * was never written. These cases stop the app in exactly that instant — after a
  * real `git worktree remove`, before the fact lands — and then ask what the
  * next launch says about it.
@@ -309,8 +309,8 @@ describe("reconcileInterruptedCleanups", () => {
 
     // The record is gone now — but `git worktree prune` leaves no trace of
     // itself, so "gone" is not evidence THIS command pruned it: a shell, a
-    // later cleanup or git's own housekeeping would look identical (re-review
-    // C3). The truthful answer is that this host cannot say.
+    // later cleanup or git's own housekeeping would look identical.
+    // The truthful answer is that this host cannot say.
     stillStale = false;
     await engine.accept({
       commandId: "cmd-2",
@@ -371,7 +371,7 @@ describe("reconcileInterruptedCleanups", () => {
 
   // `existsSync` answers false for a path it cannot stat for ANY reason, so an
   // unreadable filesystem used to be reported as "the folder is gone" — a
-  // completed deletion invented out of a permissions error (re-review C3).
+  // completed deletion invented out of a permissions error.
   it("treats an unreadable path as unknown, not as a removed folder", async () => {
     const home = tempDir("home");
     const projectPath = tempDir("proj");

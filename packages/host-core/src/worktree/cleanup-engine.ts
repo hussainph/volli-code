@@ -1,6 +1,6 @@
 /**
  * The orphan CLEANUP core: commands in, immutable facts out, one projection
- * over them (VC-284 review S1).
+ * over them (VC-284).
  *
  * The destructive half used to be a raw IPC call that deleted directories and
  * then rewrote a JSON blob describing what it had done. Two things were wrong
@@ -54,8 +54,8 @@ export interface OrphanCleanupIntent {
    * The item ids the CALLER asked for, exactly as they arrived — before any
    * scan resolved them into paths.
    *
-   * This is what makes a retry decidable from durable storage alone (VC-284
-   * re-review S1): the host door compares a repeated `{ commandId,
+   * This makes a retry decidable from durable storage alone (VC-284): the
+   * host door compares a repeated `{ commandId,
    * scanRevision, itemIds }` against these two fields and answers "the same
    * request, here is its run" or "a different request under a used id" without
    * consulting the in-memory scan — which the first run has usually already
@@ -118,7 +118,7 @@ export interface OrphanCleanupLedgerTransaction {
    * and no `cleanup.run.interrupted` fact — oldest first, UNBOUNDED.
    *
    * Separate from {@link recentCommandIds} because recovery is not display
-   * (VC-284 re-review C3): reading the newest N commands and filtering them
+   * (VC-284): reading the newest N commands and filtering them
    * silently drops an older open run, and rejected command rows push accepted
    * ones out of that window. A run that removed a directory and never finished
    * has to be reconcilable however long ago it stopped.
@@ -177,7 +177,7 @@ export interface OrphanCleanupEngine {
    * The durable answer a used command id already has, or `null` when the id is
    * new.
    *
-   * This is the host door's FIRST question (VC-284 re-review S1). A cleanup
+   * This is the host door's FIRST question (VC-284). A cleanup
    * invalidates the scan it ran against, so validating a retry against the
    * current scan would answer `scan-superseded` for a command that in fact
    * completed — turning a lost reply into a false failure, and inviting the
@@ -285,7 +285,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * A cleanup fact whose JSON parsed but whose meaning did not.
  *
- * Thrown rather than defaulted (VC-284 re-review C3). The fold is the only
+ * Thrown rather than defaulted (VC-284). The fold is the only
  * reader of a DELETION history: a damaged `cleanup.accepted` payload that
  * quietly folds to "an empty finished run" makes a record of removed
  * directories disappear without anybody being told. Loud here becomes "Couldn't
@@ -301,7 +301,7 @@ export class DamagedCleanupRecordError extends Error {
 /**
  * Folds one command's facts into the run a surface renders.
  *
- * Three rules, and each one is a review finding made structural:
+ * Three rules enforce replay-safe cleanup:
  *  - a command with no `cleanup.accepted` fact has no run (a refused request
  *    never becomes history that looks like an attempt);
  *  - an item's FIRST settled fact wins, so nothing can relabel a completed

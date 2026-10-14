@@ -878,8 +878,8 @@ const askUserSchema = Type.Object({
   ),
 });
 
-// This birth marker is not shipped yet: owner review made its declaration
-// questions-only. Once released, changing these bytes needs a new marker.
+// This not-yet-shipped birth marker declares questions only. Once released,
+// changing these bytes needs a new marker.
 const askUserQuestionsSchema = Type.Object(
   {
     questions: Type.Array(
@@ -1226,12 +1226,10 @@ const WEB_FETCH_MORE_URLS = 4;
  * back is somebody else's text, which is the claim the result's own envelope
  * repeats around every document this returns.
  *
- * The last line is the one that earns its place by arithmetic rather than by
- * principle. A model that reads a failure as "this tool is broken" reaches for
+ * A model that reads a failure as "this tool is broken" may reach for
  * the shell, and a `curl` of the same URL is the same read with none of this
- * policy in front of it — measured across the owner's transcripts, about 635
- * shell web requests beside some 1,700 `web_fetch` calls — so the description
- * says outright that the shell is not the fallback, in the place the model is
+ * policy in front of it. The description therefore says outright that the
+ * shell is not the fallback, in the place the model is
  * actually looking when it decides.
  */
 const WEB_FETCH_DESCRIPTION = [

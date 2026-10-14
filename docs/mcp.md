@@ -6,10 +6,8 @@ and Volli's own verbs.
 
 This document covers how servers are configured, who may configure them, what
 the warnings mean, how sign-in and credentials work, and how to recover when an
-install goes wrong. The client, the transports, the tool-name safety rules and
-the frozen tool surface were built in VC-8; the agent-facing management verbs in
-VC-380; sign-in, credentials and the move to the `@earendil-works/pi-mcp`
-client in VC-470.
+install goes wrong. The client is `@earendil-works/pi-mcp`; the host owns
+configuration, credential routing, bounded calls and frozen Session definitions.
 
 ## The one rule everything else follows
 
@@ -102,7 +100,7 @@ The canonical verb keys remain `mcp.*`; the wire names above are separate. New
 Board Sessions use the `server_*` wire names. Historical frozen Sessions retain
 their original `mcp_*` names: their tool surface is replayed, never renamed.
 Single-underscore `mcp_` names can route Anthropic subscription OAuth requests
-to extra-usage billing and a misleading 400 ([controlled name-only reproduction](https://github.com/NousResearch/Hermes-Agent/issues/46675));
+to extra-usage billing and a misleading 400;
 real dynamic tools named `mcp__server__tool` (double underscores) are unaffected.
 After updating the app, start a fresh Board Session to get the new wire names.
 On an old build, use a non-Anthropic model for Board work or use an Anthropic
@@ -226,9 +224,8 @@ manager. A local server is a command that must **already be on `PATH`**, usually
 invoked through `npx` or `uvx`, and Volli simply starts it.
 
 A local server always runs with its working directory set to the **project
-root**. Other clients let a config choose one (VS Code has `cwd`); Volli does not
-expose it, deliberately — the workspace is the boundary the rest of the product
-is built on, and a server pointed elsewhere would quietly step outside it.
+root**. Volli does not expose a configurable working directory: the project root
+keeps server launches aligned with the workspace boundary.
 
 So a "source" here is **provenance metadata** — a note of where the
 configuration came from and which version was asked for. `server_install` accepts
@@ -255,9 +252,8 @@ em-dashes would be a control talking about nothing.
 Two, and only two: **stdio** and **streamable HTTP**. There is no SSE and no
 WebSocket support.
 
-SSE is deprecated in the MCP specification, but Claude Code and VS Code still
-accept SSE endpoints and fall back to them, so **an SSE-only server that works in
-those clients will not work here.** It is not refused with a clear message
+SSE is deprecated in the MCP specification. **An SSE-only server will not
+work here.** It is not refused with a clear message
 either: an `https://` URL is accepted as streamable HTTP and then fails during
 the handshake. If a server's documentation offers both, use its streamable HTTP
 endpoint.
@@ -373,7 +369,7 @@ press *Cancel sign-in*) for the browser to come back to a temporary server on
   is itself on this machine);
 - checks the `iss` the browser comes back with against the authorization
   server it started with (RFC 9207), whenever one is sent or the server says
-  it always sends one — Sentry, Linear and GitHub all do;
+  it always sends one;
 - listens for the redirect on a port it chose itself, reusing that port for a
   client it registered, never one named by the authorization server;
 - refreshes the access token by itself when the server rejects it, sharing one
@@ -463,11 +459,8 @@ In `mcp-credentials.json` beside the profile database (`<userData>/` in the
 app), mode `0600`: written whole to a fresh temporary file (created exclusively,
 never through a symlink), flushed to disk, then renamed into place, so a power
 cut leaves the old file or the new one. A symlink found at the path is never
-read through. Not the macOS
-keychain, for the reasons in
-`docs/research/env-credential-ux-architecture-review.md`: keychain access raised
-a prompt whenever the build's signature changed, and every peer (Pi's own
-`mcp-auth.json`, opencode, Codex) uses a user-only file. It holds stored
+read through. This file is not OS-keychain-sealed: its protection is the user-only file
+permission boundary, not encryption at rest. It holds stored
 secrets, OAuth tokens and client registrations — never a PKCE verifier, which
 lives only in the memory of the sign-in that made it.
 
@@ -784,8 +777,8 @@ frames. Reload and replay retain references, including images emitted before
 a program error. An older card sees a named image fallback instead of corrupt
 base64; reopening in a newer build displays the picture while it is retained.
 
-The user guide is `apps/docs/src/content/docs/guides/code-mode.mdx`; the design
-and the measurements are `docs/research/code-mode-vc-471.md`.
+The user guide is `apps/docs/src/content/docs/guides/code-mode.mdx`.
+Executable measurement harnesses live in `packages/agent-runtime/bench/codemode/`.
 
 ## What a call returns
 
@@ -796,7 +789,7 @@ reads the same shape.
 | Part | What it holds |
 | --- | --- |
 | `content` | What the model reads: Volli's trust notice, then the server's text and images in order, then the structured content as compact JSON (see the next row). A block Volli does not support (a resource link, an embedded resource) becomes a one-line text placeholder. When long text is cut, all of the text comes first as one block, followed by the images. |
-| `structuredContent` | The server's `structuredContent`, unchanged. The model also reads it, as a `Structured content: {…}` line, unless one of the server's text blocks already holds the same JSON. Codex follows the same rule. It can be missing even when the tool declares an output schema: the server sent none, or it was over the limit below. |
+| `structuredContent` | The server's `structuredContent`, unchanged. The model also reads it, as a `Structured content: {…}` line, unless one of the server's text blocks already holds the same JSON. It can be missing even when the tool declares an output schema: the server sent none, or it was over the limit below. |
 | `isError` | `true` when the server marked the result as an error. The model gets it as an error result, and `structuredContent` and `details` are still kept. |
 | `details` | Notes from Volli about the result: how the text was cut and where it was saved (`output`), or the size of structured content that was dropped (`structuredContentOmittedBytes`). Usually empty. |
 
@@ -828,7 +821,7 @@ to 64 K characters.
 A result is not refused for being long, up to the host's outer bound below. If
 its text is over **20 KiB** (`MCP_RESULT_INLINE_MAX_BYTES`), the model gets the
 start and the end of the text, with a `…N chars truncated…` marker between
-them. Pi and Codex use the same format. The full text is saved to a file, and
+them. The truncation marker distinguishes omitted content from an empty result. The full text is saved to a file, and
 the result gives the file's path so the model can `read` the middle in parts
 with `offset` and `limit`. The output starts at line 3 of the file, after
 Volli's notice. Lines longer than **16 KiB** are split across several lines in

@@ -54,7 +54,7 @@ export interface WorktreeBranchListing {
 export interface DirtyWorktreeOrphan {
   path: string;
   projectId?: string;
-  /** The project's display name, so a row can name a project and not an id (VC-284 review C6). */
+  /** The project's display name, so a row can name a project and not an id (VC-284). */
   projectName?: string;
   reason: string;
 }
@@ -67,7 +67,7 @@ export interface DirtyWorktreeOrphan {
 export interface RemovableWorktreeOrphan {
   /**
    * This item's id inside its scan revision — what a cleanup command selects
-   * (VC-284 review C1). Scoped by the revision UUID, so an id from a superseded
+   * (VC-284). Scoped by the revision UUID, so an id from a superseded
    * scan can never name work in the current one.
    */
   id: string;
@@ -110,7 +110,7 @@ export interface KeptWorktreeOrphan {
  * marker in `git worktree list --porcelain`, so naming it costs nothing and
  * changes nothing.
  *
- * One record per entry, not one bundle per project (VC-284 review C2): the
+ * One record per entry, not one bundle per project (VC-284): the
  * confirmation shows records, so the plan has to carry records, and every one
  * of them earns its own outcome in the durable history.
  */
@@ -138,7 +138,7 @@ export interface KeptWorktreeMetadata {
 }
 
 /**
- * A project whose worktree listing could not be read (VC-284 review C5). It is
+ * A project whose worktree listing could not be read (VC-284). It is
  * reported rather than skipped in silence: without the listing, every checkout
  * in that project's container is unaccounted for, and "we could not look" is a
  * different statement from "there was nothing there".

@@ -12,7 +12,7 @@ const toolingIgnorePatterns = [
   "node_modules",
   "pnpm-lock.yaml",
   "*.tsbuildinfo",
-  // Curated prose — mechanical reflow of the decision-log tables is noise.
+  // Technical reference documents retain their deliberate table formatting.
   "docs",
   "CLAUDE.md",
   // LGPL compliance material that ships inside the packaged app (VC-409).
@@ -77,33 +77,16 @@ export default defineConfig({
       // the option the rule ships for exactly this shape.
       "react/no-unstable-nested-components": ["error", { allowAsProps: true }],
 
-      // --- React Compiler rules: OFF pending VC-216, not dismissed ---
-      //
-      // oxlint 1.79 (in with vite-plus 0.3.0) split the single, inactive
-      // `react/react-compiler` rule into the ten rules below, resolved the
-      // inactive ones, and aligned their categories (oxc #25500, #25830,
-      // #25840). They landed in `correctness`/`perf`, which this file sets to
-      // "error", so 205 errors appeared at once on app code that had not
-      // changed — in a PR whose only subject was a toolchain version.
-      //
-      // These are named individually rather than by turning off the `react`
-      // plugin or relaxing the categories above: every react rule that was
-      // enforcing before the bump is still enforcing, and any NEW rule oxlint
-      // adds later still arrives as an error rather than landing pre-silenced.
-      // The list is the exact set the 1.79 split activated — nothing wider.
-      //
-      // The findings are real (refs read during render, setState inside
-      // effects), and VC-216 carries adopting them, one rule at a time.
-      // Fixing them here would have meant rewriting render behaviour across
-      // the desktop app with a dependency bump as its only cover — the thing
-      // d60016c7 and VC-211 both refused to do. Delete an entry here as VC-216
-      // lands that rule; when the last one goes, this whole block goes too.
-      //
-      // Ordered most findings first, as counted at the split. The numbers
-      // themselves live in VC-216, which is dated and cannot go stale;
-      // repeating them here would plant an assertion about current code that
-      // nothing re-checks, which is the trap VC-211's review caught in its own
-      // dependabot comment. `vp lint` re-counts on demand.
+      // React Compiler rules remain individually disabled pending adoption
+      // (VC-216, VC-211). oxlint 1.79 split the inactive compiler rule into
+      // these ten rules (oxc #25500, #25830, #25840). Keep the React plugin and
+      // error categories enabled so other rules and newly added rules still
+      // enforce. Remove each override only with its corresponding behavior
+      // fixes and tests; `vp lint` reports the current findings.
+      // Keep the override set scoped to compiler adoption (VC-216); preserve
+      // existing error categories for unrelated rules (VC-211). Each enabled
+      // rule needs its behavior regression coverage (VC-216). Remove obsolete
+      // overrides with those covered fixes, not a broad waiver (VC-216).
       "react/refs": "off",
       "react/set-state-in-effect": "off",
       "react/exhaustive-effect-dependencies": "off",

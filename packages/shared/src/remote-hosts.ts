@@ -329,7 +329,7 @@ export interface RenameRemoteHostInput {
 /** One device enrolled with a host (`volli-hostd devices list`): never a key. */
 export interface RemoteHostDevice {
   readonly deviceId: string;
-  /** What it called itself when it enrolled ("Hussain's MacBook Pro"). */
+  /** The device's display name when it enrolled. */
   readonly name: string;
   /** The enrolled key's fingerprint. */
   readonly fingerprint: string;

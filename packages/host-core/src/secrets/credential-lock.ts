@@ -1,8 +1,7 @@
 /**
  * The credential lock: one kernel advisory exclusive lock that every
  * locking-aware process sharing a data directory takes before it reads a
- * sealed credential file for use or changes one (VC-642;
- * `docs/plans/sealed-credential-store.md` §6).
+ * sealed credential file for use or changes one (VC-642).
  *
  * Desktop, hostd and `volli-hostd credentials` may share one store. An atomic
  * rename keeps a sealed file whole, but it does not stop two processes that

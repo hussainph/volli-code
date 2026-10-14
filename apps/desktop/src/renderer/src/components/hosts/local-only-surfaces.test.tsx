@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 /**
- * The local-only doors a remote project must never reach (VC-711 PR 2 review
- * N2–N4): a file or diff tab restored for a remote project, Home's New Browser,
- * and an attachment dropped on a remote draft. Each stands down without one
+ * The local-only doors a remote project must never reach (VC-711): a file or
+ * diff tab restored for a remote project, Home's New Browser, and an
+ * attachment dropped on a remote draft. Each stands down without one
  * `window.api` call, and says where it is not available.
  */
 import { act } from "react";

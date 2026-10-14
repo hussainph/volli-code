@@ -119,7 +119,7 @@ test("actual path classifier selects host/container inputs and fails safe", () =
   const temporary = mkdtempSync(join(root, ".tmp/ci-host-test-"));
   try {
     const cases = [
-      ["docs/plans/volli-cloud.md", "false", "false", "false"],
+      ["docs/guide.md", "false", "false", "false"],
       ["apps/website/src/index.ts", "false", "false", "false"],
       ["apps/desktop/src/main/index.ts", "true", "false", "false"],
       ["packages/host-core/src/index.ts", "true", "true", "true"],

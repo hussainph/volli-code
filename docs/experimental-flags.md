@@ -75,5 +75,5 @@ It installs the on state for each serial test and restores the prior reader
 on teardown, without editing the environment or database. Keep the existing
 flag-off suite alongside it; do not use concurrent tests with this global fixture.
 
-Settings → Experimental is built here. Moving auto-model controls from Models
-onto this page remains VC-518's work.
+Settings → Experimental exposes the registry-backed flags. With `cloud` off,
+no cloud service or cloud-only UI is enabled.

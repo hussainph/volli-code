@@ -1,12 +1,8 @@
-# Volli — brand, from first principles
+# Volli brand
 
-This is the brief volli.app and docs.volli.app are built from. It exists because
-the 0.2 pass (VC-217) grew the homepage one reasonable section at a time — a
-feature grid, a storyboard, a trust grid, a closing band — until the page read
-like every other SaaS site and lost what the first one had. The first site was
-built on one idea borrowed from Sky: **show the thing, floating in a world, and
-then talk like a person.** Everything below re-derives that idea for Volli and
-turns it into rules, so the next release adds a chapter instead of a component.
+The visual and writing conventions for volli.app and docs.volli.app (VC-217):
+**show the product, floating in a world, and use plain language.** The rules
+below keep the two sites consistent.
 
 ## 1. What Volli is
 
@@ -26,8 +22,7 @@ Three facts carry the trust, and they are said once, plainly, in prose:
 
 ## 2. The idea: the world
 
-Sky put its product in a sky. Volli's version is already in the product: every
-Volli theme is **a canvas** — a few colours of light that the app derives its
+Every Volli theme is **a canvas** — a few colours of light that the app derives its
 whole palette from. On the site, that canvas becomes **the world**: soft pools
 of light and grain behind the window, at the scale of the page.
 
@@ -41,9 +36,8 @@ of light and grain behind the window, at the scale of the page.
 
 ## 3. Voice
 
-Marketing speaks outcomes; the docs speak nouns. Copy follows the
-`developer-copy` rules (`.agents/skills/developer-copy`, drafted in VC-472):
-plain words, short sentences, active voice, facts a skeptic can check.
+Marketing speaks outcomes; the docs speak nouns. Copy uses plain words, short
+sentences, active voice, and facts a reader can check (VC-472).
 
 - **Nothing above a headline.** No eyebrows, kickers, section labels or mono
   tag lines — anywhere on the site. A section is a headline, then its words.
@@ -65,8 +59,8 @@ plain words, short sentences, active voice, facts a skeptic can check.
 - **Honest about the stage.** It is an alpha for Apple silicon; the download
   button says _Download for Mac_ and the page says _alpha_ once, near it.
 
-The essay under the hero is the one place for more than a line. It is written
-like the Sky essay: short paragraphs, first principles, no bullets.
+The essay under the hero is the one place for more than a line: short
+paragraphs, first principles, no bullets.
 
 ## 4. The mark
 
