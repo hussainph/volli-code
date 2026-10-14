@@ -38,6 +38,19 @@ export function visibleControls(tree, role, name, { contains = false } = {}) {
     return actualRole === role && (contains ? label?.includes(name) : label === name);
   });
 }
+/** Read the production registry's Workspace state, not host health or the UI's
+ * five-second writable reconnect grace. This journey opens exactly one remote
+ * project; absent/ambiguous claims must not supply readiness.
+ */
+export function acceptanceWorkspaceReady(snapshot) {
+  const hosts = snapshot.hosts.filter((host) => host.name === REMOTE_HOST);
+  if (hosts.length !== 1 || snapshot.readOnly !== null) return false;
+  const projects = Object.values(snapshot.projects).filter(
+    (project) => project.hostId === hosts[0].id,
+  );
+  return projects.length === 1 && projects[0].link.status === "ready";
+}
+
 /** An exiting dialog can leave background text visible before its names/refs return. */
 export function hasActionableControl(tree, role, name) {
   const hits = visibleControls(tree, role, name);
