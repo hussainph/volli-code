@@ -86,6 +86,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "sessions.attach": "ipc",
   "session.snapshot": "ipc",
   "session.history": "ipc",
+  "session.picture": "ipc",
   "session.projection": "ipc",
   "session.subscribe": "ipc",
   "session.command": "ipc",

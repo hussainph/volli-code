@@ -912,7 +912,7 @@ describe("answerInteraction", () => {
 });
 
 describe("withdrawInteraction", () => {
-  /** The card's controls, Withdraw question among them, share this in-flight latch. */
+  /** Card controls and a question's Escape handler share this in-flight latch. */
   it("holds the card's own in-flight latch for the whole round trip", async () => {
     const flags: [string, boolean][] = [];
     const acts: string[] = [];

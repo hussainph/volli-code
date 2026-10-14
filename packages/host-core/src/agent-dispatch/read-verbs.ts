@@ -12,9 +12,16 @@ import {
   isTicketStatus,
   MUTATION_PLAN_CONTRACT,
   pathContains,
+  routeOf,
   shortSessionId,
 } from "@volli/shared";
-import type { AgentRequest, AgentResponse, Project, SessionEvent } from "@volli/shared";
+import type {
+  AgentHelpSurface,
+  AgentRequest,
+  AgentResponse,
+  Project,
+  SessionEvent,
+} from "@volli/shared";
 import type Database from "better-sqlite3";
 
 import { listMaterializableLinks } from "../db/blobs-repo";
@@ -99,13 +106,24 @@ function environmentProjectRoot(
 }
 
 /** Reads VC-164's frozen list without backfilling or consulting current Settings. */
-function recordedAgentToolSurface(events: readonly SessionEvent[]): readonly string[] | null {
+function recordedAgentToolSurface(
+  events: readonly SessionEvent[],
+): Pick<AgentHelpSurface, "tools" | "routes" | "mcpServerIds"> | null {
   for (const event of events) {
     if (
       event.payload.kind === "session.input.recorded" &&
       event.payload.input.kind === "tool-surface"
     ) {
-      return event.payload.input.tools;
+      const input = event.payload.input;
+      return {
+        tools: input.tools,
+        routes: Object.fromEntries(
+          input.tools.map((tool) => [tool, routeOf(input.codeMode, tool)]),
+        ),
+        mcpServerIds: Object.fromEntries(
+          (input.mcpTools ?? []).map((tool) => [tool.providerName, tool.serverId]),
+        ),
+      };
     }
   }
   return null;
@@ -188,7 +206,7 @@ export async function identifyVerb(
           : {
               agentSurface: {
                 role: envSession.role,
-                tools: frozenTools,
+                ...frozenTools,
               },
             }),
         ...(env === undefined ? {} : { env }),

@@ -383,6 +383,7 @@ export function createHeadlessSessionRuntime(input: {
           dataDir: host.dataDir,
           runtime,
           sessions,
+          pictures: assembly.pictures,
           modelAccess: piRuntimeHost,
           experiments: null,
           automations,

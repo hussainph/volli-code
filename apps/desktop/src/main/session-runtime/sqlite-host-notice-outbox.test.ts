@@ -264,29 +264,61 @@ describe("SQLite host notice outbox", () => {
     expect(await f.outbox.pending()).toEqual([value]);
   });
 
-  it("reconstructs storage, Engine, Runtime and Pi before delivering a parked notice to an idle legacy frozen Session", async () => {
-    const paths = setup();
-    const first = launch(db!.db, paths.directory);
-    const sessionId = await create(first);
-    const value = notice(sessionId);
-    expect(await first.delivery.deliver(value)).toBe("parked");
-    const second = await reconstruct(first, paths);
-    await second.delivery.recover();
-    expect(second.script.requests).toEqual([]);
-    await attach(second, sessionId);
-    await vi.waitFor(async () => expect(await second.outbox.pending()).toEqual([]));
-    expect(second.reports).toEqual([]);
-    expect(second.script.requests).toHaveLength(1);
-    const snapshot = await second.runtime.snapshot({ sessionId });
-    const notices = snapshot.transcript.filter(({ message }) => readHostNotice(message) !== null);
-    expect(notices).toHaveLength(1);
-    expect(notices[0]!.message.metadata).toEqual(value.metadata);
-    expect(notices[0]!.message.parts).toEqual([{ type: "text", text: value.text }]);
-    expect(await second.delivery.deliver({ ...value, text: "a new nonce" })).toBe(
-      "already-settled",
-    );
-    expect(second.script.requests).toHaveLength(1);
-  });
+  it.each(["immediate", "held"] as const)(
+    "reconstructs storage, Engine, Runtime and Pi before delivering a parked notice to an idle legacy frozen Session (%s settlement)",
+    async (settlement) => {
+      const paths = setup();
+      const first = launch(db!.db, paths.directory);
+      const sessionId = await create(first);
+      const value = notice(sessionId);
+      expect(await first.delivery.deliver(value)).toBe("parked");
+      const settling = Promise.withResolvers<void>();
+      const releaseCommit = Promise.withResolvers<void>();
+      const settled = Promise.withResolvers<Parameters<HostNoticeOutbox["settle"]>>();
+      const second = await reconstruct(first, paths, {
+        outboxOverride: (outbox) => ({
+          ...outbox,
+          settle: async (...args) => {
+            settling.resolve();
+            if (settlement === "held") await releaseCommit.promise;
+            await outbox.settle(...args);
+            settled.resolve(args);
+          },
+        }),
+      });
+      await second.delivery.recover();
+      expect(second.script.requests).toEqual([]);
+      await attach(second, sessionId);
+      if (settlement === "held") {
+        await settling.promise;
+        try {
+          // Pi has read the notice, but the real SQLite settlement is not yet
+          // committed. Neither attachment acceptance nor the provider request
+          // is a completion barrier for the outbox.
+          expect(second.script.requests).toHaveLength(1);
+          expect(await second.outbox.pending()).toEqual([value]);
+        } finally {
+          releaseCommit.resolve();
+        }
+      }
+      // Attachment acceptance precedes the idle turn's completion and outbox
+      // commit. Observe that commit, as the failed-live recovery case below does,
+      // rather than imposing a second, one-second deadline on real Pi/SQLite work.
+      expect(await settled.promise).toEqual([value.commandId, { status: "accepted" }]);
+      expect(await second.outbox.pending()).toEqual([]);
+      expect(second.reports).toEqual([]);
+      expect(second.script.requests).toHaveLength(1);
+      const snapshot = await second.runtime.snapshot({ sessionId });
+      const notices = snapshot.transcript.filter(({ message }) => readHostNotice(message) !== null);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]!.message.metadata).toEqual(value.metadata);
+      expect(notices[0]!.message.parts).toEqual([{ type: "text", text: value.text }]);
+      expect(await second.delivery.deliver({ ...value, text: "a new nonce" })).toBe(
+        "already-settled",
+      );
+      expect(second.script.requests).toHaveLength(1);
+    },
+  );
 
   it.each(["immediate", "held"] as const)(
     "recovers the same payload after failed live delivery with a genuinely rebuilt runtime (%s attachment)",

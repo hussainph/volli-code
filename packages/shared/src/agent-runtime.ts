@@ -306,6 +306,8 @@ export interface RuntimeToolBundle {
   mcp?: readonly McpToolDefinition[];
   /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
   mcpManagementNames?: "server";
+  /** Multi-question ask_user declaration, frozen at birth; absent keeps the original surface. */
+  askUserQuestions?: true;
   /**
    * Whether this Session's surface names `codemode`, and if so the route of
    * every other tool and the limits each script run is held to (VC-471).
@@ -454,8 +456,15 @@ export interface RuntimeAskUserOption {
   description?: string;
 }
 
+/** One related decision in the simplified, birth-marked ask_user declaration. */
+export interface RuntimeAskUserQuestion {
+  question: string;
+  /** Short answer choices. Empty means prose only; free text is always available. */
+  choices: readonly string[];
+}
+
 /**
- * One question the model decided to put to the person driving the Session.
+ * One request the model decided to put to the person driving the Session.
  *
  * A separate port from {@link RuntimeAskRequest}, and separate for a reason that
  * survives their similar shapes: an escalation is the runtime's own policy
@@ -470,6 +479,8 @@ export interface RuntimeAskUserOption {
 export interface RuntimeAskUserRequest {
   /** The runtime's own id for the asking call, so the question can be shown against it. */
   toolCallId: string;
+  /** Related decisions in the birth-marked declaration; historical flat calls stay unchanged. */
+  questions?: readonly RuntimeAskUserQuestion[];
   /** What the model wants to know, in its own words. */
   question: string;
   /** Absent or empty means the model wants prose rather than a choice. */
@@ -1949,6 +1960,12 @@ export type DeliveryOutcome =
   | {
       kind: "delivered";
       delivery: "prompt" | "queue" | "steer" | "retry";
+      /**
+       * Timestamp of the durable command acceptance marker, when one exists.
+       * Live receipts and recovery must name the same acceptance. Absent for
+       * volatile queue admission and callers without a command identity.
+       */
+      acceptedAt?: number;
       /**
        * True only when this delivery OPENED a turn that is still running
        * (VC-324) — the `settle: "opened"` answer on an idle target.

@@ -97,13 +97,12 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
       for (const attachment of projection.attachments) {
         if (stopping()) return closed;
         // A local process restart cannot recover the promise that parked a
-        // host permission question, even if the turn already interrupted or its
-        // sidecar is lost. Retiring it grants no allowance or confirmation.
+        // permission or model question, even if the turn already interrupted
+        // or its sidecar is lost. Retiring it invents no answer or allowance.
         if (attachment.adapterId === STRUCTURED_ADAPTER_ID && owns(attachment)) {
           for (const interaction of projection.interactions?.active ?? []) {
             if (stopping()) return closed;
-            if (interaction.attachmentId !== attachment.id || interaction.kind !== "permission")
-              continue;
+            if (interaction.attachmentId !== attachment.id) continue;
             try {
               await options.engine.observe({
                 id: options.newId(),

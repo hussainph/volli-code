@@ -25,10 +25,52 @@ afterEach(() => {
 
 function boot(environment?: string): ExperimentalSettings {
   ctx ??= openTestDb();
-  const settings = new ExperimentalSettings(ctx.db, environment, () => 123);
+  const settings = new ExperimentalSettings(ctx.db, environment, "dev", () => 123);
   restore = installExperimentalSettings(settings);
   return settings;
 }
+
+describe.each(["dev", "canary", "stable"] as const)("%s experimental settings", (kind) => {
+  it("gates stored intent and writes by build, preserving canary intent", async () => {
+    ctx = openTestDb();
+    const raw = '{"cloud":true,"future":true}';
+    setAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY, raw, 1);
+    const settings = new ExperimentalSettings(ctx.db, undefined, kind);
+    restore = installExperimentalSettings(settings);
+    expect(isExperimentEnabled("cloud")).toBe(kind !== "stable");
+    if (kind === "stable") {
+      expect(readExperiments()).toEqual({
+        cloud: { enabled: false, source: "default", visible: false },
+      });
+      for (const enabled of [true, false]) {
+        await expect(setExperiment("cloud", enabled)).rejects.toThrow(
+          "Experiment cloud is unavailable on stable builds",
+        );
+      }
+      expect(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)).toBe(raw);
+      expect(new ExperimentalSettings(ctx.db, undefined, "canary").isEnabled("cloud")).toBe(true);
+    } else {
+      expect(readExperiments().cloud.visible).not.toBe(false);
+      await setExperiment("cloud", false);
+      expect(isExperimentEnabled("cloud")).toBe(false);
+      await setExperiment("cloud", true);
+      expect(isExperimentEnabled("cloud")).toBe(true);
+    }
+  });
+
+  it("keeps environment opt-ins visible, enabled and locked on every build", async () => {
+    ctx = openTestDb();
+    setAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY, '{"cloud":false}', 1);
+    vi.stubEnv("VOLLI_EXPERIMENTAL", "cloud");
+    restore = installExperimentalSettings(
+      new ExperimentalSettings(ctx.db, process.env["VOLLI_EXPERIMENTAL"], kind),
+    );
+    expect(isExperimentEnabled("cloud")).toBe(true);
+    expect(readExperiments()).toEqual({ cloud: { enabled: true, source: "environment" } });
+    await expect(setExperiment("cloud", false)).rejects.toThrow("set by environment");
+    expect(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)).toBe('{"cloud":false}');
+  });
+});
 
 describe("experimental host settings", () => {
   it("defaults off before and after boot, without writing anything", () => {
@@ -48,7 +90,7 @@ describe("experimental host settings", () => {
     ctx!.db.close();
     const reopened = openRawDb(ctx!.dbPath);
     try {
-      const restarted = new ExperimentalSettings(reopened, undefined);
+      const restarted = new ExperimentalSettings(reopened, undefined, "dev");
       expect(restarted.isEnabled("cloud")).toBe(true);
       await restarted.set("cloud", false);
     } finally {
@@ -56,7 +98,7 @@ describe("experimental host settings", () => {
     }
     const third = openRawDb(ctx!.dbPath);
     try {
-      expect(new ExperimentalSettings(third, undefined).isEnabled("cloud")).toBe(false);
+      expect(new ExperimentalSettings(third, undefined, "dev").isEnabled("cloud")).toBe(false);
     } finally {
       third.close();
     }
@@ -65,9 +107,9 @@ describe("experimental host settings", () => {
   it("ignores unknown stored ids and corrupt storage", () => {
     ctx = openTestDb();
     setAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY, '{"future":true,"cloud":true}', 1);
-    expect(new ExperimentalSettings(ctx.db, undefined).isEnabled("cloud")).toBe(true);
+    expect(new ExperimentalSettings(ctx.db, undefined, "dev").isEnabled("cloud")).toBe(true);
     setAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY, "{", 2);
-    expect(new ExperimentalSettings(ctx.db, undefined).snapshot().cloud).toEqual({
+    expect(new ExperimentalSettings(ctx.db, undefined, "dev").snapshot().cloud).toEqual({
       enabled: false,
       source: "default",
     });
@@ -95,7 +137,7 @@ describe("experimental host settings", () => {
     await expect(setExperiment("cloud", false)).rejects.toThrow("set by environment");
     expect(getAppState(ctx.db, EXPERIMENTS_APP_STATE_KEY)).toBe('{"cloud":false}');
     expect(
-      new ExperimentalSettings(ctx.db, process.env["VOLLI_EXPERIMENTAL"]).isEnabled("cloud"),
+      new ExperimentalSettings(ctx.db, process.env["VOLLI_EXPERIMENTAL"], "dev").isEnabled("cloud"),
     ).toBe(false);
   });
 
@@ -143,7 +185,7 @@ describe("experimental host settings", () => {
   });
 
   it("reads defaults in degraded mode but refuses writes", async () => {
-    restore = installExperimentalSettings(new ExperimentalSettings(null, undefined));
+    restore = installExperimentalSettings(new ExperimentalSettings(null, undefined, "dev"));
     expect(isExperimentEnabled("cloud")).toBe(false);
     await expect(setExperiment("cloud", true)).rejects.toThrow("storage is unavailable");
   });
@@ -163,12 +205,12 @@ describe("experimental host settings", () => {
     const saving = setExperiment("cloud", true);
     expect(ctx!.db.inTransaction).toBe(false);
     expect(isExperimentEnabled("cloud")).toBe(true);
-    expect(new ExperimentalSettings(ctx!.db, undefined).isEnabled("cloud")).toBe(true);
+    expect(new ExperimentalSettings(ctx!.db, undefined, "dev").isEnabled("cloud")).toBe(true);
     release();
     await rejected;
     await saving;
     expect(isExperimentEnabled("cloud")).toBe(true);
-    expect(new ExperimentalSettings(ctx!.db, undefined).isEnabled("cloud")).toBe(true);
+    expect(new ExperimentalSettings(ctx!.db, undefined, "dev").isEnabled("cloud")).toBe(true);
   });
 
   it("serializes concurrent settings commands and publishes the last committed value", async () => {
@@ -180,7 +222,7 @@ describe("experimental host settings", () => {
     expect(on.cloud.enabled).toBe(true);
     expect(off.cloud.enabled).toBe(false);
     expect(isExperimentEnabled("cloud")).toBe(false);
-    expect(new ExperimentalSettings(ctx!.db, undefined).isEnabled("cloud")).toBe(false);
+    expect(new ExperimentalSettings(ctx!.db, undefined, "dev").isEnabled("cloud")).toBe(false);
   });
 
   it("keeps the last committed value when persistence fails", async () => {
@@ -190,7 +232,7 @@ describe("experimental host settings", () => {
       BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
     await expect(setExperiment("cloud", false)).rejects.toThrow("disk full");
     expect(isExperimentEnabled("cloud")).toBe(true);
-    expect(new ExperimentalSettings(ctx!.db, undefined).isEnabled("cloud")).toBe(true);
+    expect(new ExperimentalSettings(ctx!.db, undefined, "dev").isEnabled("cloud")).toBe(true);
   });
 });
 

@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   ACTIVITY_METADATA_KEY,
+  DEFAULT_CODE_MODE_LIMITS,
+  sanitizeMcpToolDefinition,
   makeAgentError,
   MUTATION_PLAN_CONTRACT,
   readSessionOrigin,
@@ -1300,6 +1302,126 @@ describe("agent command service", () => {
         ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
       }),
     ).not.toHaveProperty("data.agentSurface");
+  });
+
+  it("identifies every frozen route and only minimal MCP server identities through the stored input codec", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "project-one", path: "/repo/volli" }));
+    const engine = createTestSessionEngine(ctx.db);
+    const mcpTools = ["paper", "files"].map((serverId) => {
+      const result = sanitizeMcpToolDefinition({
+        serverId,
+        serverName: serverId,
+        toolName: "shot",
+        description: "Frozen description",
+        inputSchema: { type: "object", properties: {} },
+      });
+      if (!result.ok) throw new Error(result.reason);
+      return result.definition;
+    });
+    const [paper, files] = mcpTools;
+    if (paper === undefined || files === undefined) throw new Error("missing definitions");
+    for (const codeMode of [true, false]) {
+      const sessionId = codeMode ? "route-session" : "direct-session";
+      insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
+      const tools = [
+        "read",
+        "edit",
+        "write",
+        "ask_user",
+        paper.providerName,
+        files.providerName,
+        ...(codeMode ? ["codemode" as const] : []),
+      ] as const;
+      await engine.getOrRecordSessionInput({
+        sessionId,
+        input: {
+          kind: "tool-surface",
+          tools,
+          mcpTools,
+          ...(codeMode
+            ? {
+                codeMode: {
+                  limits: DEFAULT_CODE_MODE_LIMITS,
+                  routes: {
+                    read: "both",
+                    edit: "code",
+                    write: "hidden",
+                    ask_user: "direct",
+                    [paper.providerName]: "deferred",
+                    [files.providerName]: "code",
+                  },
+                },
+              }
+            : {}),
+        },
+        provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+      });
+      const before = await engine.listEvents({ sessionId });
+      const service = createAgentCommandService({
+        db: ctx.db,
+        appVersion: "0.2.2",
+        sessionEngine: engine,
+      });
+      const response = await service.execute({
+        v: 1,
+        cmd: "identify",
+        args: { agentSurface: true },
+        ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+      });
+      expect(response).toMatchObject({
+        ok: true,
+        data: {
+          agentSurface: {
+            role: "project",
+            tools,
+            routes: codeMode
+              ? {
+                  read: "both",
+                  edit: "code",
+                  write: "hidden",
+                  ask_user: "direct",
+                  [paper.providerName]: "deferred",
+                  [files.providerName]: "code",
+                  codemode: "direct",
+                }
+              : Object.fromEntries(tools.map((tool) => [tool, "direct"])),
+            mcpServerIds: { [paper.providerName]: "paper", [files.providerName]: "files" },
+          },
+        },
+      });
+      expect(JSON.stringify(response)).not.toContain("Frozen description");
+      expect(JSON.stringify(response)).not.toContain("inputSchema");
+      expect(await engine.listEvents({ sessionId })).toEqual(before);
+    }
+  });
+
+  it("leaves Sessions without a recorded birth surface unknown and never backfills on identify", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "project-one", path: "/repo/volli" }));
+    const sessionId = "legacy-session";
+    insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
+    const engine = createTestSessionEngine(ctx.db);
+    await engine.getOrRecordSessionInput({
+      sessionId,
+      input: { kind: "runtime-brief", text: "Legacy brief" },
+      provenance: { source: { kind: "system", id: "test", detail: null }, venue: null },
+    });
+    const before = await engine.listEvents({ sessionId });
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "0.2.2",
+      sessionEngine: engine,
+    });
+    const response = await service.execute({
+      v: 1,
+      cmd: "identify",
+      args: { agentSurface: true },
+      ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+    });
+    expect(response.ok).toBe(true);
+    expect(response).not.toHaveProperty("data.agentSurface");
+    expect(await engine.listEvents({ sessionId })).toEqual(before);
   });
 
   // The `--dry-run` preflight asks whether this build understands a preview at
@@ -2798,6 +2920,7 @@ describe("agent command service", () => {
         latestAttachment: { origin: null, reattached: false },
         latestTurn: null,
         pendingSubagents: [],
+        pendingQuestions: [],
       },
     });
     // Full UUIDs are not public session handles — only the short id resolves.

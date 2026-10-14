@@ -109,3 +109,14 @@ export function sessionCommandFor(projectId: string | null): SessionCommandDoor 
   }
   return (input) => client.session.command.mutate(input);
 }
+
+/** Saved images belong to the Session's host, never This Mac by fallback. */
+export function sessionPictureFor(
+  projectId: string | null,
+): RemoteSessionClient["session"]["picture"]["query"] {
+  const owner = remoteOwnerOf(projectId);
+  if (owner === null) return (input) => sessionRpcClient().session.picture.query(input);
+  const client = remoteTransports?.clientFor(projectId!) ?? null;
+  if (client === null) return () => Promise.reject(new Error(hostNotConnected(owner.hostName)));
+  return (input) => client.session.picture.query(input);
+}

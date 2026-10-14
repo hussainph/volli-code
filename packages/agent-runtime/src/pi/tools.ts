@@ -45,7 +45,8 @@ import {
   type ExecutionToolContext,
   type JsonValue,
 } from "./harness-env";
-import { Type, type TSchema } from "@earendil-works/pi-ai";
+import { Type, type TSchema, type Static } from "@earendil-works/pi-ai";
+import { Check, Errors } from "typebox/value";
 import { httpStatusLine, WebFetchRefusal } from "../web/safe-fetch";
 import { WebSearchRefusal } from "../web/search";
 import {
@@ -58,6 +59,8 @@ import {
   MCP_RESULT_MAX_BYTES,
   MCP_RESULT_MAX_IMAGES,
   parseTodoList,
+  readInteractionAnswers,
+  promptId,
   sessionToolBindings,
   todoListMarkdown,
   verbEntry,
@@ -87,6 +90,8 @@ import type {
   RuntimeMcpContent,
   RuntimeMcpPort,
   RuntimeVerbResult,
+  RuntimeAskUserQuestion,
+  RuntimeAskUserRequest,
   RuntimeWebDocument,
   RuntimeWebSearchResults,
   SessionInteractionResolution,
@@ -319,7 +324,7 @@ function createBoundTool(
     case "execute":
       return createTool(binding.tool, env, output);
     case "ask_user":
-      return createAskUserTool(binding.port, spec.signal);
+      return createAskUserTool(binding.port, spec.signal, spec.tools.askUserQuestions);
     case "request_secret":
       return createRequestSecretTool(binding.port, spec.signal);
     case "web_fetch":
@@ -855,6 +860,55 @@ const askUserSchema = Type.Object({
   ),
 });
 
+// This birth marker is not shipped yet: owner review made its declaration
+// questions-only. Once released, changing these bytes needs a new marker.
+const askUserQuestionsSchema = Type.Object(
+  {
+    questions: Type.Array(
+      Type.Object(
+        {
+          question: Type.String({
+            description: "The decision to ask, in one or two short sentences.",
+          }),
+          choices: Type.Array(Type.String(), {
+            maxItems: 5,
+            description:
+              "2-5 short, distinct choices. Use an empty array for free text. The person can always type another answer.",
+          }),
+        },
+        { additionalProperties: false },
+      ),
+      { minItems: 1, maxItems: 4, description: "1-4 related decisions blocking the same step." },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const ASK_USER_QUESTIONS_DESCRIPTION = [
+  "Ask the person only for related decisions that genuinely block the same step and are theirs to make, with no defensible default.",
+  "Use 1-4 short questions with choices, or an empty choices array for prose. They can always type another answer.",
+  "Do not ask what you can find in the workspace, narrate progress, confirm assigned work, or pad a batch. The turn is blocked until they answer.",
+].join(" ");
+
+function askUserRequest(
+  toolCallId: string,
+  params: Static<typeof askUserQuestionsSchema>,
+): RuntimeAskUserRequest {
+  for (const [index, question] of params.questions.entries()) {
+    if (!question.question.trim())
+      throw new Error(`ask_user: question ${index + 1} needs question text.`);
+    if (question.choices.length === 1)
+      throw new Error(
+        `ask_user: question ${index + 1} needs 2-5 choices, or an empty array for free text.`,
+      );
+    const choices = question.choices.map((choice) => choice.trim());
+    if (choices.some((choice) => !choice) || new Set(choices).size !== choices.length) {
+      throw new Error(`ask_user: question ${index + 1} needs non-empty, distinct choices.`);
+    }
+  }
+  return { toolCallId, question: params.questions[0]!.question, questions: params.questions };
+}
+
 /** Ask a person and block until they answer, exactly as the Session spec supplies it. */
 export type AskUserPort = NonNullable<SessionRuntimeSpec["askUser"]>;
 
@@ -881,6 +935,61 @@ function answerText(resolution: SessionInteractionResolution): string {
   return lines.join("\n\n");
 }
 
+/** Read every answer by its prompt id, never by position or a guessed default. */
+function questionsAnswerText(
+  resolution: SessionInteractionResolution,
+  questions: readonly RuntimeAskUserQuestion[],
+): string {
+  // These positional ids are durable. Keep them in step with the adapter,
+  // including the choice: prefix that separates answers from verdict ids.
+  const prompts = questions.map((question, index) => ({
+    id: promptId(index),
+    label: question.question,
+    detail: null,
+    options: question.choices.map((choice, choiceIndex) => ({
+      id: `choice:${choiceIndex}`,
+      label: choice,
+      description: null,
+    })),
+    multiple: false,
+    custom: true,
+  }));
+  const first = prompts[0]!;
+  // Flat historical resolutions answer only the first prompt. The shared
+  // reader never copies that answer into the later questions.
+  const answers = readInteractionAnswers(
+    {
+      id: "ask_user",
+      attachmentId: "",
+      kind: "question",
+      title: first.label,
+      detail: null,
+      options: first.options,
+      multiple: false,
+      native: { id: null, detail: null },
+      prompts,
+    },
+    resolution,
+  );
+  return JSON.stringify(
+    questions.map((question, index) => {
+      const answer = answers.find((one) => one.promptId === promptId(index));
+      if (answer === undefined)
+        return { question: question.question, answer: null, unanswered: true };
+      const reply = answer.response?.trim() ?? "";
+      const choices = answer.optionIds.map(
+        (id) => prompts[index]!.options.find((option) => option.id === id)?.label,
+      );
+      // Never invent a label for an unknown or empty choice. Dismissal is named
+      // explicitly, while a typed alternative is the person's answer verbatim.
+      if (!reply && (choices.length === 0 || choices.some((choice) => choice === undefined))) {
+        return { question: question.question, answer: null, unanswered: true };
+      }
+      return { question: question.question, answer: reply ? answer.response : choices.join(", ") };
+    }),
+  );
+}
+
 /**
  * Let the model stop and ask, for as long as it takes.
  *
@@ -901,14 +1010,53 @@ function answerText(resolution: SessionInteractionResolution): string {
  */
 export function createAskUserTool(
   askUser: AskUserPort,
+  signal: AbortSignal | undefined,
+  questions: true,
+): AgentTool<typeof askUserQuestionsSchema, undefined>;
+export function createAskUserTool(
+  askUser: AskUserPort,
   signal?: AbortSignal,
-): AgentTool<typeof askUserSchema, undefined> {
+  questions?: undefined,
+): AgentTool<typeof askUserSchema, undefined>;
+export function createAskUserTool(
+  askUser: AskUserPort,
+  signal: AbortSignal | undefined,
+  questions: true | undefined,
+): AgentTool<typeof askUserSchema | typeof askUserQuestionsSchema, undefined>;
+export function createAskUserTool(
+  askUser: AskUserPort,
+  signal?: AbortSignal,
+  questions?: true,
+): AgentTool<typeof askUserSchema | typeof askUserQuestionsSchema, undefined> {
   return {
     name: ASK_USER_TOOL_NAME,
     label: "ask",
-    description: ASK_USER_DESCRIPTION,
-    parameters: askUserSchema,
-    async execute(toolCallId, params, callSignal): Promise<AgentToolResult<undefined>> {
+    description: questions === true ? ASK_USER_QUESTIONS_DESCRIPTION : ASK_USER_DESCRIPTION,
+    parameters: questions === true ? askUserQuestionsSchema : askUserSchema,
+    async execute(toolCallId, input, callSignal): Promise<AgentToolResult<undefined>> {
+      if (questions === true && !Check(askUserQuestionsSchema, input)) {
+        const errors = Errors(askUserQuestionsSchema, input)
+          .map((error) => `call${error.instancePath}: ${error.message}`)
+          .join("; ");
+        throw new Error(`ask_user: invalid fields: ${errors}`);
+      }
+      let request: RuntimeAskUserRequest;
+      if (questions === true) {
+        request = askUserRequest(toolCallId, input as Static<typeof askUserQuestionsSchema>);
+      } else {
+        if ("questions" in input && input.questions !== undefined) {
+          throw new Error("ask_user: this Session supports only the single-question fields.");
+        }
+        // Do not normalize historical calls: their request and answer stay exact.
+        const params = input as Static<typeof askUserSchema>;
+        request = {
+          toolCallId,
+          question: params.question,
+          options: params.options,
+          multiple: params.multiple,
+          allowOther: params.allowOther,
+        };
+      }
       const withdrawn = new AbortController();
       const abandon = (): void => withdrawn.abort();
       const signals = [signal, callSignal].filter((one) => one !== undefined);
@@ -917,17 +1065,19 @@ export function createAskUserTool(
         else one.addEventListener("abort", abandon, { once: true });
       }
       try {
-        const resolution = await askUser(
-          {
-            toolCallId,
-            question: params.question,
-            options: params.options,
-            multiple: params.multiple,
-            allowOther: params.allowOther,
-          },
-          withdrawn.signal,
-        );
-        return { content: [{ type: "text", text: answerText(resolution) }], details: undefined };
+        const resolution = await askUser(request, withdrawn.signal);
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                request.questions === undefined
+                  ? answerText(resolution)
+                  : questionsAnswerText(resolution, request.questions),
+            },
+          ],
+          details: undefined,
+        };
       } finally {
         for (const one of signals) one.removeEventListener("abort", abandon);
       }

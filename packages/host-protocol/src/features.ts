@@ -44,6 +44,8 @@ export const HOST_FEATURE_OPERATIONS = {
    * it is there to read. Its own name because `sessions` is frozen (VC-669).
    */
   "sessions.history": ["session.history"],
+  /** Saved transcript pictures, in bounded chunks. Existing feature grants remain frozen. */
+  "sessions.pictures": ["session.picture"],
   /** The socket's Session reads, scoped to the connection's Workspace (VC-663, D4). */
   "session.read": ["session.list", "session.show", "session.peek", "session.answer"],
   /**

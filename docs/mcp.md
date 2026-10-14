@@ -20,10 +20,16 @@ Reattaching a Session replays that exact record or fails; it never re-derives
 one. So:
 
 - Installing a server, enabling it, or selecting more of its tools changes what
-  the **next Session created** is handed. It changes nothing about any Session
-  that already exists, including the one that made the call.
+  a **new root Session** is handed: one started with `session_start`, or from a
+  fresh Board Session. It changes nothing about any Session that already exists,
+  including the one that made the call.
+- A **delegated helper** is not a new root Session. `session_delegate` hands the
+  helper its parent's frozen tools, MCP tools included, so a helper delegated from
+  a Session born before the install does not have the new tools. Start a new
+  Session before delegating work that needs them.
 - Disabling a server or deselecting a tool likewise cannot take a tool away from
-  a Session that already has it.
+  a Session that already has it, and a helper delegated from that Session still
+  inherits it.
 - **Deleting** a server is the exception, and it is destructive in a way the
   others are not. A Session born holding one of its tools needs that server's
   transport in order to reattach. With the configuration gone, reattachment
@@ -588,8 +594,9 @@ audit record contains the transport needed to do it — and reattachment works
 again.
 
 To avoid this entirely, prefer **`server_disable`**. It keeps the configuration, so
-existing Sessions still reattach, while Sessions created afterwards are not
-offered the tools. That is what most callers actually mean.
+existing Sessions still reattach, while new root Sessions are not offered the
+tools. A helper delegated from a Session that already holds them still inherits
+them. That is what most callers actually mean.
 
 ## Where installs are recorded
 
@@ -706,8 +713,8 @@ A server is **large** when it has more than 20 tools
 (`LARGE_MCP_SERVER_TOOLS`) or its declarations are estimated past 3,000 tokens
 (`LARGE_MCP_SERVER_TOKENS`, at four characters a token). A large server's tools
 are routed `deferred` **whatever the model's mode**: a Session whose mode is
-`off` still gets `codemode`, for its large servers alone, with every other tool
-declared as before. Smaller servers follow the mode — `both` declares and lists
+`off` still gets `codemode`, with every other tool declared as before and its
+callable tools also available from programs. Smaller servers follow the mode — `both` declares and lists
 them, `only` routes each server's tools `code` as one group. Measured at 120
 tools (o200k, `bench/codemode/prompt-cost.bench.test.ts`): 17,297 declaration
 tokens declared directly against 2,217 deferred.
@@ -719,6 +726,64 @@ untrusted-content markers. Routes are frozen with the Session like the tool
 definitions, so changing the setting, or a server growing past the threshold,
 changes only Sessions created afterwards. With the Code Mode switch off, no new
 Session gets routes at all and every tool is declared, as before.
+
+### Programs and images (VC-748)
+
+New Sessions with `codemode` can call every held tool except `execute` (wire
+name `bash`), `ask_user`, `request_secret`, `todo_write`, `shell_start`,
+`shell_output` and `shell_kill`; `codemode` cannot call itself. This applies
+in `off` with a large MCP server, `both` and `only`. Each nested call still
+uses the direct-call checks. Model defaults do not change.
+
+Birth routing and read-time admission are deliberately separate:
+`defaultToolRoute` excludes bash for new records; `isCodeCallable` honors a
+legacy bash route of `both` or `code`. Safety exclusions apply even to damaged
+records. Existing Sessions keep their recorded routes, declared array and
+frozen descriptions. New records carry `descriptionVersion: 2`; records
+without it keep the pre-0.2.2 wording, output declarations and image-omission
+behavior. This birth marker stays durable on the host but is scrubbed from
+renderer and public projections; it does not widen the public protocol. N−1
+ignores it. Under `only`, a group containing bash stays declared whole. Screenshots, tab holds and verbs newly callable in this release also
+stay `both`, and keep their groups declared whole: 0.2.1 and 0.2.2-canary.1
+cannot call them from programs but can still call them directly. This ceiling
+can be removed when the N−1 floor passes this release.
+
+Nested MCP results are shaped as
+`{ text, structuredContent?, isError, images, omittedImages }`. `images`
+contains opaque handles, not image bytes; `omittedImages` counts images the
+program could not obtain. Browser screenshots also carry handles. The output
+schemas rendered by `describeTool()` give each tool's exact shape.
+
+A program attaches a picture with `image()`, or by returning the result that
+holds it. Image bytes remain host-side, outside the QuickJS heap:
+
+```js
+const shot = await tools.browser_screenshot({ tabId: "tab-1" }); // a tab id from browser_tabs
+image(shot.images[0]);        // attaches the first picture
+image(shot.images[0].handle); // attaches the same picture, given its handle string
+return shot;                  // attaches every picture in the result
+```
+
+`text(shot)` prints the result as text and attaches no picture. A Session born
+before Volli 0.2.2 cannot attach pictures from a program; start a new Session to
+use them.
+
+Images follow text, in emission/return order, including repeated emissions,
+with at most 8 images and 16 MiB of base64 data per run (the direct MCP result
+bounds). The header names images left out, including capture omissions restored
+from the replay journal. The existing 4 MiB replay journal also counts held
+image payloads; a replay stops explicitly rather than repeating a completed
+call whose image was too large to keep. Each untrusted image has a text line
+naming its source call and warning that it is third-party content, in addition
+to the run's untrusted envelope. The transcript binds that host-authored
+framing to the picture as a distinct caption; program-printed text cannot
+create a caption. Model image-input support, transcript persistence
+and storage follow the direct-image path, not a second policy. Transcript
+images use the existing screenshot store (400 pictures / 30 days); bounded
+Session-owned picture reads resolve them without placing base64 into activity
+frames. Reload and replay retain references, including images emitted before
+a program error. An older card sees a named image fallback instead of corrupt
+base64; reopening in a newer build displays the picture while it is retained.
 
 The user guide is `apps/docs/src/content/docs/guides/code-mode.mdx`; the design
 and the measurements are `docs/research/code-mode-vc-471.md`.

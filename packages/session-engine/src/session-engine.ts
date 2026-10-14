@@ -470,6 +470,53 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             return event;
           }
           const priorReceipts = transaction.listReceipts(observation.receipt.commandId);
+          const accepted = priorReceipts.find((receipt) => receipt.status === "accepted");
+          if (accepted?.status === "accepted" && observation.receipt.status === "accepted") {
+            // Acceptance belongs to the routed command, not the adapter's clock.
+            // Old Pi builds returned wall time live and marker time on recovery,
+            // producing different durable ids for the SAME acceptance. Keep the
+            // first stamp and event; never turn a refusal or changed result into
+            // acceptance, and still validate the adapter and attachment route.
+            assertReceiptMatchesCommand(command, session, observation.receipt);
+            assertAdapterReceiptRoute(command, observation);
+            // Only the frozen timestamp-derived Pi receipt identity is a
+            // legacy alias. An arbitrary new id remains conflicting evidence,
+            // even when its outcome and timestamp happen to be identical.
+            if (
+              command.route!.adapterId !== "pi" ||
+              accepted.id !== `native-receipt:${command.id}:accepted:${accepted.acceptedAt}` ||
+              observation.receipt.id !==
+                `native-receipt:${command.id}:accepted:${observation.receipt.acceptedAt}`
+            ) {
+              throw new SessionEngineConflictError(
+                `Receipt ${observation.receipt.id} is not a legacy Pi acceptance replay`,
+              );
+            }
+            if (
+              !sameCommandReceiptOutcome(accepted, {
+                ...observation.receipt,
+                id: accepted.id,
+                acceptedAt: accepted.acceptedAt,
+              })
+            ) {
+              throw new SessionEngineConflictError(
+                `Command ${command.id} was already accepted differently`,
+              );
+            }
+            const event = receiptEventFor(
+              transaction.listEvents({ sessionId: session.id }),
+              accepted.id,
+            );
+            if (!event) {
+              throw new SessionEngineConflictError(`Receipt ${accepted.id} has no Session event`);
+            }
+            if ((event.attachmentId ?? null) !== attachmentId) {
+              throw new SessionEngineConflictError(
+                `Receipt ${observation.receipt.id} does not match accepted attachment evidence`,
+              );
+            }
+            return event;
+          }
           const hasTerminalReceipt = priorReceipts.some(
             (receipt) => receipt.status === "rejected" || receipt.status === "completed",
           );

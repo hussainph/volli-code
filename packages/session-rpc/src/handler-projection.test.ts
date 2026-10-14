@@ -138,6 +138,7 @@ const SAMPLE_INPUTS: {
   "hostModels.setPickerView": "all",
   "session.snapshot": SESSION,
   "session.history": { ...SESSION, before: 2 },
+  "session.picture": { ...SESSION, pictureId: "picture" },
   "session.projection": SESSION,
   "session.subscribe": SESSION,
   "session.subscribeQueue": SESSION,

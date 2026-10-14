@@ -15,18 +15,23 @@
  * A failed read is kept off and logged, never toasted. Nobody asked for this
  * read — it is the app checking whether to draw something — so there is no
  * person waiting on it and nothing a toast could ask them to do (CLAUDE.md's
- * one exception to surfacing failures). Settings → Experimental reads the
- * registry itself and reports its own failures.
+ * one exception to surfacing failures). Opening Settings retries a failed boot
+ * read; Settings → Experimental reports its own page-read failures.
  */
 import { create } from "zustand";
-import { errorMessage, type ExperimentId, type ExperimentSnapshot } from "@volli/shared";
+import {
+  errorMessage,
+  EXPERIMENTS,
+  type ExperimentId,
+  type ExperimentSnapshot,
+} from "@volli/shared";
 
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 
 export interface ExperimentsState {
   /** The host's last answer; `null` until one lands. */
   snapshot: ExperimentSnapshot | null;
-  /** Reads the registry once; later calls share the first read and its answer. */
+  /** Shares an in-flight or successful read; a failed read can be retried. */
   ensure(): Promise<void>;
   /** Adopts a snapshot the host just answered (Settings → Experimental's saves). */
   receive(snapshot: ExperimentSnapshot): void;
@@ -49,7 +54,9 @@ export function createExperimentsStore(
         } catch (error) {
           console.warn("[volli] Couldn't read experiments:", errorMessage(error));
         }
-      })();
+      })().finally(() => {
+        if (get().snapshot === null) pending = null;
+      });
       return pending;
     },
     receive(snapshot) {
@@ -60,6 +67,11 @@ export function createExperimentsStore(
 
 /** The app's one experiments store. */
 export const useExperimentsStore = createExperimentsStore();
+
+/** Settings visibility comes from the host, never the client's build or stored intent. */
+export function hasVisibleExperiments(snapshot: ExperimentSnapshot | null): boolean {
+  return snapshot !== null && EXPERIMENTS.some(({ id }) => snapshot[id].visible !== false);
+}
 
 /** Whether a flag is on, per the host's last answer. Off until one lands. */
 export function isExperimentOn(snapshot: ExperimentSnapshot | null, id: ExperimentId): boolean {
