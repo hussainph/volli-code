@@ -18,6 +18,9 @@ import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   shortSessionId,
+  verbToolsOf,
+  verbEntry,
+  isSessionToolId,
   type McpToolDefinition,
   type ObservabilitySink,
   type SessionEvent,
@@ -53,6 +56,7 @@ import {
 } from "./index";
 import { resolveHostToolSurface } from "./host-capabilities";
 import { wireSessionRuntime } from "../session-services";
+import { effectiveToolSurface, declarationToolSurface, additiveToolRefresh } from "./tool-refresh";
 
 export interface RuntimeAssemblyOptions {
   dbHandle: DbHandle;
@@ -95,28 +99,12 @@ export interface RuntimeAssemblyOptions {
 export function recordedToolSurface(
   events: readonly SessionEvent[],
 ): readonly SessionToolId[] | null {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.tools;
-    }
-  }
-  return null;
+  return effectiveToolSurface(events)?.tools ?? null;
 }
 
 /** Exact sanitized MCP definitions frozen beside the dynamic tool names. */
 export function recordedMcpTools(events: readonly SessionEvent[]): readonly McpToolDefinition[] {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.mcpTools ?? [];
-    }
-  }
-  return [];
+  return effectiveToolSurface(events)?.mcpTools ?? [];
 }
 
 export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
@@ -195,6 +183,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                 // At birth, freeze the wire spelling too. The old mcp_* names
                 // remain available only to Sessions whose record predates this marker.
                 mcpManagementNames: "server",
+                refreshDescriptions: true,
                 // Declaration changes apply only at new birth, never on legacy backfill.
                 ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
@@ -218,6 +207,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
   const piSessionsDirectory = join(dataDir, "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
+    sessionEngine !== null &&
     piModelAccess !== null &&
     sessionToolSurface !== null &&
     sessionDelegation !== null
@@ -344,9 +334,8 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
               : (scope) => {
                   const host = new McpSessionHost({
                     workspacePath: scope.workspacePath,
-                    // Snapshot only the configuration the frozen surface needs.
-                    // Current enablement selects new Sessions; a missing record
-                    // refuses attachment instead of advertising an unusable tool.
+                    // Retained names survive missing configuration; calls below
+                    // return a named unavailable result for removed servers.
                     servers: serversForFrozenMcpTools(
                       mcpSettings.list(scope.projectId),
                       scope.mcpTools,
@@ -379,8 +368,92 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     port: host.rawPort,
                     close: () => host.close(),
                   });
-                  return { call: host.routed(bound.call).call, dispose: bound.dispose };
+                  const routed = host.routed(bound.call);
+                  return {
+                    call: (request, signal, ask) => {
+                      if (
+                        !mcpSettings
+                          .list(scope.projectId)
+                          .some((server) => server.id === request.serverId)
+                      ) {
+                        return Promise.resolve({
+                          content: [
+                            {
+                              type: "text" as const,
+                              text: `MCP tool ${request.toolName} is unavailable: its server was removed.`,
+                            },
+                          ],
+                          isError: true,
+                        });
+                      }
+                      return routed.call(request, signal, ask);
+                    },
+                    dispose: bound.dispose,
+                  };
                 },
+          refreshRuntimeContext: async (sessionId, { trigger, model }) => {
+            const projection = await sessionEngine.getSession({ sessionId });
+            const events = await sessionEngine.listEvents({ sessionId });
+            const current = effectiveToolSurface(events);
+            const latestRefresh = events.findLast(
+              (event) => event.payload.kind === "session.tools.refreshed",
+            )?.payload;
+            // Do not overwrite a newer build's unknown additions on downgrade.
+            if (
+              latestRefresh?.kind === "session.tools.refreshed" &&
+              !latestRefresh.surface.tools.every(isSessionToolId)
+            )
+              return null;
+            if (projection === null || current === null) return null;
+            const session = projection.session;
+            const parentId = session.role === "subagent" ? session.parentSessionId : null;
+            const parent =
+              parentId === null
+                ? null
+                : effectiveToolSurface(await sessionEngine.listEvents({ sessionId: parentId }));
+            // Delegates inherit their parent's effective definitions, never a
+            // project selection that the parent has not acquired yet.
+            const mcpTools =
+              parentId === null
+                ? (sessionToolSurface.resolveMcp?.(session.projectId) ?? [])
+                : (parent?.mcpTools ?? []);
+            const birth = codeMode.birth(model, mcpTools);
+            const grants = verbToolsOf(current.tools).filter(
+              (tool) => verbEntry(tool)?.retired === undefined,
+            );
+            const tools = sessionToolSurface.resolve(
+              session.role,
+              session.role === "subagent" ? [] : grants,
+              parentId === null ? undefined : (parent?.tools ?? []),
+              mcpTools,
+              birth,
+              await sessionToolSurface.resolveClassify?.(session.projectId),
+            );
+            const candidateCodeMode = codeMode.surfaceFor(birth, tools, mcpTools);
+            const candidate = {
+              kind: "tool-surface" as const,
+              tools,
+              ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
+              ...(mcpTools.length === 0 ? {} : { mcpTools }),
+              ...(candidateCodeMode === undefined ? {} : { codeMode: candidateCodeMode }),
+            };
+            const refresh = additiveToolRefresh(
+              current,
+              candidate,
+              trigger,
+              declarationToolSurface(events) ?? current,
+            );
+            await sessionEngine.recordToolRefresh({
+              sessionId,
+              trigger,
+              ...refresh,
+              provenance: { source: { kind: "system", id: "pi-runtime", detail: null }, venue },
+            });
+            // Return durable desired bindings even after a prior adoption
+            // failed. The runtime compares against its adopted spec to no-op.
+            const context = await options.resolveRuntimeContext(sessionId);
+            return context === null ? null : { ...context, model };
+          },
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
           // the tool array; this live answer supplies closures only. Missing a

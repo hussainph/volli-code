@@ -4,7 +4,7 @@
 // validation and shipped provider-tool builder without a model, tool execution,
 // Electron, credentials, a sandbox worker or network access.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -40,11 +40,22 @@ async function attach(step) {
       ids: { next: unused },
     });
     const events = await engine.listEvents({ sessionId: step.sessionId });
-    const record = events.find(
+    const projection = await engine.getSession({ sessionId: step.sessionId });
+    const birth = events.find(
       ({ payload }) =>
         payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface",
     )?.payload.input;
-    if (!record?.codeMode) throw new Error("N−1 lost the durable Code Mode birth record");
+    if (!birth?.codeMode) throw new Error("N−1 lost the durable Code Mode birth record");
+    // Use this build's production epoch reader when it has shipped. Pre-feature
+    // readers have only the immutable birth and legitimately degrade to it.
+    const readerPath = join(
+      process.env.VOLLI_N1_TREE,
+      process.env.VOLLI_N1_HOST_SRC,
+      "session-runtime/tool-refresh.ts",
+    );
+    const reader = existsSync(readerPath) ? await import(pathToFileURL(readerPath).href) : null;
+    const record = reader?.effectiveToolSurface(events) ?? birth;
+    const declaration = reader?.declarationToolSurface(events) ?? birth;
     let result;
     const browser = Object.fromEntries(
       [
@@ -72,6 +83,8 @@ async function attach(step) {
         model: { providerId: "anthropic", modelId: "fixture", reasoningLevel: "off" },
         toolSurface: record.tools,
         codeMode: record.codeMode,
+        declarationSurface: declaration,
+        refreshDescriptions: record.refreshDescriptions,
         promptResources: [],
       }),
       resolveWebPorts: () => ({ webFetch: unused, webSearch: unused }),
@@ -96,6 +109,10 @@ async function attach(step) {
             routes: record.codeMode.routes,
             bound,
             declared: declared.map((tool) => tool.name),
+            replayable: projection?.session.id === step.sessionId,
+            birthStillReadable: birth.tools.every((tool) =>
+              shared.sessionToolIds(spec).includes(tool),
+            ),
             callable: bound.filter((tool) =>
               shared.isCodeCallable(tool, record.codeMode.routes[tool]),
             ),

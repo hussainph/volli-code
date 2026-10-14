@@ -46,6 +46,9 @@ import type {
   UnstampedCommandReceipt,
 } from "@volli/shared";
 
+import { assertAdditiveToolRefresh } from "./tool-refresh";
+import { canonicalJson } from "./transcript-artifacts";
+
 export interface CreateSessionRequest {
   commandId: string;
   projectId: string;
@@ -113,6 +116,13 @@ export interface SessionEngine {
     input: SessionInput;
     provenance: SessionEventProvenance;
   }): Promise<SessionInput>;
+  /** Append an additive effective surface without changing the Session's birth input. */
+  recordToolRefresh(
+    request: Omit<Extract<SessionEventPayload, { kind: "session.tools.refreshed" }>, "kind"> & {
+      sessionId: string;
+      provenance: SessionEventProvenance;
+    },
+  ): Promise<SessionEvent | null>;
   observe(observation: SessionObservation): Promise<SessionEvent>;
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
   /** Atomically commits an adapter-applied idle model policy and its terminal receipt. */
@@ -422,6 +432,56 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
         };
         transaction.appendEvent(event);
         return { ...request.input };
+      });
+    },
+
+    async recordToolRefresh(request) {
+      return ports.ledger.transaction((transaction) => {
+        const session = transaction.getSession(request.sessionId);
+        if (!session) throw new SessionEngineNotFoundError(request.sessionId);
+        const events = transaction.listEvents({ sessionId: request.sessionId });
+        let current: Extract<SessionInput, { kind: "tool-surface" }> | undefined;
+        let declared: Extract<SessionInput, { kind: "tool-surface" }> | undefined;
+        for (const event of events) {
+          if (
+            event.payload.kind === "session.input.recorded" &&
+            event.payload.input.kind === "tool-surface"
+          ) {
+            current ??= event.payload.input;
+            declared ??= event.payload.input;
+          } else if (event.payload.kind === "session.tools.refreshed") {
+            current = event.payload.surface;
+            if (["cold-turn", "compaction", "model-switch"].includes(event.payload.trigger))
+              declared = current;
+          }
+        }
+        if (current === undefined || declared === undefined)
+          throw new Error("Tool refresh requires a recorded birth surface");
+        const declarationOnly =
+          !["warm-turn", "code-mode"].includes(request.trigger) &&
+          request.changed.includes("codemode") &&
+          canonicalJson(declared) !== canonicalJson(request.surface);
+        if (canonicalJson(current) === canonicalJson(request.surface) && !declarationOnly)
+          return null;
+        const payload: Extract<SessionEventPayload, { kind: "session.tools.refreshed" }> = {
+          kind: "session.tools.refreshed",
+          trigger: request.trigger,
+          surface: request.surface,
+          added: request.added,
+          changed: request.changed,
+        };
+        assertAdditiveToolRefresh(current, payload, declared);
+        const event: SessionEvent = {
+          id: ports.ids.next("event"),
+          sessionId: session.id,
+          sequence: transaction.latestEventSequence(session.id) + 1,
+          occurredAt: ports.clock.now(),
+          recordedAt: ports.clock.now(),
+          provenance: request.provenance,
+          payload,
+        };
+        transaction.appendEvent(event);
+        return event;
       });
     },
 

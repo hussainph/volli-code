@@ -62,6 +62,7 @@ import {
   readInteractionAnswers,
   promptId,
   sessionToolBindings,
+  sessionVerbToolDescription,
   todoListMarkdown,
   verbEntry,
   verbToolWireName,
@@ -90,6 +91,7 @@ import type {
   RuntimeMcpContent,
   RuntimeMcpPort,
   RuntimeVerbResult,
+  RuntimeToolBundle,
   RuntimeAskUserQuestion,
   RuntimeAskUserRequest,
   RuntimeWebDocument,
@@ -262,8 +264,22 @@ export function createSessionTools(
   env: ExecutionEnv,
   output?: ToolOutputStore,
   buildCodeMode?: CodeModeBuilder,
+  declarationTools?: RuntimeToolBundle,
 ): AgentTool[] {
-  const bindings = sessionToolBindings(spec);
+  let bindings = sessionToolBindings(spec);
+  if (declarationTools !== undefined) {
+    // Only code-only additions can separate the last cold declaration from
+    // the executable bundle. Ports name those additions too, so filter the
+    // validated effective bindings rather than inferring membership from ports.
+    if (declarationTools.codeMode === undefined) {
+      throw new Error("A separate declaration bundle requires Code Mode.");
+    }
+    const routes = declarationTools.codeMode.routes;
+    bindings = bindings.filter(
+      (binding) => binding.tool === "codemode" || Object.hasOwn(routes, binding.tool),
+    );
+    spec = { ...spec, tools: declarationTools };
+  }
   const built = bindings.map((binding): SurfaceTool | null =>
     binding.tool === "codemode"
       ? null
@@ -373,6 +389,7 @@ function createBoundTool(
         binding satisfies { verb: VerbToolKey },
         spec.signal,
         spec.tools.mcpManagementNames,
+        spec.tools.refreshDescriptions,
       );
   }
 }
@@ -742,6 +759,7 @@ export function createVerbTool(
   binding: { verb: VerbToolKey; port: CallVerbPort },
   signal?: AbortSignal,
   mcpManagementNames?: "server",
+  refreshDescriptions?: true,
 ): AgentTool<TSchema, RuntimeVerbResult["details"]> {
   const entry = verbEntry(binding.verb);
   if (entry?.tool === undefined) {
@@ -759,7 +777,7 @@ export function createVerbTool(
   return {
     name,
     label: name,
-    description: reword(entry.tool.description),
+    description: reword(sessionVerbToolDescription(binding.verb, refreshDescriptions)!),
     parameters,
     async execute(
       toolCallId,

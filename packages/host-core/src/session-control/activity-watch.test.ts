@@ -78,6 +78,7 @@ function stubEngine(current: () => SessionProjection | null) {
   const engine = {
     createSession: vi.fn(async () => ({ session: { id: "session-1" } })),
     getOrRecordSessionInput: vi.fn(async () => ({})),
+    recordToolRefresh: vi.fn(async () => ({ sessionId: "session-1" })),
     observe: vi.fn(async () => ({ sessionId: "session-1" })),
     submit: vi.fn(async () => ({})),
     completeModelSelection: vi.fn(async () => ({})),
@@ -499,6 +500,39 @@ describe("watchSessionActivity", () => {
     await expect(watch.engine.observe({} as never)).resolves.toEqual({ sessionId: "session-1" });
     expect(onError).toHaveBeenCalledWith(failure);
     watch.stop();
+  });
+
+  it("announces committed tool refreshes, ignores no-ops and contains observer failures", async () => {
+    const engine = stubEngine(() => projection());
+    const observeEvent = vi.fn();
+    const onError = vi.fn();
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+      observeEvent,
+      onError,
+    });
+    const event = await watch.engine.recordToolRefresh({} as never);
+    expect(observeEvent).toHaveBeenCalledWith(event);
+    const failure = new Error("refresh reader");
+    observeEvent.mockImplementation(() => {
+      throw failure;
+    });
+    await expect(watch.engine.recordToolRefresh({} as never)).resolves.toEqual({
+      sessionId: "session-1",
+    });
+    expect(onError).toHaveBeenCalledWith(failure);
+    vi.mocked(engine.recordToolRefresh).mockResolvedValue(null);
+    await expect(watch.engine.recordToolRefresh({} as never)).resolves.toBeNull();
+    expect(observeEvent).toHaveBeenCalledTimes(2);
+    watch.stop();
+    const withoutObserver = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+    });
+    vi.mocked(engine.recordToolRefresh).mockResolvedValue(event);
+    await withoutObserver.engine.recordToolRefresh({} as never);
+    withoutObserver.stop();
   });
 
   it("does not require an observer", async () => {

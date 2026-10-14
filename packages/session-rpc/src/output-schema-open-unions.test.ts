@@ -38,7 +38,7 @@ function vocabulary(node: Node): string {
 }
 
 describe("explicit tolerant-read output scalars", () => {
-  it("marks only command refusal severity, on the enum before its nullable wrapper", () => {
+  it("marks command refusal severity and the open refresh trigger, before wrappers", () => {
     const enumMarker = "x-volli-open-enum";
     const refusal = z.toJSONSchema(sessionCommandWireSchema).properties!.refusal as Node;
     expect(refusal[enumMarker]).toBeUndefined();
@@ -48,6 +48,15 @@ describe("explicit tolerant-read output scalars", () => {
     expect(nodes[0]!.enum).toEqual(["benign", "failure"]);
     // Metadata is a reader promise, not a widening of the host's validator.
     expect(sessionCommandWireSchema.shape.refusal.safeParse("future-severity").success).toBe(false);
+    const refreshTrigger = markedUnions(z.toJSONSchema(eventSchema), enumMarker)[0]!;
+    expect(refreshTrigger[enumMarker]).toBe(true);
+    expect(refreshTrigger.enum).toEqual([
+      "cold-turn",
+      "warm-turn",
+      "compaction",
+      "model-switch",
+      "code-mode",
+    ]);
     const sites = new Set<string>();
     for (const [key, procedure] of Object.entries(sessionProcedureSchemas())) {
       expect(markedUnions(z.toJSONSchema(procedure.input, { io: "input" }), enumMarker)).toEqual(
@@ -56,11 +65,25 @@ describe("explicit tolerant-read output scalars", () => {
       const marked = markedUnions(z.toJSONSchema(procedure.output), enumMarker);
       if (marked.length > 0) {
         sites.add(key);
-        expect(marked).toEqual(nodes);
+        expect(
+          marked.every(
+            (node) =>
+              JSON.stringify(node) === JSON.stringify(nodes[0]) ||
+              JSON.stringify(node) === JSON.stringify(refreshTrigger),
+          ),
+        ).toBe(true);
       }
     }
     expect(sites).toEqual(
-      new Set(["session.command", "session.cancelQueued", "session.editQueued"]),
+      new Set([
+        "session.command",
+        "session.cancelQueued",
+        "session.editQueued",
+        "session.snapshot",
+        "session.history",
+        "session.subscribe",
+        "session.subscribeQueue",
+      ]),
     );
   });
 });

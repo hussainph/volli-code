@@ -3279,11 +3279,10 @@ export const VERB_REGISTRY = [
     options: [],
   },
   {
-    // Previews by default for a reason `mcp.disable` does not share, and the
-    // reason is a property of the frozen tool surface rather than of this
-    // table: `serversForFrozenMcpTools` THROWS when a frozen tool's server is
-    // gone, so deleting a row breaks reattachment for older Sessions that were
-    // using it — an effect on Sessions the caller has never heard of.
+    // Preview destructive removal: retained Session names can still attach,
+    // but calls need the deleted transport and return a named unavailable error.
+    // Legacy tool-description bytes below stay frozen; versioned refresh copy
+    // is supplied by sessionVerbToolDescription (VC-756).
     key: "mcp.remove",
     accessModes: ["tool"],
     actor: "role",
@@ -3296,8 +3295,8 @@ export const VERB_REGISTRY = [
     example: "volli mcp remove",
     notes: [
       "Previews by default: without confirm=apply nothing is deleted.",
-      "Older Sessions born holding one of this server's tools will fail to reattach once it is gone, because the transport their frozen tool needs no longer exists.",
-      "mcp_disable is the reversible alternative and keeps reattachment working.",
+      "Existing Sessions keep their tools and can reattach, but calls to the removed server return a named unavailable error.",
+      "mcp_disable is the reversible alternative and preserves the server configuration.",
     ],
     effects: {
       durableWrites: [

@@ -24,7 +24,11 @@ import * as pi from "./pi-adapter";
 import * as runtime from "./index";
 import * as browser from "../browser/agent-port";
 import type { BrowserBackend } from "../browser/backend";
-import { DEFAULT_CODE_MODE_POLICY, decodeSessionEventPayload } from "@volli/shared";
+import {
+  DEFAULT_CODE_MODE_POLICY,
+  DEFAULT_CODE_MODE_LIMITS,
+  decodeSessionEventPayload,
+} from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { testProject } from "../db/test-helpers";
 import { createRuntimeContextResolver } from "./context";
@@ -344,6 +348,161 @@ describe("runtime attachment assembly", () => {
       }
     },
   );
+
+  it("recomputes additive effective surfaces and bounds delegate MCP refreshes by their parent", async () => {
+    const options = await fixture();
+    const engine = live().sessionEngine;
+    const db = live().database.db;
+    insertProject(db, testProject({ id: "refresh-project", path: root }));
+    const model = { providerId: "scripted", modelId: "test", reasoningLevel: "off" } as const;
+    const provenance = {
+      source: { kind: "system", id: "pi-runtime", detail: null },
+      venue: options.venue,
+    } as const;
+    const one = {
+      serverId: "paper",
+      toolName: "lookup",
+      providerName: "mcp__paper__lookup__12345678",
+      description: "Lookup",
+      inputSchema: { type: "object", properties: {} },
+    } as const;
+    const two = {
+      ...one,
+      toolName: "second",
+      providerName: "mcp__paper__second__12345678",
+    } as const;
+    let selected = [one] as readonly import("@volli/shared").McpToolDefinition[];
+    const assembleOptions = {
+      ...options,
+      codeMode: hostCodeMode({
+        env: { VOLLI_DEV_CODE_MODE: '{"mode":"only","mcp":{"paper":"deferred"}}' },
+        packaged: false,
+        log: vi.fn(),
+        policy: () => DEFAULT_CODE_MODE_POLICY,
+        sandboxAvailable: true,
+      }),
+      mcpSettings: {
+        selectedTools: () => selected,
+      } as unknown as RuntimeAssemblyOptions["mcpSettings"],
+    };
+    const assembled = createRuntimeAssembly(assembleOptions);
+    const surface = assembled.sessionToolSurface!;
+    const resolver = createRuntimeContextResolver({
+      db,
+      sessionEngine: engine,
+      venue: options.venue,
+      mcpDispatch: options.mcpDispatch,
+      waitForBirth: async () => {},
+      toolSurface: () => surface,
+    });
+    assembleOptions.resolveRuntimeContext = resolver;
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    async function birth(role: "project" | "subagent", parentSessionId: string | null) {
+      const { session } = await engine.createSession({
+        commandId: `birth-${role}`,
+        projectId: "refresh-project",
+        ticketId: null,
+        role,
+        parentSessionId,
+        title: null,
+        provenance,
+      });
+      await engine.submit({
+        commandId: `model-${role}`,
+        sessionId: session.id,
+        intent: { kind: "model.select", selection: model },
+        provenance,
+      });
+      return session.id;
+    }
+    const parent = await birth("project", null);
+    await engine.getOrRecordSessionInput({
+      sessionId: parent,
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "codemode"],
+        codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+      },
+      provenance,
+    });
+    await native.refreshRuntimeContext!(parent, { trigger: "warm-turn", model });
+    expect(await surface.recordedMcp!(parent)).toEqual([one]);
+    const child = await birth("subagent", parent);
+    const parentTools = await surface.recorded(parent);
+    const parentMcp = await surface.recordedMcp!(parent);
+    const childBirth = surface.codeModeAt!(model, parentMcp);
+    const childTools = surface.resolve("subagent", [], parentTools!, parentMcp, childBirth);
+    await surface.record(child, childTools, parentMcp, { codeMode: childBirth });
+    selected = [one, two];
+    expect(
+      (await native.refreshRuntimeContext!(child, { trigger: "warm-turn", model }))?.mcpTools,
+    ).toEqual([one]);
+    await native.refreshRuntimeContext!(parent, { trigger: "code-mode", model });
+    await native.refreshRuntimeContext!(child, { trigger: "warm-turn", model });
+    expect(await surface.recordedMcp!(child)).toEqual([one, two]);
+    const cold = await native.refreshRuntimeContext!(parent, { trigger: "cold-turn", model });
+    expect(cold?.toolSurface).toContain("edit");
+    expect(cold?.codeMode?.descriptionVersion).toBe(2);
+    const count = (await engine.listEvents({ sessionId: parent })).filter(
+      (event) => event.payload.kind === "session.tools.refreshed",
+    ).length;
+    await native.refreshRuntimeContext!(parent, { trigger: "cold-turn", model });
+    expect(
+      (await engine.listEvents({ sessionId: parent })).filter(
+        (event) => event.payload.kind === "session.tools.refreshed",
+      ),
+    ).toHaveLength(count);
+    await expect(
+      native.refreshRuntimeContext!("missing", { trigger: "cold-turn", model }),
+    ).resolves.toBeNull();
+    await assembled.sessionRuntime?.close();
+  });
+
+  it("keeps a removed MCP tool attached and returns its named unavailable result without opening a transport", async () => {
+    const options = await fixture();
+    const open = vi.fn();
+    const assembled = createRuntimeAssembly({
+      ...options,
+      mcpSettings: {
+        list: () => [],
+        opener: () => open,
+        credentials: {},
+      } as unknown as RuntimeAssemblyOptions["mcpSettings"],
+    });
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    const port = native.resolveMcpPort!({
+      projectId: "project",
+      sessionId: "session",
+      attachmentId: "attachment",
+      workspacePath: root,
+      mcpTools: [
+        {
+          serverId: "removed",
+          toolName: "lookup",
+          providerName: "mcp__removed__lookup",
+          description: "Lookup",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+    try {
+      expect(
+        await port.call(
+          { serverId: "removed", toolName: "lookup", arguments: {}, toolCallId: "call" },
+          new AbortController().signal,
+        ),
+      ).toMatchObject({
+        isError: true,
+        content: [
+          { type: "text", text: "MCP tool lookup is unavailable: its server was removed." },
+        ],
+      });
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      await port.dispose();
+      await assembled.sessionRuntime?.close();
+    }
+  });
 
   it("keeps an unavailable database inert instead of constructing an executor", async () => {
     const options = await fixture();

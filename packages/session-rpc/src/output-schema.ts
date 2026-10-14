@@ -311,6 +311,14 @@ const payloads = {
     kind: z.literal("session.input.recorded"),
     input: sessionInput,
   }),
+  "session.tools.refreshed": z.object({
+    kind: z.literal("session.tools.refreshed"),
+    trigger: z
+      .enum(["cold-turn", "warm-turn", "compaction", "model-switch", "code-mode"])
+      .meta({ "x-volli-open-enum": true }),
+    added: z.array(text),
+    changed: z.array(text),
+  }),
   "session.signaled": z.object({
     kind: z.literal("session.signaled"),
     signal: z.enum(["done", "blocked"]),

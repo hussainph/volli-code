@@ -124,10 +124,10 @@ tool, is sent to the model directly, as before Code Mode existed. Your pinned
 modes are kept for when you turn it back on.
 
 <Aside type="note">
-  A Session keeps the tools it was created with. Changing Code Mode, or a
-  model's mode, affects only Sessions created afterwards; an existing Session
-  keeps working exactly as it began. Older Sessions can still call `bash` from
-  programs if their frozen routes allowed it; new Sessions cannot. Image
-  handles are available to Sessions created with Volli 0.2.2 or newer; older
-  Sessions retain their original image-omission behavior.
+  Existing Sessions never lose or rename tools. They can gain additions at a
+  cold prompt cache, compaction or model switch; Code-Mode-only additions can
+  arrive before the next program without changing the warm prefix. Existing
+  routes stay unchanged, so older Sessions can still call `bash` from programs
+  if their recorded routes allowed it; new Sessions cannot. A cold refresh also
+  gives older Code Mode Sessions image handles.
 </Aside>

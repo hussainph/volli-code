@@ -943,3 +943,25 @@ describe("the current turn's reply", () => {
     expect(reopened.before).toBe(4);
   });
 });
+
+it("anchors refreshed names as a quiet fact and does not double-announce a replay", () => {
+  const batch = [
+    transcriptFrame(1, message("reply", "Hello")),
+    frame(2, {
+      kind: "session.tools.refreshed",
+      trigger: "warm-turn",
+      added: ["write"],
+      changed: [],
+      surface: { kind: "tool-surface", tools: ["read", "write"] },
+    }),
+  ];
+  const state = appendFrames(EMPTY_TRANSCRIPT, batch);
+  expect(state.toolRefreshes).toEqual([
+    { sequence: 2, afterMessageId: "reply", trigger: "warm-turn", added: ["write"], changed: [] },
+  ]);
+  expect(appendFrames(state, batch)).toBe(state);
+  expect(appendFrames(state, [frame(3, { kind: "session.archived" })]).toolRefreshes).toBe(
+    state.toolRefreshes,
+  );
+  expect(appendFrames(EMPTY_TRANSCRIPT, [batch[1]!]).toolRefreshes[0]?.afterMessageId).toBeNull();
+});

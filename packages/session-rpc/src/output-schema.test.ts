@@ -92,6 +92,13 @@ const payloads = {
     kind: "session.input.recorded",
     input: { kind: "tool-surface", tools: ["read"] },
   },
+  "session.tools.refreshed": {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    surface: { kind: "tool-surface", tools: ["read", "write"] },
+    added: ["write"],
+    changed: [],
+  },
   "session.signaled": { kind: "session.signaled", signal: "done", reason: null },
   "session.stopped": { kind: "session.stopped", reason: null, by: { kind: "user" } },
   "attachment.opened": { kind: "attachment.opened", attachment },

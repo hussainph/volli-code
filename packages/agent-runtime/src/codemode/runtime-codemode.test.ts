@@ -43,16 +43,23 @@ import { describe, expect, it } from "vite-plus/test";
 import { McpServerBudget } from "../mcp/server-budget";
 import { createPiAgentRuntime, type PiRuntimeHostOptions } from "../pi/runtime";
 import { ScopedExecutionEnv } from "../pi/scoped-execution-env";
+import { estimateContextTokens } from "../pi/token-counting";
 
 const PROVIDER = "anthropic";
 const MODEL = "claude-haiku-4-5";
 
 /** One provider reply: tool calls with fixed ids, or a closing text. */
-type Reply =
+type Reply = (
   | { calls: { id: string; name: string; args: JsonObject }[]; text?: string }
-  | { text: string };
+  | { text: string }
+) & { inputTokens?: number };
 
-function scripted(replies: Reply[], seen: Context[]): Models {
+function scripted(
+  replies: Reply[],
+  seen: Context[],
+  modelOverrides: Partial<Model<string>> = {},
+  providerId = PROVIDER,
+): Models {
   let index = 0;
   const stream: StreamFn = (model, context) => {
     seen.push(context);
@@ -65,11 +72,11 @@ function scripted(replies: Reply[], seen: Context[]): Models {
       provider: model.provider,
       model: model.id,
       usage: {
-        input: 100,
+        input: reply.inputTokens ?? 100,
         output: 20,
         cacheRead: 0,
         cacheWrite: 0,
-        totalTokens: 120,
+        totalTokens: (reply.inputTokens ?? 100) + 20,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
       stopReason: "stop",
@@ -111,10 +118,12 @@ function scripted(replies: Reply[], seen: Context[]): Models {
   };
   const faux = fauxProvider({
     api: "anthropic-messages",
-    provider: PROVIDER,
-    models: [{ id: MODEL }],
+    provider: providerId,
+    models: [{ id: MODEL }, { id: `${MODEL}-other` }],
   });
-  const catalog = faux.provider.getModels() as Model<string>[];
+  const catalog = (faux.provider.getModels() as Model<string>[]).map((model) =>
+    Object.assign(model, modelOverrides),
+  );
   const models = createModels();
   models.setProvider({
     ...faux.provider,
@@ -704,4 +713,608 @@ describe("Code Mode through the real Session path", () => {
     expect(scoped).toEqual([true, true]);
     expect(peakAsking).toBe(1);
   }, 15_000);
+});
+
+// Only the provider is scripted: refresh crosses the real Pi loop, the durable
+// sidecar, executable tool builders and QuickJS worker, not a registry mock.
+describe("additions-only surface refresh through Pi", () => {
+  it("reattaches warm with byte-identical declarations and callable additions, then publishes their cold epoch without new IDs", async () => {
+    const h = harness();
+    let clock = Date.now();
+    const added = {
+      serverId: "new",
+      toolName: "read",
+      providerName: mcpProviderToolName("new", "New", "read"),
+      description: "Read new data.",
+      inputSchema: { type: "object" },
+    };
+    let calls = 0;
+    const birth = specFor(h, { tools: { tools: ["read"] } });
+    const effective = specFor(h, {
+      tools: { tools: ["read"], mcp: [added] },
+      routes: { [added.providerName]: "deferred" },
+      mcp: {
+        call: async () => {
+          calls++;
+          return { content: [{ type: "text", text: "new data" }], isError: false };
+        },
+      },
+    });
+    const warmSpec = { ...effective, declarationTools: birth.tools };
+    let desired = birth;
+    const refreshTools = async () => desired;
+    const program = (id: string): Reply => ({
+      calls: [
+        { id, name: "codemode", args: { code: `return await tools.${added.providerName}({});` } },
+      ],
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      now: () => clock,
+      models: scripted(
+        [
+          { text: "first" },
+          program("warm"),
+          { text: "done" },
+          program("reattach"),
+          { text: "done" },
+          { text: "cold" },
+          { text: "recovered" },
+        ],
+        h.seen,
+      ),
+    });
+    const first = await runtime.startSession({ ...birth, refreshTools });
+    await first.submitUserMessage("first");
+    const prefix = JSON.stringify(h.seen[0]!.messages[0]);
+    const declarations = JSON.stringify(getCurrentTools(h.seen[0]!.messages));
+    desired = warmSpec;
+    clock++;
+    await first.submitUserMessage("warm");
+    expect(calls).toBe(1);
+    for (const context of h.seen) {
+      expect(JSON.stringify(context.messages[0])).toBe(prefix);
+      expect(JSON.stringify(getCurrentTools(context.messages))).toBe(declarations);
+    }
+    const recovery = first.recovery!;
+    await first.close();
+    const reopened = await runtime.startSession({ ...warmSpec, refreshTools, recovery });
+    await reopened.submitUserMessage("warm reattach");
+    expect(calls).toBe(2);
+    expect(JSON.stringify(h.seen.at(-1)!.messages[0])).toBe(prefix);
+    expect(JSON.stringify(getCurrentTools(h.seen.at(-1)!.messages))).toBe(declarations);
+    expect(JSON.stringify(h.seen.at(-1)!.messages[0])).not.toContain("mcp:new (1)");
+    desired = effective; // Effective IDs are identical; only the declaration epoch advances.
+    clock += 60 * 60_000;
+    await reopened.submitUserMessage("cold");
+    const coldPrefix = JSON.stringify(h.seen.at(-1)!.messages[0]);
+    expect(coldPrefix).toContain("Not declared here: mcp:new (1)");
+    expect(coldPrefix).not.toBe(prefix);
+    const notices = h.seen
+      .at(-1)!
+      .messages.filter(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.startsWith("Tools added through Code Mode:"),
+      );
+    expect(notices).toHaveLength(1); // Repeated full desired specs never reannounce.
+    await reopened.close();
+    const coldRecovery = await runtime.startSession({ ...effective, refreshTools, recovery });
+    try {
+      await coldRecovery.submitUserMessage("recovered");
+      expect(JSON.stringify(h.seen.at(-1)!.messages[0])).toBe(coldPrefix);
+    } finally {
+      await coldRecovery.close();
+    }
+  });
+
+  it("adopts new direct tools in canonical order and recovers that exact array", async () => {
+    const h = harness();
+    const birth = specFor(h, { tools: { tools: ["read"] } });
+    const updated = specFor(h, { tools: { tools: ["read"], todoWrite: true } });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      models: scripted([{ text: "cold" }, { text: "recovered" }], h.seen),
+    });
+    const first = await runtime.startSession({ ...birth, refreshTools: async () => updated });
+    await first.submitUserMessage("cold");
+    expect(declared(h.seen[0]!)).toEqual(["read", "todo_write", "codemode"]);
+    const prefix = JSON.stringify(h.seen[0]!.messages[0]);
+    const recovery = first.recovery!;
+    await first.close();
+    const reopened = await runtime.startSession({
+      ...updated,
+      recovery,
+      refreshTools: async () => updated,
+    });
+    try {
+      await reopened.submitUserMessage("recover");
+      expect(declared(h.seen[1]!)).toEqual(["read", "todo_write", "codemode"]);
+      expect(JSON.stringify(h.seen[1]!.messages[0])).toBe(prefix);
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  it("retries durable desired state after a staged runtime build fails, without leaking partial callables", async () => {
+    const h = harness();
+    let clock = Date.now();
+    const added = {
+      serverId: "retry",
+      toolName: "read",
+      providerName: mcpProviderToolName("retry", "Retry", "read"),
+      description: "Read after retry.",
+      inputSchema: { type: "object" },
+    };
+    let calls = 0;
+    const birth = specFor(h, { tools: { tools: ["read"] } });
+    const updated = specFor(h, {
+      tools: { tools: ["read"], mcp: [added] },
+      mcp: {
+        call: async () => {
+          calls++;
+          return { content: [{ type: "text", text: "after retry" }], isError: false };
+        },
+      },
+    });
+    let desired = birth;
+    const program = (id: string): Reply => ({
+      calls: [
+        { id, name: "codemode", args: { code: `return await tools.${added.providerName}({});` } },
+      ],
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      now: () => clock,
+      models: scripted(
+        [
+          { text: "first" },
+          program("before"),
+          { text: "done" },
+          program("after"),
+          { text: "done" },
+        ],
+        h.seen,
+      ),
+    });
+    const handle = await runtime.startSession({ ...birth, refreshTools: async () => desired });
+    try {
+      await handle.submitUserMessage("first");
+      const prefix = JSON.stringify(h.seen[0]!.messages[0]);
+      desired = { ...updated, declarationTools: { tools: [] } }; // Fails after the executable build.
+      clock += 60 * 60_000;
+      await expect(handle.submitUserMessage("failed build")).rejects.toThrow("requires Code Mode");
+      desired = birth;
+      await handle.submitUserMessage("no partial callable");
+      expect(calls).toBe(0);
+      expect(JSON.stringify(h.seen.at(-1)!.messages[0])).toBe(prefix);
+      desired = updated;
+      clock += 60 * 60_000;
+      await handle.submitUserMessage("retry durable desired state");
+      expect(calls).toBe(1);
+      expect(resultText(h, "after")).toContain("after retry");
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    ["anthropic", 60 * 60_000],
+    ["openai", 24 * 60 * 60_000],
+    ["router-fixture", 24 * 60 * 60_000],
+  ] as const)("uses the conservative cache lifetime for %s", async (providerId, ttl) => {
+    const h = harness();
+    let clock = Date.now();
+    const triggers: string[] = [];
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      now: () => clock,
+      models: scripted(
+        [{ text: "first" }, { text: "warm" }, { text: "cold" }],
+        h.seen,
+        {},
+        providerId,
+      ),
+    });
+    const handle = await runtime.startSession({
+      ...specFor(h),
+      model: { providerId, modelId: MODEL, reasoningLevel: "off" },
+      refreshTools: async ({ trigger }) => {
+        triggers.push(trigger);
+        return null;
+      },
+    });
+    try {
+      await handle.submitUserMessage("first");
+      clock += ttl - 1;
+      await handle.submitUserMessage("warm");
+      clock += ttl;
+      await handle.submitUserMessage("cold");
+      expect(triggers).toEqual(["cold-turn", "warm-turn", "cold-turn"]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("freezes every prefix byte warm, then upgrades a legacy declaration cold and on model switch", async () => {
+    const h = harness();
+    let clock = Date.now();
+    const triggers: string[] = [];
+    let candidate: SessionRuntimeSpec | null = null;
+    const current = specFor(h);
+    const { descriptionVersion: _legacyVersion, ...legacy } = current.tools.codeMode!;
+    const birth: SessionRuntimeSpec = {
+      ...current,
+      tools: { ...current.tools, codeMode: legacy },
+      refreshTools: async ({ trigger, model }) => {
+        triggers.push(trigger);
+        expect(model.providerId).toBe(current.model.providerId);
+        if (trigger === "warm-turn" || trigger === "code-mode") return null;
+        const result = candidate;
+        candidate = null;
+        return result;
+      },
+    };
+    const models = scripted(
+      [{ text: "first" }, { text: "warm" }, { text: "cold" }, { text: "same" }, { text: "switch" }],
+      h.seen,
+    );
+    const runtime = createPiAgentRuntime({ sessionDataDir: h.sessions, models, now: () => clock });
+    const handle = await runtime.startSession(birth);
+    try {
+      await handle.submitUserMessage("first");
+      const prefix = JSON.stringify(h.seen[0]!.messages);
+      // The host deliberately omits an upstream tool. Runtime keeps its binding.
+      candidate = {
+        ...specFor(h, { tools: { tools: ["read"], todoWrite: true } }),
+        refreshTools: birth.refreshTools,
+      };
+      clock += 59 * 60_000;
+      await handle.submitUserMessage("warm");
+      expect(JSON.stringify(h.seen[1]!.messages.slice(0, h.seen[0]!.messages.length))).toBe(prefix);
+      expect(declared(h.seen[1]!)).not.toContain("todo_write");
+      clock += 60 * 60_000;
+      await handle.submitUserMessage("cold");
+      expect(declared(h.seen[2]!)).toEqual(
+        expect.arrayContaining(["read", "edit", "write", "bash", "todo_write", "codemode"]),
+      );
+      expect(JSON.stringify(h.seen[2]!.messages[0])).not.toBe(
+        JSON.stringify(h.seen[0]!.messages[0]),
+      );
+      expect(h.seen[2]!.messages[1]).toEqual(h.seen[0]!.messages[1]); // static birth surface is untouched
+      const before = estimateContextTokens(
+        [h.seen[0]!.messages[0]!],
+        models.getModel(PROVIDER, MODEL)!,
+      );
+      const after = estimateContextTokens(
+        [h.seen[2]!.messages[0]!],
+        models.getModel(PROVIDER, MODEL)!,
+      );
+      console.log(
+        `VC-756 prefix estimate: legacy=${before}, refreshed=${after}, delta=${after - before}; warm byte delta=0`,
+      );
+      expect(after).toBeGreaterThan(before);
+      await expect(handle.selectModel(current.model)).resolves.toEqual({ kind: "selected" });
+      await handle.submitUserMessage("after reselecting the same pair");
+      expect(h.seen[3]!.messages[0]).toEqual(h.seen[2]!.messages[0]);
+      await expect(
+        handle.selectModel({ ...current.model, modelId: `${MODEL}-other` }),
+      ).resolves.toEqual({ kind: "selected" });
+      await handle.submitUserMessage("after switch");
+      expect(triggers).toEqual([
+        "cold-turn",
+        "warm-turn",
+        "cold-turn",
+        "warm-turn",
+        "warm-turn",
+        "model-switch",
+        "warm-turn",
+      ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("installs deferred tools between programs, announces once, and keeps the provider prefix frozen", async () => {
+    const h = harness();
+    const install = {
+      serverId: "fixture",
+      toolName: "install",
+      providerName: mcpProviderToolName("fixture", "Fixture", "install"),
+      description: "Install a fixture tool.",
+      inputSchema: { type: "object" },
+    };
+    const added = {
+      serverId: "new-fixture",
+      toolName: "read",
+      providerName: mcpProviderToolName("new-fixture", "New fixture", "read"),
+      description: "Read the newly installed fixture.",
+      inputSchema: { type: "object" },
+    };
+    let installed = false;
+    let refreshed = false;
+    const calls: string[] = [];
+    const port: RuntimeMcpPort = {
+      call: async (request) => {
+        calls.push(request.toolName);
+        if (request.toolName === "install") installed = true;
+        return { content: [{ type: "text", text: "available" }], isError: false };
+      },
+    };
+    const another = {
+      ...added,
+      toolName: "count",
+      providerName: mcpProviderToolName("new-fixture", "New fixture", "count"),
+    };
+    const routes = {
+      [install.providerName]: "deferred" as const,
+      [added.providerName]: "deferred" as const,
+      [another.providerName]: "deferred" as const,
+      web_fetch: "code" as const,
+    };
+    const birth = specFor(h, {
+      tools: { tools: ["read"], mcp: [install] },
+      mcp: port,
+      routes: { [install.providerName]: "deferred" },
+    });
+    const upgraded = specFor(h, {
+      tools: { tools: ["read"], mcp: [install, added, another] },
+      mcp: port,
+      webFetch: async ({ url }) => ({
+        requestedUrl: url,
+        finalUrl: url,
+        origin: new URL(url).origin,
+        contentType: "text",
+        text: "available",
+        truncated: false,
+      }),
+      routes,
+    });
+    const spec: SessionRuntimeSpec = {
+      ...birth,
+      refreshTools: async ({ trigger }) => {
+        if (trigger !== "code-mode" || !installed || refreshed) return null;
+        refreshed = true;
+        return upgraded;
+      },
+    };
+    await runTurn(h, spec, [
+      {
+        calls: [
+          {
+            id: "install",
+            name: "codemode",
+            args: { code: `return await tools.${install.providerName}({});` },
+          },
+        ],
+      },
+      {
+        calls: [
+          {
+            id: "discover",
+            name: "codemode",
+            args: {
+              code: `const hits = await searchTools("newly installed"); return { hits, description: await describeTool(hits[0].name), result: await tools.${added.providerName}({}) };`,
+            },
+          },
+        ],
+      },
+      {
+        calls: [
+          {
+            id: "again",
+            name: "codemode",
+            args: { code: `return await tools.${added.providerName}({});` },
+          },
+        ],
+      },
+      { text: "done" },
+    ]);
+    expect(calls, JSON.stringify(toolResults(h))).toEqual(["install", "read", "read"]);
+    expect(resultText(h, "discover")).toContain(added.providerName);
+    expect(resultText(h, "discover")).toContain("available");
+    for (const context of h.seen) {
+      expect(context.messages[0]).toEqual(h.seen[0]!.messages[0]);
+      expect(context.messages[1]).toEqual(h.seen[0]!.messages[1]);
+      expect(declared(context)).not.toContain(added.providerName);
+    }
+    const notices = h.seen
+      .at(-1)!
+      .messages.filter(
+        (message) =>
+          message.role === "system" &&
+          typeof message.content === "string" &&
+          message.content.startsWith("Tools added through Code Mode:"),
+      );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.content).toContain("mcp:new-fixture (2)");
+    expect(notices[0]!.content).toContain("volli (1)");
+  });
+
+  it.each(["manual", "automatic"] as const)(
+    "refreshes at successful %s compaction",
+    async (reason) => {
+      const h = harness();
+      const triggers: string[] = [];
+      const birth = specFor(h);
+      const updated = specFor(h, { tools: { tools: ["read"], todoWrite: true } });
+      const models = scripted(
+        [
+          { text: "first", inputTokens: reason === "automatic" ? 55_000 : 100 },
+          { text: reason === "automatic" ? "## Goal\nKeep the marker." : "second" },
+          { text: reason === "automatic" ? "second" : "## Goal\nKeep the marker." },
+          { text: "after compaction" },
+        ],
+        h.seen,
+        reason === "automatic" ? { contextWindow: 60_000 } : {},
+      );
+      const runtime = createPiAgentRuntime({ sessionDataDir: h.sessions, models });
+      const handle = await runtime.startSession({
+        ...birth,
+        refreshTools: async ({ trigger }) => {
+          triggers.push(trigger);
+          return trigger === "compaction" ? updated : null;
+        },
+      });
+      try {
+        await handle.submitUserMessage("old material ".repeat(9_000));
+        await handle.submitUserMessage("keep marker");
+        if (reason === "manual")
+          await expect(handle.compact()).resolves.toEqual({ kind: "compacted" });
+        await handle.submitUserMessage("after compaction");
+        expect(triggers).toContain("compaction");
+        expect(declared(h.seen.at(-1)!)).toContain("todo_write");
+        expect(h.observations).toContainEqual(
+          expect.objectContaining({
+            kind: "compaction",
+            state: "compacted",
+            reason: reason === "manual" ? "manual" : "threshold",
+          }),
+        );
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it("recovers the cache clock and a retained direct MCP binding from the real sidecar", async () => {
+    const h = harness();
+    let clock = Date.now();
+    const triggers: string[] = [];
+    const definition = {
+      serverId: "retained",
+      toolName: "read",
+      providerName: mcpProviderToolName("retained", "Retained", "read"),
+      description: "Read retained data.",
+      inputSchema: { type: "object" },
+    };
+    const spec = specFor(h, {
+      codeMode: false,
+      tools: { tools: ["read"], mcp: [definition] },
+      mcp: {
+        call: async () => ({ content: [{ type: "text", text: "retained data" }], isError: false }),
+      },
+      refreshTools: async ({ trigger }) => {
+        triggers.push(trigger);
+        return null;
+      },
+    });
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      now: () => clock,
+      models: scripted(
+        [
+          { calls: [{ id: "direct", name: definition.providerName, args: {} }] },
+          { text: "done" },
+          { text: "warm resume" },
+          { text: "cold resume" },
+        ],
+        h.seen,
+      ),
+    });
+    const first = await runtime.startSession(spec);
+    await first.submitUserMessage("read data");
+    const recovery = first.recovery!;
+    await first.close();
+    const reopened = await runtime.startSession({ ...spec, recovery });
+    try {
+      await reopened.submitUserMessage("warm resume");
+      clock += 60 * 60_000 + 1000;
+      await reopened.submitUserMessage("cold resume");
+      expect(triggers).toEqual(["cold-turn", "warm-turn", "warm-turn", "cold-turn"]);
+      expect(JSON.stringify(h.seen.at(-1)!.messages)).toContain("retained data");
+    } finally {
+      await reopened.close();
+    }
+  });
+
+  it("makes legacy Code Mode images available only at a cold refresh", async () => {
+    const h = harness();
+    let clock = Date.now();
+    const definition = {
+      serverId: "images",
+      toolName: "shot",
+      providerName: mcpProviderToolName("images", "Images", "shot"),
+      description: "Read an image.",
+      inputSchema: { type: "object" },
+    };
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const mcp: RuntimeMcpPort = {
+      call: async () => ({
+        content: [{ type: "image", data: png, mimeType: "image/png" }],
+        isError: false,
+      }),
+    };
+    const modern = specFor(h, { tools: { tools: ["read"], mcp: [definition] }, mcp });
+    const { descriptionVersion: _version, ...legacy } = modern.tools.codeMode!;
+    const birth = { ...modern, tools: { ...modern.tools, codeMode: legacy } };
+    const program = {
+      calls: [
+        {
+          id: "shot",
+          name: "codemode",
+          args: {
+            code: `const shot = await tools.${definition.providerName}({}); image(shot.images[0]);`,
+          },
+        },
+      ],
+    };
+    const models = scripted(
+      [{ text: "first" }, { text: "warm" }, program, { text: "done" }],
+      h.seen,
+    );
+    const runtime = createPiAgentRuntime({ sessionDataDir: h.sessions, models, now: () => clock });
+    let refresh = false;
+    const handle = await runtime.startSession({
+      ...birth,
+      refreshTools: async ({ trigger }) => {
+        if (!refresh || trigger !== "cold-turn") return null;
+        refresh = false;
+        return modern;
+      },
+    });
+    try {
+      await handle.submitUserMessage("first");
+      refresh = true;
+      clock += 1;
+      await handle.submitUserMessage("warm");
+      expect(h.seen[1]!.messages[0]).toEqual(h.seen[0]!.messages[0]);
+      clock += 60 * 60_000;
+      await handle.submitUserMessage("cold");
+      const result = toolResults(h).find((message) => message.toolCallId === "shot");
+      expect(result?.isError).toBe(false);
+      expect(result?.content.filter((block) => block.type === "image")).toEqual([
+        { type: "image", data: png, mimeType: "image/png" },
+      ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("surfaces a refresh failure without poisoning the next attempt", async () => {
+    const h = harness();
+    let failed = false;
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: h.sessions,
+      models: scripted([{ text: "done" }], h.seen),
+    });
+    const handle = await runtime.startSession({
+      ...specFor(h),
+      refreshTools: async () => {
+        if (!failed) {
+          failed = true;
+          throw new Error("refresh could not be recorded");
+        }
+        return null;
+      },
+    });
+    try {
+      await expect(handle.submitUserMessage("go")).rejects.toThrow("refresh could not be recorded");
+      await expect(handle.submitUserMessage("retry")).resolves.toMatchObject({ kind: "delivered" });
+    } finally {
+      await handle.close();
+    }
+  });
 });

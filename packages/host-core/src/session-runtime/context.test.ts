@@ -83,6 +83,24 @@ describe("shared attach context", () => {
     expect(f.resolve).not.toHaveBeenCalled();
   });
 
+  it("replays executable additions separately from the cold declaration and copy epoch", async () => {
+    const f = fixture();
+    const birth = { kind: "tool-surface", tools: ["read"] };
+    const cold = { ...birth, tools: ["read", "write"], refreshDescriptions: true };
+    const warm = { ...cold, tools: ["read", "write", "edit"] };
+    f.listEvents.mockResolvedValue([
+      inputEvent(birth),
+      { payload: { kind: "session.tools.refreshed", trigger: "cold-turn", surface: cold } },
+      { payload: { kind: "session.tools.refreshed", trigger: "warm-turn", surface: warm } },
+    ]);
+    expect(await f.context("s")).toMatchObject({
+      toolSurface: warm.tools,
+      declarationSurface: cold,
+      refreshDescriptions: true,
+    });
+    expect(f.resolve).not.toHaveBeenCalled();
+  });
+
   it.each(["project", "subagent"])("briefs the Session's own %s role", async (role) => {
     const f = fixture();
     f.getSession.mockResolvedValue({

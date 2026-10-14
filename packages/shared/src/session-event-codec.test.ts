@@ -113,6 +113,13 @@ function samples<const T extends readonly SessionEventPayload[]>(...items: T): T
  * and one shared roster is what makes both questions ask about the same kinds.
  */
 const payloads = samples(
+  {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    surface: { kind: "tool-surface", tools: ["read", "write"] },
+    added: ["write"],
+    changed: [],
+  },
   { kind: "command.recorded", command },
   {
     kind: "command.recorded",
@@ -2221,4 +2228,87 @@ it("keeps Code Mode's birth description version durable but host-only", () => {
     });
     expect(JSON.stringify(scrubSessionEvent(event))).not.toContain("descriptionVersion");
   }
+});
+
+it("round-trips refreshes with future tool names without corrupting birth or dropping their notice", () => {
+  const future = "write";
+  const raw = {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    surface: {
+      kind: "tool-surface",
+      tools: ["read", "ask_user", "codemode", future, "mcp__paper__read"],
+      askUserQuestions: true,
+      refreshDescriptions: true,
+      codeMode: {
+        routes: {
+          read: "both",
+          ask_user: "direct",
+          [future]: "both",
+          mcp__paper__read: "deferred",
+        },
+        limits: DEFAULT_CODE_MODE_LIMITS,
+        descriptionVersion: 2,
+      },
+      mcpTools: [
+        {
+          serverId: "paper",
+          toolName: "read",
+          providerName: "mcp__paper__read",
+          description: "Private declaration",
+          inputSchema: { type: "object", properties: { secret: { type: "string" } } },
+        },
+      ],
+    },
+    added: [future, "mcp__paper__read"],
+    changed: [],
+  };
+  const decoded = decodeSessionEventPayload(JSON.parse(JSON.stringify(raw)), "payload");
+  expect(decoded).toEqual(raw);
+  const safe = { kind: raw.kind, trigger: raw.trigger, added: raw.added, changed: raw.changed };
+  expect(scrubSessionEventPayload(decoded)).toEqual(safe);
+  expect(decodeRendererSessionEventPayload(JSON.parse(JSON.stringify(raw)), "payload")).toEqual(
+    safe,
+  );
+  expect(decodeRendererSessionEventPayload(JSON.parse(JSON.stringify(safe)), "payload")).toEqual(
+    safe,
+  );
+  expect(
+    decodeRendererSessionEventPayload({ ...safe, trigger: "future-trigger" }, "payload"),
+  ).toMatchObject({ trigger: "future-trigger" });
+  expect(JSON.stringify(safe)).not.toContain("surface");
+  const unbindable = {
+    ...raw.surface,
+    tools: [...raw.surface.tools, "future_builtin_from_next_release"],
+    codeMode: {
+      ...raw.surface.codeMode,
+      routes: { ...raw.surface.codeMode.routes, future_builtin_from_next_release: "both" },
+    },
+  };
+  expect(decodeSessionEventPayload({ ...raw, surface: unbindable }, "payload")).toMatchObject({
+    surface: { tools: expect.arrayContaining(["future_builtin_from_next_release"]) },
+  });
+  expect(() =>
+    decodeSessionEventPayload(
+      { ...raw, surface: { ...raw.surface, refreshDescriptions: false } },
+      "payload",
+    ),
+  ).toThrow("refreshDescriptions must be true");
+  expect(() =>
+    decodeSessionEventPayload({ kind: "session.input.recorded", input: unbindable }, "payload"),
+  ).toThrow("unsupported");
+  expect(decodeRendererSessionEventPayload({ ...raw, surface: unbindable }, "payload")).toEqual(
+    safe,
+  );
+  for (const field of ["added", "changed"] as const) {
+    expect(() => decodeSessionEventPayload({ ...raw, [field]: {} }, "payload")).toThrow(
+      "must be an array",
+    );
+    expect(() => decodeRendererSessionEventPayload({ ...safe, [field]: [7] }, "payload")).toThrow(
+      "must be a string",
+    );
+  }
+  expect(() =>
+    decodeSessionEventPayload({ ...raw, surface: { ...raw.surface, tools: {} } }, "payload"),
+  ).toThrow("must be an array");
 });

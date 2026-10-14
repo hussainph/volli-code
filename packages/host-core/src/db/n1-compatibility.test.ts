@@ -1041,6 +1041,104 @@ describe.skipIf(manifest === null)(
       },
     );
 
+    it("opens, attaches and replays a refreshed Session containing an unknown future builtin without rewriting birth", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      const sessionId = "session-head";
+      const tools = ["read", "codemode"] as const;
+      const birth = {
+        kind: "tool-surface",
+        tools,
+        refreshDescriptions: true,
+        codeMode: codeModeSurfaceFor({ tools, mode: "both" }),
+      } as const;
+      const future = "future_builtin_from_next_release" as SessionToolId;
+      const writer = openVolliDb(dbPath);
+      let rawBirth: { payload: string }[];
+      try {
+        const engine = headEngine(writer, "refresh-birth");
+        await engine.getOrRecordSessionInput({ sessionId, input: birth, provenance });
+        rawBirth = storedInputs(writer, sessionId);
+        const compatible = await engine.recordToolRefresh({
+          sessionId,
+          provenance,
+          trigger: "cold-turn",
+          added: ["write"],
+          changed: [],
+          surface: {
+            ...birth,
+            tools: ["read", "write", "codemode"],
+            codeMode: { ...birth.codeMode, routes: { ...birth.codeMode.routes, write: "both" } },
+          },
+        });
+        // Model the next release's writer without teaching this build a fake
+        // builtin. Append a new outer fact, never mutate its birth or a prior
+        // compatible refresh. Attachment must retain the last bindable epoch.
+        const futurePayload = {
+          kind: "session.tools.refreshed",
+          trigger: "cold-turn",
+          added: [future],
+          changed: [],
+          surface: {
+            ...birth,
+            tools: [...tools, "write", future],
+            codeMode: {
+              ...birth.codeMode,
+              routes: { ...birth.codeMode.routes, write: "both", [future]: "both" },
+            },
+          },
+        };
+        writer
+          .prepare(`INSERT INTO session_events
+          (id, session_id, sequence, occurred_at, recorded_at, provenance_id, attachment_id, command_id, payload)
+          SELECT ?, session_id, sequence + 1, occurred_at + 1, recorded_at + 1, provenance_id, attachment_id, command_id, ?
+          FROM session_events WHERE id = ?`)
+          .run("future-tool-refresh", JSON.stringify(futurePayload), compatible!.id);
+      } finally {
+        writer.close();
+      }
+      const run = await n1(
+        dbPath,
+        [{ kind: "attach", sessionId, workspace: join(root, "repo") }],
+        CODE_MODE_CHILD,
+      );
+      const attached = value(run, 0);
+      // The lane may skip or understand the new outer kind. In either case it
+      // must read/replay the Session and bind every birth tool, never fail over
+      // a future name embedded in a refresh. No exact old decoder shape.
+      expect(attached.replayable).toBe(true);
+      expect(attached.birthStillReadable).toBe(true);
+      expect(attached.declared).toEqual(expect.arrayContaining(["read", "codemode"]));
+      assertHeadReads(dbPath);
+      const reopened = openVolliDb(dbPath);
+      try {
+        expect(storedInputs(reopened, sessionId)).toEqual(rawBirth!);
+        const engine = headEngine(reopened, "refresh-reopened");
+        expect((await engine.getSession({ sessionId }))?.session.id).toBe(sessionId);
+        expect(
+          await engine.getOrRecordSessionInput({ sessionId, input: birth, provenance }),
+        ).toEqual(birth);
+        const rawFuture = reopened
+          .prepare("SELECT payload FROM session_events WHERE id = ?")
+          .get("future-tool-refresh") as { payload: string };
+        expect(JSON.parse(rawFuture.payload)).toMatchObject({
+          surface: { tools: expect.arrayContaining([future]) },
+        });
+        // Replay still reaches the compatible facts on either side of an
+        // unbindable future refresh, rather than failing the whole history.
+        await engine.submit({
+          sessionId,
+          commandId: "after-future-refresh",
+          provenance,
+          intent: { kind: "session.retitle", title: "Still replayable" },
+        });
+        expect((await engine.getSession({ sessionId }))?.session.title).toBe("Still replayable");
+      } finally {
+        reopened.close();
+      }
+    });
+
     it("replays Code Mode successful and failed picture references in N−1 with identical artifact hashes and named fallback text", async () => {
       const { markers, artifacts } = await durableCodeModePictures();
       const run = await n1(

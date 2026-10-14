@@ -203,6 +203,22 @@ const codecs = {
         decodeSessionInputRecord(record, context, decodeRendererMcpToolDefinitions),
       ),
   },
+  "session.tools.refreshed": {
+    decode: (record, context) => ({
+      ...decodeToolRefreshNotice(record, context),
+      surface: decodeToolSurfaceInput(
+        asRecord(record.surface, `${context}.surface`),
+        "tool-surface",
+        `${context}.surface`,
+        decodeMcpToolDefinitions,
+        true,
+      ),
+    }),
+    // Definitions and the entire effective surface are host-only. The quiet
+    // transcript fact needs just names and why they changed.
+    scrub: ({ surface: _surface, ...notice }) => notice,
+    decodeRenderer: decodeToolRefreshNotice,
+  },
   "session.signaled": {
     decode: (record, context) => ({
       kind: "session.signaled",
@@ -1284,7 +1300,12 @@ function scrubSessionInputRecord(payload: PayloadOf<"session.input.recorded">) {
   if (input.kind !== "tool-surface") return { kind: payload.kind, input };
   // Birth-only declaration state stays durable on the host, never on the
   // renderer/public wire. Keep all tool-surface markers in this one scrub path.
-  const { askUserQuestions: _askUserQuestions, codeMode: frozenCodeMode, ...surface } = input;
+  const {
+    askUserQuestions: _askUserQuestions,
+    refreshDescriptions: _refreshDescriptions,
+    codeMode: frozenCodeMode,
+    ...surface
+  } = input;
   if (frozenCodeMode === undefined) return { kind: payload.kind, input: surface };
   const { descriptionVersion: _descriptionVersion, ...codeMode } = frozenCodeMode;
   return { kind: payload.kind, input: { ...surface, codeMode } };
@@ -1390,23 +1411,51 @@ function decodeMcpToolDefinitions(value: unknown, context: string): readonly Mcp
   return validateMcpToolDefinitions(definitions);
 }
 
+function decodeToolRefreshNotice(record: JsonRecord, context: string) {
+  return {
+    kind: "session.tools.refreshed" as const,
+    // An open output enum: a newer trigger is still a useful transcript fact.
+    trigger: readString(
+      record.trigger,
+      `${context}.trigger`,
+    ) as PayloadOf<"session.tools.refreshed">["trigger"],
+    added: readToolRefreshNames(record.added, `${context}.added`),
+    changed: readToolRefreshNames(record.changed, `${context}.changed`),
+  };
+}
+
+function readToolRefreshNames(value: unknown, context: string): readonly string[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((name, index) => readString(name, `${context}[${index}]`));
+}
+
 function decodeToolSurfaceInput(
   input: Record<string, unknown>,
   kind: "tool-surface",
   context: string,
   decodeMcpTools: typeof decodeMcpToolDefinitions,
+  refreshed = false,
 ): {
   kind: "tool-surface";
   tools: readonly SessionToolId[];
   mcpManagementNames?: "server";
   askUserQuestions?: true;
+  refreshDescriptions?: true;
   mcpTools?: readonly McpToolDefinition[];
   codeMode?: CodeModeSurface;
 } {
-  const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
+  // Refresh names are an open durable vocabulary. Attachment selects the last
+  // bindable epoch; the quiet fact remains replayable even on a future downgrade.
+  // Birth remains strict because pre-feature builds read that known record.
+  const tools = refreshed
+    ? (readToolRefreshNames(input.tools, `${context}.tools`) as readonly SessionToolId[])
+    : decodeSessionToolIds(input.tools, `${context}.tools`);
   // Birth-only declaration marker: historical absence must not become a default.
   if (input.askUserQuestions !== undefined && input.askUserQuestions !== true) {
     throw new Error(`${context}.askUserQuestions must be true when present`);
+  }
+  if (input.refreshDescriptions !== undefined && input.refreshDescriptions !== true) {
+    throw new Error(`${context}.refreshDescriptions must be true when present`);
   }
   const mcpManagementNames =
     input.mcpManagementNames === undefined
@@ -1436,6 +1485,7 @@ function decodeToolSurfaceInput(
     tools,
     ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
     ...(input.askUserQuestions === true ? { askUserQuestions: true as const } : {}),
+    ...(input.refreshDescriptions === true ? { refreshDescriptions: true as const } : {}),
     ...(mcpTools === undefined ? {} : { mcpTools }),
     ...(codeMode === undefined ? {} : { codeMode }),
   };
