@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { z } from "zod";
 import {
   CATALOG_ENTRIES,
+  DEFAULT_CODE_MODE_LIMITS,
   BOARD_ENTRIES,
   HOST_WORKSPACE_ENTRIES,
   scrubSessionEvent,
@@ -90,6 +91,13 @@ const payloads = {
   "session.input.recorded": {
     kind: "session.input.recorded",
     input: { kind: "tool-surface", tools: ["read"] },
+  },
+  "session.tools.refreshed": {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    delta: {},
+    added: ["write"],
+    changed: [],
   },
   "session.signaled": { kind: "session.signaled", signal: "done", reason: null },
   "session.stopped": { kind: "session.stopped", reason: null, by: { kind: "user" } },
@@ -249,6 +257,25 @@ function commandRouter(schema: z.ZodType | undefined): AppRouter {
     },
   } as unknown as AppRouter;
 }
+
+it("keeps Code Mode's host-only description generation off wire output", () => {
+  for (const generation of [undefined, 2] as const) {
+    const input = frame({
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "codemode"],
+        codeMode: {
+          routes: { read: "both" },
+          limits: DEFAULT_CODE_MODE_LIMITS,
+          ...(generation === undefined ? {} : { descriptionVersion: generation }),
+        },
+      },
+    });
+    expect(frameSchema.parse(input)).toEqual(input);
+    expect(JSON.stringify(input)).not.toContain("descriptionVersion");
+  }
+});
 
 describe("publishable Session procedure schemas", () => {
   it("publishes every catalog entry, without unrepresentable fallback", () => {
@@ -602,6 +629,15 @@ describe("the host follow-up queue on the wire (VC-675)", () => {
     }
     expect(streamEmissionSchema.safeParse({ ...queued, throughSequence: -1 }).success).toBe(false);
     expect(followUpItemWireSchema.parse({ ...item, state: "releasing" }).state).toBe("releasing");
+    const steering = JSON.parse(
+      JSON.stringify({ ...queued, queue: [{ ...item, afterCurrentStep: true }] }),
+    );
+    expect(streamEmissionWireSchema.parse(steering)).toMatchObject({
+      queue: [{ id: item.id, afterCurrentStep: true }],
+    });
+    expect(followUpItemWireSchema.safeParse({ ...item, afterCurrentStep: false }).success).toBe(
+      false,
+    );
   });
 
   it("carries queue emissions on the current stream union and keeps the legacy union frozen", () => {

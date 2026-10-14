@@ -44,9 +44,12 @@ import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversati
 import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   activityDescriptor,
+  activityStatus,
   bundleNeedsAttention,
   bundleSummary,
+  compactSignature,
   describeActivity,
+  isBundleStreaming,
   reasoningBody,
   reasoningStatus,
   splitPath,
@@ -59,13 +62,30 @@ import {
   type SummarySegment,
   type SummaryTone,
 } from "@volli/session-presentation";
-import { BrowserTabCard } from "@renderer/components/browser/browser-tab-card";
+import {
+  BrowserCardHostContext,
+  BrowserPicture,
+  BrowserTabCard,
+  useBrowserPicture,
+} from "@renderer/components/browser/browser-tab-card";
 import { Button } from "@renderer/components/ui/button";
 import { languageForPath } from "@renderer/editor/document-identity";
 import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
 
 import { TokenText, useHighlightedLines, useOnScreen } from "./tool-output-highlight";
+import { RunningBashCall, RunningBashControl, RunningBashReason } from "./running-bash-control";
+import {
+  codeModeImageContent,
+  codeModeImageDataUrl,
+  type CodeModeContent,
+} from "./code-mode-output-model";
+
+/** The same cached screenshot reader, with the owning Session's host transport. */
+export const CodeModePictureHostContext = React.createContext<Pick<
+  import("@renderer/components/browser/browser-api").BrowserApi,
+  "picture"
+> | null>(null);
 
 /* ------------------------------------------------------------------- motion */
 
@@ -326,8 +346,12 @@ const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
  * checkmark column costs nothing: the meta on the right is the receipt, and a
  * settled row that says nothing else is a row that went fine.
  */
+const ActivityProgressContext = React.createContext(true);
+
 function RowGlyph({ kind, status }: { kind: ActivityKind; status: ActivityStatus }) {
-  if (status !== "done") return <StatusGlyph status={status} />;
+  const progressEnabled = React.useContext(ActivityProgressContext);
+  if (status !== "done" && (progressEnabled || (status !== "pending" && status !== "running")))
+    return <StatusGlyph status={status} />;
   const Icon = KIND_ICONS[kind];
   return <Icon aria-hidden className={GLYPH_CLASS} />;
 }
@@ -349,7 +373,11 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
     case "not-run":
       return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
-      return <SpinnerGapIcon aria-hidden className={cn(className, "animate-spin text-primary")} />;
+      return (
+        <span aria-hidden data-activity-progress className={cn("flex", className)}>
+          <SpinnerGapIcon className="size-full animate-spin text-primary" />
+        </span>
+      );
     case "failed":
       return (
         <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
@@ -407,7 +435,20 @@ function ObjectText({ value }: { value: string }) {
  * same immutable objects, so this is where re-rendering actually stops. Every
  * settled row above the live one skips entirely while a turn streams.
  */
-export const ToolRow = React.memo(function ToolRow({
+export const ToolRow = React.memo(function ToolRow(props: {
+  part: DynamicToolUIPart;
+  onOpenFile?(path: string): void;
+  onOpenSession?(sessionId: string): void;
+  className?: string;
+}) {
+  return (
+    <RunningBashCall part={props.part}>
+      <ToolRowContent {...props} />
+    </RunningBashCall>
+  );
+});
+
+const ToolRowContent = React.memo(function ToolRowContent({
   part,
   onOpenFile,
   onOpenSession,
@@ -432,7 +473,9 @@ export const ToolRow = React.memo(function ToolRow({
   // A bash command always earns its own disclosure: the header is one line by
   // design, while the body is the untruncated command beside whatever it
   // printed. Other rows only need a disclosure when their presenter has detail.
-  const expandable = row.detail !== null || row.command !== null || card !== null;
+  const imageContent = codeModeImageContent(part);
+  const expandable =
+    row.detail !== null || row.command !== null || card !== null || imageContent !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
 
   return (
@@ -441,12 +484,20 @@ export const ToolRow = React.memo(function ToolRow({
         {/* A refused call and a page that would not load are both successes to
             the harness; `describeActivity` is what makes the glyph disagree. */}
         <RowGlyph kind={row.kind} status={row.status} />
-        <span className="shrink-0">{row.verb}</span>
+        <span className="shrink-0">
+          {row.kind === "run-command" && row.status === "running" ? "Running" : row.verb}
+        </span>
         {row.object ? (
           <RowObject row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
         ) : null}
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <RowActions row={row} />
+        {movedBashReceipt(part) ? (
+          <span className="shrink-0 text-label text-muted-foreground">Moved to background</span>
+        ) : null}
+        {row.kind === "run-command" && row.status === "running" ? (
+          <RunningBashControl key={part.toolCallId} part={part} />
+        ) : null}
         {row.meta ? (
           <span
             className={cn("shrink-0 font-mono tabular-nums", TONE_CLASS[row.metaTone])}
@@ -456,6 +507,7 @@ export const ToolRow = React.memo(function ToolRow({
           </span>
         ) : null}
       </div>
+      <RunningBashReason />
       {deniedReason ? (
         <p
           data-slot="refusal-explanation"
@@ -467,17 +519,55 @@ export const ToolRow = React.memo(function ToolRow({
       {expandable ? (
         <Disclosure open={open}>
           {card !== null ? <BrowserTabCard facet={card} note={refusalNote(part, card)} /> : null}
-          <ToolDetail
-            kind={row.kind}
-            command={row.command}
-            detail={row.detail}
-            openPath={row.openPath}
-          />
+          {imageContent !== null ? (
+            <CodeModeOutput input={part.input} content={imageContent} />
+          ) : (
+            <ToolDetail
+              kind={row.kind}
+              command={row.command}
+              detail={row.detail}
+              openPath={row.openPath}
+            />
+          )}
         </Disclosure>
       ) : null}
     </div>
   );
 });
+
+/** Recognize the complete durable plain-text receipt, not a phrase in command output.
+ * This is presentation only: the receipt never authorizes a move or a shell lookup.
+ */
+function movedBashReceipt(part: DynamicToolUIPart): boolean {
+  if (
+    part.state !== "output-available" ||
+    part.preliminary === true ||
+    activityDescriptor(part).nativeToolName !== "bash"
+  )
+    return false;
+  const output: unknown = part.output;
+  if (
+    typeof output !== "object" ||
+    output === null ||
+    !("content" in output) ||
+    !Array.isArray(output.content) ||
+    output.content.length !== 1
+  )
+    return false;
+  const first: unknown = output.content[0];
+  if (
+    typeof first !== "object" ||
+    first === null ||
+    !("type" in first) ||
+    first.type !== "text" ||
+    !("text" in first) ||
+    typeof first.text !== "string"
+  )
+    return false;
+  return /^Moved command to background shell [^\s.]+\.\nIt keeps running\. A notice will arrive when it exits; use shell_output to read it or shell_kill to end it\.\n(?:Output so far:\n|No output so far\.(?:\n|$))/.test(
+    first.text,
+  );
+}
 
 const OBJECT_LINK_CLASS =
   "min-w-0 truncate rounded-sm font-mono text-ui text-foreground underline decoration-transparent decoration-dotted underline-offset-[3px] transition-colors hover:decoration-primary hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -667,6 +757,60 @@ function DetailFrame({
     <div ref={ref} className={cn("my-1", DETAIL_FRAME, className)}>
       {children}
     </div>
+  );
+}
+
+function CodeModeOutput({ input, content }: { input: unknown; content: CodeModeContent[] }) {
+  const signature = compactSignature(input);
+  return (
+    <>
+      {signature === null ? null : (
+        <DetailFrame className="whitespace-pre-wrap text-muted-foreground/70">
+          {signature}
+        </DetailFrame>
+      )}
+      {content.map((block, index) =>
+        block.type === "text" ? (
+          // Suppress only framing equal to a structurally bound host caption.
+          // The mapper may insert an N−1 fallback between the framing and image.
+          content
+            .slice(index + 1, index + 3)
+            .some((next) => next.type === "image" && next.caption === block.text) ? null : (
+            // Program text remains plain output, even when it mimics host framing.
+            // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate blocks are valid.
+            <DetailFrame key={index} className="whitespace-pre-wrap text-muted-foreground">
+              {block.text}
+            </DetailFrame>
+          )
+        ) : (
+          // oxlint-disable-next-line react/no-array-index-key -- Committed slots are immutable; duplicate images are valid.
+          <CodeModeImage key={index} block={block} />
+        ),
+      )}
+    </>
+  );
+}
+
+function CodeModeImage({ block }: { block: Extract<CodeModeContent, { type: "image" }> }) {
+  const host = React.useContext(BrowserCardHostContext);
+  const pictureApi = React.useContext(CodeModePictureHostContext);
+  const picture = useBrowserPicture(
+    pictureApi ?? host?.api ?? null,
+    typeof block.picture === "string" ? block.picture : null,
+  );
+  const dataUrl = codeModeImageDataUrl(block);
+  return (
+    <figure className="my-1">
+      <BrowserPicture
+        alt="Image returned by Code Mode"
+        state={dataUrl === null ? picture : { kind: "ready", dataUrl }}
+      />
+      {block.caption === undefined ? null : (
+        <figcaption className="mt-1 whitespace-pre-wrap text-ui text-muted-foreground">
+          {block.caption}
+        </figcaption>
+      )}
+    </figure>
   );
 }
 
@@ -885,6 +1029,61 @@ function DiffDetail({ lines, language }: { lines: DiffLine[]; language: string |
  */
 const BUNDLE_CAP = "max-h-96";
 
+/** The header yields only to a spinner wholly inside its expanded viewport.
+ * Observe the glyph's fixed slot, not its rotating bounds or a tall payload. Subscriptions
+ * change with active row identities, never with streamed text. */
+function useVisibleBundleProgress(
+  viewport: React.RefObject<HTMLDivElement | null>,
+  enabled: boolean,
+  indicatorKeys: string,
+): boolean {
+  const [visible, setVisible] = React.useState(false);
+  React.useLayoutEffect(() => {
+    const root = viewport.current;
+    if (!enabled || root === null || indicatorKeys === "[]") {
+      setVisible(false);
+      return;
+    }
+    const indicators = [...root.querySelectorAll("[data-activity-progress]")];
+    const bounds = root.getBoundingClientRect();
+    const shown = new Set(
+      indicators.filter((node) => {
+        const box = node.getBoundingClientRect();
+        return (
+          box.width > 0 &&
+          box.height > 0 &&
+          box.top >= bounds.top &&
+          box.bottom <= bounds.bottom &&
+          box.left >= bounds.left &&
+          box.right <= bounds.right
+        );
+      }),
+    );
+    // Measure before paint so expanding a short list never flashes a second
+    // spinner. Subsequent scroll/layout changes are observer-driven.
+    setVisible(shown.size > 0);
+    if (typeof IntersectionObserver === "undefined") return;
+    let observing = true;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!observing) return;
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 1) shown.add(entry.target);
+          else shown.delete(entry.target);
+        }
+        setVisible(shown.size > 0);
+      },
+      { root, threshold: 1 },
+    );
+    for (const indicator of indicators) observer.observe(indicator);
+    return () => {
+      observing = false;
+      observer.disconnect();
+    };
+  }, [viewport, enabled, indicatorKeys]);
+  return visible;
+}
+
 /**
  * Everything the agent did between two things it said, behind one line.
  *
@@ -905,30 +1104,48 @@ export const ActivityBundle = React.memo(
     rows,
     onOpenFile,
     onOpenSession,
+    progressEnabled = true,
   }: {
     rows: readonly BundleRow[];
+    progressEnabled?: boolean;
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
     const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
     const open = userOpen ?? bundleNeedsAttention(rows);
+    const streaming = progressEnabled && isBundleStreaming(rows);
+    const viewport = React.useRef<HTMLDivElement>(null);
+    const indicatorKeys = JSON.stringify(
+      rows
+        .filter((row) =>
+          row.kind === "reasoning" ? row.streaming : activityStatus(row.part) === "running",
+        )
+        .map((row) => row.key),
+    );
+    const rowProgressVisible = useVisibleBundleProgress(viewport, open && streaming, indicatorKeys);
+    const liveThought = progressEnabled
+      ? rows.findLast((row) => row.kind === "reasoning" && row.streaming)
+      : undefined;
     // Wired to the click and not to `open`, which is derived: a bundle that
     // opens itself because a row inside it failed is not a reader reaching for
     // anything, and must not detach them from a live stream.
     const stopFollowing = useStopFollowing();
 
     const list = (
-      <div className="space-y-1">
-        {rows.map((row) => (
-          <BundleRowView
-            key={row.key}
-            row={row}
-            onOpenFile={onOpenFile}
-            onOpenSession={onOpenSession}
-          />
-        ))}
-      </div>
+      <ActivityProgressContext.Provider value={progressEnabled}>
+        <div className="space-y-1">
+          {rows.map((row) => (
+            <RegisteredBundleRow
+              key={row.key}
+              row={row}
+              open={summary.length === 0 || open}
+              onOpenFile={onOpenFile}
+              onOpenSession={onOpenSession}
+            />
+          ))}
+        </div>
+      </ActivityProgressContext.Provider>
     );
 
     // Reasoning alone has nothing to count, so the row *is* the summary. A
@@ -947,27 +1164,49 @@ export const ActivityBundle = React.memo(
           type="button"
           onClick={toggle}
           aria-expanded={open}
+          data-slot="activity-bundle-header"
           className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
         >
-          <BundleGlyph />
-          <Summary segments={summary} />
+          {streaming && (!open || !rowProgressVisible) ? (
+            <SpinnerGapIcon
+              aria-hidden
+              className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+            />
+          ) : (
+            <BundleGlyph />
+          )}
+          {/* A closed bundle must not hide its live thought behind a finished
+              tool summary. Open, the thought already has its own visible row. */}
+          {!open && liveThought?.kind === "reasoning" ? (
+            <span className="min-w-0 truncate">
+              {reasoningStatus(liveThought.part.text, { streaming: true }).verb}
+            </span>
+          ) : (
+            <Summary segments={summary} />
+          )}
           <Caret open={open} pinned />
         </button>
-        <Disclosure open={open}>
-          {/* No `overscroll-contain`: at the bundle's edges the wheel must chain
+        {/* Call owners stay mounted; only each row's disclosed UI unmounts.
+            No `overscroll-contain`: at the bundle's edges the wheel must chain
               to the transcript, or the feed reads as dead under the cursor for
               the whole height of the open bundle (VC-32). And no bottom scrim
               over the window — it covered the last tool call whole, including at
               the end of the scroll: see "NO SCRIM AT THE BOTTOM OF A CAPPED
               WINDOW" above (VC-60). */}
-          <div className={cn(BUNDLE_CAP, "overflow-auto")}>{list}</div>
-        </Disclosure>
+        <div
+          ref={viewport}
+          data-slot="activity-bundle-viewport"
+          className={cn(open && BUNDLE_CAP, open && "overflow-auto")}
+        >
+          {list}
+        </div>
       </div>
     );
   },
   (previous, next) =>
     previous.onOpenFile === next.onOpenFile &&
     previous.onOpenSession === next.onOpenSession &&
+    previous.progressEnabled === next.progressEnabled &&
     sameBundleRows(previous.rows, next.rows),
 );
 
@@ -995,6 +1234,38 @@ function sameBundleRows(previous: readonly BundleRow[], next: readonly BundleRow
     return other.part === row.part;
   });
 }
+
+const RegisteredBundleRow = React.memo(
+  function RegisteredBundleRow({
+    row,
+    open,
+    onOpenFile,
+    onOpenSession,
+  }: {
+    row: BundleRow;
+    open: boolean;
+    onOpenFile?(path: string): void;
+    onOpenSession?(sessionId: string): void;
+  }) {
+    const content = (
+      <Disclosure open={open}>
+        <BundleRowView row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
+      </Disclosure>
+    );
+    return row.kind === "tool" ? (
+      <RunningBashCall part={row.part}>{content}</RunningBashCall>
+    ) : (
+      content
+    );
+  },
+  // Segmentation creates fresh row wrappers, not fresh parts. Keep settled call
+  // owners from rendering or registering again while another call streams.
+  (previous, next) =>
+    previous.open === next.open &&
+    previous.onOpenFile === next.onOpenFile &&
+    previous.onOpenSession === next.onOpenSession &&
+    sameBundleRows([previous.row], [next.row]),
+);
 
 const BundleRowView = React.memo(function BundleRowView({
   row,
@@ -1033,8 +1304,10 @@ const ReasoningRow = React.memo(function ReasoningRow({
   part: ReasoningUIPart;
   streaming: boolean;
 }) {
-  const elapsed = useElapsed(streaming);
-  const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
+  const progressEnabled = React.useContext(ActivityProgressContext);
+  const progressing = progressEnabled && streaming;
+  const elapsed = useElapsed(progressing);
+  const status = reasoningStatus(part.text, { streaming: progressing, durationMs: elapsed });
   const body = reasoningBody(part.text);
   const expandable = body !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
@@ -1042,8 +1315,10 @@ const ReasoningRow = React.memo(function ReasoningRow({
   return (
     <div className="group/row not-prose">
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
-        {streaming ? (
-          <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
+        {progressing ? (
+          <span aria-hidden data-activity-progress className="flex size-3.5 shrink-0">
+            <SpinnerGapIcon className="size-full animate-spin text-primary" />
+          </span>
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}

@@ -16,6 +16,8 @@ export interface SessionFollowUpItem {
   message: UIMessage;
   commandId: string;
   state: "queued" | "releasing";
+  /** Display-only wait hint; target identity stays host-private. */
+  afterCurrentStep?: true;
 }
 
 export interface SessionFollowUpCommand {
@@ -139,11 +141,12 @@ export function createInMemorySessionFollowUpLedger(
 }
 
 export function projectSessionFollowUps(snapshot: SessionFollowUpState): SessionFollowUpItem[] {
-  return snapshot.entries.map(({ id, message, commandId, state }) => ({
+  return snapshot.entries.map(({ id, message, commandId, state, steer, refused }) => ({
     id,
     message,
     commandId,
     state,
+    ...(steer === undefined || refused ? {} : { afterCurrentStep: true as const }),
   }));
 }
 

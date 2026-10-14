@@ -481,7 +481,12 @@ describe("Linux CLI scripted-provider proof (VC-622)", () => {
 
   it("withdraws a parked question on hostd stop, like desktop shutdown, and preserves its history", async () => {
     const f = await fixture([
-      { tool: { name: "ask_user", args: { question: "Which path?" } } },
+      {
+        tool: {
+          name: "ask_user",
+          args: { questions: [{ question: "Which path?", choices: [] }] },
+        },
+      },
       { text: "Finished" },
     ]);
     const started = await f.cli(

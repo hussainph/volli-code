@@ -161,7 +161,9 @@ describe("McpSettingsService", () => {
 
   it("edits, enables, disables, changes selected tools, and removes without affecting stored history", async () => {
     const settings = service();
+    expect(settings.surfaceRevision("p1")).toBe(0);
     await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    expect(settings.surfaceRevision("p1")).toBe(1);
 
     expect(settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: false }).ok).toBe(
       true,
@@ -176,6 +178,10 @@ describe("McpSettingsService", () => {
     expect(settings.selectedTools("p1").map((tool) => tool.toolName)).toEqual(["later"]);
     expect(settings.remove({ projectId: "p1", serverId: "server-1" })).toEqual({ ok: true });
     expect(settings.list("p1")).toEqual([]);
+    expect(settings.surfaceRevision("p1")).toBe(5);
+    expect(settings.surfaceRevision("other-project")).toBe(0);
+    expect(settings.remove({ projectId: "p1", serverId: "missing" }).ok).toBe(false);
+    expect(settings.surfaceRevision("p1")).toBe(5);
   });
 });
 

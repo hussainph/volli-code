@@ -8,7 +8,8 @@
 import { schemaToType } from "@earendil-works/pi-codemode";
 import { verbEntry } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
-import { outputSchemaFor, VERB_DETAILS_ABSENT } from "./shape";
+import { MCP_UNTRUSTED_DATA_WARNING_TEXT } from "./trust";
+import { outputSchemaFor, shapeResult, VERB_DETAILS_ABSENT } from "./shape";
 
 /** The properties an MCP result is declared with, for one published schema. */
 function mcpProperties(schema: unknown): Record<string, unknown> {
@@ -60,5 +61,74 @@ describe("outputSchemaFor", () => {
     const published = { type: "object", properties: { id: { type: "number" } } };
     expect(mcpProperties(published).structuredContent).toBe(published);
     expect(mcpProperties(undefined).structuredContent).toEqual({});
+  });
+});
+
+describe("image shaping", () => {
+  it("explains legacy images while keeping string reads and MCP omission counts", () => {
+    const image = { type: "image" as const, data: "AAAA", mimeType: "image/png" };
+    const result = { content: [image], details: undefined };
+    const capture = () => {
+      throw new Error(`legacy ${image.mimeType} bytes must not be captured`);
+    };
+    const placeholder =
+      "[image image/png left out: This Session started before Code Mode could return images (Volli 0.2.2). Start a new Session to see images from programs.]";
+    expect(shapeResult("text", result, false, capture, true)).toEqual({
+      ok: true,
+      value: placeholder,
+    });
+    expect(shapeResult("mcp", result, false, capture, true)).toEqual({
+      ok: true,
+      value: { text: placeholder, isError: false, omittedImages: 1 },
+    });
+    expect(
+      shapeResult(
+        "mcp",
+        { ...result, content: [{ type: "text", text: MCP_UNTRUSTED_DATA_WARNING_TEXT }, image] },
+        false,
+        capture,
+        true,
+      ),
+    ).toEqual({ ok: true, value: { text: placeholder, isError: false, omittedImages: 1 } });
+  });
+  it("types exact handle wrappers without changing old declaration schemas", () => {
+    const mcp = schemaToType(outputSchemaFor("mcp"));
+    expect(mcp).toContain('type: "image"');
+    expect(mcp).toContain("handle: string");
+    expect(schemaToType(outputSchemaFor("image"))).toContain("images:");
+    expect(outputSchemaFor("text", undefined, true)).toEqual({ type: "string" });
+    expect(schemaToType(outputSchemaFor("mcp", undefined, true))).not.toContain("handle:");
+  });
+  it("reports unavailable image references and image-only errors without returning payloads", () => {
+    const result = {
+      content: [{ type: "image" as const, data: "secret bytes", mimeType: "image/png" }],
+      details: undefined,
+    };
+    expect(shapeResult("text", result, false)).toMatchObject({
+      ok: true,
+      value: { images: [], omittedImages: 1 },
+    });
+    expect(shapeResult("image", result, true)).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("left out"),
+    });
+    expect(shapeResult("text", result, false, () => undefined)).toMatchObject({
+      ok: true,
+      value: { omittedImages: 1 },
+    });
+    expect(
+      shapeResult(
+        "structured",
+        { content: [], details: undefined, structuredContent: { n: 1 } },
+        false,
+      ),
+    ).toEqual({ ok: true, value: { n: 1 } });
+    expect(
+      shapeResult(
+        "structured",
+        { content: [{ type: "text", text: "failed" }], details: undefined },
+        true,
+      ),
+    ).toEqual({ ok: false, message: "failed" });
   });
 });

@@ -23,7 +23,7 @@
  *   prefix so a failed check is diagnosable after the fact.
  */
 import type Database from "better-sqlite3";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, type ExperimentBuildKind } from "@volli/shared";
 
 import type { NotificationRequest } from "./notifications/dispatch";
 
@@ -78,6 +78,19 @@ export function readAllowPrerelease(db: Database.Database): boolean {
  * the updater actually consumes.
  */
 export type UpdateChannelName = "stable" | "canary";
+
+/**
+ * Use electron-updater's parsed running version, not its mutable allowPrerelease
+ * policy or the user's update-channel preference. The updater already parses
+ * app.getVersion() with semver and derives its default from these components.
+ */
+export function runningBuildKind(
+  isPackaged: boolean,
+  currentVersion: { readonly prerelease: readonly (string | number)[] },
+): ExperimentBuildKind {
+  if (!isPackaged) return "dev";
+  return currentVersion.prerelease.length > 0 ? "canary" : "stable";
+}
 
 /** Which line this install follows, read back off the same key the updater uses. */
 export function readUpdateChannel(db: Database.Database): UpdateChannelName {

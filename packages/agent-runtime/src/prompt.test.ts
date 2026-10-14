@@ -560,6 +560,13 @@ describe("the Code Mode paragraph", () => {
     }
   });
 
+  it("new Sessions invite only callable reads while legacy Cache Prefixes keep their wording", () => {
+    const modern = execution("ticket", { ...surface(true), descriptionVersion: 2 });
+    expect(modern).toContain("a loop of read calls");
+    expect(modern).not.toContain("a loop of bash");
+    expect(execution("ticket", surface(true))).toContain("a loop of bash or read calls");
+  });
+
   it("is absent without the record's say-so, Code Mode or not", () => {
     expect(execution("ticket", surface(false))).toBe(execution("ticket"));
     expect(execution("ticket")).not.toContain("codemode");
@@ -907,4 +914,30 @@ describe("composeFirstUserMessage", () => {
     const delivered = spec({ brief: { text: "brief" } });
     expect(composeFirstUserMessage(delivered, "go")).toBe(composeFirstUserMessage(delivered, "go"));
   });
+});
+
+describe("first-message frozen routes", () => {
+  it.each(["direct", "both", "code", "deferred", "hidden"] as const)(
+    "describes a verb's %s route, not an imaginary direct door",
+    (route) => {
+      const text = composeToolSurfaceBlock("project", {
+        tools: ["read"],
+        verbs: ["session.start"],
+        codeMode: { limits: DEFAULT_CODE_MODE_LIMITS, routes: { "session.start": route } },
+      });
+      if (route === "code" || route === "deferred") {
+        expect(text).toContain("session.start — session_start through codemode only");
+        expect(text).not.toContain("call it as session_start");
+        expect(text).not.toContain("holds these Volli verbs as named tools");
+      } else if (route === "hidden") {
+        expect(text).toContain("session.start — hidden (unavailable)");
+        expect(text).not.toContain("call it as");
+        expect(text).not.toContain("Use the available verbs");
+      } else {
+        expect(text).toContain("session.start — call it as session_start");
+        if (route === "both") expect(text).toContain("or through codemode");
+      }
+      if (route === "deferred") expect(text).toContain("searchTools() and describeTool()");
+    },
+  );
 });

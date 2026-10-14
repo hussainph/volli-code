@@ -38,6 +38,19 @@ export function visibleControls(tree, role, name, { contains = false } = {}) {
     return actualRole === role && (contains ? label?.includes(name) : label === name);
   });
 }
+/** Read the production registry's Workspace state, not host health or the UI's
+ * five-second writable reconnect grace. This journey opens exactly one remote
+ * project; absent/ambiguous claims must not supply readiness.
+ */
+export function acceptanceWorkspaceReady(snapshot) {
+  const hosts = snapshot.hosts.filter((host) => host.name === REMOTE_HOST);
+  if (hosts.length !== 1 || snapshot.readOnly !== null) return false;
+  const projects = Object.values(snapshot.projects).filter(
+    (project) => project.hostId === hosts[0].id,
+  );
+  return projects.length === 1 && projects[0].link.status === "ready";
+}
+
 /** An exiting dialog can leave background text visible before its names/refs return. */
 export function hasActionableControl(tree, role, name) {
   const hits = visibleControls(tree, role, name);
@@ -175,7 +188,21 @@ export function acceptanceScript(turn) {
   const input = turn.body.input ?? [];
   const last = input.at(-1);
   if (last?.type === "function_call_output") {
-    if (!String(last.output).includes("proceed"))
+    const question = turn.text.includes("remote-reopen-question")
+      ? REOPEN_QUESTION
+      : ANSWER_QUESTION;
+    let answers;
+    try {
+      answers = JSON.parse(String(last.output));
+    } catch {
+      return "REMOTE: expected Proceed answer was not delivered";
+    }
+    if (
+      !Array.isArray(answers) ||
+      answers.length !== 1 ||
+      answers[0]?.question !== question ||
+      answers[0]?.answer !== "Proceed"
+    )
       return "REMOTE: expected Proceed answer was not delivered";
     return turn.text.includes("remote-reopen-question") ? REOPEN_REPLY : ANSWER_REPLY;
   }
@@ -188,14 +215,14 @@ export function acceptanceScript(turn) {
         {
           name: "ask_user",
           arguments: {
-            question: turn.text.includes("remote-reopen-question")
-              ? REOPEN_QUESTION
-              : ANSWER_QUESTION,
-            options: [
-              { id: "proceed", label: "Proceed" },
-              { id: "stop", label: "Stop" },
+            questions: [
+              {
+                question: turn.text.includes("remote-reopen-question")
+                  ? REOPEN_QUESTION
+                  : ANSWER_QUESTION,
+                choices: ["Proceed", "Stop"],
+              },
             ],
-            allowOther: false,
           },
         },
       ],

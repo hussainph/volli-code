@@ -10,11 +10,16 @@
  * slice. Session commands and boot recovery move behind this assembly next.
  */
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { BrowserPictureStore } from "../browser/picture-store";
+import { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
 import type { PiModelAccess, CodeModeSandboxAssets } from "@volli/agent-runtime";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   shortSessionId,
+  verbToolsOf,
+  verbEntry,
   type McpToolDefinition,
   type ObservabilitySink,
   type SessionEvent,
@@ -50,6 +55,13 @@ import {
 } from "./index";
 import { resolveHostToolSurface } from "./host-capabilities";
 import { wireSessionRuntime } from "../session-services";
+import {
+  effectiveToolSurface,
+  declarationToolSurface,
+  additiveToolRefresh,
+  foldToolRefreshes,
+} from "./tool-refresh";
+import { codeModeRefreshGate } from "./tool-refresh-gate";
 
 export interface RuntimeAssemblyOptions {
   dbHandle: DbHandle;
@@ -66,6 +78,8 @@ export interface RuntimeAssemblyOptions {
   mcpDispatch: HostMcpDispatch;
   codeMode: HostCodeMode;
   codeModeSandbox?: CodeModeSandboxAssets;
+  /** Desktop's screenshot store; headless hosts use the same disk path and bounds. */
+  pictures?: BrowserPictureStore;
   observability: ObservabilitySink | null;
   delegation: TicketSessionDelegationStore | null;
   secrets: SecretService;
@@ -90,28 +104,12 @@ export interface RuntimeAssemblyOptions {
 export function recordedToolSurface(
   events: readonly SessionEvent[],
 ): readonly SessionToolId[] | null {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.tools;
-    }
-  }
-  return null;
+  return effectiveToolSurface(events)?.tools ?? null;
 }
 
 /** Exact sanitized MCP definitions frozen beside the dynamic tool names. */
 export function recordedMcpTools(events: readonly SessionEvent[]): readonly McpToolDefinition[] {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.mcpTools ?? [];
-    }
-  }
-  return [];
+  return effectiveToolSurface(events)?.mcpTools ?? [];
 }
 
 export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
@@ -134,6 +132,20 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
     shells,
     browser,
   } = options;
+  const refreshGate = codeModeRefreshGate<
+    NonNullable<Awaited<ReturnType<RuntimeAssemblyOptions["resolveRuntimeContext"]>>>
+  >({
+    revision: async ({ projectId, parentId }) =>
+      JSON.stringify([
+        mcpSettings?.surfaceRevision(projectId) ?? 0,
+        codeMode.revision(),
+        webAccess?.surfaceRevision() ?? 0,
+        (await hostDecisions?.offersClassify(projectId)) ?? false,
+        parentId === null
+          ? null
+          : await sessionEngine!.latestEventSequence({ sessionId: parentId }),
+      ]),
+  });
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
@@ -190,6 +202,9 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                 // At birth, freeze the wire spelling too. The old mcp_* names
                 // remain available only to Sessions whose record predates this marker.
                 mcpManagementNames: "server",
+                refreshDescriptions: true,
+                // Declaration changes apply only at new birth, never on legacy backfill.
+                ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
                 ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               },
@@ -201,14 +216,23 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           },
         }
       : null;
+  const pictures =
+    options.pictures ??
+    new BrowserPictureStore({
+      createId: randomUUID,
+      now: Date.now,
+      persist: browserPictureDisk(browserPicturesRoot(dataDir)),
+    });
   const piSessionsDirectory = join(dataDir, "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
+    sessionEngine !== null &&
     piModelAccess !== null &&
     sessionToolSurface !== null &&
     sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
+          persistActivityImage: (sessionId, image) => pictures.keepActivityImage(sessionId, image),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -249,6 +273,13 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           // (`harness-runtime.ts`).
           executionEnvFactory: async (workspacePath, identity) => {
             await options.beforeExecution();
+            const runtimeContext =
+              shells === undefined ? null : await options.resolveRuntimeContext(identity.sessionId);
+            const canMoveBash =
+              runtimeContext !== null &&
+              (["shell_start", "shell_output", "shell_kill"] as const).every((tool) =>
+                runtimeContext.toolSurface.includes(tool),
+              );
             // The Session's own name rides beside the PATH recovery:
             // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
             // exactly as `agentSessionEnv` exports them into a spawned PTY —
@@ -259,6 +290,33 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
             // the same token — see `attachment-identity.ts`.
             return refusingCredentialReads(
               await piExecutionEnv(workspacePath, {
+                ...(shells === undefined || !canMoveBash || runtimeContext === null
+                  ? {}
+                  : {
+                      foregroundExecutor: (input) =>
+                        shells.runForeground(
+                          {
+                            sessionId: identity.sessionId,
+                            attachmentId: identity.attachmentId,
+                            projectId: runtimeContext.projectId,
+                            ticketId: runtimeContext.ticketId,
+                          },
+                          {
+                            command: input.command,
+                            shellConfig: input.shellConfig,
+                            cwd: input.cwd,
+                            env: input.env,
+                            title: null,
+                          },
+                          {
+                            toolCallId: input.toolCallId,
+                            timeout: input.timeout,
+                            signal: input.signal,
+                            onChunk: input.onOutput,
+                            onReady: input.onReady,
+                          },
+                        ),
+                    }),
                 pathPrefixes: [binDir],
                 identity: attachmentIdentities.resolve(identity),
                 // This Session's concurrency budget (VC-339), computed at attach
@@ -329,9 +387,8 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
               : (scope) => {
                   const host = new McpSessionHost({
                     workspacePath: scope.workspacePath,
-                    // Snapshot only the configuration the frozen surface needs.
-                    // Current enablement selects new Sessions; a missing record
-                    // refuses attachment instead of advertising an unusable tool.
+                    // Retained names survive missing configuration; calls below
+                    // return a named unavailable result for removed servers.
                     servers: serversForFrozenMcpTools(
                       mcpSettings.list(scope.projectId),
                       scope.mcpTools,
@@ -364,8 +421,89 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     port: host.rawPort,
                     close: () => host.close(),
                   });
-                  return { call: host.routed(bound.call).call, dispose: bound.dispose };
+                  const routed = host.routed(bound.call);
+                  return {
+                    call: (request, signal, ask) => {
+                      if (
+                        !mcpSettings
+                          .list(scope.projectId)
+                          .some((server) => server.id === request.serverId)
+                      ) {
+                        return Promise.resolve({
+                          content: [
+                            {
+                              type: "text" as const,
+                              text: `MCP tool ${request.toolName} is unavailable: its server was removed.`,
+                            },
+                          ],
+                          isError: true,
+                        });
+                      }
+                      return routed.call(request, signal, ask);
+                    },
+                    dispose: bound.dispose,
+                  };
                 },
+          releaseRuntimeContext: (sessionId) => refreshGate.forget(sessionId),
+          refreshRuntimeContext: (sessionId, request) =>
+            refreshGate.check(sessionId, request, async (rememberIdentity) => {
+              const { trigger, model } = request;
+              const projection = await sessionEngine.getSession({ sessionId });
+              const events = await sessionEngine.listEvents({ sessionId });
+              const current = effectiveToolSurface(events);
+              // Do not overwrite a newer build's unknown additions on downgrade.
+              if (foldToolRefreshes(events).future) return null;
+              if (projection === null || current === null) return null;
+              const session = projection.session;
+              const parentId = session.role === "subagent" ? session.parentSessionId : null;
+              await rememberIdentity({ projectId: session.projectId, parentId });
+              const parent =
+                parentId === null
+                  ? null
+                  : effectiveToolSurface(await sessionEngine.listEvents({ sessionId: parentId }));
+              // Delegates inherit their parent's effective definitions, never a
+              // project selection that the parent has not acquired yet.
+              const mcpTools =
+                parentId === null
+                  ? (sessionToolSurface.resolveMcp?.(session.projectId) ?? [])
+                  : (parent?.mcpTools ?? []);
+              const birth = codeMode.birth(model, mcpTools);
+              const grants = verbToolsOf(current.tools).filter(
+                (tool) => verbEntry(tool)?.retired === undefined,
+              );
+              const tools = sessionToolSurface.resolve(
+                session.role,
+                session.role === "subagent" ? [] : grants,
+                parentId === null ? undefined : (parent?.tools ?? []),
+                mcpTools,
+                birth,
+                await sessionToolSurface.resolveClassify?.(session.projectId),
+              );
+              const candidateCodeMode = codeMode.surfaceFor(birth, tools, mcpTools);
+              const candidate = {
+                kind: "tool-surface" as const,
+                tools,
+                ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
+                ...(mcpTools.length === 0 ? {} : { mcpTools }),
+                ...(candidateCodeMode === undefined ? {} : { codeMode: candidateCodeMode }),
+              };
+              const refresh = additiveToolRefresh(
+                current,
+                candidate,
+                trigger,
+                declarationToolSurface(events) ?? current,
+              );
+              await sessionEngine.recordToolRefresh({
+                sessionId,
+                trigger,
+                ...refresh,
+                provenance: { source: { kind: "system", id: "pi-runtime", detail: null }, venue },
+              });
+              // Return durable desired bindings even after a prior adoption
+              // failed. The runtime compares against its adopted spec to no-op.
+              const context = await options.resolveRuntimeContext(sessionId);
+              return context === null ? null : { ...context, model };
+            }),
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
           // the tool array; this live answer supplies closures only. Missing a
@@ -437,6 +575,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
     });
   }
   return {
+    pictures,
     sessionToolSurface,
     piRuntimeHost,
     sessionRuntime,

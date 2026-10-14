@@ -33,6 +33,74 @@ function file(hash: string, linkId: string): BlobLinkView {
   };
 }
 
+const assistant = (parts: UIMessage["parts"]): UIMessage[] => [
+  { id: "a", role: "assistant", parts },
+];
+
+describe("visible live-turn progress", () => {
+  it("does not mistake user words, empty text or settled output for progress", () => {
+    expect(liveTurnHasProgress(null)).toBe(false);
+    expect(liveTurnHasProgress([])).toBe(false);
+    expect(
+      liveTurnHasProgress([
+        { id: "u", role: "user", parts: [{ type: "text", text: "hello", state: "streaming" }] },
+      ]),
+    ).toBe(false);
+    expect(
+      liveTurnHasProgress(assistant([{ type: "text", text: " \u200b", state: "streaming" }])),
+    ).toBe(false);
+    expect(liveTurnHasProgress(assistant([{ type: "text", text: "done", state: "done" }]))).toBe(
+      false,
+    );
+  });
+  it("uses projected reasoning rather than a stale streaming part", () => {
+    const thought = { type: "reasoning" as const, text: "Checking", state: "streaming" as const };
+    expect(liveTurnHasProgress(assistant([thought]))).toBe(true);
+    expect(
+      liveTurnHasProgress(assistant([thought, { type: "text", text: "done", state: "done" }])),
+    ).toBe(false);
+    expect(
+      liveTurnHasProgress(assistant([{ type: "text", text: "reply", state: "streaming" }])),
+    ).toBe(true);
+  });
+  it.each(["input-streaming", "input-available", "output-available"] as const)(
+    "recognizes live tools including preliminary %s",
+    (state) => {
+      const tool = {
+        type: "dynamic-tool" as const,
+        toolName: "execute",
+        toolCallId: "call",
+        input: {},
+      };
+      expect(
+        liveTurnHasProgress(
+          assistant([
+            state === "output-available"
+              ? { ...tool, state, output: "still running", preliminary: true }
+              : { ...tool, state },
+          ]),
+        ),
+      ).toBe(true);
+    },
+  );
+  it("does not let a completed backgrounding receipt stand in for the open turn", () => {
+    expect(
+      liveTurnHasProgress(
+        assistant([
+          {
+            type: "dynamic-tool",
+            toolName: "execute",
+            toolCallId: "call",
+            state: "output-available",
+            input: {},
+            output: "Moved command to background shell shell-1.",
+          },
+        ]),
+      ),
+    ).toBe(false);
+  });
+});
+
 /** One staged file, for the rows and steers that carry them (VC-137). */
 function blobLinkView(): BlobLinkView {
   return {
@@ -58,6 +126,7 @@ import {
   heldStrip,
   holdList,
   lastAssistantText,
+  liveTurnHasProgress,
   messageCopyText,
   messageRoute,
   resolvingWith,
@@ -423,23 +492,21 @@ describe("sessionBlocker", () => {
     );
   });
 
-  it("sends both provider-owned recoveries to Settings with the failed run's retry beside it", () => {
+  it("offers one settings recovery for provider-owned failures", () => {
     // Signing in happens inside Settings now, so the pair no longer forks on
     // whether a manual Ticket terminal exists to hand off to.
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)).toMatchObject({
       message: "Sign-in required",
       detail: null,
       tone: "error",
-      action: { label: "Settings", act: NO_OP },
-      secondaryAction: { label: "Retry", act: NO_OP },
+      action: { label: "Open settings", act: NO_OP },
       dismiss: { label: "Dismiss" },
     });
     expect(sessionBlocker(raised(attention("configuration_invalid")), ACTS, false)).toMatchObject({
       message: "Configuration invalid",
       detail: null,
       tone: "error",
-      action: { label: "Settings", act: NO_OP },
-      secondaryAction: { label: "Retry", act: NO_OP },
+      action: { label: "Open settings", act: NO_OP },
       dismiss: { label: "Dismiss" },
     });
   });
@@ -450,7 +517,8 @@ describe("sessionBlocker", () => {
     // button that could not work. Both can reach the sign-in now.
     const projectChat = sessionBlocker(raised(attention("auth_required")), ACTS, false);
 
-    expect(projectChat?.secondaryAction).toEqual({ label: "Retry", act: NO_OP });
+    expect(projectChat?.action).toEqual({ label: "Open settings", act: NO_OP });
+    expect(projectChat?.secondaryAction).toBeUndefined();
   });
 
   it("says the Session's own model needs sign-in before a message is spent on it", () => {
@@ -492,7 +560,7 @@ describe("sessionBlocker", () => {
 
     expect(signedInTo).toEqual(["azure-openai-responses"]);
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)?.action?.label).toBe(
-      "Settings",
+      "Open settings",
     );
   });
 
@@ -663,8 +731,8 @@ describe("sessionBlocker", () => {
     });
 
     expect(drawn).toEqual([
-      ["Sign-in required", "Settings"],
-      ["Configuration invalid", "Settings"],
+      ["Sign-in required", "Open settings"],
+      ["Configuration invalid", "Open settings"],
       ["Reconnecting", null],
       ["Disconnected", "Retry"],
       ["Context limit reached", null],
@@ -820,6 +888,7 @@ describe("sessionBlocker", () => {
       message: "Rate limited",
       detail: null,
       tone: "waiting",
+      placement: "timeline",
       action: { label: "Retry", act: NO_OP },
     });
     expect(sessionBlocker(raised(quotaSpent(at)), ACTS, false)?.message).toBe(
@@ -912,7 +981,7 @@ describe("answerInteraction", () => {
 });
 
 describe("withdrawInteraction", () => {
-  /** The card's controls, Withdraw question among them, share this in-flight latch. */
+  /** Card controls and a question's Escape handler share this in-flight latch. */
   it("holds the card's own in-flight latch for the whole round trip", async () => {
     const flags: [string, boolean][] = [];
     const acts: string[] = [];
@@ -1430,7 +1499,7 @@ describe("heldStrip", () => {
     ).toEqual([
       { id: "q1", text: "first" },
       { id: "q2", text: "host edit" },
-      { id: "legacy", text: "recovery" },
+      { id: "legacy", text: "recovery", localUnsent: true },
     ]);
   });
 
@@ -1461,9 +1530,15 @@ describe("heldStrip", () => {
   // A crash between the box emptying and anything accepting the words. The
   // whole point of persisting them is that they come back as their own message
   // rather than welded onto whatever was typed next.
+  it("keeps a legacy queued recovery distinct from unsent", () => {
+    expect(heldStrip([heldMessage("legacy", "waiting", "queued")], [])).toEqual([
+      { id: "legacy", text: "waiting" },
+    ]);
+  });
+
   it("draws a message nothing took, in its own row", () => {
     expect(heldStrip([heldMessage("m1", "ship it", "unsent")], [])).toEqual([
-      { id: "m1", text: "ship it" },
+      { id: "m1", text: "ship it", localUnsent: true },
     ]);
   });
 
@@ -1475,7 +1550,7 @@ describe("heldStrip", () => {
     expect(hasReconciledSessionSnapshot({ id: "session" })).toBe(true);
     expect(heldStrip(held, [], new Set(), hasReconciledSessionSnapshot(undefined))).toEqual([]);
     expect(heldStrip(held, [], new Set(), hasReconciledSessionSnapshot({ id: "session" }))).toEqual(
-      [{ id: "m1", text: "already accepted" }],
+      [{ id: "m1", text: "already accepted", localUnsent: true }],
     );
   });
 
@@ -1499,7 +1574,7 @@ describe("heldStrip", () => {
   it("keeps a held row's skill resources on its strip row", () => {
     const resources = [{ name: "logos", text: "# Logos" }];
     expect(heldStrip([{ ...heldMessage("m1", "/logos go", "unsent"), resources }], [])).toEqual([
-      { id: "m1", text: "/logos go", resources },
+      { id: "m1", text: "/logos go", resources, localUnsent: true },
     ]);
   });
 
@@ -1508,7 +1583,7 @@ describe("heldStrip", () => {
   it("keeps a held row's attachments on its strip row", () => {
     const attachments = [blobLinkView()];
     expect(heldStrip([{ ...heldMessage("m1", "look", "unsent"), attachments }], [])).toEqual([
-      { id: "m1", text: "look", attachments },
+      { id: "m1", text: "look", attachments, localUnsent: true },
     ]);
   });
 });
@@ -1705,4 +1780,16 @@ it("keeps context recovery headline beside Anthropic invalid_request_error (revi
   );
   expect(blocker?.message).toBe("Context limit reached");
   expect(blocker?.detail).toBe("prompt is too long");
+});
+
+it("changes the queue row when the host claims it for steering", () => {
+  expect(
+    sameQueuedMessage({ id: "m", text: "one" }, { id: "m", text: "one", afterCurrentStep: true }),
+  ).toBe(false);
+});
+
+it("does not keep a stale queued label when a row becomes unsent", () => {
+  expect(
+    sameQueuedMessage({ id: "m", text: "one" }, { id: "m", text: "one", localUnsent: true }),
+  ).toBe(false);
 });

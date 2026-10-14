@@ -17,6 +17,7 @@ import { getTicket } from "../db/tickets-repo";
 import { listMaterializableLinks } from "../db/blobs-repo";
 import { composeProjectBrief, composeSubagentBrief, composeTicketBrief } from "../agent-commands";
 import { recordedToolSurface, recordedMcpTools } from "./assembly";
+import { effectiveToolSurface, declarationToolSurface, foldToolRefreshes } from "./tool-refresh";
 
 /**
  * The recorded brief's text. `getOrRecordSessionInput` is keyed by the input's
@@ -50,28 +51,17 @@ function recordedPromptResources(events: readonly SessionEvent[]): readonly Prom
 
 /** The MCP-management wire spelling frozen beside the canonical verb keys. */
 function recordedMcpManagementNames(events: readonly SessionEvent[]): "server" | undefined {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.mcpManagementNames;
-    }
-  }
-  return undefined;
+  return effectiveToolSurface(events)?.mcpManagementNames;
+}
+
+/** ask_user's declaration version is a birth fact, not today's host default (VC-749). */
+function recordedAskUserQuestions(events: readonly SessionEvent[]): true | undefined {
+  return effectiveToolSurface(events)?.askUserQuestions;
 }
 
 /** Code Mode's routes and limits, frozen beside the names they route (VC-471). */
 function recordedCodeMode(events: readonly SessionEvent[]): CodeModeSurface | undefined {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.codeMode;
-    }
-  }
-  return undefined;
+  return effectiveToolSurface(events)?.codeMode;
 }
 
 function toolSurfaceInput(input: SessionInput): Extract<SessionInput, { kind: "tool-surface" }> {
@@ -107,6 +97,7 @@ export function createRuntimeContextResolver(options: {
     // allowlist (VC-454): a tool taken off it stops overlapping.
     let mcpTools = mcpDispatch.forAttach(recordedMcpTools(events));
     let mcpManagementNames = recordedMcpManagementNames(events);
+    let askUserQuestions = recordedAskUserQuestions(events);
     let codeModeSurface = recordedCodeMode(events);
     if (toolSurface === null) {
       // Legacy backfill: the first attach under VC-164 freezes whatever
@@ -139,14 +130,23 @@ export function createRuntimeContextResolver(options: {
       toolSurface = frozen.tools;
       mcpTools = mcpDispatch.forAttach(frozen.mcpTools ?? []);
       mcpManagementNames = frozen.mcpManagementNames;
+      askUserQuestions = frozen.askUserQuestions;
       codeModeSurface = frozen.codeMode;
     }
     const shared = {
+      toolRefreshAnnouncements: foldToolRefreshes(events).announcements,
       projectId: project.id,
       rootThreadId: sessionRootThreadId(sessionId),
       model: projection.modelSelection,
       toolSurface,
+      ...(effectiveToolSurface(events)?.refreshDescriptions === true
+        ? { refreshDescriptions: true as const }
+        : {}),
+      ...(declarationToolSurface(events) === null
+        ? {}
+        : { declarationSurface: declarationToolSurface(events)! }),
       ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
+      ...(askUserQuestions === undefined ? {} : { askUserQuestions }),
       ...(mcpTools.length === 0 ? {} : { mcpTools }),
       ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
       // The skills this Session was started with, as recorded ahead of

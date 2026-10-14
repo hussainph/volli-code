@@ -63,6 +63,10 @@ const COMMAND = "00000000-0000-4000-8000-000000000001";
 const SAMPLE_INPUTS: {
   readonly [Path in HostRouterPaths | ProcedurePaths<DesktopRouter["_def"]["record"]>]: unknown;
 } = {
+  "shells.moveToBackground": {
+    sessionId: "00000000-0000-4000-8000-000000000003",
+    toolCallId: "bash-1",
+  },
   "project.reorder": { orderedIds: [PROJECT] },
   "worktree.trimSettings": undefined,
   "hosts.snapshot": undefined,
@@ -134,6 +138,7 @@ const SAMPLE_INPUTS: {
   "hostModels.setPickerView": "all",
   "session.snapshot": SESSION,
   "session.history": { ...SESSION, before: 2 },
+  "session.picture": { ...SESSION, pictureId: "picture" },
   "session.projection": SESSION,
   "session.subscribe": SESSION,
   "session.subscribeQueue": SESSION,

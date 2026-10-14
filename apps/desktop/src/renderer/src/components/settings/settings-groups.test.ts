@@ -9,7 +9,7 @@
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import { EXPERIMENTS, MODEL_TIER_ROWS } from "@volli/shared";
+import { EXPERIMENTS, MODEL_TIER_ROWS, resolveExperiments } from "@volli/shared";
 
 import { MODELS_CATEGORY_KEY, settingsGroups } from "./settings-groups";
 
@@ -38,9 +38,33 @@ describe("Settings → General", () => {
   });
 });
 
+function categories(experiments: ReturnType<typeof resolveExperiments> | null) {
+  return settingsGroups(undefined, { experiments }).flatMap((group) => group.categories);
+}
+
 describe("Settings → Experimental", () => {
+  it("omits the empty Experimental category on stable and shows it on dev/canary or an env opt-in", () => {
+    expect(categories(null).some(({ key }) => key === "experimental")).toBe(false);
+    expect(
+      categories(resolveExperiments({ cloud: true }, [], "stable")).some(
+        ({ key }) => key === "experimental",
+      ),
+    ).toBe(false);
+    for (const kind of ["dev", "canary"] as const) {
+      expect(
+        categories(resolveExperiments({}, [], kind)).some(({ key }) => key === "experimental"),
+      ).toBe(true);
+    }
+    expect(
+      categories(resolveExperiments({}, ["cloud"], "stable")).some(
+        ({ key }) => key === "experimental",
+      ),
+    ).toBe(true);
+  });
   it("lists the registry in System and makes its flag discoverable from the rail", () => {
-    const system = settingsGroups().find((group) => group.key === "system");
+    const system = settingsGroups(undefined, {
+      experiments: resolveExperiments({}, [], "canary"),
+    }).find((group) => group.key === "system");
     const experimental = system?.categories.find((category) => category.key === "experimental");
     expect(experimental).toBeDefined();
     if (!experimental) throw new Error("no Experimental category under System");

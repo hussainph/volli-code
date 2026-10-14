@@ -86,6 +86,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "sessions.attach": "ipc",
   "session.snapshot": "ipc",
   "session.history": "ipc",
+  "session.picture": "ipc",
   "session.projection": "ipc",
   "session.subscribe": "ipc",
   "session.command": "ipc",
@@ -156,6 +157,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // additive-only across supported skew, while the client-local families
   // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`) ship with this
   // renderer and main in one bundle and are not cross-version promises.
+  "shells.moveToBackground": "ipc",
   "project.reorder": "ipc",
   "worktree.trimSettings": "ipc",
   "hosts.snapshot": "ipc",

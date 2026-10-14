@@ -721,6 +721,49 @@ export function describeBrowserBackendSuite(name: string, create: BackendFactory
       expect(await run("browser_navigate", { url: "file:///etc/hosts" })).toMatch(/http and https/);
     });
 
+    it("cleans a completed delegate without closing shown, personal or other-held tabs", async () => {
+      const delegate = portFor("completed-delegate");
+      const openDelegateTab = async () =>
+        await delegate.navigate({
+          navigation: { kind: "url", url: fixture.url("/second") },
+          signal: signal(),
+        });
+      const released = await openDelegateTab();
+      await delegate.release({ tabId: released.tabId, signal: signal() });
+      const held = await openDelegateTab();
+      const preview = await openDelegateTab();
+      backend.setPresentation(preview.tabId, "preview");
+      const promoted = await openDelegateTab();
+      backend.setPresentation(promoted.tabId, "tab");
+      const personHeld = await openDelegateTab();
+      backend.takeOver(personHeld.tabId);
+      const otherHeld = await openDelegateTab();
+      await delegate.release({ tabId: otherHeld.tabId, signal: signal() });
+      backend.hold(otherHeld.tabId, { sessionId: "another-session", attachmentId: "another-a" });
+      const personal = backend.open({
+        projectId: PROJECT,
+        ticketId: null,
+        createdBy: "user",
+        url: fixture.url("/second"),
+      });
+      delegate.turnEnded({ closeHeadlessOwned: true });
+      await eventually(
+        async () => backend.list({ projectId: PROJECT }).some((tab) => tab.tabId === held.tabId),
+        (exists) => !exists,
+      );
+      const remaining = backend.list({ projectId: PROJECT }).map((tab) => tab.tabId);
+      expect(remaining).not.toContain(released.tabId);
+      for (const tab of [preview, promoted, personHeld, otherHeld, personal]) {
+        expect(remaining).toContain(tab.tabId);
+      }
+      const resumed = await openDelegateTab();
+      expect(backend.list({ projectId: PROJECT }).map((tab) => tab.tabId)).toContain(resumed.tabId);
+      delegate.dispose();
+      delegate.dispose();
+      for (const tab of [preview, promoted, personHeld, otherHeld, personal])
+        backend.close(tab.tabId);
+    });
+
     it("ends holds at turn end and closes every headless tab on dispose", async () => {
       const gamma = portFor("gamma");
       const nav = await gamma.navigate({

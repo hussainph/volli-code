@@ -30,6 +30,12 @@ export interface AgentHelpSurface {
   sessionId: string;
   role: SessionRole;
   tools: readonly string[];
+  /** Frozen routes, keyed by canonical tool id. Optional on older hosts.
+   * Output vocabulary is open: clients must treat an unrecognized route as unknown.
+   * Known values: direct, both, code, deferred, hidden. */
+  routes?: Readonly<Record<string, string>>;
+  /** Minimal frozen MCP identity map; no descriptions, schemas, or live Settings. */
+  mcpServerIds?: Readonly<Record<string, string>>;
 }
 
 export interface AgentConceptSection {

@@ -28,6 +28,10 @@ export interface QueuedMessage {
   id: string;
   commandId?: string;
   queueState?: "queued" | "releasing";
+  /** Renderer recovery only; no host accepted this message yet. */
+  localUnsent?: true;
+  /** Host-owned steering is waiting for the current model step. */
+  afterCurrentStep?: true;
   text: string;
   /**
    * A non-null launch title this opening message is allowed to refine.
@@ -136,6 +140,7 @@ export function queuedMessageFromHost(entry: {
   commandId: string;
   message: UIMessage;
   state: "queued" | "releasing";
+  afterCurrentStep?: true;
 }): QueuedMessage {
   const metadata =
     typeof entry.message.metadata === "object" && entry.message.metadata !== null
@@ -166,6 +171,7 @@ export function queuedMessageFromHost(entry: {
     id: entry.id,
     commandId: entry.commandId,
     queueState: entry.state,
+    ...(entry.afterCurrentStep ? { afterCurrentStep: true as const } : {}),
     text: entry.message.parts
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join("\n"),

@@ -67,15 +67,13 @@ async function action(kind, role, name, extra = {}, options = {}) {
 const click = (role, name, options) => action("click", role, name, {}, options);
 const type = (name, text) => action("type", "textbox", name, { text });
 async function selectProceed() {
-  // Native radios are visually hidden beneath their label's custom disc.
-  // Space selects the real focused input without bypassing pointer checks.
+  // Space activates the focused question row without submitting the card.
   const selected = await action("press", "radio", "Proceed", { key: "Space" });
   assert.match(controls(selected.text, "radio", "Proceed")[0] ?? "", /\[checked\]/u);
 }
 async function submitProceed(question) {
-  await click("button", "Submit", { scope: { role: "form", name: question } });
-  // This fixture's declared Stop draws a verdict card. Its receipt is the
-  // durable transcript row, not the ask-user card's transient Sent line.
+  await click("button", "Answer", { scope: { role: "form", name: question } });
+  // The proof is the durable transcript row, not the card's transient receipt.
   await waitUntil(
     `durable Proceed receipt for ${question}`,
     async () => visibleAnswerReceipt((await snap()).text, question, "Proceed"),
@@ -267,11 +265,14 @@ async function journey() {
   await wait(`Host: ${REMOTE_HOST}`);
   await step(3, "Create/move ticket: Backlog then Todo, persisted after UI reopen", async () => {
     await click("button", "Home");
-    // Operator configuration restarts hostd. The host chip keeps its name
-    // throughout that outage; only the enabled write control proves rejoin.
+    // Operator configuration restarts hostd. New ticket stays enabled during
+    // the reconnect grace, so it cannot prove rejoin (VC-768). Observe the
+    // project's real Workspace-ready state, then the renderer's write control.
     await waitUntil(
       "Workspace rejoins after model deployment and New ticket is actionable",
-      async () => hasActionableControl((await snap()).text, "button", "New ticket"),
+      async () =>
+        (await call("acceptance-workspace")).ready &&
+        hasActionableControl((await snap()).text, "button", "New ticket"),
       { timeout: 10_000, interval: 100 },
     );
     await click("button", "New ticket");

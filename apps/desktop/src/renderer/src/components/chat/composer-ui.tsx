@@ -198,6 +198,8 @@ export interface SessionComposerProps {
    */
   hostReadOnly?: boolean;
   queued: readonly QueuedMessage[];
+  /** A queued payload is owned by an in-flight steer, not a second submission. */
+  steeringMessages?: ReadonlySet<string>;
   /** `false` means the host refused the mutation; leave its UI untouched. */
   onQueuedChange: QueuedChange;
   onSteerQueued(id: string): void;
@@ -392,6 +394,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   ready,
   hostReadOnly = false,
   queued,
+  steeringMessages,
   onQueuedChange,
   onSteerQueued,
   onSubmit,
@@ -547,6 +550,15 @@ export const SessionComposer = React.memo(function SessionComposer({
                     (VC-273). */}
                 <AttachmentThumbRow attachments={entry.attachments ?? []} />
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
+                <span data-slot="queue-status" className="shrink-0 text-muted-foreground">
+                  {steeringMessages?.has(entry.id) || entry.afterCurrentStep
+                    ? "Sends after this step"
+                    : entry.localUnsent
+                      ? "Not sent"
+                      : entry.queueState === "releasing"
+                        ? "Sending"
+                        : "Queued"}
+                </span>
                 <span className="flex shrink-0 items-center gap-1">
                   {working ? (
                     <Button
@@ -556,7 +568,11 @@ export const SessionComposer = React.memo(function SessionComposer({
                       aria-label={`Steer queued message: ${entry.text}`}
                       // A release already claimed this identity; only the
                       // host's cancel can take it back, so Steer stays off.
-                      disabled={entry.queueState === "releasing"}
+                      disabled={
+                        entry.queueState === "releasing" ||
+                        steeringMessages?.has(entry.id) === true ||
+                        entry.afterCurrentStep === true
+                      }
                       onClick={() => {
                         onSteerQueued(entry.id);
                         onComposerFocusRequest?.();

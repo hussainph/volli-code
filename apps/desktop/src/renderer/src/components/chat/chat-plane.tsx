@@ -9,8 +9,13 @@
  * device drafts and unsent recovery live in `stores/chat-drafts.ts`. This view
  * owns only measurements and which controls have a command in flight.
  */
+import { sessionPictureFor } from "@renderer/chat/transport";
+import { CodeModePictureHostContext } from "./activity-ui";
+import { readCodeModePicture } from "./code-mode-output-model";
 import * as React from "react";
 import { toast } from "sonner";
+import { useStore } from "zustand";
+import { useStickToBottomContext } from "use-stick-to-bottom";
 
 import { toastError } from "@renderer/lib/toast";
 import type { BlobLinkView } from "@volli/shared";
@@ -32,6 +37,7 @@ import type {
 } from "@volli/shared";
 import {
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  blobUrl,
   errorMessage,
   modelPurposeForRole,
   modelTierRow,
@@ -60,16 +66,16 @@ import {
 } from "@renderer/hooks/use-materialized-attachments";
 import { Message, MessageContent } from "@renderer/components/ui/ai-elements/message";
 import { ReasoningLine } from "@renderer/components/ui/ai-elements/reasoning";
-import { ThinkingOrbs } from "@renderer/components/ui/thinking-orbs";
 import {
   groupTurns,
-  isAwaitingFirstOutput,
   currentTurnReply,
   isDeliverable,
   readInteractionResolutionMessage,
   segmentTurn,
   sessionContextUsage,
   projectTranscriptRows,
+  messageDeliveryLabels,
+  type MessageDeliveryLabel,
   type ChatSegment,
   type ComposerIntent,
   type InteractionSubmission,
@@ -85,11 +91,13 @@ import { useActivityIsland } from "@renderer/chat/use-activity-island";
 import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
 import { ActivityBundle, copyText } from "@renderer/components/chat/activity-ui";
+import { RunningBashProvider } from "@renderer/components/chat/running-bash-control";
 import {
   CompactionBoundary,
   CompactionProgress,
 } from "@renderer/components/chat/compaction-boundary-ui";
 import { ReasoningDropNotice } from "@renderer/components/chat/reasoning-drop-notice-ui";
+import { ToolRefreshNotice } from "@renderer/components/chat/tool-refresh-notice-ui";
 import {
   answerInteraction,
   composerModelSelection,
@@ -105,6 +113,7 @@ import {
   resolvingWith,
   restoreStripAttachments,
   sameInteractionId,
+  liveTurnHasProgress,
   sameMessages,
   sameQueuedMessage,
   sessionBlocker,
@@ -137,6 +146,7 @@ import {
   takeSessionItemReveal,
 } from "@renderer/chat/session-item-reveal";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import { useDelayedPresence } from "@renderer/components/chat/use-delayed-presence";
 import { SecretCards } from "@renderer/components/chat/secret-card";
 import {
   readTranscriptView,
@@ -314,6 +324,15 @@ export function ChatPlane({
   // open it; the card through its host below, the island through its deps.
   const [traceRequest, setTraceRequest] = React.useState<BrowserTraceRequest | null>(null);
   const closeTrace = React.useCallback(() => setTraceRequest(null), []);
+  const pictureApi = React.useMemo(
+    () => ({
+      picture: async ({ pictureId }: { pictureId: string }) => ({
+        ok: true as const,
+        dataUrl: await readCodeModePicture(sessionPictureFor(projectId), sessionId, pictureId),
+      }),
+    }),
+    [projectId, sessionId],
+  );
   const cardHost = browser?.cardHost ?? null;
   const tracedCardHost = React.useMemo(
     () => (cardHost === null ? null : { ...cardHost, openTrace: setTraceRequest }),
@@ -383,6 +402,7 @@ export function ChatPlane({
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const steeringQueued = React.useRef(new Set<string>());
+  const [pendingSteerIds, setPendingSteerIds] = React.useState<ReadonlySet<string>>(new Set());
   // Whether a file import committed to the FIRST message is still arriving.
   // `importingFirstMessage` below holds the same fact for the synchronous
   // reads inside callbacks; this one re-renders, so the composer can stand
@@ -839,7 +859,7 @@ export function ChatPlane({
 
   const dispatch = React.useCallback(
     (
-      message: QueuedMessage,
+      message: QueuedMessage & { delivery?: ComposerIntent },
       road: (message: QueuedMessage) => Promise<HeldDispatchOutcome>,
       provisionalDispatch: boolean,
     ) => {
@@ -853,7 +873,18 @@ export function ChatPlane({
           // handing it back would be inviting a second copy of it. The blocker
           // row owns that recovery.
           if (outcome === "refused") markHeld(sessionId, message.id, "unsent");
-          else dropHeld(sessionId, message.id);
+          else {
+            const live = sessionsStore.getState().sessions[sessionId];
+            const projected =
+              live?.queue.some((entry) => entry.id === message.id) ||
+              live?.transcript.durableMessages.some((entry) => entry.id === message.id);
+            if (projected) dropHeld(sessionId, message.id);
+            else if (outcome === "delivered")
+              amendHeldMessage(sessionId, message.id, (retained) => ({
+                ...retained,
+                deliveryAccepted: true,
+              }));
+          }
           await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
       }).finally(async () => {
@@ -882,6 +913,7 @@ export function ChatPlane({
       });
     },
     [
+      amendHeldMessage,
       attachDraftFilesNow,
       captureFirstImport,
       clearAttachments,
@@ -915,9 +947,11 @@ export function ChatPlane({
       // steer — so a copy released later delivers exactly what `/skill`
       // resolved to when ⏎ was pressed, not whatever the file says by then.
       // Attachments ride it for the same reason (VC-50).
-      const message: QueuedMessage = {
+      const message: QueuedMessage & { delivery: ComposerIntent } = {
         id: nextId(),
         text,
+        // The held copy can explain the wait before even the durability flush lands.
+        delivery: intent,
         ...(resources !== undefined && resources.length > 0 ? { resources } : {}),
         ...(attachmentsRef.current.length > 0 ? { attachments: attachmentsRef.current } : {}),
       };
@@ -977,6 +1011,34 @@ export function ChatPlane({
   const durableMessageIds = React.useMemo(
     () => new Set(messages.map((message) => message.id)),
     [messages],
+  );
+  const deliveryFrames = useStore(
+    sessionsStore,
+    (state) => state.sessions[sessionId]?.transcript.frames,
+  );
+  const deliveryEntries = useStableList(
+    React.useMemo(() => [...messageDeliveryLabels(deliveryFrames ?? [])], [deliveryFrames]),
+    (previous, next) => previous[0] === next[0] && previous[1] === next[1],
+  );
+  const deliveryLabels = React.useMemo(() => new Map(deliveryEntries), [deliveryEntries]);
+  // The wait belongs to the message, not the React child slot that currently
+  // owns it. Preserve its clock across held → durable-pending replacement.
+  const waitTimes = React.useRef<ReadonlyMap<string, number>>(new Map());
+  const pendingSince = React.useMemo(() => {
+    const ids = new Set(
+      held
+        .filter((message) => message.state === "sending" && !message.deliveryAccepted)
+        .map((message) => message.id),
+    );
+    for (const [id, label] of deliveryLabels) if (label === "Pending") ids.add(id);
+    const now = Date.now();
+    const next = new Map([...ids].map((id) => [id, waitTimes.current.get(id) ?? now]));
+    waitTimes.current = next;
+    return next;
+  }, [held, deliveryLabels]);
+  const settledMessageIds = React.useMemo(
+    () => new Set([...durableMessageIds].filter((id) => deliveryLabels.get(id) !== "Pending")),
+    [deliveryLabels, durableMessageIds],
   );
   // Held to its identity, and that is what keeps the composer out of the
   // stream's frame budget. `durableMessageIds` is a fresh Set on every flush of
@@ -1101,7 +1163,12 @@ export function ChatPlane({
         strip.some((entry) => entry.id === id && entry.commandId !== undefined)
       ) {
         // The host claims the queued identity atomically. Never cancel then resubmit.
-        void steerQueued(id);
+        steeringQueued.current.add(id);
+        setPendingSteerIds(new Set(steeringQueued.current));
+        void steerQueued(id).finally(() => {
+          steeringQueued.current.delete(id);
+          setPendingSteerIds(new Set(steeringQueued.current));
+        });
         return;
       }
       const entry = useChatDraftsStore
@@ -1111,6 +1178,7 @@ export function ChatPlane({
         return;
       const targetedTurnEpoch = current.transcript.turnEpoch;
       steeringQueued.current.add(id);
+      amendHeldMessage(sessionId, id, (message) => ({ ...message, delivery: "steer" }));
       markHeld(sessionId, id, "sending");
       void dispatchHeldMessage({
         persist: () => flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY),
@@ -1135,21 +1203,33 @@ export function ChatPlane({
         },
         finish: async (outcome) => {
           if (outcome === "refused") markHeld(sessionId, id, "unsent");
-          else dropHeld(sessionId, id);
+          else {
+            const live = sessionsStore.getState().sessions[sessionId];
+            if (
+              live?.queue.some((message) => message.id === id) ||
+              live?.transcript.durableMessages.some((message) => message.id === id)
+            )
+              dropHeld(sessionId, id);
+            else if (outcome === "delivered")
+              amendHeldMessage(sessionId, id, (message) => ({
+                ...message,
+                deliveryAccepted: true,
+              }));
+          }
           await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
       }).finally(() => steeringQueued.current.delete(id));
     },
-    [dropHeld, markHeld, sessionId, sessionsStore, steerQueued, strip, submit],
+    [amendHeldMessage, dropHeld, markHeld, sessionId, sessionsStore, steerQueued, strip, submit],
   );
 
   // Only positive host ownership evidence retires a recovery copy. An empty or
   // stale projection is not evidence of acceptance after a transport failure.
   React.useEffect(() => {
-    for (const id of settledHeldIds(held, queue, durableMessageIds)) {
+    for (const id of settledHeldIds(held, queue, settledMessageIds)) {
       if (!queuedMutations.current.has(id)) dropHeld(sessionId, id);
     }
-  }, [dropHeld, durableMessageIds, held, queue, sessionId]);
+  }, [dropHeld, settledMessageIds, held, queue, sessionId]);
 
   // Questions, budget asks and confirmations share the existing composer slot.
   // Secret requests retain their dedicated person-only card.
@@ -1367,7 +1447,7 @@ export function ChatPlane({
    * The boolean is what releases the card's submission latch when nothing
    * happened: a cancellation the client refused (it toasts and resolves
    * `false`, never throws) leaves the question standing, and a card that had
-   * latched shut on "Withdrew question" would be claiming an act that did not
+   * latched shut on "Stopped turn" would be claiming an act that did not
    * occur — with no way to press anything again. The rejection arm is for the
    * one road that could still throw, and reads the same way.
    */
@@ -1396,13 +1476,39 @@ export function ChatPlane({
    * that has not moved in an hour. Only the live turn can animate, so only the
    * live turn is told about it.
    */
+  const steeringMessages = React.useMemo(
+    () =>
+      new Set([
+        ...pendingSteerIds,
+        ...held.filter((message) => message.delivery === "steer").map((message) => message.id),
+      ]),
+    [held, pendingSteerIds],
+  );
+  // A retry can retain an unfinished overlay for minutes. Keep its streaming
+  // markdown treatment, but do not animate last-known activity as live work.
+  const progressPaused =
+    session.sessionError !== null ||
+    projection?.attention.active.some((attention) => attention.kind === "transport_retrying") ===
+      true;
   const turnContext = React.useMemo<TurnContext>(
     () => ({
       onOpenFile,
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
+      deliveryLabels,
+      steeringMessages,
+      pendingSince,
+      progressPaused,
     }),
-    [onOpenFile, onOpenSession, session.openedInteractions],
+    [
+      deliveryLabels,
+      onOpenFile,
+      onOpenSession,
+      session.openedInteractions,
+      steeringMessages,
+      pendingSince,
+      progressPaused,
+    ],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1417,16 +1523,35 @@ export function ChatPlane({
   // to its identity, so this recomputes when the conversation moves and not
   // once per streamed frame.
   const rows = React.useMemo(
-    () => projectTranscriptRows(turns, session.compactions, session.reasoningDrops),
-    [session.compactions, session.reasoningDrops, turns],
+    () =>
+      projectTranscriptRows(
+        turns,
+        session.compactions,
+        session.reasoningDrops,
+        session.toolRefreshes,
+      ),
+    [session.compactions, session.reasoningDrops, session.toolRefreshes, turns],
   );
+  // An intent waiting to reach Pi is below Working, never above it. Keep its
+  // durable identity and reuse the ordinary message renderer.
+  const undeliveredRows = rows.filter(
+    (row) =>
+      row.kind === "turn" &&
+      row.messages[0]?.role === "user" &&
+      row.messages.every((message) => deliveryLabels.get(message.id) === "Pending"),
+  );
+  const deliveredRows =
+    undeliveredRows.length === 0 ? rows : rows.filter((row) => !undeliveredRows.includes(row));
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
   // boundary, which would leave the turn still being written with nothing
   // saying so. Stream-owned `turnActive`, rather than the wider Session
   // lifecycle, keeps a transient error from treating incomplete content as
   // settled and an optimistic submit from reopening the previous Turn.
-  const liveTurn = turnActive ? (turns.at(-1) ?? null) : null;
+  const liveTurn = turnActive
+    ? (deliveredRows.findLast((row) => row.kind === "turn")?.messages ?? null)
+    : null;
+  const turnHasProgress = React.useMemo(() => liveTurnHasProgress(liveTurn), [liveTurn]);
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
   const dismissBlocker = React.useCallback((dismissKey: string) => {
@@ -1516,6 +1641,14 @@ export function ChatPlane({
     }
   }, [blockerPresentation.dismissedKey, dismissedBlockerKey]);
   const blocker = blockerPresentation.blocker;
+  const timelineBlocker = blocker?.placement === "timeline" ? blocker : null;
+  const pendingMessages = held.filter(
+    (message) =>
+      message.state === "sending" &&
+      !durableMessageIds.has(message.id) &&
+      !queue.some((entry) => entry.id === message.id),
+  );
+  const turnRunning = working || turnActive;
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
@@ -1525,6 +1658,7 @@ export function ChatPlane({
   return (
     <div
       ref={planeRef}
+      data-running-bash-session={sessionId}
       className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
       style={planeStyle}
     >
@@ -1533,68 +1667,116 @@ export function ChatPlane({
           has no header band of its own, so it floats there. Nothing with the
           `cloud` flag off, and nothing for This Mac. */}
       <RunningOnLabel projectId={projectId} className="absolute top-3 right-4 z-10 bg-background" />
-      <BrowserCardHostContext.Provider value={tracedCardHost}>
-        <FileMentionProvider onOpenFile={onOpenFile}>
-          {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
+      <CodeModePictureHostContext.Provider value={pictureApi}>
+        <BrowserCardHostContext.Provider value={tracedCardHost}>
+          <FileMentionProvider onOpenFile={onOpenFile}>
+            {/* What `![spec](.volli/attachments/spec.png)` in a turn resolves
               against (VC-273) — the agent writes the path the brief handed it,
               and this is what turns that back into the Blob it names. */}
-          <MarkdownAttachmentsProvider attachments={materializedAttachments}>
-            <Conversation className="min-h-0 bg-background">
-              {/* The bottom padding clears the composer plus the h-16 gradient over
+            <MarkdownAttachmentsProvider attachments={materializedAttachments}>
+              <RunningBashProvider sessionId={sessionId} active={surfaceVisible}>
+                <Conversation className="min-h-0 bg-background">
+                  {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-              <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-                {messages.length === 0 && session.historyBefore === null && historyPending ? (
-                  // History is on its way (VC-383). A null projection with no
-                  // Draft behind it means the snapshot has not landed, and the
-                  // empty state below would say "nothing was ever said here"
-                  // about a Session that may hold a thousand turns.
-                  <TranscriptSkeleton />
-                ) : messages.length === 0 && session.historyBefore === null ? (
-                  // Where this Session runs, drawn (VC-55). It replaces the bare
-                  // mark that stood here — see `empty/chat-empty-state.tsx` for why
-                  // that reversal is deliberate. What blocks TYPING still sits on
-                  // the composer, where the typing is.
-                  <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
-                    <ChatEmptyState projectId={projectId} ticketId={ticketId} />
-                  </ConversationEmptyState>
-                ) : (
-                  <ChatTranscript
-                    sessionId={sessionId}
-                    rows={rows}
-                    context={turnContext}
-                    liveTurn={liveTurn}
-                    historyBefore={session.historyBefore}
-                    onLoadOlder={controller.loadOlder}
-                    {...(onOpenSession === undefined ? {} : { onOpenSession })}
-                  >
-                    {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                    {working ? (
-                      <TurnRunningMark narrated={!isAwaitingFirstOutput(messages)} />
-                    ) : null}
-                  </ChatTranscript>
-                )}
-              </ConversationContent>
-              {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+                  <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
+                    {messages.length === 0 && session.historyBefore === null && historyPending ? (
+                      // History is on its way (VC-383). A null projection with no
+                      // Draft behind it means the snapshot has not landed, and the
+                      // empty state below would say "nothing was ever said here"
+                      // about a Session that may hold a thousand turns.
+                      <TranscriptSkeleton />
+                    ) : messages.length === 0 &&
+                      session.historyBefore === null &&
+                      pendingMessages.length === 0 &&
+                      !turnRunning &&
+                      timelineBlocker === null ? (
+                      // Where this Session runs, drawn (VC-55). It replaces the bare
+                      // mark that stood here — see `empty/chat-empty-state.tsx` for why
+                      // that reversal is deliberate. What blocks TYPING still sits on
+                      // the composer, where the typing is.
+                      <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
+                        <ChatEmptyState projectId={projectId} ticketId={ticketId} />
+                      </ConversationEmptyState>
+                    ) : (
+                      <ChatTranscript
+                        sessionId={sessionId}
+                        rows={deliveredRows}
+                        context={turnContext}
+                        liveTurn={liveTurn}
+                        historyBefore={session.historyBefore}
+                        onLoadOlder={controller.loadOlder}
+                        {...(onOpenSession === undefined ? {} : { onOpenSession })}
+                      >
+                        {/* Accepted words already belong above Working, even while
+                            their durable projection catches up. Moving them only
+                            at ownership handoff would jump the same bubble. */}
+                        {pendingMessages
+                          .filter(
+                            (message) => message.deliveryAccepted && message.delivery !== "queue",
+                          )
+                          .map((message) => (
+                            <PendingMessage
+                              key={message.id}
+                              message={message}
+                              context={turnContext}
+                            />
+                          ))}
+                        {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
+                        {turnRunning ? (
+                          <TurnRunningMark
+                            progressVisible={
+                              liveCompaction !== null || (!progressPaused && turnHasProgress)
+                            }
+                          />
+                        ) : null}
+                        {undeliveredRows.map((row) => (
+                          <ChatTranscriptRow
+                            key={transcriptRowKey(row)}
+                            row={row}
+                            context={turnContext}
+                            live={false}
+                          />
+                        ))}
+                        {pendingMessages
+                          .filter(
+                            (message) => !message.deliveryAccepted || message.delivery === "queue",
+                          )
+                          .map((message) => (
+                            <PendingMessage
+                              key={message.id}
+                              message={message}
+                              context={turnContext}
+                            />
+                          ))}
+                        {timelineBlocker ? <SessionBlocker blocker={timelineBlocker} /> : null}
+                      </ChatTranscript>
+                    )}
+                  </ConversationContent>
+                  {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
               for the curve. It lives inside the Conversation, ahead of the
               button, so paint order is structural: content, then fade, then
               button. */}
-              <div
-                className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
-                style={{ backgroundImage: COMPOSER_SCRIM }}
-              />
+                  <div
+                    className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+                    style={{ backgroundImage: COMPOSER_SCRIM }}
+                  />
 
-              {/* Glass, not a plug: this button only exists while the reader is
+                  {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
-              {messages.length > 0 ? (
-                <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
-              ) : null}
-            </Conversation>
-          </MarkdownAttachmentsProvider>
-        </FileMentionProvider>
-      </BrowserCardHostContext.Provider>
+                  {timelineBlocker ? (
+                    <RuntimeAttentionScrollHint message={timelineBlocker.message} />
+                  ) : messages.length > 0 ? (
+                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+                  ) : null}
+                </Conversation>
+              </RunningBashProvider>
+            </MarkdownAttachmentsProvider>
+          </FileMentionProvider>
+        </BrowserCardHostContext.Provider>
+      </CodeModePictureHostContext.Provider>
 
       {/* The tab a person asked to see (VC-238), IN FLOW between the transcript
           and the composer rather than inside the composer's absolute block: a
@@ -1636,7 +1818,7 @@ export function ChatPlane({
               question it was asked; it does not answer a failure — and the
               failure most worth seeing here is the decision that never reached
               the harness, which leaves the card looking answerable. */}
-          {blocker ? <SessionBlocker blocker={blocker} /> : null}
+          {blocker && timelineBlocker === null ? <SessionBlocker blocker={blocker} /> : null}
           {/* The Activity Island (VC-268): what this Session holds beyond the
               chat stream — its Browser Tabs, its plan, its background shells
               — a SIBLING of the interaction stack, sharing its shell material
@@ -1698,6 +1880,7 @@ export function ChatPlane({
               hostReadOnly={!canWrite}
               contextUsage={contextUsage}
               queued={strip}
+              steeringMessages={pendingSteerIds}
               onQueuedChange={onQueuedChange}
               onSteerQueued={onSteerQueued}
               onSubmit={submitComposer}
@@ -1806,58 +1989,65 @@ function useModelAccess(active: boolean): {
 
 /* ---------------------------------------------------------------- running */
 
-/**
- * The one thing on screen that says the turn is not over.
- *
- * It lives for the WHOLE turn now, not just the gap before the first token.
- * That gap was the only moment the transcript could not speak for itself, so it
- * was the only moment this was drawn — and every moment after it looked exactly
- * like a finished reply: settled prose, a collapsed bundle, nothing moving. A
- * reader could not tell a turn that had ended from one that was two tool calls
- * from ending, which is what the first external user described as disorienting.
- * The mark is mounted by `working` and unmounted by it, so the stop token that
- * ends the turn is the same event that takes it off screen; there is no timer
- * and no second source of truth to disagree with the lifecycle.
- *
- * TWO DRESSES, because the transcript's own voice is the better one wherever it
- * has something to say. Before the first output there is nothing else on
- * screen, so the mark says the word; once a bundle above it is reporting
- * `Running 2 commands…` the word would be the same sentence twice at two
- * indents, and the orbs alone carry the fact that neither of them has stopped.
- *
- * The words are said once, `sr-only`, inside the live region — so the dress
- * swap mid-turn is silent (the orbs are `aria-hidden`) and a screen reader
- * hears "Working" at the start of a turn rather than at every step of it.
- *
- * Memoized on one boolean, which is the whole of its props: this sits in the
- * plane's own render, and the plane renders on every streamed frame of the very
- * turn the mark is reporting. `narrated` flips once per turn.
- */
+/** The status region lasts the whole turn. Its visual is only a fallback:
+ * reserve its row, hide immediately behind live content, and wait out short
+ * inter-step gaps before showing it again. No crossfade means no overlap. */
 export const TurnRunningMark = React.memo(function TurnRunningMark({
-  narrated,
+  progressVisible = false,
 }: {
-  /**
-   * The transcript is already reporting this turn's work, so the mark drops
-   * its own word and keeps only the orbs.
-   */
-  narrated: boolean;
+  progressVisible?: boolean;
 }) {
+  const visible = useDelayedPresence(!progressVisible, 300, !progressVisible);
   return (
     <div role="status" className="flex min-w-0 flex-col">
       <span className="sr-only">Working</span>
-      <div aria-hidden className="flex min-w-0">
-        {narrated ? (
-          // `py-1` is the row padding {@link ReasoningLine} carries, so the
-          // orbs sit on the same rhythm as the line they stand in for and the
-          // tail does not jump when the dress changes.
-          <ThinkingOrbs className="py-1 text-primary" />
-        ) : (
-          <ReasoningLine verb="Working" meta={null} streaming />
-        )}
+      <div aria-hidden className={cn("flex min-w-0", !visible && "invisible")}>
+        <ReasoningLine verb="Working" meta={null} streaming />
       </div>
     </div>
   );
 });
+
+/** The copy that left the composer, before any host frame or queue owns it. */
+export function PendingMessage({
+  message,
+  context,
+}: {
+  message: HeldMessage;
+  context: TurnContext;
+}) {
+  const label = message.deliveryAccepted
+    ? message.delivery === "queue"
+      ? "Queued"
+      : "Delivered"
+    : message.delivery === "steer"
+      ? "Sends after this step"
+      : message.delivery === "queue"
+        ? "Queuing…"
+        : "Sending…";
+  return (
+    <ChatTurn
+      messages={[
+        {
+          id: message.id,
+          role: "user",
+          parts: [
+            { type: "text", text: message.text },
+            ...(message.attachments ?? []).map((attachment) => ({
+              type: "file" as const,
+              url: blobUrl(attachment.blobHash),
+              mediaType: attachment.mime,
+              filename: attachment.originalName,
+            })),
+          ],
+        },
+      ]}
+      context={context}
+      live={false}
+      deliveryLabel={label}
+    />
+  );
+}
 
 /* ---------------------------------------------------------------- blocked */
 
@@ -1981,6 +2171,10 @@ export interface TurnContext {
   onOpenSession?(sessionId: string): void;
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
+  deliveryLabels?: ReadonlyMap<string, MessageDeliveryLabel>;
+  steeringMessages?: ReadonlySet<string>;
+  pendingSince?: ReadonlyMap<string, number>;
+  progressPaused?: boolean;
 }
 
 /**
@@ -1991,6 +2185,24 @@ export interface TurnContext {
  * measured mid-frame both produce exactly that.
  */
 const PINNED_SLACK_PX = 8;
+
+/** Readers in history still learn why the live tail stopped. The explanation
+ * and its single recovery remain in the timeline; this only navigates to it. */
+function RuntimeAttentionScrollHint({ message }: { message: string }) {
+  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
+  if (isAtBottom) return null;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="absolute bottom-[calc(var(--composer-height)+0.75rem)] left-1/2 max-w-[90%] -translate-x-1/2 bg-background/70 shadow-raised backdrop-blur-md"
+      onClick={() => void scrollToBottom()}
+      aria-label={`${message} · Scroll to latest`}
+    >
+      {message} · Scroll to latest
+    </Button>
+  );
+}
 
 /**
  * How far above the top edge the sentinel starts loading the next page.
@@ -2485,6 +2697,8 @@ function transcriptRowKey(row: TranscriptRow): string {
       return `compaction:${row.compaction.sequence}`;
     case "reasoning-drop":
       return `reasoning-drop:${row.drop.sequence}`;
+    case "tool-refresh":
+      return `tool-refresh:${row.refresh.sequence}`;
   }
 }
 
@@ -2512,6 +2726,8 @@ export function ChatTranscriptRow({
       return <CompactionBoundary compaction={row.compaction} />;
     case "reasoning-drop":
       return <ReasoningDropNotice drop={row.drop} />;
+    case "tool-refresh":
+      return <ToolRefreshNotice refresh={row.refresh} />;
     case "turn":
       return <ChatTurn messages={row.messages} context={context} live={live} />;
   }
@@ -2531,11 +2747,14 @@ export const ChatTurn = React.memo(function ChatTurn({
   messages,
   context,
   live,
+  deliveryLabel,
 }: {
   messages: readonly UIMessage[];
   context: TurnContext;
   /** This turn is the one the harness is still writing into. Only it animates. */
   live: boolean;
+  /** Pending local intent replaces this label until durable host ownership. */
+  deliveryLabel?: string;
 }) {
   const first = messages[0] ?? null;
   const role = first?.role ?? null;
@@ -2602,6 +2821,19 @@ export const ChatTurn = React.memo(function ChatTurn({
   // Plan-only projections must not leave an empty bubble.
   if (segments && segments.length === 0) return null;
 
+  // Delivery facts remain in the model/peek. The transcript explains waits
+  // and refusals, not every successful send. The accepted held copy and its
+  // durable replacement use the same quiet markup at ownership handoff.
+  const delivery = deliveryLabel ?? context.deliveryLabels?.get(first.id);
+  const footer =
+    delivery === "Delivered" || delivery === "Recorded"
+      ? undefined
+      : delivery === "Pending" && context.steeringMessages?.has(first.id)
+        ? "Sends after this step"
+        : delivery === "Pending"
+          ? "Sending…"
+          : delivery;
+
   return (
     <Message from={role} className="relative max-w-full">
       <MessageContent className="gap-0 group-[.is-user]:rounded-xl group-[.is-user]:bg-muted group-[.is-user]:px-4 group-[.is-user]:py-2">
@@ -2640,10 +2872,38 @@ export const ChatTurn = React.memo(function ChatTurn({
           </div>
         ) : null}
       </MessageContent>
+      {role === "user" && footer !== undefined ? (
+        <MessageDelivery
+          key={first.id}
+          label={footer}
+          since={context.pendingSince?.get(first.id)}
+        />
+      ) : null}
       {copyableText !== null ? <MessageCopyAction text={copyableText} from={role} /> : null}
     </Message>
   );
 });
+
+/** A quiet tab attached to the bubble, inside the existing 24px message gap.
+ * It never changes bubble or row geometry when delivery ownership changes.
+ * Refusals remain immediate; ordinary round trips never show waiting copy. */
+function MessageDelivery({ label, since }: { label: string; since: number | undefined }) {
+  const failed = label === "Not delivered" || label === "Delivery unconfirmed";
+  const remaining = since === undefined ? 600 : Math.max(0, 600 - (Date.now() - since));
+  const waited = useDelayedPresence(!failed, remaining, remaining === 0);
+  if (!failed && !waited) return null;
+  const Icon = failed ? WarningIcon : ClockIcon;
+  return (
+    <span
+      data-slot="message-delivery"
+      className="absolute top-full right-0 flex max-w-full items-center gap-1 rounded-b-lg bg-muted px-2 text-ui text-muted-foreground"
+      title={label}
+    >
+      <Icon aria-hidden className="size-3 shrink-0" weight="bold" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
 
 /** The feed-wide copy verdict holds long enough to be read, then returns to rest. */
 const COPY_FEEDBACK_MS = 1200;
@@ -2705,6 +2965,7 @@ function renderSegment(
       return (
         <ActivityBundle
           rows={segment.rows}
+          progressEnabled={live && !context.progressPaused}
           onOpenFile={context.onOpenFile}
           onOpenSession={context.onOpenSession}
         />
