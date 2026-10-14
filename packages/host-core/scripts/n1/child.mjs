@@ -135,6 +135,49 @@ const steps = {
     }
   },
 
+  /** Replays a moved bash row through N-1's own ledger and artifact reader. */
+  bashReplay: async (step) => {
+    const { createSessionEngine } = await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const { createFileTranscriptArtifactStore } = await n1(
+      "./session-runtime/transcript-artifacts",
+    );
+    const { projectSession } = await n1("@volli/shared");
+    const db = openVolliDb(command.dbPath);
+    try {
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW },
+        ids: { next: (kind) => `${step.sessionId}-${kind}` },
+      });
+      const snapshot = await engine.getSession({ sessionId: step.sessionId });
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      // Projection must tolerate every head-written event; read the known row's body.
+      projectSession(snapshot.session, events);
+      const references = events.filter((event) => event.payload.kind === "transcript.referenced");
+      const store = createFileTranscriptArtifactStore(step.transcriptsRoot);
+      const rows = await Promise.all(
+        references.map((event) => store.read(event.payload.reference)),
+      );
+      const parts = rows.flatMap((row) => row.message.parts);
+      const bash = parts.find((part) => part.type === "dynamic-tool" && part.toolName === "bash");
+      const text =
+        bash?.output?.content
+          ?.filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n") ?? "";
+      return {
+        sessionId: snapshot.session.id,
+        frames: rows.length,
+        toolName: bash?.toolName ?? null,
+        state: bash?.state ?? null,
+        text,
+      };
+    } finally {
+      db.close();
+    }
+  },
+
   /** Makes a backup bundle of the profile. */
   bundle: async (step) => {
     const { createBackupBundle } = await n1("./backup/bundle");

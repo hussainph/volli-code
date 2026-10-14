@@ -3,6 +3,12 @@
  * output ring, its read cursor and its record, keyed by the Session that
  * owns it — the shell half of what `browser/tab-host.ts` is for tabs.
  *
+ * FOREGROUND CALLS (VC-757). `runForeground` owns the same child and retained
+ * output, privately keyed by Session and tool call. Until `moveForeground`
+ * atomically promotes it, it is neither published, capped nor announced. A
+ * move clears the bash deadline and cancellation binding, answers the call
+ * with a tail and id, and keeps the original process and spawn-ledger row.
+ *
  * WHAT A SHELL IS. `/bin/bash -c <command>`, spawned detached in its own
  * process group with stdout and stderr piped and stdin closed, through the
  * environment the caller built — the port hands in the same record the
@@ -155,6 +161,31 @@ export interface BackgroundShellStartInput {
   notifyOn?: ShellNotifyPattern;
 }
 
+/** Foreground timeout is in seconds, matching the bash tool. */
+export interface ForegroundShellOptions {
+  toolCallId: string;
+  timeout?: number;
+  signal: AbortSignal;
+  /** Retained, redacted snapshots for clients that do not own a capture. */
+  onOutput?(text: string): void;
+  /** Executor-internal bytes; the tool's existing capture/redactor owns their publication. */
+  onChunk?(chunk: Uint8Array): void;
+  onReady?(control: { pauseOutput(): void; resumeOutput(): void }): void;
+}
+
+export interface ForegroundShellResult {
+  output: string;
+  code: number | null;
+  signal: string | null;
+  background?: { shellId: string };
+}
+
+interface ForegroundRun {
+  entry?: ShellEntry;
+  cancel(message: string): void;
+  promote(): ForegroundShellResult;
+}
+
 export interface BackgroundShellHostPorts {
   /** The renderer's feed: a whole snapshot on every change of state. */
   publishState(state: BackgroundShellState): void;
@@ -279,7 +310,7 @@ interface ShellEntry {
   /** Settles when the child exits, however it exits. */
   exited: Promise<void>;
   /** Told on every chunk, for the settle window. */
-  onOutput: Set<() => void>;
+  onOutput: Set<(chunk: Buffer) => void>;
   /**
    * `start` has handed the model its first answer. An exit before that is in
    * the answer itself (its record is copied after this flips), so only an exit
@@ -299,6 +330,8 @@ interface ShellEntry {
 
 export class BackgroundShellHost {
   private readonly shells = new Map<string, ShellEntry>();
+  /** Foreground calls are private until promoted; never part of the shell cap or feed. */
+  private readonly foreground = new Map<string, Map<string, ForegroundRun>>();
   /** Disposed attachments can still have a kill in flight; retain those processes until close. */
   private readonly processes = new Set<ShellEntry>();
   private readonly createId: () => string;
@@ -368,12 +401,27 @@ export class BackgroundShellHost {
     owner: BackgroundShellOwner,
     input: BackgroundShellStartInput,
   ): Promise<{ shell: RuntimeShellRecord; pid: number; output: string }> {
+    this.requireOpen();
+    this.requireCapacity(owner.sessionId);
+    const entry = await this.spawnShell(owner, input, true);
+    await this.settle(entry);
+    // Flipped in the same synchronous block that copies the record below: an
+    // exit lands either before it (and is in the answer) or after (and is news).
+    entry.returned = true;
+    const { output } = entry.ring.readNew();
+    return { shell: { ...entry.record }, pid: entry.pid, output: this.safeOutput(output) };
+  }
+
+  private requireOpen(): void {
     if (this.closing !== undefined)
       throw new ShellRefusal(
         "shell.closing",
         "The host is stopping; no new background shell can start.",
       );
-    const live = this.ownedBy(owner.sessionId).filter((entry) => entry.record.state === "running");
+  }
+
+  private requireCapacity(sessionId: string): void {
+    const live = this.ownedBy(sessionId).filter((entry) => entry.record.state === "running");
     if (live.length >= SHELL_MAX_PER_SESSION) {
       throw new ShellRefusal(
         "shell.limit",
@@ -382,6 +430,14 @@ export class BackgroundShellHost {
           .join(", ")}): kill one with shell_kill, or reuse one.`,
       );
     }
+  }
+
+  /** Both modes own the same child, output, process group and spawn-ledger lifecycle. */
+  private async spawnShell(
+    owner: BackgroundShellOwner,
+    input: BackgroundShellStartInput,
+    background: boolean,
+  ): Promise<ShellEntry> {
     let notifyTest: ((line: string) => boolean) | null = null;
     if (input.notifyOn !== undefined) {
       const compiled = compileNotifyPattern(input.notifyOn);
@@ -433,7 +489,7 @@ export class BackgroundShellHost {
       exitedAt: null,
     };
     const ring = new OutputRing(this.outputMaxBytes);
-    const onOutput = new Set<() => void>();
+    const onOutput = new Set<(chunk: Buffer) => void>();
     const notifyOn = input.notifyOn;
     const stdout = new NoticeOutput((text) => this.redactNoticeText(text), this.outputMaxBytes);
     const stderr = new NoticeOutput((text) => this.redactNoticeText(text), this.outputMaxBytes);
@@ -461,7 +517,7 @@ export class BackgroundShellHost {
       ring.append(chunk);
       output.feed(chunk);
       matchOutput(output, watch);
-      for (const listener of onOutput) listener();
+      for (const listener of onOutput) listener(chunk);
     };
     child.stdout?.on("data", (chunk: Buffer) => receive(stdout, stdoutWatch, chunk));
     child.stderr?.on("data", (chunk: Buffer) => receive(stderr, stderrWatch, chunk));
@@ -513,16 +569,169 @@ export class BackgroundShellHost {
       onOutput,
       returned: false,
     };
-    this.shells.set(shellId, entry);
     this.processes.add(entry);
-    this.deps.publishState(this.stateOf(entry));
+    if (background) {
+      this.shells.set(shellId, entry);
+      this.deps.publishState(this.stateOf(entry));
+    }
+    return entry;
+  }
 
-    await this.settle(entry);
-    // Flipped in the same synchronous block that copies the record below: an
-    // exit lands either before it (and is in the answer) or after (and is news).
-    entry.returned = true;
-    const { output } = ring.readNew();
-    return { shell: { ...record }, pid, output: this.safeOutput(output) };
+  /** Run privately until exit, cancellation, or an atomic move to the background. */
+  runForeground(
+    owner: BackgroundShellOwner,
+    input: BackgroundShellStartInput,
+    options: ForegroundShellOptions,
+  ): Promise<ForegroundShellResult> {
+    return new Promise((resolve, reject) => {
+      this.requireOpen();
+      if (options.signal.aborted) throw Object.assign(new Error("Command aborted"), { output: "" });
+      if (
+        options.timeout !== undefined &&
+        (!Number.isFinite(options.timeout) ||
+          options.timeout <= 0 ||
+          options.timeout > 2_147_483.647)
+      )
+        throw new Error(
+          "Invalid timeout: must be a positive finite number of seconds within the timer limit",
+        );
+      let calls = this.foreground.get(owner.sessionId);
+      if (calls?.has(options.toolCallId))
+        throw new Error("This foreground shell call is already running");
+      if (calls === undefined) {
+        calls = new Map();
+        this.foreground.set(owner.sessionId, calls);
+      }
+      const sessionCalls = calls;
+      let active = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const snapshot = (): string => this.safeOutput(run.entry?.ring.all() ?? "");
+      const update = (chunk: Buffer): void => {
+        try {
+          options.onChunk?.(chunk);
+          if (options.onOutput !== undefined) options.onOutput(snapshot());
+        } catch (error) {
+          cancel(error instanceof Error ? error.message : "Shell output callback failed");
+        }
+      };
+      const cleanup = (): void => {
+        active = false;
+        clearTimeout(timer);
+        options.signal.removeEventListener("abort", abort);
+        run.entry?.onOutput.delete(update);
+        sessionCalls.delete(options.toolCallId);
+        if (sessionCalls.size === 0) this.foreground.delete(owner.sessionId);
+      };
+      const cancel = (message: string): void => {
+        if (!active) return;
+        const output = snapshot();
+        cleanup();
+        if (run.entry !== undefined) {
+          run.entry.endedBy = "agent";
+          void this.terminate(run.entry);
+        }
+        reject(Object.assign(new Error(output ? `${output}\n\n${message}` : message), { output }));
+      };
+      const abort = (): void => cancel("Command aborted");
+      const run: ForegroundRun = {
+        cancel,
+        promote: () => {
+          const entry = run.entry!;
+          cleanup();
+          const { text: output } = lastBytes(this.safeOutput(entry.ring.all()), this.tailMaxBytes);
+          entry.ring.readNew();
+          entry.returned = true;
+          this.shells.set(entry.record.shellId, entry);
+          // Capture backpressure belonged to the foreground reader, not the moved process.
+          entry.child.stdout?.resume();
+          entry.child.stderr?.resume();
+          const result: ForegroundShellResult = {
+            output,
+            code: null,
+            signal: null,
+            background: { shellId: entry.record.shellId },
+          };
+          resolve(result);
+          this.deps.publishState(this.stateOf(entry));
+          return result;
+        },
+      };
+      sessionCalls.set(options.toolCallId, run);
+      options.signal.addEventListener("abort", abort, { once: true });
+      if (options.timeout !== undefined) {
+        timer = setTimeout(
+          () => cancel(`Command timed out after ${options.timeout} seconds`),
+          options.timeout * 1_000,
+        );
+      }
+      void this.spawnShell(owner, input, false).then(
+        (entry) => {
+          run.entry = entry;
+          if (!active) {
+            entry.endedBy = "agent";
+            void this.terminate(entry);
+            return;
+          }
+          entry.onOutput.add(update);
+          try {
+            options.onReady?.({
+              pauseOutput: () => {
+                entry.child.stdout?.pause();
+                entry.child.stderr?.pause();
+              },
+              resumeOutput: () => {
+                entry.child.stdout?.resume();
+                entry.child.stderr?.resume();
+              },
+            });
+          } catch (error) {
+            cancel(error instanceof Error ? error.message : "Shell ready callback failed");
+          }
+          void entry.exited.then(() => {
+            if (!active) return;
+            const result = {
+              output: snapshot(),
+              code: entry.record.code,
+              signal: entry.record.signal,
+            };
+            cleanup();
+            resolve(result);
+          });
+        },
+        (error: unknown) => {
+          if (!active) return;
+          cleanup();
+          reject(error);
+        },
+      );
+    });
+  }
+
+  /** A running, uncancelled call with room in the background shell cap. */
+  foregroundAvailable(sessionId: string, toolCallId: string): boolean {
+    const entry = this.foreground.get(sessionId)?.get(toolCallId)?.entry;
+    return (
+      this.closing === undefined &&
+      entry?.record.state === "running" &&
+      entry.child.exitCode === null &&
+      entry.child.signalCode === null &&
+      this.ownedBy(sessionId).filter((shell) => shell.record.state === "running").length <
+        SHELL_MAX_PER_SESSION
+    );
+  }
+
+  /** No await: state/cap checks and promotion happen in one event-loop turn. */
+  moveForeground(sessionId: string, toolCallId: string): { shellId: string } {
+    this.requireOpen();
+    const run = this.foreground.get(sessionId)?.get(toolCallId);
+    const entry = run?.entry;
+    if (entry === undefined)
+      throw new ShellRefusal("shell.unknown", "No running foreground shell belongs to this call.");
+    this.requireCapacity(sessionId);
+    if (!this.foregroundAvailable(sessionId, toolCallId))
+      throw new ShellRefusal("shell.exited", "This foreground shell already exited.");
+    run!.promote();
+    return { shellId: entry.record.shellId };
   }
 
   /**
@@ -710,6 +919,9 @@ export class BackgroundShellHost {
   close(): Promise<void> {
     if (this.closing !== undefined) return this.closing;
     const entries = [...new Set([...this.processes, ...this.shells.values()])];
+    for (const calls of this.foreground.values()) {
+      for (const run of calls.values()) run.cancel("Command aborted: the host is stopping");
+    }
     for (const entry of entries) this.cancelExitNotice(entry);
     this.shells.clear();
     this.closing = Promise.all(entries.map((entry) => this.terminate(entry))).then(() => undefined);
@@ -745,6 +957,9 @@ export class BackgroundShellHost {
    * what keeps a match or an exit that lands later quiet.
    */
   disposeSession(sessionId: string): void {
+    for (const run of this.foreground.get(sessionId)?.values() ?? []) {
+      run.cancel("Command aborted: the Session attachment ended");
+    }
     for (const entry of this.ownedBy(sessionId)) {
       this.cancelExitNotice(entry);
       this.shells.delete(entry.record.shellId);

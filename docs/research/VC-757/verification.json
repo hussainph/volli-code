@@ -1,0 +1,27 @@
+{
+  "route": "http://localhost:5337/lab/#running-bash",
+  "viewport": "1440x1000",
+  "checks": [
+    "Running control enabled; capacity control disabled with matching aria-description and native title: This Session already has 4 running background shells. Stop one first.",
+    "Unsupported foreground path: Move to background absent",
+    "Nested Code Mode shell · no top-level control: Move to background absent",
+    "Clicked real running-row Move to background button; heading becomes Moved · turn continues; its move control disappears; capacity remains disabled",
+    "Expanded settled ToolRow; visible receipt: Moved to background: moved-shell"
+  ],
+  "movedSectionBeforeExpand": "Moved · turn continues\nRan\npnpm dev --host localhost",
+  "consoleErrors": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "location": {
+        "url": "http://localhost:5337/favicon.ico",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      }
+    }
+  ],
+  "pageErrors": [],
+  "status": "UI CHECKS PASS; CONSOLE ERRORS RECORDED"
+}

@@ -20,6 +20,8 @@ export type BashToolInput = Static<typeof bashSchema>;
 export interface BashToolDetails {
   truncation?: ShellOutputTruncation;
   fullOutputPath?: string;
+  /** Live hint only; old builds ignore it and replay the plain-text result. */
+  backgroundable?: boolean;
 }
 
 export interface BashExecution {
@@ -38,6 +40,8 @@ export type BashPrepare<TContext extends ExecutionToolContext = ExecutionToolCon
 export interface BashToolOptions<TContext extends ExecutionToolContext = ExecutionToolContext> {
   commandPrefix?: string;
   prepare?: BashPrepare<TContext>;
+  /** Code Mode calls stay foreground; the host may support only direct calls. */
+  isTopLevel?: () => boolean;
 }
 
 function validateTimeout(timeout: number | undefined): void {
@@ -58,7 +62,7 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
     label: "bash",
     description: `Execute a bash command in the current working directory. Returns combined stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
     parameters: bashSchema,
-    async execute(_toolCallId, { command, timeout }, onUpdate, toolContext, _invocation, context) {
+    async execute(toolCallId, { command, timeout }, onUpdate, toolContext, _invocation, context) {
       validateTimeout(timeout);
       const { env } = toolContext;
       const execution: BashExecution = {
@@ -72,6 +76,7 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
       let lastCheckpointAt = Date.now();
       let lastCheckpoint: string | undefined;
       let acceptingUpdates = true;
+      let backgroundable = false;
 
       onUpdate({ content: [], details: undefined });
       const result = await env.exec(
@@ -81,6 +86,15 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
           env: execution.env,
           inheritEnv: execution.inheritEnv,
           timeout,
+          ...(options?.isTopLevel?.() === true
+            ? {
+                foregroundCallId: toolCallId,
+                onForegroundReady: () => {
+                  backgroundable = true;
+                  onUpdate({ content: [], details: { backgroundable: true } });
+                },
+              }
+            : {}),
           capture: {
             limits: { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES, retain: "tail" },
             spill: true,
@@ -93,6 +107,7 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
               details: {
                 truncation: view.truncation.truncated ? view.truncation : undefined,
                 fullOutputPath: view.spillPath,
+                ...(backgroundable ? { backgroundable: true } : {}),
               },
             };
             const now = Date.now();
@@ -137,6 +152,13 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
         throw new Error(outputText ? `${outputText}\n\n${status}` : status, {
           cause: result.error,
         });
+      }
+      if (result.value.backgroundShellId !== undefined) {
+        outputText = [
+          `Moved command to background shell ${result.value.backgroundShellId}.`,
+          "It keeps running. A notice will arrive when it exits; use shell_output to read it or shell_kill to end it.",
+          ...(outputText ? ["Output so far:", outputText] : ["No output so far."]),
+        ].join("\n");
       }
       if (result.value.exitCode !== 0) {
         throw new Error(

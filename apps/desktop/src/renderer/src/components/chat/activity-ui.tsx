@@ -66,6 +66,7 @@ import { normalizeChatToolPath } from "@renderer/lib/chat-open-target";
 import { cn } from "@renderer/lib/utils";
 
 import { TokenText, useHighlightedLines, useOnScreen } from "./tool-output-highlight";
+import { RunningBashControl } from "./running-bash-control";
 
 /* ------------------------------------------------------------------- motion */
 
@@ -447,6 +448,9 @@ export const ToolRow = React.memo(function ToolRow({
         ) : null}
         <RowDisclosure open={open} expandable={expandable} onToggle={toggle} />
         <RowActions row={row} />
+        {row.kind === "run-command" && row.status === "running" ? (
+          <RunningBashControl key={part.toolCallId} part={part} />
+        ) : null}
         {row.meta ? (
           <span
             className={cn("shrink-0 font-mono tabular-nums", TONE_CLASS[row.metaTone])}

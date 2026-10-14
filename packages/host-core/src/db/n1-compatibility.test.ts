@@ -44,7 +44,10 @@ import { createBackupBundle, readBackupBundle } from "../backup/bundle";
 import { restoreBackupBundle } from "../backup/restore";
 import { blobsRoot } from "../blob-store";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
+import {
+  createFileTranscriptArtifactStore,
+  sessionTranscriptsRoot,
+} from "../session-runtime/transcript-artifacts";
 import { createTicketCommand } from "../ticket-commands";
 import { openVolliDb } from "./database-file";
 import { checkMigrationHistory, describeMigrationHistory } from "./migration-history";
@@ -417,6 +420,70 @@ describe.skipIf(manifest === null)(
       } finally {
         db.close();
       }
+    });
+
+    it("replays a moved bash result as an ordinary, complete tool frame (VC-757)", async () => {
+      await headProfile();
+      const { head, guarded } = await probe();
+      if (guarded && headFloor() > head) return;
+      const db = openVolliDb(dbPath);
+      const result =
+        "Moved command to background shell moved-n1.\nIt keeps running. A notice will arrive when it exits; use shell_output to read it or shell_kill to end it.\nOutput so far:\nbefore move\n";
+      try {
+        const reference = await createFileTranscriptArtifactStore(
+          sessionTranscriptsRoot(root),
+        ).write({
+          version: 1,
+          threadId: "thread-moved",
+          branchId: "branch-moved",
+          attemptId: "attempt-moved",
+          turnId: null,
+          message: {
+            id: "message-moved",
+            role: "assistant",
+            parts: [
+              {
+                type: "dynamic-tool",
+                toolName: "bash",
+                toolCallId: "call-moved",
+                state: "output-available",
+                input: { command: "echo before; sleep 1; echo after" },
+                output: { content: [{ type: "text", text: result }] },
+              },
+            ],
+          },
+        });
+        await headEngine(db).observe({
+          id: "moved-frame",
+          sessionId: "session-head",
+          attachmentId: null,
+          occurredAt: NOW,
+          provenance,
+          kind: "transcript.referenced",
+          turnId: null,
+          reference,
+        });
+      } finally {
+        db.close();
+      }
+      const replayed = value(
+        await n1(dbPath, [
+          {
+            kind: "bashReplay",
+            sessionId: "session-head",
+            transcriptsRoot: sessionTranscriptsRoot(root),
+          },
+        ]),
+        0,
+      );
+      // Behavior, never an exact decoded shape: future latest-canary/base may include this feature.
+      expect(replayed).toMatchObject({
+        sessionId: "session-head",
+        frames: 1,
+        toolName: "bash",
+        state: "output-available",
+        text: result,
+      });
     });
 
     it("makes a backup bundle of a head profile that both builds restore", async () => {

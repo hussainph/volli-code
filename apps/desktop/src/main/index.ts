@@ -1509,6 +1509,7 @@ const appStartup = app.whenReady().then(async () => {
       runtime,
       sessions,
       modelAccess: piRuntimeHost,
+      backgroundShells,
       experiments: { snapshot: readExperiments, set: setExperiment },
       automations: runtimeAutomations,
       busyWorktreeSites,

@@ -253,6 +253,7 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
       return () => void fixture.unsubscribed.push(key);
     };
   return {
+    "shells.moveToBackground": record("shells.moveToBackground", { shellId: "shell-1" }),
     "project.reorder": record("project.reorder", null),
     "worktree.trimSettings": record("worktree.trimSettings", TRIM),
     "hosts.snapshot": record("hosts.snapshot", SNAPSHOT),
@@ -407,6 +408,17 @@ describeContract<Host, DesktopRouter>(
       ]);
     });
 
+    it("moves a command through the real codec and reports failures", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const input = { sessionId: WORKSPACE, toolCallId: "bash-1" };
+      expect(await client.shells.moveToBackground.mutate(input)).toEqual({ shellId: "shell-1" });
+      expect(fixture.calls).toEqual([{ key: "shells.moveToBackground", input, call: WINDOW_CALL }]);
+      expect(
+        await expectHostError(client.shells.moveToBackground.mutate({ ...input, toolCallId: "" })),
+      ).toMatchObject({ code: "BAD_REQUEST" });
+    });
+
     // Placement-derived policy: host-placed, so device-as-user, and on no
     // network door. A paired device and a Session are refused before input.
     it("refuses every network caller, whatever its Workspace, before the handler", async () => {
@@ -420,6 +432,14 @@ describeContract<Host, DesktopRouter>(
         });
         expect(
           await expectHostError(client.project.reorder.mutate({ orderedIds: [WORKSPACE] })),
+        ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
+        expect(
+          await expectHostError(
+            client.shells.moveToBackground.mutate({
+              sessionId: WORKSPACE,
+              toolCallId: "bash-1",
+            }),
+          ),
         ).toMatchObject({ code: "FORBIDDEN", reason: "verb-refused" });
         expect(fixture.calls).toEqual([]);
       }
@@ -1316,6 +1336,7 @@ describe("the desktop router's grammar", () => {
     const schemas = desktopProcedureSchemas();
     expect(Object.keys(schemas).toSorted()).toEqual(
       [
+        "shells.moveToBackground",
         "project.reorder",
         "worktree.trimSettings",
         "hosts.snapshot",

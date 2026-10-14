@@ -56,6 +56,7 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
       ),
     () => handlers["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, CALL),
     () => handlers["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, CALL),
+    () => handlers["shells.moveToBackground"]({ sessionId: "s", toolCallId: "bash-1" }, CALL),
     () => handlers["project.reorder"]({ orderedIds: [] }, CALL),
     () => handlers["worktree.trimSettings"](undefined, CALL),
     () => handlers["hosts.snapshot"](undefined, CALL),
@@ -155,6 +156,7 @@ describe("sessionHandlersFrom", () => {
       readModelPickerView: port as never,
       writeModelPickerView: port as never,
       desktop: {
+        "shells.moveToBackground": port as never,
         "project.reorder": port as never,
         "worktree.trimSettings": port as never,
         "hosts.snapshot": port as never,
@@ -183,7 +185,7 @@ describe("sessionHandlersFrom", () => {
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(40);
+    expect(port).toHaveBeenCalledTimes(41);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -228,7 +230,8 @@ describe("sessionHandlersFrom", () => {
     // and eight remote sign-in commands (VC-702), the two Session listing
     // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
     // projects' four (VC-710), the active add flows' one (VC-720), and
-    // the host-scoped projects' two and HOST relay's three (VC-722).
-    expect(Object.keys(context.handlers)).toHaveLength(82);
+    // the host-scoped projects' two and HOST relay's three (VC-722),
+    // and moving a running command to the background (VC-757).
+    expect(Object.keys(context.handlers)).toHaveLength(83);
   });
 });

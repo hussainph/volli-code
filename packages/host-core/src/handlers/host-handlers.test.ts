@@ -1211,3 +1211,38 @@ describe("host-scope projects at the one handler map", () => {
     expect(workspaces.create).toHaveBeenCalledWith(command);
   });
 });
+
+describe("moving a foreground command", () => {
+  const input = { sessionId: "session-1", toolCallId: "bash-1" };
+  it("names both ids to the owning host and returns its shell id", async () => {
+    const moveForeground = vi.fn(() => ({ shellId: "shell-1" }));
+    expect(
+      await handlers({ backgroundShells: { moveForeground } })["shells.moveToBackground"](
+        input,
+        WINDOW,
+      ),
+    ).toEqual({ shellId: "shell-1" });
+    expect(moveForeground).toHaveBeenCalledWith(input.sessionId, input.toolCallId);
+  });
+  it("refuses an absent or null port and preserves the host's refusal", async () => {
+    for (const backgroundShells of [undefined, null]) {
+      expect(
+        await unavailable(() =>
+          handlers(backgroundShells === undefined ? {} : { backgroundShells })[
+            "shells.moveToBackground"
+          ](input, WINDOW),
+        ),
+      ).toBe("Moving commands to the background is unavailable on this host");
+    }
+    const failure = new Error("This command already exited");
+    expect(() =>
+      handlers({
+        backgroundShells: {
+          moveForeground() {
+            throw failure;
+          },
+        },
+      })["shells.moveToBackground"](input, WINDOW),
+    ).toThrow(failure);
+  });
+});

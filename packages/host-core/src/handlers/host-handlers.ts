@@ -275,8 +275,12 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "logs.follow": HostSubscriptionHandler<HostLogsRead, HostLogsBatch>;
   /**
    * The desktop-only tier (`DESKTOP_ENTRIES`, VC-608): the same map, under
-   * placement-derived policy (both host-placed: device-as-user).
+   * placement-derived policy: the person only, on no network door.
    */
+  readonly "shells.moveToBackground": HostHandler<
+    { sessionId: string; toolCallId: string },
+    { shellId: string }
+  >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /**
@@ -470,6 +474,10 @@ export interface HostHandlerOptions {
   readonly boardFeed?: BoardChangeFeed;
   /** The Session ledger's latest outcome per ticket, or null on a host without one. */
   readonly ticketSignals?: ((projectId: string) => Promise<readonly LatestSessionSignal[]>) | null;
+  /** The host's foreground-shell registry. Absent on hosts without this UI operation. */
+  readonly backgroundShells?: {
+    moveForeground(sessionId: string, toolCallId: string): { shellId: string };
+  } | null;
   /** Where Pi keeps saved tool output, which an archive or delete releases (VC-469). */
   readonly piSessionsDirectory?: string;
   /**
@@ -780,6 +788,13 @@ function hostHandlerEntries(
       logs().follow(query, (batch) => void sink.emit(batch)),
     // The desktop-only tier: the bodies `volli:project-reorder` and
     // `volli:worktree-trim-settings-get` had in `data-ipc.ts`, moved, not copied.
+    "shells.moveToBackground": ({ sessionId, toolCallId }) =>
+      joined({ sessionId, toolCallId }, () =>
+        present(
+          options.backgroundShells ?? null,
+          "Moving commands to the background is unavailable on this host",
+        ).moveForeground(sessionId, toolCallId),
+      ),
     "project.reorder": ({ orderedIds }) => {
       reorderProjects(board(), orderedIds, now());
       return null;

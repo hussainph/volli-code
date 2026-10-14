@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import type { Context } from "../context";
 import {
   type ExecutionEnv,
+  type ForegroundShellExecutor,
   ExecutionError,
   err,
   FileError,
@@ -468,11 +469,18 @@ export class NodeExecutionEnv implements ExecutionEnv {
   private shellPath?: string;
   private shellEnv?: NodeJS.ProcessEnv;
   private activeChildPids = new Set<number>();
+  private readonly foregroundExecutor?: ForegroundShellExecutor;
 
-  constructor(options: { cwd: string; shellPath?: string; shellEnv?: NodeJS.ProcessEnv }) {
+  constructor(options: {
+    cwd: string;
+    shellPath?: string;
+    shellEnv?: NodeJS.ProcessEnv;
+    foregroundExecutor?: ForegroundShellExecutor;
+  }) {
     this.cwd = options.cwd;
     this.shellPath = options.shellPath;
     this.shellEnv = options.shellEnv;
+    this.foregroundExecutor = options.foregroundExecutor;
   }
 
   async absolutePath(path: string, _context: Context): Promise<Result<string, FileError>> {
@@ -493,6 +501,8 @@ export class NodeExecutionEnv implements ExecutionEnv {
     const timeoutMsResult = resolveTimeoutMs(options?.timeout);
     if (!timeoutMsResult.ok) return err(timeoutMsResult.error);
     const timeoutMs = timeoutMsResult.value;
+    const foreground =
+      options?.foregroundCallId === undefined ? undefined : this.foregroundExecutor;
 
     const cwd = options?.cwd ? resolvePath(this.cwd, options.cwd) : this.cwd;
     const shellConfig = await getShellConfig(this.shellPath);
@@ -522,8 +532,11 @@ export class NodeExecutionEnv implements ExecutionEnv {
       let spillStart: Promise<void> | undefined;
       let spillStream: WriteStream | undefined;
       let spillBackpressured = false;
+      const captureFailure = new AbortController();
+      let foregroundControl: { pauseOutput(): void; resumeOutput(): void } | undefined;
 
       const onAbort = () => {
+        if (foreground !== undefined) captureFailure.abort();
         if (child?.pid) killProcessTree(child.pid);
       };
       const failCallback = (error: unknown) => {
@@ -554,12 +567,14 @@ export class NodeExecutionEnv implements ExecutionEnv {
         resolvePromise(result);
       };
       const pauseOutput = () => {
+        foregroundControl?.pauseOutput();
         child?.stdout?.pause();
         child?.stderr?.pause();
       };
       const resumeOutput = () => {
         if (callbackError || spillError || timedOut || signal?.aborted || spillBackpressured)
           return;
+        foregroundControl?.resumeOutput();
         child?.stdout?.resume();
         child?.stderr?.resume();
       };
@@ -622,43 +637,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
         });
       };
 
-      try {
-        const commandFromStdin = shellConfig.value.commandTransport === "stdin";
-        child = spawn(
-          shellConfig.value.shell,
-          commandFromStdin ? shellConfig.value.args : [...shellConfig.value.args, command],
-          {
-            cwd,
-            detached: process.platform !== "win32",
-            env: getShellEnv(this.shellEnv, options?.env, options?.inheritEnv),
-            stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-            windowsHide: true,
-          },
-        );
-        if (child.pid) this.activeChildPids.add(child.pid);
-        if (commandFromStdin) {
-          child.stdin?.on("error", () => {});
-          child.stdin?.end(command);
-        }
-      } catch (error) {
-        const cause = toError(error);
-        settle(err(new ExecutionError("spawn_error", cause.message, cause)));
-        return;
-      }
-
-      timeoutId =
-        timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => {
-              timedOut = true;
-              onAbort();
-            }, timeoutMs);
-
-      if (signal) {
-        if (signal.aborted) onAbort();
-        else signal.addEventListener("abort", onAbort, { once: true });
-      }
-
       const feed = (chunk: Uint8Array) => {
         try {
           const wasTruncated = capture.truncated;
@@ -677,17 +655,84 @@ export class NodeExecutionEnv implements ExecutionEnv {
           failCallback(error);
         }
       };
-      child.stdout?.on("data", feed);
-      child.stderr?.on("data", feed);
+      let completion: Promise<{
+        code: number | null;
+        signal: string | null;
+        background?: { shellId: string };
+      }>;
+      if (foreground !== undefined) {
+        // The host owns cancellation and timeout: promotion withdraws both without killing the child.
+        completion = foreground({
+          command,
+          cwd,
+          env: Object.fromEntries(
+            Object.entries(getShellEnv(this.shellEnv, options?.env, options?.inheritEnv)).filter(
+              (entry): entry is [string, string] => entry[1] !== undefined,
+            ),
+          ),
+          toolCallId: options!.foregroundCallId!,
+          timeout: options?.timeout,
+          signal:
+            signal === undefined
+              ? captureFailure.signal
+              : AbortSignal.any([signal, captureFailure.signal]),
+          onOutput: feed,
+          onReady: (control) => {
+            foregroundControl = control;
+            options?.onForegroundReady?.();
+          },
+        });
+      } else {
+        try {
+          const commandFromStdin = shellConfig.value.commandTransport === "stdin";
+          child = spawn(
+            shellConfig.value.shell,
+            commandFromStdin ? shellConfig.value.args : [...shellConfig.value.args, command],
+            {
+              cwd,
+              detached: process.platform !== "win32",
+              env: getShellEnv(this.shellEnv, options?.env, options?.inheritEnv),
+              stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
+              windowsHide: true,
+            },
+          );
+          if (child.pid) this.activeChildPids.add(child.pid);
+          if (commandFromStdin) {
+            child.stdin?.on("error", () => {});
+            child.stdin?.end(command);
+          }
+        } catch (error) {
+          const cause = toError(error);
+          settle(err(new ExecutionError("spawn_error", cause.message, cause)));
+          return;
+        }
 
-      void waitForChildProcess(
-        child,
-        () =>
-          spillError === undefined &&
-          spillStart !== undefined &&
-          (spillStream === undefined || spillBackpressured),
-      ).then(
-        async ({ code, signal: exitSignal }) => {
+        timeoutId =
+          timeoutMs === undefined
+            ? undefined
+            : setTimeout(() => {
+                timedOut = true;
+                onAbort();
+              }, timeoutMs);
+
+        if (signal) {
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
+        }
+
+        child.stdout?.on("data", feed);
+        child.stderr?.on("data", feed);
+
+        completion = waitForChildProcess(
+          child,
+          () =>
+            spillError === undefined &&
+            spillStart !== undefined &&
+            (spillStream === undefined || spillBackpressured),
+        );
+      }
+      void completion.then(
+        async ({ code, signal: exitSignal, background }) => {
           await finishSpill();
           try {
             capture.finish();
@@ -703,7 +748,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
             settle(err(new ExecutionError("timeout", `timeout:${options?.timeout}`)));
             return;
           }
-          if (signal?.aborted) {
+          if (signal?.aborted && background === undefined) {
             settle(err(new ExecutionError("aborted", "aborted")));
             return;
           }
@@ -715,10 +760,15 @@ export class NodeExecutionEnv implements ExecutionEnv {
           // A process killed by a signal (e.g. OOM killer) has no exit code; map it
           // to the conventional 128 + signal number so callers do not mistake it
           // for a successful exit.
-          const exitCode = code ?? (exitSignal ? 128 + (osConstants.signals[exitSignal] ?? 0) : 1);
+          const exitCode =
+            background === undefined
+              ? (code ??
+                (exitSignal ? 128 + (osConstants.signals[exitSignal as NodeJS.Signals] ?? 0) : 1))
+              : 0;
           settle(
             ok({
               exitCode,
+              ...(background === undefined ? {} : { backgroundShellId: background.shellId }),
               truncation: output.truncation,
               ...(output.spillPath === undefined ? {} : { spillPath: output.spillPath }),
               ...(output.lastLineBytes === undefined
@@ -727,7 +777,31 @@ export class NodeExecutionEnv implements ExecutionEnv {
             }),
           );
         },
-        (error: Error) => settle(err(new ExecutionError("spawn_error", error.message, error))),
+        async (error: Error) => {
+          await finishSpill();
+          try {
+            capture.finish();
+            capture.flush();
+          } catch (cause) {
+            failCallback(cause);
+          }
+          const failure =
+            callbackError ??
+            spillError ??
+            (error instanceof ExecutionError
+              ? error
+              : new ExecutionError(
+                  signal?.aborted
+                    ? "aborted"
+                    : options?.timeout !== undefined &&
+                        error.message.endsWith(`Command timed out after ${options.timeout} seconds`)
+                      ? "timeout"
+                      : "spawn_error",
+                  error.message,
+                  error,
+                ));
+          settle(err(failure));
+        },
       );
     });
   }
