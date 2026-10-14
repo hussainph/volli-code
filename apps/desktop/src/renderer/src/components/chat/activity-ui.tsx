@@ -44,6 +44,7 @@ import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversati
 import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   activityDescriptor,
+  activityStatus,
   bundleNeedsAttention,
   bundleSummary,
   compactSignature,
@@ -372,7 +373,11 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
     case "not-run":
       return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
-      return <SpinnerGapIcon aria-hidden className={cn(className, "animate-spin text-primary")} />;
+      return (
+        <span aria-hidden data-activity-progress className={cn("flex", className)}>
+          <SpinnerGapIcon className="size-full animate-spin text-primary" />
+        </span>
+      );
     case "failed":
       return (
         <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
@@ -1024,6 +1029,61 @@ function DiffDetail({ lines, language }: { lines: DiffLine[]; language: string |
  */
 const BUNDLE_CAP = "max-h-96";
 
+/** The header yields only to a spinner wholly inside its expanded viewport.
+ * Observe the glyph's fixed slot, not its rotating bounds or a tall payload. Subscriptions
+ * change with active row identities, never with streamed text. */
+function useVisibleBundleProgress(
+  viewport: React.RefObject<HTMLDivElement | null>,
+  enabled: boolean,
+  indicatorKeys: string,
+): boolean {
+  const [visible, setVisible] = React.useState(false);
+  React.useLayoutEffect(() => {
+    const root = viewport.current;
+    if (!enabled || root === null || indicatorKeys === "[]") {
+      setVisible(false);
+      return;
+    }
+    const indicators = [...root.querySelectorAll("[data-activity-progress]")];
+    const bounds = root.getBoundingClientRect();
+    const shown = new Set(
+      indicators.filter((node) => {
+        const box = node.getBoundingClientRect();
+        return (
+          box.width > 0 &&
+          box.height > 0 &&
+          box.top >= bounds.top &&
+          box.bottom <= bounds.bottom &&
+          box.left >= bounds.left &&
+          box.right <= bounds.right
+        );
+      }),
+    );
+    // Measure before paint so expanding a short list never flashes a second
+    // spinner. Subsequent scroll/layout changes are observer-driven.
+    setVisible(shown.size > 0);
+    if (typeof IntersectionObserver === "undefined") return;
+    let observing = true;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!observing) return;
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 1) shown.add(entry.target);
+          else shown.delete(entry.target);
+        }
+        setVisible(shown.size > 0);
+      },
+      { root, threshold: 1 },
+    );
+    for (const indicator of indicators) observer.observe(indicator);
+    return () => {
+      observing = false;
+      observer.disconnect();
+    };
+  }, [viewport, enabled, indicatorKeys]);
+  return visible;
+}
+
 /**
  * Everything the agent did between two things it said, behind one line.
  *
@@ -1055,6 +1115,15 @@ export const ActivityBundle = React.memo(
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
     const open = userOpen ?? bundleNeedsAttention(rows);
     const streaming = progressEnabled && isBundleStreaming(rows);
+    const viewport = React.useRef<HTMLDivElement>(null);
+    const indicatorKeys = JSON.stringify(
+      rows
+        .filter((row) =>
+          row.kind === "reasoning" ? row.streaming : activityStatus(row.part) === "running",
+        )
+        .map((row) => row.key),
+    );
+    const rowProgressVisible = useVisibleBundleProgress(viewport, open && streaming, indicatorKeys);
     const liveThought = progressEnabled
       ? rows.findLast((row) => row.kind === "reasoning" && row.streaming)
       : undefined;
@@ -1095,9 +1164,10 @@ export const ActivityBundle = React.memo(
           type="button"
           onClick={toggle}
           aria-expanded={open}
+          data-slot="activity-bundle-header"
           className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
         >
-          {!open && streaming ? (
+          {streaming && (!open || !rowProgressVisible) ? (
             <SpinnerGapIcon
               aria-hidden
               className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
@@ -1123,7 +1193,13 @@ export const ActivityBundle = React.memo(
               over the window — it covered the last tool call whole, including at
               the end of the scroll: see "NO SCRIM AT THE BOTTOM OF A CAPPED
               WINDOW" above (VC-60). */}
-        <div className={cn(open && BUNDLE_CAP, open && "overflow-auto")}>{list}</div>
+        <div
+          ref={viewport}
+          data-slot="activity-bundle-viewport"
+          className={cn(open && BUNDLE_CAP, open && "overflow-auto")}
+        >
+          {list}
+        </div>
       </div>
     );
   },
@@ -1240,7 +1316,9 @@ const ReasoningRow = React.memo(function ReasoningRow({
     <div className="group/row not-prose">
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
         {progressing ? (
-          <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
+          <span aria-hidden data-activity-progress className="flex size-3.5 shrink-0">
+            <SpinnerGapIcon className="size-full animate-spin text-primary" />
+          </span>
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}

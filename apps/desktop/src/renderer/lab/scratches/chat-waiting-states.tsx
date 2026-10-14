@@ -1,4 +1,4 @@
-/** VC-769: production ChatPlane with frozen renderer/store inputs, not a drawn facsimile.
+/** Production ChatPlane with frozen renderer/store inputs, not a drawn facsimile.
  * ?state=first-token|thinking|tool|between-steps|text|steering|queued|error selects a proof state.
  * Also: background|moved-background|tools-updated|compaction surface audit fixtures.
  * No runtime or provider connection; these screenshots prove presentation only.
@@ -28,11 +28,11 @@ import {
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 
-export const title = "VC-769 · chat polish states";
+export const title = "Chat · waiting and progress";
 export const note = "Actual ChatPlane; frozen host/store fixtures, no provider or Electron";
 export const viewport = "window" as const;
-const SESSION = "vc-769-screenshot-session";
-const PROJECT = "vc-769-screenshot-project";
+const SESSION = "chat-waiting-screenshot-session";
+const PROJECT = "chat-waiting-screenshot-project";
 const selection = {
   providerId: "anthropic",
   modelId: "sonnet-4.5",
@@ -42,8 +42,8 @@ const store = createChatSessionsStore();
 const state = new URLSearchParams(window.location.search).get("state") ?? "sending";
 // Optional exact Git baseline, materialized temporarily by delivery-capture.mjs.
 const baselineModule = import.meta.glob<{ ChatPlane: typeof ChatPlane }>(
-  "./vc-769-baseline-chat-plane.tsx",
-)["./vc-769-baseline-chat-plane.tsx"];
+  "./chat-waiting-baseline-chat-plane.tsx",
+)["./chat-waiting-baseline-chat-plane.tsx"];
 const BaselinePlane =
   baselineModule === undefined
     ? null
@@ -122,7 +122,7 @@ function acceptedStreamingTranscript(includeReply = true) {
         sequence,
         occurredAt: sequence,
         recordedAt: sequence,
-        attachmentId: "vc-769-fixture-attachment",
+        attachmentId: "chat-waiting-fixture-attachment",
         commandId: null,
         provenance: {
           source: { kind: "system", id: "runtime", detail: null },
@@ -155,7 +155,7 @@ function acceptedStreamingTranscript(includeReply = true) {
       ),
       frame(2, {
         kind: "turn.started",
-        attachmentId: "vc-769-fixture-attachment",
+        attachmentId: "chat-waiting-fixture-attachment",
         turnId: "reply-turn",
       }),
       frame(3, {
@@ -193,18 +193,41 @@ function acceptedStreamingTranscript(includeReply = true) {
               message: {
                 id: "reply",
                 role: "assistant",
-                parts: [
-                  {
-                    key: "reply-text",
-                    part: livePart(),
-                  },
-                ],
+                parts: liveParts().map((part, index) => ({ key: `reply-${index}`, part })),
               },
             },
           },
         ]
       : [],
   );
+}
+function liveParts(): UIMessage["parts"] {
+  const active = livePart();
+  if (active.type !== "dynamic-tool") return [active];
+  if (state === "pending-tool")
+    return [
+      {
+        type: "dynamic-tool",
+        toolName: active.toolName,
+        toolCallId: active.toolCallId,
+        state: "input-streaming",
+        input: active.input,
+        toolMetadata: active.toolMetadata,
+      },
+    ];
+  if (state !== "capped-bundle") return [active];
+  return [
+    ...Array.from({ length: 20 }, (_, index): UIMessage["parts"][number] => ({
+      type: "dynamic-tool",
+      toolName: "bash",
+      toolCallId: `settled-${index}`,
+      state: "output-available",
+      input: { command: `echo "Completed check ${index + 1}"` },
+      output: "done",
+      toolMetadata: active.toolMetadata,
+    })),
+    active,
+  ];
 }
 function livePart(): UIMessage["parts"][number] {
   if (state === "thinking")
@@ -213,7 +236,16 @@ function livePart(): UIMessage["parts"][number] {
       text: "Tracing the release notes against the compatibility guarantees.",
       state: "streaming",
     };
-  if (["tool", "background", "moved-background", "between-steps"].includes(state)) {
+  if (
+    [
+      "tool",
+      "background",
+      "moved-background",
+      "between-steps",
+      "capped-bundle",
+      "pending-tool",
+    ].includes(state)
+  ) {
     const settled = state === "between-steps" || state === "moved-background";
     return {
       type: "dynamic-tool",
@@ -270,6 +302,8 @@ export function seed() {
     "first-token",
     "thinking",
     "tool",
+    "capped-bundle",
+    "pending-tool",
     "background",
     "moved-background",
     "between-steps",
@@ -339,7 +373,7 @@ export function seed() {
     scheduledResume: null,
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
-    liveExecutor: { id: "vc-769-fixture-attachment" },
+    liveExecutor: { id: "chat-waiting-fixture-attachment" },
   };
   const slice = seedSlice(working ? "working" : "ready");
   store.setState({
@@ -353,6 +387,8 @@ export function seed() {
           "unconfirmed",
           "thinking",
           "tool",
+          "capped-bundle",
+          "pending-tool",
           "background",
           "moved-background",
           "between-steps",
@@ -477,8 +513,8 @@ export default function ChatPolishScratch() {
         <ModelAccessProvider client={client}>
           <div
             className="flex h-svh flex-col bg-background"
-            data-vc-769-state={state}
-            data-vc-769-handoff={handoff}
+            data-chat-waiting-state={state}
+            data-chat-waiting-handoff={handoff}
           >
             {state === "handoff" ? (
               <aside className="absolute top-4 left-2 z-10 flex w-40 flex-col gap-2 text-ui text-muted-foreground">
