@@ -61,6 +61,73 @@ const failed: DynamicToolUIPart = {
 const openBundle = () =>
   renderToStaticMarkup(<ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />);
 
+describe("collapsed live bundles", () => {
+  it("keeps thinking visible after a completed tool without duplicating it in an open bundle", () => {
+    const thought = {
+      kind: "reasoning" as const,
+      key: "thought",
+      part: {
+        type: "reasoning" as const,
+        text: "**Checking the result**",
+        state: "streaming" as const,
+      },
+      streaming: true,
+    };
+    const collapsed = renderToStaticMarkup(
+      <ActivityBundle rows={[{ kind: "tool", part: row, key: "read" }, thought]} />,
+    );
+    expect(collapsed).toContain("Checking the result");
+    expect(collapsed.match(/animate-spin/g)).toHaveLength(1);
+    const expanded = renderToStaticMarkup(
+      <ActivityBundle rows={[{ kind: "tool", part: failed, key: "read" }, thought]} />,
+    );
+    expect(expanded.match(/Checking the result/g)).toHaveLength(1);
+    // Visibility arbitration needs browser layout; mounted tests cover the
+    // single-indicator handoff once the expanded viewport is measured.
+  });
+
+  it("does not animate stale reasoning or tool rows in paused and historical bundles", () => {
+    const thought = {
+      kind: "reasoning" as const,
+      key: "thought",
+      streaming: true,
+      part: { type: "reasoning" as const, text: "Checking", state: "streaming" as const },
+    };
+    const tool = { kind: "tool" as const, key: "tool", part: { ...row, preliminary: true } };
+    for (const rows of [
+      [thought],
+      [tool],
+      [{ kind: "tool" as const, key: "failed", part: failed }, thought, tool],
+    ]) {
+      const html = renderToStaticMarkup(<ActivityBundle rows={rows} progressEnabled={false} />);
+      expect(html).not.toContain("animate-spin");
+    }
+  });
+
+  it("gives a collapsed running tool a single progress glyph", () => {
+    const html = renderToStaticMarkup(
+      <ActivityBundle
+        rows={[
+          {
+            kind: "tool",
+            key: "read",
+            part: {
+              type: "dynamic-tool",
+              toolName: "read",
+              toolCallId: "read-1",
+              toolMetadata: row.toolMetadata,
+              state: "input-available",
+              input: { path: "src/session.ts" },
+            },
+          },
+        ]}
+      />,
+    );
+    expect(html.match(/animate-spin/g)).toHaveLength(1);
+    expect(html).toContain("Reading");
+  });
+});
+
 describe("hard refusal", () => {
   it("shows the host explanation without opening details or offering approval", () => {
     const html = renderToStaticMarkup(
@@ -345,6 +412,23 @@ describe("ToolRow expanded detail colouring (VC-125)", () => {
 
     expect(host.textContent).toContain("Typecheck passed");
     expect(host.querySelector(TOKEN_SELECTOR)).toBeNull();
+  });
+});
+
+describe("running command copy", () => {
+  it("uses present tense for live and preliminary commands, past tense for the receipt", () => {
+    const running: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "bash",
+      toolCallId: "bash-live",
+      state: "input-available",
+      input: bashRow.input,
+      toolMetadata: bashRow.toolMetadata,
+    };
+    for (const part of [running, { ...bashRow, preliminary: true }]) {
+      expect(renderToStaticMarkup(<ToolRow part={part} />)).toContain(">Running</span>");
+    }
+    expect(renderToStaticMarkup(<ToolRow part={bashRow} />)).toContain(">Ran</span>");
   });
 });
 

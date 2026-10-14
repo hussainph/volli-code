@@ -175,7 +175,7 @@ async function eventually(assertion: () => void) {
   });
 }
 
-it("shows a normal delivered prompt above Working and its streaming reply, then retires Working", async () => {
+it("never flashes pending for an ordinary accepted send, keeps accessible Working during the reply, then retires it", async () => {
   provider = gatedProvider("Streaming reply");
   fixture = await realFixture(provider);
   await fixture.attach();
@@ -215,6 +215,22 @@ it("shows a normal delivered prompt above Working and its streaming reply, then 
   });
   const send = container.querySelector<HTMLButtonElement>('[aria-label="Send"]')!;
   expect(send.disabled).toBe(false);
+  // A final DOM snapshot cannot detect an inserted-then-removed pending flash.
+  // Observe the real Send/client/router/SQLite handoff, including removed nodes.
+  const flashedDelivery: string[] = [];
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        const slots = [
+          ...(node.matches('[data-slot="message-delivery"]') ? [node] : []),
+          ...node.querySelectorAll('[data-slot="message-delivery"]'),
+        ];
+        for (const slot of slots) flashedDelivery.push(slot.textContent ?? "");
+      }
+    }
+  });
+  observer.observe(container, { childList: true, subtree: true });
   await act(async () => {
     send.click();
     await provider!.entered;
@@ -228,6 +244,10 @@ it("shows a normal delivered prompt above Working and its streaming reply, then 
     expect(prompt?.textContent).toContain("Ordinary prompt");
     expect(reply?.textContent).toContain("Streaming reply");
     expect(working).toBeDefined();
+    expect(working?.querySelector(".sr-only")?.textContent).toBe("Working");
+    expect(working?.querySelector(":scope > [aria-hidden]")?.classList.contains("invisible")).toBe(
+      true,
+    );
     expect(prompt!.compareDocumentPosition(reply!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
       prompt!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -241,6 +261,8 @@ it("shows a normal delivered prompt above Working and its streaming reply, then 
       ),
     ).toBe("Delivered");
   });
+  observer.disconnect();
+  expect(flashedDelivery).toEqual([]);
   expect((await f.projection()).turnActive).toBe(true);
   expect((await f.peek())["transcript"]).toContainEqual(
     expect.objectContaining({ text: "Ordinary prompt", delivery: "Delivered" }),

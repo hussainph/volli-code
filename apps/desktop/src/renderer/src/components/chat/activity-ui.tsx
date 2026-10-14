@@ -44,10 +44,12 @@ import { useStopFollowing } from "@renderer/components/ui/ai-elements/conversati
 import { ReasoningBody, useElapsed } from "@renderer/components/ui/ai-elements/reasoning";
 import {
   activityDescriptor,
+  activityStatus,
   bundleNeedsAttention,
   bundleSummary,
   compactSignature,
   describeActivity,
+  isBundleStreaming,
   reasoningBody,
   reasoningStatus,
   splitPath,
@@ -344,8 +346,12 @@ const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
  * checkmark column costs nothing: the meta on the right is the receipt, and a
  * settled row that says nothing else is a row that went fine.
  */
+const ActivityProgressContext = React.createContext(true);
+
 function RowGlyph({ kind, status }: { kind: ActivityKind; status: ActivityStatus }) {
-  if (status !== "done") return <StatusGlyph status={status} />;
+  const progressEnabled = React.useContext(ActivityProgressContext);
+  if (status !== "done" && (progressEnabled || (status !== "pending" && status !== "running")))
+    return <StatusGlyph status={status} />;
   const Icon = KIND_ICONS[kind];
   return <Icon aria-hidden className={GLYPH_CLASS} />;
 }
@@ -367,7 +373,11 @@ function StatusGlyph({ status }: { status: ActivityStatus }) {
     case "not-run":
       return <CircleDashedIcon aria-hidden className={cn(className, "text-muted-foreground")} />;
     case "running":
-      return <SpinnerGapIcon aria-hidden className={cn(className, "animate-spin text-primary")} />;
+      return (
+        <span aria-hidden data-activity-progress className={cn("flex", className)}>
+          <SpinnerGapIcon className="size-full animate-spin text-primary" />
+        </span>
+      );
     case "failed":
       return (
         <XCircleIcon aria-hidden className={cn(className, "text-destructive")} weight="fill" />
@@ -474,7 +484,9 @@ const ToolRowContent = React.memo(function ToolRowContent({
         {/* A refused call and a page that would not load are both successes to
             the harness; `describeActivity` is what makes the glyph disagree. */}
         <RowGlyph kind={row.kind} status={row.status} />
-        <span className="shrink-0">{row.verb}</span>
+        <span className="shrink-0">
+          {row.kind === "run-command" && row.status === "running" ? "Running" : row.verb}
+        </span>
         {row.object ? (
           <RowObject row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
         ) : null}
@@ -1017,6 +1029,61 @@ function DiffDetail({ lines, language }: { lines: DiffLine[]; language: string |
  */
 const BUNDLE_CAP = "max-h-96";
 
+/** The header yields only to a spinner wholly inside its expanded viewport.
+ * Observe the glyph's fixed slot, not its rotating bounds or a tall payload. Subscriptions
+ * change with active row identities, never with streamed text. */
+function useVisibleBundleProgress(
+  viewport: React.RefObject<HTMLDivElement | null>,
+  enabled: boolean,
+  indicatorKeys: string,
+): boolean {
+  const [visible, setVisible] = React.useState(false);
+  React.useLayoutEffect(() => {
+    const root = viewport.current;
+    if (!enabled || root === null || indicatorKeys === "[]") {
+      setVisible(false);
+      return;
+    }
+    const indicators = [...root.querySelectorAll("[data-activity-progress]")];
+    const bounds = root.getBoundingClientRect();
+    const shown = new Set(
+      indicators.filter((node) => {
+        const box = node.getBoundingClientRect();
+        return (
+          box.width > 0 &&
+          box.height > 0 &&
+          box.top >= bounds.top &&
+          box.bottom <= bounds.bottom &&
+          box.left >= bounds.left &&
+          box.right <= bounds.right
+        );
+      }),
+    );
+    // Measure before paint so expanding a short list never flashes a second
+    // spinner. Subsequent scroll/layout changes are observer-driven.
+    setVisible(shown.size > 0);
+    if (typeof IntersectionObserver === "undefined") return;
+    let observing = true;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!observing) return;
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 1) shown.add(entry.target);
+          else shown.delete(entry.target);
+        }
+        setVisible(shown.size > 0);
+      },
+      { root, threshold: 1 },
+    );
+    for (const indicator of indicators) observer.observe(indicator);
+    return () => {
+      observing = false;
+      observer.disconnect();
+    };
+  }, [viewport, enabled, indicatorKeys]);
+  return visible;
+}
+
 /**
  * Everything the agent did between two things it said, behind one line.
  *
@@ -1037,31 +1104,48 @@ export const ActivityBundle = React.memo(
     rows,
     onOpenFile,
     onOpenSession,
+    progressEnabled = true,
   }: {
     rows: readonly BundleRow[];
+    progressEnabled?: boolean;
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
     const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
     const open = userOpen ?? bundleNeedsAttention(rows);
+    const streaming = progressEnabled && isBundleStreaming(rows);
+    const viewport = React.useRef<HTMLDivElement>(null);
+    const indicatorKeys = JSON.stringify(
+      rows
+        .filter((row) =>
+          row.kind === "reasoning" ? row.streaming : activityStatus(row.part) === "running",
+        )
+        .map((row) => row.key),
+    );
+    const rowProgressVisible = useVisibleBundleProgress(viewport, open && streaming, indicatorKeys);
+    const liveThought = progressEnabled
+      ? rows.findLast((row) => row.kind === "reasoning" && row.streaming)
+      : undefined;
     // Wired to the click and not to `open`, which is derived: a bundle that
     // opens itself because a row inside it failed is not a reader reaching for
     // anything, and must not detach them from a live stream.
     const stopFollowing = useStopFollowing();
 
     const list = (
-      <div className="space-y-1">
-        {rows.map((row) => (
-          <RegisteredBundleRow
-            key={row.key}
-            row={row}
-            open={summary.length === 0 || open}
-            onOpenFile={onOpenFile}
-            onOpenSession={onOpenSession}
-          />
-        ))}
-      </div>
+      <ActivityProgressContext.Provider value={progressEnabled}>
+        <div className="space-y-1">
+          {rows.map((row) => (
+            <RegisteredBundleRow
+              key={row.key}
+              row={row}
+              open={summary.length === 0 || open}
+              onOpenFile={onOpenFile}
+              onOpenSession={onOpenSession}
+            />
+          ))}
+        </div>
+      </ActivityProgressContext.Provider>
     );
 
     // Reasoning alone has nothing to count, so the row *is* the summary. A
@@ -1080,10 +1164,26 @@ export const ActivityBundle = React.memo(
           type="button"
           onClick={toggle}
           aria-expanded={open}
+          data-slot="activity-bundle-header"
           className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
         >
-          <BundleGlyph />
-          <Summary segments={summary} />
+          {streaming && (!open || !rowProgressVisible) ? (
+            <SpinnerGapIcon
+              aria-hidden
+              className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+            />
+          ) : (
+            <BundleGlyph />
+          )}
+          {/* A closed bundle must not hide its live thought behind a finished
+              tool summary. Open, the thought already has its own visible row. */}
+          {!open && liveThought?.kind === "reasoning" ? (
+            <span className="min-w-0 truncate">
+              {reasoningStatus(liveThought.part.text, { streaming: true }).verb}
+            </span>
+          ) : (
+            <Summary segments={summary} />
+          )}
           <Caret open={open} pinned />
         </button>
         {/* Call owners stay mounted; only each row's disclosed UI unmounts.
@@ -1093,13 +1193,20 @@ export const ActivityBundle = React.memo(
               over the window — it covered the last tool call whole, including at
               the end of the scroll: see "NO SCRIM AT THE BOTTOM OF A CAPPED
               WINDOW" above (VC-60). */}
-        <div className={cn(open && BUNDLE_CAP, open && "overflow-auto")}>{list}</div>
+        <div
+          ref={viewport}
+          data-slot="activity-bundle-viewport"
+          className={cn(open && BUNDLE_CAP, open && "overflow-auto")}
+        >
+          {list}
+        </div>
       </div>
     );
   },
   (previous, next) =>
     previous.onOpenFile === next.onOpenFile &&
     previous.onOpenSession === next.onOpenSession &&
+    previous.progressEnabled === next.progressEnabled &&
     sameBundleRows(previous.rows, next.rows),
 );
 
@@ -1197,8 +1304,10 @@ const ReasoningRow = React.memo(function ReasoningRow({
   part: ReasoningUIPart;
   streaming: boolean;
 }) {
-  const elapsed = useElapsed(streaming);
-  const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
+  const progressEnabled = React.useContext(ActivityProgressContext);
+  const progressing = progressEnabled && streaming;
+  const elapsed = useElapsed(progressing);
+  const status = reasoningStatus(part.text, { streaming: progressing, durationMs: elapsed });
   const body = reasoningBody(part.text);
   const expandable = body !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
@@ -1206,8 +1315,10 @@ const ReasoningRow = React.memo(function ReasoningRow({
   return (
     <div className="group/row not-prose">
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
-        {streaming ? (
-          <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
+        {progressing ? (
+          <span aria-hidden data-activity-progress className="flex size-3.5 shrink-0">
+            <SpinnerGapIcon className="size-full animate-spin text-primary" />
+          </span>
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />
         )}
