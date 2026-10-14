@@ -48,6 +48,7 @@ import {
   bundleSummary,
   compactSignature,
   describeActivity,
+  isBundleStreaming,
   reasoningBody,
   reasoningStatus,
   splitPath,
@@ -344,8 +345,12 @@ const GLYPH_CLASS = "size-3.5 shrink-0 text-muted-foreground";
  * checkmark column costs nothing: the meta on the right is the receipt, and a
  * settled row that says nothing else is a row that went fine.
  */
+const ActivityProgressContext = React.createContext(true);
+
 function RowGlyph({ kind, status }: { kind: ActivityKind; status: ActivityStatus }) {
-  if (status !== "done") return <StatusGlyph status={status} />;
+  const progressEnabled = React.useContext(ActivityProgressContext);
+  if (status !== "done" && (progressEnabled || (status !== "pending" && status !== "running")))
+    return <StatusGlyph status={status} />;
   const Icon = KIND_ICONS[kind];
   return <Icon aria-hidden className={GLYPH_CLASS} />;
 }
@@ -474,7 +479,9 @@ const ToolRowContent = React.memo(function ToolRowContent({
         {/* A refused call and a page that would not load are both successes to
             the harness; `describeActivity` is what makes the glyph disagree. */}
         <RowGlyph kind={row.kind} status={row.status} />
-        <span className="shrink-0">{row.verb}</span>
+        <span className="shrink-0">
+          {row.kind === "run-command" && row.status === "running" ? "Running" : row.verb}
+        </span>
         {row.object ? (
           <RowObject row={row} onOpenFile={onOpenFile} onOpenSession={onOpenSession} />
         ) : null}
@@ -1037,31 +1044,39 @@ export const ActivityBundle = React.memo(
     rows,
     onOpenFile,
     onOpenSession,
+    progressEnabled = true,
   }: {
     rows: readonly BundleRow[];
+    progressEnabled?: boolean;
     onOpenFile?(path: string): void;
     onOpenSession?(sessionId: string): void;
   }) {
     const [userOpen, setUserOpen] = React.useState<boolean | null>(null);
     const summary = React.useMemo(() => bundleSummary(rows), [rows]);
     const open = userOpen ?? bundleNeedsAttention(rows);
+    const streaming = progressEnabled && isBundleStreaming(rows);
+    const liveThought = progressEnabled
+      ? rows.findLast((row) => row.kind === "reasoning" && row.streaming)
+      : undefined;
     // Wired to the click and not to `open`, which is derived: a bundle that
     // opens itself because a row inside it failed is not a reader reaching for
     // anything, and must not detach them from a live stream.
     const stopFollowing = useStopFollowing();
 
     const list = (
-      <div className="space-y-1">
-        {rows.map((row) => (
-          <RegisteredBundleRow
-            key={row.key}
-            row={row}
-            open={summary.length === 0 || open}
-            onOpenFile={onOpenFile}
-            onOpenSession={onOpenSession}
-          />
-        ))}
-      </div>
+      <ActivityProgressContext.Provider value={progressEnabled}>
+        <div className="space-y-1">
+          {rows.map((row) => (
+            <RegisteredBundleRow
+              key={row.key}
+              row={row}
+              open={summary.length === 0 || open}
+              onOpenFile={onOpenFile}
+              onOpenSession={onOpenSession}
+            />
+          ))}
+        </div>
+      </ActivityProgressContext.Provider>
     );
 
     // Reasoning alone has nothing to count, so the row *is* the summary. A
@@ -1082,8 +1097,23 @@ export const ActivityBundle = React.memo(
           aria-expanded={open}
           className={cn(ROW_CLASS, ROW_INTERACTIVE, ROW_FOCUSABLE)}
         >
-          <BundleGlyph />
-          <Summary segments={summary} />
+          {!open && streaming ? (
+            <SpinnerGapIcon
+              aria-hidden
+              className="size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none"
+            />
+          ) : (
+            <BundleGlyph />
+          )}
+          {/* A closed bundle must not hide its live thought behind a finished
+              tool summary. Open, the thought already has its own visible row. */}
+          {!open && liveThought?.kind === "reasoning" ? (
+            <span className="min-w-0 truncate">
+              {reasoningStatus(liveThought.part.text, { streaming: true }).verb}
+            </span>
+          ) : (
+            <Summary segments={summary} />
+          )}
           <Caret open={open} pinned />
         </button>
         {/* Call owners stay mounted; only each row's disclosed UI unmounts.
@@ -1100,6 +1130,7 @@ export const ActivityBundle = React.memo(
   (previous, next) =>
     previous.onOpenFile === next.onOpenFile &&
     previous.onOpenSession === next.onOpenSession &&
+    previous.progressEnabled === next.progressEnabled &&
     sameBundleRows(previous.rows, next.rows),
 );
 
@@ -1197,8 +1228,10 @@ const ReasoningRow = React.memo(function ReasoningRow({
   part: ReasoningUIPart;
   streaming: boolean;
 }) {
-  const elapsed = useElapsed(streaming);
-  const status = reasoningStatus(part.text, { streaming, durationMs: elapsed });
+  const progressEnabled = React.useContext(ActivityProgressContext);
+  const progressing = progressEnabled && streaming;
+  const elapsed = useElapsed(progressing);
+  const status = reasoningStatus(part.text, { streaming: progressing, durationMs: elapsed });
   const body = reasoningBody(part.text);
   const expandable = body !== null;
   const { open, toggle, rowProps } = useRowToggle(expandable);
@@ -1206,7 +1239,7 @@ const ReasoningRow = React.memo(function ReasoningRow({
   return (
     <div className="group/row not-prose">
       <div {...rowProps} className={cn(ROW_CLASS, expandable && ROW_INTERACTIVE)}>
-        {streaming ? (
+        {progressing ? (
           <SpinnerGapIcon aria-hidden className="size-3.5 shrink-0 animate-spin text-primary" />
         ) : (
           <GaugeIcon aria-hidden className={GLYPH_CLASS} />

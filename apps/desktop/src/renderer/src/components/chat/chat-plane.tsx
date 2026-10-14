@@ -113,6 +113,7 @@ import {
   resolvingWith,
   restoreStripAttachments,
   sameInteractionId,
+  liveTurnHasProgress,
   sameMessages,
   sameQueuedMessage,
   sessionBlocker,
@@ -145,6 +146,7 @@ import {
   takeSessionItemReveal,
 } from "@renderer/chat/session-item-reveal";
 import { GuardedResponse } from "@renderer/components/chat/markdown-boundary";
+import { useDelayedPresence } from "@renderer/components/chat/use-delayed-presence";
 import { SecretCards } from "@renderer/components/chat/secret-card";
 import {
   readTranscriptView,
@@ -1019,6 +1021,21 @@ export function ChatPlane({
     (previous, next) => previous[0] === next[0] && previous[1] === next[1],
   );
   const deliveryLabels = React.useMemo(() => new Map(deliveryEntries), [deliveryEntries]);
+  // The wait belongs to the message, not the React child slot that currently
+  // owns it. Preserve its clock across held → durable-pending replacement.
+  const waitTimes = React.useRef<ReadonlyMap<string, number>>(new Map());
+  const pendingSince = React.useMemo(() => {
+    const ids = new Set(
+      held
+        .filter((message) => message.state === "sending" && !message.deliveryAccepted)
+        .map((message) => message.id),
+    );
+    for (const [id, label] of deliveryLabels) if (label === "Pending") ids.add(id);
+    const now = Date.now();
+    const next = new Map([...ids].map((id) => [id, waitTimes.current.get(id) ?? now]));
+    waitTimes.current = next;
+    return next;
+  }, [held, deliveryLabels]);
   const settledMessageIds = React.useMemo(
     () => new Set([...durableMessageIds].filter((id) => deliveryLabels.get(id) !== "Pending")),
     [deliveryLabels, durableMessageIds],
@@ -1467,6 +1484,12 @@ export function ChatPlane({
       ]),
     [held, pendingSteerIds],
   );
+  // A retry can retain an unfinished overlay for minutes. Keep its streaming
+  // markdown treatment, but do not animate last-known activity as live work.
+  const progressPaused =
+    session.sessionError !== null ||
+    projection?.attention.active.some((attention) => attention.kind === "transport_retrying") ===
+      true;
   const turnContext = React.useMemo<TurnContext>(
     () => ({
       onOpenFile,
@@ -1474,8 +1497,18 @@ export function ChatPlane({
       interactions: session.openedInteractions,
       deliveryLabels,
       steeringMessages,
+      pendingSince,
+      progressPaused,
     }),
-    [deliveryLabels, onOpenFile, onOpenSession, session.openedInteractions, steeringMessages],
+    [
+      deliveryLabels,
+      onOpenFile,
+      onOpenSession,
+      session.openedInteractions,
+      steeringMessages,
+      pendingSince,
+      progressPaused,
+    ],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1518,6 +1551,7 @@ export function ChatPlane({
   const liveTurn = turnActive
     ? (deliveredRows.findLast((row) => row.kind === "turn")?.messages ?? null)
     : null;
+  const turnHasProgress = React.useMemo(() => liveTurnHasProgress(liveTurn), [liveTurn]);
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
   const dismissBlocker = React.useCallback((dismissKey: string) => {
@@ -1689,7 +1723,13 @@ export function ChatPlane({
                             />
                           ))}
                         {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                        {turnRunning ? <TurnRunningMark /> : null}
+                        {turnRunning ? (
+                          <TurnRunningMark
+                            progressVisible={
+                              liveCompaction !== null || (!progressPaused && turnHasProgress)
+                            }
+                          />
+                        ) : null}
                         {undeliveredRows.map((row) => (
                           <ChatTranscriptRow
                             key={transcriptRowKey(row)}
@@ -1949,27 +1989,19 @@ function useModelAccess(active: boolean): {
 
 /* ---------------------------------------------------------------- running */
 
-/**
- * The one thing on screen that says the turn is not over.
- *
- * It lives for the WHOLE turn now, not just the gap before the first token.
- * That gap was the only moment the transcript could not speak for itself, so it
- * was the only moment this was drawn — and every moment after it looked exactly
- * like a finished reply: settled prose, a collapsed bundle, nothing moving. A
- * reader could not tell a turn that had ended from one that was two tool calls
- * from ending, which is what the first external user described as disorienting.
- * The mark is mounted by `working` and unmounted by it, so the stop token that
- * ends the turn is the same event that takes it off screen; there is no timer
- * and no second source of truth to disagree with the lifecycle.
- *
- * The word stays visible between steps and during transport errors while a
- * durable turn is still open. Tool output is progress, never proof of an end.
- */
-export const TurnRunningMark = React.memo(function TurnRunningMark(_props: { narrated?: boolean }) {
+/** The status region lasts the whole turn. Its visual is only a fallback:
+ * reserve its row, hide immediately behind live content, and wait out short
+ * inter-step gaps before showing it again. No crossfade means no overlap. */
+export const TurnRunningMark = React.memo(function TurnRunningMark({
+  progressVisible = false,
+}: {
+  progressVisible?: boolean;
+}) {
+  const visible = useDelayedPresence(!progressVisible, 300, !progressVisible);
   return (
     <div role="status" className="flex min-w-0 flex-col">
       <span className="sr-only">Working</span>
-      <div aria-hidden className="flex min-w-0">
+      <div aria-hidden className={cn("flex min-w-0", !visible && "invisible")}>
         <ReasoningLine verb="Working" meta={null} streaming />
       </div>
     </div>
@@ -1989,10 +2021,10 @@ export function PendingMessage({
       ? "Queued"
       : "Delivered"
     : message.delivery === "steer"
-      ? "Pending · After the current step"
+      ? "Sends after this step"
       : message.delivery === "queue"
-        ? "Pending · Queued"
-        : "Pending";
+        ? "Queuing…"
+        : "Sending…";
   return (
     <ChatTurn
       messages={[
@@ -2141,6 +2173,8 @@ export interface TurnContext {
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
   deliveryLabels?: ReadonlyMap<string, MessageDeliveryLabel>;
   steeringMessages?: ReadonlySet<string>;
+  pendingSince?: ReadonlyMap<string, number>;
+  progressPaused?: boolean;
 }
 
 /**
@@ -2795,8 +2829,10 @@ export const ChatTurn = React.memo(function ChatTurn({
     delivery === "Delivered" || delivery === "Recorded"
       ? undefined
       : delivery === "Pending" && context.steeringMessages?.has(first.id)
-        ? "Pending · After the current step"
-        : delivery;
+        ? "Sends after this step"
+        : delivery === "Pending"
+          ? "Sending…"
+          : delivery;
 
   return (
     <Message from={role} className="relative max-w-full">
@@ -2837,17 +2873,37 @@ export const ChatTurn = React.memo(function ChatTurn({
         ) : null}
       </MessageContent>
       {role === "user" && footer !== undefined ? (
-        <span
-          data-slot="message-delivery"
-          className="self-end text-right text-ui text-muted-foreground"
-        >
-          {footer}
-        </span>
+        <MessageDelivery
+          key={first.id}
+          label={footer}
+          since={context.pendingSince?.get(first.id)}
+        />
       ) : null}
       {copyableText !== null ? <MessageCopyAction text={copyableText} from={role} /> : null}
     </Message>
   );
 });
+
+/** A quiet tab attached to the bubble, inside the existing 24px message gap.
+ * It never changes bubble or row geometry when delivery ownership changes.
+ * Refusals remain immediate; ordinary round trips never show waiting copy. */
+function MessageDelivery({ label, since }: { label: string; since: number | undefined }) {
+  const failed = label === "Not delivered" || label === "Delivery unconfirmed";
+  const remaining = since === undefined ? 600 : Math.max(0, 600 - (Date.now() - since));
+  const waited = useDelayedPresence(!failed, remaining, remaining === 0);
+  if (!failed && !waited) return null;
+  const Icon = failed ? WarningIcon : ClockIcon;
+  return (
+    <span
+      data-slot="message-delivery"
+      className="absolute top-full right-0 flex max-w-full items-center gap-1 rounded-b-lg bg-muted px-2 text-ui text-muted-foreground"
+      title={label}
+    >
+      <Icon aria-hidden className="size-3 shrink-0" weight="bold" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
 
 /** The feed-wide copy verdict holds long enough to be read, then returns to rest. */
 const COPY_FEEDBACK_MS = 1200;
@@ -2909,6 +2965,7 @@ function renderSegment(
       return (
         <ActivityBundle
           rows={segment.rows}
+          progressEnabled={live && !context.progressPaused}
           onOpenFile={context.onOpenFile}
           onOpenSession={context.onOpenSession}
         />

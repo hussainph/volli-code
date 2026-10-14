@@ -877,14 +877,11 @@ export default function ChatActivityScratch() {
         <ToolRow part={FAILED_RUN_ROW} />
       </Section>
 
-      {/* The running mark in both dresses, side by side, because the thing to
-          judge is whether the second one still reads as "not finished" once the
-          word is gone — and in the app the two are minutes apart. Neither can
-          be summoned from a live Session on demand: the first exists only in
-          the gap before a turn's first token. */}
+      {/* The fallback keeps its space and accessible status when live content
+          supplies the visible progress indicator. */}
       <Section label="Turn · the mark that says the turn has not ended">
-        <TurnRunningMark narrated={false} />
-        <TurnRunningMark narrated />
+        <TurnRunningMark />
+        <TurnRunningMark progressVisible />
       </Section>
 
       <Section label="Bundle · everything between two things the agent said">
