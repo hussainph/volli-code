@@ -54,6 +54,7 @@ import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecy
 import {
   assertAcceptanceRunner,
   acceptanceScript,
+  acceptanceWorkspaceReady,
   prepareRemoteAcceptance,
 } from "./lib/remote-acceptance.mjs";
 
@@ -696,6 +697,19 @@ async function handle(cmd, args) {
       await remoteFixture.configureModel();
       transcript({ cmd: "acceptance-model", setup: "operator model deployment configuration" });
       return { configured: true };
+    case "acceptance-workspace": {
+      if (!remoteFixture) throw new Error("Not a remote acceptance instance");
+      const { page } = await pickWindow("main");
+      // Read through the same preload/IPC registry door as the renderer. No
+      // store setters, injected HostLink or fixture-generated readiness.
+      const result = await page.evaluate(() =>
+        window.api.sessionRpc.request({ path: "hosts.snapshot", type: "query", input: undefined }),
+      );
+      if (!result.ok) throw new Error(result.error.message);
+      const ready = acceptanceWorkspaceReady(result.data);
+      transcript({ cmd: "acceptance-workspace", ready });
+      return { ready };
+    }
     case "native-quit": {
       // The real application's native Quit menu item, not the menu-bar test
       // controller. No injected live-work count: a local scripted turn holds it.

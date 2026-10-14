@@ -265,11 +265,14 @@ async function journey() {
   await wait(`Host: ${REMOTE_HOST}`);
   await step(3, "Create/move ticket: Backlog then Todo, persisted after UI reopen", async () => {
     await click("button", "Home");
-    // Operator configuration restarts hostd. The host chip keeps its name
-    // throughout that outage; only the enabled write control proves rejoin.
+    // Operator configuration restarts hostd. New ticket stays enabled during
+    // the reconnect grace, so it cannot prove rejoin (VC-768). Observe the
+    // project's real Workspace-ready state, then the renderer's write control.
     await waitUntil(
       "Workspace rejoins after model deployment and New ticket is actionable",
-      async () => hasActionableControl((await snap()).text, "button", "New ticket"),
+      async () =>
+        (await call("acceptance-workspace")).ready &&
+        hasActionableControl((await snap()).text, "button", "New ticket"),
       { timeout: 10_000, interval: 100 },
     );
     await click("button", "New ticket");
