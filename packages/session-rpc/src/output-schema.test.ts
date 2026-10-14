@@ -95,7 +95,7 @@ const payloads = {
   "session.tools.refreshed": {
     kind: "session.tools.refreshed",
     trigger: "cold-turn",
-    surface: { kind: "tool-surface", tools: ["read", "write"] },
+    delta: {},
     added: ["write"],
     changed: [],
   },

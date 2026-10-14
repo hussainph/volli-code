@@ -952,7 +952,7 @@ it("anchors refreshed names as a quiet fact and does not double-announce a repla
       trigger: "warm-turn",
       added: ["write"],
       changed: [],
-      surface: { kind: "tool-surface", tools: ["read", "write"] },
+      delta: {},
     }),
   ];
   const state = appendFrames(EMPTY_TRANSCRIPT, batch);
