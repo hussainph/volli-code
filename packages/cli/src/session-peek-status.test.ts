@@ -7,7 +7,7 @@ import { runCli } from "./run";
  * through the real command path (argv → parse → socket → render). Each reply
  * body is transcribed from a `session.peek` payload the host's agent-command
  * service returns for the same scripted engine events against the real
- * session engine and ledger.
+ * session engine and ledger (VC-758).
  * The runtime fields (attention, stopped, signal, lastTurnOutcome and the
  * queued messages) are transcribed from the real-engine cases in
  * packages/host-core/src/agent-dispatch/session-verbs.test.ts. Only the fields

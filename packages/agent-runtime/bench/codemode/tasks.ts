@@ -3,7 +3,7 @@
  *
  * Each task builds what its tools answer from — a worktree on disk, Browser
  * pages, a verb host — and grades the model's final answer against a key it
- * computed itself. The fixtures cover a `bash`/`read` loop-and-filter
+ * computed itself. The fixtures (VC-245) cover a `bash`/`read` loop-and-filter
  * task, a multi-tab Browser task, a
  * multi-Session start-and-watch task, and a single direct call as the control.
  */

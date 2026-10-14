@@ -15,7 +15,7 @@
  * `FALLBACK_PROFILE` when that file is absent, and always prints which one it
  * used.
  *
- * The committed profile is a machine-read latency baseline, not a run report.
+ * The committed profile is a machine-read latency baseline (VC-245), not a run report.
  * Network latency varies between runs, so comparisons must use the same
  * profile. Re-running the probe changes the input: regenerate the associated
  * tables in the same run, or use the original baseline for both arms.

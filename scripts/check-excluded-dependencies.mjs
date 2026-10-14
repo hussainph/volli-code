@@ -13,7 +13,7 @@
  * of the published formula, and behavioral invariants in
  * `packages/shared/src/theme/color.test.ts`.
  *
- * Check declared, transitive, and imported dependencies to catch additions
+ * Check declared, transitive, and imported dependencies (VC-412) to catch additions
  * that source review alone may miss.
  *
  * THREE ANGLES, because a package can arrive three ways:

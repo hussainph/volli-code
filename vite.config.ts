@@ -83,6 +83,10 @@ export default defineConfig({
       // error categories enabled so other rules and newly added rules still
       // enforce. Remove each override only with its corresponding behavior
       // fixes and tests; `vp lint` reports the current findings.
+      // Keep the override set scoped to compiler adoption (VC-216); preserve
+      // existing error categories for unrelated rules (VC-211). Each enabled
+      // rule needs its behavior regression coverage (VC-216). Remove obsolete
+      // overrides with those covered fixes, not a broad waiver (VC-216).
       "react/refs": "off",
       "react/set-state-in-effect": "off",
       "react/exhaustive-effect-dependencies": "off",

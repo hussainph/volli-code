@@ -5,7 +5,7 @@
  * `apca-w3` package — a second implementation imported as an oracle by
  * `color.test.ts`, `generate.test.ts` and the canvas smoke. That package pulls
  * `colorparsley`, whose manifest declares `"license": "AGPL v3"`. To avoid
- * that transitive license obligation, verification uses these local vectors
+ * that transitive license obligation (VC-412), verification uses these local vectors
  * instead. Neither dependency is needed by the product.
  *
  * WHAT A VECTOR IS. `[text, background, Lc]` — the magnitude

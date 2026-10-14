@@ -6,7 +6,7 @@
  *   pnpm -C packages/agent-runtime run bench:runtime:published  # the quoted arm
  *
  * The printed table is checked against the shipped runtime: the assertions
- * verify its context-projection and prompt-assembly cache behavior. A cache
+ * verify its context-projection and prompt-assembly cache behavior (VC-356). A cache
  * regression fails the benchmark rather than producing an unchecked claim.
  */
 
