@@ -264,6 +264,13 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           // (`harness-runtime.ts`).
           executionEnvFactory: async (workspacePath, identity) => {
             await options.beforeExecution();
+            const runtimeContext =
+              shells === undefined ? null : await options.resolveRuntimeContext(identity.sessionId);
+            const canMoveBash =
+              runtimeContext !== null &&
+              (["shell_start", "shell_output", "shell_kill"] as const).every((tool) =>
+                runtimeContext.toolSurface.includes(tool),
+              );
             // The Session's own name rides beside the PATH recovery:
             // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
             // exactly as `agentSessionEnv` exports them into a spawned PTY —
@@ -274,6 +281,33 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
             // the same token — see `attachment-identity.ts`.
             return refusingCredentialReads(
               await piExecutionEnv(workspacePath, {
+                ...(shells === undefined || !canMoveBash || runtimeContext === null
+                  ? {}
+                  : {
+                      foregroundExecutor: (input) =>
+                        shells.runForeground(
+                          {
+                            sessionId: identity.sessionId,
+                            attachmentId: identity.attachmentId,
+                            projectId: runtimeContext.projectId,
+                            ticketId: runtimeContext.ticketId,
+                          },
+                          {
+                            command: input.command,
+                            shellConfig: input.shellConfig,
+                            cwd: input.cwd,
+                            env: input.env,
+                            title: null,
+                          },
+                          {
+                            toolCallId: input.toolCallId,
+                            timeout: input.timeout,
+                            signal: input.signal,
+                            onChunk: input.onOutput,
+                            onReady: input.onReady,
+                          },
+                        ),
+                    }),
                 pathPrefixes: [binDir],
                 identity: attachmentIdentities.resolve(identity),
                 // This Session's concurrency budget (VC-339), computed at attach

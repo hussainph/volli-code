@@ -91,6 +91,7 @@ import { useActivityIsland } from "@renderer/chat/use-activity-island";
 import { useChatBrowserTabs } from "@renderer/chat/use-island-tabs";
 import { ActivityIsland } from "@renderer/components/chat/activity-island-ui";
 import { ActivityBundle, copyText } from "@renderer/components/chat/activity-ui";
+import { RunningBashProvider } from "@renderer/components/chat/running-bash-control";
 import {
   CompactionBoundary,
   CompactionProgress,
@@ -1616,6 +1617,7 @@ export function ChatPlane({
   return (
     <div
       ref={planeRef}
+      data-running-bash-session={sessionId}
       className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
       style={planeStyle}
     >
@@ -1631,75 +1633,81 @@ export function ChatPlane({
               against (VC-273) — the agent writes the path the brief handed it,
               and this is what turns that back into the Blob it names. */}
             <MarkdownAttachmentsProvider attachments={materializedAttachments}>
-              <Conversation className="min-h-0 bg-background">
-                {/* The bottom padding clears the composer plus the h-16 gradient over
+              <RunningBashProvider sessionId={sessionId} active={surfaceVisible}>
+                <Conversation className="min-h-0 bg-background">
+                  {/* The bottom padding clears the composer plus the h-16 gradient over
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
-                <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-                  {messages.length === 0 && session.historyBefore === null && historyPending ? (
-                    // History is on its way (VC-383). A null projection with no
-                    // Draft behind it means the snapshot has not landed, and the
-                    // empty state below would say "nothing was ever said here"
-                    // about a Session that may hold a thousand turns.
-                    <TranscriptSkeleton />
-                  ) : messages.length === 0 &&
-                    session.historyBefore === null &&
-                    pendingMessages.length === 0 &&
-                    !turnRunning &&
-                    timelineBlocker === null ? (
-                    // Where this Session runs, drawn (VC-55). It replaces the bare
-                    // mark that stood here — see `empty/chat-empty-state.tsx` for why
-                    // that reversal is deliberate. What blocks TYPING still sits on
-                    // the composer, where the typing is.
-                    <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
-                      <ChatEmptyState projectId={projectId} ticketId={ticketId} />
-                    </ConversationEmptyState>
-                  ) : (
-                    <ChatTranscript
-                      sessionId={sessionId}
-                      rows={deliveredRows}
-                      context={turnContext}
-                      liveTurn={liveTurn}
-                      historyBefore={session.historyBefore}
-                      onLoadOlder={controller.loadOlder}
-                      {...(onOpenSession === undefined ? {} : { onOpenSession })}
-                    >
-                      {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
-                      {turnRunning ? <TurnRunningMark /> : null}
-                      {undeliveredRows.map((row) => (
-                        <ChatTranscriptRow
-                          key={transcriptRowKey(row)}
-                          row={row}
-                          context={turnContext}
-                          live={false}
-                        />
-                      ))}
-                      {pendingMessages.map((message) => (
-                        <PendingMessage key={message.id} message={message} context={turnContext} />
-                      ))}
-                      {timelineBlocker ? <SessionBlocker blocker={timelineBlocker} /> : null}
-                    </ChatTranscript>
-                  )}
-                </ConversationContent>
-                {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
+                  <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
+                    {messages.length === 0 && session.historyBefore === null && historyPending ? (
+                      // History is on its way (VC-383). A null projection with no
+                      // Draft behind it means the snapshot has not landed, and the
+                      // empty state below would say "nothing was ever said here"
+                      // about a Session that may hold a thousand turns.
+                      <TranscriptSkeleton />
+                    ) : messages.length === 0 &&
+                      session.historyBefore === null &&
+                      pendingMessages.length === 0 &&
+                      !turnRunning &&
+                      timelineBlocker === null ? (
+                      // Where this Session runs, drawn (VC-55). It replaces the bare
+                      // mark that stood here — see `empty/chat-empty-state.tsx` for why
+                      // that reversal is deliberate. What blocks TYPING still sits on
+                      // the composer, where the typing is.
+                      <ConversationEmptyState className={cn(EMPTY_PAGE, "min-h-80")}>
+                        <ChatEmptyState projectId={projectId} ticketId={ticketId} />
+                      </ConversationEmptyState>
+                    ) : (
+                      <ChatTranscript
+                        sessionId={sessionId}
+                        rows={deliveredRows}
+                        context={turnContext}
+                        liveTurn={liveTurn}
+                        historyBefore={session.historyBefore}
+                        onLoadOlder={controller.loadOlder}
+                        {...(onOpenSession === undefined ? {} : { onOpenSession })}
+                      >
+                        {liveCompaction ? <CompactionProgress compaction={liveCompaction} /> : null}
+                        {turnRunning ? <TurnRunningMark /> : null}
+                        {undeliveredRows.map((row) => (
+                          <ChatTranscriptRow
+                            key={transcriptRowKey(row)}
+                            row={row}
+                            context={turnContext}
+                            live={false}
+                          />
+                        ))}
+                        {pendingMessages.map((message) => (
+                          <PendingMessage
+                            key={message.id}
+                            message={message}
+                            context={turnContext}
+                          />
+                        ))}
+                        {timelineBlocker ? <SessionBlocker blocker={timelineBlocker} /> : null}
+                      </ChatTranscript>
+                    )}
+                  </ConversationContent>
+                  {/* A short fade keyed to the measured composer — see {@link COMPOSER_SCRIM}
               for the curve. It lives inside the Conversation, ahead of the
               button, so paint order is structural: content, then fade, then
               button. */}
-                <div
-                  className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
-                  style={{ backgroundImage: COMPOSER_SCRIM }}
-                />
+                  <div
+                    className="pointer-events-none absolute inset-x-0 bottom-[var(--composer-height)] h-16"
+                    style={{ backgroundImage: COMPOSER_SCRIM }}
+                  />
 
-                {/* Glass, not a plug: this button only exists while the reader is
+                  {/* Glass, not a plug: this button only exists while the reader is
               scrolled up, so there is always live text behind it. An empty
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
-                {timelineBlocker ? (
-                  <RuntimeAttentionScrollHint message={timelineBlocker.message} />
-                ) : messages.length > 0 ? (
-                  <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
-                ) : null}
-              </Conversation>
+                  {timelineBlocker ? (
+                    <RuntimeAttentionScrollHint message={timelineBlocker.message} />
+                  ) : messages.length > 0 ? (
+                    <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
+                  ) : null}
+                </Conversation>
+              </RunningBashProvider>
             </MarkdownAttachmentsProvider>
           </FileMentionProvider>
         </BrowserCardHostContext.Provider>

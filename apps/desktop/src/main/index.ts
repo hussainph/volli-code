@@ -1513,6 +1513,7 @@ const appStartup = app.whenReady().then(async () => {
       sessions,
       pictures: assembledRuntime.pictures,
       modelAccess: piRuntimeHost,
+      backgroundShells,
       experiments: { snapshot: readExperiments, set: setExperiment },
       automations: runtimeAutomations,
       busyWorktreeSites,
