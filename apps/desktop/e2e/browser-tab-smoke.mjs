@@ -36,7 +36,6 @@ import {
   makeGitRepo,
   makeScratch,
   REPO,
-  seedProjects,
   tabStrip,
   waitForChildExit,
   waitUntil,
@@ -652,7 +651,11 @@ async function main() {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.waitForLoadState("domcontentloaded");
   assertBuiltRendererLoaded(page);
-  await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
+  // The project already exists in SQLite, so boot deliberately skips the
+  // legacy localStorage import (including its selectedProjectId). Select the
+  // actual rail tile instead: its accessible name is the project's monogram,
+  // and the button filter excludes dnd-kit's outer role="button" wrapper.
+  await page.getByRole("button", { name: "BT", exact: true }).and(page.locator("button")).click();
   await waitUntil("Home tab strip", async () => ((await strip(page).count()) === 1 ? true : null));
 
   await must(
@@ -1122,8 +1125,10 @@ async function main() {
       );
       await row.waitFor({ state: "visible" });
       await page.mouse.move(700, 70);
-      await restoredNativePlane(secondUrl, (await nativePlaneState(app, secondUrl)).contentsId);
-      const before = await nativePlaneState(app, secondUrl);
+      const before = await waitUntil("the live Browser plane before the sidebar peek", async () => {
+        const state = await nativePlaneState(app, secondUrl);
+        return state.attached && state.bounds !== null && state.contentsId !== null ? state : null;
+      });
       const box = await row.boundingBox();
       if (box === null) throw new Error("seeded sidebar Session has no pointer target");
       // The controller listens for pointermove, not mouseenter. Real stepped
@@ -1156,17 +1161,38 @@ async function main() {
     async () => {
       // Keep the Browser on screen while opening the seeded transcript below
       // it. No Send, provider request, injected modal or detector substitution.
+      // Put keyboard focus back in the renderer chrome, not a remote page or
+      // a holder control that disappeared when the Session's hold ended.
+      await browserTabs(page).and(page.locator('[aria-selected="true"]')).click();
       await page.keyboard.press("Shift+Meta+\\");
+      const transcriptPane = page.locator(
+        '[data-slot="split-view-pane"][aria-label="Pane 2 of 2"]',
+      );
       await waitUntil(
-        "a second pane for the completed Session",
-        async () => (await page.locator('[data-slot="split-view-pane"]').count()) === 2,
+        "a focused second pane for the completed Session",
+        async () =>
+          (await page.locator('[data-slot="split-view-pane"]').count()) === 2 &&
+          (await transcriptPane.getAttribute("data-focused")) === "true",
       );
       await page
         .locator(`[data-peek-row="chat:${OVERLAY_SESSION.id}"][data-peek-surface="nav"]`)
         .getByRole("button")
         .click();
-      const link = page.getByRole("button", { name: MARKDOWN_LINK, exact: true });
+      const transcriptTab = tabStrip(page, "Pane 2 tabs").getByRole("tab", {
+        name: OVERLAY_SESSION.title,
+        exact: true,
+      });
+      await waitUntil(
+        "the completed Session to activate in the lower pane",
+        async () => (await transcriptTab.getAttribute("aria-selected")) === "true",
+      );
+      const link = transcriptPane.getByRole("button", { name: MARKDOWN_LINK, exact: true });
       await link.waitFor({ state: "visible" });
+      await page.mouse.move(700, 70);
+      await waitUntil(
+        "any sidebar hover peek to dismiss before the link prompt",
+        async () => (await page.locator("[data-peek-card]").count()) === 0,
+      );
       const before = await waitUntil("the Browser to stay live beside the transcript", async () => {
         const state = await nativePlaneState(app, secondUrl);
         return state.attached ? state : null;
@@ -1185,10 +1211,9 @@ async function main() {
       const restored = await restoredNativePlane(secondUrl, before.contentsId);
       // Close only the fixture transcript, leaving the original Browser journey
       // and its two tabs untouched for the teardown assertion below.
-      await strip(page)
-        .getByRole("tab", { name: OVERLAY_SESSION.title, exact: true })
-        .getByTestId("tab-close")
-        .click();
+      // A down split keeps "Home tabs" on the primary pane; this Session's
+      // close affordance belongs to the lower pane's "Pane 2 tabs" strip.
+      await transcriptTab.getByTestId("tab-close").click();
       await waitUntil(
         "the original unsplit Browser surface",
         async () =>
