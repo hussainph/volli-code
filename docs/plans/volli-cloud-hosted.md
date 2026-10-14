@@ -4,7 +4,9 @@
 require owner approval; existing plans and tickets are unchanged. M1/M2's
 merged foundations are reused, not equated with hosted readiness. Code evidence
 is this worktree's `c0cfd4577`; the parity report is the same snapshot, not a
-fresh acceptance run. Public prices were read **2026-10-14**, including by the
+fresh acceptance run. Formal M1/M2 milestone closure remains open in the ticket histories; merged
+code is distinct from passing owner acceptance. Public prices were read
+**2026-10-14**, including by the
 parallel researchers. USD unless marked EUR; tax excluded. No accounts,
 purchases, deployments or workload benchmarks were performed.
 
@@ -13,11 +15,12 @@ purchases, deployments or workload benchmarks were performed.
 | Decision | Recommendation and numbers |
 |---|---|
 | **1. Hosted before full BYO mobility?** | **Yes: an invite-only, tenant-dedicated combined `hostd` first.** At 100 paid users, infrastructure budgets are **$14.80 / $19.93 / $32.43 per light / typical / heavy user-month** on cheap retained VMs. But Hetzner CX capacity currently shows unavailable: these are conditional economics, not a launch promise. Managed Northflank execution instead budgets **$9.36 / $43.01 / $197.25**, with successful scale-to-zero and retained SSD. Approve the direction, gate commercial launch on capacity and measured performance. |
-| **2. Compute and price?** | Dogfood always-on VMs if suitable capacity exists; otherwise a bounded managed pilot, not a bare-metal fleet. Hypotheses for ≥70% infrastructure contribution margin: **$59 / $79 / $129** on the cheap VM route; **$39 / $169 / $749** on managed usage profiles. Do not promise an unlimited $20–$40 plan. Compare these prices against customer willingness before shipping; fixed fleet cost is material below 100 users. |
+| **2. Compute and price?** | Owner-funded, **unbilled H1 dogfood** on always-on VMs if suitable capacity exists; otherwise a bounded managed pilot, not a bare-metal fleet. H3 paid hypotheses for ≥70% infrastructure contribution margin: **$59 / $79 / $129** on cheap retained VMs; **$39 / $169 / $749** only after managed scale-to-zero works. These are not H1 managed prices. Do not promise unlimited $20–$40 plans; validate willingness to pay and small-fleet overhead. |
 | **3. Inference included?** | **BYO API key first; optional separately metered Volli inference later.** Representative Sol inference is **$10.05 / $100.50 / $402.00** per profile, independent of infrastructure. A 25% inference uplift produces only ~17% inference margin after a 3% payment allowance; blended VM margins fall to **62% / 38% / 28%**. “Healthy infrastructure margin” is not 70% total margin with inference bundled. |
 | **4. What does “Run in cloud” mean initially?** | A new cloud-authoritative board, with all its Sessions colocated, visible on a new signed-in laptop. One tenant host can hold multiple Workspaces. **Not** arbitrary placement of an existing Mac ticket; selective local/cloud execution follows in H2. Keep one writer and no board sync. Defer per-Workspace databases until independent placement/restore justifies the migration. |
 | **5. Credential custody and exposure?** | Approve a **hosted-only** KMS/envelope-custody amendment: the cloud ruling permits KMS, but the sealed-store plan currently prohibits provider KMS/network custody. Do not silently override that policy. BYO credentials need tenant-scoped consent and deletion; fleet inference keys stay outside tenant code. Account verifier, TLS trust, revocation and execution isolation are launch gates, not optional polish. |
-| **6. BYO, VC-579, VC-733?** | Maintain open-source local/self-hosted installation, protocol and security fixes; stop making friction-free SSH onboarding the commercial critical path. Preserve VC-579's BYO feedback and acceptance history, create a hosted acceptance successor. Rebrief VC-733's six moments around account → repository → credential consent → Run in cloud, including price/limits and away/back; keep it owner-driven, not an implementation prerequisite for every backend task. |
+| **6. BYO, VC-579, VC-733?** | Maintain open-source local/self-hosted installation, protocol and security fixes; stop making friction-free SSH onboarding the commercial critical path. Preserve VC-579's feedback/attempt history (**no recorded pass**), create a hosted acceptance successor. Rebrief VC-733's same six moments, with account/repository/consent replacing SSH setup, including price/limits and away/back; keep it owner-driven. |
+| **7. Supersede the scope reset and release gates?** | Recommend owner approval to replace the BYO acceptance/week prerequisite with **hosted acceptance + architecture review + a hosted dogfood week**; thaw only essential H0/H1 security, credentials and control-plane scopes before that week. M1/M2 foundations are merged, but VC-541/542/579 remain Backlog: do not mark milestones passed. Propose 0.3.0 = H1 acceptance plus H2 core placement/parity and existing release-safety gates; paid beta remains separately gated H3. Full mobile stays 0.4.0. |
 
 Open owner choices: acceptable first region/data residency; acceptable cold-start
 wait; whether 70% is an infrastructure or blended revenue target; willingness
@@ -151,7 +154,10 @@ produce different token counts for the same text: identical rate cards do not
 imply identical task costs. Vendor web-search/tool fees and separate Volli web
 search are additional metered services, not included token costs. Start with
 prepaid caps; reconcile usage before allowing further turns, without duplicate
-accepted work. Consumer subscriptions are quota-based, not this API arithmetic.
+accepted work. Consumer subscriptions are quota-based, not this API arithmetic. Gate the
+**already-shipped VC-702 subscription/device-code path** off for hosted tenants
+unless the provider/path is approved, in both UI and server policy. BYO/local
+policy is separate; a hidden sign-in button is not enforcement.
 
 | Subscription/key path | Hosted Pi policy |
 |---|---|
@@ -192,7 +198,7 @@ is a userspace kernel, not a microVM; compatibility is a separate gate [C1,S4].
 | Shape | Host / Worker / Client mapping | What wakes it; lid-closed consequence |
 |---|---|---|
 | **A. Combined hostd per tenant (recommended first); sleeping variant** | Present Node authority + colocated execution; desktop/phone only clients. Current DB holds multiple Workspaces, so isolate the whole tenant host, HOME, disk and network. A literal host per Workspace would duplicate host-wide settings/credentials or require a split. | Always-on version accepts turns/phone answers and runs schedules while laptop sleeps. Sleeping version needs an always-reachable authenticated gateway/control-plane wake service for commands/answers and a schedule wake index. Reads also wake, or show unreachable/read-only—no shadow board. Running turns/shells/previews inhibit sleep. |
-| **B. Small always-on host + workers on demand** | Node host remains sole board/ledger/scheduler authority; authenticated outbound workers own checkout leases, agent loops and Chromium. Clients never execute remote tools. | Host wakes worker for a turn, answer resumption or schedule. Board reads need no worker. Still pay authority baseline plus worker active time/storage. Worker transport, grants, locations, artifacts and lease/fencing services are missing; not deployment-only. |
+| **B. Small always-on host + workers on demand** | Node host remains sole board/ledger/scheduler authority; authenticated outbound workers own checkout leases, agent loops and Chromium. Clients never execute remote tools. | Host wakes workers for turns, answer resumption or schedules; board reads need no worker. Typical example: conditional CX23 authority $6.49/mo + 176h Northflank 4/8 worker $23.46 = **$29.95 compute**, or **$35.95 with 30 GB worker SSD and 25 GB egress**, before backups/control/reserve. Another eight overnight worker hours add $1.07; authority is within its cap. Missing transport/grants/leases make this implementation, not configuration. |
 | **C. Embeddable authority + environment drivers (VC-765)** | One logical authority per Workspace in DO/other durable runtime, execution in Linux sandboxes; same client protocol. Not a second board store or client-side loop. | Requests/alarms wake authority and then execution; hibernating authority can be cheap. DO prices: $5 Workers account minimum, then $0.15/M requests and $12.50/M GB-s beyond allowances [S3]. A non-hibernating 128 MB object for 730h consumes ~336k GB-s (~$4.20/user-mo amortized at fleet scale). Alone it fits the 400k fleet allowance; excess fleet duration rounds up to million-GB-s units ($12.50 increments), **not necessarily $4.20 billed**. |
 
 For a sleeping A, store accepted intent/receipts **in the authoritative host**
@@ -233,8 +239,10 @@ CLI capabilities. Keep fleet billing/model credentials in a separate broker,
 with tenant-scoped short-lived grants, spend caps and egress/metadata-service
 blocks. Test malicious repo instructions, filesystem escapes, token theft,
 crypto-mining, fork bombs, cancellation and quota recovery. Scope any eventual
-preview URL to a tenant/workspace, require explicit first exposure confirmation,
+host access route to a tenant, require explicit first remote-exposure consent,
 use a random persistent address and rotate it on disable/re-enable (VC-764).
+Apply the same safety pattern to preview URLs as an extension, not VC-764's
+original host-access scope.
 Randomness is **not authentication**; previews and agent browser streams are
 separate from the host's command endpoint.
 
@@ -269,15 +277,16 @@ M4 → M5 → hosted M6” as the commercial critical path with:
 
 | Stage | Smallest scope and exit demo |
 |---|---|
-| **H0: feasibility, custody and unit economics** | Provider/capacity choice, representative workloads, tenant execution boundary, verifier/TLS and custody decisions, suspend/backup physics. Pass the targets above; meter actual compute/inference separately. No production signups in this study. |
-| **H1: hosted owner dogfood (pull forward M6 essentials)** | Private control plane: account, registry, hosted credentials, provider provisioning, persistent tenant host, GitHub repo authorization/clone, supported BYOK consent/default model, spend dashboard/caps, backups, upgrades and limited push. **Sign in on a new laptop → see cloud board → Run in cloud → close lid → answer durable question → inspect result/PR.** Always-on first; sleeping combined host only after proven wake/parking. Explicitly name absent files/diffs/browser/attachments; do not call a chat-only prototype full parity. |
-| **H2: placement and experience parity (select M3)** | Reopen/recreate folded VC-580/581/582/583/584/586 scopes under VC-543: worker identity/grants, checkout leases/epochs, checkpoint refs, environment/secret recipes and cross-process locks. VC-583 is Done because folded, **not shipped**. Deliver per-ticket “Run on” for a cloud-authoritative board with Mac/cloud workers; owner runs 50% locally and rest remotely. Mac-only authoritative boards cannot keep orchestrating with the lid closed. Files/diffs/PRs, model picker and read/attention parity precede broad commercial acceptance; browser/preview need their own capability/security proof. |
+| **H0: feasibility, custody and unit economics** | Reopen/recreate VC-597's folded provider bake-off under VC-546: capacity, representative workloads, tenant execution boundary, verifier/TLS, custody and suspend/backup physics. Pass the targets above; meter compute/inference separately. No deployments or production signups in this study. |
+| **H1: hosted owner dogfood (pull forward M6 essentials)** | **One allowlisted owner account, one region/provider, one persistent tenant host, one repo and BYO API keys.** Thin account/registry/bootstrap, repo authorization/clone and credential consent; hard provider spend cap, usage log, backup/restore and manual drained upgrades. **Sign in on a new laptop → see cloud board → Run in cloud → close lid → answer durable question after reconnect → inspect result/PR.** Owner-funded, no customer billing, subscription transfer, paid inference, general signup, rich spend UI, fleet rollout, push or sleep. These move to H3; phone to H4. Public authorization and isolation are not cut. Name absent files/diffs/browser/attachments; this is not full parity. |
+| **H2: placement and experience parity (select M3)** | Reopen/recreate folded VC-580/581/582/583/584/586/605/606 scopes under VC-543: worker identity/grants, checkout leases/epochs, checkpoint refs, environment/secret recipes and cross-process locks. VC-583 is Done because folded, **not shipped**. Deliver per-ticket “Run on” for a cloud-authoritative board with Mac/cloud workers; owner runs 50% locally and rest remotely. Mac-only authoritative boards cannot keep orchestrating with the lid closed. Files/diffs/PRs, model picker and read/attention parity precede broad commercial acceptance; browser/preview need their own capability/security proof (VC-585's folded preview scope is separately sequenced, not dropped). |
 | **H3: economical paid beta** | Select sleeping combined hosts or persistent authority/on-demand workers from measured costs; billing/prepaid inference broker, abuse limits, restore drills and canary fleet upgrades. Gate price hypotheses on retained capacity, measured COGS and willing customers. Run VC-765 only if authority baseline dominates; own metal only when measured density pays for operations. |
-| **H4: portability + phone** | Bring back M4 whole-host drain/bundle/fenced restore, import/export to avoid lock-in; per-Workspace split only with a new ruling. Minimal VC-637 phone answer path supports H1 dogfood; full M5 mobile remains 0.4.0 unless explicitly re-ruled. Multiplayer and live ticket migration are not H1 gates. |
+| **H4: portability + phone** | Bring back M4 whole-host drain/bundle/fenced restore, import/export to avoid lock-in; per-Workspace split only with a new ruling. VC-637 is Done because folded into VC-545, **not shipped**: reopen/recreate its minimal phone-answer scope here; bringing it into H1 would require an explicit additional thaw. Full M5 mobile remains 0.4.0 unless re-ruled. Multiplayer and live ticket migration are not H1 gates. |
 
 **Ticket amendments proposed, not executed:** VC-539 records the new order and
 commercial gates; VC-546 supplies H1/H3 control-plane scopes. VC-579 keeps its
-BYO result as regression evidence, not a prerequisite to hosted. A hosted
+BYO feedback and attempted acceptance as regression evidence, not a passed
+result or the proposed hosted prerequisite. A hosted
 acceptance successor uses fresh-account/new-laptop, consent, private-repo,
 lid-closed, question-resume, quota and recovery journeys. VC-733 prototypes the
 same six moments—connect, placement, bring work, Session, away/back, cloud as a
@@ -287,6 +296,27 @@ installer work and security fixes; no new provider wizard campaign. Public
 hooks stay in the host protocol; paid registry/billing/provisioning code stays
 in the private cloud repo. Each milestone still requires owner demo and the
 post-milestone architecture review, not merely closed work tickets.
+
+### Amendments the owner would approve
+
+- **`volli-cloud.md`:** change the deployment row from one hosted host per
+  Workspace to one isolated tenant host containing multiple Workspaces for H1.
+  Explicitly re-decide **D-A3/Ruling 5**: retain the current multi-project DB
+  until independent Workspace placement/restore earns a split; whole-host
+  restore stays fenced. Update milestone order and 0.3.0 ship gates to H1/H2
+  plus existing release safety, not all M0–M4 mobility. H1 may first ship as a
+  private 0.3.0 alpha; paid H3 is a separate commercial gate. D-A2(b) is confirmed
+  by VC-691/#786, not pending; retain Electron-main Mac hosting.
+- **`volli-cloud-orchestration.md` / scope reset / VC-542:** replace “SSH
+  acceptance, then a week before Later” with hosted acceptance, architecture
+  review and a hosted week before H2/H3. Authorize only named H0/H1 exceptions
+  first: hosted authentication/hardening, sealing and control-plane essentials,
+  including necessary frozen VC-644–651/667 scopes. Do not blanket-thaw Later.
+  Reconcile M1's VC-579 dependency explicitly: recommend substituting hosted
+  box acceptance, or the owner can retain the BYO run. Neither is passed here.
+- **`sealed-credential-store.md` / credential briefs:** hosted-only custody
+  exception and server-enforced provider/sign-in allowlist; preserve local/BYO
+  key-custody invariants. No credential policy changes are implemented here.
 
 ## Sources
 
@@ -307,6 +337,7 @@ Internal inputs read 2026-10-14: [cloud ruling](volli-cloud.md),
 [host scope](host-scoped-connection.md); reference checkout's
 `.scratch/cloud-hosted/brief.md`, `.scratch/cloud-experience/level-set.md`,
 `.scratch/cloud-parity/{vc579-owner-feedback,matrix}.md`,
-`.scratch/research/opencode-2.md`; CLI ticket histories VC-539/579/733/543/583/764/765.
+`.scratch/research/opencode-2.md`, `.scratch/scope-reset-2026-10-07.md`;
+CLI ticket histories VC-539/541/542/579/733/543/583/597/637/691/764/765.
 Those scratch inputs are not portable public links; consequential findings are
 restated here. No existing plan was edited.
