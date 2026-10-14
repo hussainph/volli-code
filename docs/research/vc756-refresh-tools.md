@@ -41,7 +41,7 @@ Per-program checks use an attachment-lifetime desired-context memo, invalidated 
 
 `assembly.test.ts` contains the reproducible fixture: 10,000 historical events and 100 MCP definitions. It drives the production assembly callback; `warm-turn` bypasses the gate but uses the identical warm-addition policy, representing the previous full-check path. The steady `code-mode` path asserts zero history reads and zero `recordToolRefresh` calls, then verifies revision invalidation. Measurements exclude fixture setup and providers, include async callback overhead, and are local wall-clock observations rather than CI timing requirements.
 
-The first local run measured full-check p50/p95 **234.24/438.16 ms** (10 samples), versus steady revision-hit **0.00175/0.00271 ms** (100 samples). A marker-only refresh on the same catalog serialized to **128 bytes**, versus **808,406 bytes** for the former full-surface payload (payload only; identical event envelope excluded). This is the no-additions case; a delta that adds an MCP definition necessarily stores that new definition once.
+The post-main-merge uninstrumented run measured full-check p50/p95 **250.50/264.92 ms** (10 samples), versus steady revision-hit **0.00196/0.00292 ms** (100 samples). A marker-only refresh on the same catalog serialized to **128 bytes**, versus **808,406 bytes** for the former full-surface payload (payload only; identical event envelope excluded). This is the no-additions case; a delta that adds an MCP definition necessarily stores that new definition once.
 
 Exact verification results are recorded in the PR.
 
