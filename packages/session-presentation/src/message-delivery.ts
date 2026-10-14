@@ -1,6 +1,10 @@
 import type { ChatSessionFrame } from "./transcript";
 
-export type MessageDeliveryLabel = "Pending" | "Delivered" | "Not delivered";
+export type MessageDeliveryLabel =
+  | "Pending"
+  | "Delivered"
+  | "Not delivered"
+  | "Delivery unconfirmed";
 
 /** Durable intent is not acceptance. A turn start, accepted receipt or runtime
  * transcript observation is proof; a rejected receipt never says Delivered. */
@@ -27,11 +31,13 @@ export function messageDeliveryLabels(
       if (id !== undefined) {
         labels.set(
           id,
-          payload.receipt.status === "accepted" || payload.receipt.status === "completed"
+          labels.get(id) === "Delivered" ||
+            payload.receipt.status === "accepted" ||
+            payload.receipt.status === "completed"
             ? "Delivered"
             : payload.receipt.status === "rejected"
               ? "Not delivered"
-              : "Pending",
+              : "Delivery unconfirmed",
         );
       }
     } else if (payload?.kind === "turn.started") {

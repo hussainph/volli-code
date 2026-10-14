@@ -22456,6 +22456,10 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "afterCurrentStep": {
+                        "const": true,
+                        "type": "boolean"
+                      },
                       "commandId": {
                         "type": "string"
                       },
@@ -28338,6 +28342,10 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "afterCurrentStep": {
+                        "const": true,
+                        "type": "boolean"
+                      },
                       "commandId": {
                         "type": "string"
                       },
@@ -36738,6 +36746,10 @@
                   "items": {
                     "additionalProperties": false,
                     "properties": {
+                      "afterCurrentStep": {
+                        "const": true,
+                        "type": "boolean"
+                      },
                       "commandId": {
                         "type": "string"
                       },

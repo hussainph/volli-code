@@ -150,6 +150,25 @@ describe("SessionBlocker hit testing", () => {
 });
 
 describe("VC-758 message and work status rows", () => {
+  it("does not add a delivery footer to historical or interaction-answer messages", () => {
+    const html = turn({ id: "old", role: "user", parts: [{ type: "text", text: "old words" }] });
+    expect(html).not.toContain("message-delivery");
+    expect(html).not.toContain("Recorded");
+  });
+  it("labels committed steering while its receipt is still pending", () => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[{ id: "steer", role: "user", parts: [{ type: "text", text: "focus" }] }]}
+        context={{
+          ...context,
+          deliveryLabels: new Map([["steer", "Pending"]]),
+          steeringMessages: new Set(["steer"]),
+        }}
+        live={false}
+      />,
+    );
+    expect(html).toContain("Pending · After the current step");
+  });
   it.each(["send", "steer", "queue"] as const)(
     "names %s pending intent before host acceptance",
     (delivery) => {
@@ -167,7 +186,7 @@ describe("VC-758 message and work status rows", () => {
     },
   );
   it("marks runtime-accepted words Delivered and rejected words Not delivered", () => {
-    for (const label of ["Delivered", "Not delivered"] as const) {
+    for (const label of ["Delivered", "Not delivered", "Delivery unconfirmed"] as const) {
       const html = renderToStaticMarkup(
         <ChatTurn
           messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}

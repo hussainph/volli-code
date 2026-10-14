@@ -90,14 +90,22 @@ describe("message ownership through the real renderer codec", () => {
     expect(messageDeliveryLabels([submitted(), receipt("rejected")]).get(user.id)).toBe(
       "Not delivered",
     );
+    expect(
+      messageDeliveryLabels([submitted(), receipt("accepted"), receipt("rejected")]).get(user.id),
+    ).toBe("Delivered");
     expect(messageDeliveryLabels([submitted(), receipt("unreconciled")]).get(user.id)).toBe(
-      "Pending",
+      "Delivery unconfirmed",
     );
   });
   it("takes correlated turn start as acceptance, never unrelated starts or receipts", () => {
     const started = (id: string | null) =>
       frame(2, { kind: "turn.started", attachmentId: "attachment", turnId: "turn" }, null, id);
     expect(messageDeliveryLabels([submitted(), started("command")]).get(user.id)).toBe("Delivered");
+    expect(
+      messageDeliveryLabels([submitted(), started("command"), receipt("unreconciled")]).get(
+        user.id,
+      ),
+    ).toBe("Delivered");
     expect(
       messageDeliveryLabels([submitted(), started(null), receipt("accepted", "another")]).get(
         user.id,

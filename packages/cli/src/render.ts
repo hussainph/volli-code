@@ -746,7 +746,7 @@ function ageText(value: unknown): string {
  * must be readable: an unreadable tail hides whether a reply exists.
  *
  * The line names what the transcript shows and no cause. Why it went unanswered
- * (a failed attach, a turn that died) is host state the peek does not carry.
+ * comes from the host's runtime fields, not a guess based on this tail.
  */
 function unansweredMessageLines(
   data: Record<string, unknown>,
@@ -759,6 +759,56 @@ function unansweredMessageLines(
   return isRecord(newest) && newest["role"] === "user"
     ? ["no assistant message since the last user message"]
     : [];
+}
+
+/** Existing host facts, including queue ownership outside the transcript.
+ * Reasons and message bodies retain the CLI's untrusted-prose envelope. */
+function runtimePeekLines(data: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const blocks: Array<{ label: string; text: string }> = [];
+  const attention = data["attention"];
+  if (isRecord(attention) && typeof attention["message"] === "string") {
+    lines.push(
+      `${terminalSafeInline(attention["message"])}${typeof attention["recovery"] === "string" ? ` · ${terminalSafeInline(attention["recovery"])}` : ""}`,
+    );
+    if (typeof attention["detail"] === "string")
+      blocks.push({ label: "runtime detail", text: attention["detail"] });
+  }
+  const stopped = data["stopped"];
+  if (isRecord(stopped) && isRecord(stopped["by"])) {
+    const actor = stopped["by"];
+    lines.push(
+      `Stopped by ${terminalSafeInline(actor["kind"])}${actor["kind"] === "session" ? ` ${terminalSafeInline(actor["sessionId"])}` : ""}`,
+    );
+    if (typeof stopped["reason"] === "string")
+      blocks.push({ label: "stop reason", text: stopped["reason"] });
+  }
+  if (hasSessionSignal(data["signal"])) {
+    lines.push(sessionSignalLine(data["signal"]));
+    const reason = sessionSignalReason(data["signal"]);
+    if (reason !== null) blocks.push({ label: "signal reason", text: reason });
+  }
+  if (data["lastTurnOutcome"] === "failed") lines.push("Last turn failed");
+  const pending = recordsAt(data, "pendingMessages") ?? [];
+  const count = data["pendingMessageCount"];
+  if (typeof count === "number" && count > 0)
+    lines.push(`${count} ${count === 1 ? "message" : "messages"} waiting`);
+  for (const [index, message] of pending.entries()) {
+    const text =
+      typeof message["text"] === "string" && message["text"].length > 0
+        ? message["text"]
+        : "[Attachment]";
+    blocks.push({
+      label: `pending message ${index + 1}: ${terminalSafeInline(message["label"])}`,
+      text: `${text}${typeof message["detail"] === "string" ? `\n${message["detail"]}` : ""}`,
+    });
+  }
+  return [
+    ...lines,
+    ...(blocks.length === 0
+      ? []
+      : untrustedProseResponseLines({ response: "session runtime state", blocks })),
+  ];
 }
 
 /**
@@ -784,6 +834,7 @@ function renderChatPeek(data: Record<string, unknown>, transcript: readonly unkn
   return [
     header,
     ...sessionStopLines(data),
+    ...runtimePeekLines(data),
     ...pendingQuestionLines(data),
     ...unansweredMessageLines(data, transcript),
     ...transcript.filter(isRecord).map(transcriptLine),
@@ -846,7 +897,9 @@ function transcriptLine(entry: Record<string, unknown>): string {
   const said = `${tools.length > 0 ? `[${tools.map(terminalSafeInline).join(" ")}]` : ""}${
     tools.length > 0 && text.length > 0 ? " " : ""
   }${terminalSafeInline(text)}`;
-  return `${ageText(entry["ageMs"])}  ${terminalSafeInline(entry["role"])}${said.length > 0 ? `  ${said}` : ""}`;
+  const delivery =
+    typeof entry["delivery"] === "string" ? ` [${terminalSafeInline(entry["delivery"])}]` : "";
+  return `${ageText(entry["ageMs"])}  ${terminalSafeInline(entry["role"])}${delivery}${said.length > 0 ? `  ${said}` : ""}`;
 }
 
 /** The worktree.status snapshot: branch→base, worktree path, dirty/sequencer/sync. */

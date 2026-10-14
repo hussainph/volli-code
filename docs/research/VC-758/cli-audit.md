@@ -21,6 +21,17 @@ reads `idle` with no reason when the ledger carries the sequence the backend's
 in-flight change writes (§3, row 5). I reproduced that sequence; I did not apply
 their change.
 
+**Update (host fields landed in this worktree).** The parent's uncommitted edits to
+`packages/host-core/src/agent-dispatch/session-verbs.ts` and `packages/cli/src/render.ts`
+now send and render the host fields that §5 asked for: `attention`, `stopped`,
+`signal`, `lastTurnOutcome`, `pendingMessages` and `pendingMessageCount`. In the
+after-measurements (§11), the states that had no reason before now carry one: a
+failed turn, a reconnect, a stop by a named actor, a blocked signal, a queued or
+refused message. Still open: the backend fold of a failed turn into a reason
+(P1), the steer's target and origin (P6), and the executor-bound and
+exited-terminal items (P11, P13; F6 not landed). The before-states in §3 are kept
+as measured.
+
 ## 2. Base, coordination and what was touched
 
 - **Stale base.** The worktree branch `volli/VC-758-…` is at `c0cfd4577`
@@ -102,6 +113,11 @@ no assistant message since the last user message
 1m  user  Ship the CLI
 ```
 
+**Note (this pass).** The "CLI after" column above is the CLI-only state
+(`cli-after.txt`), measured before the host fields landed. Rows 2, 4, 5, 8, 9 and 12
+have since gained the host's fact, so for the current state of every row see §11.
+The before-states above are unchanged.
+
 Rows 6, 7, 8 and 11 gain the unanswered line because their newest row is the
 user's. Row 9 (`working`) does not. Rows 4 and 5 render identically before and
 after: the CLI has nothing it can add to them.
@@ -112,17 +128,17 @@ after: the CLI has nothing it can add to them.
 worktree base. Line numbers are at `c0cfd4577` (the worktree base); `origin/main`
 shifts `session-ledger.ts` by +2 and `session-verbs.ts` by +5.
 
-| ID | Path | Code location | What the reader sees today | Status | Fix / owner |
+| ID | Path | Code location | What the reader saw at the audit base (measured) | Status | Fix / owner |
 |---|---|---|---|---|---|
-| P1 | Executor fails mid-turn; turn ends | `session-ledger.ts:2040` (attachment.failed sets `lastTurnOutcome=failed`), `:2063` (attachment.closed `failed`); `:503-515` `sessionInterruptionReason` reads only `interrupted`; `chat-attachment.ts:99-113` `chatActivity` → `idle`; `session-verbs.ts:567-572` reason only for `interrupted`; wire has no outcome (`chat-attachment.ts:59` computes `outcome`, not sent) | `idle  last …  turn N depth M`, nothing says it failed (rows 4–5) | **open** | Host: send `outcome` (F1); backend: fold `failed` into a reason. CLI renders once sent. |
-| P2 | Attach refused (`configuration_invalid`, or `adapter_unrecoverable` at attach) | `session-runtime.ts:1616` (`configuration_invalid`), `#failAttach` at `:1818` (HEAD); `configuration_invalid` not user-blocking (`session-ledger.ts:426`), so folds to `idle` | `idle  turn 0 depth 1` and the message; the cause is absent | **partly** — CLI states the unanswered message (row 8) | Host: send active Attention (F2). |
-| P3 | Transport retrying, rate limit, quota, context limit while a turn is open | `chat-attachment.ts:99-113`: `working` whenever `turnActive && executorBound`; non-user-blocking Attention ignored; `session-ledger.ts:426` names only three user-blocking kinds | `working  last …` — identical to a healthy turn (row 2) | **open** | Host: send active Attention kinds + untrusted detail (F2). Backend: none. |
+| P1 | Executor fails mid-turn; turn ends | `session-ledger.ts:2040` (attachment.failed sets `lastTurnOutcome=failed`), `:2063` (attachment.closed `failed`); `:503-515` `sessionInterruptionReason` reads only `interrupted`; `chat-attachment.ts:99-113` `chatActivity` → `idle`; `session-verbs.ts:567-572` reason only for `interrupted`; wire has no outcome (`chat-attachment.ts:59` computes `outcome`, not sent) | `idle  last …  turn N depth M`, nothing says it failed (rows 4–5) | **fixed** for the outcome: `Last turn failed` (F1 `lastTurnOutcome`). The reason fold is still open. | Host F1 landed. Backend: fold `failed` into a reason (open). |
+| P2 | Attach refused (`configuration_invalid`, or `adapter_unrecoverable` at attach) | `session-runtime.ts:1616` (`configuration_invalid`), `#failAttach` at `:1818` (HEAD); `configuration_invalid` not user-blocking (`session-ledger.ts:426`), so folds to `idle` | `idle  turn 0 depth 1` and the message; the cause is absent | **fixed** (F2): `Configuration invalid · Open settings`. | Host F2 landed (primary Attention). |
+| P3 | Transport retrying, rate limit, quota, context limit while a turn is open | `chat-attachment.ts:99-113`: `working` whenever `turnActive && executorBound`; non-user-blocking Attention ignored; `session-ledger.ts:426` names only three user-blocking kinds | `working  last …` — identical to a healthy turn (row 2) | **fixed** for the active Attention kinds (F2): `Reconnecting`, `Rate limited`, and the rest of the table. | Host F2 landed. Backend: none. |
 | P4 | Runtime stopped the turn (retry budget spent, provider error) | `session-ledger.ts:503-520` (`stopped-by-runtime`), `render.ts` `sessionStopLines` | Explained; reset was a raw epoch | **fixed in CLI** (reset as UTC) | none further |
-| P5 | App restarted mid-turn | `boot-recovery.ts:195-221` writes `partial_turn_interrupted` and `attachment.closed` `interrupted` | `interrupted (crash-recovered)` — the token, not plain words | **partly** (row 7); plain wording is a copy decision | Decision D5. |
-| P6 | Steer sent mid-turn: not yet consumed | `transcript-tail.ts:142-150` counts `message.submit` as a transcript row when recorded; `agent-tool-door.ts:634` tells only the sender "the model reads it mid-stream"; tail entries carry no origin (`transcript-tail.ts` entry: at, role, text, tools) | `working`; the steer is a plain `user` row (row 9) | **open** | Backend: pending-steer state with its target turn (F5); Host: send it and steer origin (F5). |
-| P7 | Follow-up queued behind a running turn, or delivery refused (VC-753 blocked delivery) | `session-follow-ups.ts:14-44` (`queued \| releasing`, `refused`, `refusedDetail`); `db/session-follow-up-repo.ts`; no agent verb reads it | Absent from `peek` and `list` entirely | **open** (not probed: host-owned queue, outside engine observe) | Host: queued/refused items with untrusted `refusedDetail` (F5). Desktop: parent. |
-| P8 | Stopped by user, session, or watchdog | `session-ledger.ts:625` (`SessionStopActor`); `:1564` `projection.stopped {at, reason, by}`; `session-verbs.ts:277` (list) and `:675` (peek) set `interruption` null for stopped; the actor and reason are never sent | `stopped  last …` — no actor, reason or time (row 12) | **open** | Host: send `projection.stopped` (F3). |
-| P9 | Watchdog wedge: open turn silent 10+ minutes | Watchdog writes a durable `blocked` signal (`shared/src/session-watchdog.ts:65`); `publicSessionSignal` (`session-verbs.ts:380`) is on `show` (434, 503) and `answer` (726), **not** on `peek` (589-690) | `working  last 40m` with no blocked signal | **open** | Host: add `signal` to peek (F4). CLI renders it with the existing `sessionSignalLine`. Rejected: a CLI-side stall threshold (§6). |
+| P5 | App restarted mid-turn | `boot-recovery.ts:195-221` writes `partial_turn_interrupted` and `attachment.closed` `interrupted` | `interrupted (crash-recovered)` — the token, not plain words | **partly**: `Turn interrupted` is named (F2); the header token `crash-recovered` is unchanged (D5). | Decision D5 (copy). |
+| P6 | Steer sent mid-turn: not yet consumed | `transcript-tail.ts:142-150` counts `message.submit` as a transcript row when recorded; `agent-tool-door.ts:634` tells only the sender "the model reads it mid-stream"; tail entries carry no origin (`transcript-tail.ts` entry: at, role, text, tools) | `working`; the steer is a plain `user` row (row 9) | **partly** (F5): a queued steer is listed as `After the current step`. A steer already in the transcript is still a plain user row, and the target turn and origin are not sent. | Host F5 landed without origin or target. Backend: pending-steer state (open). |
+| P7 | Follow-up queued behind a running turn, or delivery refused (VC-753 blocked delivery) | `session-follow-ups.ts:14-44` (`queued \| releasing`, `refused`, `refusedDetail`); `db/session-follow-up-repo.ts`; no agent verb reads it | Absent from `peek` and `list` entirely | **fixed** (F5): queued, sending, after-step and refused follow-ups, with the refusal detail and the boot-hold reason. | Host F5 landed (`pendingMessages`, `pendingMessageCount`). Desktop: parent. |
+| P8 | Stopped by user, session, or watchdog | `session-ledger.ts:625` (`SessionStopActor`); `:1564` `projection.stopped {at, reason, by}`; `session-verbs.ts:277` (list) and `:675` (peek) set `interruption` null for stopped; the actor and reason are never sent | `stopped  last …` — no actor, reason or time (row 12) | **fixed** (F3): actor (session id shortened), reason (redacted, 400 max) and time. | Host F3 landed. |
+| P9 | Watchdog wedge: open turn silent 10+ minutes | Watchdog writes a durable `blocked` signal (`shared/src/session-watchdog.ts:65`); `publicSessionSignal` (`session-verbs.ts:380`) is on `show` (434, 503) and `answer` (726), **not** on `peek` (589-690) | `working  last 40m` with no blocked signal | **fixed** (F4): `signal  blocked · 1m ago` with the reason quoted. | Host F4 landed in peek. `show` and `answer` still send the raw reason (§10). |
 | P10 | Terminal parked (warm park: idle tree SIGSTOP'd) | `pty/manager.ts:1289-1307` (`parked`); wake in `host-core/src/pty/park-controller.ts` | `parked`, output frozen, no explanation | **fixed in CLI** | none further |
 | P11 | Terminal ended | `session-verbs.ts:601-606`: `SESSION_NOT_FOUND`, "has no observable live terminal" | Does not say it exited (`session list` does: `exited`) | **open** (wording) | Host: say it exited (F6). Small. |
 | P12 | Unreadable transcript messages in the tail | `render.ts` header | `2 unreadable` (no noun) | **fixed in CLI** (`N unreadable message(s)`) | none further |
@@ -151,6 +167,25 @@ Compatibility: an older CLI ignores keys it does not read. The reply of
 `session.peek` is not in the generated output schema (`session-rpc` defines only
 its input), so the protocol gate should not move; the host owner should confirm
 with `pnpm check:protocol-schema --base origin/main`.
+
+### 5b. What landed (this pass)
+
+The proposed fields are now sent by `session.peek` under these names. The shapes
+differ from the proposal where noted.
+
+| ID | Landed as (`session.peek`) | Differs from the proposal |
+|---|---|---|
+| F1 | `lastTurnOutcome`: the projection's latest turn outcome (`completed \| interrupted \| failed \| null`) | Named after the projection field, not `outcome`. |
+| F2 | `attention`: `{message, recovery, detail}` for the primary (latest) active Attention only. `message` and `recovery` are the host's human copy (`PEEK_ATTENTION`, all 11 kinds). `detail` is redacted and cut to 400. | One object, not a list. A second active Attention is not sent. |
+| F3 | `stopped`: `{at, reason, by}`. `reason` is redacted and cut to 400; a session actor's id is cut to 8 characters. | None. |
+| F4 | `signal`: `{kind, reason, at, ageMs}` from `publicSessionSignal`. `reason` is redacted and cut to 400 in peek only. | `show` and `answer` still send the raw reason (§10). |
+| F5 | `pendingMessages` (rows up to `lines`) and `pendingMessageCount` (all rows): `{id, text, label, detail}`, read in the SQLite follow-up ledger transaction. Labels: `Blocked`, `After the current step`, `Sending`, `Queued`. Text and refusal detail are redacted and cut to 400. | No steer origin or target turn. A steer is labelled, not attributed. |
+| F6 | Not landed. | `executorBound` and the exited-terminal wording stay open (P11, P13). |
+
+Also from the concurrent transcript work, not in §5: each transcript row of
+`session.peek` may carry `delivery` (`Pending`, `Delivered`, `Not delivered`,
+`Delivery unconfirmed`), rendered as `[Delivered]` after the role. A render test
+covers it (§12).
 
 ## 6. Rejected CLI-only fixes
 
@@ -204,6 +239,35 @@ full CLI coverage gate, desktop and renderer tests, the smoke matrix, Electron,
 SSH, keychain, and `check-host-electron-imports.mjs` and
 `check:protocol-schema` (no host, shared or protocol file changed in my diff).
 
+### 8b. Checks in this pass
+
+Run against the parent's uncommitted product diffs, identified by `git diff HEAD`
+hash. `render.ts` was `978683bc…` for every run in this pass. `session-verbs.ts`
+was `c1297324…` for the first set of runs and `7d80d92f…` for the final re-run,
+which covers the focused CLI and host suites, the host dispatch suite, the host
+typecheck and the after-probe (its CLI text was identical to the earlier capture,
+ids normalised). No commit, no push.
+
+| Check | Command | Result |
+|---|---|---|
+| Host verb tests: real engine, SQLite, follow-up ledger, socket and `runCli` | `vp test run src/agent-dispatch/session-verbs.test.ts --maxWorkers=$VOLLI_CONCURRENCY_HINT` in `packages/host-core` (hint `1`) | 38 passed (14 before this pass; 1 expected-fail marker flipped, see §12) |
+| Host agent dispatch, all four files | `vp test run src/agent-dispatch --maxWorkers=1` in `packages/host-core` | 4 files, 86 passed |
+| CLI focused, with the protected coverage | `vp test run src/render.test.ts src/session-peek-status.test.ts src/orchestration.test.ts src/run.test.ts src/cli-reference.test.ts --coverage --coverage.include=src/render.ts --maxWorkers=1` in `packages/cli` | 5 files, 192 passed. `render.ts`: 100% statements, branches, functions, lines. Exit 0. |
+| CLI, whole package | `vp test run --maxWorkers=1` in `packages/cli` | 14 files, 448 passed |
+| Format and lint, touched test files | `vp check` on `render.test.ts` and `session-peek-status.test.ts` (CLI), and `session-verbs.test.ts` (host-core) | pass |
+| Typecheck | `pnpm run typecheck` in `packages/cli` and `packages/host-core` | both exit 0 |
+| Before/after capture: temporary probe on the real service, socket and `runCli` | probe in host-core, removed afterwards | 15 scenarios: `.tmp/VC-758/cli-after-host-fields.txt`, `.tmp/VC-758/peek-probe-after.json`; source `.tmp/VC-758/probe-host-core-after.test.ts.txt` |
+
+Before this pass, in the two-file run (`render.test.ts`, `session-peek-status.test.ts`),
+`render.ts` was at 93.87% statements, 89.33% branches, 99.14% functions and 94.35%
+lines. The uncovered lines were `runtimePeekLines`.
+
+Not run: Electron, SSH, keychain, security, Docker, the desktop renderer, the full
+host-core suite, `check-host-electron-imports.mjs`, and `check:protocol-schema`.
+The protocol output schema is changing in this worktree for other work
+(`docs/protocol/protocol.schema.json`, `packages/session-rpc/src/output-schema.ts`),
+so that gate belongs to the parent.
+
 ## 9. Decisions to confirm
 
 - **D1 — line wording.** `no assistant message since the last user message` is
@@ -222,6 +286,20 @@ SSH, keychain, and `check-host-electron-imports.mjs` and
 - **D6 — base.** I did not rebase. The parent merges `origin/main`; expect a
   conflict in `renderChatPeek` (see §2).
 
+- **D7 — recovery words name app actions.** `Open settings` and `Retry` tell the
+  person what to do in the app. A CLI reader cannot do either (`session send` is
+  tool-only, §6). The copy is the host's (`PEEK_ATTENTION`, "human copy"). Decide
+  whether a peek names the recovery or only the state.
+- **D8 — `N message(s) waiting` counts a refused message.** The count is every queued
+  row, and a `Blocked` row is held, not waiting. `1 message waiting` above
+  `pending message 1: Blocked:` contradicts itself (§11, N1). Options: say `held` for
+  blocked rows, or count only the waiting ones.
+- **D9 — the header and the Attention line can say the same thing.**
+  `waiting on permission` with `Waiting for approval`, and
+  `interrupted (stopped-by-runtime; rate-limited)` with `Runtime stopped · Retry`.
+  Both are true. Decide whether the Attention line yields when the header already
+  names the state.
+
 ## 10. Open questions
 
 - P13 (`executorBound` on agent reads) needs a probe where an attachment stays
@@ -230,3 +308,120 @@ SSH, keychain, and `check-host-electron-imports.mjs` and
   need the host's follow-up path, which is outside the engine `observe` seam the
   probe drives.
 - Row 14 (exited terminal) is from code, not from a live terminal.
+
+### Open after the host fields
+
+- **The signal reason in `show` and `answer` is still raw.** `publicSessionSignal`
+  (`session-verbs.ts:384`) is used by `sessionShowVerb` (lines 438, 508) and
+  `sessionAnswerVerb` (line 816) and sends `signal.reason` as written. Peek now
+  redacts and cuts it (line 735). `show` is capped at 1000 characters by the CLI,
+  not redacted. Recommend one redaction at `publicSessionSignal`. Pre-existing for
+  `show` and `answer`; no test in this pass covers them.
+- **The CLI does not bound peek prose.** Peek's stop reason, Attention detail, signal
+  reason and queued text print as the host sent them. The bound is the host's 400
+  characters. `show` caps its signal reason at 1000 characters in the CLI. Decide
+  whether peek should cap too.
+- **Malformed host values print as words.** A stop without `by.kind` prints
+  `Stopped by undefined`, and a queued row without a label prints
+  `pending message 1: undefined`. The host always sends both, so this is robustness
+  only. No test pins it.
+- **An empty stop reason is quoted; a blank signal reason is dropped.** A stop reason
+  of `""` prints an empty quoted line (`  | `). A signal reason of spaces does not
+  print. Decide one rule.
+- **The `attachment.failed` branch is not exercised by a test.** The fold in
+  `packages/shared/src/session-ledger.ts:2042` (in HEAD, unchanged) sets `failed` on
+  `attachment.failed` only while a turn is open. The engine refuses an
+  `attachment.failed` for an id that already exists, so the tests use the reachable
+  path, `attachment.closed` with outcome `failed`. This is in `shared`, outside this
+  scope.
+- **P11 and P13 are unchanged.** F6 has not landed.
+
+## 11. After the host fields: measured matrix
+
+Same scripted events as §3, run against the current working tree through the
+real host service, the socket and `runCli` (`.tmp/VC-758/cli-after-host-fields.txt`;
+host payloads in `.tmp/VC-758/peek-probe-after.json`). The before columns of §3
+are not changed. Rows N1 to N3 are new: the states the host now carries that the
+original probe did not reach.
+
+| # | Scripted state | Host wire, after (new fields) | CLI after, current | Explained now? |
+|---|---|---|---|---|
+| 1 | Working, tool running | unchanged | `working  last 1m  turn 1 depth 2`, then the transcript | yes (unchanged) |
+| 2 | Transport retrying | `attention` `{message: Reconnecting, recovery: null, detail: null}` | `working …`, then `Reconnecting` | yes (the reconnect is named) |
+| 3 | Permission asked | `attention` `{message: Waiting for approval, recovery: null, detail: null}` | `waiting on permission …`, then `Waiting for approval` | yes (the same fact twice, D9) |
+| 4 | Turn failed (`attachment.closed` outcome `failed` mid-turn) | `lastTurnOutcome: failed`; status `idle` | `idle …`, then `Last turn failed` | **yes** (was no, P1) |
+| 5 | Same, plus `adapter_unrecoverable` with no attachment | `attention` `{message: Runtime stopped, recovery: Retry, detail: The runtime stopped unexpectedly.}`; `lastTurnOutcome: failed` | `idle …`, then `Runtime stopped · Retry`, `Last turn failed`, and the runtime-detail block | **yes** (was no, P1 and P3) |
+| 6 | Runtime stopped the turn (rate limit) | `attention` `{message: Runtime stopped, recovery: Retry}` beside the existing `interruption` | the stop block as before, then `Runtime stopped · Retry`, then the unanswered line | yes (the reset as UTC was already measured, §3) |
+| 7 | App restarted mid-turn | `attention` `{message: Turn interrupted, recovery: null}` | `interrupted (crash-recovered)`, then `Turn interrupted`, then the unanswered line | yes (plain words added; the header token stays, D5) |
+| 8 | Attach refused (`configuration_invalid`) | `attention` `{message: Configuration invalid, recovery: Open settings}` | `idle  …  turn 0 depth 1`, then `Configuration invalid · Open settings`, then the unanswered line | **yes** (was partly, P2) |
+| 9 | Steer sent mid-turn, not yet consumed | `pendingMessageCount: 1`; `pendingMessages[0]` label `After the current step` | `working`, `1 message waiting`, then the `pending message 1: After the current step` block; the transcript row is unchanged | **partly**: the queued steer is named; its origin is not sent (P6) |
+| 10 | Turn completed, nothing pending | unchanged | unchanged | yes |
+| 11 | Message after a completed turn, no turn started | unchanged | unchanged, with the earlier unanswered line | yes |
+| 12 | Stopped by user | `stopped` `{at, reason: owner stop, by: {kind: user}}` | `stopped …`, then `Stopped by user`, then the `stop reason:` block | **yes** (was no, P8) |
+| 13 | Terminal parked | unchanged (terminal branch) | unchanged | yes (earlier CLI change) |
+| 14 | Terminal ended | unchanged | unchanged | no (P11; F6 open) |
+| N1 | Delivery refused, VC-753 blocked delivery | `pendingMessages[0]` label `Blocked`, detail `Queued delivery refused: rejected: session_archived` | `idle …`, `1 message waiting`, `pending message 1: Blocked:` with the refusal line, then the unanswered line | **yes**, with the count wording open (D8) |
+| N2 | Held at boot, because an older Volli ran | label `Blocked`, detail `Held: an older Volli version ran since this was queued — edit or remove it` | `idle …`, `1 message waiting`, `pending message 1: Blocked:` with the hold reason | **yes** |
+| N3 | Blocked signal, open turn (the watchdog's signal) | `signal` `{kind: blocked, reason: No progress for ten minutes, ageMs: 99000}` | `working …`, `signal  blocked · 1m ago`, then the `signal reason:` block | **yes** (was no, P9) |
+
+Notes:
+
+- Row 9, N1 and N2 need queue state. The probe writes those queue entries through
+  the same SQLite follow-up ledger the runtime drains, because it does not drive the
+  runtime's steer and refusal paths. The transcript row of the steer is the one
+  §3 measured.
+- Row 5's before state is the §3 row 5 measurement; the CLI printed no failure line there.
+- The `stopped` reason and the signal reason shown here are the host's values after
+  redaction. A secret in them does not reach the peek text (§12).
+- Duplicated facts (rows 3, 6): D9.
+
+## 12. Tests and changes in this pass
+
+**Tests added or changed** (no product file was edited in this pass):
+
+- `packages/host-core/src/agent-dispatch/session-verbs.test.ts`: 24 new tests in
+  `session peek runtime facts (VC-758)`; the 14 existing tests are unchanged. The
+  fixtures run the real engine, SQLite and the follow-up ledger.
+  - One test per Attention kind (11 cases): the message and the recovery, with no
+    recovery where the host sends none.
+  - The Attention's detail is redacted and cut to 400; `attention.cleared` removes
+    it; the latest active Attention is the one shown, and the one before it returns
+    when that clears.
+  - The stop: a session actor is named by its short id and the reason is redacted;
+    the user and the watchdog are named with their reasons; a resumed attachment
+    clears the stop.
+  - The signal: the latest done or blocked, with its age. The reason is redacted and
+    cut to 400. This test first pinned the gap with `it.fails` (the reason came back
+    raw); the parent's redaction made it pass, so it was flipped to a normal test with
+    the exact expected text.
+  - The last-turn outcome: completed, interrupted and failed. Failed is written as
+    `attachment.closed` with outcome `failed`.
+  - The queue read through `createSqliteSessionFollowUpLedger`: Queued, Sending, After
+    the current step and Blocked; an attachment-only row is named; text is redacted and
+    cut; `lines` bounds the rows but not the count.
+  - The boot hold: `stampFollowUpCleanClose`, a later event, then
+    `consumeFollowUpCleanClose`. The held row reads Blocked with the hold detail.
+  - Socket and `runCli`: the text and `--json` carry every fact, and no secret appears
+    in either.
+- `packages/cli/src/render.test.ts`: 12 new tests (88 to 100), at module scope where
+  they need it. They cover every branch of `runtimePeekLines` with exact text: an
+  Attention with and without a recovery; a detail that quotes a forged end marker;
+  stops by user, session and watchdog, with and without a reason, and a malformed stop;
+  a blocked and a done signal, a blank reason and a malformed signal; `Last turn
+  failed`; the singular, plural, zero and non-number counts; queued rows with empty,
+  non-string text and a detail; a malformed or empty queue; the full fixed-order
+  output; terminal controls and bidi marks escaped in every fact, with `--json`
+  unchanged; and the transcript `delivery` tag.
+- `packages/cli/src/session-peek-status.test.ts`: 6 new tests (14 to 20), each a real-shape
+  reply through `runCli`: failed turn, steer waiting, stopped by user, blocked signal,
+  reconnect, and `--json`. The four earlier tests that pinned a gap (transport retry,
+  failed turn, steer, stop) are renamed "an older host ..." and keep their assertions:
+  a reply without the field must not invent the fact.
+
+**Coverage.** `render.ts` in the focused CLI run: 100% statements, branches, functions and
+lines (§8b). The protected gate is scoped to `src/render.ts`, as asked.
+
+**Not changed:** `packages/cli/src/render.ts`, `packages/host-core/src/agent-dispatch/session-verbs.ts`,
+and every file outside the three test files and this audit. Nothing was committed or
+pushed. The temporary probe was written to `packages/host-core/src/`, run, and
+removed; its source is kept in `.tmp/VC-758/` (gitignored).

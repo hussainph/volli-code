@@ -329,7 +329,7 @@ export function heldStrip(
     rows.push({
       id: entry.id,
       text: entry.text,
-      localUnsent: true,
+      ...(entry.state === "unsent" ? { localUnsent: true as const } : {}),
       ...(entry.resources === undefined ? {} : { resources: entry.resources }),
       ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
     });
@@ -1026,6 +1026,7 @@ export function sameQueuedMessage(left: QueuedMessage, right: QueuedMessage): bo
     left.attachments === right.attachments &&
     left.commandId === right.commandId &&
     left.queueState === right.queueState &&
-    left.localUnsent === right.localUnsent
+    left.localUnsent === right.localUnsent &&
+    left.afterCurrentStep === right.afterCurrentStep
   );
 }

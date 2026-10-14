@@ -149,8 +149,9 @@ describe("host queued message projection", () => {
         commandId: "c1",
         message: queuedWireMessage(message),
         state: "releasing",
+        afterCurrentStep: true,
       }),
-    ).toEqual({ ...message, commandId: "c1", queueState: "releasing" });
+    ).toEqual({ ...message, commandId: "c1", queueState: "releasing", afterCurrentStep: true });
   });
   it("reads files from another Client without desktop metadata", () => {
     const message = {

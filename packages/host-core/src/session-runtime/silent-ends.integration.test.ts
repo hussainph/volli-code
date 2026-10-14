@@ -20,6 +20,8 @@ import {
   type ScriptedReply,
 } from "../../../agent-runtime/test-fixtures/scripted-provider";
 import { insertProject } from "../db/projects-repo";
+import { createAgentCommandService } from "../agent-commands";
+import { testHostHandlers } from "../testing/host-handlers";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
@@ -165,6 +167,27 @@ async function fixture(
     });
   const projection = async () => (await runtime.projection({ sessionId })).projection;
   const events = () => engine.listEvents({ sessionId });
+  const commandService = createAgentCommandService({
+    db: db.db,
+    handlers: testHostHandlers({ db: db.db }),
+    appVersion: "test",
+    sessionEngine: engine,
+    now,
+    readTranscriptArtifact: (reference) => artifacts.read(reference),
+  });
+  const peek = async () => {
+    // The same JSON codec handed to an agent; real Pi, ledger and file bodies
+    // feed this reply, rather than a hand-written delivery fixture.
+    const response = await commandService.execute({
+      v: 1,
+      cmd: "session.peek",
+      args: { id: sessionId.slice(0, 8) },
+      ctx: { cwd: directory, env: {} },
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error(response.error.message);
+    return JSON.parse(JSON.stringify(response.data)) as Record<string, unknown>;
+  };
   const tail = () =>
     readSessionTranscriptTail(
       {
@@ -183,6 +206,7 @@ async function fixture(
     projection,
     events,
     tail,
+    peek,
     terminal: terminal.promise,
     crash: () =>
       observe!({
@@ -220,6 +244,15 @@ describe("silent ends audit (VC-758)", () => {
           kind: "adapter_unrecoverable",
           detail: expect.stringContaining("Fixture provider request failed"),
         }),
+      );
+      const peeked = await f.peek();
+      expect(peeked["attention"]).toMatchObject({
+        message: "Runtime stopped",
+        recovery: "Retry",
+        detail: expect.stringContaining("Fixture provider request failed"),
+      });
+      expect(peeked["transcript"]).toContainEqual(
+        expect.objectContaining({ role: "user", text: "send", delivery: "Delivered" }),
       );
     },
   );
@@ -327,6 +360,14 @@ describe("silent ends audit (VC-758)", () => {
       expect.objectContaining({ detail: "The runtime stopped unexpectedly", attachmentId: null }),
     );
     expect(failureRows(await f.events())).toHaveLength(1);
+    expect(await f.peek()).toMatchObject({
+      lastTurnOutcome: "failed",
+      attention: {
+        message: "Runtime stopped",
+        detail: "The runtime stopped unexpectedly",
+        recovery: "Retry",
+      },
+    });
     const coldEngine = createSessionEngine({
       ledger: createSqliteSessionLedger(db!.db),
       clock: { now: () => 2000 },
@@ -367,6 +408,9 @@ describe("silent ends audit (VC-758)", () => {
       }),
     );
     expect(failureRows(await f.events())).toEqual([]);
+    expect((await f.peek())["transcript"]).toContainEqual(
+      expect.objectContaining({ role: "user", text: "send", delivery: "Not delivered" }),
+    );
   });
 
   it("keeps a provider stall working without inventing a failure", async () => {

@@ -296,6 +296,11 @@ describe("host follow-up commands", () => {
     await expect
       .poll(async () => (await runtime.projection({ sessionId })).projection.queue?.[0].state)
       .toBe("releasing");
+    expect((await runtime.projection({ sessionId })).projection.queue?.[0]).toMatchObject({
+      id: "queued",
+      state: "releasing",
+      afterCurrentStep: true,
+    });
     for (const command of [
       { kind: "message.cancel" as const, messageId: "queued" },
       { kind: "message.edit" as const, messageId: "queued", message: message("queued", "edit") },

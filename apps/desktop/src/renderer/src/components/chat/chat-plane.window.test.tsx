@@ -1618,6 +1618,7 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
 });
 
 describe("VC-758 visible timeline regressions", () => {
+  afterEach(() => disposeChatClient(SESSION));
   it("shows the message immediately while promotion is pending", async () => {
     const { store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
@@ -1632,6 +1633,61 @@ describe("VC-758 visible timeline regressions", () => {
     );
     expect(container?.textContent).toContain("waiting on promotion");
     expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Pending");
+  });
+
+  it("retains accepted steering from the recovery strip until host ownership is visible", async () => {
+    const store = chatStore(transcript(1), { lifecycle: "working", turnActive: true });
+    const slice = store.getState().sessions[SESSION]!;
+    store.setState({
+      sessions: {
+        [SESSION]: {
+          ...slice,
+          projection: {
+            ...slice.projection!,
+            modelSelection: DEFAULT_SELECTION,
+            liveExecutor: { id: "executor" },
+          },
+        },
+      },
+    } as never);
+    const result = Promise.withResolvers<unknown>();
+    const submit = vi.fn(() => result.promise);
+    getOrCreateChatClient(SESSION, {
+      rpc: { session: { command: { mutate: submit } } } as unknown as ChatSessionRpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "steer-command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("not under test");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "steer-recovery", text: "steer these words" });
+    drafts.markHeld(SESSION, "steer-recovery", "unsent");
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () =>
+      container
+        ?.querySelector<HTMLButtonElement>('[aria-label="Steer queued message: steer these words"]')
+        ?.click(),
+    );
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(container?.textContent).toContain("Pending · After the current step");
+    await act(async () => result.resolve({ sessionId: SESSION, receipt: { status: "accepted" } }));
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held[0]).toMatchObject({
+        id: "steer-recovery",
+        deliveryAccepted: true,
+      }),
+    );
+    expect(container?.textContent).toContain("steer these words");
+    expect(
+      container?.querySelector('[aria-label="Steer queued message: steer these words"]'),
+    ).toBeNull();
   });
 
   it("keeps Working when a turn starts before any transcript message", async () => {

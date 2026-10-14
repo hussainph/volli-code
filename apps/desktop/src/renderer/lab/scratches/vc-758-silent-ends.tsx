@@ -1,5 +1,5 @@
 /** VC-758: production ChatPlane with frozen renderer/store inputs, not a drawn facsimile.
- * ?state=sending|steering|queued|working|error selects one reproducible state.
+ * ?state=sending|steering|queued|working|error|error-scrolled selects one reproducible state.
  * No runtime or provider connection; these screenshots prove presentation only.
  */
 import * as React from "react";
@@ -100,6 +100,7 @@ export const api = {
 };
 export function seed() {
   const working = ["steering", "queued", "working"].includes(state);
+  const error = state === "error" || state === "error-scrolled";
   const messages: UIMessage[] =
     state === "working" || state === "sending"
       ? []
@@ -109,7 +110,7 @@ export function seed() {
             role: "user",
             parts: [{ type: "text", text: "Check the release notes before we ship." }],
           },
-          ...(state === "error"
+          ...(error
             ? []
             : [
                 {
@@ -121,6 +122,27 @@ export function seed() {
                 },
               ]),
         ];
+  if (state === "error-scrolled") {
+    for (let index = 1; index <= 16; index++) {
+      messages.push(
+        {
+          id: `history-request-${index}`,
+          role: "user",
+          parts: [{ type: "text", text: `Review release note section ${index}.` }],
+        },
+        {
+          id: `history-reply-${index}`,
+          role: "assistant",
+          parts: [
+            {
+              type: "text",
+              text: `Section ${index} is checked against the compatibility notes. The existing behavior remains documented; the migration notes are next.`,
+            },
+          ],
+        },
+      );
+    }
+  }
   const projection: SessionPresentationProjection = {
     session: {
       id: SESSION,
@@ -156,8 +178,7 @@ export function seed() {
           turnActive: working,
           turnEpoch: working ? 1 : 0,
         },
-        sessionError:
-          state === "error" ? "Context assembly failed before the model could start." : null,
+        sessionError: error ? "Context assembly failed before the model could start." : null,
         queue:
           state === "queued"
             ? [{ id: "follow-up", text: "Also check the migration notes.", queueState: "queued" }]

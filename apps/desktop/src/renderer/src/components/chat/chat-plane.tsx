@@ -1,6 +1,3 @@
-import { sessionPictureFor } from "@renderer/chat/transport";
-import { CodeModePictureHostContext } from "./activity-ui";
-import { readCodeModePicture } from "./code-mode-output-model";
 /**
  * One chat Session, drawn.
  *
@@ -12,9 +9,13 @@ import { readCodeModePicture } from "./code-mode-output-model";
  * device drafts and unsent recovery live in `stores/chat-drafts.ts`. This view
  * owns only measurements and which controls have a command in flight.
  */
+import { sessionPictureFor } from "@renderer/chat/transport";
+import { CodeModePictureHostContext } from "./activity-ui";
+import { readCodeModePicture } from "./code-mode-output-model";
 import * as React from "react";
 import { toast } from "sonner";
 import { useStore } from "zustand";
+import { useStickToBottomContext } from "use-stick-to-bottom";
 
 import { toastError } from "@renderer/lib/toast";
 import type { BlobLinkView } from "@volli/shared";
@@ -397,6 +398,7 @@ export function ChatPlane({
   const composerHeight = useMeasuredHeight<HTMLDivElement>();
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const steeringQueued = React.useRef(new Set<string>());
+  const [pendingSteerIds, setPendingSteerIds] = React.useState<ReadonlySet<string>>(new Set());
   // Whether a file import committed to the FIRST message is still arriving.
   // `importingFirstMessage` below holds the same fact for the synchronous
   // reads inside callbacks; this one re-renders, so the composer can stand
@@ -874,8 +876,8 @@ export function ChatPlane({
               live?.transcript.durableMessages.some((entry) => entry.id === message.id);
             if (projected) dropHeld(sessionId, message.id);
             else if (outcome === "delivered")
-              amendHeldMessage(sessionId, message.id, (held) => ({
-                ...held,
+              amendHeldMessage(sessionId, message.id, (retained) => ({
+                ...retained,
                 deliveryAccepted: true,
               }));
           }
@@ -1006,6 +1008,19 @@ export function ChatPlane({
     () => new Set(messages.map((message) => message.id)),
     [messages],
   );
+  const deliveryFrames = useStore(
+    sessionsStore,
+    (state) => state.sessions[sessionId]?.transcript.frames,
+  );
+  const deliveryEntries = useStableList(
+    React.useMemo(() => [...messageDeliveryLabels(deliveryFrames ?? [])], [deliveryFrames]),
+    (previous, next) => previous[0] === next[0] && previous[1] === next[1],
+  );
+  const deliveryLabels = React.useMemo(() => new Map(deliveryEntries), [deliveryEntries]);
+  const settledMessageIds = React.useMemo(
+    () => new Set([...durableMessageIds].filter((id) => deliveryLabels.get(id) !== "Pending")),
+    [deliveryLabels, durableMessageIds],
+  );
   // Held to its identity, and that is what keeps the composer out of the
   // stream's frame budget. `durableMessageIds` is a fresh Set on every flush of
   // a live turn, so this memo re-runs once per frame and `heldStrip` mints a
@@ -1129,7 +1144,12 @@ export function ChatPlane({
         strip.some((entry) => entry.id === id && entry.commandId !== undefined)
       ) {
         // The host claims the queued identity atomically. Never cancel then resubmit.
-        void steerQueued(id);
+        steeringQueued.current.add(id);
+        setPendingSteerIds(new Set(steeringQueued.current));
+        void steerQueued(id).finally(() => {
+          steeringQueued.current.delete(id);
+          setPendingSteerIds(new Set(steeringQueued.current));
+        });
         return;
       }
       const entry = useChatDraftsStore
@@ -1164,7 +1184,19 @@ export function ChatPlane({
         },
         finish: async (outcome) => {
           if (outcome === "refused") markHeld(sessionId, id, "unsent");
-          else dropHeld(sessionId, id);
+          else {
+            const live = sessionsStore.getState().sessions[sessionId];
+            if (
+              live?.queue.some((message) => message.id === id) ||
+              live?.transcript.durableMessages.some((message) => message.id === id)
+            )
+              dropHeld(sessionId, id);
+            else if (outcome === "delivered")
+              amendHeldMessage(sessionId, id, (message) => ({
+                ...message,
+                deliveryAccepted: true,
+              }));
+          }
           await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         },
       }).finally(() => steeringQueued.current.delete(id));
@@ -1175,10 +1207,10 @@ export function ChatPlane({
   // Only positive host ownership evidence retires a recovery copy. An empty or
   // stale projection is not evidence of acceptance after a transport failure.
   React.useEffect(() => {
-    for (const id of settledHeldIds(held, queue, durableMessageIds)) {
+    for (const id of settledHeldIds(held, queue, settledMessageIds)) {
       if (!queuedMutations.current.has(id)) dropHeld(sessionId, id);
     }
-  }, [dropHeld, durableMessageIds, held, queue, sessionId]);
+  }, [dropHeld, settledMessageIds, held, queue, sessionId]);
 
   // Questions, budget asks and confirmations share the existing composer slot.
   // Secret requests retain their dedicated person-only card.
@@ -1425,13 +1457,13 @@ export function ChatPlane({
    * that has not moved in an hour. Only the live turn can animate, so only the
    * live turn is told about it.
    */
-  const deliveryFrames = useStore(
-    sessionsStore,
-    (state) => state.sessions[sessionId]?.transcript.frames,
-  );
-  const deliveryLabels = React.useMemo(
-    () => messageDeliveryLabels(deliveryFrames ?? []),
-    [deliveryFrames],
+  const steeringMessages = React.useMemo(
+    () =>
+      new Set([
+        ...pendingSteerIds,
+        ...held.filter((message) => message.delivery === "steer").map((message) => message.id),
+      ]),
+    [held, pendingSteerIds],
   );
   const turnContext = React.useMemo<TurnContext>(
     () => ({
@@ -1439,8 +1471,9 @@ export function ChatPlane({
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
       deliveryLabels,
+      steeringMessages,
     }),
-    [deliveryLabels, onOpenFile, onOpenSession, session.openedInteractions],
+    [deliveryLabels, onOpenFile, onOpenSession, session.openedInteractions, steeringMessages],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1474,7 +1507,9 @@ export function ChatPlane({
   // saying so. Stream-owned `turnActive`, rather than the wider Session
   // lifecycle, keeps a transient error from treating incomplete content as
   // settled and an optimistic submit from reopening the previous Turn.
-  const liveTurn = turnActive ? (turns.at(-1) ?? null) : null;
+  const liveTurn = turnActive
+    ? (deliveredRows.findLast((row) => row.kind === "turn")?.messages ?? null)
+    : null;
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
   const dismissBlocker = React.useCallback((dismissKey: string) => {
@@ -1659,7 +1694,9 @@ export function ChatPlane({
               scrolled up, so there is always live text behind it. An empty
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
-                {messages.length > 0 ? (
+                {timelineBlocker ? (
+                  <RuntimeAttentionScrollHint message={timelineBlocker.message} />
+                ) : messages.length > 0 ? (
                   <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
                 ) : null}
               </Conversation>
@@ -1770,6 +1807,7 @@ export function ChatPlane({
               hostReadOnly={!canWrite}
               contextUsage={contextUsage}
               queued={strip}
+              steeringMessages={pendingSteerIds}
               onQueuedChange={onQueuedChange}
               onSteerQueued={onSteerQueued}
               onSubmit={submitComposer}
@@ -2069,6 +2107,7 @@ export interface TurnContext {
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
   deliveryLabels?: ReadonlyMap<string, MessageDeliveryLabel>;
+  steeringMessages?: ReadonlySet<string>;
 }
 
 /**
@@ -2079,6 +2118,24 @@ export interface TurnContext {
  * measured mid-frame both produce exactly that.
  */
 const PINNED_SLACK_PX = 8;
+
+/** Readers in history still learn why the live tail stopped. The explanation
+ * and its single recovery remain in the timeline; this only navigates to it. */
+function RuntimeAttentionScrollHint({ message }: { message: string }) {
+  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
+  if (isAtBottom) return null;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="absolute bottom-[calc(var(--composer-height)+0.75rem)] left-1/2 max-w-[90%] -translate-x-1/2 bg-background/70 shadow-raised backdrop-blur-md"
+      onClick={() => void scrollToBottom()}
+      aria-label={`${message} · Scroll to latest`}
+    >
+      {message} · Scroll to latest
+    </Button>
+  );
+}
 
 /**
  * How far above the top edge the sentinel starts loading the next page.
@@ -2731,12 +2788,16 @@ export const ChatTurn = React.memo(function ChatTurn({
           </div>
         ) : null}
       </MessageContent>
-      {role === "user" ? (
+      {role === "user" && (deliveryLabel !== undefined || context.deliveryLabels?.has(first.id)) ? (
         <span
           data-slot="message-delivery"
           className="self-end text-right text-ui text-muted-foreground"
         >
-          {deliveryLabel ?? context.deliveryLabels?.get(first.id) ?? "Recorded"}
+          {deliveryLabel ??
+            (context.deliveryLabels?.get(first.id) === "Pending" &&
+            context.steeringMessages?.has(first.id)
+              ? "Pending · After the current step"
+              : (context.deliveryLabels?.get(first.id) ?? "Recorded"))}
         </span>
       ) : null}
       {copyableText !== null ? <MessageCopyAction text={copyableText} from={role} /> : null}

@@ -1461,6 +1461,12 @@ describe("heldStrip", () => {
   // A crash between the box emptying and anything accepting the words. The
   // whole point of persisting them is that they come back as their own message
   // rather than welded onto whatever was typed next.
+  it("keeps a legacy queued recovery distinct from unsent", () => {
+    expect(heldStrip([heldMessage("legacy", "waiting", "queued")], [])).toEqual([
+      { id: "legacy", text: "waiting" },
+    ]);
+  });
+
   it("draws a message nothing took, in its own row", () => {
     expect(heldStrip([heldMessage("m1", "ship it", "unsent")], [])).toEqual([
       { id: "m1", text: "ship it", localUnsent: true },
@@ -1705,6 +1711,12 @@ it("keeps context recovery headline beside Anthropic invalid_request_error (revi
   );
   expect(blocker?.message).toBe("Context limit reached");
   expect(blocker?.detail).toBe("prompt is too long");
+});
+
+it("changes the queue row when the host claims it for steering", () => {
+  expect(
+    sameQueuedMessage({ id: "m", text: "one" }, { id: "m", text: "one", afterCurrentStep: true }),
+  ).toBe(false);
 });
 
 it("does not keep a stale queued label when a row becomes unsent", () => {
