@@ -28,55 +28,189 @@ function element(tag: string, attributes: Record<string, string>): HTMLElement {
   return node;
 }
 
+/** jsdom has no layout; supply the same viewport boxes Chromium measures. */
+function setBox(node: Element, x = 100, y = 100, width = 200, height = 100): void {
+  const rect = new DOMRect(x, y, width, height);
+  Object.defineProperty(node, "getBoundingClientRect", { configurable: true, value: () => rect });
+  Object.defineProperty(node, "getClientRects", { configurable: true, value: () => [rect] });
+}
+
+function scene(): { root: HTMLElement; anchor: HTMLElement } {
+  const root = mountAppRoot();
+  const anchor = element("div", { "data-browser-plane": "tab-1" });
+  root.append(anchor);
+  setBox(anchor);
+  return { root, anchor };
+}
+
+function surface(attributes: Record<string, string>, parent: Element = document.body): HTMLElement {
+  const node = element("div", attributes);
+  parent.append(node);
+  setBox(node);
+  return node;
+}
+
+// Each shipped family has its real outer shape represented here, including
+// role-less peeks and Streamdown's role=button link-safety prompt.
+const surfaces: [string, Record<string, string>][] = [
+  ["confirmation", { role: "alertdialog" }],
+  ["dialog / session and subagent peek / image lightbox", { role: "dialog" }],
+  ["command palette scrim", { class: "fixed", style: "position: fixed" }],
+  ["dropdown / context menu", { role: "menu" }],
+  ["select", { role: "listbox" }],
+  ["tooltip", { role: "tooltip" }],
+  [
+    "popover / hover card wrapper",
+    { "data-radix-popper-content-wrapper": "", style: "position: fixed" },
+  ],
+  [
+    "sidebar session / ticket hover peek",
+    { "data-session-peek-card": "", style: "position: fixed" },
+  ],
+  ["toast", { "data-sonner-toast": "" }],
+  [
+    "link safety",
+    {
+      "data-streamdown": "link-safety-modal",
+      role: "button",
+      class: "fixed",
+      style: "position: fixed",
+    },
+  ],
+  ["table fullscreen", { "data-streamdown": "table-fullscreen", role: "dialog" }],
+  ["mermaid fullscreen", { "data-streamdown": "mermaid-fullscreen", role: "dialog" }],
+  ["drag preview", { style: "position: fixed; pointer-events: none" }],
+  ["new role-less portal", { style: "position: absolute" }],
+];
+
 describe("hasNativePlaneOverlay", () => {
-  it("is quiet when only the app root is mounted", () => {
-    mountAppRoot();
-    expect(hasNativePlaneOverlay(document)).toBe(false);
+  it("is quiet with no floating surfaces or only permanent app lists", () => {
+    const { root, anchor } = scene();
+    surface({ role: "listbox" }, root);
+    surface({ role: "menu" }, root);
+    surface({ style: "position: absolute" }, root);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
   });
 
-  it("ignores a permanent listbox INSIDE the app root", () => {
-    // The VC-251 bug: the Ticket Change Set rendered `<ul role="listbox">` for
-    // the life of the panel (it is a plain list since VC-311). Matching it
-    // detached a Browser Tab's plane and never reattached it.
-    const root = mountAppRoot();
-    root.append(element("ul", { role: "listbox", "aria-label": "Change Set" }));
-    expect(hasNativePlaneOverlay(document)).toBe(false);
+  it.each(surfaces)("freezes only for an intersecting %s", (_label, attributes) => {
+    const { anchor } = scene();
+    const overlay = surface(attributes);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
+    setBox(overlay, 400, 300);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+  });
+
+  it("sees fixed and opted-in chrome inside the root, not its layout containers", () => {
+    const { root, anchor } = scene();
+    root.style.position = "fixed";
+    setBox(root, 0, 0, 900, 700);
+    const pixels = surface({ style: "position: absolute" }, anchor);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+    pixels.remove();
+    const fixed = surface({ class: "fixed", style: "position: fixed" }, root);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
+    fixed.remove();
+    surface({ "data-native-plane-overlay": "" }, root);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
   });
 
   it.each([
-    ["dialog", { role: "dialog" }],
-    ["alertdialog", { role: "alertdialog" }],
-    ["menu", { role: "menu" }],
-    ["listbox", { role: "listbox" }],
-    ["toast", { "data-sonner-toast": "" }],
-  ])("sees a portaled %s outside the app root", (_label, attributes) => {
-    mountAppRoot();
-    document.body.append(element("div", attributes));
-    expect(hasNativePlaneOverlay(document)).toBe(true);
+    ["Sonner toast", { "data-sonner-toast": "", style: "position: absolute" }],
+    ["host connection island", { "data-native-plane-overlay": "true", role: "status" }],
+    [
+      "composer picker overlay",
+      { "data-native-plane-overlay": "true", style: "position: absolute" },
+    ],
+    ["split drop zone", { "data-native-plane-overlay": "true" }],
+    ["floating navigation sidebar", { "data-native-plane-overlay": "true" }],
+    ["armed-run countdown", { "data-native-plane-overlay": "true" }],
+  ] satisfies [string, Record<string, string>][])(
+    "measures an in-root %s, not the whole window",
+    (_name, attributes) => {
+      const { root, anchor } = scene();
+      const overlay = surface(attributes, root);
+      expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
+      setBox(overlay, 500, 500);
+      expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+    },
+  );
+
+  it("does not confuse an unpositioned portal container with its small content", () => {
+    const { anchor } = scene();
+    const portal = surface({});
+    const toast = surface({ "data-sonner-toast": "" }, portal);
+    setBox(toast, 500, 500);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
   });
 
-  it("ignores a tooltip, which follows the pointer and is not worth the plane", () => {
-    mountAppRoot();
-    document.body.append(element("div", { role: "tooltip" }));
-    expect(hasNativePlaneOverlay(document)).toBe(false);
+  it("works without an app root", () => {
+    const { root, anchor } = scene();
+    root.removeAttribute("id");
+    surface({ role: "menu" });
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
   });
 
-  it("sees floating chrome inside the app root that opts in by marker", () => {
-    const root = mountAppRoot();
-    root.append(element("div", { "data-native-plane-overlay": "", role: "status" }));
-    expect(hasNativePlaneOverlay(document)).toBe(true);
+  it.each(["display: none", "visibility: hidden", "visibility: collapse"])(
+    "ignores %s",
+    (style) => {
+      const { anchor } = scene();
+      surface({ role: "dialog", style });
+      expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+    },
+  );
+
+  it("ignores undisplayed ancestors, zero area and edge-only contact", () => {
+    const { anchor } = scene();
+    const overlay = surface({ role: "dialog" });
+    Object.defineProperty(overlay, "getClientRects", { configurable: true, value: () => [] });
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+    for (const [x, y, w, h] of [
+      [100, 100, 0, 10],
+      [100, 100, 10, 0],
+      [300, 100, 10, 10],
+      [90, 100, 10, 10],
+      [100, 200, 10, 10],
+      [100, 90, 10, 10],
+    ]) {
+      setBox(overlay, x, y, w, h);
+      expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+    }
   });
 
-  it("treats everything as floating when no app root is mounted", () => {
-    document.body.append(element("div", { role: "menu" }));
-    expect(hasNativePlaneOverlay(document)).toBe(true);
+  it("starts capturing during a transparent entry animation", () => {
+    const { anchor } = scene();
+    surface({ role: "dialog", style: "opacity: 0" });
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
   });
 
-  it("accepts an explicit root, so a caller need not depend on the id", () => {
-    const root = mountAppRoot();
-    root.append(element("div", { role: "menu" }));
-    expect(hasNativePlaneOverlay(document, root)).toBe(false);
-    expect(hasNativePlaneOverlay(document, null)).toBe(true);
+  it("only affects the overlapping pane in a split", () => {
+    const { root, anchor } = scene();
+    const second = surface({ "data-browser-plane": "tab-2" }, root);
+    setBox(second, 500, 100);
+    surface({ role: "tooltip" });
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
+    expect(hasNativePlaneOverlay(document, second)).toBe(false);
+  });
+
+  it("clips planes to the viewport and ignores hidden or collapsed planes", () => {
+    const { anchor } = scene();
+    const overlay = surface({ role: "dialog" });
+    for (const [x, y, w, h] of [
+      [100, 100, 0, 100],
+      [100, 100, 100, 0],
+      [2000, 100, 100, 100],
+      [100, 2000, 100, 100],
+    ]) {
+      setBox(anchor, x, y, w, h);
+      expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+    }
+    setBox(anchor, -100, -100, 200, 200);
+    setBox(overlay, -100, -100, 50, 50);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
+    setBox(overlay, 0, 0, 50, 50);
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(true);
+    anchor.style.visibility = "hidden";
+    expect(hasNativePlaneOverlay(document, anchor)).toBe(false);
   });
 });
 

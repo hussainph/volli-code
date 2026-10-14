@@ -918,6 +918,7 @@ export function ComposerPickerStack({
       {layout === "overlay" ? (
         <div
           data-slot="composer-picker-overlay"
+          data-native-plane-overlay
           className="pointer-events-none absolute inset-x-0 top-10 z-10 min-w-0 max-w-full"
         >
           {card}
