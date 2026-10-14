@@ -664,6 +664,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
         // The host owns cancellation and timeout: promotion withdraws both without killing the child.
         completion = foreground({
           command,
+          shellConfig: shellConfig.value,
           cwd,
           env: Object.fromEntries(
             Object.entries(getShellEnv(this.shellEnv, options?.env, options?.inheritEnv)).filter(

@@ -27,7 +27,7 @@ const text = (result: { content: { type: string; text?: string }[] }) =>
 /** Only the host boundary is substituted here; bytes come from a real piped child. */
 function childExecutor(background = false): ForegroundShellExecutor {
   return async (input) => {
-    const child = spawn("/bin/bash", ["-c", input.command], {
+    const child = spawn(input.shellConfig.shell, [...input.shellConfig.args, input.command], {
       cwd: input.cwd,
       env: input.env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -81,6 +81,7 @@ describe("foreground bash capture", () => {
     expect(runner).toHaveBeenCalledOnce();
     expect(runner.mock.calls[0]![0]).toMatchObject({
       toolCallId: "call",
+      shellConfig: { shell: "/bin/bash", args: ["-c"] },
       cwd,
       env: { VOLLI_SESSION: "session" },
     });

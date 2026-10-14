@@ -3,7 +3,7 @@ import { ACTIVITY_METADATA_KEY, type BackgroundShellState } from "@volli/shared"
 import type { DynamicToolUIPart } from "ai";
 import type { ApiOverrides } from "../fake-api";
 
-import { ToolRow } from "@renderer/components/chat/activity-ui";
+import { ActivityBundle, ToolRow } from "@renderer/components/chat/activity-ui";
 import { RunningBashProvider } from "@renderer/components/chat/running-bash-control";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 
@@ -11,6 +11,7 @@ export const title = "Running bash · move to background";
 export const note = "Real tool rows: running, moved, at capacity, unsupported and nested.";
 const BEFORE = "00000000-0000-4000-8000-000000000001";
 const CAP = "00000000-0000-4000-8000-000000000002";
+const COLLAPSED = "00000000-0000-4000-8000-000000000003";
 
 function shell(shellId: string, sessionId: string): BackgroundShellState {
   return {
@@ -56,7 +57,14 @@ function bash(id: string, running: boolean, supported: boolean): DynamicToolUIPa
       content: [
         {
           type: "text",
-          text: running ? "Vite ready on localhost:5300" : "Moved to background: moved-shell",
+          text: running
+            ? "Vite ready on localhost:5300"
+            : [
+                "Moved command to background shell moved-shell.",
+                "It keeps running. A notice will arrive when it exits; use shell_output to read it or shell_kill to end it.",
+                "Output so far:",
+                "Vite ready on localhost:5300",
+              ].join("\n"),
         },
       ],
       details: supported ? { backgroundable: true } : {},
@@ -90,20 +98,41 @@ export default function RunningBashScratch() {
           part: bash("cap", true, true),
         },
         {
+          label: "Old frozen Session · no background-shell support",
+          sessionId: BEFORE,
+          part: bash("frozen", true, false),
+        },
+        {
           label: "Unsupported foreground path",
           sessionId: BEFORE,
           part: bash("unsupported", true, false),
         },
         {
-          label: "Nested Code Mode shell · no top-level control",
+          label: "Nested Code Mode shell · visible unsupported reason",
           sessionId: BEFORE,
           part: bash("program/nested/bash", true, false),
+        },
+        {
+          label: "Collapsed activity · focus composer and press Ctrl+Shift+B",
+          sessionId: COLLAPSED,
+          part: bash("collapsed", !moved, !moved),
         },
       ].map(({ label, sessionId, part }) => (
         <section key={part.toolCallId} className="space-y-2">
           <h2 className="text-label text-muted-foreground">{label}</h2>
           <RunningBashProvider sessionId={sessionId} active>
-            <ToolRow part={part} />
+            {part.toolCallId === "collapsed" ? (
+              <>
+                <ActivityBundle rows={[{ kind: "tool", key: part.toolCallId, part }]} />
+                <textarea
+                  aria-label="Composer"
+                  placeholder="Focus here for Ctrl+Shift+B"
+                  className="w-full bg-background text-ui text-foreground"
+                />
+              </>
+            ) : (
+              <ToolRow part={part} />
+            )}
           </RunningBashProvider>
         </section>
       ))}

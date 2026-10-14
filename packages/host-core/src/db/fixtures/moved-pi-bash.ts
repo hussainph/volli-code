@@ -125,7 +125,13 @@ export async function movedPiBash(input: {
           foregroundExecutor: (call) =>
             shells.runForeground(
               { sessionId, attachmentId: identity.attachmentId, projectId, ticketId },
-              { command: call.command, cwd: call.cwd, env: call.env, title: null },
+              {
+                command: call.command,
+                shellConfig: call.shellConfig,
+                cwd: call.cwd,
+                env: call.env,
+                title: null,
+              },
               {
                 toolCallId: call.toolCallId,
                 timeout: call.timeout,

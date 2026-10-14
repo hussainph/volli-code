@@ -10,6 +10,8 @@
     - /url: "#host-add-live"
   - link "App shell":
     - /url: "#app-shell"
+  - link "Ask user · one or three questions":
+    - /url: "#ask-user-multi"
   - link "Automation · studio":
     - /url: "#automation-studio"
   - link "Automation · trigger":
@@ -96,6 +98,7 @@
   - button "Show details"
   - button "Copy":
     - img
+  - text: Moved to background
   - heading "At capacity · 4 running background shells" [level=2]
   - text: Ran
   - code: pnpm dev --host localhost
@@ -103,15 +106,32 @@
   - button "Copy":
     - img
   - button "Move to background" [disabled]
+  - paragraph: This Session already has 4 running background shells. Stop one first.
+  - heading "Old frozen Session · no background-shell support" [level=2]
+  - text: Ran
+  - code: pnpm dev --host localhost
+  - button "Show details"
+  - button "Copy":
+    - img
+  - button "Move to background" [disabled]
+  - paragraph: This command can’t move to the background. Nested commands and Sessions without background-shell support aren’t supported.
   - heading "Unsupported foreground path" [level=2]
   - text: Ran
   - code: pnpm dev --host localhost
   - button "Show details"
   - button "Copy":
     - img
-  - heading "Nested Code Mode shell · no top-level control" [level=2]
+  - button "Move to background" [disabled]
+  - paragraph: This command can’t move to the background. Nested commands and Sessions without background-shell support aren’t supported.
+  - heading "Nested Code Mode shell · visible unsupported reason" [level=2]
   - text: Ran
   - code: pnpm dev --host localhost
   - button "Show details"
   - button "Copy":
     - img
+  - button "Move to background" [disabled]
+  - paragraph: This command can’t move to the background. Nested commands and Sessions without background-shell support aren’t supported.
+  - heading "Collapsed activity · focus composer and press Ctrl+Shift+B" [level=2]
+  - button "Running 1 command…"
+  - textbox "Composer":
+    - /placeholder: Focus here for Ctrl+Shift+B

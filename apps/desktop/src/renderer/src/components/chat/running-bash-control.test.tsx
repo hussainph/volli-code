@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
-import { ToolRow } from "./activity-ui";
+import { ActivityBundle, ToolRow } from "./activity-ui";
 import { RunningBashControl, RunningBashProvider } from "./running-bash-control";
 
 const fixture = vi.hoisted(() => ({ move: vi.fn(), remote: vi.fn(), toast: vi.fn() }));
@@ -60,7 +60,7 @@ async function mount(next = part, active = true, provider = true) {
           <ToolRow part={next} />
         </RunningBashProvider>
       ) : (
-        <RunningBashControl part={next} />
+        <ToolRow part={next} />
       ),
     ),
   );
@@ -108,6 +108,8 @@ describe("running bash control", () => {
     expect(fixture.move).toHaveBeenCalledWith({ sessionId: SESSION, toolCallId: "bash-1" });
     expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
     expect(button()).toBeUndefined();
+    await mount({ ...part, toolCallId: "next-bash" });
+    expect(button()?.disabled).toBe(false);
   });
   it("offers Ctrl+Shift+B inside the focused Session, and ignores other chords", async () => {
     await mount();
@@ -159,6 +161,88 @@ describe("running bash control", () => {
     await act(async () => composer.dispatchEvent(shortcut()));
     expect(fixture.move).toHaveBeenCalledOnce();
     outside.remove();
+  });
+  it("registers through a real collapsed ActivityBundle and retains pending/moved state across disclosure", async () => {
+    const pending = Promise.withResolvers<{ shellId: string }>();
+    fixture.move.mockReturnValue(pending.promise);
+    await act(async () =>
+      root.render(
+        <RunningBashProvider sessionId={SESSION} active>
+          <ActivityBundle rows={[{ kind: "tool", key: part.toolCallId, part }]} />
+          <textarea aria-label="Composer" />
+        </RunningBashProvider>,
+      ),
+    );
+    const disclosure = container.querySelector<HTMLButtonElement>("[aria-expanded]")!;
+    const composer = container.querySelector("textarea")!;
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(button()).toBeUndefined();
+    composer.focus();
+    await act(async () => composer.dispatchEvent(shortcut()));
+    expect(fixture.move).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SESSION,
+      toolCallId: "bash-1",
+    });
+    await act(async () => disclosure.click());
+    expect(container.textContent).toContain("Moving…");
+    await act(async () => {
+      disclosure.click();
+      composer.dispatchEvent(shortcut());
+    });
+    expect(fixture.move).toHaveBeenCalledTimes(1);
+    await act(async () => pending.resolve({ shellId: "shell-1" }));
+    await act(async () => {
+      disclosure.click();
+      composer.dispatchEvent(shortcut());
+    });
+    expect(button()).toBeUndefined();
+    expect(fixture.move).toHaveBeenCalledTimes(1);
+  });
+  it("does not register remote, capped or unsupported calls in collapsed bundles", async () => {
+    for (const mode of ["remote", "capped", "unsupported"] as const) {
+      fixture.remote.mockReturnValue(mode === "remote" ? "box" : null);
+      await act(async () =>
+        useBackgroundShellsStore
+          .getState()
+          .receiveAll(mode === "capped" ? [1, 2, 3, 4].map((id) => shell(String(id))) : []),
+      );
+      const next = mode === "unsupported" ? { ...part, output: { content: [] } } : part;
+      await act(async () =>
+        root.render(
+          <RunningBashProvider sessionId={SESSION} active>
+            <ActivityBundle rows={[{ kind: "tool", key: next.toolCallId, part: next }]} />
+            <textarea />
+          </RunningBashProvider>,
+        ),
+      );
+      await act(async () => container.querySelector("textarea")?.dispatchEvent(shortcut()));
+      expect(fixture.move).not.toHaveBeenCalled();
+    }
+  });
+  it("opening a bundle never registers a duplicate or changes which newest call wins", async () => {
+    const newest = { ...part, toolCallId: "bash-2" };
+    await act(async () =>
+      root.render(
+        <RunningBashProvider sessionId={SESSION} active>
+          <ActivityBundle
+            rows={[part, newest].map((next) => ({
+              kind: "tool",
+              key: next.toolCallId,
+              part: next,
+            }))}
+          />
+          <textarea />
+        </RunningBashProvider>,
+      ),
+    );
+    const disclosure = container.querySelector<HTMLButtonElement>("[aria-expanded]")!;
+    await act(async () => disclosure.click());
+    await act(async () => disclosure.click());
+    await act(async () => container.querySelector("textarea")?.dispatchEvent(shortcut()));
+    expect(fixture.move).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SESSION,
+      toolCallId: "bash-2",
+    });
   });
   it("counts running shells of this Session only and recovers after one stops", async () => {
     useBackgroundShellsStore
@@ -213,11 +297,33 @@ describe("running bash control", () => {
     await act(async () => button()?.click());
     expect(fixture.toast).toHaveBeenCalledWith("Couldn’t move command to the background.");
   });
-  it("hides settled, pending, nested/unsupported, unaddressed and inactive rows", async () => {
+  it("explains unaddressed and inactive running calls", async () => {
     await mount(part, true, false);
-    expect(button()).toBeUndefined();
+    expect(button()?.disabled).toBe(true);
+    expect(container.textContent).toContain("isn’t attached to a Session");
     await mount(part, false);
-    expect(button()).toBeUndefined();
+    expect(button()?.disabled).toBe(true);
+    expect(container.textContent).toContain("Activate this Session");
+  });
+  it("explains unsupported, nested and old frozen running calls without enabling a move", async () => {
+    for (const output of [
+      null,
+      { details: null },
+      { details: {} },
+      { details: { backgroundable: false } },
+      { content: [] },
+    ]) {
+      await mount({ ...part, toolCallId: "program/nested/bash", output });
+      expect(button()?.disabled).toBe(true);
+      expect(container.textContent).toContain(
+        "Nested commands and Sessions without background-shell support aren’t supported.",
+      );
+      expect(button()?.getAttribute("aria-description")).toContain("can’t move");
+      await act(async () => button()?.parentElement?.dispatchEvent(shortcut()));
+    }
+    expect(fixture.move).not.toHaveBeenCalled();
+  });
+  it("hides settled, pending and non-bash rows", async () => {
     const cases: DynamicToolUIPart[] = [
       { ...part, preliminary: false },
       {
@@ -227,12 +333,6 @@ describe("running bash control", () => {
         state: "input-available",
         input: {},
       },
-      { ...part, output: null },
-      { ...part, output: { details: null } },
-      { ...part, output: { details: {} } },
-      { ...part, output: { details: { backgroundable: false } } },
-      // Code Mode's nested shell has no supported foreground-host hint.
-      { ...part, toolCallId: "program/nested/bash", output: { content: [] } },
       { ...part, toolMetadata: undefined },
     ];
     for (const next of cases) {

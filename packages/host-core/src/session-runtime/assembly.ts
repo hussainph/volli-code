@@ -294,6 +294,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                           },
                           {
                             command: input.command,
+                            shellConfig: input.shellConfig,
                             cwd: input.cwd,
                             env: input.env,
                             title: null,

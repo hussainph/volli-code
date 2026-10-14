@@ -321,6 +321,8 @@ export interface ShellExecResult extends ShellOutputMetadata {
 /** Host-owned foreground execution, using the normal background-shell lifecycle on handoff. */
 export type ForegroundShellExecutor = (input: {
   command: string;
+  /** Resolved by the execution environment, including PATH/sh fallback and command transport. */
+  shellConfig: { shell: string; args: string[]; commandTransport?: "argv" | "stdin" };
   cwd: string;
   env: Record<string, string>;
   toolCallId: string;

@@ -1,14 +1,18 @@
 {
   "route": "http://localhost:5337/lab/#running-bash",
-  "viewport": "1440x1000",
+  "viewport": "1440x1400",
+  "scope": "Browser-only real renderer components with fixture RPC/store. No real process, host receipt, or desktop proof.",
   "checks": [
-    "Running control enabled; capacity control disabled with matching aria-description and native title: This Session already has 4 running background shells. Stop one first.",
-    "Unsupported foreground path: Move to background absent",
-    "Nested Code Mode shell · no top-level control: Move to background absent",
-    "Clicked real running-row Move to background button; heading becomes Moved · turn continues; its move control disappears; capacity remains disabled",
-    "Expanded settled ToolRow; visible receipt: Moved to background: moved-shell"
+    "At capacity · 4 running background shells: disabled action and persistent visible reason, matching aria-description/title",
+    "Old frozen Session · no background-shell support: disabled action and persistent visible reason, matching aria-description/title",
+    "Unsupported foreground path: disabled action and persistent visible reason, matching aria-description/title",
+    "Nested Code Mode shell · visible unsupported reason: disabled action and persistent visible reason, matching aria-description/title",
+    "Settled ToolRow has visible Moved to background marker while details remain collapsed",
+    "Composer Ctrl+Shift+B changes genuine collapsed ActivityBundle from Running 1 command… to Ran 1 command; bundle never opened; fixture moves and standalone collapsed ToolRow displays marker",
+    "Opening settled ActivityBundle reveals a still-collapsed ToolRow with visible Moved to background marker",
+    "Expanding ToolRow displays fixture receipt: Moved command to background shell moved-shell.",
+    "Fresh-page direct Move to background click also settles the collapsed ToolRow with its visible marker"
   ],
-  "movedSectionBeforeExpand": "Moved · turn continues\nRan\npnpm dev --host localhost",
   "consoleErrors": [
     {
       "type": "error",

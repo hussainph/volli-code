@@ -243,6 +243,7 @@ describe("runtime attachment assembly", () => {
         expect(
           await executor!({
             command: "printf assembly-wired",
+            shellConfig: { shell: "/bin/sh", args: ["-c"] },
             cwd: root,
             env: {},
             toolCallId: "foreground-call",
@@ -261,7 +262,12 @@ describe("runtime attachment assembly", () => {
             projectId: "project",
             ticketId: null,
           },
-          expect.objectContaining({ command: "printf assembly-wired", cwd: root, env: {} }),
+          expect.objectContaining({
+            command: "printf assembly-wired",
+            shellConfig: { shell: "/bin/sh", args: ["-c"] },
+            cwd: root,
+            env: {},
+          }),
           expect.objectContaining({ toolCallId: "foreground-call", timeout: 1, signal }),
         );
       } finally {

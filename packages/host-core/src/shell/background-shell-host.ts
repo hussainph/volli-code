@@ -9,8 +9,9 @@
  * move clears the bash deadline and cancellation binding, answers the call
  * with a tail and id, and keeps the original process and spawn-ledger row.
  *
- * WHAT A SHELL IS. `/bin/bash -c <command>`, spawned detached in its own
- * process group with stdout and stderr piped and stdin closed, through the
+ * WHAT A SHELL IS. `/bin/bash -c <command>` for shell_start; foreground calls
+ * use the executor's resolved shell and command transport. Spawned detached
+ * in its own process group with stdout and stderr piped, through the
  * environment the caller built — the port hands in the same record the
  * `execute` tool's child gets, and this module never reads `process.env`. No
  * PTY: a shell a person types into is the terminal, and a read-only tail does
@@ -157,6 +158,8 @@ export interface BackgroundShellStartInput {
   title: string | null;
   /** The whole environment the child gets; nothing is added here. */
   env: Record<string, string>;
+  /** Foreground executor's resolved shell; shell_start retains its bash default. */
+  shellConfig?: { shell: string; args: string[]; commandTransport?: "argv" | "stdin" };
   /**
    * Tell the Session the first time this appears in a line of output (VC-495).
    * Judged before anything is spawned: a pattern the host will not run is a
@@ -456,12 +459,24 @@ export class BackgroundShellHost {
       notifyTest = compiled.test;
     }
     const shellId = this.createId();
-    const child = spawn("/bin/bash", ["-c", input.command], {
-      cwd: input.cwd,
-      env: input.env,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const config = input.shellConfig ?? { shell: "/bin/bash", args: ["-c"] };
+    const commandFromStdin = config.commandTransport === "stdin";
+    const child = spawn(
+      config.shell,
+      commandFromStdin ? config.args : [...config.args, input.command],
+      {
+        cwd: input.cwd,
+        env: input.env,
+        detached: true,
+        stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
+      },
+    );
+    if (commandFromStdin) {
+      // A shell can exit before consuming its script. Match the executor's
+      // transport: close stdin at EOF and let child exit report that outcome.
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(input.command);
+    }
     const pid = child.pid;
     if (pid === undefined) {
       // Node reports a failed spawn as an `error` event with no pid; the

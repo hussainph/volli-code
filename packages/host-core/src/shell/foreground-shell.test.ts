@@ -123,6 +123,73 @@ afterEach(async () => {
 });
 
 describe("foreground shell lifecycle", () => {
+  it.each(["argv", "stdin"] as const)(
+    "executes the resolved sh executable and arguments using %s transport",
+    async (commandTransport) => {
+      const { host, input, pids, exits } = harness();
+      const args = ["-u", commandTransport === "stdin" ? "-s" : "-c"];
+      await expect(
+        host.runForeground(
+          owner,
+          {
+            ...input('case $- in *u*) echo nounset;; esac; echo "$0"; echo final; exit 7'),
+            shellConfig: { shell: "/bin/sh", args, commandTransport },
+          },
+          { toolCallId: "call-1", signal: new AbortController().signal },
+        ),
+      ).resolves.toEqual({ output: "nounset\n/bin/sh\nfinal\n", code: 7, signal: null });
+      expect(args).toEqual(["-u", commandTransport === "stdin" ? "-s" : "-c"]);
+      expect(pids).toHaveLength(1);
+      expect(exits).toEqual(["row-1"]);
+    },
+  );
+
+  it.each(["argv", "stdin"] as const)(
+    "keeps the same resolved sh process after promotion with %s transport",
+    async (commandTransport) => {
+      const { host, input, pids, notices, exits } = harness();
+      let output = "";
+      const running = host.runForeground(
+        owner,
+        {
+          ...input('echo "before:$0:$$"; sleep 0.2; echo "after:$0:$$"'),
+          shellConfig: {
+            shell: "/bin/sh",
+            args: ["-u", commandTransport === "stdin" ? "-s" : "-c"],
+            commandTransport,
+          },
+        },
+        {
+          toolCallId: "call-1",
+          signal: new AbortController().signal,
+          onOutput: (text) => {
+            output = text;
+          },
+        },
+      );
+      await until(() => output.includes("before:"));
+      const moved = host.moveForeground(owner.sessionId, "call-1");
+      await expect(running).resolves.toMatchObject({
+        output: `before:/bin/sh:${pids[0]}\n`,
+        background: moved,
+      });
+      await until(() => notices.length === 1);
+      expect(pids).toHaveLength(1);
+      expect(host.tailOf(moved.shellId)?.output).toBe(
+        `before:/bin/sh:${pids[0]}\nafter:/bin/sh:${pids[0]}\n`,
+      );
+      expect(exits).toEqual(["row-1"]);
+    },
+  );
+
+  it("keeps shell_start on bash with no resolved configuration", async () => {
+    const { host, input } = harness();
+    const started = await host.start(owner, input('echo "$BASH_VERSION"'));
+    await until(() => host.read(owner, started.shell.shellId).shell.state === "exited");
+    expect(host.read(owner, started.shell.shellId).shell).toMatchObject({ code: 0 });
+    expect(host.tailOf(started.shell.shellId)?.output).toMatch(/^\d+\.\d+/);
+  });
+
   it("runs through the shared ledger privately, retaining stdout and stderr through normal exit", async () => {
     const { host, run, states, notices, pids, exits } = harness();
     const running = run("echo before; sleep 0.1; echo after >&2; exit 7");
