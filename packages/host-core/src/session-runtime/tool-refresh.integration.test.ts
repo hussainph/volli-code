@@ -47,7 +47,7 @@ afterEach(async () => {
   db?.cleanup();
 });
 
-async function fixture(birth: Surface, initial: Surface) {
+async function fixture(birth: Surface, initial: Surface, supportsMidConvoSystemMessages?: boolean) {
   db = openTestDb();
   const root = dirname(db.dbPath);
   const workspace = join(root, "workspace");
@@ -55,6 +55,11 @@ async function fixture(birth: Surface, initial: Surface) {
   insertProject(db.db, testProject({ id: "project-refresh", path: workspace }));
   const replies: ScriptedReply[] = [];
   const script = scriptedOpusProvider(replies);
+  if (supportsMidConvoSystemMessages !== undefined) {
+    Object.assign(script.models.getModel(MODEL.providerId, MODEL.modelId)!, {
+      compat: { supportsMidConvoSystemMessages },
+    });
+  }
   const engine = createSessionEngine({
     ledger: createSqliteSessionLedger(db.db),
     clock: { now: () => clock++ },
@@ -321,70 +326,98 @@ describe("Session tool refresh through Pi", { timeout: 20_000 }, () => {
     ).toHaveLength(1);
   });
 
-  it("adds a selected deferred MCP tool warm, discovers and calls it in the next program, announces once and leaves the prefix unchanged", async () => {
-    const modern = { ...legacy, codeMode: { ...legacy.codeMode!, descriptionVersion: 2 as const } };
-    const f = await fixture(modern, modern);
-    f.replies.push({ text: "First" });
-    await f.turn();
-    const firstHead = JSON.stringify(f.script.requests[0]?.[0]);
-    f.select({
-      ...modern,
-      tools: [...modern.tools, tool.providerName],
-      mcpTools: [tool],
-      codeMode: {
-        ...modern.codeMode,
-        routes: { ...modern.codeMode.routes, [tool.providerName]: "deferred" },
-      },
-    });
-    f.replies.push(
-      {
-        tool: {
-          name: "codemode",
-          args: {
-            code: 'const found = await searchTools("lookup"); text(found); text(await tools.mcp__paper__lookup__12345678({}));',
+  it.each([true, false])(
+    "adds and calls a deferred MCP tool warm, announces once when compatible (mid-conversation system support=%s)",
+    async (supportsMidConvoSystemMessages) => {
+      const modern = {
+        ...legacy,
+        codeMode: { ...legacy.codeMode!, descriptionVersion: 2 as const },
+      };
+      const f = await fixture(modern, modern, supportsMidConvoSystemMessages);
+      f.replies.push({ text: "First" });
+      await f.turn();
+      const firstHead = JSON.stringify(f.script.requests[0]?.[0]);
+      f.select({
+        ...modern,
+        tools: [...modern.tools, tool.providerName],
+        mcpTools: [tool],
+        codeMode: {
+          ...modern.codeMode,
+          routes: { ...modern.codeMode.routes, [tool.providerName]: "deferred" },
+        },
+      });
+      f.replies.push(
+        {
+          tool: {
+            name: "codemode",
+            args: {
+              code: 'const found = await searchTools("lookup"); text(found); text(await tools.mcp__paper__lookup__12345678({}));',
+            },
           },
         },
-      },
-      { text: "Second" },
-    );
-    await f.turn();
-    expect(f.called).toEqual(["lookup"]);
-    expect(JSON.stringify(f.script.requests[1]?.[0])).toBe(firstHead);
-    const notices = f.script.requests[2]?.filter(
-      (message) =>
-        message.role === "system" &&
-        JSON.stringify(message).includes("Tools added through Code Mode"),
-    );
-    expect(notices).toHaveLength(1);
-    const events = await f.engine.listEvents({ sessionId: f.sessionId });
-    expect(events.filter((event) => event.payload.kind === "session.tools.refreshed")).toHaveLength(
-      1,
-    );
-    expect(effectiveToolSurface(events)?.tools).toContain(tool.providerName);
-    await f.reattach();
-    f.replies.push({ text: "Warm after reattach" });
-    await f.turn();
-    expect(JSON.stringify(f.script.requests[3]?.[0])).toBe(firstHead);
-    expect(
-      (await f.engine.listEvents({ sessionId: f.sessionId })).filter(
+        { text: "Second" },
+      );
+      await f.turn();
+      expect(f.called).toEqual(["lookup"]);
+      expect(JSON.stringify(f.script.requests[1]?.[0])).toBe(firstHead);
+      const notices = f.script.requests[2]?.filter(
+        (message) =>
+          message.role === "system" &&
+          JSON.stringify(message).includes("Tools added through Code Mode"),
+      );
+      expect(notices).toHaveLength(supportsMidConvoSystemMessages ? 1 : 0);
+      expect(
+        f.script.requests[2]?.filter((message) =>
+          JSON.stringify(message).includes("volliToolRefreshId"),
+        ),
+      ).toHaveLength(supportsMidConvoSystemMessages ? 1 : 0);
+      const events = await f.engine.listEvents({ sessionId: f.sessionId });
+      expect(
+        events.filter((event) => event.payload.kind === "session.tools.refreshed"),
+      ).toHaveLength(1);
+      expect(effectiveToolSurface(events)?.tools).toContain(tool.providerName);
+      await f.reattach();
+      f.replies.push({ text: "Warm after reattach" });
+      await f.turn();
+      expect(JSON.stringify(f.script.requests[3]?.[0])).toBe(firstHead);
+      expect(
+        f.script.requests[3]?.filter((message) =>
+          JSON.stringify(message).includes("volliToolRefreshId"),
+        ),
+      ).toHaveLength(supportsMidConvoSystemMessages ? 1 : 0);
+      expect(
+        (await f.engine.listEvents({ sessionId: f.sessionId })).filter(
+          (event) => event.payload.kind === "session.tools.refreshed",
+        ),
+      ).toHaveLength(1);
+      f.advance(60 * 60_000 + 1);
+      f.replies.push({ text: "Cold publishes the deferred namespace" });
+      await f.turn();
+      expect(JSON.stringify(f.script.requests[4]?.[0])).not.toBe(firstHead);
+      expect(JSON.stringify(f.script.requests[4]?.[0])).toContain("mcp:paper");
+      expect(
+        f.script.requests[4]?.filter(
+          (message) =>
+            message.role === "system" &&
+            JSON.stringify(message).includes("Tools added through Code Mode"),
+        ),
+      ).toHaveLength(1);
+      expect(
+        f.script.requests[4]?.filter((message) =>
+          JSON.stringify(message).includes("volliToolRefreshId"),
+        ),
+      ).toHaveLength(1);
+      const published = (await f.engine.listEvents({ sessionId: f.sessionId })).filter(
         (event) => event.payload.kind === "session.tools.refreshed",
-      ),
-    ).toHaveLength(1);
-    f.advance(60 * 60_000 + 1);
-    f.replies.push({ text: "Cold publishes the deferred namespace" });
-    await f.turn();
-    expect(JSON.stringify(f.script.requests[4]?.[0])).not.toBe(firstHead);
-    expect(JSON.stringify(f.script.requests[4]?.[0])).toContain("mcp:paper");
-    const published = (await f.engine.listEvents({ sessionId: f.sessionId })).filter(
-      (event) => event.payload.kind === "session.tools.refreshed",
-    );
-    expect(published).toHaveLength(2);
-    expect(published[1]?.payload).toMatchObject({
-      trigger: "cold-turn",
-      added: [],
-      changed: ["codemode"],
-    });
-    await runtime.close();
-    expect(f.disposed()).toBe(2);
-  });
+      );
+      expect(published).toHaveLength(2);
+      expect(published[1]?.payload).toMatchObject({
+        trigger: "cold-turn",
+        added: [],
+        changed: ["codemode"],
+      });
+      await runtime.close();
+      expect(f.disposed()).toBe(2);
+    },
+  );
 });
