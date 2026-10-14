@@ -28,5 +28,6 @@ See `n1-fixround.md` for the older-checkout evidence and `screenshots.md` for re
 - Opening acceptance is delivery proof, not proof of completion. Working continues while Pi's actual turn is open.
 - No uncertain message is automatically resent. The N−1 idempotency check retries the same accepted command identity.
 - PR #865 remains unmerged for owner review.
+- A second-opinion review found a false-delivered result under concurrent direct Pi-attachment calls, but its alleged client/host overlap did not reproduce: the real host admission tail holds Retry until the queued message opens durably, then rejects Retry as busy. `opened-race.test.ts` pins that real-host serialization; `opened-race.md` records both experiments and the bounded direct-attachment concurrency follow-up. No speculative production runtime fix or supervisor-steering redesign is included.
 
 Exact local commands/results are in `validation.md`; exact verified head and CI/CodeQL links are posted on PR #865 and VC-758 at handoff.

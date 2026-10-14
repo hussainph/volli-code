@@ -107,10 +107,8 @@ interface HostFixture {
 }
 async function realFixture(provider: ReturnType<typeof gatedProvider>): Promise<HostFixture> {
   const path = decodeURIComponent(
-    new URL(
-      "../../../../../../../packages/host-core/src/session-runtime/silent-ends.test-support.ts",
-      import.meta.url,
-    ).pathname,
+    new URL("../../../../../../../packages/host-core/src/testing/silent-ends.ts", import.meta.url)
+      .pathname,
   );
   const module: {
     silentEndsFixture(options: { provider: typeof provider }): Promise<HostFixture>;

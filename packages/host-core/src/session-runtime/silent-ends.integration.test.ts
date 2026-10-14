@@ -9,7 +9,7 @@ import { gatedProvider } from "../../../agent-runtime/test-fixtures/gated-provid
 import { createSessionEngine, isSessionStreamQueue } from "@volli/session-engine";
 import type { SessionEvent } from "@volli/shared";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { silentEndsFixture } from "./silent-ends.test-support";
+import { silentEndsFixture } from "../testing/silent-ends";
 
 const releases: Array<() => void> = [];
 const fixtures: Awaited<ReturnType<typeof silentEndsFixture>>[] = [];

@@ -1102,10 +1102,8 @@ describe("a chat plane holding a long transcript", () => {
     // Keep Node/SQLite composition outside the browser type graph. Host-core
     // typechecks this test-only helper; the real module is loaded at test time.
     const path = decodeURIComponent(
-      new URL(
-        "../../../../../../../packages/host-core/src/session-runtime/silent-ends.test-support.ts",
-        import.meta.url,
-      ).pathname,
+      new URL("../../../../../../../packages/host-core/src/testing/silent-ends.ts", import.meta.url)
+        .pathname,
     );
     const module: {
       silentEndsFixture(options: { provider: typeof provider }): Promise<{

@@ -15,12 +15,12 @@ import {
 } from "../../../agent-runtime/test-fixtures/scripted-provider";
 import { insertProject } from "../db/projects-repo";
 import { createAgentCommandService } from "../agent-commands";
-import { testHostHandlers } from "../testing/host-handlers";
+import { testHostHandlers } from "./host-handlers";
 import { openTestDb, testProject } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
-import { createPiNativeAdapter, type PiAdapterOptions } from "./pi-adapter";
-import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
+import { createPiNativeAdapter, type PiAdapterOptions } from "../session-runtime/pi-adapter";
+import { createFileTranscriptArtifactStore } from "../session-runtime/transcript-artifacts";
 
 export async function silentEndsFixture(
   options: {
