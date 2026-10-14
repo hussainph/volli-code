@@ -27,6 +27,7 @@ import {
   snapshotSubtree,
   projectCreationOutcome,
   acceptanceHostAddState,
+  acceptanceWorkspaceReady,
 } from "./remote-acceptance.mjs";
 
 const exec = promisify(execFile);
@@ -485,14 +486,81 @@ test("missing guard fields, keychain violations, leftovers and remote cleanup er
         /manifest failed/u,
       );
 });
-test("an unchanged host chip is not writable readiness after a daemon restart", () => {
-  const outage =
-    '- button "Host: volli-acceptance" [ref=e1]\n- button "New ticket" [disabled]\n- generic: Reconnecting to volli-acceptance';
-  assert.equal(hasActionableControl(outage, "button", "New ticket"), false);
-  assert.equal(
-    hasActionableControl(outage.replace("[disabled]", "[ref=e2]"), "button", "New ticket"),
-    true,
+const workspaceSnapshot = (status) => ({
+  v: 1,
+  hosts: [{ id: "host", name: REMOTE_HOST, reachability: { state: { status: "ready" } } }],
+  projects: { project: { hostId: "host", link: { status } } },
+  readOnly: null,
+});
+
+test("enabled New ticket during reconnect grace is not Workspace readiness (both CI failures)", () => {
+  // Both gen117 artifacts: the enabled control coexists with Reconnecting.
+  // gen120/121 then retain the correctly typed title, but Create is Read-only.
+  const grace =
+    '- button "Host: volli-acceptance" [ref=e1]\n- button "New ticket" [ref=e2]\n- generic: Reconnecting to volli-acceptance';
+  assert.equal(hasActionableControl(grace, "button", "New ticket"), true);
+  for (const status of ["connecting", "unreachable", "refused", "fenced", "closed"])
+    assert.equal(acceptanceWorkspaceReady(workspaceSnapshot(status)), false, status);
+  assert.equal(acceptanceWorkspaceReady(workspaceSnapshot("ready")), true);
+  const ready = workspaceSnapshot("ready");
+  for (const snapshot of [
+    { ...ready, hosts: [] },
+    { ...ready, hosts: [...ready.hosts, ...ready.hosts] },
+    { ...ready, hosts: [{ id: "host", name: "Other host" }] },
+    { ...ready, projects: {} },
+    { ...ready, projects: { project: { hostId: "other", link: { status: "ready" } } } },
+    { ...ready, projects: { ...ready.projects, second: ready.projects.project } },
+    { ...ready, readOnly: "Cannot read the host registry" },
+  ])
+    assert.equal(acceptanceWorkspaceReady(snapshot), false);
+});
+
+test("step 3 waits for the real Workspace rejoin before clicking the grace-enabled control", async () => {
+  const smoke = read("../remote-acceptance-smoke.mjs");
+  const start = smoke.indexOf('await step(3, "Create/move ticket:');
+  const body = smoke.slice(
+    smoke.indexOf('    await click("button", "Home");', start),
+    smoke.indexOf('    await type("Ticket title", TITLE);', start),
   );
+  const statuses = ["unreachable", "connecting", "ready"];
+  let reads = 0;
+  let clicks = 0;
+  const run = new Function(
+    "tools",
+    `const { click, call, snap, waitUntil, hasActionableControl } = tools;
+     return (async () => { ${body} })();`,
+  );
+  await run({
+    click: async (_role, name) => {
+      if (name === "New ticket") {
+        assert.equal(reads, 3, "a grace-enabled button must not be mistaken for rejoin");
+        clicks++;
+      }
+    },
+    call: async (cmd) => {
+      assert.equal(cmd, "acceptance-workspace");
+      return {
+        ready: acceptanceWorkspaceReady(workspaceSnapshot(statuses[reads++])),
+      };
+    },
+    snap: async () => ({ text: '- button "New ticket" [ref=e2]' }),
+    waitUntil: async (_label, check, options) => {
+      assert.deepEqual(options, { timeout: 10_000, interval: 100 });
+      for (let i = 0; i < 3; i++) if (await check()) return;
+      assert.fail("Workspace never became ready");
+    },
+    hasActionableControl,
+  });
+  assert.equal(clicks, 1);
+  const supervisor = read("../supervisor.mjs");
+  const observer = supervisor.slice(
+    supervisor.indexOf('case "acceptance-workspace":'),
+    supervisor.indexOf('case "native-quit":'),
+  );
+  assert.match(observer, /if \(!remoteFixture\) throw/u);
+  assert.match(observer, /path: "hosts\.snapshot", type: "query"/u);
+  assert.match(observer, /acceptanceWorkspaceReady\(result\.data\)/u);
+  assert.doesNotMatch(observer, /setState|openWorkspace|reconnect|retry/u);
 });
 
 function liftedKeepaliveRetirement(started, quitAttempted, tools) {
