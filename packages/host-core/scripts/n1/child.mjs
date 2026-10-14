@@ -520,7 +520,15 @@ const steps = {
         references.map((event) => store.read(event.payload.reference)),
       );
       const parts = rows.flatMap((row) => row.message.parts);
-      const bash = parts.find((part) => part.type === "dynamic-tool" && part.toolName === "bash");
+      // HEAD records a tool call as an activity row (`volli.activity`), whose
+      // reserved descriptor names the native tool; a bash row is `bash` there.
+      const bashParts = parts.filter(
+        (part) =>
+          part.type === "dynamic-tool" &&
+          (part.toolName === "bash" ||
+            part.toolMetadata?.["volli.activity"]?.nativeToolName === "bash"),
+      );
+      const bash = bashParts.findLast((part) => part.state === "output-available");
       const text =
         bash?.output?.content
           ?.filter((part) => part.type === "text")
@@ -529,11 +537,157 @@ const steps = {
       return {
         sessionId: snapshot.session.id,
         frames: rows.length,
-        toolName: bash?.toolName ?? null,
+        nativeToolName:
+          bash?.toolMetadata?.["volli.activity"]?.nativeToolName ?? bash?.toolName ?? null,
         state: bash?.state ?? null,
         text,
       };
     } finally {
+      db.close();
+    }
+  },
+
+  /**
+   * Reattaches HEAD's Pi sidecar, whose bash call was moved to the background
+   * (VC-757), through N-1's own Pi adapter and scripted provider. The host's
+   * cold path calls the adapter with native_resume and the durable binding's
+   * locator; the provider's first request must carry the moved receipt.
+   */
+  movedBash: async (step) => {
+    const { createSessionEngine, createSessionRuntime, sessionRootThreadId } =
+      await n1("@volli/session-engine");
+    const { createSqliteSessionLedger } = await n1("./session-control/sqlite-ledger");
+    const { createPiNativeAdapter } = await n1("./session-runtime/pi-adapter");
+    const { createFileTranscriptArtifactStore } = await n1(
+      "./session-runtime/transcript-artifacts",
+    );
+    // Only the provider is scripted; N-1's Pi and its scripted provider are its own.
+    const { scriptedProvider } = await n1(
+      pathToFileURL(
+        join(
+          process.env.VOLLI_N1_TREE,
+          "packages/agent-runtime/test-fixtures/scripted-provider.ts",
+        ),
+      ).href,
+    );
+    const script = scriptedProvider([{ text: "Continued after the moved command." }]);
+    const { BackgroundShellHost } = await n1("./shell/background-shell-host");
+    const { createAgentShellPort } = await n1("./shell/agent-port");
+    const shells = new BackgroundShellHost({ publishState() {}, publishRemoved() {} });
+    const db = openVolliDb(command.dbPath);
+    let runtime;
+    try {
+      let next = 0;
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db),
+        clock: { now: () => NOW + ++next },
+        ids: { next: (kind) => `moved-n1-${kind}-${++next}` },
+      });
+      const before = await engine.getSession({ sessionId: step.sessionId });
+      if (!before?.liveExecutor) throw new Error("Head's moved attachment is not open in N-1");
+      const history = await engine.listEvents({ sessionId: step.sessionId });
+      const birth = history.find(
+        ({ payload }) =>
+          payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface",
+      )?.payload;
+      if (!birth) throw new Error("Head's moved Session has no frozen tool surface");
+      const adapter = createPiNativeAdapter({
+        sessionDataDir: step.sessionDataDir,
+        models: script.models,
+        now: () => NOW + ++next,
+        usageLimits: {
+          fetch: async () => {
+            throw new Error("Fixture has no network");
+          },
+        },
+        resolveRuntimeContext: async () => ({
+          role: "ticket",
+          projectId: before.session.projectId,
+          ticketId: before.session.ticketId,
+          rootThreadId: sessionRootThreadId(step.sessionId),
+          brief: "N−1 moved bash fixture",
+          model: { providerId: "scripted-fixture", modelId: "scripted", reasoningLevel: "off" },
+          toolSurface: birth.input.tools,
+          promptResources: [],
+        }),
+        resolveShellPort: (scope) =>
+          createAgentShellPort({
+            host: shells,
+            scope,
+            session: scope,
+            workspacePath: step.workspace,
+            identity: { sessionId: scope.sessionId, ticketDisplayId: null },
+            pathPrefixes: [],
+          }),
+      });
+      const attachSpecs = [];
+      runtime = createSessionRuntime({
+        engine,
+        artifacts: createFileTranscriptArtifactStore(step.transcriptsRoot),
+        clock: { now: () => NOW + ++next },
+        ids: { next: (kind) => `moved-n1-runtime-${kind}-${++next}` },
+        locations: {
+          resolve: async () => ({
+            directory: step.workspace,
+            venue: { id: "local", kind: "local" },
+          }),
+          prepare: async () => ({
+            directory: step.workspace,
+            venue: { id: "local", kind: "local" },
+          }),
+          reaffirm: async () => undefined,
+        },
+        executor: {
+          ...adapter,
+          attach: (spec, sink) => {
+            attachSpecs.push(spec);
+            return adapter.attach(spec, sink);
+          },
+        },
+      });
+      await runtime.reconcile({ sessionId: step.sessionId, attachmentId: before.liveExecutor.id });
+      const attached = await engine.getSession({ sessionId: step.sessionId });
+      const delivered = await runtime.command({
+        commandId: "n1-moved-message",
+        sessionId: step.sessionId,
+        command: {
+          kind: "message.submit",
+          // Settle the turn so the provider's request and the reply are both done.
+          settle: "turn",
+          message: {
+            id: "n1-moved-message",
+            role: "user",
+            parts: [{ type: "text", text: "Read the earlier result." }],
+          },
+        },
+      });
+      const after = await engine.getSession({ sessionId: step.sessionId });
+      const events = await engine.listEvents({ sessionId: step.sessionId });
+      const messages = script.requests[0] ?? [];
+      return {
+        attachStatus: attached.liveExecutor?.status,
+        deliveryStatus: delivered.receipt?.status,
+        realAttachCount: attachSpecs.length,
+        attachContinuity: attachSpecs[0]?.continuity,
+        recoveredSidecar: attachSpecs[0]?.native?.detail?.sessionFilePath,
+        providerRequests: script.requests.length,
+        turnActive: after.turnActive,
+        messages,
+        frozenTools: birth.input.tools,
+        movedResults: messages
+          .filter((message) => message.role === "toolResult" && message.toolName === "bash")
+          .map((message) => ({ isError: message.isError, content: message.content })),
+        acceptedNextMessages: events.filter(
+          ({ payload }) =>
+            payload.kind === "command.receipt.recorded" &&
+            payload.receipt.commandId === "n1-moved-message" &&
+            payload.receipt.status === "accepted",
+        ).length,
+      };
+    } finally {
+      await runtime?.close();
+      shells.disposeSession(step.sessionId);
+      await shells.close?.();
       db.close();
     }
   },

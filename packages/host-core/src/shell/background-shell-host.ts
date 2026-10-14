@@ -59,7 +59,9 @@
  * relaunch, and nothing is written to the database. The record flips to
  * `exited` on the child's `close`, not its `exit` — the two are not ordered
  * against each other, and marking a fast command exited on `exit` alone can
- * beat its last stdout chunk into the ring.
+ * beat its last stdout chunk into the ring. Private foreground calls instead
+ * finish after leader exit and a 100ms stdio idle grace (or normal close),
+ * then close their own pipes; promotion withdraws that foreground-only wait.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -96,6 +98,8 @@ export const SHELL_TAIL_MAX_BYTES = 64_000;
 export const SHELL_START_SETTLE_MS = 1_000;
 /** How long SIGTERM gets before SIGKILL. */
 export const SHELL_KILL_GRACE_MS = 5_000;
+/** Foreground leader exit gets the executor's 100ms idle window to drain final bytes. */
+const FOREGROUND_EXIT_STDIO_GRACE_MS = 100;
 
 /** How long an exit waits for the model to have read it itself before a notice is sent. */
 export const SHELL_EXIT_NOTICE_GRACE_MS = 1_000;
@@ -303,6 +307,8 @@ interface ShellEntry {
   record: RuntimeShellRecord;
   pid: number;
   child: ChildProcess;
+  /** Only private foreground pipes may be closed without waiting for inherited writers. */
+  foreground: boolean;
   ring: OutputRing;
   /** Each pipe retains its own bounded, uncut redaction/UTF-8 context. */
   stdout: NoticeOutput;
@@ -562,6 +568,7 @@ export class BackgroundShellHost {
       record,
       pid,
       child,
+      foreground: !background,
       ring,
       stdout,
       stderr,
@@ -585,7 +592,8 @@ export class BackgroundShellHost {
   ): Promise<ForegroundShellResult> {
     return new Promise((resolve, reject) => {
       this.requireOpen();
-      if (options.signal.aborted) throw Object.assign(new Error("Command aborted"), { output: "" });
+      if (options.signal.aborted)
+        throw Object.assign(new Error("Command aborted"), { code: "aborted", output: "" });
       if (
         options.timeout !== undefined &&
         (!Number.isFinite(options.timeout) ||
@@ -605,24 +613,62 @@ export class BackgroundShellHost {
       const sessionCalls = calls;
       let active = true;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let drainTimer: ReturnType<typeof setTimeout> | undefined;
+      let outputPaused = false;
+      const leaderExited = (): boolean =>
+        run.entry !== undefined &&
+        (run.entry.child.exitCode !== null || run.entry.child.signalCode !== null);
+      const finish = (): void => {
+        if (!active) return;
+        const entry = run.entry!;
+        const result = {
+          output: snapshot(),
+          code: entry.child.exitCode ?? entry.record.code,
+          signal: entry.child.signalCode ?? entry.record.signal,
+        };
+        cleanup();
+        // A grandchild can retain the pipes long after bash exits. Foreground
+        // completion follows the leader, unlike a promoted/background record.
+        entry.child.stdout?.destroy();
+        entry.child.stderr?.destroy();
+        resolve(result);
+      };
+      const drainAfterExit = (): void => {
+        clearTimeout(drainTimer);
+        drainTimer = setTimeout(() => {
+          // The executor may be spilling output: do not discard unread bytes
+          // during its backpressure pause. Cancellation has its own bound.
+          if (outputPaused) drainAfterExit();
+          else finish();
+        }, FOREGROUND_EXIT_STDIO_GRACE_MS);
+      };
       const snapshot = (): string => this.safeOutput(run.entry?.ring.all() ?? "");
       const update = (chunk: Buffer): void => {
         try {
           options.onChunk?.(chunk);
           if (options.onOutput !== undefined) options.onOutput(snapshot());
+          if (active && leaderExited()) drainAfterExit();
         } catch (error) {
-          cancel(error instanceof Error ? error.message : "Shell output callback failed");
+          cancel(
+            error instanceof Error ? error.message : "Shell output callback failed",
+            "callback_error",
+          );
         }
       };
       const cleanup = (): void => {
         active = false;
         clearTimeout(timer);
+        clearTimeout(drainTimer);
         options.signal.removeEventListener("abort", abort);
+        run.entry?.child.removeListener("exit", drainAfterExit);
         run.entry?.onOutput.delete(update);
         sessionCalls.delete(options.toolCallId);
         if (sessionCalls.size === 0) this.foreground.delete(owner.sessionId);
       };
-      const cancel = (message: string): void => {
+      const cancel = (
+        message: string,
+        code: "aborted" | "timeout" | "callback_error" = "aborted",
+      ): void => {
         if (!active) return;
         const output = snapshot();
         cleanup();
@@ -630,7 +676,9 @@ export class BackgroundShellHost {
           run.entry.endedBy = "agent";
           void this.terminate(run.entry);
         }
-        reject(Object.assign(new Error(output ? `${output}\n\n${message}` : message), { output }));
+        // The executor already captured these bytes. Keep status separate from
+        // output so its error result cannot duplicate the entire retained ring.
+        reject(Object.assign(new Error(message.slice(0, 500)), { code, output }));
       };
       const abort = (): void => cancel("Command aborted");
       const run: ForegroundRun = {
@@ -638,6 +686,7 @@ export class BackgroundShellHost {
         promote: () => {
           const entry = run.entry!;
           cleanup();
+          entry.foreground = false;
           const { text: output } = lastBytes(this.safeOutput(entry.ring.all()), this.tailMaxBytes);
           entry.ring.readNew();
           entry.returned = true;
@@ -660,7 +709,7 @@ export class BackgroundShellHost {
       options.signal.addEventListener("abort", abort, { once: true });
       if (options.timeout !== undefined) {
         timer = setTimeout(
-          () => cancel(`Command timed out after ${options.timeout} seconds`),
+          () => cancel(`Command timed out after ${options.timeout} seconds`, "timeout"),
           options.timeout * 1_000,
         );
       }
@@ -673,30 +722,32 @@ export class BackgroundShellHost {
             return;
           }
           entry.onOutput.add(update);
+          entry.child.once("exit", drainAfterExit);
+          // Register before onReady, which can synchronously move or cancel.
+          void entry.exited.then(finish);
+          if (leaderExited()) drainAfterExit();
           try {
             options.onReady?.({
               pauseOutput: () => {
+                if (!active) return;
+                outputPaused = true;
                 entry.child.stdout?.pause();
                 entry.child.stderr?.pause();
               },
               resumeOutput: () => {
+                if (!active) return;
+                outputPaused = false;
                 entry.child.stdout?.resume();
                 entry.child.stderr?.resume();
+                if (leaderExited()) drainAfterExit();
               },
             });
           } catch (error) {
-            cancel(error instanceof Error ? error.message : "Shell ready callback failed");
+            cancel(
+              error instanceof Error ? error.message : "Shell ready callback failed",
+              "callback_error",
+            );
           }
-          void entry.exited.then(() => {
-            if (!active) return;
-            const result = {
-              output: snapshot(),
-              code: entry.record.code,
-              signal: entry.record.signal,
-            };
-            cleanup();
-            resolve(result);
-          });
         },
         (error: unknown) => {
           if (!active) return;
@@ -895,6 +946,14 @@ export class BackgroundShellHost {
     );
     if ((await Promise.race([entry.exited, grace])) === "grace") {
       signalGroup(entry.pid, "SIGKILL");
+      if (entry.foreground) {
+        // An escaped grandchild may be in its own group yet still hold our
+        // pipes. After the kill grace, private foreground cleanup must not
+        // join that unrelated writer forever. Background shells keep their
+        // existing close-based drain semantics, including after promotion.
+        entry.child.stdout?.destroy();
+        entry.child.stderr?.destroy();
+      }
       await entry.exited;
     }
   }

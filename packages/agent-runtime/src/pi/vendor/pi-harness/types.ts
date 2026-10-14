@@ -314,6 +314,8 @@ export interface ShellExecResult extends ShellOutputMetadata {
   exitCode: number;
   /** Person-requested handoff; plain text is the replay fallback. */
   backgroundShellId?: string;
+  /** Capture failed after handoff; the shell id must still reach the model. */
+  backgroundCaptureIncomplete?: boolean;
 }
 
 /** Host-owned foreground execution, using the normal background-shell lifecycle on handoff. */

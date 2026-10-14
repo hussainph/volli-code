@@ -740,7 +740,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
           } catch (error) {
             failCallback(error);
           }
-          if (callbackError) {
+          if (callbackError && background === undefined) {
             settle(err(callbackError));
             return;
           }
@@ -752,7 +752,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
             settle(err(new ExecutionError("aborted", "aborted")));
             return;
           }
-          if (spillError) {
+          if (spillError && background === undefined) {
             settle(err(spillError));
             return;
           }
@@ -769,8 +769,14 @@ export class NodeExecutionEnv implements ExecutionEnv {
             ok({
               exitCode,
               ...(background === undefined ? {} : { backgroundShellId: background.shellId }),
+              ...(background !== undefined &&
+              (callbackError !== undefined || spillError !== undefined)
+                ? { backgroundCaptureIncomplete: true }
+                : {}),
               truncation: output.truncation,
-              ...(output.spillPath === undefined ? {} : { spillPath: output.spillPath }),
+              ...(output.spillPath === undefined || spillError !== undefined
+                ? {}
+                : { spillPath: output.spillPath }),
               ...(output.lastLineBytes === undefined
                 ? {}
                 : { lastLineBytes: output.lastLineBytes }),
@@ -793,10 +799,17 @@ export class NodeExecutionEnv implements ExecutionEnv {
               : new ExecutionError(
                   signal?.aborted
                     ? "aborted"
-                    : options?.timeout !== undefined &&
-                        error.message.endsWith(`Command timed out after ${options.timeout} seconds`)
-                      ? "timeout"
-                      : "spawn_error",
+                    : "code" in error &&
+                        (error.code === "aborted" ||
+                          error.code === "timeout" ||
+                          error.code === "callback_error")
+                      ? error.code
+                      : options?.timeout !== undefined &&
+                          error.message.endsWith(
+                            `Command timed out after ${options.timeout} seconds`,
+                          )
+                        ? "timeout"
+                        : "spawn_error",
                   error.message,
                   error,
                 ));

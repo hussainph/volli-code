@@ -8,6 +8,7 @@ import { createSessionTools } from "./tools";
 import { withCallScope } from "./call-scope";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "./harness-env";
 import { NodeExecutionEnv } from "./vendor/pi-harness/env/nodejs";
+import { OutputCapture } from "./vendor/pi-harness/execution/output-capture";
 import { ExecutionError, type ForegroundShellExecutor } from "./vendor/pi-harness/types";
 
 const roots: string[] = [];
@@ -126,6 +127,14 @@ describe("foreground bash capture", () => {
     [new Error("Command timed out after 0.01 seconds"), "timeout"],
     [new Error("spawn failed"), "spawn_error"],
     [new ExecutionError("spawn_error", "typed failure"), "spawn_error"],
+    [Object.assign(new Error("Session attachment ended"), { code: "aborted" }), "aborted"],
+    [Object.assign(new Error("Host stopping"), { code: "aborted" }), "aborted"],
+    [Object.assign(new Error("host timeout"), { code: "timeout" }), "timeout"],
+    [
+      Object.assign(new Error("host callback failed"), { code: "callback_error" }),
+      "callback_error",
+    ],
+    [Object.assign(new Error("unrecognized host error"), { code: "other" }), "spawn_error"],
   ] as const)("keeps host failures typed: %s", async (error, code) => {
     const env = new NodeExecutionEnv({
       cwd: await workspace(),
@@ -139,6 +148,56 @@ describe("foreground bash capture", () => {
       BACKGROUND_CONTEXT,
     );
     expect(result).toMatchObject({ ok: false, error: { code } });
+    await env.cleanup(BACKGROUND_CONTEXT);
+  });
+
+  it("preserves a moved receipt when the final output callback fails after promotion", async () => {
+    let promoted = false;
+    const flush = OutputCapture.prototype.flush;
+    vi.spyOn(OutputCapture.prototype, "flush").mockImplementation(function (this: OutputCapture) {
+      if (promoted) throw new Error("final callback failed");
+      return flush.call(this);
+    });
+    const env = new NodeExecutionEnv({
+      cwd: await workspace(),
+      foregroundExecutor: async (input) => {
+        const result = await childExecutor(true)(input);
+        promoted = true;
+        return result;
+      },
+    });
+    const [bash] = createSessionTools({ tools: { tools: ["execute"] } }, env);
+    const result = await bash!.execute("late-callback", { command: "printf before-move" });
+    expect(text(result)).toContain("Moved command to background shell moved-1.");
+    expect(text(result)).toContain("Output capture was interrupted. Use shell_output");
+    await env.cleanup(BACKGROUND_CONTEXT);
+  });
+
+  it("preserves a moved receipt when spill creation fails after promotion", async () => {
+    const spill = Promise.withResolvers<never>();
+    const env = new NodeExecutionEnv({
+      cwd: await workspace(),
+      foregroundExecutor: async (input) => {
+        // Keep this real child's pipes draining while the deliberately pending spill
+        // simulates a host handoff before disk completion.
+        const result = await childExecutor(true)({
+          ...input,
+          onReady: () => input.onReady({ pauseOutput() {}, resumeOutput() {} }),
+        });
+        spill.reject(new Error("spill failed after move"));
+        return result;
+      },
+    });
+    vi.spyOn(env, "createTempFile").mockReturnValue(spill.promise);
+    const [bash] = createSessionTools({ tools: { tools: ["execute"] } }, env);
+    const result = await bash!.execute("late-spill", {
+      command: "head -c 60000 /dev/zero | tr '\\0' x",
+    });
+    expect(text(result)).toContain("Moved command to background shell moved-1.");
+    expect(text(result)).toContain("Output capture was interrupted. Use shell_output");
+    expect(text(result)).not.toContain("Full output: undefined");
+    expect(result.details).toMatchObject({ truncation: { truncated: true } });
+    expect(result.details).not.toHaveProperty("fullOutputPath", expect.any(String));
     await env.cleanup(BACKGROUND_CONTEXT);
   });
 

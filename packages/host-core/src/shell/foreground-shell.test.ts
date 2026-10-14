@@ -19,6 +19,9 @@ const owner: BackgroundShellOwner = {
 };
 const hosts: BackgroundShellHost[] = [];
 const directories: string[] = [];
+// Some tests deliberately leave pipe holders outside the leader's lifetime or
+// process group. Track them independently so a failing assertion cannot leak.
+const pipeHolderGroups: number[] = [];
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function until(predicate: () => boolean): Promise<void> {
@@ -85,7 +88,35 @@ function alive(pid: number): boolean {
   }
 }
 
+function killPipeHolders(): void {
+  for (const pid of pipeHolderGroups.splice(0)) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // The test or host already stopped the group.
+    }
+  }
+}
+
+async function promptly<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("foreground completion blocked on pipes")),
+          2_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 afterEach(async () => {
+  killPipeHolders();
   await Promise.all(hosts.splice(0).map((host) => host.close()));
   for (const directory of directories.splice(0))
     rmSync(directory, { recursive: true, force: true });
@@ -345,11 +376,10 @@ describe("foreground shell lifecycle", () => {
     await until(() => !alive(pids[0]!));
   });
 
-  it("refuses a child already exited while its inherited pipes are still draining", async () => {
-    const { host, run, pids, states } = harness();
-    // A real grandchild keeps the pipes open briefly after bash itself exits.
-    // `close` waits for it, but a dead bash must not become a running shell.
-    const running = run("echo ready; sleep 0.2 & exit 0");
+  it("promptly completes an exited leader despite a long-lived pipe holder and refuses move during drain", async () => {
+    const { host, run, pids, states, exits } = harness();
+    const running = run("echo ready; sleep 30 & exit 0");
+    pipeHolderGroups.push(pids[0]!);
     await until(() => running.output.includes("ready\n"));
     await until(() => {
       try {
@@ -361,9 +391,142 @@ describe("foreground shell lifecycle", () => {
     });
     expect(host.foregroundAvailable(owner.sessionId, "call-1")).toBe(false);
     expect(() => host.moveForeground(owner.sessionId, "call-1")).toThrow("already exited");
-    await expect(running.promise).resolves.toEqual({ output: "ready\n", code: 0, signal: null });
+    // Foreground finalization closes its pipes, but does not kill an ordinary
+    // backgrounded grandchild. Explicit cleanup proves this test leaves none.
+    await expect(promptly(running.promise)).resolves.toEqual({
+      output: "ready\n",
+      code: 0,
+      signal: null,
+    });
+    expect(alive(pids[0]!)).toBe(true);
+    await until(() => exits.length === 1);
+    expect(host.liveCwds()).toEqual([]);
+    killPipeHolders();
+    await until(() => !alive(pids[0]!));
     expect(states).toEqual([]);
   });
+
+  it.each(["started", "promoted"] as const)(
+    "preserves close-based background records for a %s shell with inherited pipes",
+    async (mode) => {
+      const { host, input, run, pids, exits } = harness();
+      let shellId: string;
+      if (mode === "started") {
+        const started = await host.start(owner, input("echo ready; sleep 30 & exit 0"));
+        shellId = started.shell.shellId;
+      } else {
+        const running = run("echo ready; sleep 0.1; sleep 30 & exit 0");
+        await until(() => running.output.includes("ready\n"));
+        shellId = host.moveForeground(owner.sessionId, "call-1").shellId;
+        await running.promise;
+      }
+      pipeHolderGroups.push(pids[0]!);
+      await until(() => {
+        try {
+          process.kill(pids[0]!, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+      await pause(200);
+      expect(host.read(owner, shellId).shell.state).toBe("running");
+      expect(exits).toEqual([]);
+      killPipeHolders();
+      await until(() => host.read(owner, shellId).shell.state === "exited");
+      expect(exits).toEqual(["row-1"]);
+      await until(() => !alive(pids[0]!));
+    },
+  );
+
+  it("resets the foreground idle grace for final bytes arriving after leader exit", async () => {
+    const { run, pids } = harness();
+    const running = run(
+      "echo ready; (sleep 0.06; echo middle; sleep 0.06; echo final >&2; sleep 30) & exit 7",
+    );
+    pipeHolderGroups.push(pids[0]!);
+    await expect(promptly(running.promise)).resolves.toEqual({
+      output: "ready\nmiddle\nfinal\n",
+      code: 7,
+      signal: null,
+    });
+    killPipeHolders();
+    await until(() => !alive(pids[0]!));
+  });
+
+  it("does not cut off foreground output paused for executor backpressure after leader exit", async () => {
+    const { run, pids } = harness();
+    let resume: (() => void) | undefined;
+    const running = run("echo ready; sleep 30 & exit 0", {
+      onReady: (control) => {
+        control.pauseOutput();
+        resume = control.resumeOutput;
+      },
+    });
+    pipeHolderGroups.push(pids[0]!);
+    let completed = false;
+    void running.promise.then(() => {
+      completed = true;
+    });
+    await pause(200);
+    expect(completed).toBe(false);
+    resume!();
+    await expect(promptly(running.promise)).resolves.toEqual({
+      output: "ready\n",
+      code: 0,
+      signal: null,
+    });
+    killPipeHolders();
+    await until(() => !alive(pids[0]!));
+  });
+
+  it("keeps cancellation status bounded and separate from the captured output", async () => {
+    const { run, pids } = harness();
+    const running = run(
+      `'${process.execPath}' -e 'process.stdout.write("x".repeat(200000)); setInterval(() => {}, 1000)'`,
+    );
+    const rejection = expect(running.promise).rejects.toMatchObject({
+      code: "aborted",
+      message: "Command aborted",
+      output: "x".repeat(200000),
+    });
+    await until(() => running.output.at(-1)?.length === 200000);
+    running.controller.abort();
+    await rejection;
+    await until(() => !alive(pids[0]!));
+  });
+
+  it.each(["close", "abort", "timeout", "dispose"] as const)(
+    "bounds foreground %s cleanup when an escaped grandchild holds the pipes",
+    async (reason) => {
+      const { host, run, pids, exits } = harness();
+      const running = run(
+        `'${process.execPath}' -e 'const child = require("node:child_process").spawn("/bin/sleep", ["30"], { detached: true, stdio: ["ignore", 1, 2] }); child.unref(); console.log("holder:" + child.pid); setInterval(() => {}, 1000)'`,
+        reason === "timeout" ? { timeout: 0.3 } : {},
+      );
+      const rejection = expect(running.promise).rejects.toMatchObject({
+        code: reason === "timeout" ? "timeout" : "aborted",
+        output: expect.stringContaining("holder:"),
+      });
+      await until(() => running.output.some((text) => text.includes("holder:")));
+      const holder = Number(/holder:(\d+)/.exec(running.output.at(-1)!)![1]);
+      pipeHolderGroups.push(holder);
+      expect(alive(holder)).toBe(true);
+      if (reason === "close") await promptly(host.close());
+      else if (reason === "abort") running.controller.abort();
+      else if (reason === "dispose") host.disposeSession(owner.sessionId);
+      await rejection;
+      await promptly(host.close());
+      expect(alive(pids[0]!)).toBe(false);
+      expect(exits).toEqual(["row-1"]);
+      expect(host.liveCwds()).toEqual([]);
+      // The host cannot signal the grandchild's new group. It closes its own
+      // pipes after killing the original group; the test owns escaped cleanup.
+      expect(alive(holder)).toBe(true);
+      killPipeHolders();
+      await until(() => !alive(holder));
+    },
+  );
 
   it("retains independent call cancellation bindings within one Session", async () => {
     const { host, run, pids } = harness();

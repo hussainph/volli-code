@@ -132,7 +132,9 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
         details = { truncation: capture.truncation, fullOutputPath: capture.spillPath };
         const startLine = capture.truncation.totalLines - capture.truncation.outputLines + 1;
         const endLine = capture.truncation.totalLines;
-        if (capture.truncation.lastLinePartial) {
+        if (result.ok && result.value.backgroundCaptureIncomplete) {
+          outputText += "\n\n[Output tail truncated.]";
+        } else if (capture.truncation.lastLinePartial) {
           const lastLineSize = formatSize(capture.lastLineBytes ?? capture.truncation.outputBytes);
           outputText += `\n\n[Showing last ${formatSize(capture.truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${capture.spillPath}]`;
         } else if (capture.truncation.truncatedBy === "lines") {
@@ -158,6 +160,9 @@ export function createBashTool<TContext extends ExecutionToolContext = Execution
           `Moved command to background shell ${result.value.backgroundShellId}.`,
           "It keeps running. A notice will arrive when it exits; use shell_output to read it or shell_kill to end it.",
           ...(outputText ? ["Output so far:", outputText] : ["No output so far."]),
+          ...(result.value.backgroundCaptureIncomplete
+            ? ["Output capture was interrupted. Use shell_output to read retained output."]
+            : []),
         ].join("\n");
       }
       if (result.value.exitCode !== 0) {
