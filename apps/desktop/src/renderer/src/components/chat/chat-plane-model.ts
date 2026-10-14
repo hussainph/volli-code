@@ -30,11 +30,25 @@ import type { UIMessage } from "ai";
 
 import {
   currentTurnReply,
+  isBundleStreaming,
+  segmentTurn,
   type ComposerIntent,
   type InteractionSubmission,
   type QueuedMessage,
 } from "@volli/session-presentation";
 import type { HeldMessage } from "@renderer/stores/chat-drafts";
+
+/** Use the same segmentation as the feed: stale thoughts and blank text are
+ * not visible progress. Collapsed bundles carry their live row in the header.
+ * Only the stream-owned live assistant turn can stand in for Working. */
+export function liveTurnHasProgress(messages: readonly UIMessage[] | null): boolean {
+  if (messages?.[0]?.role !== "assistant") return false;
+  return segmentTurn(messages).some((segment) =>
+    segment.kind === "bundle"
+      ? isBundleStreaming(segment.rows)
+      : segment.part.state === "streaming",
+  );
+}
 
 export function composerModelSelection(input: {
   providerId: string;

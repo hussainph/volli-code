@@ -33,6 +33,74 @@ function file(hash: string, linkId: string): BlobLinkView {
   };
 }
 
+const assistant = (parts: UIMessage["parts"]): UIMessage[] => [
+  { id: "a", role: "assistant", parts },
+];
+
+describe("visible live-turn progress", () => {
+  it("does not mistake user words, empty text or settled output for progress", () => {
+    expect(liveTurnHasProgress(null)).toBe(false);
+    expect(liveTurnHasProgress([])).toBe(false);
+    expect(
+      liveTurnHasProgress([
+        { id: "u", role: "user", parts: [{ type: "text", text: "hello", state: "streaming" }] },
+      ]),
+    ).toBe(false);
+    expect(
+      liveTurnHasProgress(assistant([{ type: "text", text: " \u200b", state: "streaming" }])),
+    ).toBe(false);
+    expect(liveTurnHasProgress(assistant([{ type: "text", text: "done", state: "done" }]))).toBe(
+      false,
+    );
+  });
+  it("uses projected reasoning rather than a stale streaming part", () => {
+    const thought = { type: "reasoning" as const, text: "Checking", state: "streaming" as const };
+    expect(liveTurnHasProgress(assistant([thought]))).toBe(true);
+    expect(
+      liveTurnHasProgress(assistant([thought, { type: "text", text: "done", state: "done" }])),
+    ).toBe(false);
+    expect(
+      liveTurnHasProgress(assistant([{ type: "text", text: "reply", state: "streaming" }])),
+    ).toBe(true);
+  });
+  it.each(["input-streaming", "input-available", "output-available"] as const)(
+    "recognizes live tools including preliminary %s",
+    (state) => {
+      const tool = {
+        type: "dynamic-tool" as const,
+        toolName: "execute",
+        toolCallId: "call",
+        input: {},
+      };
+      expect(
+        liveTurnHasProgress(
+          assistant([
+            state === "output-available"
+              ? { ...tool, state, output: "still running", preliminary: true }
+              : { ...tool, state },
+          ]),
+        ),
+      ).toBe(true);
+    },
+  );
+  it("does not let a completed backgrounding receipt stand in for the open turn", () => {
+    expect(
+      liveTurnHasProgress(
+        assistant([
+          {
+            type: "dynamic-tool",
+            toolName: "execute",
+            toolCallId: "call",
+            state: "output-available",
+            input: {},
+            output: "Moved command to background shell shell-1.",
+          },
+        ]),
+      ),
+    ).toBe(false);
+  });
+});
+
 /** One staged file, for the rows and steers that carry them (VC-137). */
 function blobLinkView(): BlobLinkView {
   return {
@@ -58,6 +126,7 @@ import {
   heldStrip,
   holdList,
   lastAssistantText,
+  liveTurnHasProgress,
   messageCopyText,
   messageRoute,
   resolvingWith,

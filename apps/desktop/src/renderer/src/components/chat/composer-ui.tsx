@@ -552,7 +552,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
                 <span data-slot="queue-status" className="shrink-0 text-muted-foreground">
                   {steeringMessages?.has(entry.id) || entry.afterCurrentStep
-                    ? "After the current step"
+                    ? "Sends after this step"
                     : entry.localUnsent
                       ? "Not sent"
                       : entry.queueState === "releasing"
