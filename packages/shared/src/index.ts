@@ -90,6 +90,7 @@ export * from "./label";
 export * from "./legacy-import";
 export * from "./fs-entries";
 export type * from "./file-types";
+export { SHELL_MAX_PER_SESSION } from "./background-shell";
 export type * from "./background-shell";
 export * from "./walk-prune";
 export * from "./errors";

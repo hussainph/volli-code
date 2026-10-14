@@ -312,7 +312,25 @@ export type ShellOutputUpdate =
 /** Bounded shell completion. Output text is delivered through {@link ShellExecOptions.onUpdate}. */
 export interface ShellExecResult extends ShellOutputMetadata {
   exitCode: number;
+  /** Person-requested handoff; plain text is the replay fallback. */
+  backgroundShellId?: string;
+  /** Capture failed after handoff; the shell id must still reach the model. */
+  backgroundCaptureIncomplete?: boolean;
 }
+
+/** Host-owned foreground execution, using the normal background-shell lifecycle on handoff. */
+export type ForegroundShellExecutor = (input: {
+  command: string;
+  /** Resolved by the execution environment, including PATH/sh fallback and command transport. */
+  shellConfig: { shell: string; args: string[]; commandTransport?: "argv" | "stdin" };
+  cwd: string;
+  env: Record<string, string>;
+  toolCallId: string;
+  timeout?: number;
+  signal: AbortSignal;
+  onOutput(chunk: Uint8Array): void;
+  onReady(control: { pauseOutput(): void; resumeOutput(): void }): void;
+}) => Promise<{ code: number | null; signal: string | null; background?: { shellId: string } }>;
 
 /** Options for {@link Shell.exec}. */
 export interface ShellExecOptions {
@@ -328,6 +346,9 @@ export interface ShellExecOptions {
   capture?: ShellOutputCaptureOptions;
   /** Called with bounded output changes. */
   onUpdate?: (update: ShellOutputUpdate, context: Context) => void;
+  /** Only a top-level bash call can be handed off; ignored by unsupported environments. */
+  foregroundCallId?: string;
+  onForegroundReady?: () => void;
 }
 
 /** Shell execution capability used by the harness. */

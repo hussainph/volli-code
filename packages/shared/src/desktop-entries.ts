@@ -362,6 +362,14 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "Follow one HOST subscription over desktop main's host link.",
   },
+  // Person-only intent on one Session; no agent tool or public network operation.
+  {
+    key: "shells.moveToBackground",
+    compatibility: "client-local",
+    placement: "workspace",
+    idempotency: "natural",
+    summary: "Move a running foreground command into its Session's background shells.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];
