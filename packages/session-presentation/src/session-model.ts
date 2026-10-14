@@ -28,6 +28,8 @@ export interface QueuedMessage {
   id: string;
   commandId?: string;
   queueState?: "queued" | "releasing";
+  /** Renderer recovery only; no host accepted this message yet. */
+  localUnsent?: true;
   text: string;
   /**
    * A non-null launch title this opening message is allowed to refine.

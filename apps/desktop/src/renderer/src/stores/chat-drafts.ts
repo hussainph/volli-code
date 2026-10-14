@@ -59,9 +59,8 @@ export { CHAT_DRAFTS_APP_STATE_KEY };
 /**
  * Where a message that left the box currently stands.
  *
- * - `sending` — a round trip is open on it. The surface draws nothing: the
- *   transcript is already showing the message, and a second copy under the
- *   composer would read as a message that failed to leave.
+ * - `sending` — a round trip is open on it. The timeline shows it as pending
+ *   until the host's transcript or queue takes ownership.
  * - `queued` — legacy renderer-owned follow-up recovery. New follow-ups are
  *   host-owned and retire this local copy only after durable acceptance.
  * - `unsent` — nothing took it. It belongs back in front of the person who
@@ -94,12 +93,18 @@ export interface HeldMessage {
    */
   attachments?: readonly BlobLinkView[];
   state: HeldMessageState;
+  /** A receipt arrived before its stream projection; never lose that visible handoff. */
+  deliveryAccepted?: true;
+  /** Local submit intent only; older builds ignore it and recover the words. */
+  delivery?: "send" | "queue" | "steer";
 }
 
 /** What crosses into this store when a message leaves the box. */
 export interface HeldMessageInput {
   id: string;
   text: string;
+  /** Local submit intent only; hydration always recovers as unsent. */
+  delivery?: "send" | "queue" | "steer";
   resources?: readonly PromptResource[];
   attachments?: readonly BlobLinkView[];
 }

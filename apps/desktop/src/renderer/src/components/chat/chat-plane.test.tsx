@@ -13,7 +13,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
 
-import { ChatTranscriptRow, ChatTurn, SessionBlocker, type TurnContext } from "./chat-plane";
+import {
+  ChatTranscriptRow,
+  ChatTurn,
+  PendingMessage,
+  SessionBlocker,
+  type TurnContext,
+} from "./chat-plane";
 
 const context: TurnContext = {
   onOpenFile: () => undefined,
@@ -140,5 +146,36 @@ describe("SessionBlocker hit testing", () => {
       /^<div class="pointer-events-none"><div\b[^>]*\bdata-slot="session-blocker"[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
     );
     expect(html).toContain('aria-label="Dismiss"');
+  });
+});
+
+describe("VC-758 message and work status rows", () => {
+  it.each(["send", "steer", "queue"] as const)(
+    "names %s pending intent before host acceptance",
+    (delivery) => {
+      const html = renderToStaticMarkup(
+        <PendingMessage
+          message={{ id: "pending", text: "my words", state: "sending", delivery }}
+          context={context}
+        />,
+      );
+      expect(html).toContain("my words");
+      expect(html).toContain("Pending");
+      expect(html).not.toContain("Delivered");
+      if (delivery === "steer") expect(html).toContain("After the current step");
+      if (delivery === "queue") expect(html).toContain("Queued");
+    },
+  );
+  it("marks runtime-accepted words Delivered and rejected words Not delivered", () => {
+    for (const label of ["Delivered", "Not delivered"] as const) {
+      const html = renderToStaticMarkup(
+        <ChatTurn
+          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+          context={{ ...context, deliveryLabels: new Map([["user", label]]) }}
+          live={false}
+        />,
+      );
+      expect(html).toContain(`>${label}</span>`);
+    }
   });
 });

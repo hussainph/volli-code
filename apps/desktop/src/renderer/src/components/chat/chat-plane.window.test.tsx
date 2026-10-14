@@ -1616,3 +1616,61 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
     expect(writeText).toHaveBeenCalledWith("Current-turn reply");
   });
 });
+
+describe("VC-758 visible timeline regressions", () => {
+  it("shows the message immediately while promotion is pending", async () => {
+    const { store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () => {
+      const box = composer();
+      if (box === null) throw new Error("expected composer");
+      type(box, "waiting on promotion");
+      container?.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click();
+    });
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held).toHaveLength(1),
+    );
+    expect(container?.textContent).toContain("waiting on promotion");
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe("Pending");
+  });
+
+  it("keeps Working when a turn starts before any transcript message", async () => {
+    const store = chatStore([], { lifecycle: "working", turnActive: true });
+    await mountPlane(store);
+    expect(container?.querySelector('[role="status"]')?.textContent).toContain("Working");
+  });
+
+  it("shows the failure in the timeline with one recovery", async () => {
+    const store = chatStore(transcript(1), {
+      lifecycle: "error",
+      sessionError: "Context assembly failed",
+    });
+    await mountPlane(store);
+    const row = container?.querySelector('[data-slot="session-blocker"]');
+    expect(row).not.toBeNull();
+    expect(row?.closest('[data-slot="chat-composer-dock"]')).toBeNull();
+    expect(row?.textContent).toContain("Retry");
+  });
+});
+
+it("VC-758 keeps Working above undelivered steering even while the stream reports an error", async () => {
+  const store = chatStore(transcript(1), {
+    lifecycle: "error",
+    turnActive: true,
+    sessionError: "Lost the Session stream",
+  });
+  useChatDraftsStore
+    .getState()
+    .holdMessage(SESSION, { id: "steer", text: "focus here", delivery: "steer" });
+  await mountPlane(store);
+  const status = container?.querySelector('[role="status"]');
+  const delivery = container?.querySelector('[data-slot="message-delivery"]');
+  expect(status?.textContent).toContain("Working");
+  // The current user message precedes the mark; the held steering follows it.
+  const pending = [...(container?.querySelectorAll('[data-slot="message-delivery"]') ?? [])].find(
+    (node) => node.textContent?.includes("After the current step"),
+  );
+  expect(pending).toBeDefined();
+  expect(status!.compareDocumentPosition(pending!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(delivery).not.toBeNull();
+});

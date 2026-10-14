@@ -3307,6 +3307,18 @@ async function attachSession(
         pendingReasoningDrop = undefined;
         await commitObservation(dropped);
       }
+      // A provider may finish normally after the person pressed Stop (the
+      // final chunk can race the abort, or the transport may ignore it). The
+      // runtime's own interruption is authoritative even without an error
+      // stop reason: never report that deliberately cut-short turn completed.
+      // Teardown may still drain a normal finish; this rule names a live Stop.
+      if (failure === undefined && interrupting && !closed) {
+        await clearTransportNotice();
+        await commitObservation(
+          await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+        );
+        return;
+      }
       if (failure === undefined) {
         await clearTransportNotice();
         for (const reason of activeAttentionReasons) {

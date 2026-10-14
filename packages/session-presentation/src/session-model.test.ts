@@ -190,3 +190,14 @@ describe("host queued message projection", () => {
     ).toEqual(row);
   });
 });
+
+it("projects a text-only host queue without manufacturing file state", () => {
+  expect(
+    queuedMessageFromHost({
+      id: "text",
+      commandId: "command",
+      state: "queued",
+      message: { id: "text", role: "user", parts: [{ type: "text", text: "later" }] },
+    }),
+  ).toEqual({ id: "text", commandId: "command", queueState: "queued", text: "later" });
+});

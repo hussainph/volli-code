@@ -423,23 +423,21 @@ describe("sessionBlocker", () => {
     );
   });
 
-  it("sends both provider-owned recoveries to Settings with the failed run's retry beside it", () => {
+  it("offers one settings recovery for provider-owned failures", () => {
     // Signing in happens inside Settings now, so the pair no longer forks on
     // whether a manual Ticket terminal exists to hand off to.
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)).toMatchObject({
       message: "Sign-in required",
       detail: null,
       tone: "error",
-      action: { label: "Settings", act: NO_OP },
-      secondaryAction: { label: "Retry", act: NO_OP },
+      action: { label: "Open settings", act: NO_OP },
       dismiss: { label: "Dismiss" },
     });
     expect(sessionBlocker(raised(attention("configuration_invalid")), ACTS, false)).toMatchObject({
       message: "Configuration invalid",
       detail: null,
       tone: "error",
-      action: { label: "Settings", act: NO_OP },
-      secondaryAction: { label: "Retry", act: NO_OP },
+      action: { label: "Open settings", act: NO_OP },
       dismiss: { label: "Dismiss" },
     });
   });
@@ -450,7 +448,8 @@ describe("sessionBlocker", () => {
     // button that could not work. Both can reach the sign-in now.
     const projectChat = sessionBlocker(raised(attention("auth_required")), ACTS, false);
 
-    expect(projectChat?.secondaryAction).toEqual({ label: "Retry", act: NO_OP });
+    expect(projectChat?.action).toEqual({ label: "Open settings", act: NO_OP });
+    expect(projectChat?.secondaryAction).toBeUndefined();
   });
 
   it("says the Session's own model needs sign-in before a message is spent on it", () => {
@@ -492,7 +491,7 @@ describe("sessionBlocker", () => {
 
     expect(signedInTo).toEqual(["azure-openai-responses"]);
     expect(sessionBlocker(raised(attention("auth_required")), ACTS, false)?.action?.label).toBe(
-      "Settings",
+      "Open settings",
     );
   });
 
@@ -663,8 +662,8 @@ describe("sessionBlocker", () => {
     });
 
     expect(drawn).toEqual([
-      ["Sign-in required", "Settings"],
-      ["Configuration invalid", "Settings"],
+      ["Sign-in required", "Open settings"],
+      ["Configuration invalid", "Open settings"],
       ["Reconnecting", null],
       ["Disconnected", "Retry"],
       ["Context limit reached", null],
@@ -820,6 +819,7 @@ describe("sessionBlocker", () => {
       message: "Rate limited",
       detail: null,
       tone: "waiting",
+      placement: "timeline",
       action: { label: "Retry", act: NO_OP },
     });
     expect(sessionBlocker(raised(quotaSpent(at)), ACTS, false)?.message).toBe(
@@ -1430,7 +1430,7 @@ describe("heldStrip", () => {
     ).toEqual([
       { id: "q1", text: "first" },
       { id: "q2", text: "host edit" },
-      { id: "legacy", text: "recovery" },
+      { id: "legacy", text: "recovery", localUnsent: true },
     ]);
   });
 
@@ -1463,7 +1463,7 @@ describe("heldStrip", () => {
   // rather than welded onto whatever was typed next.
   it("draws a message nothing took, in its own row", () => {
     expect(heldStrip([heldMessage("m1", "ship it", "unsent")], [])).toEqual([
-      { id: "m1", text: "ship it" },
+      { id: "m1", text: "ship it", localUnsent: true },
     ]);
   });
 
@@ -1475,7 +1475,7 @@ describe("heldStrip", () => {
     expect(hasReconciledSessionSnapshot({ id: "session" })).toBe(true);
     expect(heldStrip(held, [], new Set(), hasReconciledSessionSnapshot(undefined))).toEqual([]);
     expect(heldStrip(held, [], new Set(), hasReconciledSessionSnapshot({ id: "session" }))).toEqual(
-      [{ id: "m1", text: "already accepted" }],
+      [{ id: "m1", text: "already accepted", localUnsent: true }],
     );
   });
 
@@ -1499,7 +1499,7 @@ describe("heldStrip", () => {
   it("keeps a held row's skill resources on its strip row", () => {
     const resources = [{ name: "logos", text: "# Logos" }];
     expect(heldStrip([{ ...heldMessage("m1", "/logos go", "unsent"), resources }], [])).toEqual([
-      { id: "m1", text: "/logos go", resources },
+      { id: "m1", text: "/logos go", resources, localUnsent: true },
     ]);
   });
 
@@ -1508,7 +1508,7 @@ describe("heldStrip", () => {
   it("keeps a held row's attachments on its strip row", () => {
     const attachments = [blobLinkView()];
     expect(heldStrip([{ ...heldMessage("m1", "look", "unsent"), attachments }], [])).toEqual([
-      { id: "m1", text: "look", attachments },
+      { id: "m1", text: "look", attachments, localUnsent: true },
     ]);
   });
 });
@@ -1705,4 +1705,10 @@ it("keeps context recovery headline beside Anthropic invalid_request_error (revi
   );
   expect(blocker?.message).toBe("Context limit reached");
   expect(blocker?.detail).toBe("prompt is too long");
+});
+
+it("does not keep a stale queued label when a row becomes unsent", () => {
+  expect(
+    sameQueuedMessage({ id: "m", text: "one" }, { id: "m", text: "one", localUnsent: true }),
+  ).toBe(false);
 });

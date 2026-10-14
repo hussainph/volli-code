@@ -547,6 +547,13 @@ export const SessionComposer = React.memo(function SessionComposer({
                     (VC-273). */}
                 <AttachmentThumbRow attachments={entry.attachments ?? []} />
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
+                <span data-slot="queue-status" className="shrink-0 text-muted-foreground">
+                  {entry.localUnsent
+                    ? "Not sent"
+                    : entry.queueState === "releasing"
+                      ? "Sending"
+                      : "Queued"}
+                </span>
                 <span className="flex shrink-0 items-center gap-1">
                   {working ? (
                     <Button

@@ -516,6 +516,14 @@ function sessionStateCell(session: Record<string, unknown>): unknown {
     : cell;
 }
 
+/**
+ * What a terminal peek's `parked` state means: the warm-park tier SIGSTOPs an
+ * idle process tree, so the output tail stops where it is until something wakes
+ * it. Said beside the word, so a caller does not have to guess what a frozen
+ * tail means.
+ */
+const PARKED_EXPLANATION = "paused while idle; output stops until it wakes";
+
 /** A wire origin (Session ids already public handles) as one line; `null` is unknown, never the user. */
 function originText(value: unknown): string {
   return formatSessionOrigin(readSessionOrigin(value));
@@ -660,12 +668,23 @@ function renderSessionShow(data: Record<string, unknown>): string | null {
   return lines.join("\n");
 }
 
+/**
+ * When the provider's allowance comes back, as a UTC instant a reader can act
+ * on. The wire carries epoch milliseconds, which stay the value in `--json`;
+ * text that printed them raw left the reader a number to decode by hand.
+ */
+function resetInstantText(resetsAt: number | null): string {
+  if (resetsAt === null) return "not stated";
+  const instant = new Date(resetsAt);
+  return Number.isNaN(instant.getTime()) ? "not stated" : instant.toISOString();
+}
+
 /** Free-form provider text gets the same trust envelope as another Session's answer. */
 function sessionStopLines(session: Record<string, unknown>): string[] {
   if (!isRecord(session["interruption"])) return [];
   const detail = decodeSessionStopDetail(session["interruption"], "interruption");
   return [
-    `${sessionStopSummary(detail)}; retry: ${detail.retry}; reset: ${detail.resetsAt ?? "not stated"}.`,
+    `${sessionStopSummary(detail)}; retry: ${detail.retry}; reset: ${resetInstantText(detail.resetsAt)}.`,
     ...untrustedProseResponseLines({
       response: "provider stop detail",
       blocks: [
@@ -698,6 +717,28 @@ function ageText(value: unknown): string {
 }
 
 /**
+ * The one fact a peek can state about a quiet chat whose newest message is the
+ * person's: nothing has answered it. Only idle and interrupted qualify, because
+ * those are the states with no turn running to answer it. The newest message
+ * must be readable: an unreadable tail hides whether a reply exists.
+ *
+ * The line names what the transcript shows and no cause. Why it went unanswered
+ * (a failed attach, a turn that died) is host state the peek does not carry.
+ */
+function unansweredMessageLines(
+  data: Record<string, unknown>,
+  transcript: readonly unknown[],
+): string[] {
+  if (data["status"] !== "idle" && data["status"] !== "interrupted") return [];
+  const unreadable = data["unreadable"];
+  if (typeof unreadable === "number" && unreadable > 0) return [];
+  const newest = transcript.at(-1);
+  return isRecord(newest) && newest["role"] === "user"
+    ? ["no assistant message since the last user message"]
+    : [];
+}
+
+/**
  * A chat Session's peek: one activity line, then one line per transcript
  * message. The activity line leads because it answers the question the command
  * was run to ask — alive, doing what, since when — and the tail below it is
@@ -710,12 +751,17 @@ function renderChatPeek(data: Record<string, unknown>, transcript: readonly unkn
     `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
     `last ${ageText(data["lastActivityAgeMs"])}`,
     `turn ${countCell(data["turns"])} depth ${countCell(data["turnDepth"])}`,
-    ...(typeof unreadable === "number" && unreadable > 0 ? [`${unreadable} unreadable`] : []),
+    // Counted, not listed: each unreadable message is a row the tail could not
+    // print, so the count says what the reader is missing.
+    ...(typeof unreadable === "number" && unreadable > 0
+      ? [`${unreadable} unreadable ${unreadable === 1 ? "message" : "messages"}`]
+      : []),
     ...sessionOriginHeaderCells(data),
   ].join("  ");
   return [
     header,
     ...sessionStopLines(data),
+    ...unansweredMessageLines(data, transcript),
     ...transcript.filter(isRecord).map(transcriptLine),
   ].join("\n");
 }
@@ -1367,8 +1413,11 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
     // is an activity line plus a transcript.
     if (Array.isArray(data["transcript"])) return renderChatPeek(data, data["transcript"]);
     const output = typeof data["output"] === "string" ? data["output"] : "";
+    // `parked` says nothing useful by itself: the processes are paused, so the
+    // output below is not new. The explanation rides the word.
+    const parked = data["status"] === "parked" ? ` (${PARKED_EXPLANATION})` : "";
     const header = [
-      `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
+      `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}${parked}`,
       ...sessionOriginHeaderCells(data),
     ].join("  ");
     return `${header}${output.length > 0 ? `\n${output}` : ""}`;

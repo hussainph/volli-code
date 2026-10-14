@@ -1,0 +1,124 @@
+[
+  {
+    "phase": "after",
+    "state": "sending",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-sending-light.png",
+    "text": "Check the release notes before we ship.\n\nPending\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Pending\n  - button \"Copy\":\n    - img\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\"':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\"':\n      - img\n      - text: High\n      - img\n    - button \"Send\" [disabled]:\n      - img",
+    "checks": {
+      "pending": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "steering",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-steering-light.png",
+    "text": "Check the release notes before we ship.\n\nRecorded\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\n\nFocus on the compatibility section first.\n\nPending · After the current step\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Recorded\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n  - paragraph: Focus on the compatibility section first.\n  - text: Pending · After the current step\n  - button \"Copy\":\n    - img\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "steeringVisible": true,
+      "workingAboveSteering": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "queued",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-queued-light.png",
+    "text": "Check the release notes before we ship.\n\nRecorded\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\nAlso check the migration notes.\nQueued\nSteer\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Recorded\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - group:\n    - 'group \"Queued message: Also check the migration notes.\"':\n      - text: Also check the migration notes. Queued\n      - 'button \"Steer queued message: Also check the migration notes.\"':\n        - img\n        - text: Steer\n      - 'button \"Remove queued message: Also check the migration notes.\"':\n        - img\n      - 'button \"Queued message actions: Also check the migration notes.\"':\n        - img\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "queuedLabel": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "working",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-working-light.png",
+    "text": "Working\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "workingStatus": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "error",
+    "theme": "light",
+    "file": "docs/research/VC-758/screenshots/after-error-light.png",
+    "text": "Check the release notes before we ship.\n\nRecorded\n\nContext assembly failed before the model could start.\n\nRetry\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Recorded\n  - button \"Copy\":\n    - img\n  - paragraph: Context assembly failed before the model could start.\n  - button \"Retry\"\n  - button \"Dismiss\"\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\"':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\"':\n      - img\n      - text: High\n      - img\n    - button \"Send\" [disabled]:\n      - img",
+    "checks": {
+      "errorInComposer": false
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "sending",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-sending-dark.png",
+    "text": "Check the release notes before we ship.\n\nPending\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Pending\n  - button \"Copy\":\n    - img\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\"':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\"':\n      - img\n      - text: High\n      - img\n    - button \"Send\" [disabled]:\n      - img",
+    "checks": {
+      "pending": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "steering",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-steering-dark.png",
+    "text": "Check the release notes before we ship.\n\nRecorded\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\n\nFocus on the compatibility section first.\n\nPending · After the current step\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Recorded\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n  - paragraph: Focus on the compatibility section first.\n  - text: Pending · After the current step\n  - button \"Copy\":\n    - img\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "steeringVisible": true,
+      "workingAboveSteering": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "queued",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-queued-dark.png",
+    "text": "Check the release notes before we ship.\n\nRecorded\n\nI’m checking the release notes and tests.\n\nWorking\nWorking\nWorking\nAlso check the migration notes.\nQueued\nSteer\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Recorded\n  - button \"Copy\":\n    - img\n  - paragraph: I’m checking the release notes and tests.\n  - button \"Copy\":\n    - img\n  - status: Working\n- status\n- group:\n  - group:\n    - 'group \"Queued message: Also check the migration notes.\"':\n      - text: Also check the migration notes. Queued\n      - 'button \"Steer queued message: Also check the migration notes.\"':\n        - img\n        - text: Steer\n      - 'button \"Remove queued message: Also check the migration notes.\"':\n        - img\n      - 'button \"Queued message actions: Also check the migration notes.\"':\n        - img\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "queuedLabel": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "working",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-working-dark.png",
+    "text": "Working\nWorking\nWorking\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - status: Working\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\" [disabled]':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\" [disabled]':\n      - img\n      - text: High\n      - img\n    - button \"Stop turn\":\n      - img\n    - button \"Queue\" [disabled]:\n      - img",
+    "checks": {
+      "workingStatus": true
+    },
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "state": "error",
+    "theme": "dark",
+    "file": "docs/research/VC-758/screenshots/after-error-dark.png",
+    "text": "Check the release notes before we ship.\n\nRecorded\n\nContext assembly failed before the model could start.\n\nRetry\nClaude Sonnet 4.5\nHigh",
+    "accessibility": "- log:\n  - paragraph: Check the release notes before we ship.\n  - text: Recorded\n  - button \"Copy\":\n    - img\n  - paragraph: Context assembly failed before the model could start.\n  - button \"Retry\"\n  - button \"Dismiss\"\n- status\n- group:\n  - textbox \"Message\":\n    - /placeholder: Ask, plan, or implement…\n  - group:\n    - button \"Add to message\":\n      - img\n    - 'button \"Model: Claude Sonnet 4.5 · Anthropic\"':\n      - text: Claude Sonnet 4.5\n      - img\n    - 'button \"Reasoning effort: High\"':\n      - img\n      - text: High\n      - img\n    - button \"Send\" [disabled]:\n      - img",
+    "checks": {
+      "errorInComposer": false
+    },
+    "errors": []
+  }
+]

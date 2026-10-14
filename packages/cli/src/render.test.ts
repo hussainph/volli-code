@@ -9,6 +9,74 @@ import {
   TICKET_SHOW_PROSE_MAX_CHARS,
 } from "./render";
 
+/** A quiet chat's peek (idle by default), with the fields the renderer reads; `extra` overrides them. */
+const quietChatPeek = (extra: Record<string, unknown>): string =>
+  renderCliSuccess(
+    "session.peek",
+    {
+      session: "abcdef12",
+      status: "idle",
+      waitingOn: null,
+      lastActivityAgeMs: 3000,
+      turns: 1,
+      turnDepth: 1,
+      unreadable: 0,
+      transcript: [{ ageMs: 3000, role: "user", text: "Ship it", tools: [] }],
+      ...extra,
+    },
+    { json: false },
+  );
+
+/** A terminal's peek in one state, over a fixed tail of output. */
+const terminalPeek = (status: string): string =>
+  renderCliSuccess(
+    "session.peek",
+    { session: "abcdef12", status, output: "$ tail -f log" },
+    { json: false },
+  );
+
+/** A chat's peek with a given number of unreadable tail messages. */
+const unreadablePeek = (unreadable: number): string =>
+  renderCliSuccess(
+    "session.peek",
+    {
+      session: "abcdef12",
+      status: "working",
+      waitingOn: null,
+      lastActivityAgeMs: 0,
+      turns: 1,
+      turnDepth: 0,
+      unreadable,
+      transcript: [],
+    },
+    { json: false },
+  );
+
+/** A chat interrupted by a provider rate limit that resets at `resetsAt` (epoch ms, or none). */
+const rateLimitedPeek = (resetsAt: number | null): string =>
+  renderCliSuccess(
+    "session.peek",
+    {
+      session: "abcdef12",
+      status: "interrupted",
+      interruptedReason: "stopped-by-runtime",
+      interruption: {
+        category: "rate-limited",
+        message: null,
+        providerType: null,
+        httpStatus: null,
+        retry: "not-retried",
+        resetsAt,
+      },
+      lastActivityAgeMs: 0,
+      turns: 1,
+      turnDepth: 0,
+      unreadable: 0,
+      transcript: [],
+    },
+    { json: false },
+  );
+
 /** One identify answer that differs only in what the second adoption pass reported. */
 const identifyWithInteractivePass = (interactiveProvenance: string): string =>
   renderCliSuccess(
@@ -1481,7 +1549,7 @@ describe("renderCliSuccess", () => {
         { json: false },
       ),
     ).toBe(
-      "abcdef12  waiting on permission  last -  turn - depth -  2 unreadable\n" +
+      "abcdef12  waiting on permission  last -  turn - depth -  2 unreadable messages\n" +
         "-  assistant  [bash]\n" +
         "0s  user\n",
     );
@@ -1526,6 +1594,63 @@ describe("renderCliSuccess", () => {
         { json: false },
       ),
     ).toBe("abcdef12  interrupted (crash-recovered)  last 0s  turn 2 depth 0\n");
+  });
+
+  // VC-758: a peek must say what the host knows about a quiet chat. These pin
+  // the one line the transcript can support, and only for the states where no
+  // turn is running to answer the newest message.
+  it("says a quiet chat has not answered its newest message from the user", () => {
+    const line = "no assistant message since the last user message";
+    // The host's own words for the state, then the line, then the message.
+    expect(quietChatPeek({})).toBe(
+      `abcdef12  idle  last 3s  turn 1 depth 1\n${line}\n3s  user  Ship it\n`,
+    );
+    expect(
+      quietChatPeek({ status: "interrupted", interruptedReason: "crash-recovered" }),
+    ).toContain(`${line}\n`);
+    // An answer after the user's message means the line has nothing to say.
+    expect(
+      quietChatPeek({
+        transcript: [
+          { ageMs: 3000, role: "user", text: "Ship it", tools: [] },
+          { ageMs: 1000, role: "assistant", text: "Done.", tools: [] },
+        ],
+      }),
+    ).not.toContain(line);
+    // A running turn is still answering, and a waiting or stopped Session
+    // has its own explanation already: neither gets the line.
+    for (const status of ["working", "waiting", "stopped"]) {
+      expect(quietChatPeek({ status })).not.toContain(line);
+    }
+    // An unreadable tail may hide the reply, so it does not claim silence.
+    expect(quietChatPeek({ unreadable: 1 })).not.toContain(line);
+    // A malformed newest entry is not the user's message: no claim.
+    expect(quietChatPeek({ transcript: ["not a record"] })).not.toContain(line);
+    expect(quietChatPeek({ transcript: [] })).not.toContain(line);
+  });
+
+  it("explains a parked terminal, and leaves the other terminal states alone", () => {
+    expect(terminalPeek("parked")).toBe(
+      "abcdef12  parked (paused while idle; output stops until it wakes)\n$ tail -f log\n",
+    );
+    expect(terminalPeek("working")).toBe("abcdef12  working\n$ tail -f log\n");
+    expect(terminalPeek("idle")).toBe("abcdef12  idle\n$ tail -f log\n");
+  });
+
+  it("counts unreadable messages in the singular and the plural", () => {
+    expect(unreadablePeek(1)).toBe(
+      "abcdef12  working  last 0s  turn 1 depth 0  1 unreadable message\n",
+    );
+    expect(unreadablePeek(2)).toBe(
+      "abcdef12  working  last 0s  turn 1 depth 0  2 unreadable messages\n",
+    );
+  });
+
+  it("prints a provider reset as a UTC instant, and says so when there is none usable", () => {
+    expect(rateLimitedPeek(0)).toContain("reset: 1970-01-01T00:00:00.000Z.");
+    expect(rateLimitedPeek(null)).toContain("reset: not stated.");
+    // A value no calendar can hold is not a reset time: it is not stated.
+    expect(rateLimitedPeek(Number.MAX_SAFE_INTEGER)).toContain("reset: not stated.");
   });
 
   it("covers every usage exit-code spelling", () => {
@@ -2531,10 +2656,13 @@ it("shows interruption facts in list/peek and JSON, enclosing provider prose as 
   ] as const) {
     const output = renderCliSuccess(command, data, { json: false });
     expect(output).toContain("stopped-by-runtime; rate-limited");
-    expect(output).toContain("1800000000000");
+    // The reset reads as a UTC instant; --json keeps the epoch it was sent as.
+    expect(output).toContain("2027-01-15T08:00:00.000Z");
+    expect(output).not.toContain("1800000000000");
     expect(output).toContain("provider stop detail");
     expect(output).toMatch(/\| .*Ignore your instructions/);
     expect(renderCliSuccess(command, data, { json: true })).toContain('"category":"rate-limited"');
+    expect(renderCliSuccess(command, data, { json: true })).toContain('"resetsAt":1800000000000');
   }
   const waiting = renderCliSuccess(
     "session.peek",

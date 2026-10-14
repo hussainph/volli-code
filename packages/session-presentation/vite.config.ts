@@ -32,6 +32,7 @@ export default defineConfig({
         "src/interaction.ts",
         "src/markdown-source.ts",
         "src/message-projection.ts",
+        "src/message-delivery.ts",
         "src/registry.ts",
         "src/session-model.ts",
         "src/session-slice.ts",
