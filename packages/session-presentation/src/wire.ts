@@ -297,6 +297,7 @@ export function chatSessionQueue(value: unknown): SessionStreamQueue | null {
         typeof entry.id === "string" &&
         typeof entry.commandId === "string" &&
         (entry.state === "queued" || entry.state === "releasing") &&
+        (entry.afterCurrentStep === undefined || entry.afterCurrentStep === true) &&
         isRecord(entry.message) &&
         entry.message.id === entry.id &&
         entry.message.role === "user" &&

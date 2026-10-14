@@ -6,10 +6,13 @@ import { startAgentSocket } from "../agent-socket";
 import type {
   AgentCommand,
   AgentResponse,
+  SessionAttention,
+  SessionAttentionKind,
   SessionInteraction,
   SessionOrigin,
   SessionRole,
 } from "@volli/shared";
+import type { StoredSessionFollowUp } from "@volli/session-engine";
 import { createAgentCommandService } from "../agent-commands";
 import { testHostHandlers } from "../testing/host-handlers";
 import { insertProject } from "../db/projects-repo";
@@ -19,6 +22,12 @@ import { openTestDb, testProject, testSession, testTicket, type TestDb } from ".
 import { createTestSessionEngine } from "../testing/session-engine";
 import { insertSession } from "../session-control/test-support";
 import { pendingSessionQuestions } from "./pending-session-questions";
+import {
+  consumeFollowUpCleanClose,
+  createSqliteSessionFollowUpLedger,
+  FOLLOW_UP_DOWNGRADE_HOLD_DETAIL,
+  stampFollowUpCleanClose,
+} from "../db/session-follow-up-repo";
 
 let db: TestDb;
 afterEach(() => db?.cleanup());
@@ -1116,5 +1125,463 @@ describe("executeInWorkspace", () => {
       ok: false,
       error: { code: "PROJECT_NOT_FOUND" },
     });
+  });
+});
+
+// VC-758: the runtime fixtures. Attachments and queued messages are written
+// through the same engine and SQLite ledger the runtime uses.
+const attachmentFor = (sessionId: string, attachmentId = `attachment-${sessionId}`) =>
+  ({
+    id: attachmentId,
+    sessionId,
+    adapterId: "pi",
+    venue: { id: "local", kind: "local" },
+    continuity: "fresh",
+    native: { id: "test", detail: null },
+    authority: null,
+  }) as const;
+const message = (id: string, text: string) =>
+  ({ id, role: "user", parts: [{ type: "text", text }] }) as StoredSessionFollowUp["message"];
+
+// VC-758: `session peek` answers the runtime facts a reader needs to explain a
+// quiet, stopped or ended chat. Each case writes through the real engine and
+// SQLite ledger, and the queue is read through the same SQLite follow-up
+// ledger the runtime drains. Nothing is hand-built in the projection.
+describe("session peek runtime facts (VC-758)", () => {
+  type Fixture = ReturnType<typeof fixture>;
+  // The per-kind fields the Attention union requires; the copy is the host's own.
+  const KIND_FIELDS: Partial<Record<SessionAttentionKind, Record<string, null>>> = {
+    rate_limited: { retryAt: null },
+    quota_exhausted: { resetAt: null },
+    adapter_unrecoverable: { resetsAt: null },
+  };
+  const raise = (
+    f: Fixture,
+    id: string,
+    kind: SessionAttentionKind,
+    detail: string | null,
+    key: string = kind,
+  ) =>
+    f.engine.observe({
+      id: `raise-${key}-${id}`,
+      kind: "attention.raised",
+      sessionId: id,
+      attachmentId: `attachment-${id}`,
+      occurredAt: 2 * DAY,
+      provenance,
+      attention: {
+        id: `attention-${key}`,
+        kind,
+        attachmentId: `attachment-${id}`,
+        detail,
+        diagnostic: null,
+        ...KIND_FIELDS[kind],
+      } as SessionAttention,
+    });
+  const clear = (f: Fixture, id: string, key: string) =>
+    f.engine.observe({
+      id: `clear-${key}-${id}`,
+      kind: "attention.cleared",
+      sessionId: id,
+      attachmentId: `attachment-${id}`,
+      occurredAt: 2 * DAY,
+      provenance,
+      attentionId: `attention-${key}`,
+    });
+  const signal = (f: Fixture, id: string, kind: "done" | "blocked", reason: string | null) =>
+    f.engine.submit({
+      commandId: `signal-${kind}-${id}`,
+      sessionId: id,
+      intent: { kind: "session.signal", signal: kind, reason },
+      provenance,
+    });
+  const stop = (
+    f: Fixture,
+    id: string,
+    reason: string | null,
+    by: { kind: "user" } | { kind: "watchdog" } | { kind: "session"; sessionId: string },
+  ) =>
+    f.engine.submit({
+      commandId: `stop-${id}`,
+      sessionId: id,
+      intent: { kind: "session.stop", reason, by },
+      provenance,
+    });
+  const peek = async (f: Fixture, id: string, args: Record<string, unknown> = {}) =>
+    data(await f.read("session.peek", { id: id.slice(0, 8), ...args }));
+  const queued = (
+    id: string,
+    state: StoredSessionFollowUp["state"],
+    extra: Partial<StoredSessionFollowUp> = {},
+  ): StoredSessionFollowUp => ({
+    id,
+    commandId: `command-${id}`,
+    deliveryCommandId: `delivery-${id}`,
+    state,
+    message: message(id, `text of ${id}`),
+    ...extra,
+  });
+  const seedQueue = (sessionId: string, entries: StoredSessionFollowUp[]) =>
+    createSqliteSessionFollowUpLedger(db.db).transaction(sessionId, (state) => {
+      state.entries.push(...entries);
+      state.revision += 1;
+    });
+
+  it.each([
+    ["auth_required", "Sign-in required", "Open settings"],
+    ["configuration_invalid", "Configuration invalid", "Open settings"],
+    ["transport_retrying", "Reconnecting", null],
+    ["adapter_disconnected", "Disconnected", "Retry"],
+    ["rate_limited", "Rate limited", "Retry"],
+    ["quota_exhausted", "Quota exhausted", null],
+    ["context_limit_reached", "Context limit reached", null],
+    ["partial_turn_interrupted", "Turn interrupted", null],
+    ["adapter_unrecoverable", "Runtime stopped", "Retry"],
+    ["input_required", "Waiting for an answer", null],
+    ["permission_required", "Waiting for approval", null],
+  ] as const)(
+    "names the %s Attention in plain words, with its recovery when it has one",
+    async (kind, copy, recovery) => {
+      const f = fixture();
+      const id = await f.create("attention", DAY);
+      await f.active(id, 2 * DAY);
+      await raise(f, id, kind, null);
+      expect((await peek(f, id))["attention"]).toEqual({ message: copy, recovery, detail: null });
+    },
+  );
+
+  it("redacts and bounds an Attention's detail, and drops the Attention once it is cleared", async () => {
+    const f = fixture();
+    const id = await f.create("detail", DAY);
+    await f.active(id, 2 * DAY);
+    await raise(
+      f,
+      id,
+      "adapter_unrecoverable",
+      `Authorization: Bearer sk-live-detail-secret ${"tail ".repeat(200)}`,
+    );
+    const shown = await peek(f, id);
+    expect(shown["attention"]).toEqual({
+      message: "Runtime stopped",
+      recovery: "Retry",
+      detail: `Authorization: Bearer [redacted] ${"tail ".repeat(200)}`.slice(0, 400),
+    });
+    expect(JSON.stringify(shown)).not.toContain("sk-live-detail-secret");
+    await clear(f, id, "adapter_unrecoverable");
+    expect((await peek(f, id))["attention"]).toBeNull();
+  });
+
+  it("shows the latest active Attention, and falls back to the one before it when that clears", async () => {
+    const f = fixture();
+    const id = await f.create("primary", DAY);
+    await f.active(id, 2 * DAY);
+    await raise(f, id, "transport_retrying", "first", "first");
+    await raise(f, id, "adapter_unrecoverable", "second", "second");
+    expect((await peek(f, id))["attention"]).toMatchObject({ message: "Runtime stopped" });
+    await clear(f, id, "second");
+    expect((await peek(f, id))["attention"]).toEqual({
+      message: "Reconnecting",
+      recovery: null,
+      detail: "first",
+    });
+  });
+
+  it("names a Session stopped by a session, redacting the reason and shortening that actor's id", async () => {
+    const f = fixture();
+    const operator = await f.create("operator", DAY);
+    const id = await f.create("stopped", 2 * DAY);
+    await f.active(id, 2 * DAY);
+    await stop(f, id, "Stopping: token=stop-secret-value because the build broke", {
+      kind: "session",
+      sessionId: operator,
+    });
+    const shown = await peek(f, id);
+    expect(shown["stopped"]).toEqual({
+      at: 2 * DAY,
+      reason: "Stopping: token= [redacted] because the build broke",
+      by: { kind: "session", sessionId: operator.slice(0, 8) },
+    });
+    expect(JSON.stringify(shown)).not.toContain("stop-secret-value");
+    expect(JSON.stringify(shown)).not.toContain(operator);
+    // The stopped executor closes, then resumed work opens a fresh attachment,
+    // and that ends the stop: the record stays in history, the state does not.
+    await f.engine.observe({
+      id: `closed-${id}`,
+      kind: "attachment.closed",
+      sessionId: id,
+      attachmentId: `attachment-${id}`,
+      occurredAt: 3 * DAY,
+      provenance,
+      outcome: "interrupted",
+    });
+    await f.engine.observe({
+      id: `resume-${id}`,
+      kind: "attachment.opened",
+      sessionId: id,
+      occurredAt: 3 * DAY,
+      provenance,
+      attachment: attachmentFor(id, `resume-${id}`),
+    });
+    expect((await peek(f, id))["stopped"]).toBeNull();
+  });
+
+  it.each([
+    ["the user", { kind: "user" } as const, null],
+    ["the watchdog", { kind: "watchdog" } as const, "Silent for ten minutes"],
+  ])("names a Session stopped by %s, with the reason it was given", async (_, by, reason) => {
+    const f = fixture();
+    const id = await f.create("stopped", 2 * DAY);
+    await f.active(id, 2 * DAY);
+    await stop(f, id, reason, by);
+    expect((await peek(f, id))["stopped"]).toEqual({ at: 2 * DAY, reason, by });
+  });
+
+  it("answers the latest done or blocked signal with its reason and age", async () => {
+    const f = fixture();
+    const id = await f.create("signal", 2 * DAY);
+    await f.active(id, 2 * DAY);
+    await signal(f, id, "blocked", "Waiting on the schema decision");
+    expect((await peek(f, id))["signal"]).toEqual({
+      kind: "blocked",
+      reason: "Waiting on the schema decision",
+      at: 2 * DAY,
+      ageMs: 8 * DAY,
+    });
+    await signal(f, id, "done", null);
+    expect((await peek(f, id))["signal"]).toEqual({
+      kind: "done",
+      reason: null,
+      at: 2 * DAY,
+      ageMs: 8 * DAY,
+    });
+  });
+
+  // The signal is the Session's own text, so it gets the same redaction and
+  // 400-character bound as the Attention detail and the stop reason.
+  it("redacts and bounds the signal reason the way the other peek prose is", async () => {
+    const f = fixture();
+    const id = await f.create("signal bounds", 2 * DAY);
+    await f.active(id, 2 * DAY);
+    await signal(f, id, "blocked", `Need token=signal-secret-value ${"x".repeat(600)}`);
+    const shown = await peek(f, id);
+    expect(shown["signal"]).toMatchObject({
+      kind: "blocked",
+      reason: `Need token= [redacted] ${"x".repeat(600)}`.slice(0, 400),
+    });
+    expect(JSON.stringify(shown)).not.toContain("signal-secret-value");
+  });
+
+  it.each(["completed", "interrupted", "failed"] as const)(
+    "answers the last turn as %s, from the same fold the listing reads",
+    async (outcome) => {
+      const f = fixture();
+      const id = await f.create("outcome", DAY);
+      await f.active(id, 2 * DAY);
+      if (outcome === "completed")
+        await f.engine.observe({
+          id: `turn-end-${id}`,
+          kind: "turn.completed",
+          sessionId: id,
+          attachmentId: `attachment-${id}`,
+          occurredAt: 2 * DAY,
+          provenance,
+          turnId: `turn-${id}`,
+        });
+      else if (outcome === "interrupted")
+        await f.engine.observe({
+          id: `turn-end-${id}`,
+          kind: "turn.interrupted",
+          sessionId: id,
+          attachmentId: `attachment-${id}`,
+          occurredAt: 2 * DAY,
+          provenance,
+          turnId: `turn-${id}`,
+        });
+      else
+        // The executor ended while the turn was open: the turn failed, and
+        // no Attention is raised, so the outcome is the only fact that says so.
+        await f.engine.observe({
+          id: `attachment-closed-${id}`,
+          kind: "attachment.closed",
+          sessionId: id,
+          attachmentId: `attachment-${id}`,
+          occurredAt: 2 * DAY,
+          provenance,
+          outcome: "failed",
+        });
+      const shown = await peek(f, id);
+      expect(shown["lastTurnOutcome"]).toBe(outcome);
+      expect(shown["attention"]).toBeNull();
+    },
+  );
+
+  it("answers the follow-up queue from the SQLite ledger: each state, a steer, a refusal, bounded and redacted", async () => {
+    const f = fixture();
+    const id = await f.create("queue", DAY);
+    await f.active(id, 2 * DAY);
+    await seedQueue(id, [
+      queued("queued", "queued", {
+        message: message("queued", `Use token=queued-secret-value ${"y".repeat(500)}`),
+      }),
+      queued("sending", "releasing", { message: message("sending", "Sending now") }),
+      queued("steer", "queued", {
+        message: message("steer", "Steer after this step"),
+        steer: { signature: "steer-signature", targetTurnId: `turn-${id}` },
+      }),
+      queued("refused", "queued", {
+        message: message("refused", "Refused text"),
+        refused: true,
+        refusedDetail: "Queued delivery refused: rejected: token=refused-secret-value",
+      }),
+      queued("attachment", "queued", {
+        message: {
+          id: "attachment",
+          role: "user",
+          parts: [{ type: "file", mediaType: "image/png", url: "https://example.invalid/x.png" }],
+        },
+      }),
+    ]);
+    const shown = await peek(f, id);
+    expect(shown["pendingMessageCount"]).toBe(5);
+    expect(shown["pendingMessages"]).toEqual([
+      {
+        id: "queued",
+        text: `Use token= [redacted] ${"y".repeat(500)}`.slice(0, 400),
+        label: "Queued",
+        detail: null,
+      },
+      { id: "sending", text: "Sending now", label: "Sending", detail: null },
+      {
+        id: "steer",
+        text: "Steer after this step",
+        label: "After the current step",
+        detail: null,
+      },
+      {
+        id: "refused",
+        text: "Refused text",
+        label: "Blocked",
+        detail: "Queued delivery refused: rejected: token= [redacted]",
+      },
+      // A message with no text is named as an attachment, not as an empty line.
+      { id: "attachment", text: "", label: "Queued", detail: null },
+    ]);
+    expect(JSON.stringify(shown)).not.toContain("queued-secret-value");
+    expect(JSON.stringify(shown)).not.toContain("refused-secret-value");
+    // `lines` bounds the rows shown; the count still says how many wait.
+    const bounded = await peek(f, id, { lines: 2 });
+    expect(bounded["pendingMessageCount"]).toBe(5);
+    expect((bounded["pendingMessages"] as unknown[]).length).toBe(2);
+  });
+
+  it("shows a follow-up that boot held for an older Volli as Blocked, with the hold's reason", async () => {
+    const f = fixture();
+    const id = await f.create("held", DAY);
+    await f.active(id, 2 * DAY);
+    await seedQueue(id, [
+      queued("claimed", "releasing", { message: message("claimed", "Resend this") }),
+    ]);
+    // Boot stamps the watermark at the last event; any later event makes it stale.
+    stampFollowUpCleanClose(db.db, 2 * DAY);
+    await signal(f, id, "blocked", null);
+    expect(consumeFollowUpCleanClose(db.db)).toEqual([id]);
+    expect((await peek(f, id))["pendingMessages"]).toEqual([
+      {
+        id: "claimed",
+        text: "Resend this",
+        label: "Blocked",
+        detail: FOLLOW_UP_DOWNGRADE_HOLD_DETAIL,
+      },
+    ]);
+  });
+
+  it("prints every runtime fact through the socket and runCli, and keeps secrets out of text and JSON", async () => {
+    const f = fixture();
+    const id = await f.create("runtime facts", DAY);
+    await f.active(id, 2 * DAY);
+    await raise(f, id, "adapter_unrecoverable", "Authorization: Bearer e2e-detail-secret", "e2e");
+    await seedQueue(id, [
+      queued("held", "queued", {
+        message: message("held", "Ship it token=e2e-queue-secret"),
+        refused: true,
+        refusedDetail: "Queued delivery refused: rejected: password=e2e-refusal-secret",
+      }),
+      queued("waiting", "queued", {
+        message: message("waiting", "Use the steer"),
+        steer: { signature: "steer-signature", targetTurnId: `turn-${id}` },
+      }),
+    ]);
+    await stop(f, id, "Paused: token=e2e-stop-secret", { kind: "user" });
+    await f.engine.observe({
+      id: `attachment-closed-${id}`,
+      kind: "attachment.closed",
+      sessionId: id,
+      attachmentId: `attachment-${id}`,
+      occurredAt: 3 * DAY,
+      provenance,
+      outcome: "failed",
+    });
+    const socketPath = join(dirname(db.dbPath), "runtime-facts.sock");
+    const socket = await startAgentSocket({
+      socketPath,
+      execute: (request) => f.service.execute(request),
+    });
+    const peekThrough = async (args: string[]) => {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const code = await runCli(["session", "peek", id.slice(0, 8), ...args], {
+        env: { VOLLI_SOCKET: socketPath },
+        cwd: "/repo/volli",
+        stdout: (text) => stdout.push(text),
+        stderr: (text) => stderr.push(text),
+        request: (path, request) => requestAgent(path, request, { timeoutMs: 2000 }),
+        readText: async () => {
+          throw new Error("No file argument expected");
+        },
+        launch: async () => {
+          throw new Error("No app launch expected");
+        },
+        observe: async () => ({}),
+      });
+      return { code, text: stdout.join(""), stderr: stderr.join("") };
+    };
+    try {
+      const text = await peekThrough([]);
+      expect(text.code).toBe(0);
+      expect(text.stderr).toBe("");
+      for (const line of [
+        "Runtime stopped · Retry",
+        "Stopped by user",
+        "Paused: token= [redacted]",
+        "Last turn failed",
+        "2 messages waiting",
+        "pending message 1: Blocked",
+        "  | Queued delivery refused: rejected: password= [redacted]",
+        "pending message 2: After the current step",
+      ]) {
+        expect(text.text).toContain(line);
+      }
+      for (const secret of [
+        "e2e-detail-secret",
+        "e2e-stop-secret",
+        "e2e-queue-secret",
+        "e2e-refusal-secret",
+      ]) {
+        expect(text.text).not.toContain(secret);
+      }
+      const json = await peekThrough(["--json"]);
+      expect(json.code).toBe(0);
+      expect(json.text).not.toContain("e2e-detail-secret");
+      expect(json.text).not.toContain("e2e-refusal-secret");
+      // `--json` prints the reply's data, the same object the text is rendered from.
+      expect(JSON.parse(json.text)).toMatchObject({
+        lastTurnOutcome: "failed",
+        stopped: { by: { kind: "user" } },
+        pendingMessageCount: 2,
+        attention: { message: "Runtime stopped", recovery: "Retry" },
+      });
+    } finally {
+      await socket.close();
+    }
   });
 });

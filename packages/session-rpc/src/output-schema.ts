@@ -486,6 +486,8 @@ export const followUpItemWireSchema = z.object({
   message: uiMessageWireSchema,
   commandId: text,
   state: z.enum(["queued", "releasing"]),
+  // Additive wait hint, not a new queue state. Older readers keep the payload.
+  afterCurrentStep: z.literal(true).optional(),
 });
 /** Queue order is by this revision, never by the event cursor; safe-integer bounded. */
 export const queueRevisionWireSchema = sequence;

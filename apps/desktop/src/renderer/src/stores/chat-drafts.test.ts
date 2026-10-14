@@ -1118,3 +1118,25 @@ describe("persistence", () => {
     });
   });
 });
+
+it("VC-758 hydrates acceptance hints conservatively without losing identity, resources or files", async () => {
+  const storage = createMemoryStorage();
+  const store = createChatDraftsStore(storage);
+  const resources = [{ name: "review", text: "Review notes" }];
+  const attachments = [blobView()];
+  store.getState().holdMessage("s1", {
+    id: "message",
+    text: "keep me",
+    resources,
+    attachments,
+    delivery: "steer",
+  });
+  store
+    .getState()
+    .amendHeldMessage("s1", "message", (message) => ({ ...message, deliveryAccepted: true }));
+  const reloaded = createChatDraftsStore(storage);
+  await reloaded.persist.rehydrate();
+  expect(reloaded.getState().drafts.s1?.held).toEqual([
+    { id: "message", text: "keep me", resources, attachments, state: "unsent" },
+  ]);
+});

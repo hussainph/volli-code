@@ -1220,3 +1220,14 @@ describe("the picker's place in the composer stack", () => {
     );
   });
 });
+
+it.each([
+  [{ id: "q", text: "later", queueState: "queued" as const }, "Queued"],
+  [{ id: "q", text: "later", queueState: "releasing" as const }, "Sending"],
+  [{ id: "q", text: "later", localUnsent: true as const }, "Not sent"],
+  [{ id: "q", text: "later", afterCurrentStep: true as const }, "After the current step"],
+])("names queue ownership instead of showing unexplained words", (message, label) => {
+  const html = renderToStaticMarkup(<SessionComposer {...composerProps({ queued: [message] })} />);
+  expect(html).toContain('data-slot="queue-status"');
+  expect(html).toContain(`>${label}</span>`);
+});

@@ -629,6 +629,15 @@ describe("the host follow-up queue on the wire (VC-675)", () => {
     }
     expect(streamEmissionSchema.safeParse({ ...queued, throughSequence: -1 }).success).toBe(false);
     expect(followUpItemWireSchema.parse({ ...item, state: "releasing" }).state).toBe("releasing");
+    const steering = JSON.parse(
+      JSON.stringify({ ...queued, queue: [{ ...item, afterCurrentStep: true }] }),
+    );
+    expect(streamEmissionWireSchema.parse(steering)).toMatchObject({
+      queue: [{ id: item.id, afterCurrentStep: true }],
+    });
+    expect(followUpItemWireSchema.safeParse({ ...item, afterCurrentStep: false }).success).toBe(
+      false,
+    );
   });
 
   it("carries queue emissions on the current stream union and keeps the legacy union frozen", () => {

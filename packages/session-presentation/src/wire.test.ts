@@ -457,6 +457,13 @@ describe("chatSessionQueue", () => {
   };
   it("reads both queued and releasing state at an unchanged durable cursor", () => {
     expect(chatSessionQueue(queueBaseline)).toEqual(queueBaseline);
+    const steering = JSON.parse(
+      JSON.stringify({ ...queueBaseline, queue: [{ ...item, afterCurrentStep: true }] }),
+    );
+    expect(chatSessionQueue(steering)?.queue[0]).toMatchObject({
+      id: "q1",
+      afterCurrentStep: true,
+    });
     expect(
       chatSessionQueue({ ...queueBaseline, queue: [{ ...item, state: "releasing" }] }),
     ).not.toBeNull();
@@ -486,6 +493,7 @@ describe("chatSessionQueue", () => {
       { ...item, id: null },
       { ...item, commandId: null },
       { ...item, state: "sent" },
+      { ...item, afterCurrentStep: false },
       { ...item, message: null },
       { ...item, message: { ...item.message, id: "other" } },
       { ...item, message: { ...item.message, role: "assistant" } },

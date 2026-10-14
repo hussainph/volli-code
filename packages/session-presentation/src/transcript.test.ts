@@ -244,6 +244,43 @@ describe("appendFrames", () => {
     expect(interrupted.turnEpoch).toBe(2);
   });
 
+  it.each(["completed", "interrupted", "failed"] as const)(
+    "ends the live turn at attachment.closed: %s without an explicit turn end",
+    (outcome) => {
+      const closed = frame(3, { kind: "attachment.closed", attachmentId: "attachment-1", outcome });
+      const opened = appendFrames(EMPTY_TRANSCRIPT, [turn(1, "turn.started")]);
+      const ended = appendFrames(opened, [closed]);
+      expect(ended.turnActive).toBe(false);
+      expect(ended.turnEpoch).toBe(2);
+      expect(appendFrames(ended, [closed])).toBe(ended);
+      const batched = appendFrames(EMPTY_TRANSCRIPT, [turn(1, "turn.started"), closed]);
+      expect(batched.turnActive).toBe(false);
+      expect(batched.turnEpoch).toBe(2);
+    },
+  );
+
+  it("counts failed attachment attempts as a boundary even without a live turn", () => {
+    const failed = frame(2, {
+      kind: "attachment.failed",
+      attachment: {
+        id: "attachment-1",
+        sessionId: "session-1",
+        adapterId: "pi",
+        continuity: "fresh",
+        native: null,
+        authority: null,
+        venue: { id: "local", kind: "local" },
+      },
+      failure: { code: "failed", detail: "Runtime stopped", diagnostic: null },
+    });
+    const ended = appendFrames(EMPTY_TRANSCRIPT, [failed]);
+    expect(ended.turnActive).toBe(false);
+    expect(ended.turnEpoch).toBe(1);
+    expect(appendFrames(ended, [failed])).toBe(ended);
+    const live = appendFrames(EMPTY_TRANSCRIPT, [turn(1, "turn.started")]);
+    expect(appendFrames(live, [failed])).toMatchObject({ turnActive: false, turnEpoch: 2 });
+  });
+
   it("folds the Session's prompt-resources record into the skill names it shows", () => {
     const folded = appendFrames(EMPTY_TRANSCRIPT, [
       frame(1, {
