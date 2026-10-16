@@ -285,13 +285,13 @@ function hostChatStore(
     signal: null,
     modelSelection: DEFAULT_SELECTION,
     modelTier: null,
-    turnActive: false,
+    turnActive: true,
     lastActivityAt: 0,
     bornTicketless: true,
     scheduledResume: null,
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
-    liveExecutor: null,
+    liveExecutor: { id: "running-executor" },
     queue: [hostRow("host follow-up", options)],
     queueRevision: 1,
   };
@@ -1721,7 +1721,7 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
 describe("VC-758 visible timeline regressions", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => disposeChatClient(SESSION));
-  it("shows the message immediately while promotion is pending", async () => {
+  it("shows the first message as sent with Working while promotion is pending", async () => {
     const { store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
     await act(async () => {
@@ -1736,9 +1736,177 @@ describe("VC-758 visible timeline regressions", () => {
     expect(container?.textContent).toContain("waiting on promotion");
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(600);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(container?.querySelector('[role="status"]')?.textContent).toContain("Working");
+  });
+
+  it("keeps the opening bubble and Working in place through host queue and turn ownership", async () => {
+    const store = chatStore([]);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: {
+            ...sessions[SESSION]!.projection!,
+            status: "open",
+            modelSelection: DEFAULT_SELECTION,
+          },
+        },
+      },
+    }));
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "opening", text: "First words", delivery: "send" });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const bubble = container!.querySelector(".is-user");
+    const workingMark = () =>
+      [...container!.querySelectorAll('[role="status"]')].find((node) =>
+        node.textContent?.includes("Working"),
+      );
+    const working = workingMark();
+    const assertOpening = () => {
+      expect(container!.querySelectorAll(".is-user")).toHaveLength(1);
+      expect(container!.querySelector(".is-user")).toBe(bubble);
+      expect(workingMark()).toBe(working);
+      expect(working?.textContent).toContain("Working");
+      expect(container!.querySelector('[data-slot="message-delivery"]')).toBeNull();
+      expect(
+        container!.querySelector('[aria-label="Remove queued message: First words"]'),
+      ).toBeNull();
+      expect(
+        bubble!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    };
+    assertOpening();
+    await advanceProgressTime(1000);
+    assertOpening();
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [{ id: "opening", text: "First words", queueState: "queued" }],
+          },
+        },
+      }));
+      drafts.dropHeld(SESSION, "opening");
+    });
+    assertOpening();
+    // Durable intent can precede the actual turn and delivery receipt too.
+    const pendingFrame: ChatSessionFrame = {
+      sessionId: SESSION,
+      sequence: 1,
+      event: {
+        id: "opening-command-event",
+        sessionId: SESSION,
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        attachmentId: null,
+        commandId: "opening-command",
+        provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
+        payload: {
+          kind: "command.recorded",
+          command: {
+            id: "opening-command",
+            sessionId: SESSION,
+            createdAt: 1,
+            route: null,
+            intent: {
+              kind: "message.submit",
+              reference: { id: "artifact", mediaType: null, digest: null },
+            },
+          },
+        },
+      },
+      transcript: {
+        message: { id: "opening", role: "user", parts: [{ type: "text", text: "First words" }] },
+      },
+    };
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [],
+            transcript: appendFrames(sessions[SESSION]!.transcript, [pendingFrame]),
+          },
+        },
+      }));
+    });
+    await advanceProgressTime(1000);
+    expect(
+      messageDeliveryLabels(store.getState().sessions[SESSION]!.transcript.frames).get("opening"),
+    ).toBe("Pending");
+    assertOpening();
+    await act(async () => {
+      const message: UIMessage = {
+        id: "opening",
+        role: "user",
+        parts: [{ type: "text", text: "First words" }],
+      };
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [],
+            lifecycle: "working",
+            transcript: {
+              ...EMPTY_TRANSCRIPT,
+              turnActive: true,
+              turnEpoch: 1,
+              messages: [message],
+              durableMessages: [message],
+            },
+          },
+        },
+      }));
+    });
+    assertOpening();
+  });
+
+  it("returns an opening queue to recovery when a real blocker arrives", async () => {
+    const store = chatStore([]);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: { ...sessions[SESSION]!.projection!, modelSelection: DEFAULT_SELECTION },
+          queue: [{ id: "blocked", text: "Blocked words", queueState: "queued" }],
+        },
+      },
+    }));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    expect(container!.querySelector(".is-user")?.textContent).toContain("Blocked words");
+    expect(container!.textContent).toContain("Working");
+    await act(async () =>
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            lifecycle: "error",
+            sessionError: "Attachment failed",
+          },
+        },
+      })),
     );
+    expect(container!.querySelector('[data-slot="session-blocker"]')?.textContent).toContain(
+      "Attachment failed",
+    );
+    expect(
+      container!.querySelector('[aria-label="Remove queued message: Blocked words"]'),
+    ).not.toBeNull();
+    expect(container!.querySelector(".is-user")).toBeNull();
+    expect(
+      [...container!.querySelectorAll('[role="status"]')].some((node) =>
+        node.textContent?.includes("Working"),
+      ),
+    ).toBe(false);
   });
 
   it("removes delayed sending state on acceptance and keeps the same quiet bubble through durable handoff", async () => {
@@ -1866,7 +2034,7 @@ describe("VC-758 visible timeline regressions", () => {
     await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(600);
-    expect(container?.textContent).toContain("Sends after this step");
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await act(async () => result.resolve({ sessionId: SESSION, receipt: { status: "accepted" } }));
     await vi.waitFor(() =>
       expect(useChatDraftsStore.getState().drafts[SESSION]?.held[0]).toMatchObject({
@@ -1914,14 +2082,14 @@ it("VC-758 keeps Working above undelivered steering even while the stream report
   expect(status?.textContent).toContain("Working");
   expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
   await advanceProgressTime(600);
-  expect(container?.textContent).toContain("Sends after this step");
-  // The current user message precedes the mark; the held steering follows it.
-  const pending = [...(container?.querySelectorAll('[data-slot="message-delivery"]') ?? [])].find(
-    (node) => node.textContent?.includes("Sends after this step"),
+  expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+  // Steering still follows Working; only its redundant delivery tab is gone.
+  const pending = [...(container?.querySelectorAll(".is-user") ?? [])].find((node) =>
+    node.textContent?.includes("focus here"),
   );
   expect(pending).toBeDefined();
   expect(status!.compareDocumentPosition(pending!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  expect(container?.querySelector('[data-slot="message-delivery"]')).not.toBeNull();
+  expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
 });
 
 async function advanceProgressTime(ms: number) {

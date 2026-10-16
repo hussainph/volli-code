@@ -9,7 +9,7 @@
 ## How to get to it (user POV)
 1. Board → open card `DRV-1` (see 01). Its ticket tab `DRV-1` comes to the front.
 2. Press **New chat**. A tab (fallback label `Chat`, ticket-chat-tab.ts:19) opens, showing a composer with placeholder `Ask, plan, or implement…`.
-3. Type `hello drive` and press ↵. The user bubble appears, **Stop turn** shows, then the reply `fake-agent: hello drive`.
+3. Type `hello drive` and press ↵. The user bubble stays in the transcript and **Working** shows even while the Session is attaching, with no delivery tab or composer queue strip. Once the turn opens, **Stop turn** shows, then the reply `fake-agent: hello drive`.
 
 ## Driving it with volli-drive
 PROVEN transcript (vd-1b7e41, VC-703) — a Ticket chat on DRV-5, from the board:
@@ -58,7 +58,7 @@ volli-drive state vd-xxxx cli session answer <short-id>             # final mess
 ## Gotchas
 - Opening **New chat** writes nothing durable. No `sessions` row and no worktree exist until the first Send (pi-ticket-chat-smoke.mjs:966-1000). Don't assert on SQL before you've sent.
 - Every Session needs an app-wide default model (`DEFAULT_MODEL_REQUIRED`, host-core/src/session-runtime/sessions.ts:1137-1146). Without `--model fake`, Send fails with an error toast.
-- The first ticket Send creates a git worktree, so the turn takes longer to start. Give the `wait` 30s or more. Verified live: a message sent while the Session is still starting shows as **queued** (`Remove queued message: …`) and is released once it is ready — expected, not a bug.
+- The first ticket Send creates a git worktree, so the turn takes longer to start. Give the `wait` 30s or more. Verified live (VC-774, `vd-36e738`, ticket and project Drafts; light/dark captures): the first sent bubble stays in the transcript with **Working**, even before attachment finishes. No **Sending…**, **Queued**, or **Sends after this step** tab, no composer queue strip, no empty-state flash, and no attachment-pending blocker/Retry should appear. The host may queue the message internally; that ownership handoff and the turn opening must not move the bubble or Working mark. Capture the attaching and turn-open states, not just the final reply. Queueing a follow-up behind an already running turn is unchanged (see 03).
 - Verified live: the first message the model receives is wrapped in Volli's `<ticket …>` + `--- BEGIN TICKET BRIEF ---` / `--- BEGIN SESSION TOOLS ---` blocks. The fake provider echoes only the typed text (`spokenText`), so wait for `fake-agent: <your text>`; the transcript bubble shows only what you typed.
 - The tab label is not stable: it starts as `Chat` and is retitled by auto-titling (shared/auto-title.ts), which also calls the fake model — so the title starts `fake-agent: …`. Find the tab by its position in `Ticket tabs`, not by its label.
 - Assistant prose has no role or label of its own. Match on the text `fake-agent:`.

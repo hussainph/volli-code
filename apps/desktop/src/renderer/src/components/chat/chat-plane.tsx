@@ -1040,6 +1040,156 @@ export function ChatPlane({
     () => new Set([...durableMessageIds].filter((id) => deliveryLabels.get(id) !== "Pending")),
     [deliveryLabels, durableMessageIds],
   );
+  const dismissBlocker = React.useCallback((dismissKey: string) => {
+    setDismissedBlockerKey(dismissKey);
+  }, []);
+
+  const blockerActs = React.useMemo<SessionBlockerActs>(
+    () => ({
+      recover: () => void recover(),
+      // A failed initial Pi attach has no live binding to continue; Retry is a
+      // fresh attach there. Once Pi is live, it is the exact failed run.
+      retryRuntime: () => void (liveExecutorId === null ? recover() : retryRuntime()),
+      // Straight to the category Model Access lives in. The blocker names a
+      // provider that needs signing in, and landing on General would make the
+      // user go find it — a short trip, but one this row already knows the
+      // answer to.
+      openSettings: () => setSettingsOpen(true, "model-access"),
+      // And when the row knows WHICH provider, straight to its sign-in: the
+      // pane auto-starts (or offers) that provider's flow on arrival.
+      signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
+      dismissError: () => dismissError(),
+      dismiss: dismissBlocker,
+      scheduleResume: (request) => void scheduleResume(request),
+      cancelScheduledResume: (scheduleId) => void cancelScheduledResume(scheduleId),
+    }),
+    [
+      cancelScheduledResume,
+      dismissBlocker,
+      dismissError,
+      liveExecutorId,
+      recover,
+      retryRuntime,
+      scheduleResume,
+      setSettingsOpen,
+    ],
+  );
+  // The clock the resume offer is read against. It only has to move when an
+  // offered reset passes — then "Resume at" gives way to the plain Retry — so
+  // it wakes once, at the nearest reset, rather than ticking.
+  const activeAttention = projection?.attention.active ?? EMPTY_ATTENTION.active;
+  const nearestReset = React.useMemo(() => {
+    let nearest: number | null = null;
+    for (const item of activeAttention) {
+      if (item.kind !== "adapter_unrecoverable" || item.resetsAt === null) continue;
+      nearest = nearest === null ? item.resetsAt : Math.min(nearest, item.resetsAt);
+    }
+    return nearest;
+  }, [activeAttention]);
+  const [resumeNow, setResumeNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    setResumeNow(Date.now());
+    if (nearestReset === null) return;
+    const timer = window.setTimeout(() => setResumeNow(Date.now()), delayUntil(nearestReset));
+    return () => window.clearTimeout(timer);
+  }, [nearestReset]);
+  // The providers a first-run "Sign in" can offer — the ones with an in-app
+  // flow, in the same reachable-first order the Accounts list uses.
+  const signInProviders = React.useMemo<readonly SignInProviderOption[]>(
+    () =>
+      providers
+        .filter((provider) => provider.signIn.length > 0)
+        .toSorted((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
+        .map((provider) => ({ id: provider.id, label: provider.label })),
+    [providers],
+  );
+  const candidateBlocker = sessionBlocker(
+    {
+      sessionError: session.sessionError,
+      attention: projection?.attention ?? EMPTY_ATTENTION,
+      // The failure a notification click named, so the row shows THAT problem
+      // rather than whichever one happens to be newest (VC-295).
+      revealedAttentionId: revealed?.attentionId ?? null,
+      catalogState,
+      catalogError,
+      sessionModel,
+      signInProviders,
+      scheduledResume: projection?.scheduledResume ?? null,
+      now: resumeNow,
+    },
+    blockerActs,
+    interactions.length > 0,
+  );
+  const blockerPresentation = visibleBlocker(candidateBlocker, dismissedBlockerKey);
+  React.useEffect(() => {
+    if (blockerPresentation.dismissedKey !== dismissedBlockerKey) {
+      setDismissedBlockerKey(blockerPresentation.dismissedKey);
+    }
+  }, [blockerPresentation.dismissedKey, dismissedBlockerKey]);
+  const blocker = blockerPresentation.blocker;
+  const timelineBlocker = blocker?.placement === "timeline" ? blocker : null;
+  // The opening send is already part of the conversation while the host
+  // attaches. Remember its identity across held → queue → transcript ownership;
+  // later Enter presses still belong to the ordinary follow-up strip.
+  const turnEpoch = useStore(
+    sessionsStore,
+    (state) => state.sessions[sessionId]?.transcript.turnEpoch ?? 0,
+  );
+  const openingId = React.useRef<string | null>(null);
+  const openingHeld = held.find(
+    (message) => message.id === openingId.current && message.state === "sending",
+  );
+  const openingQueued = queue.find((message) => message.id === openingId.current);
+  if (
+    openingHeld === undefined &&
+    openingQueued === undefined &&
+    !messages.some((message) => message.id === openingId.current)
+  ) {
+    openingId.current = null;
+  }
+  if (
+    openingId.current === null &&
+    messages.length === 0 &&
+    historyBefore === null &&
+    turnEpoch === 0 &&
+    !working &&
+    !turnActive &&
+    !projection?.turnActive
+  ) {
+    openingId.current =
+      held.find(
+        (message) =>
+          message.state === "sending" &&
+          message.delivery !== "queue" &&
+          message.delivery !== "steer",
+      )?.id ??
+      queue[0]?.id ??
+      null;
+  }
+  const openingPending =
+    openingId.current !== null &&
+    candidateBlocker === null &&
+    interactions.length === 0 &&
+    projection?.status !== "archived" &&
+    !settledMessageIds.has(openingId.current);
+  const openingMessage = openingPending
+    ? (held.find((message) => message.id === openingId.current && message.state === "sending") ??
+      queue.find((message) => message.id === openingId.current))
+    : undefined;
+  const transcriptMessages = React.useMemo(
+    () =>
+      openingMessage !== undefined && !durableMessageIds.has(openingMessage.id)
+        ? [...messages, pendingUserMessage(openingMessage)]
+        : messages,
+    [durableMessageIds, messages, openingMessage],
+  );
+  const transcriptDeliveryLabels = React.useMemo(() => {
+    if (!openingPending || openingId.current === null) return deliveryLabels;
+    const labels = new Map(deliveryLabels);
+    labels.delete(openingId.current);
+    return labels;
+  }, [deliveryLabels, openingPending]);
+
   // Held to its identity, and that is what keeps the composer out of the
   // stream's frame budget. `durableMessageIds` is a fresh Set on every flush of
   // a live turn, so this memo re-runs once per frame and `heldStrip` mints a
@@ -1054,8 +1204,8 @@ export function ChatPlane({
           queue,
           durableMessageIds,
           provisional !== undefined || hasReconciledSessionSnapshot(projection),
-        ),
-      [durableMessageIds, held, projection, provisional, queue],
+        ).filter((message) => !openingPending || message.id !== openingId.current),
+      [durableMessageIds, held, openingPending, projection, provisional, queue],
     ),
     sameQueuedMessage,
   );
@@ -1495,13 +1645,13 @@ export function ChatPlane({
       onOpenFile,
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
-      deliveryLabels,
+      deliveryLabels: transcriptDeliveryLabels,
       steeringMessages,
       pendingSince,
       progressPaused,
     }),
     [
-      deliveryLabels,
+      transcriptDeliveryLabels,
       onOpenFile,
       onOpenSession,
       session.openedInteractions,
@@ -1515,7 +1665,7 @@ export function ChatPlane({
   // nothing happened in keeps the array it had, which is what lets its rows
   // stand while the live tail repaints.
   const turns = useStableList(
-    React.useMemo(() => groupTurns(messages), [messages]),
+    React.useMemo(() => groupTurns(transcriptMessages), [transcriptMessages]),
     sameMessages,
   );
   // The portable Session Surface Model: ordinary Turns, host-authored notices,
@@ -1538,7 +1688,7 @@ export function ChatPlane({
     (row) =>
       row.kind === "turn" &&
       row.messages[0]?.role === "user" &&
-      row.messages.every((message) => deliveryLabels.get(message.id) === "Pending"),
+      row.messages.every((message) => transcriptDeliveryLabels.get(message.id) === "Pending"),
   );
   const deliveredRows =
     undeliveredRows.length === 0 ? rows : rows.filter((row) => !undeliveredRows.includes(row));
@@ -1554,101 +1704,14 @@ export function ChatPlane({
   const turnHasProgress = React.useMemo(() => liveTurnHasProgress(liveTurn), [liveTurn]);
 
   const stopTurn = React.useCallback(() => void interrupt(), [interrupt]);
-  const dismissBlocker = React.useCallback((dismissKey: string) => {
-    setDismissedBlockerKey(dismissKey);
-  }, []);
-
-  const blockerActs = React.useMemo<SessionBlockerActs>(
-    () => ({
-      recover: () => void recover(),
-      // A failed initial Pi attach has no live binding to continue; Retry is a
-      // fresh attach there. Once Pi is live, it is the exact failed run.
-      retryRuntime: () => void (liveExecutorId === null ? recover() : retryRuntime()),
-      // Straight to the category Model Access lives in. The blocker names a
-      // provider that needs signing in, and landing on General would make the
-      // user go find it — a short trip, but one this row already knows the
-      // answer to.
-      openSettings: () => setSettingsOpen(true, "model-access"),
-      // And when the row knows WHICH provider, straight to its sign-in: the
-      // pane auto-starts (or offers) that provider's flow on arrival.
-      signIn: (providerId) => setSettingsOpen(true, "model-access", providerId),
-      dismissError: () => dismissError(),
-      dismiss: dismissBlocker,
-      scheduleResume: (request) => void scheduleResume(request),
-      cancelScheduledResume: (scheduleId) => void cancelScheduledResume(scheduleId),
-    }),
-    [
-      cancelScheduledResume,
-      dismissBlocker,
-      dismissError,
-      liveExecutorId,
-      recover,
-      retryRuntime,
-      scheduleResume,
-      setSettingsOpen,
-    ],
-  );
-  // The clock the resume offer is read against. It only has to move when an
-  // offered reset passes — then "Resume at" gives way to the plain Retry — so
-  // it wakes once, at the nearest reset, rather than ticking.
-  const activeAttention = projection?.attention.active ?? EMPTY_ATTENTION.active;
-  const nearestReset = React.useMemo(() => {
-    let nearest: number | null = null;
-    for (const item of activeAttention) {
-      if (item.kind !== "adapter_unrecoverable" || item.resetsAt === null) continue;
-      nearest = nearest === null ? item.resetsAt : Math.min(nearest, item.resetsAt);
-    }
-    return nearest;
-  }, [activeAttention]);
-  const [resumeNow, setResumeNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    setResumeNow(Date.now());
-    if (nearestReset === null) return;
-    const timer = window.setTimeout(() => setResumeNow(Date.now()), delayUntil(nearestReset));
-    return () => window.clearTimeout(timer);
-  }, [nearestReset]);
-  // The providers a first-run "Sign in" can offer — the ones with an in-app
-  // flow, in the same reachable-first order the Accounts list uses.
-  const signInProviders = React.useMemo<readonly SignInProviderOption[]>(
-    () =>
-      providers
-        .filter((provider) => provider.signIn.length > 0)
-        .toSorted((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
-        .map((provider) => ({ id: provider.id, label: provider.label })),
-    [providers],
-  );
-  const candidateBlocker = sessionBlocker(
-    {
-      sessionError: session.sessionError,
-      attention: projection?.attention ?? EMPTY_ATTENTION,
-      // The failure a notification click named, so the row shows THAT problem
-      // rather than whichever one happens to be newest (VC-295).
-      revealedAttentionId: revealed?.attentionId ?? null,
-      catalogState,
-      catalogError,
-      sessionModel,
-      signInProviders,
-      scheduledResume: projection?.scheduledResume ?? null,
-      now: resumeNow,
-    },
-    blockerActs,
-    interactions.length > 0,
-  );
-  const blockerPresentation = visibleBlocker(candidateBlocker, dismissedBlockerKey);
-  React.useEffect(() => {
-    if (blockerPresentation.dismissedKey !== dismissedBlockerKey) {
-      setDismissedBlockerKey(blockerPresentation.dismissedKey);
-    }
-  }, [blockerPresentation.dismissedKey, dismissedBlockerKey]);
-  const blocker = blockerPresentation.blocker;
-  const timelineBlocker = blocker?.placement === "timeline" ? blocker : null;
   const pendingMessages = held.filter(
     (message) =>
       message.state === "sending" &&
+      !(openingPending && message.id === openingId.current) &&
       !durableMessageIds.has(message.id) &&
       !queue.some((entry) => entry.id === message.id),
   );
-  const turnRunning = working || turnActive;
+  const turnRunning = working || turnActive || openingPending;
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
@@ -1680,13 +1743,15 @@ export function ChatPlane({
               it, with enough left that the last line lands on clean background
               rather than inside the fade. */}
                   <ConversationContent className="gap-4 px-0 pt-5 pb-[calc(var(--composer-height)+12rem)]">
-                    {messages.length === 0 && session.historyBefore === null && historyPending ? (
+                    {transcriptMessages.length === 0 &&
+                    session.historyBefore === null &&
+                    historyPending ? (
                       // History is on its way (VC-383). A null projection with no
                       // Draft behind it means the snapshot has not landed, and the
                       // empty state below would say "nothing was ever said here"
                       // about a Session that may hold a thousand turns.
                       <TranscriptSkeleton />
-                    ) : messages.length === 0 &&
+                    ) : transcriptMessages.length === 0 &&
                       session.historyBefore === null &&
                       pendingMessages.length === 0 &&
                       !turnRunning &&
@@ -2016,37 +2081,39 @@ export function PendingMessage({
   message: HeldMessage;
   context: TurnContext;
 }) {
-  const label = message.deliveryAccepted
-    ? message.delivery === "queue"
-      ? "Queued"
-      : "Delivered"
-    : message.delivery === "steer"
-      ? "Sends after this step"
+  const label =
+    message.deliveryAccepted || message.delivery === "steer"
+      ? message.delivery === "queue"
+        ? "Queued"
+        : "Delivered"
       : message.delivery === "queue"
         ? "Queuing…"
         : "Sending…";
   return (
     <ChatTurn
-      messages={[
-        {
-          id: message.id,
-          role: "user",
-          parts: [
-            { type: "text", text: message.text },
-            ...(message.attachments ?? []).map((attachment) => ({
-              type: "file" as const,
-              url: blobUrl(attachment.blobHash),
-              mediaType: attachment.mime,
-              filename: attachment.originalName,
-            })),
-          ],
-        },
-      ]}
+      messages={[pendingUserMessage(message)]}
       context={context}
       live={false}
       deliveryLabel={label}
     />
   );
+}
+
+/** Local and host-queued copies use the exact same sent-bubble shape. */
+function pendingUserMessage(message: QueuedMessage): UIMessage {
+  return {
+    id: message.id,
+    role: "user",
+    parts: [
+      { type: "text", text: message.text },
+      ...(message.attachments ?? []).map((attachment) => ({
+        type: "file" as const,
+        url: blobUrl(attachment.blobHash),
+        mediaType: attachment.mime,
+        filename: attachment.originalName,
+      })),
+    ],
+  };
 }
 
 /* ---------------------------------------------------------------- blocked */
@@ -2826,13 +2893,13 @@ export const ChatTurn = React.memo(function ChatTurn({
   // durable replacement use the same quiet markup at ownership handoff.
   const delivery = deliveryLabel ?? context.deliveryLabels?.get(first.id);
   const footer =
-    delivery === "Delivered" || delivery === "Recorded"
+    delivery === "Delivered" ||
+    delivery === "Recorded" ||
+    (delivery === "Pending" && context.steeringMessages?.has(first.id))
       ? undefined
-      : delivery === "Pending" && context.steeringMessages?.has(first.id)
-        ? "Sends after this step"
-        : delivery === "Pending"
-          ? "Sending…"
-          : delivery;
+      : delivery === "Pending"
+        ? "Sending…"
+        : delivery;
 
   return (
     <Message from={role} className="relative max-w-full">

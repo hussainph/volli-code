@@ -1,5 +1,7 @@
 /** Production ChatPlane with frozen renderer/store inputs, not a drawn facsimile.
- * ?state=first-token|thinking|tool|between-steps|text|steering|queued|error selects a proof state.
+ * ?state=attaching|sending|handoff|first-token|thinking|tool|between-steps|text|steering|queued|error selects a proof state.
+ * Attaching simulates local-held → host-queued → turn-open ownership without a queue strip.
+ * Steering has no delivery tab; queued remains a follow-up behind a running turn.
  * Also: background|moved-background|tools-updated|compaction surface audit fixtures.
  * No runtime or provider connection; these screenshots prove presentation only.
  */
@@ -311,27 +313,32 @@ export function seed() {
     "compaction",
   ].includes(state);
   const error = state === "error" || state === "error-scrolled" || state === "delivery-error";
-  const messages: UIMessage[] =
-    state === "working" || state === "sending" || state === "handoff" || state === "first-token"
-      ? []
-      : [
-          {
-            id: "request",
-            role: "user",
-            parts: [{ type: "text", text: "Check the release notes before we ship." }],
-          },
-          ...(error
-            ? []
-            : [
-                {
-                  id: "reply",
-                  role: "assistant" as const,
-                  parts: [
-                    { type: "text" as const, text: "I’m checking the release notes and tests." },
-                  ],
-                },
-              ]),
-        ];
+  const messages: UIMessage[] = [
+    "attaching",
+    "working",
+    "sending",
+    "handoff",
+    "first-token",
+  ].includes(state)
+    ? []
+    : [
+        {
+          id: "request",
+          role: "user",
+          parts: [{ type: "text", text: "Check the release notes before we ship." }],
+        },
+        ...(error
+          ? []
+          : [
+              {
+                id: "reply",
+                role: "assistant" as const,
+                parts: [
+                  { type: "text" as const, text: "I’m checking the release notes and tests." },
+                ],
+              },
+            ]),
+      ];
   if (state === "error-scrolled") {
     for (let index = 1; index <= 16; index++) {
       messages.push(
@@ -373,9 +380,11 @@ export function seed() {
     scheduledResume: null,
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
-    liveExecutor: { id: "chat-waiting-fixture-attachment" },
+    liveExecutor: state === "attaching" ? null : { id: "chat-waiting-fixture-attachment" },
   };
-  const slice = seedSlice(working ? "working" : "ready");
+  // Startup has no executor or open turn yet. The plane must infer the visible
+  // send/Working presentation from the first message, not invented turn facts.
+  const slice = seedSlice(state === "attaching" ? "starting" : working ? "working" : "ready");
   store.setState({
     sessions: {
       [SESSION]: {
@@ -438,20 +447,21 @@ export function seed() {
         text: "",
         attachments: [],
         touchedAt: 0,
-        held:
-          state === "sending" || state === "steering" || state === "handoff"
-            ? [
-                {
-                  id: state === "handoff" ? "request" : "pending",
-                  text:
-                    state !== "steering"
-                      ? "Check the release notes before we ship."
-                      : "Focus on the compatibility section first.",
-                  state: "sending",
-                  delivery: state === "steering" ? "steer" : "send",
-                },
-              ]
-            : [],
+        held: ["attaching", "sending", "steering", "handoff"].includes(state)
+          ? [
+              {
+                id: state === "handoff" || state === "attaching" ? "request" : "pending",
+                text:
+                  state !== "steering"
+                    ? "Check the release notes before we ship."
+                    : "Focus on the compatibility section first.",
+                state: "sending",
+                // Enter before the first turn is Send; the transport queues
+                // that send while attaching without changing composer intent.
+                delivery: state === "steering" ? "steer" : "send",
+              },
+            ]
+          : [],
       },
     },
   });
@@ -481,9 +491,55 @@ export function seed() {
   useProjectSessionsStore.setState({ byProject: { [PROJECT]: EMPTY_PROJECT_SESSION_ROWS } });
 }
 export default function ChatPolishScratch() {
-  const [handoff, setHandoff] = React.useState("pending");
+  const [handoff, setHandoff] = React.useState(
+    state === "attaching" ? "held-attaching" : "pending",
+  );
   function advanceHandoff() {
-    if (handoff === "pending") {
+    if (handoff === "held-attaching") {
+      // Simulated wiring: the host queue takes ownership while attachment is
+      // still pending. No transcript, executor, or turn has appeared yet.
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [
+              {
+                id: "request",
+                text: "Check the release notes before we ship.",
+                queueState: "queued",
+              },
+            ],
+            queueRevision: 2,
+          },
+        },
+      }));
+      setHandoff("queued-attaching");
+    } else if (handoff === "queued-attaching") {
+      // The same message becomes durable as the turn opens. Keep this plane
+      // mounted so captures can compare bubble/Working bounds at every stage.
+      store.setState(({ sessions }) => {
+        const current = sessions[SESSION]!;
+        return {
+          sessions: {
+            ...sessions,
+            [SESSION]: {
+              ...current,
+              lifecycle: "working",
+              projection: {
+                ...current.projection!,
+                turnActive: true,
+                liveExecutor: { id: "chat-waiting-fixture-attachment" },
+              },
+              transcript: acceptedStreamingTranscript(false),
+              queue: [],
+              queueRevision: 3,
+            },
+          },
+        };
+      });
+      setHandoff("durable-delivered");
+    } else if (handoff === "pending") {
       // Seed the same acknowledgement bit the client sets when its receipt arrives
       // before the stream. This is a presentation fixture, not a real send.
       useChatDraftsStore.getState().amendHeldMessage(SESSION, "request", (message) => ({
@@ -516,7 +572,7 @@ export default function ChatPolishScratch() {
             data-chat-waiting-state={state}
             data-chat-waiting-handoff={handoff}
           >
-            {state === "handoff" ? (
+            {state === "handoff" || state === "attaching" ? (
               <aside className="absolute top-4 left-2 z-10 flex w-40 flex-col gap-2 text-ui text-muted-foreground">
                 <span>Seeded lab presentation proof</span>
                 <span>{handoff}</span>
