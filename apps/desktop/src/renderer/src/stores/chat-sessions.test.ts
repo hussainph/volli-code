@@ -2667,6 +2667,27 @@ it("VC-758 keeps an accepted message visible until its delayed host projection l
 });
 
 describe("resident idle-send shadows", () => {
+  it.each(["accepted", "refused"] as const)(
+    "settles a queued idle-send shadow when the host command is %s",
+    async (outcome) => {
+      const { store, state } = fixture();
+      store.getState().adoptChatSession("durable-9");
+      await vi.waitFor(() =>
+        expect(store.getState().sessions["durable-9"]?.projection).not.toBeNull(),
+      );
+      store.getState().rememberIdleSend("durable-9", { id: "other", text: "another send" });
+      store.getState().rememberIdleSend("durable-9", { id: "q1", text: "first" });
+      if (outcome === "refused") state.answer = () => REFUSED;
+      await expect(
+        store.getState().enqueue("durable-9", { id: "q1", text: "first" }),
+      ).resolves.toBe(outcome === "accepted" ? "delivered" : "refused");
+      expect(store.getState().idleSends["durable-9"]?.find((row) => row.id === "q1")).toEqual(
+        outcome === "accepted" ? { id: "q1", text: "first", accepted: true } : undefined,
+      );
+      expect(store.getState().idleSends["durable-9"]?.[0]?.id).toBe("other");
+    },
+  );
+
   it("keeps multiple sends ordered and their accepted content across queue gaps, until explicitly retired", () => {
     const { store } = fixture();
     const state = store.getState();
