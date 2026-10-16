@@ -811,7 +811,9 @@ function SortableTab({ dragId, ...props }: TabProps & { dragId: string }) {
       aria-describedby={attributes["aria-describedby"]}
       style={{
         ...props.style,
-        transform: ghosted ? undefined : CSS.Transform.toString(transform),
+        // Surface strips use fixed tab-edge pairing targets. Moving siblings
+        // during a drag would separate the visible edge from its hit box.
+        transform: inSurface ? undefined : CSS.Transform.toString(transform),
         transition: transition ?? undefined,
       }}
       // Above its neighbours while it travels, so the tab being dragged is not

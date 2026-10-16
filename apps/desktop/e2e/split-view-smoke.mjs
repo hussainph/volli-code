@@ -158,14 +158,20 @@ function readGroups(page) {
 
 async function pairAtTabEdge(page, movingLabel, targetLabel, edge) {
   const target = page.getByRole("tab", { name: targetLabel, exact: true }).first();
-  const box = await target.boundingBox();
-  if (box === null) throw new Error(`no bounding box for pair target ${targetLabel}`);
   await dragTabTo(
     page,
     movingLabel,
-    {
-      x: box.x + box.width * (edge === "left" ? 0.1 : 0.9),
-      y: box.y + box.height / 2,
+    async () => {
+      await target.scrollIntoViewIfNeeded();
+      const box = await target.evaluate((tab) => {
+        const rect = tab.closest("[data-pair-target-id]")?.getBoundingClientRect();
+        return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+      });
+      if (box === null) throw new Error(`no bounds for pair target ${targetLabel}`);
+      return {
+        x: box.x + box.width * (edge === "left" ? 0.1 : 0.9),
+        y: box.y + box.height / 2,
+      };
     },
     { drop: false },
   );
@@ -255,14 +261,17 @@ async function openTicketViaCard(page, displayId) {
  * pointer sensor to activate (4px) and to measure a hover before the release.
  */
 async function dragTabTo(page, tabLabel, target, { drop = true } = {}) {
-  const from = await page.getByRole("tab", { name: tabLabel, exact: true }).first().boundingBox();
+  const source = page.getByRole("tab", { name: tabLabel, exact: true }).first();
+  await source.scrollIntoViewIfNeeded();
+  const from = await source.boundingBox();
   if (from === null) throw new Error(`no bounding box for tab ${tabLabel}`);
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   // Three steps: past the activation constraint, into the pane, onto the mark.
   await page.mouse.move(from.x + from.width / 2 + 12, from.y + from.height / 2 + 12, { steps: 4 });
-  await page.mouse.move(target.x, target.y, { steps: 12 });
-  await page.mouse.move(target.x, target.y, { steps: 2 });
+  const destination = typeof target === "function" ? await target() : target;
+  await page.mouse.move(destination.x, destination.y, { steps: 12 });
+  await page.mouse.move(destination.x, destination.y, { steps: 2 });
   if (drop) await page.mouse.up();
 }
 

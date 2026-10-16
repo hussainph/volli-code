@@ -151,22 +151,40 @@ async function closeFromCard(page, tabId) {
 
 /** Exercise the real tab-edge pairing gesture; no store or layout injection. */
 async function pairBrowsers(page, agentTab, personTab) {
+  await agentTab.scrollIntoViewIfNeeded();
   const from = await agentTab.boundingBox();
-  const to = await personTab.boundingBox();
-  if (from === null || to === null) throw new Error("browser pair tabs have no bounds");
+  if (from === null) throw new Error("browser source tab has no bounds");
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   try {
     await page.mouse.move(from.x + from.width / 2 + 12, from.y + from.height / 2 + 12, {
       steps: 4,
     });
+    // Activation can scroll an overflowing strip. Aim at its current visible
+    // wrapper, not a pre-drag child rectangle displaced by that scroll.
+    await personTab.scrollIntoViewIfNeeded();
+    const to = await personTab.evaluate((tab) => {
+      const box = tab.closest("[data-pair-target-id]")?.getBoundingClientRect();
+      return box ? { x: box.x, y: box.y, width: box.width, height: box.height } : null;
+    });
+    if (to === null) throw new Error("browser pair target has no bounds");
     await page.mouse.move(to.x + to.width * 0.9, to.y + to.height / 2, { steps: 12 });
     await waitUntil("browser tab's right-edge pairing preview", () =>
       personTab.evaluate(
         (tab) =>
           tab.closest("[data-pair-target-id]")?.getAttribute("data-pair-drop-edge") === "right",
       ),
-    );
+    ).catch(async (error) => {
+      const geometry = await personTab.evaluate((tab) => ({
+        child: tab.getBoundingClientRect().toJSON(),
+        wrapper: tab.closest("[data-pair-target-id]")?.getBoundingClientRect().toJSON(),
+        transform: getComputedStyle(tab).transform,
+        scrollLeft: tab.closest('[data-slot="tab-scroll"]')?.scrollLeft,
+      }));
+      throw new Error(
+        `${error.message}; target=${JSON.stringify(to)} actual=${JSON.stringify(geometry)}`,
+      );
+    });
   } finally {
     await page.mouse.up();
   }

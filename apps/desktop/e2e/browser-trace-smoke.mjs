@@ -334,18 +334,25 @@ const replayPosition = (page) => replay(page).locator("[data-trace-position]");
 const replayCaption = (page) => replay(page).locator("[data-trace-caption]");
 
 /** Drive the actual transcript disclosures; Replay no longer lives in the Island. */
-async function openReplayFromTranscript(page, sessionId, tabId, entryCount) {
+async function openReplayFromTranscript(page, sessionId, tabId, expectedTabIds) {
   await chatTab(page, sessionId).click();
   const bundles = page.locator('[data-slot="activity-bundle-header"]');
-  await waitUntil(
-    "the persisted browse entries in the transcript",
-    async () => (await bundles.count()) === entryCount,
-  );
-  const header = bundles.last();
-  if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
-  const bundle = header.locator("..");
-  await bundle.getByRole("button", { name: "Show details", exact: true }).click();
-  const card = bundle.locator(`[data-browser-tab-card="${tabId}"]`);
+  await waitUntil("the persisted browse entries in the transcript", async () => {
+    // Adjacent assistant tool entries share a bundle, even across ledger turns.
+    // Open the real bundle and row disclosures, then count cards, not headers.
+    for (const header of await bundles.all()) {
+      if ((await header.getAttribute("aria-expanded")) !== "true") await header.click();
+      const details = header
+        .locator("..")
+        .getByRole("button", { name: "Show details", exact: true });
+      while ((await details.count()) > 0) await details.first().click();
+    }
+    const actualTabIds = await page
+      .locator("[data-browser-tab-card]")
+      .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-browser-tab-card")));
+    return canonical(actualTabIds.toSorted()) === canonical(expectedTabIds.toSorted());
+  });
+  const card = page.locator(`[data-browser-tab-card="${tabId}"]`);
   await waitUntil("the transcript's BrowserTabCard", async () => (await card.count()) === 1);
   await card.getByRole("button", { name: "Replay", exact: true }).click();
   await waitUntil("the replay dialog", async () =>
@@ -553,7 +560,7 @@ async function main() {
     3,
     "the replay opens from the transcript BrowserTabCard and steps through the frames with the keyboard",
     async () => {
-      await openReplayFromTranscript(page, sessionId, driven.tabId, 1);
+      await openReplayFromTranscript(page, sessionId, driven.tabId, [driven.tabId]);
       const opened = await replayPosition(page).textContent();
       const expectedFrames = shownFrames(recorded[0].steps);
       const walked = await walkReplay(page, expectedFrames);
@@ -693,7 +700,7 @@ async function main() {
       // Retain replay coverage while a recorded tab is still live, as well as
       // the disk-only path below. The durable older card opens at its own tab;
       // End reaches the new tab's live step in this Session-wide timeline.
-      await openReplayFromTranscript(page, sessionId, driven.tabId, 1);
+      await openReplayFromTranscript(page, sessionId, driven.tabId, [driven.tabId]);
       await page.keyboard.press("End");
       await waitUntil(
         "the new live replay step",
@@ -706,7 +713,7 @@ async function main() {
       app = null;
       await persistReplayEntry(sessionId, latestTrace, 2);
       page = await boot();
-      await openReplayFromTranscript(page, sessionId, tabId, 2);
+      await openReplayFromTranscript(page, sessionId, tabId, [driven.tabId, tabId]);
       const opened = await replayPosition(page).textContent();
       const before = shownFrames(recorded[0].steps);
       const walked = await walkReplay(page, [...before, latest]);

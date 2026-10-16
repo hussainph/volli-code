@@ -151,6 +151,13 @@ export function SplitDnd({
   children,
 }: SplitDndProps) {
   const areaRef = React.useRef<HTMLDivElement>(null);
+  // Collision coordinates are viewport coordinates. Drag-event delta also
+  // includes scroll compensation and cannot be added to the activation point.
+  const pointerRef = React.useRef<{ x: number; y: number } | null>(null);
+  const collisionDetection = React.useCallback<CollisionDetection>((args) => {
+    pointerRef.current = args.pointerCoordinates;
+    return splitCollision(args);
+  }, []);
   const previewRef = React.useRef<HTMLElement | null>(null);
   const clearPairPreview = React.useCallback(() => {
     previewRef.current?.removeAttribute("data-pair-drop-edge");
@@ -159,13 +166,19 @@ export function SplitDnd({
   const pairDrop = React.useCallback(
     (event: DragMoveEvent | DragEndEvent) => {
       if (onPairTabs === undefined || !(event.activatorEvent instanceof MouseEvent)) return null;
-      const x = event.activatorEvent.clientX + event.delta.x;
-      const y = event.activatorEvent.clientY + event.delta.y;
+      const pointer = pointerRef.current;
+      if (pointer === null) return null;
+      const { x, y } = pointer;
       const area = areaRef.current;
       for (const target of area?.querySelectorAll<HTMLElement>("[data-pair-target-id]") ?? []) {
         if (target.closest("[data-split-area]") !== area) continue;
         const id = target.dataset.pairTargetId;
         if (id === undefined || id === String(event.active.id)) continue;
+        const scroller = target.closest('[data-slot="tab-scroll"]');
+        if (scroller !== null) {
+          const clip = scroller.getBoundingClientRect();
+          if (x < clip.left || x > clip.right || y < clip.top || y > clip.bottom) continue;
+        }
         const rect = target.getBoundingClientRect();
         if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
         const fraction = (x - rect.left) / rect.width;
@@ -241,7 +254,7 @@ export function SplitDnd({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={splitCollision}
+      collisionDetection={collisionDetection}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragMove={(event) => {
