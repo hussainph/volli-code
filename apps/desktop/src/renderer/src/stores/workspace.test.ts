@@ -3647,6 +3647,22 @@ describe("legacy workspace split migration", () => {
         HOME_BOARD_TAB_ID,
       ).panes.map((leaf) => leaf.activeTabId),
     ).toEqual(["chat:c2"]);
+
+    // Subsequent writes use grouped semantics too: dissolving the migrated
+    // pair must not replace the authoritative strip with an old pane's claims.
+    store.getState().closeHomePane("project-a", "p2");
+    store.getState().closeTicketPane("project-a", "ticket-1", "p2");
+    expect(homeSplit(store)).toBeNull();
+    expect(ticketSplit(store)).toBeNull();
+    const collapsed = store.getState().byProject["project-a"]!;
+    expect(collapsed.homeTabOrder).toEqual(ui.homeTabOrder);
+    expect(collapsed.ticketTabs["ticket-1"]!.tabOrder).toEqual(ui.ticketTabs["ticket-1"]!.tabOrder);
+    expect(collapsed.ticketTabs["ticket-1"]!.files).toEqual(ui.ticketTabs["ticket-1"]!.files);
+    expect(collapsed.ticketTabs["ticket-1"]!.diffs).toEqual(ui.ticketTabs["ticket-1"]!.diffs);
+    const restored = createWorkspaceStore(storage);
+    expect(homeSplit(restored)).toBeNull();
+    expect(ticketSplit(restored)).toBeNull();
+    expect(restored.getState().byProject["project-a"]?.homeTabOrder).toEqual(ui.homeTabOrder);
   });
 });
 
@@ -3686,5 +3702,166 @@ describe("pair drop anchors and Board focus", () => {
     expect(store.getState().byProject["project-a"]?.openTicketId).toBeNull();
     expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe(HOME_BOARD_TAB_ID);
     expect(homeSplit(store)?.pairs).toHaveLength(1);
+  });
+});
+
+// The surface owns tab order; pane-local callbacks remain wired for older drop
+// paths, but a bounded pair has no hidden pane strip to reorder.
+describe.each(["Home", "Ticket"] as const)("grouped pane bookkeeping — %s", (surface) => {
+  const permanent = surface === "Home" ? HOME_BOARD_TAB_ID : TICKET_BODY_TAB_ID;
+  const read = (store: Store) => (surface === "Home" ? homeSplit(store) : ticketSplit(store));
+  const active = (store: Store) => {
+    const ui = store.getState().byProject["project-a"];
+    return surface === "Home" ? ui?.homeActiveTab : ui?.ticketTabs["ticket-1"]?.active;
+  };
+  const select = (store: Store, id: string) => {
+    if (surface === "Home") store.getState().setHomeActiveTab("project-a", id);
+    else store.getState().setTicketActiveTab("project-a", "ticket-1", id);
+  };
+  const pair = (store: Store, first: string, second: string) => {
+    if (surface === "Home") store.getState().pairHomeTabs("project-a", first, second);
+    else store.getState().pairTicketTabs("project-a", "ticket-1", first, second);
+  };
+  const remove = (store: Store, id: string) => {
+    if (surface === "Home") store.getState().removeHomeTabFromSplit("project-a", id);
+    else store.getState().removeTicketTabFromSplit("project-a", "ticket-1", id);
+  };
+  const move = (store: Store, id: string) => {
+    if (surface === "Home") store.getState().moveHomeTabInPane("project-a", "n1", id, [id]);
+    else store.getState().moveTicketTabInPane("project-a", "ticket-1", "n1", id, [id]);
+  };
+  const preview = (store: Store, path: string) => {
+    if (surface === "Home") store.getState().previewHomeFile("project-a", path);
+    else store.getState().previewTicketFile("project-a", "ticket-1", path);
+  };
+
+  it("leaves untouched projects and unsplit workspaces unchanged on pane callbacks", () => {
+    const store = splitStore();
+    const empty = store.getState();
+    move(store, "file:missing.ts");
+    remove(store, "chat:missing");
+    expect(store.getState()).toBe(empty);
+    select(store, "chat:ordinary");
+    const unsplit = store.getState();
+    move(store, "file:missing.ts");
+    remove(store, "chat:missing");
+    if (surface === "Home") store.getState().focusHomePane("project-a", "root");
+    else store.getState().focusTicketPane("project-a", "ticket-1", "root");
+    expect(store.getState()).toBe(unsplit);
+  });
+
+  it("pins a dragged preview without changing pairs, selection or strip arrangement", () => {
+    const store = splitStore();
+    preview(store, "kept.ts");
+    if (surface === "Home") store.getState().pinHomeFile("project-a", "kept.ts");
+    else store.getState().pinTicketFile("project-a", "ticket-1", "kept.ts");
+    preview(store, "preview.ts");
+    const order = ["file:preview.ts", "chat:one", "file:kept.ts"];
+    if (surface === "Home") store.getState().moveHomeTab("project-a", "chat:one", order);
+    else store.getState().moveTicketTab("project-a", "ticket-1", "chat:one", order);
+    pair(store, "chat:one", "file:preview.ts");
+    const split = read(store);
+
+    move(store, "file:preview.ts");
+
+    const ui = store.getState().byProject["project-a"]!;
+    expect(surface === "Home" ? ui.projectFiles.tabs : ui.ticketTabs["ticket-1"]!.files).toEqual([
+      { relPath: "kept.ts", pinned: true },
+      { relPath: "preview.ts", pinned: true },
+    ]);
+    expect(surface === "Home" ? ui.homeTabOrder : ui.ticketTabs["ticket-1"]!.tabOrder).toEqual(
+      order,
+    );
+    expect(read(store)).toBe(split);
+    expect(active(store)).toBe("file:preview.ts");
+    const pinned = store.getState();
+    move(store, "file:preview.ts");
+    move(store, "file:missing.ts");
+    move(store, "chat:one");
+    expect(store.getState()).toBe(pinned);
+  });
+
+  it("retains surface context when resizing hidden pairs and removing a background member", () => {
+    const store = splitStore();
+    pair(store, "chat:one", "browser:one");
+    const splitId = read(store)!.pairs![0]!.id;
+    select(store, "chat:ordinary");
+    remove(store, "chat:ordinary");
+    expect(active(store)).toBe(permanent);
+    expect(read(store)?.selectedTabId).toBeNull();
+
+    if (surface === "Home") store.getState().setHomeSplitRatio("project-a", splitId, 0.3);
+    else store.getState().setTicketSplitRatio("project-a", "ticket-1", splitId, 0.3);
+
+    expect(read(store)?.pairs?.[0]?.ratio).toBe(0.3);
+    expect(active(store)).toBe(permanent);
+    remove(store, "chat:one");
+    expect(active(store)).toBe(permanent);
+    expect(read(store)).toBeNull();
+  });
+
+  it("returns to the other file when closing a pair's active file", () => {
+    const store = splitStore();
+    preview(store, "first.ts");
+    if (surface === "Home") store.getState().pinHomeFile("project-a", "first.ts");
+    else store.getState().pinTicketFile("project-a", "ticket-1", "first.ts");
+    preview(store, "second.ts");
+    pair(store, "file:first.ts", "file:second.ts");
+
+    if (surface === "Home") store.getState().closeHomeFile("project-a", "second.ts", []);
+    else store.getState().closeTicketFile("project-a", "ticket-1", "second.ts");
+
+    expect(active(store)).toBe("file:first.ts");
+    expect(read(store)).toBeNull();
+    if (surface === "Home") {
+      expect(store.getState().byProject["project-a"]?.projectFiles.activeRelPath).toBe("first.ts");
+    }
+  });
+});
+
+describe("background Home file rename in grouped state", () => {
+  it("leaves unrelated pair metadata unchanged when the file is not a member", () => {
+    const store = splitStore();
+    store.getState().previewHomeFile("project-a", "before.ts");
+    store.getState().pairHomeTabs("project-a", "chat:one", "browser:one");
+    const split = homeSplit(store);
+
+    store.getState().renameHomeFile("project-a", "before.ts", "after.ts");
+
+    expect(homeSplit(store)).toBe(split);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("browser:one");
+    expect(store.getState().byProject["project-a"]?.projectFiles.tabs).toEqual([
+      { relPath: "after.ts", pinned: false },
+    ]);
+  });
+
+  it("carries membership without selecting the renamed file or filling a partner menu", () => {
+    const store = splitStore();
+    store.getState().previewHomeFile("project-a", "before.ts");
+    store.getState().pairHomeTabs("project-a", "file:before.ts", "chat:one");
+    store.getState().pairHomeTabs("project-a", "browser:one", null);
+    const focused = homeSplit(store)!.focusedPaneId;
+
+    store.getState().renameHomeFile("project-a", "before.ts", "after.ts");
+
+    expect(pairForTab(homeSplit(store), "file:after.ts")?.second.activeTabId).toBe("chat:one");
+    expect(pairForTab(homeSplit(store), "file:before.ts")).toBeNull();
+    expect(homeSplit(store)?.focusedPaneId).toBe(focused);
+    expect(homeSplit(store)?.pairs).toHaveLength(2);
+    expect(store.getState().byProject["project-a"]?.homeActiveTab).toBe("browser:one");
+  });
+});
+
+describe("closing a pending ticket pair's only file", () => {
+  it("returns to Ticket Body and prunes the empty ticket record", () => {
+    const store = splitStore();
+    store.getState().previewTicketFile("project-a", "ticket-1", "only.ts");
+    store.getState().splitTicketPane("project-a", "ticket-1", "root", "right");
+    expect(ticketSplit(store)?.pairs).toHaveLength(1);
+
+    store.getState().closeTicketFile("project-a", "ticket-1", "only.ts");
+
+    expect(store.getState().byProject["project-a"]?.ticketTabs["ticket-1"]).toBeUndefined();
+    expect(ticketSplit(store)).toBeNull();
   });
 });

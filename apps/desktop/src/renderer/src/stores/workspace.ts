@@ -42,7 +42,6 @@ import {
   EMPTY_TAB_ORDER,
   focusAdjacentPane,
   focusPane,
-  isSinglePane,
   markFileEdited,
   moveFile,
   moveTabToPane,
@@ -56,7 +55,6 @@ import {
   renamedTabInSplitView,
   renamedTabOrder,
   renameFile,
-  reorderPaneTabs,
   sanitizeFileWorkspace,
   sanitizeSplitView,
   sanitizeTabOrder,
@@ -68,7 +66,6 @@ import {
   type FileWorkspaceTab,
   type SplitViewEdge,
   type SplitViewFocusDirection,
-  type SplitViewPane,
   type SplitViewState,
   type TabOrder,
   type TicketSort,
@@ -470,38 +467,21 @@ function activateInSplit(
 }
 
 /**
- * The strip's arrangement after a split collapsed onto one pane: the surviving
- * pane's order, so the merged strip keeps the order the panes had.
- *
- * The permanent tab is dropped from it because it is not part of an
- * arrangement at all — both strips slice their fixed leading tab off before
- * sorting (`tab-order.ts`).
- */
-function collapsedTabOrder(pane: SplitViewPane, permanentTabId: string): TabOrder {
-  return sanitizeTabOrder(pane.tabIds.filter((id) => id !== permanentTabId));
-}
-
-/**
  * What Home writes after a split-view operation. `null` means "nothing to
  * write" — the surface is not split, or the operation changed nothing — which
  * is what keeps every unsplit path byte-for-byte what it was.
  */
 function homeSplitWrite(next: SplitViewState | null): Partial<WorkspaceUiState> {
   if (next === null) return {};
-  if (next.pairs !== undefined) return { homeSplitView: next.pairs.length === 0 ? null : next };
-  if (!isSinglePane(next)) return { homeSplitView: next };
-  return {
-    homeSplitView: null,
-    homeTabOrder: collapsedTabOrder(next.root, HOME_BOARD_TAB_ID),
-  };
+  // Every entry point creates grouped state or sanitizes legacy trees into it.
+  // Dissolving a pair never rewrites the surface's authoritative arrangement.
+  return { homeSplitView: next.pairs!.length === 0 ? null : next };
 }
 
 /** {@link homeSplitWrite} one scope down, onto a ticket's own record. */
 function ticketSplitWrite(next: SplitViewState | null): Partial<TicketTabsState> {
   if (next === null) return {};
-  if (next.pairs !== undefined) return { splitView: next.pairs.length === 0 ? null : next };
-  if (!isSinglePane(next)) return { splitView: next };
-  return { splitView: null, tabOrder: collapsedTabOrder(next.root, BODY_TAB_ID) };
+  return { splitView: next.pairs!.length === 0 ? null : next };
 }
 
 /** Home's split view after activating `tabId`, or null when there is nothing to write. */
@@ -979,11 +959,9 @@ interface WorkspaceState {
   /** {@link WorkspaceState.closeHomePane} for a ticket workspace. */
   closeTicketPane(projectId: string, ticketId: string, paneId: string): void;
   /**
-   * {@link WorkspaceState.moveHomeTab} INSIDE one pane: `order` is that pane's
-   * movable tab ids as the drop left them. The surface-level arrangement is not
-   * touched while split — a pane's order is the pane's — but a dragged preview
-   * tab is still pinned, because arranging a tab is deliberate wherever it
-   * landed (VC-189).
+   * Compatibility door for a pane-local drag. Grouped panes contain one member,
+   * so pane order has no effect; the authoritative surface arrangement stays
+   * untouched. Dragging a preview still pins it.
    */
   moveHomeTabInPane(
     projectId: string,
@@ -2379,12 +2357,11 @@ export function createWorkspaceStore(
           );
         },
 
-        moveHomeTabInPane(projectId, paneId, movedId, order) {
+        moveHomeTabInPane(projectId, _paneId, movedId, _order) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             const split = current.homeSplitView ?? null;
             if (split === null) return state;
-            const next = reorderPaneTabs(split, paneId, sanitizeTabOrder(order));
             // The File half of `moveHomeTab`, minus its list reorder: where a
             // file sits in the SURFACE's file list is not what a drag inside one
             // pane decided, so the file is moved onto its own index — which is
@@ -2399,38 +2376,26 @@ export function createWorkspaceStore(
                     relPath,
                     current.projectFiles.tabs.findIndex((tab) => tab.relPath === relPath),
                   );
-            if (next === split && projectFiles === current.projectFiles) return state;
-            return patchWorkspace(state, projectId, {
-              ...homeSplitWrite(next === split ? null : next),
-              projectFiles,
-            });
+            if (projectFiles === current.projectFiles) return state;
+            return patchWorkspace(state, projectId, { projectFiles });
           });
         },
 
-        moveTicketTabInPane(projectId, ticketId, paneId, movedId, order) {
+        moveTicketTabInPane(projectId, ticketId, _paneId, movedId, _order) {
           set((state) => {
             const current = state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI;
             const existing = current.ticketTabs[ticketId];
             if (existing === undefined || (existing.splitView ?? null) === null) return state;
-            const split = existing.splitView!;
-            const reordered = reorderPaneTabs(split, paneId, sanitizeTabOrder(order));
-            let next: TicketTabsState = {
-              ...existing,
-              ...ticketSplitWrite(reordered === split ? null : reordered),
-            };
             const relPath = parseFileTabId(movedId);
-            const pinned =
-              relPath === null
-                ? null
-                : applyTicketFileTransition(next, (files) =>
-                    moveFile(
-                      files,
-                      relPath,
-                      files.tabs.findIndex((tab) => tab.relPath === relPath),
-                    ),
-                  );
-            if (reordered === split && pinned === null) return state;
-            next = pinned ?? next;
+            if (relPath === null) return state;
+            const next = applyTicketFileTransition(existing, (files) =>
+              moveFile(
+                files,
+                relPath,
+                files.tabs.findIndex((tab) => tab.relPath === relPath),
+              ),
+            );
+            if (next === null) return state;
             return patchWorkspace(state, projectId, {
               ticketTabs: { ...current.ticketTabs, [ticketId]: next },
             });
