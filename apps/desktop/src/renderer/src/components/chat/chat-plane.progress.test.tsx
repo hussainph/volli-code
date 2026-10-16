@@ -154,7 +154,6 @@ describe("Working visual and screen-reader lifetimes", () => {
 describe("calm message delivery timing", () => {
   it.each([
     ["send", "Sending…"],
-    ["steer", "Sends after this step"],
     ["queue", "Queuing…"],
   ] as const)("delays %s state 600ms but never delays the words", async (delivery, copy) => {
     await render(
@@ -173,7 +172,19 @@ describe("calm message delivery timing", () => {
     expect(container.textContent).not.toContain("Pending");
   });
 
-  it("delays durable pending steering too, not only held messages", async () => {
+  it("never adds a tab to held steering", async () => {
+    await render(
+      <PendingMessage
+        message={{ id: "steer", text: "Keep these words", state: "sending", delivery: "steer" }}
+        context={context}
+      />,
+    );
+    await advance(5000);
+    expect(container.textContent).toContain("Keep these words");
+    expect(footer()).toBeNull();
+  });
+
+  it("keeps durable pending steering quiet, not only held messages", async () => {
     await render(
       <ChatTurn
         messages={[user]}
@@ -189,7 +200,9 @@ describe("calm message delivery timing", () => {
     await advance(599);
     expect(footer()).toBeNull();
     await advance(1);
-    expect(footer()?.textContent).toBe("Sends after this step");
+    expect(footer()).toBeNull();
+    await advance(1000);
+    expect(footer()).toBeNull();
   });
 
   it("never flashes state for a send accepted before 600ms, including after its old deadline", async () => {
