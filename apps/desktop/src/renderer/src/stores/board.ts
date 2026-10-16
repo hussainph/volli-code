@@ -14,6 +14,7 @@
  */
 import {
   EMPTY_TICKET_FILTER,
+  errorMessage,
   moveTicket as moveTicketOp,
   moveTickets as moveTicketsOp,
   setTicketPriority as setTicketPriorityOp,
@@ -36,6 +37,8 @@ import type {
 } from "../../../ipc/contract";
 import { create } from "zustand";
 
+import { boardProtocol } from "@renderer/lib/board-protocol";
+import { toastError } from "@renderer/lib/toast";
 import { killTicketSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useChatSessionsStore } from "./chat-sessions";
@@ -263,6 +266,20 @@ export interface BoardState {
    */
   adoptTicketBody(projectId: string, ticketId: string, body: string): void;
   /**
+   * Paints one Workspace's board as the protocol path holds it (VC-565,
+   * `cloud` on): the host's confirmed rows with this window's pending writes
+   * replayed over them (`board-sync.ts`). Every ticket and label that did not
+   * change keeps its object identity, so a repaint re-renders only the cards
+   * it moved. `unloadedBodies` are the rows whose body this window has not
+   * read (VC-387).
+   */
+  paintProtocolBoard(
+    projectId: string,
+    tickets: Ticket[],
+    labels: Label[],
+    unloadedBodies: ReadonlySet<string>,
+  ): void;
+  /**
    * Seeds empty `ticketsByProject`/`labelsByProject` slices for a project that
    * didn't exist at boot — mirroring the wholesale seed `hydrate` does from
    * the bootstrap payload (see lib/boot.ts), for the one path that bypasses
@@ -376,6 +393,14 @@ export interface BoardState {
   forget(projectId: string): void;
 }
 
+/** The create options a caller actually supplied: `undefined` means "the host's default". */
+function definedOptions<Options extends object>(options: Options | undefined): Partial<Options> {
+  if (options === undefined) return {};
+  return Object.fromEntries(
+    Object.entries(options).filter(([, value]) => value !== undefined),
+  ) as Partial<Options>;
+}
+
 /** Toggles `value` in `values`: drops it if present, appends it otherwise. */
 function toggleValue<T>(values: readonly T[], value: T): T[] {
   return values.includes(value) ? values.filter((v) => v !== value) : [...values, value];
@@ -448,6 +473,46 @@ function teardownProjectChatTabs(projectId: string, slice: readonly Ticket[]): v
   const openTabs = useChatSessionsStore.getState().openTabs;
   const orphaned = [projectId, ...slice.map((ticket) => ticket.id)].filter((id) => id in openTabs);
   if (orphaned.length > 0) useChatSessionsStore.getState().dropChatTabs(orphaned);
+}
+
+/** Whether two tickets hold the same values: their label lists compared by element. */
+function sameTicket(left: Ticket, right: Ticket): boolean {
+  const keys = Object.keys(right) as (keyof Ticket)[];
+  if (Object.keys(left).length !== keys.length) return false;
+  return keys.every((key) =>
+    key === "labels" ? sameIds(left.labels, right.labels) : left[key] === right[key],
+  );
+}
+
+/**
+ * `next`, with every element that equals its predecessor (by `id`) replaced by
+ * that predecessor's object, and `previous` itself when nothing changed at
+ * all (VC-447): a refresh that read back the same rows mints no new objects,
+ * so a memoized card or row re-renders only when its own data moved.
+ */
+export function preserveIdentities<T extends { id: string }>(
+  previous: readonly T[],
+  next: readonly T[],
+  same: (left: T, right: T) => boolean,
+): T[] {
+  const byId = new Map(previous.map((item) => [item.id, item]));
+  let unchanged = previous.length === next.length;
+  const kept = next.map((item, index) => {
+    const prior = byId.get(item.id);
+    const reused = prior !== undefined && same(prior, item) ? prior : item;
+    if (reused !== previous[index]) unchanged = false;
+    return reused;
+  });
+  return unchanged ? (previous as T[]) : kept;
+}
+
+function sameLabel(left: Label, right: Label): boolean {
+  return (
+    left.id === right.id &&
+    left.projectId === right.projectId &&
+    left.name === right.name &&
+    left.color === right.color
+  );
 }
 
 /** Factory so tests can inject a fake gateway instead of the real preload bridge. */
@@ -614,6 +679,33 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
     }
 
+    /**
+     * What a confirmed archive does after its terminals end and it leaves the
+     * board, on either path: drops the stale Archive slice, and takes the card
+     * out of the selection.
+     */
+    function afterArchived(projectId: string, ticketId: string): void {
+      // The ticket is now archived; any cached Archive slice is stale, so drop
+      // it — the next `loadArchived` (on Archive-view open) refetches it in.
+      const { archivedByProject } = get();
+      if (projectId in archivedByProject) {
+        const next = { ...archivedByProject };
+        delete next[projectId];
+        set({ archivedByProject: next });
+      }
+      // An archived card can't stay in a multi-selection. Keep its selected
+      // siblings; drop the project record only when this was the last one.
+      const { selectedByProject } = get();
+      const selected = selectedByProject[projectId];
+      if (selected?.includes(ticketId)) {
+        const remaining = selected.filter((id) => id !== ticketId);
+        const next = { ...selectedByProject };
+        if (remaining.length === 0) delete next[projectId];
+        else next[projectId] = remaining;
+        set({ selectedByProject: next });
+      }
+    }
+
     /** Shared optimistic/write-through/reconcile path for one-card and group moves. */
     async function persistMove(
       projectId: string,
@@ -679,7 +771,13 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const previous = get().ticketsByProject[projectId];
         if (previous === undefined) return;
         const bodyById = new Map(previous.map((ticket) => [ticket.id, ticket.body]));
-        const next = tickets.map((row) => ({ ...row, body: bodyById.get(row.id) ?? "" }));
+        // Every row the read answered unchanged keeps its object (VC-447): an
+        // agent's comment no longer re-renders every card on the board.
+        const next = preserveIdentities(
+          previous,
+          tickets.map((row) => ({ ...row, body: bodyById.get(row.id) ?? "" })),
+          sameTicket,
+        );
         // A row this renderer has not seen before got a PLACEHOLDER body above,
         // not a read one. Marked here so no surface mistakes it for an empty
         // body a person wrote. A row already on the board keeps whatever mark it
@@ -692,7 +790,14 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         for (const ticket of previous) if (!survivingIds.has(ticket.id)) delete unloaded[ticket.id];
         set({
           ticketsByProject: { ...get().ticketsByProject, [projectId]: next },
-          labelsByProject: { ...get().labelsByProject, [projectId]: labels },
+          labelsByProject: {
+            ...get().labelsByProject,
+            [projectId]: preserveIdentities(
+              get().labelsByProject[projectId] ?? [],
+              labels,
+              sameLabel,
+            ),
+          },
           unloadedTicketBodies: unloaded,
         });
         // The same re-home a wholesale hydrate does, for the same reason: a CLI
@@ -702,6 +807,9 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       adoptTicketBody(projectId, ticketId, body) {
+        // The protocol path keeps the bodies it has read beside its base, so
+        // its next repaint keeps this one.
+        boardProtocol()?.sync.adoptBody(ticketId, body);
         const slice = get().ticketsByProject[projectId];
         if (slice === undefined) return;
         const index = slice.findIndex((ticket) => ticket.id === ticketId);
@@ -724,6 +832,36 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           ticketsByProject: { ...get().ticketsByProject, [projectId]: next },
           ...(loaded === undefined ? {} : { unloadedTicketBodies: loaded }),
         });
+      },
+
+      paintProtocolBoard(projectId, tickets, labels, unloadedBodies) {
+        const previous = get().ticketsByProject[projectId] ?? [];
+        const next = preserveIdentities(previous, tickets, sameTicket);
+        const previousLabels = get().labelsByProject[projectId] ?? [];
+        const nextLabels = preserveIdentities(previousLabels, labels, sameLabel);
+        const unloaded = { ...get().unloadedTicketBodies };
+        let marksChanged = false;
+        for (const ticket of next) {
+          const marked = unloaded[ticket.id] !== undefined;
+          if (unloadedBodies.has(ticket.id) === marked) continue;
+          marksChanged = true;
+          if (marked) delete unloaded[ticket.id];
+          else unloaded[ticket.id] = true;
+        }
+        const sliceChanged = !(projectId in get().ticketsByProject) || next !== previous;
+        const labelsChanged =
+          !(projectId in get().labelsByProject) || nextLabels !== previousLabels;
+        if (!sliceChanged && !labelsChanged && !marksChanged) return;
+        set({
+          ...(sliceChanged
+            ? { ticketsByProject: { ...get().ticketsByProject, [projectId]: next } }
+            : {}),
+          ...(labelsChanged
+            ? { labelsByProject: { ...get().labelsByProject, [projectId]: nextLabels } }
+            : {}),
+          ...(marksChanged ? { unloadedTicketBodies: unloaded } : {}),
+        });
+        if (sliceChanged) reconcileTicketChatTabOwners(projectId, previous, next);
       },
 
       hydrate(ticketsByProject, labelsByProject) {
@@ -758,11 +896,27 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           ticketsByProject: { ...ticketsByProject, [projectId]: [] },
           labelsByProject: { ...labelsByProject, [projectId]: [] },
         });
+        // The protocol path follows the new Workspace's board and feed.
+        const protocol = boardProtocol();
+        if (protocol !== null && !protocol.sync.follows(projectId)) {
+          void protocol.sync.open(projectId).catch((error: unknown) => {
+            toastError(`Couldn't open the board: ${errorMessage(error)}`);
+          });
+        }
       },
 
       async addTicket(projectId, status, title, options) {
         const trimmed = title.trim();
         if (trimmed === "") return null;
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          // A placeholder shows at once; the confirmed row replaces it (T5).
+          return protocol.sync.createTicket(projectId, {
+            status,
+            title: trimmed,
+            ...definedOptions(options),
+          });
+        }
 
         const result = await writeThrough("create ticket", (): Promise<TicketResult> =>
           gateway.createTicket({
@@ -787,6 +941,11 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       async moveTicket(projectId, ticketId, toStatus, toIndex, choice) {
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          await protocol.sync.moveTickets(projectId, [ticketId], toStatus, toIndex, choice);
+          return;
+        }
         await persistMove(
           projectId,
           (previous) => moveTicketOp(previous, ticketId, toStatus, toIndex, Date.now()),
@@ -804,6 +963,11 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
 
       async moveTickets(projectId, ticketIds, toStatus, toIndex, choice) {
         const ids = uniqueIds(ticketIds);
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          await protocol.sync.moveTickets(projectId, ids, toStatus, toIndex, choice);
+          return;
+        }
         await persistMove(
           projectId,
           (previous) => moveTicketsOp(previous, ids, toStatus, toIndex, Date.now()),
@@ -824,6 +988,11 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const original = previous.find((ticket) => ticket.id === ticketId);
         const optimistic = setTicketPriorityOp(previous, ticketId, priority, Date.now());
         if (!original || optimistic === previous) return; // unknown id or unchanged priority (the shared op's no-op guard)
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          await protocol.sync.setPriority(projectId, ticketId, priority);
+          return;
+        }
         set({ ticketsByProject: { ...get().ticketsByProject, [projectId]: optimistic } });
 
         // Priority never reorders a column (the shared op only edits the
@@ -859,12 +1028,31 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         if (changes.usesWorktree !== undefined)
           optimisticFields.usesWorktree = changes.usesWorktree;
 
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          const found = findTicketProject(ticketId);
+          if (!found) return;
+          // A host path is the host's to stamp: the board router takes no worktreePath.
+          const { worktreePath: _worktreePath, ...fields } = input;
+          const updated = await protocol.sync.updateTicket(found.projectId, fields);
+          if (updated !== null) {
+            const loaded = markTicketBodyLoaded(ticketId);
+            if (loaded !== undefined) set({ unloadedTicketBodies: loaded });
+          }
+          return;
+        }
         await optimisticTicketPatch(ticketId, optimisticFields, "update ticket", () =>
           gateway.updateTicket(input),
         );
       },
 
       async setLabels(ticketId, labels) {
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          const found = findTicketProject(ticketId);
+          if (found) await protocol.sync.setLabels(found.projectId, ticketId, labels);
+          return;
+        }
         await optimisticTicketPatch(ticketId, { labels }, "update labels", () =>
           gateway.setLabels({ ticketId, labels }),
         );
@@ -874,6 +1062,11 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const previous = get().labelsByProject[projectId] ?? [];
         const original = previous.find((label) => label.id === labelId);
         if (!original || original.color === color) return; // unknown id or unchanged color
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          await protocol.sync.setLabelColor(projectId, labelId, color);
+          return;
+        }
 
         const patch = (label: Label) =>
           reconcileLabels(projectId, (slice) =>
@@ -892,9 +1085,15 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
       },
 
       async loadArchived(projectId) {
-        const result = await writeThrough("load archive", (): Promise<ArchivedTicketsResult> =>
-          gateway.listArchived(projectId),
-        );
+        const protocol = boardProtocol();
+        const result =
+          protocol !== null
+            ? await protocol.sync
+                .archivedTickets(projectId)
+                .then((tickets) => (tickets === null ? null : { ok: true as const, tickets }))
+            : await writeThrough("load archive", (): Promise<ArchivedTicketsResult> =>
+                gateway.listArchived(projectId),
+              );
         if (!result) return false;
         // The project may have been forgotten (removed) while the fetch was in
         // flight — `ticketsByProject` is the liveness signal now that every
@@ -914,6 +1113,15 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         const previous = get().ticketsByProject[projectId] ?? [];
         const target = previous.find((ticket) => ticket.id === ticketId);
         if (!target) return; // unknown id — nothing to archive
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          // The pending layer drops the card at once and holds it off the
+          // board until the feed confirms (T5); a refusal puts it back.
+          if (!(await protocol.sync.archiveTicket(projectId, ticketId))) return;
+          killTicketSessions(ticketId);
+          afterArchived(projectId, ticketId);
+          return;
+        }
         const index = previous.indexOf(target);
 
         // Optimistically drop the card from the board.
@@ -940,25 +1148,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // resurrected it as an "extra". Responses arrive in send order, so
         // this later word wins.
         reconcileSlice(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
-        // The ticket is now archived; any cached Archive slice is stale, so drop
-        // it — the next `loadArchived` (on Archive-view open) refetches it in.
-        const { archivedByProject } = get();
-        if (projectId in archivedByProject) {
-          const next = { ...archivedByProject };
-          delete next[projectId];
-          set({ archivedByProject: next });
-        }
-        // An archived card can't stay in a multi-selection. Keep its selected
-        // siblings; drop the project record only when this was the last one.
-        const { selectedByProject } = get();
-        const selected = selectedByProject[projectId];
-        if (selected?.includes(ticketId)) {
-          const remaining = selected.filter((id) => id !== ticketId);
-          const next = { ...selectedByProject };
-          if (remaining.length === 0) delete next[projectId];
-          else next[projectId] = remaining;
-          set({ selectedByProject: next });
-        }
+        afterArchived(projectId, ticketId);
       },
 
       async unarchiveTicket(projectId, ticketId) {
@@ -970,6 +1160,17 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // Optimistically drop it from the Archive slice.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
+        const protocol = boardProtocol();
+        if (protocol !== null) {
+          // The board shows it at once, appended to its column (T5).
+          const revived = await protocol.sync.unarchiveTicket(projectId, target);
+          if (revived === null) {
+            reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
+            return;
+          }
+          reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
+          return;
+        }
         const result = await writeThrough("unarchive ticket", (): Promise<TicketResult> =>
           gateway.unarchiveTicket({ ticketId }),
         );
@@ -1003,9 +1204,15 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // Optimistically drop it from the Archive slice.
         reconcileArchived(projectId, (slice) => slice.filter((ticket) => ticket.id !== ticketId));
 
-        const result = await writeThrough("delete ticket", (): Promise<Result> =>
-          gateway.deleteTicket({ ticketId }),
-        );
+        const protocol = boardProtocol();
+        const result =
+          protocol !== null
+            ? (await protocol.sync.deleteTicket(projectId, ticketId))
+              ? { ok: true as const }
+              : null
+            : await writeThrough("delete ticket", (): Promise<Result> =>
+                gateway.deleteTicket({ ticketId }),
+              );
         if (!result) {
           // Revert: restore it to its old Archive slot unless already back.
           reconcileArchived(projectId, (slice) => restoreAt(slice, target, index));
@@ -1104,6 +1311,7 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
           return;
 
         teardownProjectChatTabs(projectId, ticketsByProject[projectId] ?? []);
+        boardProtocol()?.sync.close(projectId);
 
         const nextTickets = { ...ticketsByProject };
         delete nextTickets[projectId];

@@ -14,10 +14,12 @@ import {
   decodeSessionCommandIntent,
   decodeSessionCommandRoute,
   decodeSessionEventPayload,
+  decodeRendererSessionEventPayload,
   decodeSessionEventProvenance,
   encodeSessionJson,
   UnknownSessionEventKindError,
 } from "./session-event-codec";
+import type { RendererSessionEventPayload } from "./session-event-codec";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
 import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type {
@@ -111,6 +113,13 @@ function samples<const T extends readonly SessionEventPayload[]>(...items: T): T
  * and one shared roster is what makes both questions ask about the same kinds.
  */
 const payloads = samples(
+  {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    delta: {},
+    added: ["write"],
+    changed: [],
+  },
   { kind: "command.recorded", command },
   {
     kind: "command.recorded",
@@ -166,6 +175,11 @@ const payloads = samples(
       kind: "tool-surface",
       tools: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
     },
+  },
+  // New births opt into the multi-question declaration without changing names.
+  {
+    kind: "session.input.recorded",
+    input: { kind: "tool-surface", tools: ["read", "ask_user"], askUserQuestions: true },
   },
   // Old surfaces keep the historical mcp_* wire projection; the new marker is
   // durable so reattachment and a model switch never change the tool names.
@@ -479,6 +493,28 @@ const payloads = samples(
 type MissingPayloadSample = Exclude<SessionEventPayload["kind"], (typeof payloads)[number]["kind"]>;
 type AssertEveryKindSampled<Missing extends never> = Missing;
 export type CompletePayloadSampleCoverage = AssertEveryKindSampled<MissingPayloadSample>;
+
+type RendererReasoningDroppedPayload = Extract<
+  RendererSessionEventPayload,
+  { kind: "context.reasoning_dropped" }
+>;
+
+// The decoder's per-kind type check and this published contract proof guard
+// against putting the scrubbed structural paths back on the renderer edge.
+const safeReasoningDroppedPayload: RendererReasoningDroppedPayload = {
+  kind: "context.reasoning_dropped",
+  attachmentId: "attachment-1",
+  turnId: "turn-1",
+  count: 1,
+  causes: ["prefix-mismatch"],
+};
+const leakedReasoningDroppedPayload: RendererReasoningDroppedPayload = {
+  ...safeReasoningDroppedPayload,
+  // @ts-expect-error context.reasoning_dropped scrub removes structural paths.
+  paths: ["messages.1.content.0"],
+};
+
+void leakedReasoningDroppedPayload;
 
 describe("decodeSessionEventPayload round-trips every durable kind", () => {
   it("round-trips credential presentation metadata but never extra fields or values", () => {
@@ -1044,6 +1080,17 @@ describe("decodeSessionEventPayload tolerance and corruption", () => {
         "payload",
       ),
     ).toThrow("payload.input.mcpManagementNames has an unsupported value");
+    for (const askUserQuestions of [false, null, "true", 1]) {
+      expect(() =>
+        decodeSessionEventPayload(
+          {
+            kind: "session.input.recorded",
+            input: { kind: "tool-surface", tools: ["ask_user"], askUserQuestions },
+          },
+          "payload",
+        ),
+      ).toThrow("payload.input.askUserQuestions must be true when present");
+    }
     // Code Mode's name and its record travel together, and the record routes
     // exactly the surface it was frozen with (VC-471).
     expect(() =>
@@ -1638,6 +1685,64 @@ describe("the renderer-safe scrub", () => {
     });
   });
 
+  it("keeps the ask_user declaration revision durable and behind the renderer edge", () => {
+    const payload: SessionEventPayload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["ask_user"],
+        askUserQuestions: true,
+      },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+    const scrubbed = {
+      kind: "session.input.recorded",
+      input: { kind: "tool-surface", tools: ["ask_user"] },
+    };
+    expect(scrubSessionEventPayload(payload)).toEqual(scrubbed);
+    expect(decodeRendererSessionEventPayload(payload, "payload")).toEqual(scrubbed);
+    expect(parseRendererSessionEvent(rendererEvent({ payload }), "event")).toMatchObject({
+      ok: true,
+      event: { payload: scrubbed },
+    });
+  });
+
+  it("scrubs both ask_user and Code Mode birth markers from the same renderer record", () => {
+    const payload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "ask_user", "codemode"],
+        askUserQuestions: true,
+        codeMode: {
+          routes: { read: "both", ask_user: "direct" },
+          limits: { ...DEFAULT_CODE_MODE_LIMITS },
+          descriptionVersion: 2,
+        },
+      },
+    } satisfies SessionEventPayload;
+    const safe = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "ask_user", "codemode"],
+        codeMode: {
+          routes: { read: "both", ask_user: "direct" },
+          limits: DEFAULT_CODE_MODE_LIMITS,
+        },
+      },
+    };
+    expect(roundTrip(payload)).toEqual(payload);
+    expect(scrubSessionEventPayload(payload)).toEqual(safe);
+    expect(decodeRendererSessionEventPayload(payload, "payload")).toEqual(safe);
+    expect(parseRendererSessionEvent(rendererEvent({ payload }), "event")).toMatchObject({
+      ok: true,
+      event: { payload: safe },
+    });
+    expect(payload.input.askUserQuestions).toBe(true);
+    expect(payload.input.codeMode.descriptionVersion).toBe(2);
+  });
+
   // Usage is metadata about a request, never any of its content. There is no
   // prompt, reply, path, credential or account identity in it to strip, so it
   // crosses whole — and a scrub that dropped the cost would leave the renderer
@@ -2078,4 +2183,211 @@ describe("the renderer-side parse", () => {
       message: "event.payload.attachment is not a valid Session attachment",
     });
   });
+});
+
+it("keeps Code Mode's birth description version durable but host-only", () => {
+  for (const descriptionVersion of [undefined, 2] as const) {
+    const payload = {
+      kind: "session.input.recorded",
+      input: {
+        kind: "tool-surface",
+        tools: ["read", "codemode"],
+        codeMode: {
+          routes: { read: "both" },
+          limits: { ...DEFAULT_CODE_MODE_LIMITS },
+          ...(descriptionVersion === undefined ? {} : { descriptionVersion }),
+        },
+      },
+    } satisfies SessionEventPayload;
+    expect(decodeSessionEventPayload(JSON.parse(encodeSessionJson(payload)), "payload")).toEqual(
+      payload,
+    );
+    const safe = scrubSessionEventPayload(payload);
+    expect(safe).toEqual({
+      kind: "session.input.recorded",
+      input: {
+        ...payload.input,
+        codeMode: { routes: { read: "both" }, limits: DEFAULT_CODE_MODE_LIMITS },
+      },
+    });
+    expect(payload.input.codeMode?.descriptionVersion).toBe(descriptionVersion);
+    const event: SessionEvent = {
+      id: "surface-event",
+      sessionId: "session-1",
+      sequence: 1,
+      occurredAt: 1,
+      recordedAt: 1,
+      provenance,
+      payload,
+    };
+    // Even raw host JSON is scrubbed on renderer decoding; no mutation of
+    // the durable record or attach-time declaration generation is needed.
+    expect(parseRendererSessionEvent(JSON.parse(encodeSessionJson(event)), "event")).toEqual({
+      ok: true,
+      event: scrubSessionEvent(event),
+    });
+    expect(JSON.stringify(scrubSessionEvent(event))).not.toContain("descriptionVersion");
+  }
+});
+
+it("round-trips refreshes with future tool names without corrupting birth or dropping their notice", () => {
+  const future = "write";
+  const raw = {
+    kind: "session.tools.refreshed",
+    trigger: "cold-turn",
+    delta: {
+      askUserQuestions: true,
+      refreshDescriptions: true,
+      routes: { read: "both", ask_user: "direct", [future]: "both", mcp__paper__read: "deferred" },
+      codeMode: {
+        limits: DEFAULT_CODE_MODE_LIMITS,
+        descriptionVersion: 2,
+      },
+      mcpTools: [
+        {
+          serverId: "paper",
+          toolName: "read",
+          providerName: "mcp__paper__read",
+          description: "Private declaration",
+          inputSchema: { type: "object", properties: { secret: { type: "string" } } },
+        },
+      ],
+    },
+    added: ["ask_user", "codemode", future, "mcp__paper__read"],
+    changed: [],
+  };
+  const decoded = decodeSessionEventPayload(JSON.parse(JSON.stringify(raw)), "payload");
+  expect(decoded).toEqual(raw);
+  const safe = { kind: raw.kind, trigger: raw.trigger, added: raw.added, changed: raw.changed };
+  expect(scrubSessionEventPayload(decoded)).toEqual(safe);
+  expect(decodeRendererSessionEventPayload(JSON.parse(JSON.stringify(raw)), "payload")).toEqual(
+    safe,
+  );
+  expect(decodeRendererSessionEventPayload(JSON.parse(JSON.stringify(safe)), "payload")).toEqual(
+    safe,
+  );
+  expect(
+    decodeRendererSessionEventPayload({ ...safe, trigger: "future-trigger" }, "payload"),
+  ).toMatchObject({ trigger: "future-trigger" });
+  expect(JSON.stringify(safe)).not.toContain("surface");
+  const unknown = "future_builtin_from_next_release";
+  const unbindable = {
+    ...raw,
+    added: [...raw.added, unknown],
+    delta: {
+      ...raw.delta,
+      routes: { ...raw.delta.routes, [unknown]: "both" },
+    },
+  };
+  expect(decodeSessionEventPayload(unbindable, "payload")).toMatchObject({
+    added: expect.arrayContaining([unknown]),
+  });
+  expect(() =>
+    decodeSessionEventPayload(
+      { ...raw, delta: { ...raw.delta, refreshDescriptions: false } },
+      "payload",
+    ),
+  ).toThrow("refreshDescriptions must be true");
+  expect(() =>
+    decodeSessionEventPayload(
+      {
+        kind: "session.input.recorded",
+        input: {
+          kind: "tool-surface",
+          tools: [unknown],
+        },
+      },
+      "payload",
+    ),
+  ).toThrow("unsupported");
+  expect(decodeRendererSessionEventPayload(unbindable, "payload")).toEqual({
+    ...safe,
+    added: unbindable.added,
+  });
+  for (const field of ["added", "changed"] as const) {
+    expect(() => decodeSessionEventPayload({ ...raw, [field]: {} }, "payload")).toThrow(
+      "must be an array",
+    );
+    expect(() => decodeRendererSessionEventPayload({ ...safe, [field]: [7] }, "payload")).toThrow(
+      "must be a string",
+    );
+  }
+  expect(() => decodeSessionEventPayload({ ...raw, delta: null }, "payload")).toThrow(
+    "must be an object",
+  );
+});
+
+it("validates refresh deltas independently of the renderer notice", () => {
+  const base = {
+    kind: "session.tools.refreshed",
+    trigger: "future-trigger",
+    added: [] as string[],
+    changed: [],
+    delta: {},
+  };
+  expect(decodeSessionEventPayload(base, "payload")).toEqual(base);
+  expect(
+    decodeSessionEventPayload(
+      {
+        ...base,
+        delta: { routes: {}, mcpTools: [], descriptionVersion: 2, refreshDescriptions: true },
+      },
+      "payload",
+    ),
+  ).toEqual({
+    ...base,
+    delta: { routes: {}, mcpTools: [], descriptionVersion: 2, refreshDescriptions: true },
+  });
+  const acquired = {
+    ...base,
+    added: ["codemode"],
+    delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS }, routes: {} },
+  };
+  expect(decodeSessionEventPayload(acquired, "payload")).toEqual(acquired);
+  const malformed = [
+    { delta: undefined },
+    { delta: [] },
+    { delta: { mcpTools: {} } },
+    { added: ["read", "read"] },
+    { changed: ["read", "read"] },
+    { delta: { askUserQuestions: false } },
+    { delta: { refreshDescriptions: false } },
+    { delta: { askUserQuestions: true } },
+    { delta: { descriptionVersion: 1 } },
+    { delta: { routes: [] } },
+    { delta: { routes: { codemode: "direct" } } },
+    { added: ["write"], delta: { routes: { write: "invalid" } } },
+    { delta: { routes: { write: "code" } } },
+    { added: ["mcp__paper__read"] },
+    { added: ["codemode"] },
+    { delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS } } },
+    { added: ["codemode"], delta: { codeMode: null } },
+    {
+      added: ["codemode"],
+      delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS }, descriptionVersion: 2 },
+    },
+    { added: ["codemode"], delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS, routes: {} } } },
+    { added: ["codemode"], delta: { codeMode: { limits: {} } } },
+    { added: ["codemode", "write"], delta: { codeMode: { limits: DEFAULT_CODE_MODE_LIMITS } } },
+  ];
+  for (const patch of malformed) {
+    expect(() => decodeSessionEventPayload({ ...base, ...patch }, "payload")).toThrow();
+  }
+  // The renderer cannot compile or leak a delta, even a malformed one.
+  expect(
+    decodeRendererSessionEventPayload({ ...base, delta: { mcpTools: "private" } }, "payload"),
+  ).toEqual({ kind: base.kind, trigger: base.trigger, added: [], changed: [] });
+});
+
+it("retains birth refresh wording markers without defaulting historical records", () => {
+  const old = { kind: "session.input.recorded", input: { kind: "tool-surface", tools: ["read"] } };
+  expect(decodeSessionEventPayload(old, "payload")).toEqual(old);
+  const modern = { ...old, input: { ...old.input, refreshDescriptions: true } };
+  expect(decodeSessionEventPayload(modern, "payload")).toEqual(modern);
+  expect(() =>
+    decodeSessionEventPayload(
+      { ...old, input: { ...old.input, refreshDescriptions: false } },
+      "payload",
+    ),
+  ).toThrow("must be true");
 });

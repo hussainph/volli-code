@@ -1,0 +1,545 @@
+import { withTransaction } from "./transaction-gate";
+/**
+ * `projects` table repo: row↔domain mapping (snake_case → camelCase) plus
+ * the plain SQL `projects.create/remove/reorder` need. No event log here —
+ * only tickets get one (`ticket_events`, migration 001).
+ */
+import type Database from "better-sqlite3";
+import {
+  isAppearance,
+  isEmptyAuthorityPolicyOverride,
+  isProjectThemeOverrideEmpty,
+  NO_DECISION_MODEL,
+  parseAuthorityPolicyOverride,
+  parseCanvas,
+  parseDecisionModelSetting,
+  parseSessionModel,
+  parseSkillModes,
+  resolveAuthorityPolicy,
+} from "@volli/shared";
+import type {
+  Appearance,
+  AuthorityPolicy,
+  AuthorityPolicyOverride,
+  Canvas,
+  DecisionModelSetting,
+  ModelSelection,
+  Project,
+  ProjectThemeOverride,
+  SkillModes,
+} from "@volli/shared";
+import { prepared } from "./prepared";
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  path: string;
+  ticket_prefix: string;
+  base_branch: string | null;
+  setup_command: string | null;
+  /** Migration 013 — one nullable column per surface, plus the auto-tint seed; NULL = inherit. */
+  theme_app_slug: string | null;
+  theme_terminal_name: string | null;
+  theme_editor_id: string | null;
+  theme_seed: string | null;
+  /** Migration 014 — the authored canvas as JSON, and the appearance; NULL = inherit. */
+  theme_canvas: string | null;
+  theme_appearance: string | null;
+  /** Migration 023 — active project agent configuration; NULL = inherit. */
+  skill_modes: string | null;
+  /** Retired setting, retained for append-only schema and export compatibility. */
+  session_harness: string | null;
+  session_model: string | null;
+  /** Migration 025 — this project's authority departures; NULL = inherit every default. */
+  authority_policy: string | null;
+  /** Migration 053 — this project's decision model; NULL = inherit the app-wide one. */
+  decision_model: string | null;
+  color_index: number;
+  sort_order: number;
+  row_version: number;
+  created_at: number;
+  updated_at: number;
+  /**
+   * The next display number `nextTicketNumberForProject` (tickets-repo) will
+   * hand out (migration 005) — a db-internal allocation detail, deliberately
+   * NOT surfaced on the domain `Project` type; `mapProject` below doesn't
+   * read it.
+   */
+  next_ticket_number: number;
+}
+
+/**
+ * Two of the row's four migration-013 theme columns as a domain override — or
+ * `null` when both are NULL. Collapsing the all-inherit case to `null` keeps
+ * "does this project override anything?" a single check for every reader,
+ * instead of an object whose fields all have to be interrogated.
+ *
+ * HALF DYING, and it is worth being exact about which half. Migration 014's
+ * `theme_canvas`/`theme_appearance` are what the APP surface means now (see
+ * `mapCanvas` below), so `theme_app_slug` and `theme_seed` are read by nobody —
+ * they went with the seed-based picker, and `@volli/shared`'s
+ * `ProjectThemeOverride` no longer even carries fields for them. The other two
+ * did not: the terminal and editor surfaces are separate systems (a ghostty
+ * overlay file, a Monaco/shiki id) that still resolve global → project off
+ * this row, and `renderer/src/stores/theme.ts` reads both out of
+ * `volli:theme-state`'s `projectOverride`. The two dead COLUMNS stay because
+ * `db/export.test.ts` requires every column on `projects` to have an exported
+ * field, and SQLite `DROP COLUMN` is not safe on the versions we support —
+ * `updateProjectThemeOverride` below still writes them (always `null`, since
+ * nothing upstream can populate them anymore).
+ */
+function mapThemeOverride(row: ProjectRow): ProjectThemeOverride | null {
+  // `theme_editor_id` joined `theme_app_slug` and `theme_seed` as a dead column
+  // in VC-123: the editor follows the resolved appearance, which is migration
+  // 014's `theme_appearance`, so there is no per-project editor id to read.
+  const override: ProjectThemeOverride = { terminalThemeName: row.theme_terminal_name };
+  return isProjectThemeOverrideEmpty(override) ? null : override;
+}
+
+/**
+ * The row's canvas column as a domain canvas — or `null` for absent, malformed,
+ * or "this is a payload from the system this one replaces".
+ *
+ * Degrading rather than throwing is the same stance the global canvas takes
+ * (`theme-repo.ts`): a project's row is read at boot, in a loop over every
+ * project, before there is any UI to surface a failure in. One hand-edited row
+ * must not take the rail down with it — it inherits the global canvas, which is
+ * both survivable and visible.
+ */
+function mapCanvas(row: ProjectRow): Canvas | null {
+  if (row.theme_canvas === null || row.theme_canvas.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.theme_canvas);
+  } catch {
+    return null;
+  }
+  return parseCanvas(parsed);
+}
+
+/**
+ * A nullable JSON column as `unknown`, or `undefined` when it holds nothing
+ * readable. The column CHECKs already refuse non-JSON at the write, so this
+ * only catches a db edited around them — see {@link mapCanvas} on why that
+ * degrades instead of throwing.
+ */
+function parseJsonColumn(value: string | null): unknown {
+  if (value === null || value.length === 0) return undefined;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function mapProject(row: ProjectRow): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    path: row.path,
+    ticketPrefix: row.ticket_prefix,
+    baseBranch: row.base_branch,
+    setupCommand: row.setup_command,
+    themeOverride: mapThemeOverride(row),
+    themeCanvas: mapCanvas(row),
+    // The CHECK on the column already limits this to the three words, so a
+    // value that fails the guard means a db edited around it — inherit.
+    themeAppearance: isAppearance(row.theme_appearance) ? row.theme_appearance : null,
+    skillModes: parseSkillModes(parseJsonColumn(row.skill_modes)),
+    // The DEPARTURES this project stated, not the policy it resolves to — see
+    // `Project.authorityPolicy`. The surface that edits this needs to know what
+    // was chosen versus what is inherited, and only the unresolved document
+    // carries that. `getProjectAuthorityPolicy` below is the other reader, and
+    // it resolves because the attach path wants the answer, not the question.
+    authorityPolicy: parseAuthorityPolicyOverride(parseJsonColumn(row.authority_policy)),
+    sessionModel: parseSessionModel(parseJsonColumn(row.session_model)),
+    decisionModel: readDecisionModelColumn(row.decision_model),
+    colorIndex: row.color_index,
+    sortOrder: row.sort_order,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * A project's decision model column (migration 053). `NULL` inherits. A row
+ * that no longer parses — a URL off this Mac, a cloud model without its
+ * opt-in, a kind a later build wrote — reads as NO decision model, never as
+ * inherit: a project that chose Local to keep its data on this Mac must not
+ * start reaching the app-wide cloud model because its own row became
+ * unreadable.
+ */
+function readDecisionModelColumn(value: string | null): DecisionModelSetting | null {
+  if (value === null) return null;
+  return parseDecisionModelSetting(parseJsonColumn(value)) ?? NO_DECISION_MODEL;
+}
+
+/** Every project, ordered by rail position. */
+export function listProjects(db: Database.Database): Project[] {
+  const rows = prepared<[], ProjectRow>(db, "SELECT * FROM projects ORDER BY sort_order").all();
+  return rows.map(mapProject);
+}
+
+export function countProjects(db: Database.Database): number {
+  const row = prepared<[], { count: number }>(db, "SELECT COUNT(*) as count FROM projects").get();
+  return row?.count ?? 0;
+}
+
+export function findProjectByPath(db: Database.Database, path: string): Project | undefined {
+  const row = prepared<[string], ProjectRow>(db, "SELECT * FROM projects WHERE path = ?").get(path);
+  return row ? mapProject(row) : undefined;
+}
+
+/** One project by id — used by the artifacts IPC handlers to resolve a ticket's project path. */
+export function getProjectById(db: Database.Database, id: string): Project | undefined {
+  const row = prepared<[string], ProjectRow>(db, "SELECT * FROM projects WHERE id = ?").get(id);
+  return row ? mapProject(row) : undefined;
+}
+
+/**
+ * The authority policy one project is governed by (VC-44), RESOLVED.
+ *
+ * Kept separate from {@link mapProject} because the two readers want different
+ * documents, which is no longer the reason VC-44 gave. That reason was "no
+ * surface to show it yet", and it held exactly until VC-172 built one; the
+ * departures now ride `Project.authorityPolicy` to the renderer, because a
+ * surface that edits an override has to distinguish a chosen value from an
+ * inherited one.
+ *
+ * This is the host-API policy reader: actor admission and delegation budgets
+ * need the resolved answer. The renderer wants the unresolved question. Resolving once here and shipping the departures there is
+ * what keeps the resolved document from ever being written back — migration
+ * 025's ruling, and the thing that would break inheritance if it slipped.
+ *
+ * A project that does not exist resolves to the defaults rather than throwing.
+ * This runs where a throw costs a Session its attachment, and "no project row"
+ * and "a project that states nothing" are the same policy either way — the
+ * built-in defaults, which are the safe answer and the only one this layer could
+ * honestly give.
+ */
+export function getProjectAuthorityPolicy(
+  db: Database.Database,
+  projectId: string,
+): AuthorityPolicy {
+  const row = prepared<[string], Pick<ProjectRow, "authority_policy">>(
+    db,
+    "SELECT authority_policy FROM projects WHERE id = ?",
+  ).get(projectId);
+  return resolveAuthorityPolicy(
+    parseAuthorityPolicyOverride(parseJsonColumn(row?.authority_policy ?? null)),
+  );
+}
+
+/**
+ * Records what one project says about its own authority (VC-172), and returns
+ * the authoritative row.
+ *
+ * The write `getProjectAuthorityPolicy` above was owed since migration 025. Note
+ * what it takes: an {@link AuthorityPolicyOverride}, the DEPARTURES — never an
+ * {@link AuthorityPolicy}. The resolved document must not round-trip into this
+ * column, because a project storing a full policy would pin every field it never
+ * meant to state, and the next tightening of a built-in default would silently
+ * skip every project a person had ever opened this surface on.
+ *
+ * VALIDATION IS THE CALLER'S, and it happens before this is reached — see
+ * `validateAuthorityPolicyOverride`, which the IPC handler runs so a person gets
+ * told. This function still normalises rather than trusting: it stores the
+ * validated object's own fields, so a caller that skipped the check cannot park
+ * an unknown key in the column for `parseAuthorityPolicyOverride` to drop
+ * forever after.
+ *
+ * An EMPTY override stores `NULL`, not `{}` — `updateProjectSkillModes`'s rule,
+ * for its reason. "This project states nothing" and "this project reverted its
+ * last departure" are the same fact and must be the same bytes; two spellings of
+ * one state is a difference something eventually depends on by accident.
+ */
+export function updateProjectAuthorityPolicy(
+  db: Database.Database,
+  id: string,
+  override: AuthorityPolicyOverride | null,
+  now: number,
+): Project | undefined {
+  const normalized = override === null ? null : parseAuthorityPolicyOverride(override);
+  const stored =
+    normalized === null || isEmptyAuthorityPolicyOverride(normalized)
+      ? null
+      : JSON.stringify(normalized);
+  prepared(
+    db,
+    `UPDATE projects
+        SET authority_policy = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(stored, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Points this project at a different folder on disk (VC-430) and returns the
+ * authoritative row.
+ *
+ * The ONE write that moves `projects.path` after creation, and it moves
+ * nothing else: the id stays, which is what keeps every ticket, label, event,
+ * Session and setting attached to the same project through a rename. Callers
+ * come through `relinkProject` (`packages/host-core/src/project-relink.ts`), which is where
+ * the folder is judged before this is reached — this function trusts its
+ * argument exactly as its `base_branch`/`setup_command` siblings above do.
+ */
+export function updateProjectPath(
+  db: Database.Database,
+  id: string,
+  path: string,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET path = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(path, now, id);
+  return getProjectById(db, id);
+}
+
+/** Updates the pinned automation base branch and returns the authoritative row. */
+export function updateProjectBaseBranch(
+  db: Database.Database,
+  id: string,
+  baseBranch: string | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET base_branch = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(baseBranch, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Updates the per-project worktree setup command and returns the authoritative
+ * row — the `base_branch` precedent above, for the field migration 008 adds.
+ * `null` clears it (the setup phase is then skipped for that project's
+ * worktrees).
+ */
+export function updateProjectSetupCommand(
+  db: Database.Database,
+  id: string,
+  setupCommand: string | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET setup_command = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(setupCommand, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Updates the project's per-surface theme override and returns the
+ * authoritative row — the `base_branch`/`setup_command` precedent above, for
+ * the columns migration 013 adds.
+ *
+ * `null` clears every surface back to inheriting the global theme; a partial
+ * override clears only the surfaces whose fields are null, because resolution
+ * is per surface and never per token (#69). All four columns are still
+ * written on every call — `theme_app_slug`/`theme_seed` always to `null`,
+ * since `ProjectThemeOverride` no longer carries fields for them (see
+ * `mapThemeOverride` above) — so the stored row always equals the override
+ * the caller asked for, plus the two dead columns quietly staying empty.
+ */
+export function updateProjectThemeOverride(
+  db: Database.Database,
+  id: string,
+  override: ProjectThemeOverride | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET theme_app_slug = ?, theme_terminal_name = ?, theme_editor_id = ?, theme_seed = ?,
+            row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(null, override?.terminalThemeName ?? null, null, null, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's canvas override (migration 014) and returns the
+ * authoritative row; `null` clears it back to inheriting the global canvas.
+ *
+ * The canvas is rebuilt field by field on the way in by `parseCanvas`, exactly
+ * as the global one is — storing the caller's object by reference is how a
+ * resolved token set would end up in a column.
+ */
+export function updateProjectCanvas(
+  db: Database.Database,
+  id: string,
+  canvas: Canvas | null,
+  now: number,
+): Project | undefined {
+  let payload: string | null = null;
+  if (canvas !== null) {
+    const stored = parseCanvas(canvas);
+    // Throws rather than storing something else, exactly as `setGlobalCanvas`
+    // does: the IPC envelope turns it into a typed error the renderer surfaces,
+    // and a write that quietly stored a different canvas is the one outcome
+    // nobody can debug.
+    if (stored === null) throw new Error("Refusing to store a canvas that cannot be painted");
+    payload = JSON.stringify(stored);
+  }
+  prepared(
+    db,
+    `UPDATE projects
+        SET theme_canvas = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(payload, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's appearance override (migration 014) and returns the
+ * authoritative row; `null` clears it back to inheriting the global choice.
+ * Written independently of the canvas — the two are separately scoped, so a
+ * single "set the project's theme" write would make overriding one of them
+ * silently clear the other.
+ */
+export function updateProjectAppearance(
+  db: Database.Database,
+  id: string,
+  appearance: Appearance | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET theme_appearance = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(appearance, now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's per-skill rules (migration 023) and returns the
+ * authoritative row.
+ *
+ * An EMPTY map stores `NULL`, not `{}`. The column's whole vocabulary is "NULL
+ * means every skill as its author intended", and a project that put its last
+ * ruled skill back must read exactly like one that never ruled on anything —
+ * otherwise the two states are distinguishable in the db and identical
+ * everywhere above it, which is a difference waiting to be depended on by
+ * accident.
+ *
+ * Normalised on the way in by `parseSkillModes` rather than stored as handed
+ * over, for `updateProjectCanvas`'s reason: storing the caller's object by
+ * reference is how an unknown mode or an unspellable slug ends up in a column
+ * every reader then has to defend against.
+ */
+export function updateProjectSkillModes(
+  db: Database.Database,
+  id: string,
+  modes: SkillModes,
+  now: number,
+): Project | undefined {
+  const normalized = parseSkillModes(modes);
+  prepared(
+    db,
+    `UPDATE projects
+        SET skill_modes = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(Object.keys(normalized).length === 0 ? null : JSON.stringify(normalized), now, id);
+  return getProjectById(db, id);
+}
+
+/** Sets this project's Chat model default; `null` clears it back to inheriting. */
+export function updateProjectSessionDefaults(
+  db: Database.Database,
+  id: string,
+  defaults: { model: ModelSelection | null },
+  now: number,
+): Project | undefined {
+  const model = defaults.model === null ? null : parseSessionModel(defaults.model);
+  prepared(
+    db,
+    `UPDATE projects
+        SET session_model = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(model === null ? null : JSON.stringify(model), now, id);
+  return getProjectById(db, id);
+}
+
+/**
+ * Sets this project's decision model (VC-478); `null` clears it back to
+ * inheriting the app-wide one. The caller has already parsed the setting.
+ */
+export function updateProjectDecisionModel(
+  db: Database.Database,
+  id: string,
+  setting: DecisionModelSetting | null,
+  now: number,
+): Project | undefined {
+  prepared(
+    db,
+    `UPDATE projects
+        SET decision_model = ?, row_version = row_version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).run(setting === null ? null : JSON.stringify(setting), now, id);
+  return getProjectById(db, id);
+}
+
+/** The `sortOrder` one past the current max (`-1` when the table is empty, so this returns `0`). */
+export function nextSortOrder(db: Database.Database): number {
+  const row = prepared<[], { max: number | null }>(
+    db,
+    "SELECT MAX(sort_order) as max FROM projects",
+  ).get();
+  return (row?.max ?? -1) + 1;
+}
+
+/** Inserts a brand-new project row (`row_version` starts at `1`). */
+export function insertProject(db: Database.Database, project: Project): void {
+  prepared(
+    db,
+    `INSERT INTO projects (id, name, path, ticket_prefix, base_branch, setup_command, color_index, sort_order, row_version, created_at, updated_at)
+     VALUES (@id, @name, @path, @ticketPrefix, @baseBranch, @setupCommand, @colorIndex, @sortOrder, 1, @createdAt, @updatedAt)`,
+  ).run({
+    id: project.id,
+    name: project.name,
+    path: project.path,
+    ticketPrefix: project.ticketPrefix,
+    baseBranch: project.baseBranch ?? null,
+    setupCommand: project.setupCommand ?? null,
+    colorIndex: project.colorIndex,
+    sortOrder: project.sortOrder,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  });
+}
+
+/** Deletes a project; `ON DELETE CASCADE` takes its tickets/labels/ticket_events with it. */
+export function deleteProject(db: Database.Database, id: string): void {
+  prepared(db, "DELETE FROM projects WHERE id = ?").run(id);
+}
+
+/**
+ * Rewrites `sort_order` to `0..n-1` following `orderedIds`; unknown ids are
+ * silently no-ops. Wrapped in a transaction so the N row updates commit
+ * atomically (one WAL commit, not N) — a mid-loop failure can never persist a
+ * half-renumbered order the next boot would hydrate.
+ */
+export function reorderProjects(
+  db: Database.Database,
+  orderedIds: readonly string[],
+  now: number,
+): void {
+  withTransaction(db, () => {
+    const stmt = prepared(
+      db,
+      "UPDATE projects SET sort_order = ?, row_version = row_version + 1, updated_at = ? WHERE id = ?",
+    );
+    orderedIds.forEach((id, index) => {
+      stmt.run(index, now, id);
+    });
+  });
+}

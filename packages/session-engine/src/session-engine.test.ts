@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
+  SessionEngineCommandConflictError,
   SessionEngineConflictError,
   SessionEngineNotFoundError,
   createSessionEngine,
@@ -187,7 +188,7 @@ describe("SessionEngine creation and explicit commands", () => {
         ...createRequest("command-promote"),
         requestedSessionId: "11111111-2222-4333-8444-555555555555",
       }),
-    ).rejects.toBeInstanceOf(SessionEngineConflictError);
+    ).rejects.toBeInstanceOf(SessionEngineCommandConflictError);
   });
 
   it("records one immutable Runtime Brief when concurrent callers disagree", async () => {
@@ -283,7 +284,9 @@ describe("SessionEngine creation and explicit commands", () => {
       { ...createRequest(), parentSessionId: "other-parent" },
       { ...createRequest(), title: "different" },
     ]) {
-      await expect(plane.createSession(request)).rejects.toBeInstanceOf(SessionEngineConflictError);
+      await expect(plane.createSession(request)).rejects.toBeInstanceOf(
+        SessionEngineCommandConflictError,
+      );
     }
     await plane.submit({
       commandId: "command-create-conflict",
@@ -295,6 +298,217 @@ describe("SessionEngine creation and explicit commands", () => {
       plane.createSession(createRequest("command-create-conflict")),
     ).rejects.toBeInstanceOf(SessionEngineConflictError);
   });
+
+  it("reconciles only legacy Pi acceptance ids with a different recovery timestamp, without weakening conflicts", async () => {
+    const { ledger, plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const piProvenance = {
+      ...adapterProvenance,
+      source: { ...adapterProvenance.source, id: "pi" },
+    };
+    const opened = { ...attachment(session.id), adapterId: "pi" };
+    await plane.observe({
+      id: "replay-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: piProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+    const submitted = await plane.submit({
+      commandId: "replay-message",
+      sessionId: session.id,
+      intent: {
+        kind: "message.submit",
+        reference: { id: "message", mediaType: null, digest: null },
+      },
+      provenance: userProvenance,
+    });
+    const observation = {
+      id: `native-receipt-event:${submitted.command.id}:accepted:200`,
+      sessionId: session.id,
+      attachmentId: opened.id,
+      occurredAt: 200,
+      provenance: piProvenance,
+      kind: "command.receipt" as const,
+      receipt: {
+        id: `native-receipt:${submitted.command.id}:accepted:200`,
+        commandId: submitted.command.id,
+        status: "accepted" as const,
+        acceptedAt: 200,
+        result: { kind: "message.submitted" as const, sessionId: session.id },
+      },
+    };
+    const first = await plane.observe(observation);
+    const replay = {
+      ...observation,
+      id: `native-receipt-event:${submitted.command.id}:accepted:100`,
+      receipt: {
+        ...observation.receipt,
+        id: `native-receipt:${submitted.command.id}:accepted:100`,
+        acceptedAt: 100,
+      },
+    };
+    expect(await plane.observe(replay)).toEqual(first);
+    expect(await ledger.transaction((tx) => tx.listReceipts(submitted.command.id))).toHaveLength(1);
+    await expect(plane.observe({ ...replay, attachmentId: "other" })).rejects.toThrow(
+      "routed attachment",
+    );
+    await expect(plane.observe({ ...replay, provenance: userProvenance })).rejects.toThrow(
+      "adapter pi",
+    );
+    for (const id of [
+      "unrelated-new-receipt-id",
+      `native-receipt:another-command:accepted:100`,
+      `native-receipt:${submitted.command.id}:accepted:101`,
+    ]) {
+      await expect(
+        plane.observe({
+          ...replay,
+          receipt: { ...replay.receipt, id },
+        }),
+      ).rejects.toThrow("not a legacy Pi acceptance replay");
+    }
+    await expect(
+      plane.observe({
+        ...observation,
+        receipt: { ...observation.receipt, id: "unrelated-same-timestamp" },
+      }),
+    ).rejects.toThrow("not a legacy Pi acceptance replay");
+    await expect(
+      plane.observe({
+        ...replay,
+        receipt: { ...replay.receipt, result: { kind: "message.submitted", sessionId: "other" } },
+      }),
+    ).rejects.toThrow("does not match command");
+    await expect(
+      plane.observe({
+        ...replay,
+        receipt: { ...replay.receipt, result: { ...replay.receipt.result, corrupt: true } },
+      } as SessionObservation),
+    ).rejects.toThrow("already accepted differently");
+    await expect(
+      plane.observe({
+        ...observation,
+        id: "same-id-different-time",
+        receipt: { ...observation.receipt, acceptedAt: 100 },
+      }),
+    ).rejects.toThrow("already recorded differently");
+    await plane.observe({
+      ...observation,
+      id: "completed-event",
+      receipt: {
+        id: "completed-receipt",
+        commandId: submitted.command.id,
+        status: "completed",
+        result: observation.receipt.result,
+      },
+    });
+    expect(await plane.observe(replay)).toEqual(first);
+    await plane.observe({
+      id: "replay-close",
+      sessionId: session.id,
+      attachmentId: opened.id,
+      occurredAt: 201,
+      provenance: piProvenance,
+      kind: "attachment.closed",
+      outcome: "completed",
+    });
+    const start = await plane.submit({
+      commandId: "replay-start",
+      sessionId: session.id,
+      intent: { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
+      provenance: userProvenance,
+    });
+    const startAcceptance = {
+      ...observation,
+      id: "start-acceptance",
+      attachmentId: null,
+      receipt: {
+        ...observation.receipt,
+        id: `native-receipt:${start.command.id}:accepted:200`,
+        commandId: start.command.id,
+        result: { kind: "executor.start.requested" as const, sessionId: session.id },
+      },
+    };
+    await plane.observe(startAcceptance);
+    await expect(
+      plane.observe({
+        ...startAcceptance,
+        id: "start-recovery",
+        attachmentId: opened.id,
+        receipt: {
+          ...startAcceptance.receipt,
+          id: `native-receipt:${start.command.id}:accepted:100`,
+          acceptedAt: 100,
+        },
+      }),
+    ).rejects.toThrow("does not match accepted attachment evidence");
+    const transaction = ledger.transaction.bind(ledger);
+    ledger.transaction = (work) => transaction((tx) => work({ ...tx, listEvents: () => [] }));
+    await expect(plane.observe(replay)).rejects.toThrow("has no Session event");
+  });
+
+  it.each([
+    { adapterId: "pi", priorId: "unrelated-original-receipt-id" },
+    { adapterId: "opencode", priorId: "native-receipt:message:accepted:42" },
+  ])(
+    "does not alias a non-Pi route or a nonlegacy original receipt (%s)",
+    async ({ adapterId, priorId }) => {
+      const { ledger, plane } = composition();
+      const { session } = await plane.createSession(createRequest());
+      const provenance = {
+        ...adapterProvenance,
+        source: { ...adapterProvenance.source, id: adapterId },
+      };
+      const opened = { ...attachment(session.id), adapterId };
+      await plane.observe({
+        id: "open",
+        sessionId: session.id,
+        occurredAt: 1,
+        provenance,
+        kind: "attachment.opened",
+        attachment: opened,
+      });
+      await plane.submit({
+        commandId: "message",
+        sessionId: session.id,
+        intent: {
+          kind: "message.submit",
+          reference: { id: "message", mediaType: null, digest: null },
+        },
+        provenance: userProvenance,
+      });
+      const observation = {
+        id: "native-receipt-event:message:accepted:42",
+        sessionId: session.id,
+        attachmentId: opened.id,
+        occurredAt: 42,
+        provenance,
+        kind: "command.receipt" as const,
+        receipt: {
+          id: priorId,
+          commandId: "message",
+          status: "accepted" as const,
+          acceptedAt: 42,
+          result: { kind: "message.submitted" as const, sessionId: session.id },
+        },
+      };
+      await plane.observe(observation);
+      await expect(
+        plane.observe({
+          ...observation,
+          id: "native-receipt-event:message:accepted:21",
+          receipt: {
+            ...observation.receipt,
+            id: "native-receipt:message:accepted:21",
+            acceptedAt: 21,
+          },
+        }),
+      ).rejects.toThrow("not a legacy Pi acceptance replay");
+      expect(await ledger.transaction((tx) => tx.listReceipts("message"))).toHaveLength(1);
+    },
+  );
 
   it("persists adapter-bound intent without manufacturing a receipt, then appends adapter receipts as facts", async () => {
     const { ledger, plane } = composition();
@@ -1759,12 +1973,15 @@ describe("SessionEngine creation and explicit commands", () => {
     ]);
   });
 
-  it("uses SQLite BINARY ordering to break equal-time ticket signal ties", async () => {
+  it("breaks equal-time ticket signal ties by local acceptance order, not Session id (VC-512)", async () => {
     const { ledger, plane } = composition();
     const bmpId = "session-\uE000";
     const nonBmpId = "session-\u{10000}";
     await ledger.transaction((transaction) => {
-      for (const sessionId of [bmpId, nonBmpId]) {
+      // Accepted first is the Session id SQLite BINARY would rank HIGHER, so an
+      // ordering by id — or by occurredAt, which both signals share — would
+      // name the wrong signal "latest".
+      for (const sessionId of [nonBmpId, bmpId]) {
         transaction.insertSession({ ...sessionRecord(sessionId), ticketId: "ticket-1" });
         transaction.appendEvent({
           id: `signal-${sessionId}`,
@@ -1785,9 +2002,9 @@ describe("SessionEngine creation and explicit commands", () => {
     await expect(plane.listLatestTicketSignals({ projectId: "project-1" })).resolves.toEqual([
       {
         ticketId: "ticket-1",
-        sessionId: nonBmpId,
+        sessionId: bmpId,
         signal: "done",
-        reason: nonBmpId,
+        reason: bmpId,
         createdAt: 100,
       },
     ]);
@@ -3610,6 +3827,23 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
 });
 
 describe("InMemorySessionLedger", () => {
+  it("requires synchronous work while keeping transaction methods synchronous", () => {
+    const ledger = createInMemorySessionLedger();
+    expectTypeOf<
+      ReturnType<SessionLedgerTransaction["getSession"]>
+    >().toEqualTypeOf<Session | null>();
+    expectTypeOf<ReturnType<SessionLedgerTransaction["listSessions"]>>().toEqualTypeOf<
+      readonly Session[]
+    >();
+
+    // Type-check this function without calling it or opening a transaction.
+    const invalid = () => {
+      // @ts-expect-error -- Transaction callbacks must not return PromiseLike values.
+      return ledger.transaction(async () => "async result");
+    };
+    expectTypeOf(invalid).toBeFunction();
+  });
+
   it("exposes only a scoped transaction facade and closes captured facades", async () => {
     const ledger = createInMemorySessionLedger();
     expectTypeOf(ledger).toEqualTypeOf<SessionLedger>();

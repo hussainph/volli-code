@@ -40,7 +40,7 @@ describe("automation authoring assistance", () => {
       .mockImplementation(() => {});
     const enqueue = vi
       .spyOn(useChatSessionsStore.getState(), "enqueue")
-      .mockImplementation(() => {});
+      .mockResolvedValue("delivered");
     const home = vi.spyOn(useWorkspaceStore.getState(), "openHome").mockImplementation(() => {});
     vi.mocked(bootChatSession).mockImplementation(async (_scope, options: ChatBoot) => {
       expect(enqueue).not.toHaveBeenCalled();
@@ -66,7 +66,7 @@ describe("automation authoring assistance", () => {
     vi.mocked(bootChatSession).mockResolvedValue(null);
     const enqueue = vi
       .spyOn(useChatSessionsStore.getState(), "enqueue")
-      .mockImplementation(() => {});
+      .mockResolvedValue("delivered");
     const home = vi.spyOn(useWorkspaceStore.getState(), "openHome").mockImplementation(() => {});
     expect(await startAutomationAuthoring("p1", DRAFT)).toBeNull();
     expect(enqueue).not.toHaveBeenCalled();

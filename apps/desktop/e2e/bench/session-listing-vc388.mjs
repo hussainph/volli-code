@@ -94,19 +94,21 @@ try {
   // measured 9.6 s against 26.8 s for the parallel one. (Either way, the
   // module runner's own invoke timeout is 60 s; a very busy machine can still
   // trip it before the first arm runs, and the answer is to re-run.)
-  const { openVolliDb } = await vite.ssrLoadModule("/apps/desktop/src/main/db/index.ts");
-  const { insertProject } = await vite.ssrLoadModule("/apps/desktop/src/main/db/projects-repo.ts");
-  const { insertTicket } = await vite.ssrLoadModule("/apps/desktop/src/main/db/tickets-repo.ts");
-  const eventsRepo = await vite.ssrLoadModule("/apps/desktop/src/main/db/events-repo.ts");
-  const automationsRepo = await vite.ssrLoadModule("/apps/desktop/src/main/db/automations-repo.ts");
+  const { openVolliDb } = await vite.ssrLoadModule("/packages/host-core/src/db/index.ts");
+  const { insertProject } = await vite.ssrLoadModule("/packages/host-core/src/db/projects-repo.ts");
+  const { insertTicket } = await vite.ssrLoadModule("/packages/host-core/src/db/tickets-repo.ts");
+  const eventsRepo = await vite.ssrLoadModule("/packages/host-core/src/db/events-repo.ts");
+  const automationsRepo = await vite.ssrLoadModule(
+    "/packages/host-core/src/db/automations-repo.ts",
+  );
   const provenanceRepo = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/db/session-provenance-repo.ts",
+    "/packages/host-core/src/db/session-provenance-repo.ts",
   );
   const sessionControl = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/session-control/index.ts",
+    "/packages/host-core/src/session-control/index.ts",
   );
   const { createSqliteSessionLedger } = await vite.ssrLoadModule(
-    "/apps/desktop/src/main/session-control/sqlite-ledger.ts",
+    "/packages/host-core/src/session-control/sqlite-ledger.ts",
   );
   const engineModule = await vite.ssrLoadModule("/packages/session-engine/src/index.ts");
 

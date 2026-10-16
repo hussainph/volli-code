@@ -14,12 +14,16 @@
  * is `islandPlanFromTodos`'. What is left here is the binding: one subscription
  * and one memo.
  *
- * RELAUNCH IS NOT A CASE THIS HANDLES, and that is the point. The input is the
- * Session's durable transcript, which the client replays from history on
- * attach, so the plan after a relaunch is the plan before it without a line of
- * recovery code.
+ * RELAUNCH IS NOT A CASE THIS HANDLES, and that is the point. The inputs are
+ * durable: the transcript the client holds, and the plan the host keeps in the
+ * Session's projection (VC-315). A client opens a Session on its newest window
+ * of transcript, never the whole log, so the plan call can sit far above what
+ * it holds; the projection's `todoList` is the plan as it stands however much
+ * of the transcript is loaded, and the plan after a relaunch is the plan
+ * before it without a line of recovery code.
  */
 import * as React from "react";
+import type { SessionTodoList } from "@volli/shared";
 import type { UIMessage } from "ai";
 import { useStore } from "zustand";
 
@@ -45,6 +49,12 @@ const NO_MESSAGES: readonly UIMessage[] = [];
  * so re-running it per render would put every message the Session has ever
  * recorded into the render body — the exact mistake `ChatTranscriptState`
  * documents having made and fixed.
+ *
+ * The messages held answer first: they are a contiguous run up to the newest
+ * moment, so a plan among them is the newest plan. Only when they hold none is
+ * the projection's baseline the answer — the plan call is above the window. The
+ * baseline is selected as its JSON, a string, so a projection refresh that
+ * changed nothing about the plan moves nothing here.
  */
 export function useIslandPlan(
   sessionId: string,
@@ -54,8 +64,17 @@ export function useIslandPlan(
     store,
     (state) => state.sessions[sessionId]?.transcript.durableMessages ?? NO_MESSAGES,
   );
+  const projected = useStore(store, (state) => {
+    const list = state.sessions[sessionId]?.projection?.todoList;
+    return list === undefined ? null : JSON.stringify(list);
+  });
   return React.useMemo(
-    () => islandPlanFromTodos(sessionId, currentTodoList(durableMessages)),
-    [durableMessages, sessionId],
+    () =>
+      islandPlanFromTodos(
+        sessionId,
+        currentTodoList(durableMessages) ??
+          (projected === null ? null : (JSON.parse(projected) as SessionTodoList)),
+      ),
+    [durableMessages, projected, sessionId],
   );
 }

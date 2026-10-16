@@ -94,6 +94,7 @@ const SUPPORT: SupportInfoResult = {
     platform: "darwin",
     arch: "arm64",
     schemaVersion: 34,
+    migrationHistory: "consistent",
   },
 };
 

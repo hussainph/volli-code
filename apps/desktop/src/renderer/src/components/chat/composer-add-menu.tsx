@@ -3,13 +3,11 @@
  *
  * Three rows, and the point is the two that are not "attach". The `/` and `@`
  * pickers open from what is typed, which is the right way to open them and
- * also invisible: nothing on the surface said the grammars existed, and the
- * first outside users found neither. The field converged on one answer —
- * OpenCode's `+` lists Attachments · Commands `/` · Context `@`, claude.ai's
- * lists files and `/` commands, Claude Code Desktop's lists files, skills and
- * connectors — a menu under one mark whose rows *are* the shortcut hints. The
- * trailing slot on each row carries the character that would have done the
- * same thing, so the menu teaches the keystroke that makes it unnecessary.
+ * also invisible: nothing on the surface says the grammars exist. So the `+`
+ * is one mark over the attachment, command, and file-context shortcuts, and its
+ * rows *are* the shortcut hints. The trailing slot on each row carries the
+ * character that would have done the same thing, so the menu teaches the
+ * keystroke that makes it unnecessary.
  *
  * A row writes the trigger at the caret through the picker stack's own
  * binding ({@link useComposerCaretBinding}), which is what makes the picker
@@ -54,6 +52,12 @@ export interface ComposerAddMenuProps {
   imagesUnsupported?: boolean;
   /** The picker rows are offered only where a `/` or `@` would open one. */
   pickers?: boolean;
+  /**
+   * Why files cannot be attached here ("Not available on hetzner-1 yet",
+   * VC-713): the attach row stays, disabled, and says so, instead of a row
+   * that would attach something the Session's host cannot read.
+   */
+  attachUnavailable?: string | null;
   className?: string;
 }
 
@@ -64,12 +68,14 @@ export function ComposerAddMenu({
   onFiles,
   imagesUnsupported = false,
   pickers = true,
+  attachUnavailable = null,
   className,
 }: ComposerAddMenuProps): React.ReactElement | null {
   const caret = useComposerCaretBinding();
   const picker = useFilePicker(onFiles ?? NO_FILES);
   const insert = pickers ? caret.insert : undefined;
-  if (onFiles === undefined && insert === undefined) return null;
+  const attachRow = onFiles !== undefined || attachUnavailable !== null;
+  if (!attachRow && insert === undefined) return null;
 
   return (
     <>
@@ -111,13 +117,21 @@ export function ComposerAddMenu({
             caret.focus();
           }}
         >
-          {onFiles === undefined ? null : (
+          {attachUnavailable !== null ? (
+            <DropdownMenuItem disabled data-slot="attach-unavailable">
+              <PaperclipIcon />
+              <span className="flex flex-col">
+                Attach files…
+                <span className="text-muted-foreground">{attachUnavailable}</span>
+              </span>
+            </DropdownMenuItem>
+          ) : onFiles === undefined ? null : (
             <DropdownMenuItem onSelect={picker.open}>
               <PaperclipIcon />
               Attach files…
             </DropdownMenuItem>
           )}
-          {onFiles !== undefined && insert !== undefined ? <DropdownMenuSeparator /> : null}
+          {attachRow && insert !== undefined ? <DropdownMenuSeparator /> : null}
           {insert === undefined ? null : (
             <>
               <DropdownMenuItem onSelect={() => insert("/")}>
@@ -134,7 +148,7 @@ export function ComposerAddMenu({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      {onFiles === undefined ? null : picker.input}
+      {onFiles === undefined || attachUnavailable !== null ? null : picker.input}
     </>
   );
 }

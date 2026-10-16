@@ -3,11 +3,9 @@
  *
  *   pnpm -C packages/agent-runtime run bench
  *
- * The table it prints is the deliverable. The assertions around the table are
- * what make the table worth reading: each one is a property VC-245's decision
- * rests on, and every one of them is a property of Pi's real loop rather than
- * of this file. If a future Pi changes any of them, this fails loudly instead
- * of quietly making the design note wrong.
+ * Assertions check the printed table against Pi's real loop (VC-245), not
+ * only the fixture. Changes to its batching and execution behavior must fail
+ * loudly rather than silently invalidating the benchmark.
  *
  * It is out of the default `test` lane because it sleeps for real time. It is
  * not a smoke: it spends no money and reaches no provider.

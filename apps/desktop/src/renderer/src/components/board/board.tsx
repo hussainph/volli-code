@@ -15,7 +15,11 @@ import {
   type DragOverEvent,
   type DragStartEvent,
   type MeasuringConfiguration,
+  KeyboardCode,
+  type KeyboardSensorOptions,
+  type PointerSensorOptions,
 } from "@dnd-kit/core";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { motion } from "motion/react";
 import {
@@ -394,6 +398,22 @@ function DragOverlayBody({
  * (see `TicketDialogHost`); the context menu each card must keep is the rest.
  * This is a cheap correct boundary, not the fix for either.
  */
+const POINTER_DRAG: PointerSensorOptions = { activationConstraint: { distance: 4 } };
+/** A pointer that never travels far enough: a read-only board lifts nothing. */
+const POINTER_NEVER: PointerSensorOptions = {
+  activationConstraint: { distance: Number.POSITIVE_INFINITY },
+};
+const KEYBOARD_DRAG: KeyboardSensorOptions = { coordinateGetter: sortableKeyboardCoordinates };
+/** No key starts a keyboard drag on a read-only board. */
+const KEYBOARD_NEVER: KeyboardSensorOptions = {
+  coordinateGetter: sortableKeyboardCoordinates,
+  keyboardCodes: {
+    start: [],
+    cancel: [KeyboardCode.Esc],
+    end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab],
+  },
+};
+
 export const Board = React.memo(function Board({
   projectId,
   ticketPrefix,
@@ -566,7 +586,11 @@ export const Board = React.memo(function Board({
     [aimedStatus],
   );
 
-  // Live only while a card is in the air. ⌥ is read from TWO sources for the
+  // Listen before activation, but consume input only while the synchronous
+  // picker ref says a card is in the air. Attaching from the drag-start render's
+  // passive effect loses moves and Option presses that arrive before it commits
+  // (VC-530). A stationary hand must not need a second move to recover them.
+  // ⌥ is read from TWO sources for the
   // reason the Lab rig documents: the key events alone miss a drag that STARTED
   // with ⌥ already down, and a keyup that never arrived (⌥ released while the
   // window lacked focus) would leave a column enlarged under a modifier nobody
@@ -574,8 +598,8 @@ export const Board = React.memo(function Board({
   // read from whichever event is fresher.
   const dragging = drag !== null;
   React.useEffect(() => {
-    if (!dragging) return;
     function handlePointerMove(event: PointerEvent) {
+      if (!pickerRef.current.dragging) return;
       const landing = pointerLanding(event.clientX, event.clientY);
       applyPicker({
         kind: "pointer-move",
@@ -585,6 +609,7 @@ export const Board = React.memo(function Board({
       });
     }
     function handleKey(event: KeyboardEvent) {
+      if (!pickerRef.current.dragging) return;
       if (event.key === "Alt") {
         applyPicker({ kind: "modifier", held: event.type === "keydown" });
         return;
@@ -606,7 +631,7 @@ export const Board = React.memo(function Board({
       window.removeEventListener("keydown", handleKey);
       window.removeEventListener("keyup", handleKey);
     };
-  }, [dragging, applyPicker]);
+  }, [applyPicker]);
 
   // The countdown owns bottom-centre while it is open: it has a deadline and
   // the one control, and the hint is advice. Two ephemeral surfaces on one edge
@@ -673,9 +698,15 @@ export const Board = React.memo(function Board({
   // distance: 4 keeps plain clicks (selection, context menu) working — the
   // drag only activates after pointer travel through the browser event
   // pipeline. Keyboard drags come free with the sortable coordinate getter.
+  //
+  // Read-only (VC-576): a move is a write, so no drag can start while the
+  // project's host cannot serve — the same two sensors, set never to
+  // activate (dnd-kit wants the sensor list's size fixed). Cards still open
+  // and select.
+  const canWrite = useCanWrite(projectId);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(PointerSensor, canWrite ? POINTER_DRAG : POINTER_NEVER),
+    useSensor(KeyboardSensor, canWrite ? KEYBOARD_DRAG : KEYBOARD_NEVER),
   );
 
   const tickets = drag?.preview ?? storeTickets;
@@ -1000,6 +1031,9 @@ export const Board = React.memo(function Board({
     frozen.current = null;
     setDrag(null);
     if (drop === null) return;
+    // A drag that began before the host went away lands nowhere; the card
+    // goes back and the reason shows.
+    if (!guardWrite(projectId)) return;
 
     if (completed.ticketIds.length === 1) {
       void useBoardStore
@@ -1128,14 +1162,16 @@ export const Board = React.memo(function Board({
                 data-board-ticket-count={visible.length}
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
-                  // grab-able under them (Trello-style mouse pan). Scrollbar is
+                  // grab-able under them (mouse pan). Scrollbar is
                   // hidden — drag / shift-wheel / trackpad replace it.
                   "flex min-h-0 flex-1 items-start gap-4 overflow-x-auto px-gutter pb-4",
                   "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
                   panning ? "cursor-grabbing select-none" : "cursor-grab",
                 )}
               >
-                {boardBare ? <BoardEmpty className="min-h-0 flex-1 self-stretch" /> : null}
+                {boardBare ? (
+                  <BoardEmpty projectId={projectId} className="min-h-0 flex-1 self-stretch" />
+                ) : null}
                 {shown.map((status) => (
                   <BoardColumn
                     key={status}
@@ -1149,8 +1185,8 @@ export const Board = React.memo(function Board({
                     // column for rendering. Drag mechanics stay unchanged — a drop
                     // still writes the manual `order` (see handleDragEnd), but under
                     // a non-manual sort the displayed position is sort-driven, so the
-                    // card snaps to its sorted slot after the drop (Linear behaves the
-                    // same). "manual" remains the true drag-reorder mode.
+                    // card snaps to its sorted slot after the drop. "manual" remains
+                    // the true drag-reorder mode.
                     tickets={sortedGroups[status]}
                     projectId={projectId}
                     ticketPrefix={ticketPrefix}

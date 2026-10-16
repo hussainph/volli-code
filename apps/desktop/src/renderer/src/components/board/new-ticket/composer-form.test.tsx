@@ -244,10 +244,42 @@ it.each([false, true])(
   },
 );
 
+it.each([
+  ["plain create", "Create", runPlainCreate],
+  ["kickoff", "Submit", runKickoff],
+  ["automation", "Submit", runCreateWithAutomation],
+] as const)(
+  "returns Create-more focus with the committed reset after %s",
+  async (kind, press, submit) => {
+    // A pending animation frame must not leave a blank composer with focus still
+    // in the body (or footer). Batch entry is ready in the reset's own commit.
+    const frames = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+    let finish!: (result: { created: boolean }) => void;
+    vi.mocked(submit).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await click("Create more");
+    if (kind === "automation") await click("Saved");
+    const title = host.querySelector("input")!;
+    const body = host.querySelector("textarea")!;
+    body.focus();
+    await click(press);
+    expect(title.value).toBe("Typed ticket");
+    expect(document.activeElement).toBe(body);
+
+    await act(async () => finish({ created: true }));
+    expect(title.value).toBe("");
+    expect(body.value).toBe("");
+    expect(document.activeElement).toBe(title);
+    expect(frames).not.toHaveBeenCalled();
+  },
+);
+
 it("creates a second ticket in the same mount with fresh fields and no inherited attachments", async () => {
   const onClose = vi.fn();
-  const frames: FrameRequestCallback[] = [];
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => frames.push(callback));
+  const frames = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
   const linkDrafts = vi.fn(async () => ({ ok: true }));
   vi.stubGlobal("api", { attachments: { linkDrafts } });
   const attachment: BlobLinkView = {
@@ -297,8 +329,8 @@ it("creates a second ticket in the same mount with fresh fields and no inherited
   expect(title.value).toBe("");
   expect(body.value).toBe("");
   expect(host.querySelector('[aria-label="Attachments"]')).toBeNull();
-  frames.splice(0).forEach((callback) => callback(0));
   expect(document.activeElement).toBe(title);
+  expect(frames).not.toHaveBeenCalled();
   expect(host.querySelector('[aria-pressed="true"]')?.textContent).toBe("Create more");
 
   await typeInto(title, "Second ticket");
@@ -320,8 +352,8 @@ it("creates a second ticket in the same mount with fresh fields and no inherited
   expect(title.value).toBe("");
   expect(body.value).toBe("");
   expect(host.querySelector('[aria-pressed="true"]')?.textContent).toBe("Create more");
-  frames.splice(0).forEach((callback) => callback(0));
   expect(document.activeElement).toBe(title);
+  expect(frames).not.toHaveBeenCalled();
 });
 
 it("gives plain creation its own button and the unmodified chord", async () => {
@@ -431,3 +463,45 @@ it.each([
     ).toBe(false);
   },
 );
+
+/**
+ * Read-only (VC-576): a composer already open when p1's host goes away keeps
+ * its draft and submits nothing — by button or chord — and says why above the
+ * footer. Back online, it submits as before.
+ */
+it("refuses every submission while the project's host cannot serve, keeping the draft", async () => {
+  const { useExperimentsStore } = await import("@renderer/stores/experiments");
+  const { useHostConnectionStore } = await import("@renderer/stores/host-connection");
+  const { createFakeHostSource, hostSnapshot, remoteHost } =
+    await import("@renderer/stores/host-sources");
+  const remote = createFakeHostSource(
+    hostSnapshot([remoteHost("h1", "hetzner-1")], { p1: "h1", p2: "h1" }),
+  );
+  useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
+  const detach = useHostConnectionStore.getState().attach(remote);
+  try {
+    await act(async () =>
+      remote.setHost("h1", { link: { status: "offline", since: 0, retryAt: null } }),
+    );
+    const note = host.querySelector('[data-slot="host-read-only-note"]');
+    expect(note?.textContent).toBe("Can’t reach hetzner-1 · Read-only");
+    const create = [...host.querySelectorAll("button")].find((el) => el.textContent === "Create");
+    expect(create?.disabled).toBe(true);
+    await chord();
+    await chord(true);
+    await click("Saved");
+    await chord(true);
+    expect(runPlainCreate).not.toHaveBeenCalled();
+    expect(runKickoff).not.toHaveBeenCalled();
+    expect(runCreateWithAutomation).not.toHaveBeenCalled();
+    expect(host.querySelector("input")?.value).toBe("Typed ticket");
+
+    await act(async () => remote.setHost("h1", { link: { status: "open" } }));
+    expect(host.querySelector('[data-slot="host-read-only-note"]')).toBeNull();
+    await chord();
+    expect(runPlainCreate).toHaveBeenCalledOnce();
+  } finally {
+    detach();
+    useExperimentsStore.setState({ snapshot: null });
+  }
+});

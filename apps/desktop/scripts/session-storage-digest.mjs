@@ -2,7 +2,7 @@
 
 import { resolve } from "node:path";
 
-import { computeSessionStorageContentDigestAtPath } from "../src/main/db/session-storage-digest.ts";
+import { computeSessionStorageContentDigestAtPath } from "../../../packages/host-core/src/db/session-storage-digest.ts";
 
 const dbPath = process.argv.slice(2).find((argument) => argument !== "--");
 if (!dbPath) {

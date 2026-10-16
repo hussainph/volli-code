@@ -2,7 +2,7 @@
  * The VC-478 decision benchmark, offline: every arm driven against the
  * network-free fixture provider, so the harness itself is proven without a
  * credential, a server or a cent. The numbers here measure the harness, not a
- * model — `decision.live.test.ts` is the run whose table goes in the PR.
+ * model — `decision.live.test.ts` measures actual provider behavior.
  *
  *   pnpm -C packages/agent-runtime run bench -- bench/decision
  */

@@ -5,7 +5,7 @@
  *   node apps/desktop/e2e/database-recovery-smoke.mjs
  *
  * All profiles, HOME/worktrees, SQLite fixtures and screenshots stay under a
- * fresh ignored <workspace>/.tmp/recovery-* directory. The actual 750ms restart
+ * fresh recovery-* directory in the CI report root or ignored <workspace>/.tmp. The actual 750ms restart
  * timer runs, but its relaunch/quit pair is intercepted in Electron main so it
  * cannot spawn a detached process. Cleanup restores the original quit method;
  * a separately tracked fresh launch proves the restored profile boots healthy.
@@ -30,11 +30,21 @@ import {
   writeFakeLoginShell,
 } from "./lib/smoke-kit.mjs";
 
+import { installShutdownTrace, sampleStalledClose, traceClose } from "./lib/shutdown-trace.mjs";
+import { screenshotWithTrace } from "./lib/screenshot-trace.mjs";
+
 const RESTORE_LABEL = "Restore from the last backup that checks clean";
 const NO_CLEAN = "No local backup checks clean. Nothing was restored.";
 const MANUAL = "Your database and safety copies are preserved for manual recovery.";
 const MARKER_KEY = "database-recovery-smoke";
 const MARKER_VALUE = "last-clean-saved-marker";
+// Cheap CI breadcrumbs are kept only on failure. Native sampling is intrusive
+// and stays opt-in, including during unchanged-head validation.
+const sampleNative = process.env.VOLLI_RECOVERY_SAMPLE === "1";
+const traceShutdown =
+  Boolean(process.env.VOLLI_SMOKE_REPORT_DIR) ||
+  process.env.VOLLI_RECOVERY_TRACE === "1" ||
+  sampleNative;
 const runs = new Set();
 const checks = [];
 const failures = [];
@@ -90,15 +100,32 @@ async function fixture(name) {
 
 async function openApp(config, label) {
   const app = await launch(config);
-  const run = { app, label, stdout: "", stderr: "", page: null };
+  const run = {
+    app,
+    child: app.process(),
+    label,
+    stdout: "",
+    stderr: "",
+    page: null,
+    debuggerWaitTraced: false,
+    tracePath: traceShutdown ? join(scratch, `${label.replaceAll(" ", "-")}-shutdown.jsonl`) : null,
+  };
+  run.child.once("exit", (code, signal) =>
+    traceClose(run.tracePath, "child-exit", { code, signal }),
+  );
   runs.add(run);
   // Bounded log retention; neither seed nor app gets any real credentials.
-  app.process().stdout?.on("data", (chunk) => {
+  run.child.stdout?.on("data", (chunk) => {
     run.stdout = `${run.stdout}${chunk}`.slice(-24000);
   });
-  app.process().stderr?.on("data", (chunk) => {
+  run.child.stderr?.on("data", (chunk) => {
     run.stderr = `${run.stderr}${chunk}`.slice(-24000);
+    if (!run.debuggerWaitTraced && run.stderr.includes("Waiting for the debugger to disconnect")) {
+      run.debuggerWaitTraced = true;
+      traceClose(run.tracePath, "debugger-disconnect-wait");
+    }
   });
+  await installShutdownTrace(app, run.tracePath);
   await bounded(`${label}: profile isolation`, () =>
     assertProfileIsolated(app, config.userDataDir),
   );
@@ -128,7 +155,24 @@ async function closeRun(run) {
   ).catch((error) => console.error(`cleanup patch restoration: ${error.message}`));
   // The application allows 15s for accepted shutdown work to drain. Do not
   // SIGTERM it at smoke-kit's default 2.5s before that deadline on a busy runner.
-  const exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+  traceClose(run.tracePath, "quit-requested");
+  const finishSampling = sampleStalledClose(run.child, sampleNative ? run.tracePath : null);
+  let exit;
+  try {
+    exit = await closeAppBounded(run.app, { closeGraceMs: 20000 });
+    traceClose(run.tracePath, "close-result", exit);
+  } finally {
+    await finishSampling();
+    if (
+      run.tracePath &&
+      (!exit ||
+        exit.exit.code !== 0 ||
+        !["graceful", "already-exited", "natural-after-close"].includes(exit.kind))
+    )
+      console.error(
+        `SHUTDOWN TRACE: ${run.label}:\n${await fs.readFile(run.tracePath, "utf8").catch((error) => `unavailable: ${error.message}`)}`,
+      );
+  }
   console.log(`CLEANUP: ${run.label}: ${JSON.stringify(exit)}`);
   // Retain failed runs so the outer handler prints their stdout/stderr.
   assert.equal(exit.exit.code, 0, `${run.label} did not quit cleanly`);
@@ -165,7 +209,10 @@ async function malformedHeader(config) {
 // Use the immutable production v1/v2 SQL snapshots, not a partial hand-written
 // app_state-only database (that can pass quick_check but cannot really migrate).
 async function legacySql(version) {
-  const source = await fs.readFile(join(APP_DIR, "src/main/db/migrations.ts"), "utf8");
+  const source = await fs.readFile(
+    join(APP_DIR, "../../packages/host-core/src/db/migrations.ts"),
+    "utf8",
+  );
   const constant = version === 1 ? "MIGRATION_001_INITIAL_SCHEMA" : "MIGRATION_002_TICKET_ARCHIVAL";
   const match = new RegExp(`const ${constant} = \x60([\\s\\S]*?)\x60;`).exec(source);
   assert.ok(match, `immutable v${version} fixture SQL was not found`);
@@ -221,7 +268,14 @@ async function expectFault(run) {
 }
 
 async function screenshot(run, name) {
-  await run.page.screenshot({ path: join(scratch, `${name}.png`), timeout: 5000 });
+  await screenshotWithTrace(
+    run,
+    { path: join(scratch, `${name}.png`), timeout: 5000 },
+    traceShutdown
+      ? join(scratch, `${run.label.replaceAll(" ", "-")}-${name}-screenshot.jsonl`)
+      : null,
+    { sample: sampleNative },
+  );
 }
 
 // Match the real incident: the SQLite header/schema are intact, but an index
@@ -583,8 +637,7 @@ async function malformedHeaderScenario() {
       await unchanged(raw);
       await unchanged(copies);
       await preservedRaw(config, actionRaw);
-      const marker = await fs.lstat(`${config.dbPath}.recovery-pending`);
-      assert.equal(marker.isFile(), true);
+      await assertMissing(`${config.dbPath}.recovery-pending`);
       // A round trip and a >750ms observation window catch any accidental success
       // timer while leaving all production lifecycle/timer logic unmodified.
       await run.page.waitForTimeout(1100);
@@ -748,8 +801,9 @@ try {
   );
   for (const path of [join(APP_DIR, "dist-electron/main.cjs"), join(APP_DIR, "dist/index.html")])
     await fs.access(path);
-  await fs.mkdir(join(REPO, ".tmp"), { recursive: true });
-  scratch = await fs.mkdtemp(join(REPO, ".tmp", "recovery-"));
+  const evidenceRoot = process.env.VOLLI_SMOKE_REPORT_DIR ?? join(REPO, ".tmp");
+  await fs.mkdir(evidenceRoot, { recursive: true });
+  scratch = await fs.mkdtemp(join(evidenceRoot, "recovery-"));
   console.log(`Evidence: ${scratch}`);
   await recoveryScenario();
   await malformedHeaderScenario();
@@ -781,7 +835,7 @@ try {
     );
     // Keep screenshots/summary for PR evidence, but remove isolated profiles and
     // shadow Electron bundles after success. Failures retain fixtures to debug.
-    if (code === 0)
+    if (code === 0) {
       for (const name of [
         "restore",
         "malformed-header",
@@ -790,6 +844,9 @@ try {
         "interrupted-switch",
       ])
         await fs.rm(join(scratch, name), { recursive: true, force: true });
+      for (const name of await fs.readdir(scratch))
+        if (name.includes("-shutdown.jsonl")) await fs.rm(join(scratch, name), { force: true });
+    }
   }
 }
 console.log(

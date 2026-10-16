@@ -246,9 +246,9 @@ const LINK_ATTRIBUTES: ReadonlySet<string> = new Set(["href", "cite", "action", 
  * The only shape a `style` value may have: plain `property: value` text.
  *
  * An ALLOWLIST over characters rather than a hunt for `url(`, because a regular
- * expression cannot read CSS — review round 2 walked
- * `background-image:u\72l(https://…)` straight past the old check, and a
- * stylesheet has more ways to spell a request than a pattern can enumerate
+ * expression cannot read CSS: `background-image:u\72l(https://…)` bypasses a
+ * literal match, and a stylesheet has more ways to spell a request than a
+ * pattern can enumerate
  * (escapes, comments, `image-set()`, `@import`, `expression()`, `element()`).
  * So nothing with structure is admitted: no `\`, no `(`, no `@`, no `/`, no
  * quotes, no anything outside the characters a flat declaration needs.
@@ -279,9 +279,8 @@ const NON_ELEMENT_MARKUP = /<[!?]/;
  * Refused whole, and asked on the raw text for the same reason the line above
  * is: after parsing there is nothing left to see. A parser gives every fragment
  * an `html`, a `head` and a `body` of its own, so the tree cannot tell a bare
- * authored root from an invented one — which is how `<body onload="…">` reached
- * the page unmarked (review round 2), and how a `<frameset>` disappears without
- * a word. A markdown file is not a document, so a block that declares one is
+ * authored root from an invented one. Without the source scan, an authored
+ * `<body onload="…">` or `<frameset>` could disappear without a marker. A markdown file is not a document, so a block that declares one is
  * unsupported by definition, handler or no handler. (A root that brought
  * attributes or replaced the body IS visible in the tree, and
  * {@link inventedRoots} asks there too, for the root this scan cannot see.)
@@ -300,7 +299,7 @@ const COMMENT_CLOSE = "-->";
  * as well as `-->` does, and an unclosed `<!--` runs to the end of the input.
  * So `<!--> <body onload=…> -->` was one comment to the regex and an empty
  * comment followed by a real `<body>` to the parser — the raw scans never saw
- * the root, and round 2's `<body onload>` hole was open again behind it.
+ * the root, allowing `<body onload>` to bypass the source scan.
  *
  * Rather than re-implement the tokenizer's comment states, the gate admits only
  * the comments the HTML standard calls well-formed: closed by `-->`, not

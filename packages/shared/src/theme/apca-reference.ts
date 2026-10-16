@@ -4,11 +4,9 @@
  * WHY THIS FILE EXISTS. {@link apcaLc} used to be cross-checked against the
  * `apca-w3` package — a second implementation imported as an oracle by
  * `color.test.ts`, `generate.test.ts` and the canvas smoke. That package pulls
- * `colorparsley`, whose manifest declares `"license": "AGPL v3"`, and the
- * owner's decision for VC-412 is that a project shipping as commercial OSS
- * downstream carries neither. So the dependency is gone, and the verification
- * it carried has to live here instead. Nothing in the product ever imported
- * it; only the checks did.
+ * `colorparsley`, whose manifest declares `"license": "AGPL v3"`. To avoid
+ * that transitive license obligation (VC-412), verification uses these local vectors
+ * instead. Neither dependency is needed by the product.
  *
  * WHAT A VECTOR IS. `[text, background, Lc]` — the magnitude
  * `apcaLc(text, background)` must return, to four decimals. The pairs are not

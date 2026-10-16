@@ -1,6 +1,7 @@
 import * as React from "react";
 import type { TicketStatus } from "@volli/shared";
 
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useBoardStore } from "@renderer/stores/board";
 
 interface TicketComposerOptions {
@@ -16,6 +17,11 @@ interface TicketComposerOptions {
  * composer and the list view's section composer so the two views can never
  * drift: Enter submits and keeps composing, Escape closes, a non-empty blur
  * submits then closes. The consumers own only their wrapper markup.
+ *
+ * Read-only (VC-576): while the project's host cannot serve, the composer does
+ * not open, and one already open refuses to submit — Enter says why, and a
+ * blur closes it KEEPING the draft for when the host is back. `canWrite` is
+ * the consumer's gate for its "New" button.
  */
 export function useTicketComposer({
   projectId,
@@ -23,7 +29,9 @@ export function useTicketComposer({
   initiallyOpen = false,
   onClose,
 }: TicketComposerOptions) {
-  const [open, setOpen] = React.useState(initiallyOpen);
+  const canWrite = useCanWrite(projectId);
+  // A collapsed column's expand opens this composer; a read-only one stays shut.
+  const [open, setOpen] = React.useState(initiallyOpen && canWrite);
   const [title, setTitle] = React.useState("");
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -35,6 +43,7 @@ export function useTicketComposer({
   function submit(): boolean {
     const trimmed = title.trim();
     if (trimmed === "") return false;
+    if (!guardWrite(projectId)) return false;
     // Fire-and-forget: the store surfaces creation failures via toast; this
     // composer only needs to know locally whether it had a title to submit.
     void useBoardStore.getState().addTicket(projectId, status, trimmed);
@@ -57,13 +66,22 @@ export function useTicketComposer({
   }
 
   function handleBlur() {
+    if (title.trim() !== "" && !guardWrite(projectId)) {
+      // Not sent, so not lost: the draft waits for the host.
+      setOpen(false);
+      onClose?.();
+      return;
+    }
     submit();
     close();
   }
 
   return {
     open,
-    openComposer: () => setOpen(true),
+    canWrite,
+    openComposer: () => {
+      if (guardWrite(projectId)) setOpen(true);
+    },
     title,
     setTitle,
     inputRef,

@@ -12,7 +12,7 @@ import { SettingsPage } from "./settings-page";
  * it is the one nobody looks at while developing.
  */
 describe("SettingsPage (app-wide)", () => {
-  it("groups the rail rather than listing nine categories flat", () => {
+  it("groups the rail rather than listing categories flat", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
     // The group labels carry the relationship — see settings-groups.tsx.
@@ -21,7 +21,7 @@ describe("SettingsPage (app-wide)", () => {
     expect(html).toContain("System");
   });
 
-  it("lists every app-wide category", () => {
+  it("lists the unconditional app-wide categories, hiding experiments until the host answers", () => {
     const html = renderToStaticMarkup(<SettingsPage />);
 
     for (const category of [
@@ -38,6 +38,7 @@ describe("SettingsPage (app-wide)", () => {
     ]) {
       expect(html).toContain(category);
     }
+    expect(html).not.toContain("Experimental");
   });
 
   it("has retired the categories that had nothing to change", () => {

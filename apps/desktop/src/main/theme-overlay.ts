@@ -5,7 +5,7 @@
  * Decision #67: the user's own `~/.config/ghostty/config` is a read-only base.
  * Volli owns overlay files under `<userData>/volli/ghostty/`, in ghostty's own
  * `key = value` format, layered on top. If Volli ever wrote the real config,
- * clicking a swatch in Volli would silently restyle **Ghostty.app and cmux** —
+ * clicking a swatch in Volli would silently restyle Ghostty.app —
  * so {@link writeTerminalOverlay} refuses, by construction, to write any path
  * outside the overlay root. Every write in this module goes through it; there
  * is no unguarded door.

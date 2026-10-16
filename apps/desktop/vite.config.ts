@@ -149,10 +149,18 @@ export default defineConfig(({ mode }) => ({
       // Inherits root src/renderer, plugins, @renderer alias — existing store
       // tests keep working under the default include.
       { extends: true, test: { name: "renderer" } },
-      // NOT extends: main tests need no plugins/alias; fresh entry avoids
-      // inheriting root src/renderer. @volli/shared resolves via workspace link.
+      // NOT extends: main tests need no plugins; a fresh entry avoids
+      // inheriting root src/renderer. It takes the renderer's alias alone
+      // (below). @volli/shared resolves via workspace link.
       {
         root: fileURLToPath(new URL(".", import.meta.url)),
+        // The renderer's alias alone: the real-link Sessions test drives the
+        // renderer's remote-Session binding and stores from desktop main.
+        resolve: {
+          alias: {
+            "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
+          },
+        },
         test: {
           name: "main",
           environment: "node",
@@ -161,7 +169,7 @@ export default defineConfig(({ mode }) => ({
           // determinism, which takes minutes and blows this lane's 5s default
           // timeout — it failed CI exactly that way. They have their own config
           // and command: `pnpm test:performance-harness` (vite.bench.config.ts).
-          include: ["src/main/**/*.test.ts"],
+          include: ["src/main/**/*.test.ts", "src/ipc/**/*.test.ts"],
           // Drains the data-change coalescer after every test. Module state
           // that outlives the test that filled it is delivered into the next
           // one's window mock otherwise; see the file for why it disposes
@@ -172,7 +180,7 @@ export default defineConfig(({ mode }) => ({
           // inherits nothing, and vitest refuses a run whose projects disagree
           // about `maxWorkers` while sharing a `sequence.groupOrder` — which is
           // exactly what a `--maxWorkers` flag on the command line produced
-          // (VC-339 review r2). Both projects say the same thing; the flag then
+          // (VC-339). Both projects say the same thing; the flag then
           // governs the pool they share.
           ...SHARED_MACHINE_TEST_WORKERS,
         },
@@ -331,6 +339,25 @@ export default defineConfig(({ mode }) => ({
         "src/components/board/new-ticket/draft.ts",
         "src/components/board/new-ticket/submit.ts",
         "src/components/harness/trust-prompt-model.ts",
+        // What each host state SAYS (VC-576): the Island's line and action, the
+        // chip's badge, the switcher's meta and detail, the recovery toasts.
+        // A state that silently says nothing is a read-only board with no
+        // explanation, and no screenshot of one state shows another's words.
+        "src/components/hosts/host-surface-model.ts",
+        // Adding and managing a host (VC-700): which question asks what, which
+        // answer it offers, how a failure reads and recovers, and how a host's
+        // health and facts read in Settings: wording rules no screenshot pins.
+        "src/components/hosts/add-host-model.ts",
+        "src/components/settings/panes/hosts-pane-model.ts",
+        // Opening a project on a host (VC-710): what each empty, error and
+        // can't-add state says and offers, and how the one field is read.
+        "src/components/hosts/open-project-model.ts",
+        // Whether a project can be written to (VC-576): the per-project link
+        // merge, the host aggregate, and the outage mapping that must keep an
+        // offline host offline through every retry. A branch missed here is a
+        // board that invites writes a dead link will refuse.
+        "src/stores/host-connection.ts",
+        "src/stores/host-sources.ts",
         // Home's tab resolution: which tab is in front AND what the persisted
         // record owes a tab that names nothing on screen (VC-54). The ticket's
         // highest correctness risk, so it is a pure module precisely so the
@@ -497,7 +524,7 @@ export default defineConfig(({ mode }) => ({
         // not open on Home), and which store write a drop is.
         "src/components/split/split-drop.ts",
         // …and the routing between that meaning and the store twin that writes
-        // it, extracted from the two surfaces (review S2 on VC-202) so they
+        // it, shared by the two surfaces (VC-202) so they
         // cannot answer the same drop differently. Its wrong answer is a drop
         // that lands somewhere other than where the zone said it would.
         "src/components/split/split-surface-drop.ts",
@@ -518,7 +545,7 @@ export default defineConfig(({ mode }) => ({
         // like every other glue module — and so does `notification-surface.ts`,
         // which is the store calls that carry that decision out.
         "src/lib/notification-target.ts",
-        // The click's ORDER and its terminal/chat fork (round 2): select the
+        // The click's ORDER and its terminal/chat fork: select the
         // project, open the Session, then reveal the item. Ported precisely so
         // the sequence is assertable, because the failure it prevents — a card
         // revealed in a Session nobody opened, or a harness alert opening a chat
@@ -552,6 +579,50 @@ export default defineConfig(({ mode }) => ({
         "src/lib/debounce.ts",
         "src/lib/escape-guard.ts",
         "src/lib/session-rpc-ipc-link.ts",
+        // Which door the board goes through (VC-565): with `cloud` on, every
+        // board surface's write is a command under one `commandId`, retried
+        // while its outcome is unknown; a wrong branch is a write sent twice
+        // or a failure no screenshot shows. (Its engine, `stores/board-sync.ts`,
+        // is gated by `src/stores/**` above.)
+        "src/lib/board-protocol.ts",
+        // When a remote project's Session listing is read again (VC-713): a
+        // missed branch is a question nobody sees on reopen, or a poll that
+        // never stops.
+        "src/lib/remote-listing-refresh.ts",
+        // Which door a project's Session listing is read through (VC-713): a
+        // wrong branch calls `window.api` with a remote project's id.
+        "src/lib/session-listing-reader.ts",
+        // A remote Workspace's Session streams within the link's budget
+        // (VC-713, AM1): a missed branch is a blank chat or a leaked stream.
+        "src/lib/remote-session-streams.ts",
+        // Sessions on a remote host (VC-713): which transport, listing and
+        // streams a remote project's Sessions take, and when they let go.
+        "src/lib/remote-sessions.ts",
+        "src/lib/remote-session-wire.ts",
+        // A Session's project, for the surfaces that hold only its id: a wrong
+        // answer calls `window.api` with a remote Session's id.
+        "src/lib/session-project.ts",
+        // Which projects this window has known on a remote host (VC-713, B1):
+        // a wrong answer sends a remote Session's id to This Mac's IPC.
+        "src/lib/remote-owners.ts",
+        // A remote project's Workspace link as the window reaches it (VC-711):
+        // when a relayed stream resumes, waits for a slot, or ends is a rule
+        // no screenshot shows until a board silently stops following.
+        "src/lib/relay-host-link.ts",
+        // Each remote host in the one log viewer (VC-712): when a host's source
+        // registers and goes, which link it reads over, when it moves, and when
+        // a full link turns it to polling. A wrong branch is a host missing
+        // from the viewer, or a source that silently stops, with nothing on
+        // screen to say so.
+        "src/components/logs/log-sources.ts",
+        "src/components/logs/remote-log-sources.ts",
+        // Which remote boards a window opens, when it says a host offers none,
+        // and when it asks again (VC-711): a loop or a silence no screenshot shows.
+        "src/lib/follow-remote-projects.ts",
+        // Reopen restores remote intent only while its bounded boot owner is current.
+        "src/lib/restore-remote-selection.ts",
+        // An acknowledged draft must remain durable after its debounce/write completes.
+        "src/lib/app-state-storage.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
@@ -618,21 +689,10 @@ export default defineConfig(({ mode }) => ({
         // mixed batch. A branch that quietly narrowed a scope would leave a
         // surface showing yesterday's data with nothing on screen saying so.
         "**/src/main/data-change-coalescer.ts",
-        "**/src/main/blob-attach.ts",
-        "**/src/main/blob-collect.ts",
-        "**/src/main/blob-protocol.ts",
-        "**/src/main/turn-attachments.ts",
         "**/src/main/ipc.ts",
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
-        // The agent-observability export boundary (VC-119). The mapping module
-        // is the ONLY place Volli's metadata-only vocabulary becomes somebody
-        // else's attribute names, and the sink is the bound that stops a
-        // collector from reaching a turn — both are enrolled here for the same
-        // reason the IPC handlers are: a missed branch is a privacy or a
-        // liveness failure, not a cosmetic one. `otlp.ts` stays outside, like
-        // `index.ts`: it is transport bootstrap around an SDK.
         // The notification delivery boundary (VC-295). Enrolled for the same
         // reason the IPC handlers are: a missed branch here is an alert that
         // escapes a preference, a click that opens nothing, or a suppression
@@ -644,82 +704,62 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/notifications/dispatch.ts",
         "**/src/main/notifications/ipc.ts",
         "**/src/main/notifications/settings.ts",
-        "**/src/main/observability/genai.ts",
+        // The agent-observability export boundary (VC-119). The mapping module,
+        // the settings owner and the sink moved to @volli/host-core with their
+        // tests (VC-622); their unchanged 100% gate moved to that package's
+        // vite.config.ts. The IPC door stays here.
         "**/src/main/observability/ipc.ts",
-        "**/src/main/observability/settings.ts",
-        "**/src/main/observability/sink.ts",
-        // The orphan process sweep (VC-341). Enrolled for the same reason the
-        // IPC handlers and `quit-gate.ts` are, only more so: this is the one
-        // place in the app that calls `process.kill`, and every uncovered
-        // branch in it is a branch nobody has watched decide whether to signal
-        // a stranger's process. The ledger's storage rides along, because a row
-        // it hands back wrong is what that decision is made from.
-        "**/src/main/process/**",
-        "**/src/main/db/spawn-ledger-repo.ts",
-        "**/src/main/project-roots.ts",
-        // The per-repository ordering of worktree CHANGES (VC-389). Enrolled
-        // for the reason the process modules above are: it is a concurrency
-        // guard, so its branches are the ones no screenshot and no manual pass
-        // can show. An uncovered branch here is a `worktree add` and a
-        // `worktree prune` nobody watched decide whether to run against one
-        // repository at the same time, which is a race git's own documentation
-        // names. Its sibling `worktree/git.ts` is deliberately NOT enrolled:
-        // one defensive fallback in it (a child-process failure carrying no
-        // `message`) is not reachable from a test without exporting an
-        // internal purely to satisfy the gate, and a contrived test is worth
-        // less than an honest gap.
-        "**/src/main/worktree/repository-turn.ts",
+        // The process IPC door stays here; the sweep and its unchanged 100%
+        // gate moved with its tests to @volli/host-core (VC-618).
+        "**/src/main/process/ipc.ts",
+        // Still covered by desktop's IPC/PTY boundary tests; host-core's own
+        // tests do not yet hold every registry branch at 100%.
+        "**/packages/host-core/src/project-roots.ts",
         // About's support metadata (VC-293). Enrolled on the same argument as
         // the IPC handlers around it: this module is an ALLOWLIST, and the
         // guarantee it carries — five fields, one pragma, one app_state key,
         // nothing that could reach a credential — is only as good as the test
         // that walks every branch of it.
         "**/src/main/support-info.ts",
-        // Relinking a project to the folder it moved to (VC-430). In the gate
-        // because every branch of it is a rule about a filesystem nobody is
-        // watching: the refusal that stops two projects tracking one checkout,
-        // and the container move that keeps a renamed project's worktrees
-        // inside the set this database recognises as its own. Both are silent
-        // when wrong — one duplicates a project, the other strands checkouts
-        // that no cleanup surface will ever list again.
-        "**/src/main/project-relink.ts",
-        "**/src/main/prompt-templates.ts",
-        "**/src/main/pty.ts",
-        "**/src/main/park.ts",
         "**/src/main/quit-gate.ts",
+        "**/src/main/host-runtime.ts",
+        // Menu-bar mode's whole decision and lifecycle (VC-577).
+        "**/src/main/menu-bar-host.ts",
+        "**/src/main/menu-bar-electron.ts",
+        // The flush-and-ack barrier before menu-bar mode destroys a window.
+        "**/src/main/client-state-flush.ts",
+        // When the web keys' sealed mirror reconciles, and that an accepted quit
+        // stops it before it can start keychain work (VC-643). Every branch is
+        // a rule about teardown nobody watches.
+        "**/src/main/web/sealing-lifecycle.ts",
         "**/src/main/update-ipc.ts",
-        "**/src/main/shutdown-deadline.ts",
+        // The host deadline is still covered by desktop's quit/socket integration tests.
+        "**/packages/host-core/src/shutdown-deadline.ts",
         "**/src/main/fs-deps.ts",
         "**/src/main/auto-update.ts",
         "**/src/main/ghostty-config.ts",
         "**/src/main/harness-ipc.ts",
-        "**/src/main/session-runtime/boot-recovery.ts",
         "**/src/main/window-theme.ts",
         "**/src/main/theme-ipc.ts",
         "**/src/main/theme-overlay.ts",
-        "**/src/main/db/export.ts",
-        "**/src/main/db/theme-repo.ts",
-        // Where "unread" is written down (VC-30). Enrolled beside the other
-        // named db modules for the reason the notification boundary is: a
-        // receipt read or written wrong is work a person never sees they have,
-        // and nothing on screen says the dot was the part that was broken.
-        "**/src/main/db/session-read-repo.ts",
-        // The Session concurrency budget (VC-339). In the gate because every
-        // branch of it is a rule about a machine nobody watches: a miscount
-        // hands one Session the whole box while three others build, and a
-        // missed no-clobber branch overwrites what a person put in their own
-        // login shell. Neither is visible anywhere until the laptop swaps.
-        "**/src/main/session-concurrency.ts",
+        // The db modules, including export.ts, are protected by
+        // @volli/host-core's own gate; see that package's vite.config.ts.
         "**/src/main/session-rpc-ipc.ts",
-        "**/src/main/session-runtime/sessions.ts",
-        "**/src/main/session-control/activity-watch.ts",
-        // The turn boundary that decides unread (VC-30), beside the watch it
-        // decorates: main is the only process that knows both that a turn ended
-        // and whether anyone was looking, so every branch of this is one nobody
-        // else can check. The peek's fold rides here too — it is the whole of
-        // what a card is allowed to say about a Session it never adopted.
-        "**/src/main/session-control/session-read-watch.ts",
-        "**/src/main/session-control/peek-content.ts",
+        "**/src/main/experiments.ts",
+        // Sign-ins on a remote host (VC-702): the relay that binds this Mac's
+        // loopback for one request, "Send from this Mac" (a key leaving this
+        // Mac), and the rows' state.
+        "**/src/main/host-sign-ins/relay-client.ts",
+        "**/src/main/host-sign-ins/send-from-this-mac.ts",
+        "**/src/main/host-sign-ins/sign-in-runner.ts",
+        "**/src/main/host-sign-ins/service.ts",
+        "**/src/main/host-sign-ins/port.ts",
+        // The Workspace link relay (VC-711): which calls leave this Mac over a
+        // remote project's link, and each relayed stream's owner and budget.
+        "**/src/main/host-link-relay.ts",
+        "src/components/hosts/sign-ins/host-sign-in-model.ts",
+        "src/components/hosts/sign-ins/host-sign-in-controller.ts",
+        "src/components/hosts/sign-ins/remote-host-sign-in-source.ts",
       ],
       // Global bar only — vitest applies global thresholds to every included
       // file even when per-glob entries exist, so partial carve-outs can't
@@ -827,7 +867,7 @@ export default defineConfig(({ mode }) => ({
       },
       build: {
         command:
-          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs && node scripts/verify-preload-standalone.mjs && node scripts/verify-packed-requires.mjs",
+          "vp run --filter @volli/cli build && vp build && node scripts/verify-chat-css.mjs && vp pack && node scripts/copy-cli.mjs && node scripts/copy-hostd-manifest.mjs && node scripts/verify-preload-standalone.mjs && node scripts/verify-packed-requires.mjs",
         cache: false,
       },
       // The UI lab (src/renderer/lab) — the renderer dev server alone, no

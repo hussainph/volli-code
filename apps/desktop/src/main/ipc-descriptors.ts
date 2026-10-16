@@ -420,6 +420,14 @@ export const DATABASE_RECOVERY_IPC = {
     guard: (args: unknown[]): args is [] => args.length === 0,
     invalidError: "Invalid database recovery request",
   },
+  "volli:database-recovery-fault": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+  "volli:database-recovery-quit": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
 };
 
 // ---- data-IPC descriptor table ------------------------------------------
@@ -656,11 +664,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:project-remove"> =>
       args.length === 1 && typeof args[0] === "string",
     invalidError: "Invalid project id",
-  },
-  "volli:project-reorder": {
-    guard: (args): args is IpcArgs<"volli:project-reorder"> =>
-      args.length === 1 && isStringArray(args[0]),
-    invalidError: "Invalid project order",
   },
 
   "volli:ticket-create": {
@@ -1009,18 +1012,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid session peek",
   },
-  "volli:session-stop": {
-    guard: (args): args is IpcArgs<"volli:session-stop"> => {
-      if (args.length !== 1) return false;
-      const [input] = args;
-      if (!isRecord(input)) return false;
-      if (typeof input["sessionId"] !== "string" || input["sessionId"].length === 0) return false;
-      // The reason is the durable why: absent, or a non-blank sentence.
-      const reason = input["reason"];
-      return reason === undefined || (typeof reason === "string" && reason.trim().length > 0);
-    },
-    invalidError: "Invalid session stop",
-  },
   "volli:label-set-color": {
     guard: (args): args is IpcArgs<"volli:label-set-color"> => {
       if (args.length !== 1) return false;
@@ -1078,12 +1069,12 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
   "volli:worktree-orphan-cleanup": {
     // A command id, the scan revision it was confirmed against, and at least
     // one item id from that scan's plan. NO PATHS: main resolves ids against
-    // the proposal it minted itself (VC-284 review C1), so this guard only has
+    // the proposal it minted itself (VC-284), so this guard only has
     // to say the shape is a cleanup command — whether the revision is current
     // and the ids are real is a question only the plan can answer.
     //
     // The command id is held to UUID syntax like every other command channel
-    // (VC-284 re-review S1). It is the identity a destructive act is replayed
+    // (VC-284). It is the identity a destructive act is replayed
     // under: a caller that may pick `"cmd-1"` can collide with another caller's
     // id and be answered with somebody else's deletion.
     guard: (args): args is IpcArgs<"volli:worktree-orphan-cleanup"> => {
@@ -1115,10 +1106,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     // input, so there is no shape to get wrong.
     guard: (args): args is IpcArgs<"volli:worktree-trim"> => args.length === 0,
     invalidError: "Invalid trim request",
-  },
-  "volli:worktree-trim-settings-get": {
-    guard: (args): args is IpcArgs<"volli:worktree-trim-settings-get"> => args.length === 0,
-    invalidError: "Invalid request",
   },
   "volli:worktree-trim-settings-set": {
     guard: (args): args is IpcArgs<"volli:worktree-trim-settings-set"> => {
@@ -1262,7 +1249,7 @@ export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 
 // ---- file-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliFileIpcContract channel (the file, artifact, and
-// external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
+// external-app channels `src/main/volli-fs-ipc.ts` owns). Every one of that module's
 // handlers falls back to the same "Invalid request" string on a bad shape.
 
 /**
@@ -1621,8 +1608,8 @@ function isModelSelectionShape(value: unknown): boolean {
  * rule 1). The renderer mints one so a retry can carry the exact same intent
  * through another host without deriving an id from this machine.
  *
- * Shared by every command channel rather than copied per feature (VC-284
- * re-review S1): the orphan cleanup transports a DELETION under this id, and a
+ * Shared by every command channel rather than copied per feature (VC-284):
+ * the orphan cleanup transports a DELETION under this id, and a
  * transport that accepts `"cmd-1"` accepts an id another writer could mint too,
  * which is exactly the cross-writer collision the rule exists to prevent.
  */

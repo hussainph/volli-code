@@ -4,16 +4,11 @@
  *     node apps/desktop/scripts/check-vendored-themes.mjs             # the gate
  *     node apps/desktop/scripts/check-vendored-themes.mjs --self-test # the detector's own tests
  *
- * WHY THIS EXISTS (VC-413). The app used to ship
- * `packages/shared/src/ghostty-theme-sources.generated.ts`: 463 theme files
- * copied verbatim out of Ghostty.app's bundled collection, most of them
- * originally iTerm2 color schemes, none of whose individual license status
- * anybody had verified — one of them, Monokai Pro, a known problem. The owner's
- * call was to remove all of it. That removal is a commit; what this file
- * protects is the month after, because every force that produced the catalog is
- * still there. A picker wants a list. A generator script is eleven lines. The
- * material is sitting on the developer's own disk at a stable path, and pasting
- * it in looks exactly like a normal feature commit in review.
+ * WHY THIS EXISTS (VC-413). A terminal-theme collection's license does not
+ * establish the license of its individual themes. Volli reads the user's own
+ * Ghostty config and theme files; it does not redistribute a bundled catalog.
+ * This check prevents a copied catalog or its generator from reintroducing
+ * theme material into the tracked source tree.
  *
  * WHAT IT LOOKS FOR, and why it is content and not a filename. Blocking the old
  * paths would be trivially defeated by a new one, and blocking theme NAMES would

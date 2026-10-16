@@ -14,7 +14,7 @@
  * What differs is only where each starts, because each starts at its own
  * generator's floor — 68 in light, 60 in dark — and that is the whole reason
  * `textWeight` is per-mode: one position on two ranges that begin 8 Lc apart is
- * two different asks. Appendix § Copy weight.
+ * two different asks.
  */
 
 import { clamp, lerp } from "../color";
@@ -39,11 +39,9 @@ export const LIGHT_FLOORS = {
    * Body copy, on `--background` — deliberately NOT moved to the card with the
    * others, because this one token is already the answer.
    *
-   * The ink it produces (#352a26 on the shipped default) is the branch text the
-   * owner named as the thing he liked, and a floor is a means to an ink rather
-   * than the other way round. Re-solving the same 90 against `--card` looks like
-   * the consistent choice and is not: APCA's curve is steep at the paper end, so
-   * one rung of surface reaches for #0d0503, a stark near-black nobody asked for.
+   * This produces #352a26 on the default canvas. Solving the same 90 against
+   * `--card` instead reaches #0d0503: APCA's curve is steep at the paper end,
+   * so one rung of surface would make the body copy substantially darker.
    */
   body: 90,
   /**

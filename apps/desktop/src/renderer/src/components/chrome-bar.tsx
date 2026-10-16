@@ -7,6 +7,8 @@ import { MagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/MagnifyingGl
 import { SidebarIcon } from "@phosphor-icons/react/dist/csr/Sidebar";
 
 import { CommandPalette } from "@renderer/components/command-palette";
+import { HostChip } from "@renderer/components/hosts/host-chip";
+import { HostsChrome } from "@renderer/components/hosts/hosts-chrome";
 import { QuickOpen } from "@renderer/components/files/quick-open";
 import { UsageLimitsPopover } from "@renderer/components/usage-limits/usage-limits-popover";
 import { Button } from "@renderer/components/ui/button";
@@ -85,6 +87,9 @@ export function ChromeBar() {
               />
             </div>
             <NavHistoryButtons />
+            {/* Which machine the project in front runs on (VC-576). Nothing
+                with the `cloud` flag off. */}
+            <HostChip />
             <CommandCluster onCommandPalette={() => setCommandPaletteOpen(true)} />
             {/* The content-area tab strip (if any) lives below in MainContent, not here. */}
           </>
@@ -96,6 +101,9 @@ export function ChromeBar() {
         <TerminalFocusExit />
       </div>
       <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+      {/* "Add a host…" and "Manage hosts…" (VC-700): the Add-a-host sheet and
+          the switcher's entry points. Nothing with the `cloud` flag off. */}
+      <HostsChrome />
       <QuickOpen open={quickOpenOpen} onOpenChange={setQuickOpenOpen} />
       {/* No Automation editor here. It used to mount beside the palette as a
           window-level surface summoned from anywhere (VC-126) — which is a

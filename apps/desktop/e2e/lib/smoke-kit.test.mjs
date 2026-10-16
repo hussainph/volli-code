@@ -10,6 +10,7 @@ import {
   closeAppBounded,
   createDeadline,
   createRunner,
+  descendantProcesses,
   evidenceDir,
   launchEnvFor,
   quietAppExecutablePlan,
@@ -217,6 +218,29 @@ const FAST_CLOSE = {
   naturalExitRaceMs: 10,
 };
 
+test("stall sampling selects GPU/renderer descendants, never another Electron app", () => {
+  const output = `
+    100 1 /scratch/Electron
+    101 100 /scratch/Electron Helper (GPU)
+    102 100 /scratch/Electron Helper (Renderer)
+    103 102 /scratch/child helper
+    200 1 /live/Electron
+    201 200 /live/Electron Helper (GPU)
+  `;
+  assert.deepEqual(descendantProcesses(output, 100), [
+    { pid: 101, ppid: 100, command: "/scratch/Electron Helper (GPU)" },
+    { pid: 102, ppid: 100, command: "/scratch/Electron Helper (Renderer)" },
+    { pid: 103, ppid: 102, command: "/scratch/child helper" },
+  ]);
+});
+
+test("stall sampling handles missing processes, malformed rows and cycles", () => {
+  assert.deepEqual(descendantProcesses("invalid\n1 2 root\n2 1 child\n2 1 duplicate", 1), [
+    { pid: 2, ppid: 1, command: "child" },
+  ]);
+  assert.deepEqual(descendantProcesses("2 1 child", 99), []);
+});
+
 test("closeAppBounded exposes the full default shutdown budget", () => {
   assert.equal(CLOSE_APP_BOUNDED_MAX_MS, 6_000);
 });
@@ -347,6 +371,43 @@ test("closeAppBounded returns graceful only after the child exit is observed", a
     closeFailures: [],
   });
   assert.deepEqual(child.signals, []);
+});
+
+for (const forced of [false, true]) {
+  test(`closeAppBounded retains the child after ${forced ? "forced" : "graceful"} exit disposes Playwright`, async () => {
+    const child = new FakeChild({
+      onSignal(signal, process) {
+        process.exit({ signal });
+        return true;
+      },
+    });
+    const app = {
+      process() {
+        if (child.exitCode !== null || child.signalCode !== null)
+          throw new Error("Electron dispatcher disposed");
+        return child;
+      },
+      async close() {
+        if (!forced) child.exit({ code: 0 });
+        else await new Promise(() => {});
+      },
+    };
+    const first = await closeAppBounded(app, FAST_CLOSE);
+    assert.equal(first.kind, forced ? "sigterm" : "graceful");
+    const second = await closeAppBounded(app, FAST_CLOSE);
+    assert.equal(second.kind, "already-exited");
+    assert.deepEqual(second.exit, first.exit);
+    assert.equal(second.exit.code, forced ? null : 0);
+    assert.equal(second.exit.signal, forced ? "SIGTERM" : null);
+    assert.deepEqual(child.signals, forced ? ["SIGTERM"] : []);
+  });
+}
+
+test("closeAppBounded rejects an unavailable first child rather than claiming an exit", async () => {
+  await assert.rejects(
+    closeAppBounded({ process: () => undefined }, FAST_CLOSE),
+    /cannot inspect Electron main child before bounded close/,
+  );
 });
 
 for (const [label, close] of [

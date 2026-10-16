@@ -279,7 +279,7 @@ function oklchL(hex) {
  * whichever wins.
  *
  * Needed because one declared floor is physically unreachable and the engine
- * clamps rather than throwing (arc-theming-migration.md §7.1): at light's
+ * clamps rather than throwing: at light's
  * settled spread `--sidebar` lands at L 0.840, where even black scores 74.8
  * against a floor of 75. So the assertion that can actually be kept is "meets
  * its floor, or is AT its surface's ceiling" — which still catches anything
@@ -491,8 +491,7 @@ async function setSlider(page, label, value) {
 /**
  * Authors a canvas through the REAL editor: a preset swatch and both faders.
  *
- * Grain is a native range now too — the rotary dial retired when the owner
- * traded it for two matching vertical wave faders flanking the pad — so both
+ * Grain and vibrancy are matching native ranges flanking the pad. Both
  * unit values go through `setSlider`: previews on every `input`, one write on
  * settle.
  */

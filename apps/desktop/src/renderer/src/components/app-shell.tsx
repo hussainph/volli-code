@@ -3,6 +3,7 @@ import * as React from "react";
 import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
 import { hasVisibleNativePlane } from "@renderer/components/browser/browser-plane-freeze";
 import { ChromeBar } from "@renderer/components/chrome-bar";
+import { HostIsland } from "@renderer/components/hosts/host-island";
 import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-dialog";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
@@ -708,6 +709,10 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           )}
         >
           {content}
+          {/* The connection Island (VC-576): floats over the card's foot while
+              the project's host has something blocking to say. Nothing with
+              the `cloud` flag off. */}
+          <HostIsland />
         </SidebarInset>
 
         {/* THE WALL. A box that does not move, holding a clip that therefore
@@ -860,7 +865,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             standing the remaining strip is thin enough that the user has to
             aim, and this is what they aim at. With the rail down the target is
             the zone below, which widens by one shell inset to answer the aiming
-            problem itself; the owner's call is that a hint there is not worth
+            problem itself; a hint there is not worth
             the ink. A hint, not a handle. */}
         {!pinned && !terminalFocused && !workspaceRailHidden ? (
           <div

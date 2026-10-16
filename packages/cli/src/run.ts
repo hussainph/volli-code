@@ -23,8 +23,9 @@ import type {
   AgentResponse,
 } from "@volli/shared";
 
-import { agentRequestEnv, AgentClientError } from "./client";
-import { bareHelpText, resolveHelp } from "./help";
+import { agentRequestEnv, AgentClientError, operatorTokenFor } from "./client";
+import type { OperatorTokenFileRead } from "./client";
+import { bareHelpText, resolveHelp, toolRouteLabel } from "./help";
 import { parseCliArgs } from "./parser";
 import { exitCodeForError, renderCliError, renderCliSuccess } from "./render";
 import { materializeFileArguments } from "./runtime";
@@ -48,6 +49,16 @@ export interface RunCliDependencies {
    * filesystem to script; defaults to the real one.
    */
   pathExists?(path: string): boolean;
+  /**
+   * Reads the operator's token file (VC-623). Called only when this process
+   * carries no Session evidence; absent means there is no file to read.
+   */
+  readOperatorToken?(): Promise<OperatorTokenFileRead>;
+  /**
+   * Why the socket may not be the host it names (`untrustedSocketPath`), asked
+   * only before an operator token would be sent. Absent means no check.
+   */
+  socketPathFault?(socketPath: string): Promise<string | null>;
 }
 
 function clientError(error: unknown): AgentError {
@@ -187,6 +198,13 @@ async function previewContractRefusal(
   );
 }
 
+function stringMap(value: unknown): Readonly<Record<string, string>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (!entries.every(([, entry]) => typeof entry === "string")) return undefined;
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
 function parsedHelpSurface(value: unknown, sessionId: string): AgentHelpSurface | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const surface = value as Record<string, unknown>;
@@ -199,7 +217,15 @@ function parsedHelpSurface(value: unknown, sessionId: string): AgentHelpSurface 
   ) {
     return null;
   }
-  return { sessionId, role, tools };
+  const routes = stringMap(surface["routes"]);
+  const mcpServerIds = stringMap(surface["mcpServerIds"]);
+  return {
+    sessionId,
+    role,
+    tools,
+    ...(routes === undefined ? {} : { routes }),
+    ...(mcpServerIds === undefined ? {} : { mcpServerIds }),
+  };
 }
 
 /**
@@ -287,12 +313,21 @@ export function teachingErrorForParseResult(
   if (runtime?.surface !== null && runtime?.surface !== undefined) {
     const carried = runtime.surface.tools.includes(entry.key);
     const roleName = SESSION_ROLE_NAMES[runtime.surface.role];
+    const route = runtime.surface.routes?.[entry.key];
     const roleReason = carried
-      ? ` This ${roleName}'s frozen tool surface carries ${entry.key}.`
+      ? ` This ${roleName}'s frozen tool surface carries ${entry.key}; ${toolRouteLabel(route)}.`
       : ` This ${roleName}'s frozen tool surface does not carry ${entry.key}.`;
-    const next = carried
-      ? `Call the named ${entry.key} tool through this Session's Agent Tool Surface.`
-      : `Use a Session whose frozen Agent Tool Surface carries ${entry.key}; do not bypass the refusal through process or database workarounds.`;
+    const name = entry.tool?.name ?? entry.key;
+    let next = `Use a Session whose frozen Agent Tool Surface makes ${entry.key} available; do not bypass the refusal through process or database workarounds.`;
+    if (carried) {
+      if (route === "code" || route === "deferred") {
+        next = `Use codemode to call ${name}${route === "deferred" ? " after searchTools() and describeTool()" : ""}; it is not a direct named tool in this Session.`;
+      } else if (route === "direct" || route === "both") {
+        next = `Call the named ${name} tool through this Session's Agent Tool Surface.`;
+      } else if (route !== "hidden") {
+        next = `Run \`volli help ${entry.key.replaceAll(".", " ")}\` and inspect this Session's tool declarations; the route is unknown, so no direct call is claimed.`;
+      }
+    }
     return makeAgentError("WRONG_DOOR", `${parsed.message}${roleReason}`, next);
   }
   const unknown = runtime?.surfaceUnknownReason;
@@ -341,7 +376,24 @@ export async function runCli(
     dependencies.stderr(bareHelpText());
     return 2;
   }
-  const parsed = parseCliArgs(argv);
+  let parsed = parseCliArgs(argv);
+  let startOperator: Awaited<ReturnType<typeof operatorTokenFor>> | undefined;
+  if (
+    !parsed.ok &&
+    parsed.code === "WRONG_DOOR" &&
+    parsed.verb !== undefined &&
+    verbEntry(parsed.verb)?.operatorCli === true &&
+    dependencies.env["VOLLI_SOCKET"] !== undefined
+  ) {
+    startOperator = await operatorTokenFor(
+      dependencies.env,
+      dependencies.readOperatorToken ?? (async () => null),
+      async () => (await dependencies.socketPathFault?.(dependencies.env["VOLLI_SOCKET"]!)) ?? null,
+    );
+    if (startOperator.warning !== undefined) dependencies.stderr(startOperator.warning);
+    if (startOperator.token !== undefined)
+      parsed = parseCliArgs(argv, undefined, { operator: true });
+  }
   if (!parsed.ok) return renderParseRefusal(parsed, argv, dependencies);
   if (parsed.invocation.command === "help") {
     const runtime = await readHelpRuntime(dependencies);
@@ -409,11 +461,28 @@ export async function runCli(
       command === "doctor" && invocation.args["dryRun"] !== true
         ? { ...invocation.args, ...(await doctorObservation(dependencies)) }
         : invocation.args;
+    // The person's credential on a headless host (VC-623). Never beside a
+    // Session's environment: `operatorTokenFor` returns nothing there without
+    // reading anything, so an agent's request is byte-for-byte what it was.
+    const operator =
+      startOperator ??
+      (await operatorTokenFor(
+        dependencies.env,
+        dependencies.readOperatorToken ?? (async () => null),
+        async () => (await dependencies.socketPathFault?.(socketPath)) ?? null,
+      ));
+    if (operator.warning !== undefined) dependencies.stderr(operator.warning);
     const request: AgentRequest = {
       v: 1,
       cmd: command,
       args,
-      ctx: { cwd: dependencies.cwd, env: agentRequestEnv(dependencies.env) },
+      ctx: {
+        cwd: dependencies.cwd,
+        env: agentRequestEnv(
+          dependencies.env,
+          operator.token === undefined ? {} : { operatorToken: operator.token },
+        ),
+      },
     };
     if (args["dryRun"] === true) {
       const refusal = await previewContractRefusal(socketPath, request, dependencies);

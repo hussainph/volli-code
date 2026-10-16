@@ -18,9 +18,9 @@
  * the lettermark; one provider is signed out. Labels are what pi's catalog
  * actually ships (`model.name`), not raw ids.
  *
- * This scratch held variants A and B of the pane during the VC-259 design
- * review — flat rows under two group headings against the tree — and the
- * tree shipped. The A/B chrome is gone with the decision.
+ * This scratch held variants A and B of the pane during VC-259 — flat rows
+ * under two group headings against the tree — and the tree shipped. The A/B
+ * chrome is gone with the decision.
  *
  * WHAT THE LAB CANNOT SHOW: persistence. The client below holds state in memory
  * and forgets it on reload.

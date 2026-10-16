@@ -4,12 +4,10 @@
  *
  * It replaces the status dot on every Session row (the sidebar's two bands,
  * the Sessions inside a ticket folder, the in-ticket rail) and leads the peek
- * card's header, so one Session reads the same wherever it is drawn. The lab
- * compared three ways of saying this (`lab/session-peek/row-mark.tsx`) and the
- * owner chose the BADGE: the vendor's mark in its own colours on a quiet tile,
- * the state as a corner icon. A tinted logo carrying the status colour was the
- * alternative, and it lost because a brand colour and a state colour in one
- * glyph cannot both be read.
+ * card's header, so one Session reads the same wherever it is drawn. The BADGE
+ * keeps the vendor's mark in its own colours on a quiet tile, with the state
+ * as a corner icon. A tinted logo cannot communicate brand and state colours
+ * independently.
  *
  * TWO MAPS, AND WHY THERE IS NOT A THIRD. What a state LOOKS like belongs to
  * `ui/status-dot.tsx`, and what a Session's activity IS as a state belongs to

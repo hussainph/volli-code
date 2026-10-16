@@ -99,11 +99,11 @@ describe("concurrencyBudgetEnv", () => {
   });
 });
 
-// VC-339 review: a budget is a ceiling on what one Session may take, not a
+// VC-339: a budget is a ceiling on what one Session may take, not a
 // licence to take it. vitest re-reads `VITEST_MAX_WORKERS` after config
 // resolution and assigns it over the config, so a Session alone on an 8-core
 // laptop — budget 8 — raised this repository's deliberate cap of 2 back to 8
-// (measured in review: 6 workers with the variable at 6, even under
+// (6 workers with the variable at 6, even under
 // `--maxWorkers=2`). These are the rules `vitest.workers.ts` resolves through.
 describe("loweredParallelism", () => {
   it("lets an ambient budget lower a cap", () => {

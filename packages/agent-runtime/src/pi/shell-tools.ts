@@ -17,8 +17,8 @@
  *
  * The model knows what it has because every result here restates the
  * Session's live shells — id, state, age, command. The tool calls are the
- * durable record, and re-reading them is free (the owner ruled out a per-turn
- * prompt channel for this). What survives compaction is a named follow-up.
+ * durable record, and re-reading them is free; there is no per-turn prompt
+ * channel for shell state. What survives compaction is a named follow-up.
  *
  * Deliberately absent, as the port is deliberately narrow: no stdin, no PTY,
  * no restart verb, no filter on reads. A shell a person types into is the
@@ -30,6 +30,7 @@ import { Type } from "@earendil-works/pi-ai";
 import {
   shellCommandLine,
   shellStanding,
+  SHELL_MAX_PER_SESSION,
   type NonCodingToolId,
   type RuntimeShellOutputOutcome,
   type RuntimeShellPort,
@@ -74,7 +75,7 @@ function detailsOf(shell: RuntimeShellRecord): ShellToolDetails {
  * number: the desktop's host imports this constant and enforces it against
  * the Session's running shells, so there is no second copy to drift.
  */
-export const SHELL_MAX_PER_SESSION = 4;
+export { SHELL_MAX_PER_SESSION } from "@volli/shared";
 
 /** How long a command's first line is allowed to be in a listing. */
 const COMMAND_LINE_LIMIT = 80;

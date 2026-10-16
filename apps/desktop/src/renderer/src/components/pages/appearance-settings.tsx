@@ -135,7 +135,7 @@ const GLOBAL_SCOPE: ThemeScope = { kind: "global" };
  * the same reason. A project pinned to light must not make this section
  * describe a light canvas the app-wide setting never asked for.
  *
- * LIGHT/DARK FLOATS ON THE PAD (the Arc arrangement): to anyone changing how
+ * LIGHT/DARK FLOATS ON THE PAD (the pad arrangement): to anyone changing how
  * the app looks, the mode and the canvas are one subject, and the pad is
  * where that subject is looked at. What the old sibling-row split protected
  * still holds — THE CANVAS DOES NOT NAME A MODE, and a project may override
@@ -150,7 +150,7 @@ function AppThemeSection() {
   const resolved = resolveAppearance(appearance, systemPrefersDark);
 
   // No "Project override" pill when a project's canvas shadows this one — it
-  // was a status nothing here could act on, and the owner called it off. The
+  // would be a status nothing here could act on. The
   // precedence is published once instead, in the section's (i), and the
   // project's own Configure page carries the divergence and its revert.
   return (

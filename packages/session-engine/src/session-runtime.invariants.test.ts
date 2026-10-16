@@ -7,6 +7,7 @@ import {
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
+  SESSION_HISTORY_WINDOW,
   type BindingHandle,
   type NativeHarnessAdapter,
   type ObservationSink,
@@ -208,7 +209,112 @@ describe("SessionRuntime durable boundary invariants", () => {
       "is not open",
     );
     expect(adapter.attaches).toBe(1);
+    const failed = await runtime.snapshot({ sessionId: created.sessionId });
+    expect(failed.projection.attention.active).toContainEqual(
+      expect.objectContaining({
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "provider disconnected",
+      }),
+    );
+    // A fresh attachment is the existing recovery, and clears the one durable
+    // explanation even though the failed binding is already historical.
+    await attach(runtime, created.sessionId, "recover");
+    expect(
+      (await runtime.snapshot({ sessionId: created.sessionId })).projection.attention.active,
+    ).toEqual([]);
   });
+
+  it("names a fatal attachment with no diagnostic and redacts diagnostic credentials (VC-758)", async () => {
+    for (const diagnostic of [undefined, "", "   ", "password=fixture-secret-value"]) {
+      const { runtime, adapter } = composition();
+      const { sessionId } = await create(runtime);
+      await attach(runtime, sessionId);
+      await adapter.emit({
+        kind: "attachment",
+        state: "failed",
+        ...(diagnostic === undefined
+          ? {}
+          : { failure: { reason: "unknown" as const, message: diagnostic } }),
+      });
+      const snapshot = await runtime.snapshot({ sessionId });
+      expect(snapshot.projection.attention.active).toHaveLength(1);
+      expect(snapshot.projection.attention.active[0]?.detail).toEqual(
+        !diagnostic?.trim()
+          ? "The runtime stopped unexpectedly."
+          : expect.stringContaining("[redacted]"),
+      );
+      expect(JSON.stringify(snapshot)).not.toContain("fixture-secret-value");
+      expect(snapshot.projection.liveExecutor).toBeNull();
+      await runtime.close();
+    }
+  });
+
+  it("keeps the existing recovery when a runtime fails after explaining the turn (VC-758)", async () => {
+    const { runtime, adapter } = composition();
+    const { sessionId } = await create(runtime);
+    await attach(runtime, sessionId);
+    await adapter.emit({
+      kind: "attention",
+      state: "raised",
+      reason: "runtime-failure",
+      message: "Provider request failed",
+    });
+    await adapter.emit({
+      kind: "attachment",
+      state: "failed",
+      failure: { reason: "unknown", message: "Transport closed" },
+    });
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(snapshot.projection.attention.active).toHaveLength(1);
+    expect(snapshot.projection.attention.active[0]?.detail).toBe("Provider request failed");
+    expect(snapshot.projection.liveExecutor).toBeNull();
+  });
+
+  it.each(["before explanation", "after explanation"])(
+    "drops fatal observation work when close wins %s (VC-758)",
+    async (boundary) => {
+      const base = composition();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let armed = false;
+      const engine: SessionEngine = {
+        ...base.engine,
+        listEvents: async (query) => {
+          const events = await base.engine.listEvents(query);
+          if (armed && boundary === "before explanation") {
+            armed = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return events;
+        },
+        observe: async (observation) => {
+          const event = await base.engine.observe(observation);
+          if (armed && observation.kind === "attention.raised") {
+            armed = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return event;
+        },
+      };
+      const { runtime, adapter } = composition({ engine });
+      const { sessionId } = await create(runtime);
+      await attach(runtime, sessionId);
+      armed = true;
+      const failed = adapter.emit({ kind: "attachment", state: "failed" });
+      await entered.promise;
+      await runtime.close();
+      release.resolve();
+      await expect(failed).resolves.toBeUndefined();
+      const projection = await engine.getSession({ sessionId });
+      expect(projection?.attention.active).toHaveLength(boundary === "before explanation" ? 0 : 1);
+      // close() is process teardown, not a durable attachment outcome.
+      expect(projection?.liveExecutor).not.toBeNull();
+      await base.runtime.close();
+    },
+  );
 
   it("single-flights buffered rehydration and resumes from the immutable original directory", async () => {
     let directory = "/ticket/original";
@@ -899,8 +1005,12 @@ describe("SessionRuntime durable boundary invariants", () => {
       });
     }
 
+    // Past one engine page the projection still folds every event, while the
+    // snapshot beside it carries only its bounded tail (VC-315).
     const snapshot = await runtime.snapshot({ sessionId: created.sessionId });
-    expect(snapshot.frames.length).toBeGreaterThan(500);
+    expect(snapshot.throughSequence).toBeGreaterThan(500);
+    expect(snapshot.frames).toHaveLength(SESSION_HISTORY_WINDOW.events);
+    expect(snapshot.frames.at(-1)?.sequence).toBe(snapshot.throughSequence);
     await expect(
       runtime.command({
         commandId: "paged-interrupt",

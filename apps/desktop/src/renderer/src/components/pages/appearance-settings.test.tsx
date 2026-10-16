@@ -31,7 +31,7 @@ describe("Settings → Appearance", () => {
 
   it("carries no shadow pill — divergence is Configure's to say, not this page's", () => {
     // The "Project override" note was a status pill nothing here could act
-    // on, and the owner called it off. The project's own Configure page says
+    // on. The project's own Configure page says
     // the divergence once, with the revert beside it.
     const html = renderToStaticMarkup(<AppearanceSettings />);
 
@@ -41,7 +41,7 @@ describe("Settings → Appearance", () => {
 
   it("floats light/dark/auto on the canvas pad, in one App theme section", () => {
     // They are one subject to anyone changing how the app looks, so the separate
-    // "Light & dark" section is gone and the mode rides the pad itself (the Arc
+    // "Light & dark" section is gone and the mode rides the pad itself (the pad
     // arrangement). What the old split protected still holds: the canvas does
     // not name a mode, so the editor takes the control as a slot this page
     // fills — see AppThemeSection.
@@ -64,7 +64,7 @@ describe("Settings → Appearance", () => {
 
   it("carries no contrast instrumentation at all", () => {
     // The per-floor Lc readout was tuning instrumentation, and the standing
-    // stranded-floor alert followed it out at the owner's call: a canvas is an
+    // page carries no stranded-floor alert: a canvas is an
     // aesthetic choice, and a persistent warning about an outcome the user
     // chose is the surface arguing with them. Controls only.
     const html = renderToStaticMarkup(<AppearanceSettings />);

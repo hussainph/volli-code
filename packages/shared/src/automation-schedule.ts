@@ -3,8 +3,8 @@
  *
  * This module is a PURE FUNCTION of the schedule, its stored IANA zone and a
  * current time. It answers WHEN; `automation-schedule-pass.ts` beside it
- * answers what a host owes about that; and the Electron timer that acts on
- * both is a thin caller (`main/automations/scheduler.ts`). That split is the
+ * answers what a host owes about that; and the host timer that acts on
+ * both is a thin caller (`packages/host-core/src/automations/scheduler.ts`). That split is the
  * ticket's ruled architecture rather than a preference:
  *
  *  - **Testability first.** Every hard rule this feature owns — reschedule and

@@ -93,6 +93,7 @@ import {
   type TicketTabDescriptor,
 } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
+import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
@@ -121,6 +122,11 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 import { getEngine } from "@renderer/terminal/registry";
+import {
+  notAvailableOn,
+  remoteHostNow,
+  remoteHostOfTicketNow,
+} from "@renderer/stores/remote-project";
 
 /** The always-present Ticket Body tab's id — the fallback every persisted/live
  * tab id resets to once it no longer names a renderable tab (body/file/session).
@@ -401,6 +407,12 @@ export function TicketDetail({
   React.useEffect(() => {
     let cancelled = false;
     setAttachmentsLoaded(false);
+    // A remote project's ticket keeps its attachments on its host (VC-711).
+    if (remoteHostOfTicketNow(ticket.id) !== null) {
+      resetAttachments([]);
+      setAttachmentsLoaded(true);
+      return;
+    }
     void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
       if (cancelled) return;
       if (result.ok) resetAttachments(result.blobs);
@@ -926,6 +938,8 @@ export function TicketDetail({
       indexVersion: fileIndex.version,
       onOpenFile: openFile,
       createArtifact: async (name) => {
+        const host = remoteHostNow(projectId);
+        if (host !== null) return { ok: false, error: notAvailableOn(host) };
         try {
           const result = await window.api.files.createArtifact({ projectId, name });
           // A new artifact must show up in the index so its chip resolves at once.
@@ -1167,6 +1181,7 @@ export function TicketDetail({
   // twin. The `window.prompt` this replaces throws in Electron by definition,
   // and threw from outside the try, so the press was swallowed whole.
   const createBrowser = React.useCallback(
+    // The shared door refuses a remote project's (VC-711).
     () => openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, setActiveTab),
     [browserApi, projectId, setActiveTab, ticket.id],
   );
@@ -1425,6 +1440,9 @@ export function TicketDetail({
         {tab.kind === "body" && (
           <ContentColumn>
             <TicketTitle ticket={ticket} />
+            {/* "Running on hetzner-1" (VC-576): only for a host other than
+                This Mac, and only with the `cloud` flag on. */}
+            <RunningOnLabel projectId={projectId} className="mt-2" />
           </ContentColumn>
         )}
         {/* Positioning context for the resident terminal plane: Doc/file tabs

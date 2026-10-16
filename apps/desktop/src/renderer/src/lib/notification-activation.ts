@@ -2,11 +2,9 @@
  * Performing a notification click in this window (VC-295 rule 6).
  *
  * The DESTINATION is decided next door in `notification-target.ts`; this module
- * is the ORDER and the acts. Both halves matter, and round 1 got the second one
- * wrong twice: every Session opened as a chat tab (so a harness waiting in a
- * terminal opened a tab that does not exist), and the item ids the alert
- * carried were used only to print a regret rather than to put the card in
- * front.
+ * is the ORDER and the acts. Terminal Sessions must open their terminal tabs,
+ * not nonexistent chat tabs, and the item ids carried by the alert must reveal
+ * the live card rather than merely describe it.
  *
  * ── THE ORDER IS THE RULE ─────────────────────────────────────────────────
  * Select the project, open the Session, THEN reveal the item. A reveal request

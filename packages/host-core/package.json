@@ -1,0 +1,114 @@
+{
+  "name": "@volli/host-core",
+  "version": "0.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./agents": {
+      "types": "./src/entries/agents.ts",
+      "import": "./src/entries/agents.ts"
+    },
+    "./automations": {
+      "types": "./src/entries/automations.ts",
+      "import": "./src/entries/automations.ts"
+    },
+    "./board": {
+      "types": "./src/entries/board.ts",
+      "import": "./src/entries/board.ts"
+    },
+    "./handlers": {
+      "types": "./src/entries/handlers.ts",
+      "import": "./src/entries/handlers.ts"
+    },
+    "./browser": {
+      "types": "./src/entries/browser.ts",
+      "import": "./src/entries/browser.ts"
+    },
+    "./db": {
+      "types": "./src/entries/db.ts",
+      "import": "./src/entries/db.ts"
+    },
+    "./files": {
+      "types": "./src/entries/files.ts",
+      "import": "./src/entries/files.ts"
+    },
+    "./integrations": {
+      "types": "./src/entries/integrations.ts",
+      "import": "./src/entries/integrations.ts"
+    },
+    "./log": {
+      "types": "./src/entries/log.ts",
+      "import": "./src/entries/log.ts"
+    },
+    "./maintenance": {
+      "types": "./src/entries/maintenance.ts",
+      "import": "./src/entries/maintenance.ts"
+    },
+    "./ports": {
+      "types": "./src/entries/ports.ts",
+      "import": "./src/entries/ports.ts"
+    },
+    "./pty": {
+      "types": "./src/entries/pty.ts",
+      "import": "./src/entries/pty.ts"
+    },
+    "./secrets": {
+      "types": "./src/entries/secrets.ts",
+      "import": "./src/entries/secrets.ts"
+    },
+    "./session-runtime": {
+      "types": "./src/entries/session-runtime.ts",
+      "import": "./src/entries/session-runtime.ts"
+    },
+    "./sessions": {
+      "types": "./src/entries/sessions.ts",
+      "import": "./src/entries/sessions.ts"
+    },
+    "./worktree": {
+      "types": "./src/entries/worktree.ts",
+      "import": "./src/entries/worktree.ts"
+    },
+    "./testing": {
+      "types": "./src/testing/index.ts",
+      "import": "./src/testing/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run",
+    "test:coverage": "vp test run --coverage",
+    "migrations:lock": "node scripts/lock-migrations.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-mcp": "0.99.2",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/otlp-exporter-base": "0.221.0",
+    "@opentelemetry/otlp-transformer": "0.221.0",
+    "@opentelemetry/resources": "2.10.0",
+    "@opentelemetry/sdk-metrics": "2.10.0",
+    "@opentelemetry/sdk-trace": "2.10.0",
+    "@volli/agent-runtime": "workspace:*",
+    "@volli/session-engine": "workspace:*",
+    "@volli/shared": "workspace:*",
+    "@vscode/ripgrep": "^1.18.0",
+    "better-sqlite3": "^13.0.3",
+    "node-pty": "1.1.0",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-codemode": "1.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "catalog:",
+    "ai": "^7.0.83",
+    "playwright-core": "^1.62.1",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

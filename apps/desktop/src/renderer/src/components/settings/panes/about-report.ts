@@ -15,7 +15,7 @@ export interface AboutReportInput {
    * for the clock on every render (VC-293).
    */
   generatedAt: string;
-  /** Main's allowlist: build, release line, OS, architecture, schema version. */
+  /** Main's allowlist: build, release line, OS, architecture, schema version, migration history. */
   support: SupportInfo;
   rows: readonly CliStatusRow[];
   checks: readonly DoctorCheck[];
@@ -33,7 +33,7 @@ export interface AboutReportInput {
  * place. What it must never grow is the other direction — no credential or
  * secret-store value, no environment, no database contents beyond the schema
  * number. `support` is an allowlist assembled in main for exactly that reason,
- * and this reader touches only its five fields.
+ * and this reader touches only its six fields.
  */
 export function buildAboutReport({
   generatedAt,
@@ -49,6 +49,7 @@ export function buildAboutReport({
     `Release channel: ${support.channel}`,
     `OS: ${support.platform} ${support.arch}`,
     `Database schema: ${support.schemaVersion}`,
+    `Migration history: ${support.migrationHistory}`,
   ];
 
   if (rows.length > 0) {

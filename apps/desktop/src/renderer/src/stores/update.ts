@@ -4,7 +4,7 @@
  * bookkeeping. The sidebar's download icon and the install dialog both render
  * from here and nowhere else.
  *
- * Two rules carry the ticket's owner preference:
+ * Two rules keep downloaded updates visible without repeated prompts:
  *
  *  - **The dialog pops itself exactly once per downloaded version.** A
  *    `downloaded` snapshot auto-opens it the first time that version is seen;

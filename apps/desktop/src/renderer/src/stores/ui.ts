@@ -136,6 +136,8 @@ import {
 } from "@renderer/components/ticket/ticket-rail-model";
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 
+export const UI_APP_STATE_KEY = "volli:ui";
+
 export const SIDEBAR_DEFAULT_WIDTH = 318;
 export const SIDEBAR_MIN_WIDTH = 280;
 export const SIDEBAR_MAX_WIDTH = 640;
@@ -671,7 +673,7 @@ export function createUiStore(storage?: StateStorage) {
           ),
       }),
       {
-        name: "volli:ui",
+        name: UI_APP_STATE_KEY,
         version: 1,
         storage: createJSONStorage(() => storage ?? appStateStorage),
         skipHydration: storage === undefined,

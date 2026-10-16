@@ -1,4 +1,4 @@
-import { type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn as spawnResolvedShell } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
@@ -12,6 +12,7 @@ import { applyShellOutputUpdate } from "./vendor/pi-harness/execution/output-cap
 import type { NodeExecutionEnv } from "./vendor/pi-harness/env/nodejs";
 import {
   type FileError,
+  type ForegroundShellExecutor,
   getOrThrow,
   type Result,
   type ShellExecOptions,
@@ -53,6 +54,7 @@ async function environment(
     platform?: string;
     shellPath?: string;
     shellEnv?: NodeJS.ProcessEnv;
+    foregroundExecutor?: ForegroundShellExecutor;
   } = {},
 ): Promise<NodeExecutionEnv> {
   for (const module of ["node:fs/promises", "node:fs", "node:os", "node:child_process"])
@@ -72,7 +74,12 @@ async function environment(
     vi.doMock("node:child_process", () => ({ spawn: options.spawn }));
   }
   const { NodeExecutionEnv: Env } = await import("./vendor/pi-harness/env/nodejs");
-  const env = new Env({ cwd: scratch, shellPath: options.shellPath, shellEnv: options.shellEnv });
+  const env = new Env({
+    cwd: scratch,
+    shellPath: options.shellPath,
+    shellEnv: options.shellEnv,
+    foregroundExecutor: options.foregroundExecutor,
+  });
   environments.push(env);
   return env;
 }
@@ -786,7 +793,65 @@ function discovery(
   return { spawn, access };
 }
 
+const resolvedForeground: ForegroundShellExecutor = async (input) => {
+  const processHandle = spawnResolvedShell(
+    input.shellConfig.shell,
+    [...input.shellConfig.args, input.command],
+    {
+      cwd: input.cwd,
+      env: input.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  input.onReady({
+    pauseOutput: () => {
+      processHandle.stdout.pause();
+      processHandle.stderr.pause();
+    },
+    resumeOutput: () => {
+      processHandle.stdout.resume();
+      processHandle.stderr.resume();
+    },
+  });
+  processHandle.stdout.on("data", input.onOutput);
+  processHandle.stderr.on("data", input.onOutput);
+  return await new Promise((finishForeground, reject) => {
+    processHandle.once("error", reject);
+    processHandle.once("close", (code, signal) => finishForeground({ code, signal }));
+  });
+};
+
 describe("vendored Node shell discovery and platform transport", () => {
+  it.each(["PATH bash", "sh"] as const)(
+    "passes resolved %s fallback to foreground execution and runs the selected shell",
+    async (fallback) => {
+      const candidate = join(scratch, "bash");
+      await fs.symlink("/bin/sh", candidate);
+      const expected = fallback === "PATH bash" ? candidate : "sh";
+      const { spawn, access } = discovery(fallback === "PATH bash" ? [candidate] : [], {
+        text: fallback === "PATH bash" ? `${candidate}\n` : "",
+      });
+      const foreground = vi.fn(resolvedForeground);
+      const env = await environment({
+        platform: "linux",
+        spawn,
+        files: { access },
+        foregroundExecutor: foreground,
+      });
+      const output = collected({ foregroundCallId: "resolved-fallback" });
+      expect(
+        getOrThrow(await env.exec("printf foreground-fallback", output.options, context)).exitCode,
+      ).toBe(0);
+      expect(output.text()).toBe("foreground-fallback");
+      expect(foreground).toHaveBeenCalledOnce();
+      expect(foreground.mock.calls[0]![0].shellConfig).toEqual({ shell: expected, args: ["-c"] });
+      // Node discovers the shell; only the foreground host/runner spawns the command.
+      expect(spawn.mock.calls.map(([command, args]) => [command, args])).toEqual([
+        ["which", ["bash"]],
+      ]);
+    },
+  );
+
   it.each([
     { text: "/test/bash\n/other/bash\n", status: 0, allowed: ["/test/bash"], shell: "/test/bash" },
     { text: "/missing/bash\n", status: 0, allowed: [], shell: "sh" },

@@ -523,11 +523,12 @@ describe("an auto-picked model", () => {
 });
 
 /**
- * AND WITHOUT BEING ABLE TO CHANGE IT AT ALL (VC-288 review). The list is the
- * enabled pill's reveal, and a disabled trigger opens nothing and takes no
- * focus — so in the two states where the selection is frozen, which is most of
- * a working turn, the whole identity was reachable by a `title` and by nothing
- * else. Reading what is selected cannot depend on being allowed to change it.
+ * The selection is readable WITHOUT BEING ABLE TO CHANGE IT AT ALL (VC-288).
+ * The list is the enabled pill's reveal, and a disabled trigger opens nothing
+ * and takes no focus — so in the two states where the selection is frozen,
+ * which is most of a working turn, the whole identity was reachable by a
+ * `title` and by nothing else. Reading what is selected cannot depend on being
+ * allowed to change it.
  */
 describe("reading it while the selection is frozen", () => {
   async function renderLocked(input: { disabled?: boolean; models?: typeof MODELS } = {}) {

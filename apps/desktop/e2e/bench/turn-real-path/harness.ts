@@ -8,7 +8,7 @@
  * them back, in one Node process with no Electron:
  *
  * - **Session runtime.** `createSessionRuntime` from `@volli/session-engine`,
- *   composed port for port as `createDesktopSessionRuntime` composes it: the
+ *   composed port for port as `createHostSessionRuntime` composes it: the
  *   Session Engine over the desktop's `SqliteSessionLedger`, the file
  *   transcript-artifact store, one checkpoint failure reporter, `Date.now`,
  *   random ids, and the opt-in VC-119 sink. Two ports differ, both listed in
@@ -51,17 +51,16 @@ import {
 } from "@volli/session-engine";
 import { type ObservabilityEvent, type ObservabilitySink, type SessionLedger } from "@volli/shared";
 
-import { openVolliDb } from "../../../src/main/db";
-import { insertProject } from "../../../src/main/db/projects-repo";
+import { openVolliDb, insertProject } from "@volli/host-core/db";
 import {
   createCheckpointFailureReporter,
   createSqliteSessionLedger,
-} from "../../../src/main/session-control";
+} from "@volli/host-core/testing";
 import {
   createPiRuntimeHost,
   type PiRuntimeContext,
-} from "../../../src/main/session-runtime/pi-adapter";
-import { createFileTranscriptArtifactStore } from "../../../src/main/session-runtime/transcript-artifacts";
+  createFileTranscriptArtifactStore,
+} from "@volli/host-core/session-runtime";
 
 import { PRIVATE_CONTENT_CANARY, type SubscriberMode } from "./constants";
 
@@ -228,7 +227,7 @@ function fixedLocations(directory: string): SessionLocationResolver {
   return { resolve: at, prepare: at, reaffirm: async () => undefined };
 }
 
-/** The desktop engine's host yield (`session-control/index.ts`), which is private there. */
+/** The host engine's yield (`packages/host-core/src/session-control/index.ts`), which is private there. */
 function yieldToMainProcess(): Promise<void> {
   return new Promise<void>((resolvePromise) => {
     setImmediate(resolvePromise);
@@ -385,7 +384,7 @@ async function compose(
     usageLimits: { fetch: refusingFetch },
   });
 
-  // `createDesktopSessionEngine`, with the ledger's transactions timed. The
+  // The host's private Session engine, with the ledger's transactions timed. The
   // ledger runs BEGIN IMMEDIATE and COMMIT outside the work callback, so the
   // handle it is given times those statements too. Both are filed under the
   // Session whose call queued the transaction: the ledger runs it as a
@@ -485,9 +484,14 @@ async function compose(
   const artifacts: TranscriptArtifactStore = {
     write: (artifact) => timedArtifact("write", () => innerArtifacts.write(artifact)),
     read: (reference) => timedArtifact("read", () => innerArtifacts.read(reference)),
+    // A window is chosen from persisted sizes (VC-315); forwarded so the
+    // bench measures the path the host takes, not the read-to-measure fallback.
+    ...(innerArtifacts.byteLength === undefined
+      ? {}
+      : { byteLength: innerArtifacts.byteLength.bind(innerArtifacts) }),
   };
 
-  // `createDesktopSessionRuntime`, port for port, except:
+  // `createHostSessionRuntime`, port for port, except:
   // - `locations`: the Electron-free resolver above;
   // - `engine`: composed above so its ledger transactions can be timed. Same
   //   ledger class, clock, ids, reporter and host yield as the desktop's.

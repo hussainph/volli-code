@@ -23,6 +23,7 @@ const noop = (_path: string): void => {};
 function controlsWith(edit: NavigatorEdit): FileNavigatorControls {
   return {
     edit,
+    canWrite: true,
     startDraft: () => {},
     startRename: () => {},
     cancelEdit: () => {},
@@ -191,7 +192,7 @@ describe("TicketFilesList inline edits (VC-191)", () => {
 });
 
 /**
- * VC-406 review: the panel WITHOUT a worktree, and the panel handed a different
+ * VC-406: the panel WITHOUT a worktree, and the panel handed a different
  * ticket — the two cases where the page used to answer with something that was
  * not about the Ticket in front of it.
  */
@@ -355,7 +356,7 @@ describe("TicketFilesPanel", () => {
       expect(drawn('[data-testid="ticket-files-panel"]')).toHaveLength(1);
       expect(drawn('[data-testid="rail-attachments-trigger"]')).toHaveLength(1);
       // Nothing permanent: no eyebrow, no chip strip, no list until it is asked
-      // for (VC-406, revision 06).
+      // for (VC-406).
       expect(document.body.textContent).not.toContain("Ticket files");
       expect(drawn('[data-testid="rail-attachments-list"]')).toHaveLength(0);
       expect(drawn('button[aria-label="Attach files"]')).toHaveLength(0);

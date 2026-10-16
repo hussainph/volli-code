@@ -8,10 +8,9 @@ import {
   FIXTURE_NATIVE_RECEIPT_EVENT_ID,
   FIXTURE_NATIVE_USAGE_EVENT_ID,
   type FixtureProfile,
-} from "../backup/test-fixture";
-import { SqliteSessionLedger } from "../session-control/sqlite-ledger";
-import { migrate } from "./migrations";
-import { computeSessionStorageContentDigest } from "./session-storage-digest";
+  SqliteSessionLedger,
+} from "@volli/host-core/testing";
+import { migrate, computeSessionStorageContentDigest } from "@volli/host-core/db";
 
 const RECEIPT_EVENT_ID = FIXTURE_NATIVE_RECEIPT_EVENT_ID;
 const USAGE_EVENT_ID = FIXTURE_NATIVE_USAGE_EVENT_ID;

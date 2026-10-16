@@ -52,8 +52,10 @@ import {
   updateProjectAppearance,
   updateProjectCanvas,
   updateProjectThemeOverride,
-} from "./db/projects-repo";
-import { setFirstPaintHint, setGlobalAppearance, setGlobalCanvas } from "./db/theme-repo";
+  setFirstPaintHint,
+  setGlobalAppearance,
+  setGlobalCanvas,
+} from "@volli/host-core/db";
 import { readGhosttyAppearance } from "./ghostty-config";
 import type { FsDeps } from "./fs-deps";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";

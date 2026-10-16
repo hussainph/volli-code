@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * THE FOUR PIECES OF THE NARROW DIFF, WIRED TOGETHER (VC-288 review).
+ * THE FOUR PIECES OF THE NARROW DIFF, WIRED TOGETHER (VC-288).
  *
  * `diff-fit.test.ts` pins the arithmetic, `use-pane-width.test.tsx` pins the
  * observer, and `diff-presentation-toggle.test.tsx` pins the band. All three

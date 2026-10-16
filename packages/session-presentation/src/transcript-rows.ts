@@ -1,6 +1,10 @@
 import type { UIMessage } from "ai";
 import { readHostNotice, type TranscriptHostNotice } from "./host-notice";
-import type { TranscriptCompaction, TranscriptReasoningDrop } from "./transcript";
+import type {
+  TranscriptCompaction,
+  TranscriptReasoningDrop,
+  TranscriptToolRefresh,
+} from "./transcript";
 
 /** What every Session client draws from the portable transcript projection. */
 export type TranscriptRow =
@@ -10,7 +14,8 @@ export type TranscriptRow =
     }
   | { kind: "host-notice"; messageId: string; notice: TranscriptHostNotice }
   | { kind: "compaction"; compaction: TranscriptCompaction }
-  | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop };
+  | { kind: "reasoning-drop"; drop: TranscriptReasoningDrop }
+  | { kind: "tool-refresh"; refresh: TranscriptToolRefresh };
 
 function rowFor(messages: readonly UIMessage[]): TranscriptRow {
   const message = messages.length === 1 ? messages[0] : undefined;
@@ -22,6 +27,12 @@ function rowFor(messages: readonly UIMessage[]): TranscriptRow {
 }
 
 type AnchoredContextNotice =
+  | {
+      kind: "tool-refresh";
+      sequence: number;
+      afterMessageId: string | null;
+      value: TranscriptToolRefresh;
+    }
   | {
       kind: "compaction";
       sequence: number;
@@ -41,6 +52,8 @@ function noticeRow(notice: AnchoredContextNotice): TranscriptRow {
       return { kind: "compaction", compaction: notice.value };
     case "reasoning-drop":
       return { kind: "reasoning-drop", drop: notice.value };
+    case "tool-refresh":
+      return { kind: "tool-refresh", refresh: notice.value };
   }
 }
 
@@ -57,9 +70,16 @@ export function projectTranscriptRows(
   turns: readonly (readonly UIMessage[])[],
   compactions: readonly TranscriptCompaction[],
   reasoningDrops: readonly TranscriptReasoningDrop[],
+  toolRefreshes: readonly TranscriptToolRefresh[] = [],
 ): readonly TranscriptRow[] {
   const turnRows = turns.map(rowFor);
   const pending: AnchoredContextNotice[] = [
+    ...toolRefreshes.map((value) => ({
+      kind: "tool-refresh" as const,
+      sequence: value.sequence,
+      afterMessageId: value.afterMessageId,
+      value,
+    })),
     ...compactions.map((value) => ({
       kind: "compaction" as const,
       sequence: value.sequence,

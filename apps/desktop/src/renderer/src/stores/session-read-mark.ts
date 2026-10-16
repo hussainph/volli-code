@@ -27,6 +27,8 @@
  */
 import { errorMessage, type SessionReadState } from "@volli/shared";
 
+import { notAvailableOn } from "@renderer/components/hosts/use-remote-project";
+import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { toastError } from "@renderer/lib/toast";
 
 export interface SessionReadMarkPorts {
@@ -51,6 +53,13 @@ export async function markSessionRead(
   input: { sessionId: string; unread: boolean },
   ports: SessionReadMarkPorts,
 ): Promise<void> {
+  // A remote Session's read receipt is its host's (VC-713), and this Mac's
+  // `volli:session-read-set` writes only its own: say so, and mark nothing.
+  const host = remoteHostOfSession(input.sessionId);
+  if (host !== null) {
+    toastError(`Couldn't mark the session: ${notAvailableOn(host)}`);
+    return;
+  }
   const previous = ports.readState();
   // The stamp the dot needs NOW. Main records its own when it answers, and the
   // push replaces this with it.

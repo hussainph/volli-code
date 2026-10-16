@@ -557,7 +557,7 @@ interface PickerRow {
 }
 
 /**
- * The Codex pattern: a short stack of rounded rows, an outline icon, a plain
+ * A short stack of rounded rows, an outline icon, a plain
  * label, a right-aligned key hint. No headings and no descriptions — the rows
  * are the explanation.
  *
@@ -567,8 +567,8 @@ interface PickerRow {
  * split-down near the bottom edge behaves exactly like split-right, because the
  * picker is only ever as big as the hole it was born in.
  *
- * The last two rows are the open question — Codex offers Files and Review,
- * which are not sessions. They are inert here on purpose.
+ * The last two rows, Files and Review, are not Sessions. They are inert here
+ * because this scratch exercises only Session creation.
  */
 function PanePicker({
   rows,

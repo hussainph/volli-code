@@ -149,7 +149,7 @@ export function estimatedContextTokens(
  * prices the live array: the prompt once, each declared tool once however
  * many system messages declare it. There is no second spelling to hand the
  * estimator, so `tokensBefore` cannot count the prompt or a declaration
- * twice (VC-421 review, findings A and B). A caller with neither prompt nor
+ * twice (VC-421). A caller with neither prompt nor
  * tools prices the bare conversation, which is what Pi would send for it.
  */
 function requestTranscript(input: CompactionInput, path: readonly Entry[]): AgentMessage[] {

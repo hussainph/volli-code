@@ -16,6 +16,11 @@ export {
   type PiSignInOptions,
   type PiSignInSteps,
 } from "./pi/sign-in";
+export {
+  piHostCredentials,
+  type PiHostCredentials,
+  type PiStoredCredential,
+} from "./pi/host-credentials";
 export { createPiAgentRuntime, type PiRuntimeHostOptions } from "./pi/runtime";
 export { codeModeSandboxAssetsFrom } from "./codemode/assets";
 export type { CodeModeDetails, CodeModeSandboxAssets } from "./codemode/tool";
@@ -73,7 +78,13 @@ export {
   type WebExtractLimits,
 } from "./web/extract";
 export { BrowserRefusal, type BrowserRefusalPage } from "./browser/refusal";
-export { BROWSER_TOOL_NAMES, type BrowserToolId } from "./pi/browser-tools";
+export {
+  BROWSER_TOOL_NAMES,
+  createBrowserFindTool,
+  createBrowserHoldTool,
+  createBrowserTool,
+  type BrowserToolId,
+} from "./pi/browser-tools";
 export { ShellRefusal } from "./shell/refusal";
 export {
   createShellTool,

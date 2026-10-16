@@ -78,7 +78,7 @@ export function maxReadableSlide(
 }
 
 /**
- * Picks the on-canvas foreground — Arc's two precomputed swatches, chosen by
+ * Picks the on-canvas foreground from two precomputed swatches, chosen by
  * measurement rather than by a lightness threshold — then builds the two tiers
  * that rank under it.
  *

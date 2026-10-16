@@ -58,6 +58,8 @@ type PictureState = { kind: "loading" } | { kind: "ready"; dataUrl: string } | {
 /** Ids already asked for, whatever main said; bounded so a long Session does not hoard frames. */
 const PICTURES = new Map<string, Promise<string | null>>();
 const PICTURE_CACHE_LIMIT = 64;
+const PICTURE_READER_IDS = new WeakMap<object, number>();
+let nextPictureReaderId = 0;
 
 /** Test seam: forget every cached picture. */
 export function forgetBrowserPictures(): void {
@@ -72,14 +74,22 @@ export function prefetchBrowserPicture(api: BrowserApi, pictureId: string): void
   void pictureOf(api, pictureId);
 }
 
-function pictureOf(api: BrowserApi, pictureId: string): Promise<string | null> {
-  const cached = PICTURES.get(pictureId);
+function pictureOf(api: Pick<BrowserApi, "picture">, pictureId: string): Promise<string | null> {
+  // A remote host may use the same id as another host. Cache by the reader
+  // as well as the picture so a card cannot show another Session's pixels.
+  let readerId = PICTURE_READER_IDS.get(api);
+  if (readerId === undefined) {
+    readerId = ++nextPictureReaderId;
+    PICTURE_READER_IDS.set(api, readerId);
+  }
+  const key = `${readerId}:${pictureId}`;
+  const cached = PICTURES.get(key);
   if (cached !== undefined) return cached;
   const pending = api
     .picture({ pictureId })
     .then((result) => (result.ok ? result.dataUrl : null))
     .catch(() => null);
-  PICTURES.set(pictureId, pending);
+  PICTURES.set(key, pending);
   while (PICTURES.size > PICTURE_CACHE_LIMIT) {
     const oldest = PICTURES.keys().next().value;
     if (oldest === undefined) break;
@@ -88,7 +98,10 @@ function pictureOf(api: BrowserApi, pictureId: string): Promise<string | null> {
   return pending;
 }
 
-export function useBrowserPicture(api: BrowserApi | null, pictureId: string | null): PictureState {
+export function useBrowserPicture(
+  api: Pick<BrowserApi, "picture"> | null,
+  pictureId: string | null,
+): PictureState {
   const [state, setState] = React.useState<PictureState>({ kind: "loading" });
   React.useEffect(() => {
     if (api === null || pictureId === null) {
@@ -209,7 +222,7 @@ export function BrowserTabCard({
           </span>
         </div>
       ) : null}
-      {facet.picture !== null ? <Picture state={picture} /> : null}
+      {facet.picture !== null ? <BrowserPicture state={picture} /> : null}
       {host !== null && (live !== undefined || replay !== null) ? (
         <div className="flex flex-wrap items-center gap-1">
           {live?.createdBy === "session" ? (
@@ -312,7 +325,14 @@ function PageError({ error }: { error: string }) {
   );
 }
 
-function Picture({ state }: { state: PictureState }) {
+/** The same bounded picture presentation for browser cards and returned tool images. */
+export function BrowserPicture({
+  state,
+  alt = "The page as the agent left it",
+}: {
+  state: PictureState;
+  alt?: string;
+}) {
   if (state.kind === "loading") {
     return <div className="h-24 animate-pulse rounded-sm bg-muted/50" aria-hidden />;
   }
@@ -321,7 +341,7 @@ function Picture({ state }: { state: PictureState }) {
   }
   return (
     <img
-      alt="The page as the agent left it"
+      alt={alt}
       src={state.dataUrl}
       draggable={false}
       className={cn("max-h-64 w-full rounded-sm border border-border/50 object-contain object-top")}

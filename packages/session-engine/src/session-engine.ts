@@ -1,5 +1,8 @@
+import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
 import {
   advanceSessionProjection,
+  applyToolRefreshDelta,
+  createToolRefreshDelta,
   createSessionProjectionCheckpoint,
   observationPayload,
   pendingScheduledResume,
@@ -44,6 +47,9 @@ import type {
   LatestSessionSignal,
   UnstampedCommandReceipt,
 } from "@volli/shared";
+
+import { assertAdditiveToolRefresh, type ToolRefreshRequest } from "./tool-refresh";
+import { canonicalJson } from "./transcript-artifacts";
 
 export interface CreateSessionRequest {
   commandId: string;
@@ -112,6 +118,13 @@ export interface SessionEngine {
     input: SessionInput;
     provenance: SessionEventProvenance;
   }): Promise<SessionInput>;
+  /** Append an additive effective surface without changing the Session's birth input. */
+  recordToolRefresh(
+    request: ToolRefreshRequest & {
+      sessionId: string;
+      provenance: SessionEventProvenance;
+    },
+  ): Promise<SessionEvent | null>;
   observe(observation: SessionObservation): Promise<SessionEvent>;
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
   /** Atomically commits an adapter-applied idle model policy and its terminal receipt. */
@@ -233,6 +246,24 @@ export class SessionEngineConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SessionEngineConflictError";
+  }
+}
+
+/**
+ * A command id the ledger already holds, sent again with a different intent:
+ * the one conflict a client causes, and the one the host protocol answers
+ * `CONFLICT` / `command-conflict` (HP § Commands, VC-564). Every other
+ * {@link SessionEngineConflictError} is a fact about the ledger, not the request.
+ */
+export class SessionEngineCommandConflictError
+  extends SessionEngineConflictError
+  implements CommandIntentConflict
+{
+  readonly [COMMAND_INTENT_CONFLICT] = true as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionEngineCommandConflictError";
   }
 }
 
@@ -406,6 +437,61 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       });
     },
 
+    async recordToolRefresh(request) {
+      return ports.ledger.transaction((transaction) => {
+        const session = transaction.getSession(request.sessionId);
+        if (!session) throw new SessionEngineNotFoundError(request.sessionId);
+        const events = transaction.listEvents({ sessionId: request.sessionId });
+        let current: Extract<SessionInput, { kind: "tool-surface" }> | undefined;
+        let declared: Extract<SessionInput, { kind: "tool-surface" }> | undefined;
+        for (const event of events) {
+          if (
+            event.payload.kind === "session.input.recorded" &&
+            event.payload.input.kind === "tool-surface"
+          ) {
+            current ??= event.payload.input;
+            declared ??= event.payload.input;
+          } else if (event.payload.kind === "session.tools.refreshed" && current !== undefined) {
+            current = applyToolRefreshDelta(current, event.payload);
+            if (["cold-turn", "compaction", "model-switch"].includes(event.payload.trigger))
+              declared = current;
+          }
+        }
+        if (current === undefined || declared === undefined)
+          throw new Error("Tool refresh requires a recorded birth surface");
+        const declarationOnly =
+          ["cold-turn", "compaction", "model-switch"].includes(request.trigger) &&
+          request.changed.includes("codemode") &&
+          canonicalJson(declared) !== canonicalJson(request.surface);
+        if (canonicalJson(current) === canonicalJson(request.surface) && !declarationOnly)
+          return null;
+        assertAdditiveToolRefresh(current, request, declared);
+        const payload: Extract<SessionEventPayload, { kind: "session.tools.refreshed" }> = {
+          kind: "session.tools.refreshed",
+          trigger: request.trigger,
+          delta: createToolRefreshDelta(current, request.surface),
+          added: request.added,
+          changed: request.changed,
+        };
+        // No intended change may disappear when reduced to a minimal delta.
+        if (
+          canonicalJson(applyToolRefreshDelta(current, payload)) !== canonicalJson(request.surface)
+        )
+          throw new Error("Tool refresh delta must reproduce the desired canonical surface");
+        const event: SessionEvent = {
+          id: ports.ids.next("event"),
+          sessionId: session.id,
+          sequence: transaction.latestEventSequence(session.id) + 1,
+          occurredAt: ports.clock.now(),
+          recordedAt: ports.clock.now(),
+          provenance: request.provenance,
+          payload,
+        };
+        transaction.appendEvent(event);
+        return event;
+      });
+    },
+
     async observe(observation) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(observation.sessionId);
@@ -451,6 +537,53 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             return event;
           }
           const priorReceipts = transaction.listReceipts(observation.receipt.commandId);
+          const accepted = priorReceipts.find((receipt) => receipt.status === "accepted");
+          if (accepted?.status === "accepted" && observation.receipt.status === "accepted") {
+            // Acceptance belongs to the routed command, not the adapter's clock.
+            // Old Pi builds returned wall time live and marker time on recovery,
+            // producing different durable ids for the SAME acceptance. Keep the
+            // first stamp and event; never turn a refusal or changed result into
+            // acceptance, and still validate the adapter and attachment route.
+            assertReceiptMatchesCommand(command, session, observation.receipt);
+            assertAdapterReceiptRoute(command, observation);
+            // Only the frozen timestamp-derived Pi receipt identity is a
+            // legacy alias. An arbitrary new id remains conflicting evidence,
+            // even when its outcome and timestamp happen to be identical.
+            if (
+              command.route!.adapterId !== "pi" ||
+              accepted.id !== `native-receipt:${command.id}:accepted:${accepted.acceptedAt}` ||
+              observation.receipt.id !==
+                `native-receipt:${command.id}:accepted:${observation.receipt.acceptedAt}`
+            ) {
+              throw new SessionEngineConflictError(
+                `Receipt ${observation.receipt.id} is not a legacy Pi acceptance replay`,
+              );
+            }
+            if (
+              !sameCommandReceiptOutcome(accepted, {
+                ...observation.receipt,
+                id: accepted.id,
+                acceptedAt: accepted.acceptedAt,
+              })
+            ) {
+              throw new SessionEngineConflictError(
+                `Command ${command.id} was already accepted differently`,
+              );
+            }
+            const event = receiptEventFor(
+              transaction.listEvents({ sessionId: session.id }),
+              accepted.id,
+            );
+            if (!event) {
+              throw new SessionEngineConflictError(`Receipt ${accepted.id} has no Session event`);
+            }
+            if ((event.attachmentId ?? null) !== attachmentId) {
+              throw new SessionEngineConflictError(
+                `Receipt ${observation.receipt.id} does not match accepted attachment evidence`,
+              );
+            }
+            return event;
+          }
           const hasTerminalReceipt = priorReceipts.some(
             (receipt) => receipt.status === "rejected" || receipt.status === "completed",
           );
@@ -1169,7 +1302,7 @@ function replayCreate(
 ): CreateSessionResult {
   const stored = transaction.getCommand(request.commandId);
   if (!stored || !sameCreateSessionRequest(stored, request)) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${request.commandId} was already accepted with different intent`,
     );
   }
@@ -1177,7 +1310,7 @@ function replayCreate(
   // the id the command was first accepted under — a promote that replays with
   // a different client-minted id is a different intent, not the same one.
   if (request.requestedSessionId && stored.sessionId !== request.requestedSessionId) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${stored.id} was accepted for Session ${stored.sessionId}, not ${request.requestedSessionId}`,
     );
   }
@@ -1253,7 +1386,7 @@ function replaySubmit(
 ): SubmitSessionCommandResult {
   const stored = transaction.getCommand(command.id);
   if (!stored || !sameSessionCommandRequest(stored, command)) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${command.id} was already accepted with different intent`,
     );
   }

@@ -24,8 +24,9 @@ import {
   selectRailFresh,
   type OfferedListSlices,
 } from "./automations";
+import { remoteProject } from "./remote-project.test-support";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 /**
  * The four slices an Offered-list composition reads, assembled from one
@@ -1368,5 +1369,47 @@ describe("selectRailFresh", () => {
     expect(selectRailFresh(warm, "p1", 4)).toBe(false);
     // Another project reading at the same version does not answer for p1.
     expect(selectRailFresh(warm, "p2", 3)).toBe(false);
+  });
+});
+
+// VC-711: a remote project's Automations are its host's. Nothing about one is
+// asked of this Mac: reads answer empty, writes say where they are not available.
+describe("a remote project", () => {
+  let undo: (() => void) | null = null;
+  afterEach(() => {
+    undo?.();
+    undo = null;
+  });
+
+  it("lists nothing and arms nothing, asking this Mac nothing", async () => {
+    stubApi({});
+    undo = remoteProject("r1");
+    const store = createAutomationsStore();
+    expect(await store.getState().refresh("r1")).toBe(true);
+    expect(await store.getState().refreshArming("r1")).toBe(true);
+    expect(await store.getState().refreshOrder("r1")).toBe(true);
+    await store.getState().refreshRuns("r1");
+    await store.getState().refreshSkips("r1");
+    await store.getState().refreshAutomationHistory("r1", "automation-1");
+    expect(store.getState().byProject["r1"]).toEqual([]);
+    expect(store.getState().armingByProject["r1"]).toEqual([]);
+    expect(store.getState().orderByProject["r1"]).toEqual([]);
+    const refused = "Not available on box yet";
+    expect(
+      await store.getState().arm({ projectId: "r1", status: "doing", automationId: "a" }),
+    ).toBe(refused);
+    expect(
+      await store
+        .getState()
+        .setColumnOrder({ projectId: "r1", status: "doing", rankedAutomationIds: [] }),
+    ).toBe(refused);
+    expect(await store.getState().save({ projectId: "r1" } as never)).toBe(refused);
+    store.getState().openEditor("r1");
+    expect(await store.getState().save({ projectId: null } as never)).toBe(refused);
+    await store.getState().duplicate("r1", automation());
+    await store.getState().remove("r1", automation());
+    for (const verb of Object.values(window.api.automations)) {
+      expect(verb).not.toHaveBeenCalled();
+    }
   });
 });

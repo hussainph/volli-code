@@ -82,8 +82,8 @@ function DropdownMenuItem({
   );
 }
 
-// Checkbox/radio items put the selection indicator TRAILING (right edge,
-// Linear-style) rather than stock shadcn's leading pl-8 gutter: these menus
+// Checkbox/radio items put the selection indicator TRAILING (right edge)
+// rather than stock shadcn's leading pl-8 gutter: these menus
 // carry their own leading icons (priority bars, tag dots), and an empty
 // check column in front of them read as dead space.
 function DropdownMenuCheckboxItem({

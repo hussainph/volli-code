@@ -91,6 +91,7 @@ import { toast } from "sonner";
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { RunningProcessesSection } from "./processes-section";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
 import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
 
@@ -100,7 +101,7 @@ const CONFIRM_BELOW_DAYS = 7;
 export function StoragePane() {
   // The retention window is what every eligibility date in the orphan list was
   // measured against, so the two halves of this pane are not independent
-  // (VC-284 re-review C6): committing a new window makes the list on screen a
+  // (VC-284): committing a new window makes the list on screen a
   // statement about a policy that no longer exists. Retention says so, and the
   // orphan list refuses to act on a stale proposal until it has been scanned
   // again — main supersedes the revision from its own side at the same moment.
@@ -246,12 +247,12 @@ function BuildArtifactsSection() {
 
   React.useEffect(() => {
     let cancelled = false;
-    void window.api.worktree
-      .trimSettings()
-      .then((result) => {
-        if (cancelled) return;
-        if (result.ok) setTrimOnFinish(result.settings.trimOnFinish);
-        else toastError(`Couldn't load the trim setting: ${result.error}`);
+    // `worktree.trimSettings`, the desktop-only tier's read that replaced
+    // `volli:worktree-trim-settings-get` (VC-608).
+    void sessionRpcClient()
+      .worktree.trimSettings.query()
+      .then((settings) => {
+        if (!cancelled) setTrimOnFinish(settings.trimOnFinish);
       })
       .catch((error: unknown) => {
         if (!cancelled) toastError(`Couldn't load the trim setting: ${errorMessage(error)}`);
@@ -961,10 +962,10 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
    * The confirmed act. It names exactly the scan revision on screen and the
    * item ids that revision proposed — never a path — and mints a fresh
    * command id per press so a retried click after a stalled response cannot
-   * double-run (VC-284 review C1). Main re-checks each target before touching
+   * double-run (VC-284). Main re-checks each target before touching
    * it, so a skip is a normal outcome, reported rather than treated as a
    * failure — but a FAILED or indeterminate item is not: it gets a warning,
-   * never `toast.success` (review S2).
+   * never `toast.success`.
    */
   async function runCleanup(plan: CleanupPlan): Promise<void> {
     if (cleaning) return;
@@ -992,7 +993,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
   }
 
   // The proposal describes a retention window that has since been replaced, so
-  // it may be READ but not acted on (VC-284 re-review C6).
+  // it may be READ but not acted on (VC-284).
   const stale = state.status === "ready" && isScanStale(state.data, setting);
   const plan = state.status === "ready" && !stale ? planCleanup(state.data) : null;
   // The window every eligibility date on this list was measured against, read
@@ -1067,7 +1068,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * else because it is the only row that describes an incomplete act
              * — and it says what completed, so nothing already removed reads as
              * still pending. "Scan again" is a real button here, not only a
-             * sentence, per the review's S2.
+             * sentence.
              */}
             {unfinishedRuns(report.runs).map((run) => (
               <ItemRow key={run.id} name="Interrupted cleanup" meta={describeInterrupted(run)}>
@@ -1079,9 +1080,8 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
 
             {/*
              * A cleanup that FINISHED but left a failed or indeterminate item
-             * behind — the case the old pane's `toast.success` erased (review
-             * S2). Every failed path and its reason are named, with the same
-             * recovery.
+             * behind — the case the old pane's `toast.success` erased. Every failed
+             * path and its reason are named, with the same recovery.
              */}
             {runsWithFailures(report.runs).map((run) => (
               <ItemRow
@@ -1192,7 +1192,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * removal nobody can audit is indistinguishable from work going
              * missing, and one mislabelled is worse. Includes pruned METADATA
              * records, not only removed folders, and never folds two runs'
-             * rows into one (review C6).
+             * rows into one.
              */}
             {historyRows(report.runs).map((row) => (
               <ItemRow key={row.key} name={truncateMiddle(row.path)} meta={row.meta} />
@@ -1201,7 +1201,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
             {/*
              * The exact preservation policy each completed cleanup ran under,
              * rendered through the same shared vocabulary the confirmation
-             * uses — never a second, independent description (review S3).
+             * uses — never a second, independent description.
              */}
             {preservationHistoryRows(report.runs).map((row) => (
               <ItemRow key={row.key} name="Preservation applied" meta={row.meta} />

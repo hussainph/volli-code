@@ -7,7 +7,7 @@
  * Squirrel.Mac. This module owns everything around that and, like the
  * retention watch (`retention-runtime.ts`), takes its Electron seams
  * injected so the policy is testable under plain Node: `index.ts` passes the
- * real `autoUpdater`, a native `Notification` and `console`.
+ * real `autoUpdater`, a native `Notification` and a host logger.
  *
  * The policy:
  * - never checks in dev (`isPackaged` guard) — `pnpm start` has no
@@ -23,13 +23,12 @@
  *   prefix so a failed check is diagnosable after the fact.
  */
 import type Database from "better-sqlite3";
-import { errorMessage } from "@volli/shared";
+import { errorMessage, type ExperimentBuildKind } from "@volli/shared";
 
 import type { NotificationRequest } from "./notifications/dispatch";
 
 import type { UpdateUiState } from "../ipc/contract";
-import { setAppState } from "./db/app-state-repo";
-import { prepared } from "./db/prepared";
+import { setAppState, prepared } from "@volli/host-core/db";
 
 /**
  * The `app_state` key behind the prerelease toggle (default OFF). Canary
@@ -79,6 +78,19 @@ export function readAllowPrerelease(db: Database.Database): boolean {
  * the updater actually consumes.
  */
 export type UpdateChannelName = "stable" | "canary";
+
+/**
+ * Use electron-updater's parsed running version, not its mutable allowPrerelease
+ * policy or the user's update-channel preference. The updater already parses
+ * app.getVersion() with semver and derives its default from these components.
+ */
+export function runningBuildKind(
+  isPackaged: boolean,
+  currentVersion: { readonly prerelease: readonly (string | number)[] },
+): ExperimentBuildKind {
+  if (!isPackaged) return "dev";
+  return currentVersion.prerelease.length > 0 ? "canary" : "stable";
+}
 
 /** Which line this install follows, read back off the same key the updater uses. */
 export function readUpdateChannel(db: Database.Database): UpdateChannelName {
@@ -167,7 +179,7 @@ export interface AutoUpdateDeps {
    * a title and a body.
    */
   notify(request: NotificationRequest): void;
-  /** The main-process log seam (`console.info` in production). */
+  /** The main-process log seam (the `auto-update` host logger in production). */
   log(line: string): void;
   /**
    * Announces every state transition — `index.ts` fans it out to every window

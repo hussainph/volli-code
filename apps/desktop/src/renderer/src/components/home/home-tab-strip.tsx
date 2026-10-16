@@ -193,6 +193,7 @@ export function HomeTabStrip({
               back into the window rather than off its edge. */}
           <div className="flex items-center gap-1">
             <NewSessionControl
+              projectId={list.projectId}
               disabled={creating}
               placement="strip"
               align="end"
@@ -218,7 +219,7 @@ export function HomeTabStrip({
               title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
             >
               {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
-                  RIGHT panel (VS Code's secondary-sidebar convention). */}
+                  RIGHT panel; each caret points toward the rail it toggles. */}
               <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
             </Button>
           ) : null}

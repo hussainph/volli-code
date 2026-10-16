@@ -24,7 +24,7 @@
  * It is a pure function for the reason the amendment on VC-130 gives: these are
  * the rules whose failure modes are unattended work starting at a time nobody
  * chose, and each of them is a table test here instead of a sleep against a
- * live timer. The Electron timer (`main/automations/scheduler.ts`) supplies a
+ * live timer. The host timer (`packages/host-core/src/automations/scheduler.ts`) supplies a
  * clock and performs the returned steps; it decides none of them.
  *
  * Nothing here reads a clock, a host zone, a database or a process. Every

@@ -20,7 +20,6 @@ import type {
   SessionReadSetResult,
   SessionRenameResult,
   SessionsResult,
-  SessionStopResult,
   TicketBodyResult,
   TicketCommentResult,
   TicketCommentsResult,
@@ -60,6 +59,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  MIN_READER_VERSION_KEY,
+  recordAutomationRun,
+  recordSessionStartedOnce,
+  readSessionProvenance,
+  readSessionUnread,
+  recordMcpOperation,
+  insertProject,
+  getProjectById,
+} from "@volli/host-core/db";
 
 // Keep the production detector entrypoints observable. Project-create tests
 // usually inject a detector; this seam also verifies the uninjected default.
@@ -68,8 +77,10 @@ const { detectAsync, detectSync } = vi.hoisted(() => ({
   detectSync: vi.fn<(path: string) => string | null>(),
 }));
 
-vi.mock("./project-base-branch", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./project-base-branch")>()),
+vi.mock("../../../../packages/host-core/src/project-base-branch", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../../packages/host-core/src/project-base-branch")
+  >()),
   detectProjectBaseBranchAsync: detectAsync,
   detectProjectBaseBranch: detectSync,
 }));
@@ -77,8 +88,9 @@ vi.mock("./project-base-branch", async (importOriginal) => ({
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
-const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch } = vi.hoisted(
-  () => ({
+const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch, appMode } =
+  vi.hoisted(() => ({
+    appMode: { isPackaged: false },
     handlers: new Map<string, (...args: never[]) => unknown>(),
     dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
     showItemInFolder: vi.fn(),
@@ -96,8 +108,7 @@ const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWa
           }
         | undefined,
     },
-  }),
-);
+  }));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -109,6 +120,9 @@ vi.mock("electron", () => ({
   // this — a stable stand-in path is enough since none of the mocked worktree
   // functions below actually read it.
   app: {
+    get isPackaged() {
+      return appMode.isPackaged;
+    },
     getPath: () => "/volli-test-userdata",
   },
   // The worktree remove/orphan-delete broadcasts fan out over BrowserWindow;
@@ -134,7 +148,7 @@ vi.mock("electron", () => ({
 // shell out; `worktree-runtime`'s `worktreeDeps` stays real (it just builds a
 // plain deps object and never touches BrowserWindow unless `onPhase` fires,
 // which the mocked functions below never call).
-vi.mock("./worktree", async () => ({
+vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
   remove: vi.fn(),
   listBranches: vi.fn(),
   // The rail reads. Mocked so the coalescing/dedup assertions below can count
@@ -158,22 +172,24 @@ vi.mock("./worktree", async () => ({
   // NOT mocked: the cleanup command core and its SQLite ledger are what the
   // channel's receipts and durable history come from, and a stand-in would
   // answer a different question than the one production asks (VC-284 S1).
-  ...(await vi.importActual<typeof import("./worktree/cleanup-engine")>(
-    "./worktree/cleanup-engine",
-  )),
-  ...(await vi.importActual<typeof import("./worktree/cleanup-ledger")>(
-    "./worktree/cleanup-ledger",
-  )),
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/cleanup-engine")
+  >("../../../../packages/host-core/src/worktree/cleanup-engine")),
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/cleanup-ledger")
+  >("../../../../packages/host-core/src/worktree/cleanup-ledger")),
   // NOT mocked: the activity guard is what these handler tests are asserting
   // about, and a hand-rolled stand-in would answer a different question than
   // the one production asks (it canonicalizes both paths).
-  ...(await vi.importActual<typeof import("./worktree/activity")>("./worktree/activity")),
-  // NOT mocked either: the deletion lease is the serialization the manual
-  // delete and the cleanup share (VC-284 review C4), and a stand-in would let
-  // this channel claim a lease discipline it does not have.
-  ...(await vi.importActual<typeof import("./worktree/deletion-lease")>(
-    "./worktree/deletion-lease",
+  ...(await vi.importActual<typeof import("../../../../packages/host-core/src/worktree/activity")>(
+    "../../../../packages/host-core/src/worktree/activity",
   )),
+  // NOT mocked either: the deletion lease is the serialization the manual
+  // delete and the cleanup share (VC-284), and a stand-in would let
+  // this channel claim a lease discipline it does not have.
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/deletion-lease")
+  >("../../../../packages/host-core/src/worktree/deletion-lease")),
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
   ensure: vi.fn(),
@@ -192,7 +208,6 @@ vi.mock("./worktree", async () => ({
   // thing against real `git worktree add` checkouts.
   scanTrimTargets: vi.fn(async () => ({ worktrees: [] })),
   trimAllWorktrees: vi.fn(),
-  getTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: true })),
   setTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: false })),
   // Constructed at registration time; these tests exercise no watch channel, so
   // a no-op stand-in keeps real `fs.watch` handles out of the suite. It does
@@ -218,28 +233,27 @@ vi.mock("./worktree", async () => ({
 }));
 
 import { flushDataChangedForTest } from "./broadcast";
-import { registerDataIpcHandlers } from "./data-ipc";
-import { createDesktopSessionEngine, watchSessionActivity } from "./session-control";
-import { insertSession } from "./session-control/test-support";
-import { recordAutomationRun } from "./db/automations-repo";
-import { recordSessionStartedOnce } from "./db/events-repo";
-import { readSessionProvenance } from "./db/session-provenance-repo";
-import { readSessionUnread } from "./db/session-read-repo";
-import { recordMcpOperation } from "./db/mcp-operations-repo";
-import { insertProject } from "./db/projects-repo";
-import { openTestDb, testProject, testSession } from "./db/test-helpers";
-import type { TestDb } from "./db/test-helpers";
-import { getProjectById } from "./db/projects-repo";
-import { resetOrphanScanForTest } from "./orphan-scan";
-import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import { worktreesHome } from "./worktree-runtime";
-import { projectContainerName } from "./worktree/containers";
+import { registerDataIpcHandlers } from "./data-ipc.test-support";
+import { watchSessionActivity } from "@volli/host-core/sessions";
 import {
+  createTestSessionEngine,
+  insertSession,
+  openTestDb,
+  testProject,
+  testSession,
+  type TestDb,
+  resetOrphanScanForTest,
+  resetWorktreeSnapshotsForTest,
+  resetDeletionLeasesForTest,
+} from "@volli/host-core/testing";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime";
+import {
+  worktreesHome,
+  projectContainerName,
   archiveAndClean,
   cleanupOrphans,
   commitTicketRemaining,
   ensure,
-  getTrimSettings,
   listBranches,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
@@ -253,12 +267,14 @@ import {
   setTrimSettings,
   trimAllWorktrees,
   trimFinishedWorktree,
-} from "./worktree";
-import { resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
-import { orphanCleanupEngine } from "./worktree-runtime";
-import { acquireDeletionLease, resetDeletionLeasesForTest } from "./worktree/deletion-lease";
-import { updateTicketFieldsCommand } from "./ticket-commands";
-import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
+  orphanCleanupEngine,
+  acquireDeletionLease,
+} from "@volli/host-core/worktree";
+import {
+  updateTicketFieldsCommand,
+  subscribeTicketWake,
+  type TicketWake,
+} from "@volli/host-core/board";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
   MAX_INLINE_IMAGE_BYTES,
@@ -266,6 +282,9 @@ import {
   roleImpliedByTicket,
 } from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
+
+/** No executor binding is open: these rows rest at not-live. */
+const noOpenBindings = () => [];
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
 const fakeEvent = { sender: {} };
@@ -296,6 +315,7 @@ function expectNoDataChange(): void {
 }
 
 let ctx: TestDb;
+let fixtureSessionEngine: ReturnType<typeof createTestSessionEngine>;
 
 // `volli:project-create` now requires an existing directory (main-side path
 // validation, see data-ipc.ts) — every fixture project needs a real temp dir
@@ -311,6 +331,7 @@ function freshProjectDir(): string {
 }
 
 beforeEach(() => {
+  appMode.isPackaged = false;
   handlers.clear();
   vi.resetAllMocks();
   dataChangedSends.length = 0;
@@ -325,7 +346,15 @@ beforeEach(() => {
   // not refuse the next test's destructive path.
   resetDeletionLeasesForTest();
   ctx = openTestDb();
-  registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch: async () => null });
+  fixtureSessionEngine = createTestSessionEngine(ctx.db);
+  registerDataIpcHandlers(
+    { ok: true, db: ctx.db },
+    {
+      sessionEngine: fixtureSessionEngine,
+      detectBaseBranch: async () => null,
+      busyWorktreeSites: async () => [],
+    },
+  );
 });
 
 afterEach(() => {
@@ -421,6 +450,22 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
+describe("project removal", () => {
+  it("tells the host after the project is gone, so it releases the board feed it held", () => {
+    const removed = vi.fn<(projectId: string) => void>();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, onProjectRemoved: removed },
+    );
+    const projectId = createProject();
+    removed.mockImplementation(() => {
+      expect(getProjectById(ctx.db, projectId)).toBeUndefined();
+    });
+    expect(invoke<ProjectMutationResult>("volli:project-remove", projectId)).toEqual({ ok: true });
+    expect(removed).toHaveBeenCalledExactlyOnceWith(projectId);
+  });
+});
+
 describe("MCP settings IPC", () => {
   it("routes typed project-scoped settings operations through the main-owned service", async () => {
     const list = vi.fn(() => [{ id: "server-1" }]);
@@ -428,7 +473,7 @@ describe("MCP settings IPC", () => {
     const accessFor = vi.fn(() => ({ "server-1": { signIn: "signed-in", missingSecrets: [] } }));
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { mcpSettings: { list, save, accessFor } as never },
+      { sessionEngine: fixtureSessionEngine, mcpSettings: { list, save, accessFor } as never },
     );
 
     // One read carries what the pane shows: the servers, the management
@@ -480,7 +525,10 @@ describe("MCP settings IPC", () => {
     );
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { mcpSettings: { list: () => [], accessFor: () => ({}) } as never },
+      {
+        sessionEngine: fixtureSessionEngine,
+        mcpSettings: { list: () => [], accessFor: () => ({}) } as never,
+      },
     );
 
     const result = invoke<{ operations: { summary: string }[] }>("volli:mcp-list" as never, {
@@ -505,7 +553,10 @@ describe("MCP sign-in IPC (VC-470)", () => {
     const discardDraft = vi.fn(() => ({ ok: true }));
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { mcpSettings: { signIn, cancelSignIn, signOut, discardDraft } as never },
+      {
+        sessionEngine: fixtureSessionEngine,
+        mcpSettings: { signIn, cancelSignIn, signOut, discardDraft } as never,
+      },
     );
 
     const waiting = invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
@@ -535,7 +586,10 @@ describe("MCP sign-in IPC (VC-470)", () => {
 
   it("answers a completed sign-in with its message, keyed by the draft's own id", async () => {
     const signIn = vi.fn(async () => ({ ok: true, message: "Signed in to Draft." }));
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { mcpSettings: { signIn } as never });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, mcpSettings: { signIn } as never },
+    );
 
     await expect(
       invoke<Promise<unknown>>("volli:mcp-sign-in" as never, {
@@ -639,7 +693,7 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     const branch = deferredBranch();
     detectAsync.mockReturnValue(branch.promise);
     detectSync.mockReturnValue("sync-default");
-    registerDataIpcHandlers({ ok: true, db: ctx.db });
+    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
 
     const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path,
@@ -664,7 +718,10 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     handlers.clear();
     const volliPath = freshProjectDir();
     const detectBaseBranch = vi.fn(async (path: string) => (path === volliPath ? "trunk" : null));
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, detectBaseBranch },
+    );
 
     const result = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: volliPath,
@@ -680,7 +737,10 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     const path = freshProjectDir();
     const branch = deferredBranch();
     const detectBaseBranch = vi.fn(() => branch.promise);
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, detectBaseBranch },
+    );
 
     const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path,
@@ -705,7 +765,10 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     const path = freshProjectDir();
     const branch = deferredBranch();
     const detectBaseBranch = vi.fn(() => branch.promise);
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, detectBaseBranch },
+    );
 
     const first = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path,
@@ -757,7 +820,10 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
       if (!branch) throw new Error("Unexpected path");
       return branch.promise;
     });
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, detectBaseBranch },
+    );
 
     const first = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
       path: firstPath,
@@ -798,7 +864,10 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     const file = join(directory, "file");
     writeFileSync(file, "not a directory");
     const detectBaseBranch = vi.fn(async () => "main");
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { detectBaseBranch });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, detectBaseBranch },
+    );
 
     await expect(
       invoke<Promise<ProjectCreateResult>>("volli:project-create", {
@@ -1255,7 +1324,11 @@ describe("archiving or deleting a ticket drops its Sessions' saved tool output (
     createdProjectDirs.push(sessionsRoot);
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { detectBaseBranch: async () => null, piSessionsDirectory: sessionsRoot },
+      {
+        sessionEngine: fixtureSessionEngine,
+        detectBaseBranch: async () => null,
+        piSessionsDirectory: sessionsRoot,
+      },
     );
     const projectId = createProject();
     const archived = createTicket(projectId);
@@ -1936,7 +2009,7 @@ describe("volli:ticket-move — multi-card drops", () => {
     handlers.clear();
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { onDeliberateMove: (notice) => arrivals.push(notice) },
+      { sessionEngine: fixtureSessionEngine, onDeliberateMove: (notice) => arrivals.push(notice) },
     );
     const projectId = createProject();
     const first = createTicket(projectId);
@@ -1980,7 +2053,10 @@ describe("volli:ticket-move — multi-card drops", () => {
         }),
     );
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, interruptTicketSessions },
+    );
     const projectId = createProject();
     const first = createTicket(projectId);
     const second = createTicket(projectId);
@@ -2014,7 +2090,7 @@ describe("volli:ticket-move — armed-column arrival", () => {
     handlers.clear();
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { onDeliberateMove: (notice) => arrivals.push(notice) },
+      { sessionEngine: fixtureSessionEngine, onDeliberateMove: (notice) => arrivals.push(notice) },
     );
     const projectId = createProject();
     const ticket = createTicket(projectId);
@@ -2042,7 +2118,10 @@ describe("volli:ticket-move — armed-column arrival", () => {
   it("does not report a same-column reorder as an arrival", () => {
     const onDeliberateMove = vi.fn();
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { onDeliberateMove });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, onDeliberateMove },
+    );
     const projectId = createProject();
     const ticket = createTicket(projectId);
 
@@ -2062,7 +2141,10 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
   function withInterrupt(ids: string[]) {
     const interruptTicketSessions = vi.fn((_ticketId: string) => ids);
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, interruptTicketSessions },
+    );
     return interruptTicketSessions;
   }
 
@@ -2124,7 +2206,49 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     expect(trim.mock.calls[0]?.[1]).toBe(ticket.id);
   });
 
-  // The other door (review r2): an archive KEEPS the checkout, which makes an
+  it("keeps the IPC reply synchronous while the shared Done trim is pending, with the same busy guard", async () => {
+    let settle!: (value: Awaited<ReturnType<typeof trimFinishedWorktree>>) => void;
+    vi.mocked(trimFinishedWorktree).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const busyWorktreeSites = vi.fn(async () => []);
+    handlers.clear();
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        sessionEngine: fixtureSessionEngine,
+        busyWorktreeSites,
+      },
+    );
+    const projectId = createProject();
+    const ticket = createTicket(projectId);
+    const reply = move(projectId, ticket.id, "done");
+    expect(reply).not.toBeInstanceOf(Promise);
+    expect(reply).toMatchObject({
+      ok: true,
+      tickets: [expect.objectContaining({ id: ticket.id, status: "done" })],
+    });
+    expect(vi.mocked(trimFinishedWorktree).mock.calls.at(-1)?.[0].busySites).toBe(
+      busyWorktreeSites,
+    );
+    // The board change is delivered by the receipt, not a new IPC push.
+    expectNoDataChange();
+    settle({
+      kind: "trimmed",
+      report: { worktreePath: "/mock", dryRun: false, removed: [], kept: [], totalBytes: 0 },
+    });
+    await expectDataChanged({
+      entity: "tickets",
+      projectId,
+      ticketId: ticket.id,
+      kind: "worktree",
+    });
+  });
+
+  // An archive KEEPS the checkout, which makes an
   // archived ticket the longest-lived carrier of a dead dependency tree, so the
   // wiring is held here and not only in the primitive's own suite.
   it("trims the ticket's worktree when the ticket is archived", () => {
@@ -2211,7 +2335,10 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     });
     const logFailure = vi.spyOn(console, "error").mockImplementation(() => undefined);
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, interruptTicketSessions },
+    );
     const projectId = createProject();
     const ticket = createTicket(projectId);
     move(projectId, ticket.id, "doing");
@@ -2220,7 +2347,13 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
 
     expect(result.ok && result.tickets[0]?.status).toBe("todo");
     expect(logFailure).toHaveBeenCalledWith(
-      "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
+      "[ticket-move] failed to interrupt ticket sessions after committed move",
+      expect.objectContaining({
+        error: expect.objectContaining({
+          name: "Error",
+          message: "terminal interrupt unavailable",
+        }),
+      }),
     );
   });
 
@@ -2230,7 +2363,10 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     });
     const logFailure = vi.spyOn(console, "error").mockImplementation(() => undefined);
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { interruptTicketSessions });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, interruptTicketSessions },
+    );
     const projectId = createProject();
     const ticket = createTicket(projectId);
     move(projectId, ticket.id, "doing");
@@ -2244,7 +2380,13 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
 
     expect(result.ok && result.tickets[0]?.status).toBe("todo");
     expect(logFailure).toHaveBeenCalledWith(
-      "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
+      "[ticket-move] failed to interrupt ticket sessions after committed move",
+      expect.objectContaining({
+        error: expect.objectContaining({
+          name: "Error",
+          message: "terminal interrupt unavailable",
+        }),
+      }),
     );
   });
 });
@@ -2367,7 +2509,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "terminal-session" }));
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const structured = await sessionEngine.createSession({
       commandId: "structured-create",
       projectId,
@@ -2443,7 +2585,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
   it("projects live from this process's executor bindings, not durable attachment openness", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const provenance = {
       source: { kind: "user" as const, id: "test", detail: null },
       venue: { id: "local", kind: "local" as const },
@@ -2515,9 +2657,10 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
   it("pushes the same rows the fetch returns, provenance included", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const pushed = new Map<string, SessionListingRow>();
     const watch = watchSessionActivity(sessionEngine, {
+      listOpenNativeBindings: noOpenBindings,
       publish: ({ row }) => pushed.set(rowId(row), row),
       // The expression `index.ts` passes, unchanged.
       provenanceOf: (born) => readSessionProvenance(ctx.db, born),
@@ -2620,7 +2763,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
   it("lists a roster without paying a provenance read per Session", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const roster = 24;
     for (let index = 0; index < roster; index += 1) {
       const created = await sessionEngine.createSession({
@@ -2703,7 +2846,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
 describe("volli:session-read-set (VC-30)", () => {
   /** One chat Session, minted through the engine the handlers are given. */
   async function chatSession(
-    sessionEngine: ReturnType<typeof createDesktopSessionEngine>,
+    sessionEngine: ReturnType<typeof createTestSessionEngine>,
     ticketId: string | null,
   ): Promise<string> {
     const created = await sessionEngine.createSession({
@@ -2722,7 +2865,7 @@ describe("volli:session-read-set (VC-30)", () => {
   }
 
   it("persists the receipt and re-publishes the row every sidebar holds", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const sessionId = await chatSession(sessionEngine, null);
     handlers.clear();
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
@@ -2749,7 +2892,7 @@ describe("volli:session-read-set (VC-30)", () => {
   });
 
   it("clears the receipt again, and publishes a row with nothing to say", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const sessionId = await chatSession(sessionEngine, null);
     handlers.clear();
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
@@ -2772,7 +2915,7 @@ describe("volli:session-read-set (VC-30)", () => {
   });
 
   it("refuses a Session the ledger does not have, and publishes nothing", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     handlers.clear();
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
     dataChangedSends.length = 0;
@@ -2801,7 +2944,7 @@ describe("volli:session-read-set (VC-30)", () => {
 
 describe("volli:session-peek-content (VC-30)", () => {
   it("reads local content without utility work, then refines only on explicit demand", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const created = await sessionEngine.createSession({
       commandId: "create-summary-peek",
       projectId: createProject(),
@@ -2832,7 +2975,7 @@ describe("volli:session-peek-content (VC-30)", () => {
   });
 
   it("answers the Session's tail and the question it is asking", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const created = await sessionEngine.createSession({
       commandId: "create-peek",
       projectId: createProject(),
@@ -2869,7 +3012,7 @@ describe("volli:session-peek-content (VC-30)", () => {
   });
 
   it("answers null content for a Session the ledger does not have", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     handlers.clear();
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
 
@@ -2894,7 +3037,7 @@ describe("volli:ticket-latest-signals", () => {
   it("uses the SessionEngine's bounded latest-signal query with a deterministic session-id tie-break", async () => {
     const projectId = createProject();
     const ticket = createTicket(projectId);
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
+    const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "session-a" }));
     insertSession(ctx.db, testSession(projectId, ticket.id, { id: "session-z" }));
     await sessionEngine.submit({
@@ -3021,7 +3164,7 @@ describe("volli:session-rename", () => {
   it("reports a durable rejection instead of acknowledging an archived session rename", async () => {
     const projectId = createProject();
     insertSession(ctx.db, testSession(projectId, null, { id: "s1", title: "Session 1" }));
-    await createDesktopSessionEngine(ctx.db).submit({
+    await createTestSessionEngine(ctx.db).submit({
       commandId: "archive-s1",
       sessionId: "s1",
       intent: { kind: "session.archive" },
@@ -3040,146 +3183,6 @@ describe("volli:session-rename", () => {
   });
 });
 
-// VC-269: the Activity Island's armed stop, as the person.
-describe("volli:session-stop", () => {
-  async function structuredSession(sessionEngine: ReturnType<typeof createDesktopSessionEngine>) {
-    const projectId = createProject();
-    const created = await sessionEngine.createSession({
-      commandId: "stop-create",
-      projectId,
-      ticketId: null,
-      role: "project",
-      parentSessionId: null,
-      title: "Helper",
-      provenance: {
-        source: { kind: "user", id: "test", detail: null },
-        venue: { id: "local", kind: "local" },
-      },
-    });
-    return { projectId, sessionId: created.session.id };
-  }
-
-  it("records the stop with the user actor, then interrupts and releases through the runtime", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
-    const { projectId, sessionId } = await structuredSession(sessionEngine);
-    const attachment = {
-      id: "att-1",
-      sessionId,
-      adapterId: "pi",
-      venue: { id: "local", kind: "local" as const },
-      continuity: "fresh" as const,
-      native: null,
-      authority: null,
-    };
-    const provenance = {
-      source: { kind: "adapter" as const, id: "pi", detail: null },
-      venue: { id: "local", kind: "local" as const },
-    };
-    await sessionEngine.observe({
-      id: "stop-opened",
-      kind: "attachment.opened",
-      sessionId,
-      commandId: null,
-      occurredAt: 501,
-      provenance,
-      attachment,
-    });
-    await sessionEngine.observe({
-      id: "stop-turn",
-      kind: "turn.started",
-      sessionId,
-      attachmentId: "att-1",
-      turnId: "t1",
-      commandId: null,
-      occurredAt: 502,
-      provenance,
-    });
-    const commands: { commandId: string; command: { kind: string } }[] = [];
-    handlers.clear();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      {
-        sessionEngine,
-        sessionRuntime: {
-          command: async (request) => {
-            commands.push({ commandId: request.commandId, command: request.command });
-            return {
-              receipt: {
-                id: `${request.commandId}:receipt`,
-                commandId: request.commandId,
-                status: "accepted",
-                recordedAt: 1,
-                sequence: 1,
-              },
-            } as never;
-          },
-        },
-      },
-    );
-
-    const result = await invoke<Promise<SessionStopResult>>("volli:session-stop", {
-      sessionId,
-      reason: "  Runaway  ",
-    });
-
-    expect(result).toEqual({ ok: true, interrupted: true, released: true, failures: [] });
-    expect(commands.map((one) => one.command.kind)).toEqual([
-      "executor.interrupt",
-      "adapter.release",
-    ]);
-    // The durable fact names the person, and the listing now reads stopped.
-    const projection = await sessionEngine.getSession({ sessionId });
-    expect(projection?.stopped).toMatchObject({ reason: "Runaway", by: { kind: "user" } });
-    const list = await invoke<Promise<SessionsResult>>("volli:session-list", { projectId });
-    expect(list.ok && list.sessions.find((row) => rowId(row) === sessionId)).toMatchObject({
-      kind: "chat",
-      record: { activity: "stopped" },
-    });
-  });
-
-  // Fix-first (review c5714a22): a not-live target — no open attachment, so
-  // nothing for the runtime acts to touch — is refused by name through the
-  // door's ordinary `{ ok: false }` shape, the same as every other mutation's
-  // refusal, and NOT durably recorded as a quiet success.
-  it("refuses a not-live target as an ordinary ok:false, and writes nothing", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
-    const { sessionId } = await structuredSession(sessionEngine);
-    handlers.clear();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { sessionEngine, sessionRuntime: { command: async () => ({ receipt: null }) as never } },
-    );
-
-    const result = await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId });
-
-    expect(result).toEqual({ ok: false, error: expect.stringContaining("is not live") });
-    const projection = await sessionEngine.getSession({ sessionId });
-    expect(projection?.stopped).toBeNull();
-  });
-
-  it("refuses without a runtime, and words an unknown session as the operation does", async () => {
-    const sessionEngine = createDesktopSessionEngine(ctx.db, { now: () => 500 });
-    handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine });
-    expect(
-      await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId: "ghost" }),
-    ).toEqual({ ok: false, error: expect.stringContaining("not available this launch") });
-
-    handlers.clear();
-    registerDataIpcHandlers(
-      { ok: true, db: ctx.db },
-      { sessionEngine, sessionRuntime: { command: async () => ({ receipt: null }) as never } },
-    );
-    expect(
-      await invoke<Promise<SessionStopResult>>("volli:session-stop", { sessionId: "ghost" }),
-    ).toEqual({ ok: false, error: "Unknown session." });
-    expect(invoke<SessionStopResult>("volli:session-stop", { sessionId: "" })).toEqual({
-      ok: false,
-      error: "Invalid session stop",
-    });
-  });
-});
-
 describe("volli:session-rename auto-title rider", () => {
   /** A renameable session plus a recorder for whatever titling it asks for. */
   function renameHarness(): AutoTitleRequest[] {
@@ -3188,7 +3191,7 @@ describe("volli:session-rename auto-title rider", () => {
     const requests: AutoTitleRequest[] = [];
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { autoTitle: (input) => requests.push(input) },
+      { sessionEngine: fixtureSessionEngine, autoTitle: (input) => requests.push(input) },
     );
     return requests;
   }
@@ -3307,6 +3310,7 @@ describe("volli:worktree-remove", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async () => [
           { directory: `${worktreePath}/packages`, surface: "terminal" },
         ],
@@ -3337,7 +3341,10 @@ describe("volli:worktree-remove", () => {
     vi.mocked(removeWorktree).mockResolvedValue({ ok: true, value: undefined });
 
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { busyWorktreeSites: async () => [] });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, busyWorktreeSites: async () => [] },
+    );
 
     const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
       ticketId: ticket.id,
@@ -3359,7 +3366,10 @@ describe("volli:worktree-remove", () => {
     handlers.clear();
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { busyWorktreeSites: async () => [{ directory: worktreePath, surface: "agent" }] },
+      {
+        sessionEngine: fixtureSessionEngine,
+        busyWorktreeSites: async () => [{ directory: worktreePath, surface: "agent" }],
+      },
     );
 
     const result = await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
@@ -3414,6 +3424,7 @@ describe("volli:worktree-remove", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async (target) => {
           asked.push(target);
           return [];
@@ -3442,7 +3453,10 @@ describe("volli:worktree-remove", () => {
     const releaseAgentSites = vi.fn(async () => ({ released: [], stillOpen: [] }));
 
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { releaseAgentSites });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, releaseAgentSites },
+    );
 
     await invoke<Promise<WorktreeRemoveResult>>("volli:worktree-remove", {
       ticketId: ticket.id,
@@ -4142,7 +4156,11 @@ describe("volli:worktree-orphans", () => {
     handlers.clear();
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { busyWorktreeSites: noBusySites, releaseAgentSites: noAgentSites },
+      {
+        sessionEngine: fixtureSessionEngine,
+        busyWorktreeSites: noBusySites,
+        releaseAgentSites: noAgentSites,
+      },
     );
 
     await invoke<Promise<WorktreeOrphansResult>>("volli:worktree-orphans");
@@ -4230,7 +4248,11 @@ describe("volli:worktree-orphans", () => {
       handlers.clear();
       registerDataIpcHandlers(
         { ok: true, db: ctx.db },
-        { busyWorktreeSites: noBusySites, releaseAgentSites: noAgentSites },
+        {
+          sessionEngine: fixtureSessionEngine,
+          busyWorktreeSites: noBusySites,
+          releaseAgentSites: noAgentSites,
+        },
       );
       await scanOnce();
 
@@ -4255,7 +4277,7 @@ describe("volli:worktree-orphans", () => {
           scanRevision: "rev-1",
           // The ids as the caller sent them, kept so a retry is decidable from
           // the durable record alone, and the window the proposal was measured
-          // against (re-review S1/C1).
+          // against.
           requestedItemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
           retentionDays: 14,
           source: "settings",
@@ -4355,7 +4377,7 @@ describe("volli:worktree-orphans", () => {
       expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
     });
 
-    // The gateway rule (re-review S1). A cleanup invalidates the scan it ran
+    // A cleanup invalidates the scan it ran
     // against, so a retry validated against the CURRENT scan is told its
     // command was superseded — a completed deletion reported as a failure, with
     // a second deletion the obvious next step. The durable record answers
@@ -4533,11 +4555,8 @@ describe("the build-artifact channels", () => {
     expectNoDataChange();
   });
 
-  it("reads and writes the trim settings", async () => {
-    const read = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-get");
-    expect(read).toEqual({ ok: true, settings: { keepPatterns: [".env"], trimOnFinish: true } });
-    expect(vi.mocked(getTrimSettings)).toHaveBeenCalled();
-
+  // The read is `worktree.trimSettings` on the bridge (VC-608).
+  it("writes the trim settings", async () => {
     const written = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-set", {
       trimOnFinish: false,
     });
@@ -4649,6 +4668,7 @@ describe("volli:worktree-orphan-delete", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async () => [{ directory: join(target, "src"), surface: "terminal" }],
       },
     );
@@ -4696,6 +4716,7 @@ describe("volli:worktree-orphan-delete", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async (probed) => {
           asked.push(probed);
           return [];
@@ -4714,7 +4735,7 @@ describe("volli:worktree-orphan-delete", () => {
     );
 
     expect(result).toEqual({ ok: true });
-    // Asked TWICE, and the second time is the point (VC-284 re-review C4):
+    // Recheck occupancy after releasing the bindings (VC-284):
     // releasing the bindings takes time, and the answer from before that await
     // is not an answer about the instant of the delete.
     expect(asked).toEqual([canonical, canonical]);
@@ -4733,6 +4754,7 @@ describe("volli:worktree-orphan-delete", () => {
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
       {
+        sessionEngine: fixtureSessionEngine,
         busyWorktreeSites: async (probed) =>
           released ? [{ directory: probed, surface: "terminal" as const }] : [],
         releaseAgentSites: async () => {
@@ -4755,7 +4777,7 @@ describe("volli:worktree-orphan-delete", () => {
     const target = ownedPath("VC-7-contended");
     mkdirSync(target, { recursive: true });
     // A cleanup is mid-removal on this exact directory; the manual delete takes
-    // the same lease, so it skips rather than racing it (VC-284 re-review C4).
+    // the same lease, so it skips rather than racing it (VC-284).
     const held = acquireDeletionLease(realpathSync.native(target));
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
@@ -4777,7 +4799,10 @@ describe("volli:worktree-orphan-delete", () => {
     handlers.clear();
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { releaseAgentSites: async () => ({ released: [], stillOpen: ["chat-1"] }) },
+      {
+        sessionEngine: fixtureSessionEngine,
+        releaseAgentSites: async () => ({ released: [], stillOpen: ["chat-1"] }),
+      },
     );
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
@@ -4793,7 +4818,7 @@ describe("volli:worktree-orphan-delete", () => {
 describe("degraded db handle", () => {
   it("every new channel resolves with the degraded error instead of throwing", async () => {
     handlers.clear();
-    registerDataIpcHandlers({ ok: false, error: "db is down" });
+    registerDataIpcHandlers({ ok: false, error: "db is down" }, { sessionEngine: null });
 
     expect(invoke<TicketEventsResult>("volli:ticket-events", { ticketId: "x" })).toEqual({
       ok: false,
@@ -4831,7 +4856,7 @@ describe("degraded db handle", () => {
 
   it("answers EVERY DATA_CHANNELS member with the degraded error — the omitted-channel defect (issue #98)", () => {
     handlers.clear();
-    registerDataIpcHandlers({ ok: false, error: "db is down" });
+    registerDataIpcHandlers({ ok: false, error: "db is down" }, { sessionEngine: null });
 
     for (const channel of DATA_CHANNELS) {
       expect(invoke(channel)).toEqual({ ok: false, error: "db is down" });
@@ -4864,13 +4889,6 @@ describe("descriptor guard rejections reach the caller through the envelope, one
     });
   });
 
-  it("single string-array-arg shape: rejects a non-array", () => {
-    expect(invoke<ProjectMutationResult>("volli:project-reorder", "not-an-array")).toEqual({
-      ok: false,
-      error: "Invalid project order",
-    });
-  });
-
   it("single object-arg shape: rejects garbage — e.g. ticket-move", () => {
     expect(invoke<TicketsResult>("volli:ticket-move", "nope")).toEqual({
       ok: false,
@@ -4882,6 +4900,94 @@ describe("descriptor guard rejections reach the caller through the envelope, one
     expect(invoke<AppStateSetResult>("volli:app-state-set", 1, 2)).toEqual({
       ok: false,
       error: "Invalid app state",
+    });
+  });
+
+  it("refuses a renderer write to the database's schema floor (VC-602)", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", MIN_READER_VERSION_KEY, "999")).toEqual(
+      { ok: false, error: "This app state key is owned by the database." },
+    );
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+    ).toBeUndefined();
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "1")).toEqual({
+      ok: true,
+    });
+  });
+
+  it("refuses an unclassified renderer key (VC-574)", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:unclassified", "1")).toEqual({
+      ok: false,
+      error: "[volli] Unregistered or retired app_state write: volli:unclassified",
+    });
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get("volli:unclassified"),
+    ).toBeUndefined();
+  });
+
+  it("preserves unregistered renderer and legacy writes byte-for-byte when packaged (VC-574)", () => {
+    appMode.isPackaged = true;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(invoke("volli:app-state-set", "volli:unclassified", "raw renderer value")).toEqual({
+        ok: true,
+      });
+      ctx.db.exec("DELETE FROM projects");
+      expect(
+        invoke("volli:legacy-import", {
+          projects: [],
+          appState: { "volli:unclassified-legacy": "raw legacy value" },
+          rawBackup: {},
+        }),
+      ).toMatchObject({ ok: true });
+      expect(
+        ctx.db
+          .prepare(
+            "SELECT key, value FROM app_state WHERE key LIKE 'volli:unclassified%' ORDER BY key",
+          )
+          .all(),
+      ).toEqual([
+        { key: "volli:unclassified", value: "raw renderer value" },
+        { key: "volli:unclassified-legacy", value: "raw legacy value" },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("refuses an unclassified legacy key and rolls back the import (VC-574)", () => {
+    ctx.db.exec("DELETE FROM projects");
+    expect(
+      invoke("volli:legacy-import", {
+        projects: [],
+        appState: { "volli:ui": "registered", "volli:unclassified": "1" },
+        rawBackup: { "volli:ui": "source" },
+      }),
+    ).toEqual({
+      ok: false,
+      error: "[volli] Unregistered or retired app_state write: volli:unclassified",
+    });
+    expect(
+      ctx.db
+        .prepare("SELECT key FROM app_state WHERE key IN (?, ?, ?)")
+        .all("volli:ui", "volli:unclassified", "volli:legacy-backup"),
+    ).toEqual([]);
+  });
+
+  it("drops the schema floor from a legacy import and keeps the rest (VC-602)", () => {
+    ctx.db.exec("DELETE FROM projects");
+    const result = invoke<{ ok: boolean }>("volli:legacy-import", {
+      projects: [],
+      appState: { [MIN_READER_VERSION_KEY]: "58", "volli:ui": "1" },
+      rawBackup: {},
+    });
+    expect(result.ok).toBe(true);
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
+    ).toBeUndefined();
+    expect(ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:ui'").get()).toEqual({
+      value: "1",
     });
   });
 
@@ -4922,7 +5028,10 @@ describe("attachments (VC-50)", () => {
     // Re-register so the attach handler has somewhere to put bytes; the shared
     // beforeEach registers without a blob root.
     handlers.clear();
-    registerDataIpcHandlers({ ok: true, db: ctx.db }, { blobsRoot: blobsDir });
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, blobsRoot: blobsDir },
+    );
     projectId = createProject();
     ticket = createTicket(projectId);
   });

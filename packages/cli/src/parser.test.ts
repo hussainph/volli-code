@@ -324,6 +324,27 @@ describe("parseCliArgs", () => {
     expect(result.code).toBe("WRONG_DOOR");
   });
 
+  it("parses the operator's project add, and names its positional <path> (VC-623)", () => {
+    expect(parseCliArgs(["project", "add", "/srv/acme", "--name", "Acme", "--dry-run"])).toEqual({
+      ok: true,
+      invocation: {
+        command: "project.add",
+        args: { id: "/srv/acme", name: "Acme", dryRun: true },
+        json: false,
+      },
+    });
+    expect(parseCliArgs(["project", "add"])).toEqual({
+      ok: false,
+      code: "USAGE",
+      message: "project add requires <path>",
+    });
+    // An inline name that starts with a dash is the name, never help (VC-710's desktop sends these).
+    expect(parseCliArgs(["project", "add", "/srv/acme", "--name=-h", "--json"])).toEqual({
+      ok: true,
+      invocation: { command: "project.add", args: { id: "/srv/acme", name: "-h" }, json: true },
+    });
+  });
+
   it("requires the harness session id positional for session link", () => {
     expect(parseCliArgs(["session", "link"])).toEqual({
       ok: false,
@@ -964,9 +985,12 @@ describe("registry ↔ argv mechanics", () => {
 
   // Mechanics for a verb that is on no agent surface would be a route to
   // something the registry does not publish anywhere.
-  it("holds mechanics only for verbs carrying a cli access mode", () => {
+  it("holds mechanics only for CLI verbs or the person-only operator door", () => {
     for (const { key } of mechanicsEntries) {
-      expect(verbEntry(key)!.accessModes, key).toContain("cli");
+      expect(
+        verbEntry(key)!.accessModes.includes("cli") || verbEntry(key)!.operatorCli === true,
+        key,
+      ).toBe(true);
     }
   });
 
@@ -976,13 +1000,15 @@ describe("registry ↔ argv mechanics", () => {
   // control-tier tool (VC-134), and the agent-control family — start, stop,
   // send — is tool-only (VC-163, VC-86). A shell door for any of them would be
   // the socket door VC-92 §6 refuses.
+  //
+  // The host-protocol catalog's router entries (VC-564) are outside the
+  // question: they are on no agent surface, so no shell door could exist.
   it("leaves exactly the verbs the CLI cannot execute without mechanics", () => {
-    const missing = VERB_REGISTRY.filter((entry) => CLI_MECHANICS[entry.key] === undefined).map(
-      (entry) => entry.key,
-    );
+    const missing = VERB_REGISTRY.filter(
+      (entry) => CLI_MECHANICS[entry.key] === undefined && !routerOnly(entry),
+    ).map((entry) => entry.key);
     expect(missing).toEqual([
       "ticket.archive",
-      "session.start",
       "hook",
       "help",
       "ticket.await",
@@ -1060,3 +1086,25 @@ describe("cost", () => {
     });
   });
 });
+
+it("opens session start argv only with explicit operator parsing", () => {
+  expect(parseCliArgs(["session", "start", "VC-1"]).ok).toBe(false);
+  expect(
+    parseCliArgs(
+      ["session", "start", "VC-1", "--model", "scripted/test", "--reasoning", "off", "-m", "hello"],
+      undefined,
+      { operator: true },
+    ),
+  ).toMatchObject({
+    ok: true,
+    invocation: {
+      command: "session.start",
+      args: { id: "VC-1", model: "scripted/test", reasoning: "off", message: "hello" },
+    },
+  });
+});
+
+/** A host-protocol catalog entry no shell door projects (VC-564). */
+function routerOnly(entry: VerbEntry): boolean {
+  return entry.catalog !== undefined && !entry.accessModes.includes("cli");
+}

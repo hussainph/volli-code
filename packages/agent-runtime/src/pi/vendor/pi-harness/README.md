@@ -28,8 +28,8 @@ private executor sidecar machinery, not a second Session engine. There is no
 Consumers use `src/pi/harness-session.ts`, `harness-compaction.ts`, and
 `harness-env.ts`; provider/loop types and `Agent` still come from core's root.
 `pi-context.ts` uses `Context` and cancellation directly from `chord@1.0.0`.
-VC-497 can replace sidecar storage without changing the Session Engine or taking
-ownership of Pi's deleted harness orchestration.
+Sidecar storage is independent of the Session Engine and does not include Pi's
+deleted harness orchestration (VC-497).
 
 ## Retained modules and why
 
@@ -133,10 +133,5 @@ native wire projection, and exactly-once failed-checkpoint recovery. Runtime
 continuations across restart preserve the recovery locator, inode and original
 byte prefix. The older genuine 0.87.1 runtime fixture remains in the suite.
 
-The initial workspace-only manual check copied the 0.99.2 profile, appended
-through the new repo and reopened it with the original byte prefix intact.
-Authenticated Electron smoke is separately verified: ticket chat, project chat
-and Session-host lifecycle all pass. See
-[`migration verification`](../../../../../../docs/research/pi-1.0-migration-vc496.md)
-for follow-up commands and evidence; live smoke success is not inferred from
-synthetic fixtures.
+These fixtures verify storage and runtime compatibility; they do not substitute
+for authenticated application smoke tests.

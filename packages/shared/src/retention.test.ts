@@ -84,7 +84,7 @@ describe("computeArchiveReadiness", () => {
     });
   });
 
-  // The Vibe-Kanban bug, encoded: a kept ticket is exempt from BOTH paths.
+  // A kept ticket is exempt from both merge and TTL cleanup paths.
   it("Keep exempts a merged-PR ticket (merge path)", () => {
     expect(
       computeArchiveReadiness({

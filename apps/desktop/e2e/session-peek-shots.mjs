@@ -35,6 +35,7 @@
  *   pnpm run build   # only if apps/desktop/dist-electron is missing
  *   env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/session-peek-shots.mjs
  *
+ * Captures default to .tmp/session-peek-shots/ (gitignored).
  * Optional first argument overrides the output directory.
  */
 import { execFile } from "node:child_process";
@@ -58,7 +59,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-const OUT_DIR = process.argv[2] ?? join(REPO, "docs", "plans", "session-peek", "production");
+const OUT_DIR = process.argv[2] ?? join(REPO, ".tmp", "session-peek-shots");
 
 /** The window the shots are composed for. */
 const WINDOW = { width: 1440, height: 900 };
@@ -610,13 +611,13 @@ async function seedLedger(projectPath) {
   });
   let db;
   try {
-    const { openVolliDb } = await vite.ssrLoadModule("/apps/desktop/src/main/db/index.ts");
+    const { openVolliDb } = await vite.ssrLoadModule("/packages/host-core/src/db/index.ts");
     const { insertProject } = await vite.ssrLoadModule(
-      "/apps/desktop/src/main/db/projects-repo.ts",
+      "/packages/host-core/src/db/projects-repo.ts",
     );
-    const { insertTicket } = await vite.ssrLoadModule("/apps/desktop/src/main/db/tickets-repo.ts");
+    const { insertTicket } = await vite.ssrLoadModule("/packages/host-core/src/db/tickets-repo.ts");
     const { createSqliteSessionLedger } = await vite.ssrLoadModule(
-      "/apps/desktop/src/main/session-control/sqlite-ledger.ts",
+      "/packages/host-core/src/session-control/sqlite-ledger.ts",
     );
 
     db = openVolliDb(dbPath);

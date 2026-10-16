@@ -592,34 +592,6 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  describe("volli:project-reorder", () => {
-    const { guard, invalidError } = DATA_IPC["volli:project-reorder"];
-
-    it("accepts a string array", () => {
-      expect(guard([["p1", "p2"]])).toBe(true);
-    });
-
-    it("accepts an empty array", () => {
-      expect(guard([[]])).toBe(true);
-    });
-
-    it("rejects a non-array", () => {
-      expect(guard(["p1"])).toBe(false);
-    });
-
-    it("rejects an array with a non-string entry", () => {
-      expect(guard([["p1", 2]])).toBe(false);
-    });
-
-    it("rejects a wrong arity", () => {
-      expect(guard([])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid project order");
-    });
-  });
-
   describe("volli:ticket-create", () => {
     const { guard, invalidError } = DATA_IPC["volli:ticket-create"];
     const valid = { projectId: "p1", title: "Do the thing", status: "todo" };
@@ -1580,29 +1552,6 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  // VC-269: the person's stop.
-  describe("volli:session-stop", () => {
-    const { guard, invalidError } = DATA_IPC["volli:session-stop"];
-
-    it("accepts an id alone, and an id with a non-blank reason", () => {
-      expect(guard([{ sessionId: "s1" }])).toBe(true);
-      expect(guard([{ sessionId: "s1", reason: "Runaway" }])).toBe(true);
-    });
-
-    it("rejects a missing or empty id, a blank or non-string reason, and a wrong arity", () => {
-      expect(guard([{ sessionId: "" }])).toBe(false);
-      expect(guard([{ sessionId: 1 }])).toBe(false);
-      expect(guard([{ sessionId: "s1", reason: "   " }])).toBe(false);
-      expect(guard([{ sessionId: "s1", reason: 1 }])).toBe(false);
-      expect(guard([null])).toBe(false);
-      expect(guard([])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid session stop");
-    });
-  });
-
   describe("volli:label-set-color", () => {
     const { guard, invalidError } = DATA_IPC["volli:label-set-color"];
 
@@ -1756,7 +1705,7 @@ describe("DATA_IPC descriptor table", () => {
       ).toBe(true);
     });
 
-    // The id a destructive command is REPLAYED under (VC-284 re-review S1).
+    // The id a destructive command is REPLAYED under (VC-284).
     // `"cmd-1"` is an id a second writer could mint too, and cross-writer
     // string equality has to mean "the same logical fact"
     // (docs/BOUNDARIES.md rule 1) — here, the same deletion.
@@ -2202,8 +2151,8 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 84 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(84);
+    it("covers all 81 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(81);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
       // The relink pair (VC-430): looking at a registered folder, and pointing
       // the project at the one it moved to. Renderer channels with no agent verb
@@ -2246,12 +2195,14 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
       expect(DATA_CHANNELS).toContain("volli:session-starts");
       expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
-      // Build artifacts (VC-340): one read, one destructive action, and the two
-      // settings that govern both.
+      // Build artifacts (VC-340): one read, one destructive action, and the
+      // settings write. The settings read is `worktree.trimSettings` on the
+      // bridge (VC-608), as the rail order is `project.reorder`.
       expect(DATA_CHANNELS).toContain("volli:worktree-trim-scan");
       expect(DATA_CHANNELS).toContain("volli:worktree-trim");
-      expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-get");
+      expect(DATA_CHANNELS).not.toContain("volli:worktree-trim-settings-get");
       expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-set");
+      expect(DATA_CHANNELS).not.toContain("volli:project-reorder");
     });
   });
 
@@ -2263,18 +2214,16 @@ describe("DATA_IPC descriptor table", () => {
       const { guard, invalidError } = DATA_IPC["volli:worktree-trim"];
       expect(guard([])).toBe(true);
       // There is nothing to vary, so anything at all is a caller that does not
-      // know what this channel is (review r2 removed an unused dry-run input).
+      // know what this channel is; even a dry-run option is invalid.
       expect(guard([{}])).toBe(false);
       expect(guard([{ dryRun: true }])).toBe(false);
       expect(guard(["nope"])).toBe(false);
       expect(invalidError).toBe("Invalid trim request");
     });
 
-    it("takes no argument for either read", () => {
+    it("takes no argument for the scan", () => {
       expect(DATA_IPC["volli:worktree-trim-scan"].guard([])).toBe(true);
       expect(DATA_IPC["volli:worktree-trim-scan"].guard([{}])).toBe(false);
-      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([])).toBe(true);
-      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([{}])).toBe(false);
     });
 
     it("requires a settings patch to actually patch something", () => {

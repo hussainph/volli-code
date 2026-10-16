@@ -93,6 +93,18 @@ describe("renderHelp command detail", () => {
     );
   });
 
+  it("documents Session signal reads, quoted reasons and JSON timestamp and age", () => {
+    for (const verb of ["show", "answer"]) {
+      const detail = renderHelp(["session", verb]);
+      expect(detail).toContain("done/blocked signal");
+      expect(detail).toContain("signal: {kind, reason, at, ageMs} or null");
+      expect(detail).toContain("quoted reason");
+      expect(detail).toContain("Unix time in milliseconds");
+      expect(detail).toContain("ageMs is elapsed milliseconds");
+    }
+    expect(renderHelp(["session", "show"])).toContain("Reads need no operator token");
+  });
+
   it("advertises a signal rehearsal alongside its append-only warning", () => {
     const detail = renderHelp(["ticket", "signal"]);
 
@@ -138,7 +150,7 @@ describe("renderHelp command detail", () => {
 
   it("describes a tool-only verb by its callable name, not by argv", () => {
     const detail = renderHelp(["session", "start"]);
-    expect(detail).toContain("Door: Agent Tool Surface (named tool; not shell-executable)");
+    expect(detail).toContain("Door: Agent Tool Surface (route unknown; not shell-executable)");
     expect(detail).toContain("Verb tier: control");
     // The wire name a model actually calls, and its real input fields.
     expect(detail).toContain("Tool: session_start");
@@ -172,6 +184,27 @@ describe("renderHelp command detail", () => {
 
     expect(detail).toContain("Tool: session_ping");
     expect(detail).not.toContain("Input:");
+  });
+
+  it("names a positional by its declared label, required or optional (VC-623)", () => {
+    const entry: VerbEntry = {
+      key: "project.add",
+      accessModes: ["cli"],
+      actor: "user",
+      handler: { site: "main", id: "project.add" },
+      listed: true,
+      referenceOrder: 0,
+      group: "Write",
+      summary: "Register a folder.",
+      positionalId: "required",
+      positionalLabel: "path",
+      options: [],
+    };
+
+    expect(renderHelp(["project", "add"], [entry])).toContain("Usage: volli project add <path>");
+    expect(renderHelp(["project", "add"], [{ ...entry, positionalId: "optional" }])).toContain(
+      "Usage: volli project add [<path>]",
+    );
   });
 
   it("renders a command that has options but no notes", () => {
@@ -331,7 +364,7 @@ describe("renderHelp over a supplied entry list", () => {
 
   it("renders a tool-only verb's real door and unknown availability outside a Session", () => {
     const detail = renderHelp(["vault", "rotate"], [toolOnly]);
-    expect(detail).toContain("Door: Agent Tool Surface (named tool; not shell-executable)");
+    expect(detail).toContain("Door: Agent Tool Surface (route unknown; not shell-executable)");
     expect(detail).toContain("Verb tier: control");
     expect(detail).toContain("Tool availability: not claimed outside a resolved Session");
   });
@@ -420,7 +453,7 @@ describe("renderHelp over a supplied entry list", () => {
       "not carried by this Ticket Session's frozen Agent Tool Surface",
     );
     expect(bareHelpText([toolOnly], { runtime: carried })).toContain(
-      "Frozen Agent Tool Surface: vault.rotate",
+      "vault.rotate — route unknown",
     );
   });
 
@@ -437,4 +470,86 @@ describe("renderHelp over a supplied entry list", () => {
     expect(detail).toContain("Usage: volli vault inspect");
     expect(detail).not.toContain("Example:");
   });
+});
+
+describe("frozen route-aware help", () => {
+  const runtime: AgentHelpRuntime = {
+    appVersion: "0.2.2",
+    surfaceUnknownReason: null,
+    surface: {
+      sessionId: "session-1",
+      role: "project",
+      tools: [
+        "codemode",
+        "read",
+        "edit",
+        "secret",
+        "mcp__paper__a",
+        "mcp__paper__b",
+        "mcp__files__a",
+        "future",
+      ],
+      routes: {
+        codemode: "direct",
+        read: "direct",
+        edit: "both",
+        secret: "hidden",
+        mcp__paper__a: "code",
+        mcp__paper__b: "deferred",
+        mcp__files__a: "deferred",
+        future: "new-route",
+      },
+      mcpServerIds: {
+        mcp__paper__a: "paper",
+        mcp__paper__b: "paper",
+        mcp__files__a: "files",
+        read: "direct-server",
+      },
+    },
+  };
+
+  it("labels every route and groups only code-only MCP tools by frozen server id", () => {
+    const text = bareHelpText([], { runtime });
+    expect(text).toContain("read — direct (named tool only)");
+    expect(text).toContain("edit — both (named tool or codemode)");
+    expect(text).toContain("secret — hidden (unavailable)");
+    expect(text).toContain("future — route unknown");
+    expect(text).toContain(
+      "mcp:paper — through codemode only\n    mcp__paper__a — code (through codemode only)\n    mcp__paper__b — deferred",
+    );
+    expect(text).toContain("mcp:files — through codemode only");
+    expect(text).not.toContain("mcp:direct-server — through codemode only");
+  });
+
+  it.each(["direct", "both", "code", "deferred", "hidden", "future", undefined])(
+    "keeps command and group help honest for %s",
+    (route) => {
+      const routed: AgentHelpRuntime = {
+        ...runtime,
+        surface: {
+          sessionId: "s",
+          role: "project",
+          tools: ["session.start"],
+          ...(route === undefined ? {} : { routes: { "session.start": route } }),
+        },
+      };
+      const detail = renderHelp(["session", "start"], undefined, { runtime: routed });
+      const group = renderHelp(["session"], undefined, { runtime: routed });
+      if (route === "code" || route === "deferred") {
+        for (const text of [detail, group]) {
+          expect(text).toContain("through codemode only");
+          expect(text).not.toContain("named tool;");
+        }
+      } else if (route === "hidden") {
+        expect(detail).toContain("hidden (unavailable)");
+        expect(group).toContain("hidden (unavailable)");
+      } else if (route === undefined || route === "future") {
+        expect(detail).toContain("route unknown");
+        expect(group).toContain("route unknown");
+      } else {
+        expect(detail).toContain(route === "direct" ? "named tool only" : "named tool or codemode");
+      }
+      expect(detail).not.toContain("Usage: volli session start");
+    },
+  );
 });

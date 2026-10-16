@@ -438,7 +438,7 @@ export function formatMarkdown(report: {
     ...env.fileSyncProbes.map(fileSyncRow),
     ``,
     `## Method\n`,
-    `- Composition: \`SessionRuntime\` + the desktop Pi adapter over \`createPiAgentRuntime\` + the desktop \`SqliteSessionLedger\` on a migrated \`volli.db\` opened by \`openVolliDb\`, the file transcript-artifact store, and one VC-119 sink shared by the Session runtime and the Pi runtime, as \`createDesktopSessionRuntime\` composes them. Differences: an Electron-free location resolver answering a fixed directory, a fixed \`resolveRuntimeContext\`, and no connectivity, compaction-policy, execution-environment, web, browser, shell or MCP host options (Pi's defaults apply).\n`,
+    `- Composition: \`SessionRuntime\` + the desktop Pi adapter over \`createPiAgentRuntime\` + the desktop \`SqliteSessionLedger\` on a migrated \`volli.db\` opened by \`openVolliDb\`, the file transcript-artifact store, and one VC-119 sink shared by the Session runtime and the Pi runtime, as \`createHostSessionRuntime\` composes them. Differences: an Electron-free location resolver answering a fixed directory, a fixed \`resolveRuntimeContext\`, and no connectivity, compaction-policy, execution-environment, web, browser, shell or MCP host options (Pi's defaults apply).\n`,
     `- Script per turn (${report.parameters.deltasPerReply} text deltas per reply): a tool round (\`read\` inside the workspace, \`bash printf\`), a provider overflow error, Pi's local overflow compaction, and a final reply. Provider stand-in timings per request: ${Object.values(
       REAL_PATH_REQUEST_PLAN,
     )

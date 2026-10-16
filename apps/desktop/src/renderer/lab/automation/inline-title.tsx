@@ -1,5 +1,5 @@
 /**
- * Linear-style rename: reads as a title until you aim at it.
+ * Inline rename: reads as a title until you aim at it.
  *
  * The previous studio header was a permanently-chrome-free input that looked
  * like static text and offered no signal it was editable — so renaming felt

@@ -259,8 +259,8 @@ describe("detectDocumentLanguage", () => {
     expect(detectDocumentLanguage({ ...mainFile, relPath })).toBe(expected);
   });
 
-  // Scripts with no extension say what they are on line 1. Same first-line
-  // rules VS Code applies; the interpreter word may sit anywhere on the line so
+  // Scripts with no extension say what they are on line 1. The interpreter
+  // word may sit anywhere on the line so
   // `env -S node --flags` still reads as node.
   it.each([
     ["#!/bin/bash\necho hi\n", "shell"],

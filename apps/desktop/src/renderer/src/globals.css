@@ -566,8 +566,7 @@
    * dense, and the chat feed was proving it while a ticket body two panes over
    * read at 1.7 (`typeset.css`). This names that ratio so both surfaces breathe
    * at the same rate: the transcript wears it as the `leading-prose` utility,
-   * typeset reads `var(--leading-prose)`. 1.7 on 14px is ~24px lines — the
-   * band chat products settle in (ChatGPT 1.75, Claude ~1.65). */
+   * typeset reads `var(--leading-prose)`. 1.7 on 14px is ~24px lines. */
   --leading-prose: 1.7;
 }
 
@@ -1931,4 +1930,18 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-position: center;
   background-size: 24px 24px;
   mask-image: radial-gradient(ellipse 76% 62% at 50% 48%, black 0%, transparent 78%);
+}
+
+/* A write control standing down while its project's host cannot serve
+ * (VC-576; the lab's #host-health read-only staging): greyed AND desaturated,
+ * so a primary orange "New ticket" reads as off, not as a quieter orange.
+ * Unlayered so it outranks a component's own `disabled:opacity-*`. The
+ * control is also `disabled`; the submission behind it re-checks. */
+[data-host-read-only] {
+  opacity: 0.4;
+  filter: saturate(0);
+  pointer-events: none;
+  transition:
+    opacity 200ms var(--ease-out),
+    filter 200ms var(--ease-out);
 }

@@ -21,7 +21,7 @@
  * The arithmetic is pure so the coverage gate can hold it at 100%.
  */
 
-/** One full wave, in px — a handful of relaxed cycles across the fader (Arc's cadence). */
+/** One full wave, in px — a handful of relaxed cycles across the fader. */
 export const SLIDER_SQUIGGLE_WAVELENGTH = 72;
 
 /** The wave's peak, in px from its centreline, at full vibrancy. */

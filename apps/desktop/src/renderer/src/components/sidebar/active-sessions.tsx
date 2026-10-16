@@ -87,10 +87,12 @@ import {
   unreadSessionIds,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
+import { useRemoteSessionsUnavailable } from "@renderer/stores/remote-session-availability";
 import { projectBandOrderKey, useHeldSessionOrder } from "@renderer/stores/session-order";
 import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
@@ -348,6 +350,8 @@ export function ActiveSessions({
   const listingState = useProjectSessionsStore((state) => state.listingState[project.id]);
   const listingPending = projectSessionListingPending(listingState);
   const listingFailed = listingState === "failed";
+  // A host that grants this window no Session features (VC-713): said in its name.
+  const sessionsUnavailable = useRemoteSessionsUnavailable(project.id);
   const records = projectRows.terminal;
   const chatSessions = projectRows.chat;
   const projectChatSessionIds = React.useMemo(
@@ -499,8 +503,8 @@ export function ActiveSessions({
   const statusFetch = useLatestAsync();
   React.useEffect(() => {
     const token = statusFetch.claim();
-    window.api.tickets
-      .statusEntries({ projectId: project.id })
+    boardApi()
+      .tickets.statusEntries({ projectId: project.id })
       .then((result) => {
         if (!statusFetch.isCurrent(token)) return;
         if (!result.ok) {
@@ -531,8 +535,8 @@ export function ActiveSessions({
       setSignalsByTicket({});
       return;
     }
-    window.api.tickets
-      .latestSignals({ projectId: project.id })
+    boardApi()
+      .tickets.latestSignals({ projectId: project.id })
       .then((result) => {
         if (!signalsFetch.isCurrent(token)) return;
         if (!result.ok) {
@@ -1240,6 +1244,10 @@ export function ActiveSessions({
           <SessionBandRowSkeleton primaryWidth="w-3/4" />
           <SessionBandRowSkeleton primaryWidth="w-1/2" />
         </SidebarMenu>
+      ) : activeRows.length === 0 && sessionsUnavailable !== null ? (
+        <p className={EMPTY_INLINE} data-testid="sessions-unavailable">
+          {sessionsUnavailable}
+        </p>
       ) : activeRows.length === 0 && listingFailed ? (
         // A failed baseline cannot establish that the Project is quiet. Keep
         // this terse — the toast owns the bridge detail — but never let an
@@ -1285,7 +1293,8 @@ export function ActiveSessions({
         <SidebarMenu {...loadingRegionProps("sessions")}>
           <SessionBandRowSkeleton primaryWidth="w-2/3" />
         </SidebarMenu>
-      ) : previousEntries.length === 0 && listingFailed ? (
+      ) : previousEntries.length === 0 &&
+        sessionsUnavailable !== null ? null : previousEntries.length === 0 && listingFailed ? (
         <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
       ) : previousEntries.length === 0 ? (
         <p className={EMPTY_INLINE}>Nothing yet</p>

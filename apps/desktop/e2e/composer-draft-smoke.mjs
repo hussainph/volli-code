@@ -1,9 +1,9 @@
 /**
- * RED-phase acceptance smoke for the New-ticket composer's DRAFT persistence —
- * Linear-style implicit save of in-progress work, so an accidental Escape /
+ * Acceptance smoke for the New-ticket composer's DRAFT persistence —
+ * implicit save of in-progress work, so an accidental Escape /
  * overlay click / app quit never destroys what was typed.
  *
- * Spec being built (follow-up to the ui/ticket-creation-fix composer):
+ * Persistence contract:
  *   • While composing, the full draft (target project, status, priority, title,
  *     body, labels, worktree toggle) is cached continuously through the
  *     app_state kv layer (SQLite-backed, debounced).
@@ -59,16 +59,40 @@ const titleInput = (page) => composer(page).getByPlaceholder("Ticket title");
 
 async function openComposerViaHeader(page) {
   await page.getByRole("button", { name: "New ticket", exact: true }).click();
-  await sleep(350);
-  return (await composer(page).count()) === 1;
+  const opened = await waitUntil(
+    "composer to open with an editable title",
+    async () =>
+      (await composer(page).count()) === 1 &&
+      (await titleInput(page).isVisible()) &&
+      (await titleInput(page).isEditable()),
+    { timeout: 3000 },
+  )
+    .then(() => true)
+    .catch(() => false);
+  if (opened) await focusComposerTitle(page);
+  return opened;
+}
+
+async function focusComposerTitle(page) {
+  // Monaco can consume Escape while the body owns focus. Like the basics
+  // smoke, deliver dialog keyboard actions to the editable title instead.
+  await titleInput(page).focus();
+  await waitUntil(
+    "composer title to receive focus",
+    () => titleInput(page).evaluate((el) => el === document.activeElement),
+    { timeout: 3000 },
+  );
 }
 
 async function closeAnyDialog(page) {
-  if ((await page.getByRole("dialog").count()) === 0) return;
+  if ((await page.locator('[role="dialog"]').count()) === 0) return;
+  await focusComposerTitle(page);
   await page.keyboard.press("Escape");
-  await waitUntil("dialog to close", async () => (await page.getByRole("dialog").count()) === 0, {
-    timeout: 3000,
-  }).catch(() => {});
+  await waitUntil(
+    "dialog to unmount after Escape",
+    async () => (await page.locator('[role="dialog"]').count()) === 0,
+    { timeout: 3000 },
+  );
 }
 
 /** Snapshot the restorable field state of the OPEN composer. */

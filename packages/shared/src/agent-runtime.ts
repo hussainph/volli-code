@@ -273,6 +273,8 @@ export type ExecutionVenue = "local";
  * lets {@link SessionToolBinding} carry the right thing for each.
  */
 export interface RuntimeToolBundle {
+  /** Compatible versioned verb copy; absent preserves historical description bytes. */
+  refreshDescriptions?: true;
   /** Coding tools, in the order this venue offers them. */
   tools: readonly CodingToolId[];
   /**
@@ -306,6 +308,8 @@ export interface RuntimeToolBundle {
   mcp?: readonly McpToolDefinition[];
   /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
   mcpManagementNames?: "server";
+  /** Multi-question ask_user declaration, frozen at birth; absent keeps the original surface. */
+  askUserQuestions?: true;
   /**
    * Whether this Session's surface names `codemode`, and if so the route of
    * every other tool and the limits each script run is held to (VC-471).
@@ -454,8 +458,15 @@ export interface RuntimeAskUserOption {
   description?: string;
 }
 
+/** One related decision in the simplified, birth-marked ask_user declaration. */
+export interface RuntimeAskUserQuestion {
+  question: string;
+  /** Short answer choices. Empty means prose only; free text is always available. */
+  choices: readonly string[];
+}
+
 /**
- * One question the model decided to put to the person driving the Session.
+ * One request the model decided to put to the person driving the Session.
  *
  * A separate port from {@link RuntimeAskRequest}, and separate for a reason that
  * survives their similar shapes: an escalation is the runtime's own policy
@@ -470,6 +481,8 @@ export interface RuntimeAskUserOption {
 export interface RuntimeAskUserRequest {
   /** The runtime's own id for the asking call, so the question can be shown against it. */
   toolCallId: string;
+  /** Related decisions in the birth-marked declaration; historical flat calls stay unchanged. */
+  questions?: readonly RuntimeAskUserQuestion[];
   /** What the model wants to know, in its own words. */
   question: string;
   /** Absent or empty means the model wants prose rather than a choice. */
@@ -1065,6 +1078,12 @@ export interface RuntimeWorkspaceEnvironment {
 }
 
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
+export interface RuntimeToolRefreshAnnouncement {
+  /** Session Event id, never an attachment-local id. */
+  id: string;
+  namespaces: readonly { name: string; count: number }[];
+}
+
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
   /**
@@ -1086,6 +1105,29 @@ export interface SessionRuntimeSpec {
   workspaceEnvironment?: RuntimeWorkspaceEnvironment;
   promptResources?: readonly PromptResource[];
   tools: RuntimeToolBundle;
+  /**
+   * Last cold provider-visible bundle. Omitted when equal to `tools`.
+   * Warm additions behind Code Mode change the executable bundle only; startup
+   * and recovery must render this subset, not regenerate the cached declaration
+   * from the larger executable registry. Direct additions cannot happen warm.
+   */
+  declarationTools?: RuntimeToolBundle;
+  /** Durable warm refresh facts whose keyed discovery messages survive sidecar retries/recovery. */
+  toolRefreshAnnouncements?: readonly RuntimeToolRefreshAnnouncement[];
+  /**
+   * Recompute and durably record an additions-only compatible surface before
+   * returning its full desired spec, including unchanged durable state on retry.
+   * Null also means unchanged; the runtime compares tool bundles and wired IDs.
+   * Warm/code-mode calls may add code-only tools, but must preserve provider declarations, routes and
+   * description bytes. Cold triggers may also upgrade compatible declarations.
+   * The model is the currently selected pair, not necessarily the birth model.
+   * The runtime awaits this before the next program or provider turn; failures
+   * propagate through that operation rather than silently losing an update.
+   */
+  refreshTools?: (request: {
+    trigger: "cold-turn" | "warm-turn" | "compaction" | "model-switch" | "code-mode";
+    model: ModelSelection;
+  }) => Promise<SessionRuntimeSpec | null>;
   /** Opaque Pi sidecar locator from the durable Session Attachment. */
   recovery?: RuntimeRecoveryRef;
   /**
@@ -1950,6 +1992,12 @@ export type DeliveryOutcome =
       kind: "delivered";
       delivery: "prompt" | "queue" | "steer" | "retry";
       /**
+       * Timestamp of the durable command acceptance marker, when one exists.
+       * Live receipts and recovery must name the same acceptance. Absent for
+       * volatile queue admission and callers without a command identity.
+       */
+      acceptedAt?: number;
+      /**
        * True only when this delivery OPENED a turn that is still running
        * (VC-324) — the `settle: "opened"` answer on an idle target.
        *
@@ -2027,6 +2075,11 @@ export interface RuntimeAttachmentHandle {
      * behaviour it was written against.
      */
     settle?: RuntimeMessageSettle,
+    /**
+     * A host-owned steer may only join this still-accepting turn. Refuse if
+     * it ended or changed while delivery waited; never open another turn.
+     */
+    targetTurnId?: string,
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;

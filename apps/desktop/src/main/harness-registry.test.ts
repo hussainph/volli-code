@@ -13,11 +13,12 @@ import {
   recordHarnessDelivery,
   scanHarnessManifests,
   trustedHarnessAdapters,
-} from "./harness-registry";
-import type { HarnessManifestScan, ScannedHarnessManifest } from "./harness-registry";
+  type HarnessManifestScan,
+  type ScannedHarnessManifest,
+} from "@volli/host-core/agents";
 import { ensureHarnessRuntime } from "./harness-runtime";
-import { getRegisteredHarness, recordHarnessTrust } from "./db/harness-registry-repo";
-import { openTestDb, type TestDb } from "./db/test-helpers";
+import { getRegisteredHarness, recordHarnessTrust } from "@volli/host-core/db";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
 
 let root: string;
 let fixture: TestDb;
@@ -175,7 +176,7 @@ describe("scanHarnessManifests — a scan that could not see everything", () => 
 
     expect(scan.manifests).toHaveLength(MAX_SCANNED_HARNESS_DIRS);
     expect(scan.gap).toBe("too-many-manifests");
-    const logged = warn.mock.calls.flat().join(" ");
+    const logged = JSON.stringify(warn.mock.calls);
     for (const skipped of slugs.slice(MAX_SCANNED_HARNESS_DIRS)) {
       expect(logged).toContain(skipped);
     }
@@ -189,7 +190,7 @@ describe("scanHarnessManifests — a scan that could not see everything", () => 
     // Nothing here could not be measured: the file was seen and rejected, so a
     // caller reconciling wrappers is right to treat this harness as absent.
     expect(scan).toEqual({ manifests: [], gap: null });
-    expect(warn.mock.calls.flat().join(" ")).toContain("huge");
+    expect(JSON.stringify(warn.mock.calls)).toContain("huge");
   });
 });
 

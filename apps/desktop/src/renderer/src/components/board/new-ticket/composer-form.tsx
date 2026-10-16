@@ -30,9 +30,12 @@ import {
 import { startTicketChat } from "@renderer/components/sessions/session-create";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { cn } from "@renderer/lib/utils";
+import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { useBoardStore } from "@renderer/stores/board";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { notAvailableOn, refuseRemoteTicket, remoteHostNow } from "@renderer/stores/remote-project";
 
 /**
  * The New-ticket composer's stateful body: field state, the description editor
@@ -42,8 +45,8 @@ import { useProjectsStore } from "@renderer/stores/projects";
  *
  * Mounted only while the dialog is open (Radix unmounts the content on close).
  * Field state seeds from the DRAFT CACHE (draft.ts) when one exists — an
- * accidental Escape/overlay-click/quit mid-compose is non-destructive, Linear
- * style — and from blank defaults otherwise (`target` then seeds from the
+ * accidental Escape/overlay-click/quit mid-compose is non-destructive —
+ * and from blank defaults otherwise (`target` then seeds from the
  * currently selected project). Every field change re-saves the draft; a
  * successful create clears it.
  *
@@ -129,6 +132,13 @@ export function ComposerForm({
 
   const titleRef = React.useRef<HTMLInputElement>(null);
   const editorRef = React.useRef<MonacoDocumentEditorHandle>(null);
+  const [resetCount, setResetCount] = React.useState(0);
+
+  React.useLayoutEffect(() => {
+    // Batch entry is ready with the reset's commit, not in a later animation
+    // frame that can leave focus on the footer or steal the next keystroke.
+    if (resetCount > 0) titleRef.current?.focus();
+  }, [resetCount]);
 
   // The `@file` index + create/open wiring for the description editor, keyed to
   // the (retargetable) target project — mirrors ticket-detail's fileRefs, minus
@@ -141,6 +151,8 @@ export function ComposerForm({
       indexVersion: fileIndex.version,
       onOpenFile: () => toast.info("Files open after the ticket is created"),
       createArtifact: async (name) => {
+        const host = remoteHostNow(target.id);
+        if (host !== null) return { ok: false, error: notAvailableOn(host) };
         try {
           const result = await window.api.files.createArtifact({ projectId: target.id, name });
           if (result.ok) fileIndex.forceRefresh();
@@ -154,6 +166,7 @@ export function ComposerForm({
   );
 
   const canSubmit = title.trim() !== "" && !submitting;
+  const canWrite = useCanWrite(target.id);
   // What Create & start will run: the target project's own runtime preference
   // when it holds one, else the Ticket purpose's configured default — the same
   // rung order main resolves — read per open, overridable for this ticket
@@ -203,6 +216,8 @@ export function ComposerForm({
   } = useAttachments({
     owner: { unowned: true },
     refRoot: target.path,
+    // A remote target's draft takes no attachment of this Mac's (VC-711).
+    projectId: target.id,
     onRefInsert: (relPath) => editorRef.current?.insertAtCursor(`@${relPath}`),
     onError: (message) => toast.error(message),
   });
@@ -249,6 +264,8 @@ export function ComposerForm({
       linkAttachments: async (ticketId) => {
         const pending = attachmentsRef.current;
         if (pending.length === 0) return;
+        // A remote project's ticket keeps its attachments on its host (VC-711).
+        if (refuseRemoteTicket(ticketId)) return;
         const result = await window.api.attachments.linkDrafts({
           ticketId,
           blobs: pending.map((entry) => ({ blobHash: entry.blobHash, label: entry.label })),
@@ -277,12 +294,13 @@ export function ComposerForm({
     // The links now belong to the Ticket that was just created; the strip is
     // forgotten rather than detached.
     clearAttachments();
-    // Return focus to the title for the next rapid entry (Create-more).
-    requestAnimationFrame(() => titleRef.current?.focus());
+    setResetCount((count) => count + 1);
   }, [clearAttachments]);
 
   const handleCreate = React.useCallback(async () => {
     if (title.trim() === "" || submitting) return;
+    // Read-only (VC-576): the draft stays; the note above the footer says why.
+    if (!guardWrite(target.id)) return;
     setSubmitting(true);
     try {
       const result = await runPlainCreate(currentFields(), deps);
@@ -295,10 +313,12 @@ export function ComposerForm({
     } finally {
       setSubmitting(false);
     }
-  }, [title, submitting, currentFields, deps, createMore, resetForm, onClose]);
+  }, [title, submitting, target.id, currentFields, deps, createMore, resetForm, onClose]);
 
   const handleKickoff = React.useCallback(async () => {
     if (title.trim() === "" || submitting) return;
+    // Read-only (VC-576): the draft stays; the note above the footer says why.
+    if (!guardWrite(target.id)) return;
     setSubmitting(true);
     try {
       const result = await runKickoff(
@@ -320,6 +340,7 @@ export function ComposerForm({
   }, [
     title,
     submitting,
+    target.id,
     currentFields,
     deps,
     createMore,
@@ -334,6 +355,7 @@ export function ComposerForm({
   const handleCreateWithAutomation = React.useCallback(
     async (automation: { id: string; name: string }) => {
       if (title.trim() === "" || submitting) return;
+      if (!guardWrite(target.id)) return;
       setSubmitting(true);
       try {
         const result = await runCreateWithAutomation(currentFields(), deps, { automation });
@@ -347,7 +369,7 @@ export function ComposerForm({
         setSubmitting(false);
       }
     },
-    [title, submitting, currentFields, deps, createMore, resetForm, onClose],
+    [title, submitting, target.id, currentFields, deps, createMore, resetForm, onClose],
   );
 
   const handleSubmit = React.useCallback(() => {
@@ -502,6 +524,7 @@ export function ComposerForm({
         className="border-t border-border px-6 py-2"
       />
 
+      <ReadOnlyNote projectId={target.id} className="px-6 pt-3" />
       <div className="prompt-toolbar px-6 py-4">
         <ComposerFooter
           projectId={target.id}
@@ -516,7 +539,7 @@ export function ComposerForm({
             ready: automationOffer.ready,
             enabledIds,
           }}
-          disabled={!canSubmit}
+          disabled={!canSubmit || !canWrite}
         />
       </div>
     </div>

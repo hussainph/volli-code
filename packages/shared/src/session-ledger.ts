@@ -5,6 +5,7 @@ import { readSessionOrigin, type SessionOrigin } from "./session-origin";
  */
 
 import type { SessionStopDetail } from "./session-stop";
+import type { SessionToolRefreshDelta } from "./tool-refresh-delta";
 
 import type {
   CompactionReason,
@@ -26,6 +27,7 @@ import {
   roundSessionUsageCost,
   summarizeSessionUsage,
 } from "./session-usage";
+import type { SessionTodoList } from "./session-todo";
 import type { SessionUsage, SessionUsageSummary } from "./session-usage";
 import type { SessionUsageEntry } from "./session-usage-report";
 
@@ -363,6 +365,38 @@ export interface TranscriptReference {
   digest: string | null;
 }
 
+/**
+ * The few facts about one settled transcript message that the Session's
+ * current state depends on, recorded beside its reference (VC-315).
+ *
+ * The body stays in the artifact store; this is what lets the projection know
+ * the Session's current plan and where its current turn's latest reply is
+ * without reading any body back. A Client that opens a Session holds only the
+ * newest window of its transcript, so "the plan as it stands" and "what
+ * `/copy` copies" must be answerable from the checkpoint, not from a fold of
+ * messages the Client may never page in.
+ *
+ * Absent on events recorded before VC-315: those say nothing, and the fold
+ * leaves its state as it was rather than guessing.
+ */
+export interface SessionTranscriptDigest {
+  /** Who spoke. A user message starts a new current turn: the latest reply resets. */
+  readonly role: "user" | "assistant" | "system";
+  /** Present when an assistant message said something a reader would call a reply. */
+  readonly reply?: true;
+  /**
+   * The todo list the message's last settled plan call left — `[]` when it
+   * cleared the list. Absent when the message holds no plan call.
+   */
+  readonly todoList?: SessionTodoList;
+}
+
+/** Where the current turn's latest reply lives: the transcript event that recorded it. */
+export interface SessionReplyLocation {
+  readonly sequence: number;
+  readonly reference: TranscriptReference;
+}
+
 export const SESSION_ATTENTION_KINDS = [
   "input_required",
   "permission_required",
@@ -569,6 +603,10 @@ export type SessionInput =
       tools: readonly SessionToolId[];
       /** New MCP-management wire names. Absent on historical surfaces, whose mcp_* names must survive reattachment. */
       mcpManagementNames?: "server";
+      /** Multi-question ask_user declaration, frozen at new birth only (VC-749). Absent keeps the historical single-question surface. */
+      askUserQuestions?: true;
+      /** Cache-safe refresh wording; absent preserves the original tool descriptions. Host-only. */
+      refreshDescriptions?: true;
       /** Exact sanitized dynamic definitions corresponding to MCP names in tools. */
       mcpTools?: readonly McpToolDefinition[];
       /**
@@ -626,6 +664,14 @@ export type SessionEventPayload =
    */
   | { kind: "model.selected"; selection: ModelSelection; tier?: ModelTier; auto?: ModelAutoPick }
   | { kind: "session.input.recorded"; input: SessionInput }
+  /** Additive surface delta; a new outer kind lets older readers retain the immutable birth. */
+  | {
+      kind: "session.tools.refreshed";
+      trigger: "cold-turn" | "warm-turn" | "compaction" | "model-switch" | "code-mode";
+      delta: SessionToolRefreshDelta;
+      added: readonly string[];
+      changed: readonly string[];
+    }
   /** An adapter-neutral outcome signal; it is not a Ticket lifecycle event. */
   | { kind: "session.signaled"; signal: "done" | "blocked"; reason: string | null }
   /**
@@ -735,6 +781,8 @@ export type SessionEventPayload =
       attachmentId: string | null;
       turnId: string | null;
       reference: TranscriptReference;
+      /** What the message means for current state (VC-315); absent before it. */
+      digest?: SessionTranscriptDigest;
     }
   | { kind: "attention.raised"; attention: SessionAttention }
   | { kind: "attention.cleared"; attentionId: string }
@@ -824,6 +872,7 @@ export const SESSION_PROJECTION_EVENT_KINDS = [
   "session.retitled",
   "session.signaled",
   "session.stopped",
+  "session.tools.refreshed",
   "transcript.referenced",
   "turn.completed",
   "turn.interrupted",
@@ -1097,6 +1146,7 @@ export function observationPayload(
         attachmentId: observation.attachmentId,
         turnId: observation.turnId,
         reference: observation.reference,
+        ...(observation.digest === undefined ? {} : { digest: observation.digest }),
       };
     case "attention.raised":
       return { kind: observation.kind, attention: observation.attention };
@@ -1391,7 +1441,16 @@ export interface ListSessionStartsQuery {
   sinceMs: number;
 }
 
-/** One project-wide, bounded sidebar read over explicit Session outcome facts. */
+/**
+ * One project-wide, bounded sidebar read over explicit Session outcome facts.
+ *
+ * "Latest" is the signal this ledger ACCEPTED last, in local ledger order —
+ * never the largest `occurred_at`, which is what a source claimed and can move
+ * backwards with a clock (VC-512). Local ledger order is provisional
+ * (docs/BOUNDARIES.md standing rule 2): it is what this host learned last, not
+ * a global order, and a relay replaces it with server-assigned order or
+ * explicit supersession.
+ */
 export interface ListLatestTicketSignalsQuery {
   projectId: string;
 }
@@ -1571,6 +1630,23 @@ export interface SessionProjection {
    * today, but only the Board Session was ever meant to.
    */
   readonly bornTicketless: boolean;
+  /**
+   * The Session's current todo list, as its newest settled plan call left it
+   * (VC-315). `[]` is a list the model cleared, which is not the same as
+   * never having had one: absent is "no plan recorded" — never written, or
+   * written only before transcript digests existed. Folded from
+   * {@link SessionTranscriptDigest}, so it is there however little of the
+   * transcript a Client holds.
+   */
+  readonly todoList?: SessionTodoList;
+  /**
+   * Where the current turn's latest reply is, or absent when the current
+   * turn has said nothing yet (VC-315). Reset by every user message — a
+   * submitted one, a steer, an answer to an interaction — and moved by every
+   * assistant message that says something. What `/copy` copies, without the
+   * Client holding the message.
+   */
+  readonly latestReply?: SessionReplyLocation;
 }
 
 /**
@@ -1600,6 +1676,20 @@ export interface SessionProjectionCheckpoint {
   stoppedRecoveryAttachmentId: string | null;
   pendingAttachmentCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
   pendingTurnCommands: readonly { commandId: string; origin: SessionOrigin | null }[];
+  /**
+   * The projection's plan and reply baseline (`todoList`, `latestReply`) is
+   * whole (VC-315). Present when every transcript fact folded into this
+   * checkpoint carried its {@link SessionTranscriptDigest} — a Session born
+   * with digests — or when the host recovered the baseline from the bodies of
+   * the digest-less facts written before them. Absent on a checkpoint written
+   * by an older build, or folded over a digest-less fact: the host recovers
+   * the baseline once and writes it back with this set.
+   *
+   * Optional and additive, not a version bump: an older reader ignores it, and
+   * a checkpoint without it costs one recovery, never a refold of every
+   * Session.
+   */
+  baselineComplete?: true;
 }
 
 export const SESSION_PROJECTION_CHECKPOINT_VERSION = 4 as const;
@@ -1790,6 +1880,11 @@ function foldSessionProjection(
   // every real Session's `session.created` immediately overrides it with the
   // immutable birth fact below.
   let bornTicketless = base?.bornTicketless ?? session.ticketId === null;
+  let todoList: SessionTodoList | null = base?.todoList ?? null;
+  let latestReply: SessionReplyLocation | null = base?.latestReply ?? null;
+  // A fold from the first event knows its baseline is whole until it meets a
+  // digest-less transcript fact; a fold over a checkpoint inherits its word.
+  let baselineComplete = checkpoint === null || checkpoint.baselineComplete === true;
   const throughSequence = checkpoint?.throughSequence ?? 0;
 
   const ordered = [...events]
@@ -1813,6 +1908,7 @@ function foldSessionProjection(
       event.payload.kind !== "command.recorded" &&
       event.payload.kind !== "command.receipt.recorded" &&
       event.payload.kind !== "session.input.recorded" &&
+      event.payload.kind !== "session.tools.refreshed" &&
       event.payload.kind !== "session.retitled" &&
       event.payload.kind !== "usage.recorded"
     ) {
@@ -1847,6 +1943,14 @@ function foldSessionProjection(
         if (command.intent.kind === "executor.start") {
           pendingExecutorStarts.set(command.id, command);
         }
+        // A user message is a new current turn, whatever turn the executor
+        // folds it into: the reply before it is no longer "the last reply".
+        if (
+          command.intent.kind === "message.submit" ||
+          command.intent.kind === "interaction.resolve"
+        ) {
+          latestReply = null;
+        }
         break;
       }
       case "session.archived":
@@ -1861,6 +1965,7 @@ function foldSessionProjection(
         modelAuto = event.payload.auto ?? null;
         break;
       case "session.input.recorded":
+      case "session.tools.refreshed":
         break;
       case "session.signaled":
         signal = {
@@ -2071,9 +2176,24 @@ function foldSessionProjection(
       case "context.reasoning_dropped":
       case "run.started":
       case "run.completed":
-      case "transcript.referenced":
       case "adapter.observed":
         break;
+      // The body is the transcript's; only the digest moves state (VC-315).
+      case "transcript.referenced": {
+        const { digest } = event.payload;
+        if (digest === undefined) {
+          // Written before digests: what it meant for the plan and the reply
+          // is only in its body, which the host recovers (VC-315).
+          baselineComplete = false;
+          break;
+        }
+        if (digest.todoList !== undefined) todoList = digest.todoList;
+        if (digest.role === "user") latestReply = null;
+        else if (digest.role === "assistant" && digest.reply === true) {
+          latestReply = { sequence: event.sequence, reference: event.payload.reference };
+        }
+        break;
+      }
       // Collected rather than summed in place: `summarizeSessionUsage` owns
       // what a mixed basis and a partial coverage mean, and a second addition
       // written here would be a second opinion about the same money.
@@ -2138,6 +2258,8 @@ function foldSessionProjection(
     },
     lastActivityAt,
     bornTicketless,
+    ...(todoList === null ? {} : { todoList }),
+    ...(latestReply === null ? {} : { latestReply }),
   };
   return {
     version: SESSION_PROJECTION_CHECKPOINT_VERSION,
@@ -2157,6 +2279,7 @@ function foldSessionProjection(
       commandId,
       origin,
     })),
+    ...(baselineComplete ? { baselineComplete: true as const } : {}),
   };
 }
 
@@ -2249,7 +2372,10 @@ export interface SessionLedgerTransaction {
    * across every project — see {@link ListSessionStartsQuery}.
    */
   listSessionStarts(query: ListSessionStartsQuery): readonly number[];
-  /** Latest explicit outcome per ticket, selected by occurred time then Session id. */
+  /**
+   * Latest explicit outcome per ticket, selected by this ledger's local
+   * acceptance order — see {@link ListLatestTicketSignalsQuery}.
+   */
   listLatestTicketSignals(
     query: ListLatestTicketSignalsQuery,
   ): readonly import("./ticket-events").LatestSessionSignal[];
@@ -2318,9 +2444,12 @@ export interface SessionLedgerTransaction {
   appendReceipt(receipt: CommandReceipt): void;
 }
 
+/** A callback result that cannot keep a storage transaction open across an await. */
+export type Synchronous<T> = T extends PromiseLike<unknown> ? never : T;
+
 /** The composition root guarantees atomicity for every function passed here. */
 export interface SessionLedger {
-  transaction<T>(work: (transaction: SessionLedgerTransaction) => Promise<T> | T): Promise<T>;
+  transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T>;
 }
 
 /** Injected by the composition root so the domain never imports a runtime clock or UUID library. */

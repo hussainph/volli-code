@@ -191,25 +191,10 @@ export const CORE_E2E = new Set([
 
 /**
  * Measured repeat flakers, NOT silent exclusions. Run nightly with artifacts;
- * each has a Backlog owner and a measured return condition. Selection/threshold
- * evidence: docs/research/smoke-flakes-2026-10.md. Never quarantine sole core
+ * each exclusion needs a measured return condition. Never quarantine sole core
  * coverage, deterministic related failures, or credential-dependent probes.
  */
-export const SMOKE_QUARANTINE = new Map([
-  [
-    "browser-recovery-smoke.mjs",
-    "VC-523: 59/225 confirmed recoveries; lost click result / preview recovery",
-  ],
-  [
-    "automations-picker-smoke.mjs",
-    "VC-524: 15/227 confirmed recoveries; picker/drag readiness hypothesis",
-  ],
-  ["bare-path-env-smoke.mjs", "VC-525: 16/227 confirmed recoveries; harness readiness marker"],
-  [
-    "browser-tab-smoke.mjs",
-    "VC-526: 16/226 confirmed recoveries; hold/cursor UI readiness hypothesis",
-  ],
-]);
+export const SMOKE_QUARANTINE = new Map();
 
 /**
  * Probes that must not overlap another smoke process.
@@ -224,7 +209,7 @@ export const SMOKE_QUARANTINE = new Map([
  * shell state; one run also failed to acquire its GPU backend. A dropped first
  * command cannot be waited back.
  *
- * The retained probe runs last after the concurrent pass finishes.
+ * The retained probes run alone after the concurrent pass finishes.
  */
 const SERIAL = new Set([
   // Clicks and wheels a live terminal and asserts the SGR mouse reports that
@@ -238,7 +223,28 @@ const SERIAL = new Set([
   // retire it, pair this probe with split-view-smoke five times
   // (`--jobs 2`) and drop the line if it passes 5/5.
   "terminal-smoke.mjs",
+  // VC-635: three fresh profiles exercise first-time Chromium SQLite store
+  // initialization and immediately quit. Loaded macOS CI captures show native
+  // shutdown waiting on background observer/DIPS initializers; app DB drain
+  // already completed. Run after this shard's pool drains, with every browser
+  // feature and durability barrier intact. This is scheduling, not quarantine:
+  // both attempts run alone and retain their own fresh-profile evidence.
+  // Retry success is still FLAKY; VC-635 validation requires first-attempt PASS.
+  "database-newer-version-smoke.mjs",
+  // VC-638: recovery also repeatedly cold-boots, screenshots and quits. Its
+  // screenshot flake recurred with board/composer/theming peers; VC-635 measured
+  // native starvation in this runner regime. Reduce that exposure by the same
+  // narrow scheduling policy, not by changing paint/quit assertions or budgets.
+  // Post-timeout samples do not establish the original native wait.
+  "database-recovery-smoke.mjs",
 ]);
+
+export function smokeScheduleFor(names) {
+  return {
+    concurrent: names.filter((name) => !SERIAL.has(name)),
+    exclusive: names.filter((name) => SERIAL.has(name)),
+  };
+}
 
 /**
  * Probes that do not match `*-smoke.mjs` but are part of the lane anyway.
@@ -430,8 +436,7 @@ async function main() {
   const execution = { reporter, children, isInterrupted: () => interruptedBy !== null };
   const startedAt = Date.now();
   try {
-    const concurrent = names.filter((name) => !SERIAL.has(name));
-    const exclusive = names.filter((name) => SERIAL.has(name));
+    const { concurrent, exclusive } = smokeScheduleFor(names);
     const label = `tier=${args.tier}${args.shard ? ` shard=${args.shard}` : ""} jobs=${args.jobs}`;
     process.stdout.write(`Running ${names.length} smoke(s) — ${label}\nEvidence: ${reportDir}\n`);
     if (exclusive.length > 0)
@@ -445,7 +450,7 @@ async function main() {
       process.stdout.write(`Skipped ${DENY.size} by legacy deny-list:\n`);
       for (const [name, reason] of DENY) process.stdout.write(`  - ${name}: ${reason}\n`);
     }
-    // Fully drain concurrent probes before terminal's exclusive pass.
+    // Fully drain concurrent probes before running each exclusive probe alone.
     const results = await runPool(concurrent, args.jobs, execution);
     results.push(...(await runPool(exclusive, 1, execution)));
     const failures = results.filter((result) => result.code !== 0);

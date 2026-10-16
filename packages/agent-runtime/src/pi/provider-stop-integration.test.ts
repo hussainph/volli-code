@@ -61,7 +61,7 @@ function socketFixture(started: boolean) {
   };
 }
 
-it("terminal usage limit after actual WebSocket-to-SSE fallback is not retried (review item 3)", async () => {
+it("terminal usage limit after actual WebSocket-to-SSE fallback is not retried", async () => {
   vi.stubGlobal("WebSocket", socketFixture(false));
   const root = mkdtempSync(join(process.cwd(), ".stop-fallback-test-"));
   const workspace = join(root, "worktree");
@@ -134,7 +134,7 @@ it("terminal usage limit after actual WebSocket-to-SSE fallback is not retried (
   }
 });
 
-it("maps Pi's actual terminal WebSocketCloseError code 1006 (review item 4)", async () => {
+it("maps Pi's actual terminal WebSocketCloseError code 1006", async () => {
   vi.stubGlobal("WebSocket", socketFixture(true));
   try {
     const capture = new ProviderStopCapture();
@@ -160,7 +160,7 @@ it("maps Pi's actual terminal WebSocketCloseError code 1006 (review item 4)", as
   }
 });
 
-it("maps Node fetch UND_ERR_SOCKET through Pi's actual SSE implementation (review item 4)", async () => {
+it("maps Node fetch UND_ERR_SOCKET through Pi's actual SSE implementation", async () => {
   const server = createServer((request) => {
     request.socket.destroy();
   });

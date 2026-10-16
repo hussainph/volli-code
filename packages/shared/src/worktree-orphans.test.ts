@@ -95,8 +95,8 @@ describe("orphan vocabulary guards", () => {
   });
 });
 
-// The guard a durable reader uses before believing a stored plan (VC-284
-// re-review C3). It is deliberately whole-shape: a plan item that is missing a
+// The guard a durable reader uses before believing a stored plan (VC-284).
+// It is deliberately whole-shape: a plan item that is missing a
 // path, or carries one of the wrong type, cannot be silently folded into a
 // shorter plan, because a shorter plan is a shorter deletion history.
 describe("isOrphanCleanupPlanItem", () => {

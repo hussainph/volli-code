@@ -3,6 +3,7 @@ import type { Ticket } from "@volli/shared";
 
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { isTicketBodyLoaded, planningChangeAffects, useBoardStore } from "@renderer/stores/board";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 /**
  * What the open Ticket workspace may do with the body in the board store.
@@ -52,8 +53,8 @@ export function useTicketBody(ticket: Pick<Ticket, "id" | "projectId">): TicketB
     const projectId = ticket.projectId;
     const token = bodyRead.claim();
     setFailed(false);
-    void window.api.tickets
-      .body({ ticketId })
+    void boardApi()
+      .tickets.body({ ticketId })
       .then((result) => {
         // A result that lost its claim belongs to a ticket this view has since
         // left; applying it would put one ticket's body on another's workspace.

@@ -47,6 +47,9 @@ import {
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
+import { useExperimentsStore } from "@renderer/stores/experiments";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { createFakeHostSource, hostSnapshot, remoteHost } from "@renderer/stores/host-sources";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 import { Board } from "./board";
@@ -713,6 +716,59 @@ function loopErrors(): string[] {
 const BUDGET = 60_000;
 
 describe("a released card whose landing column runs an automation", () => {
+  it.each([false, true])(
+    "retains pointer and Option input before drag-start commits (already held: %s)",
+    async (alreadyHeld) => {
+      await mountBoard();
+      const card = columnNamed("todo").querySelector("article")!;
+      const from = centre(card);
+      const doing = centre(columnNamed("doing"));
+      await act(async () => {
+        card.parentElement!.dispatchEvent(pointerEvent("pointerdown", from, alreadyHeld));
+        // One browser task: activation, arrival and Option all precede React's
+        // passive effects for the newly active drag. No compensating nudge.
+        document.dispatchEvent(
+          pointerEvent("pointermove", { x: from.x, y: from.y + 6 }, alreadyHeld),
+        );
+        document.dispatchEvent(pointerEvent("pointermove", doing, alreadyHeld));
+        if (!alreadyHeld) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", bubbles: true }));
+        }
+      });
+      expect(document.querySelector("[data-board-drag]")).not.toBeNull();
+      expect(grown("doing")).toBe(true);
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent("keyup", { key: "Alt", bubbles: true }));
+      });
+      expect(grown("doing")).toBe(false);
+      expect(columnNamed("doing").querySelector("[data-offered-panel]")).not.toBeNull();
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+        );
+      });
+      expect(document.querySelector("[data-board-drag]")).toBeNull();
+      // The permanently mounted listeners must do no hit test or consume
+      // digits at rest, and must never revive the just-ended picker.
+      const hitTest = vi.spyOn(document, "elementsFromPoint");
+      const digit = new KeyboardEvent("keydown", {
+        key: "1",
+        code: "Digit1",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        document.dispatchEvent(pointerEvent("pointermove", doing, true));
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", bubbles: true }));
+        window.dispatchEvent(digit);
+      });
+      expect(hitTest).not.toHaveBeenCalled();
+      expect(digit.defaultPrevented).toBe(false);
+      expect(columnNamed("doing").querySelector("[data-offered-panel]")).toBeNull();
+      expect(loopErrors()).toEqual([]);
+    },
+  );
+
   it(
     "lands in the destination column, triggers the automation once, and logs no render loop",
     async () => {
@@ -919,6 +975,115 @@ describe("a card in the air over a running countdown", () => {
 
       expect(grown("doing")).toBe(true);
       expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+});
+
+function cloud(enabled: boolean): void {
+  useExperimentsStore.setState({ snapshot: { cloud: { enabled, source: "storage" } } });
+}
+
+function writeControls(): HTMLButtonElement[] {
+  return [...document.querySelectorAll<HTMLButtonElement>("[data-board-column] button")].filter(
+    (button) => button.textContent?.trim() === "New" || button.hasAttribute("data-column-arming"),
+  );
+}
+/**
+ * Read-only (VC-576): while the project's host cannot serve, a move is a
+ * write like any other — no card lifts, and the column's create and arm
+ * controls stand down, greyed as in the lab. Reading still works.
+ */
+describe("a read-only board", () => {
+  let detach: (() => void) | null = null;
+  const remote = createFakeHostSource(
+    hostSnapshot(
+      [remoteHost("h1", "hetzner-1", { link: { status: "offline", since: 0, retryAt: null } })],
+      { p1: "h1" },
+    ),
+  );
+
+  beforeEach(() => {
+    detach = useHostConnectionStore.getState().attach(remote);
+  });
+
+  afterEach(() => {
+    act(() => remote.setHost("h1", { link: { status: "offline", since: 0, retryAt: null } }));
+    detach?.();
+    detach = null;
+    useExperimentsStore.setState({ snapshot: null });
+  });
+
+  async function pressAndTravel(): Promise<void> {
+    const card = columnNamed("todo").querySelector("article");
+    const grip = card?.parentElement;
+    if (!card || !grip) throw new Error("no card in Todo");
+    const from = centre(card);
+    await act(async () => {
+      grip.dispatchEvent(pointerEvent("pointerdown", from));
+    });
+    await move({ x: from.x, y: from.y + 6 });
+  }
+
+  it(
+    "lifts no card, moves nothing, and stands New and Arm down",
+    async () => {
+      cloud(true);
+      await mountBoard();
+      await pressAndTravel();
+      expect(document.querySelector("[data-board-drag]")).toBeNull();
+      await act(async () => {
+        document.dispatchEvent(pointerEvent("pointerup", { x: 400, y: 500 }));
+      });
+      expect(window.api.tickets.move).not.toHaveBeenCalled();
+      expect(ticketSlots("todo")).toEqual(["t1", "t2"]);
+
+      const controls = writeControls();
+      expect(controls.length).toBeGreaterThan(0);
+      for (const control of controls) {
+        expect(control.disabled).toBe(true);
+        expect(control.hasAttribute("data-host-read-only")).toBe(true);
+      }
+    },
+    BUDGET,
+  );
+
+  it(
+    "drags again, with every control back, once the host serves",
+    async () => {
+      cloud(true);
+      await mountBoard();
+      act(() => remote.setHost("h1", { link: { status: "open" } }));
+      for (const control of writeControls()) {
+        expect(control.hasAttribute("data-host-read-only")).toBe(false);
+      }
+      await pressAndTravel();
+      expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+        DRAGGED,
+      );
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+    },
+    BUDGET,
+  );
+
+  it(
+    "changes nothing with the flag off, whatever the host is doing",
+    async () => {
+      cloud(false);
+      await mountBoard();
+      for (const control of writeControls()) {
+        expect(control.hasAttribute("data-host-read-only")).toBe(false);
+        expect(control.disabled).toBe(false);
+      }
+      await pressAndTravel();
+      expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+        DRAGGED,
+      );
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
     },
     BUDGET,
   );

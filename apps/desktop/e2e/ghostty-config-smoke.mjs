@@ -1,7 +1,7 @@
 /**
  * End-to-end acceptance smoke for the Ghostty config adapter (issue #18).
  * Drives the REAL packaged renderer through Playwright against an ISOLATED
- * $HOME (so the owner's actual Ghostty config never interferes and is never
+ * $HOME (so the user's Ghostty config never interferes and is never
  * touched) and asserts the three acceptance criteria:
  *
  *   1. `theme = "Smoke Probe"` in the config, with a matching theme FILE in the
@@ -167,7 +167,7 @@ async function waitForFileContains(path, needle, timeoutMs = 8000) {
 async function main() {
   // Isolated $HOME: the app reads $XDG_CONFIG_HOME/ghostty/config and
   // ~/Library/Application Support/... via os.homedir(), both of which honor
-  // these env overrides — the owner's real config stays untouched.
+  // these env overrides — the user's config stays untouched.
   const home = await fs.realpath(await fs.mkdtemp(join(SCRATCH, "home-")));
   const ghosttyDir = join(home, ".config", "ghostty");
   await fs.mkdir(ghosttyDir, { recursive: true });
