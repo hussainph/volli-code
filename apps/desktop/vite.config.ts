@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
 import type { PackUserConfig } from "vite-plus/pack";
 
+import { labAutoSelectPlugin } from "./lab-server/auto-select-plugin";
 import { RENDERER_DEV_PORT } from "./scripts/dev-constants.mjs";
 import { SHARED_MACHINE_TEST_WORKERS } from "../../vitest.workers";
 
@@ -107,7 +108,7 @@ const packedElectronDeps = {
   neverBundle: ["electron", "jsdom", "sharp", "@vscode/ripgrep"],
 };
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode, command }) => ({
   // Renderer (React) app build. `root` points Vite at the renderer's index.html.
   root: "src/renderer",
   // THE LAB GETS ITS OWN DEP CACHE. Everything rooted at apps/desktop defaults
@@ -130,7 +131,11 @@ export default defineConfig(({ mode }) => ({
   // CRITICAL: assets stay relative so the built index and worker chunks resolve
   // beneath volli-app://bundle/ in packaged builds. Plain Vite defaults to "/".
   base: "./",
-  plugins: [tailwindcss(), react()],
+  plugins: [
+    tailwindcss(),
+    react(),
+    ...(mode === "lab" && command === "serve" ? [labAutoSelectPlugin()] : []),
+  ],
   resolve: {
     alias: {
       "@renderer": fileURLToPath(new URL("./src/renderer/src", import.meta.url)),
@@ -169,7 +174,7 @@ export default defineConfig(({ mode }) => ({
           // determinism, which takes minutes and blows this lane's 5s default
           // timeout — it failed CI exactly that way. They have their own config
           // and command: `pnpm test:performance-harness` (vite.bench.config.ts).
-          include: ["src/main/**/*.test.ts", "src/ipc/**/*.test.ts"],
+          include: ["src/main/**/*.test.ts", "src/ipc/**/*.test.ts", "lab-server/**/*.test.ts"],
           // Drains the data-change coalescer after every test. Module state
           // that outlives the test that filled it is delivered into the next
           // one's window mock otherwise; see the file for why it disposes
