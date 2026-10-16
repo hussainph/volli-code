@@ -103,7 +103,7 @@
   "devDependencies": {
     "@earendil-works/pi-codemode": "1.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "@types/better-sqlite3": "^7.6.13",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "catalog:",
     "ai": "^7.0.83",
     "playwright-core": "^1.62.1",
