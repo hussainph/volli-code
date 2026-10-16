@@ -1,0 +1,16 @@
+[data-pair-drop-edge]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--primary);
+  pointer-events: none;
+  z-index: 20;
+}
+[data-pair-drop-edge="left"]::after {
+  left: 0;
+}
+[data-pair-drop-edge="right"]::after {
+  right: 0;
+}

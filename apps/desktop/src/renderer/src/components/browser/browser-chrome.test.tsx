@@ -75,6 +75,20 @@ describe("normalizeBrowserAddress", () => {
 });
 
 describe("BrowserChrome", () => {
+  it("keeps host ownership beside the address without a second title row", () => {
+    const tree = BrowserChrome(props({ holder: { kind: "person" } }));
+    const rows = findElements(tree, "div");
+    const row = (slot: string) =>
+      rows.find((element) => (element.props as { "data-slot"?: string })["data-slot"] === slot);
+    const address = row("browser-address-row");
+    const identity = row("browser-identity-row");
+    expect(address).toBeDefined();
+    expect(identity).toBeUndefined();
+    expect(findElements(address, Input)).toHaveLength(1);
+    expect(findElements(address, BrowserHolderPill)).toHaveLength(1);
+    expect(renderToStaticMarkup(tree)).toContain('aria-label="Volli docs"');
+  });
+
   it("submits a trimmed address through the Browser Tab navigation command", () => {
     let navigated: string | undefined;
     let prevented = false;
@@ -117,7 +131,7 @@ describe("BrowserChrome", () => {
     expect((input?.props as { ref?: unknown } | undefined)?.ref).toBe(ref);
   });
 
-  it("names a blank tab in the trailing title slot instead of showing its scheme", () => {
+  it("names the blank chrome accessibly without showing its internal scheme", () => {
     const html = renderToStaticMarkup(
       <BrowserChrome
         {...props({

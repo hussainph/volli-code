@@ -36,6 +36,14 @@ import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-do
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { ExternalAppContextMenu } from "@renderer/components/files/external-app-menu";
+import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import {
+  GroupedTabList,
+  groupTabItems,
+  type TabPair,
+} from "@renderer/components/split/grouped-tab-chip";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
@@ -52,7 +60,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
-import { Tab, TabStrip, tabStopIndex } from "@renderer/components/ui/tab-strip";
+import { Tab, TabStrip } from "@renderer/components/ui/tab-strip";
 import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { useSessionProvenance } from "@renderer/hooks/use-session-provenance";
 import { cn } from "@renderer/lib/utils";
@@ -188,7 +196,9 @@ export function tabTitleWithProvenance(title: string, provenanceLine: string | n
  * How a tab is DRAWN is shared, and shared as a component rather than as a
  * convention, so two strips on one screen cannot drift apart.
  */
-interface TicketTabListProps {
+export interface TicketTabListProps {
+  pairs?: readonly TabPair[];
+  onUnpair?(pairId: string): void;
   /** The ticket's owning project, used to resolve file tabs in main. */
   projectId: string;
   ticketId: string;
@@ -210,9 +220,9 @@ interface TicketTabListProps {
   onRenameSessionTab(tabId: string, title: string): void;
   /**
    * A tab was dragged to a new place (VC-189): the tab that moved, and the
-   * strip's movable tab ids in the order the drop left them. The Body tab is
-   * never among them — it does not drag and nothing lands before it. Optional:
-   * a strip without it mounts no drag machinery.
+   * strip's movable tab ids in the order the drop left them. An unpaired Body
+   * does not drag; a paired Body can leave its pair. Optional: a strip without
+   * it mounts no drag machinery.
    */
   onReorderTabs?(movedId: string, ids: readonly string[]): void;
 }
@@ -259,7 +269,7 @@ function TicketTab({
   active: boolean;
   /** This tab is the strip's single roving-tabindex entry point. */
   tabStop: boolean;
-  /** This tab's id for the strip's sortable, or undefined for the Body tab. */
+  /** This tab's sortable id, absent for an unpaired Body tab. */
   dragId?: string;
   editing: boolean;
   onSelect(): void;
@@ -287,6 +297,18 @@ function TicketTab({
   // answer — one frozen shared constant — for every tab that is not a Session
   // and every Session no Automation started.
   const sessionId = tabSessionId(tab);
+  const liveProvider = useChatSessionsStore((state) =>
+    sessionId === null
+      ? null
+      : (state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null),
+  );
+  const savedProvider = useTicketSessionRecordsStore((state) => {
+    const row = state.byTicket[ticketId]?.find(
+      (entry) => entry.kind === "chat" && entry.record.sessionId === sessionId,
+    );
+    return row?.kind === "chat" ? (row.record.model?.providerId ?? null) : null;
+  });
+  const providerId = liveProvider ?? savedProvider;
   const provenance = useSessionProvenance(projectId, sessionId);
   const provenanceLine = sessionProvenanceHoverLine(provenance);
   const parked = terminal !== null && terminal.parked && !terminal.exited;
@@ -351,11 +373,22 @@ function TicketTab({
       // terminal tabs stay static.
       revealLabel={tab.kind === "chat"}
       status={
-        tab.status ??
-        (tab.kind === "browser" && tab.loading ? "working" : (terminalDot ?? undefined))
+        tab.kind === "chat"
+          ? undefined
+          : (tab.status ??
+            (tab.kind === "browser" && tab.loading ? "working" : (terminalDot ?? undefined)))
       }
       leading={
-        tab.kind === "browser" ? (
+        tab.kind === "chat" ? (
+          <SessionGlyph
+            providerId={providerId}
+            providerLabel={providerId ?? "Chat"}
+            state={tab.status ?? null}
+            kind="chat"
+            name={`${providerId ?? "Chat"}, ${tab.status ?? "idle"}`}
+            size="row"
+          />
+        ) : tab.kind === "browser" ? (
           <BrowserTabMark driven={tab.driven === true} />
         ) : terminalDot === null && terminal !== null ? (
           <MoonIcon aria-hidden weight="bold" className="size-3 shrink-0 text-muted-foreground" />
@@ -562,14 +595,16 @@ export function TicketPaneTabStrip({ label, ...list }: TicketTabListProps & { la
 }
 
 /**
- * Every tab but the permanent Body tab may be dragged — the same statement the
- * absent `dragId` below makes, spelled for the half that could disagree with
- * it. A strip with no `onReorderTabs` mounts no drag machinery at all.
+ * Every tab but an unpaired Body tab may be dragged. A paired Body keeps an
+ * individual drag identity so it can leave its pair. A strip with no
+ * `onReorderTabs` mounts no drag machinery at all.
  */
-function reorderFor({ tabs, onReorderTabs }: TicketTabListProps) {
+function reorderFor({ tabs, pairs, onReorderTabs }: TicketTabListProps) {
   if (onReorderTabs === undefined) return undefined;
   return {
-    ids: tabs.filter((tab) => tab.kind !== "body").map((tab) => tab.id),
+    ids: groupTabItems(tabs, pairs).flatMap((group) =>
+      group.tabs.filter((tab) => tab.kind !== "body" || group.pair !== null).map((tab) => tab.id),
+    ),
     onReorder: onReorderTabs,
   };
 }
@@ -580,31 +615,27 @@ function TicketTabList({
   ticketId,
   tabs,
   activeTabId,
+  pairs,
+  onUnpair,
   onSelectTab,
   onCloseTab,
   onPinFileTab,
   onRenameSessionTab,
 }: TicketTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const stop = tabStopIndex(
-    tabs.length,
-    tabs.findIndex((tab) => tab.id === activeTabId),
-  );
-
   return (
-    <>
-      {tabs.map((tab, index) => (
+    <GroupedTabList tabs={tabs} pairs={pairs} activeTabId={activeTabId} onUnpair={onUnpair}>
+      {(tab, { active, tabStop, paired }) => (
         <TicketTab
           key={tab.id}
           projectId={projectId}
           ticketId={ticketId}
           tab={tab}
-          active={tab.id === activeTabId}
-          tabStop={index === stop}
-          // The Body tab is the permanent first tab: no id here means no
-          // sortable registration, which is half of "index 0 is not a drop
-          // target" (the other half is its absence from `movableIds`).
-          dragId={tab.kind === "body" ? undefined : tab.id}
+          active={active}
+          tabStop={tabStop}
+          // The unpaired Body stays permanent. Inside a pair it drags on its
+          // own, just like the other member, so either can leave the pair.
+          dragId={tab.kind === "body" && !paired ? undefined : tab.id}
           editing={editingId === tab.id}
           onSelect={() => onSelectTab(tab.id)}
           onClose={() => onCloseTab(tab)}
@@ -620,7 +651,7 @@ function TicketTabList({
           }}
           onCancelRename={() => setEditingId(null)}
         />
-      ))}
-    </>
+      )}
+    </GroupedTabList>
   );
 }

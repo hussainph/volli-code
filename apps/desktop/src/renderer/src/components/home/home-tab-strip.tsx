@@ -1,6 +1,5 @@
 import * as React from "react";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
-import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { KanbanIcon } from "@phosphor-icons/react/dist/csr/Kanban";
 import { MoonIcon } from "@phosphor-icons/react/dist/csr/Moon";
 import { PencilSimpleIcon } from "@phosphor-icons/react/dist/csr/PencilSimple";
@@ -17,6 +16,14 @@ import { BrowserHolderDot } from "@renderer/components/browser/browser-holder-do
 import { WordWrapContextMenuItem } from "@renderer/components/editor/word-wrap-menu-item";
 import { CopyPathContextMenuItems } from "@renderer/components/files/copy-path-menu";
 import { HOME_BOARD_TAB_ID } from "@renderer/components/home/home-tabs";
+import { SessionGlyph } from "@renderer/components/sessions/session-glyph";
+import {
+  GroupedTabList,
+  groupTabItems,
+  type TabPair,
+} from "@renderer/components/split/grouped-tab-chip";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { NewSessionControl } from "@renderer/components/sessions/new-session-control";
 import { SessionProvenanceMark } from "@renderer/components/sessions/session-provenance-mark";
 import {
@@ -37,7 +44,7 @@ import {
   ContextMenuTrigger,
 } from "@renderer/components/ui/context-menu";
 import { Button } from "@renderer/components/ui/button";
-import { Tab, TabStrip, tabStopIndex, type TabProps } from "@renderer/components/ui/tab-strip";
+import { Tab, TabStrip, type TabProps } from "@renderer/components/ui/tab-strip";
 import { useSessionsStore, type SessionTab } from "@renderer/stores/sessions";
 
 /**
@@ -97,7 +104,9 @@ export const HOME_BOARD_TAB: HomeTabDescriptor = { kind: "board", id: HOME_BOARD
  * italics and the rename plumbing is how a strip drifts from the strip beside
  * it on the same screen.
  */
-interface HomeTabListProps {
+export interface HomeTabListProps {
+  pairs?: readonly TabPair[];
+  onUnpair?(pairId: string): void;
   /**
    * The project whose Main checkout Home's File tabs come from — what Copy Path
    * resolves against. Home has no ticket, so those paths never resolve into a
@@ -160,9 +169,9 @@ interface HomeTabStripProps extends HomeTabListProps {
  * a hover-revealed close. Session tabs rename on double-click; preview File
  * tabs pin.
  *
- * The Board tab does not drag and nothing drops before it — it is simply left
- * out of the sortable ids and given no `dragId`, which is the same statement
- * made twice for the two halves that could otherwise disagree.
+ * The unpaired Board tab does not drag and nothing drops before it. Once paired,
+ * it registers its own drag identity like the other member, so either member
+ * can be carried out of the pair.
  *
  * Only the terminal kind talks about parking: the moon badge, the wake-on-click
  * and the Park/Wake/Keep Awake items are all about a PTY holding memory (issue
@@ -244,14 +253,18 @@ export function HomePaneTabStrip({ label, ...list }: HomeTabListProps & { label:
 }
 
 /**
- * Every tab but the permanent Board tab may be dragged — which is the same
- * statement made twice for the two halves that could otherwise disagree (the
- * other is the absent `dragId` below). A strip with no `onReorder` mounts no
- * drag machinery at all.
+ * Every tab but an unpaired Board tab may be dragged. A paired Board keeps an
+ * individual drag identity so it can leave its pair. A strip with no
+ * `onReorder` mounts no drag machinery at all.
  */
-function reorderFor({ tabs, onReorder }: HomeTabListProps) {
+function reorderFor({ tabs, pairs, onReorder }: HomeTabListProps) {
   if (onReorder === undefined) return undefined;
-  return { ids: tabs.filter((tab) => tab.kind !== "board").map((tab) => tab.id), onReorder };
+  return {
+    ids: groupTabItems(tabs, pairs).flatMap((group) =>
+      group.tabs.filter((tab) => tab.kind !== "board" || group.pair !== null).map((tab) => tab.id),
+    ),
+    onReorder,
+  };
 }
 
 /** The tabs themselves, drawn the same wherever the strip around them is. */
@@ -259,6 +272,8 @@ function HomeTabList({
   projectId,
   tabs,
   activeTabId,
+  pairs,
+  onUnpair,
   onSelect,
   onClose,
   onRename,
@@ -266,22 +281,16 @@ function HomeTabList({
   onCloseOtherFiles,
 }: HomeTabListProps) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
-  const stop = tabStopIndex(
-    tabs.length,
-    tabs.findIndex((tab) => tab.id === activeTabId),
-  );
-
   return (
-    <>
-      {tabs.map((descriptor, index) => {
-        const active = descriptor.id === activeTabId;
-        const tabStop = index === stop;
+    <GroupedTabList tabs={tabs} pairs={pairs} activeTabId={activeTabId} onUnpair={onUnpair}>
+      {(descriptor, { active, tabStop, paired }) => {
         if (descriptor.kind === "board") {
           return (
             <BoardTab
               key={descriptor.id}
               active={active}
               tabStop={tabStop}
+              dragId={paired ? descriptor.id : undefined}
               onSelect={() => onSelect(descriptor)}
             />
           );
@@ -359,8 +368,8 @@ function HomeTabList({
             onSelect={() => onSelect(descriptor)}
           />
         );
-      })}
-    </>
+      }}
+    </GroupedTabList>
   );
 }
 
@@ -379,15 +388,18 @@ function HomeTabList({
 function BoardTab({
   active,
   tabStop,
+  dragId,
   onSelect,
 }: {
   active: boolean;
   tabStop: boolean;
+  dragId?: string;
   onSelect(): void;
 }) {
   return (
     <Tab
       label="Board"
+      dragId={dragId}
       active={active}
       tabStop={tabStop}
       closable={false}
@@ -630,10 +642,8 @@ function TerminalTab({ projectId, tab, onSelect, ...shell }: KindTabProps & { ta
 }
 
 /**
- * One chat tab. The dot sits in the same leading slot a terminal's does, so the
- * column reads as liveness whatever the kind; the bubble beside it is the only
- * thing that says this row is not a terminal — the exception is marked, the
- * default is not.
+ * One chat tab. SessionGlyph carries the model provider and liveness together,
+ * matching the ticket strip rather than drawing a second standalone state mark.
  *
  * No park, no split: a chat Session's stream, fold and queue live in the
  * resident client, which outlives every view, so there is nothing here to hold
@@ -648,6 +658,15 @@ function ChatTab({
   ...shell
 }: KindTabProps & { sessionId: string; title: string; status: TicketTabStatus }) {
   const provenance = useSessionProvenance(projectId, sessionId);
+  const liveProvider = useChatSessionsStore(
+    (state) => state.sessions[sessionId]?.projection?.modelSelection?.providerId ?? null,
+  );
+  const savedProvider = useProjectSessionsStore(
+    (state) =>
+      state.byProject[projectId]?.chat.find((record) => record.sessionId === sessionId)?.model
+        ?.providerId ?? null,
+  );
+  const providerId = liveProvider ?? savedProvider;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -662,17 +681,19 @@ function ChatTab({
             sessionProvenanceHoverLine(provenance),
           )}
           onActivate={onSelect}
-          status={status}
           badge={<SessionProvenanceMark provenance={provenance} />}
           // A landing auto-title reveals here word by word (VC-81); terminal
           // and board tabs stay static.
           revealLabel
           leading={
-            // Bold, not filled: the dot beside it is already a solid object,
-            // and two in a 12px row is one too many. Same treatment as the
-            // sidebar's kind glyph — at this size regular draws lighter than
-            // its own label and bold puts the pen back on the text stem.
-            <ChatCircleIcon weight="bold" className="size-3 shrink-0 text-muted-foreground" />
+            <SessionGlyph
+              providerId={providerId}
+              providerLabel={providerId ?? "Chat"}
+              state={status}
+              kind="chat"
+              name={`${providerId ?? "Chat"}, ${status}`}
+              size="row"
+            />
           }
         />
       </ContextMenuTrigger>

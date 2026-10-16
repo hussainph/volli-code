@@ -1,0 +1,84 @@
+import * as React from "react";
+
+import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import { BrowserPane } from "@renderer/components/browser/browser-pane";
+import {
+  browserViewportSnapshot,
+  registerBrowserViewport,
+  subscribeBrowserViewports,
+} from "@renderer/components/browser/browser-viewport-registry";
+import { TerminalViewportBox } from "@renderer/components/sessions/terminal-viewport-box";
+import { paneIdForElement } from "@renderer/components/split/split-view-grid";
+import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
+
+/**
+ * The surface owns only a placeholder, never BrowserPane's lifetime. `visible`
+ * must include both the selected tab and its area's navigation visibility:
+ * retained background panes must not publish over a hidden Home/Ticket surface.
+ */
+export function BrowserPaneAnchor({ tabId, visible }: { tabId: string; visible: boolean }) {
+  const anchorRef = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    if (!visible || anchor === null) return;
+    return registerBrowserViewport(tabId, anchor);
+  }, [tabId, visible]);
+
+  return <div ref={anchorRef} data-slot="browser-pane-anchor" className="absolute inset-0" />;
+}
+
+/**
+ * Mount once beside HomeSurface's switching content, not inside either area.
+ * All projects' strip tabs remain keyed by opaque tab id here, preserving native
+ * page controllers and unfinished address edits across navigation and pairing.
+ * Only a published visible anchor lends a resident pane an on-screen rectangle.
+ */
+export function ResidentBrowserPanes({ api }: { api: BrowserApi }) {
+  const byId = useBrowserTabsStore((state) => state.byId);
+  const receive = useBrowserTabsStore((state) => state.receive);
+  const viewports = React.useSyncExternalStore(subscribeBrowserViewports, browserViewportSnapshot);
+  const [positionedViewports, setPositionedViewports] = React.useState<
+    ReadonlyMap<string, HTMLElement>
+  >(() => new Map());
+  React.useLayoutEffect(() => {
+    // Child viewport boxes have now positioned themselves. A same-size anchor
+    // handoff can change only x/y, which ResizeObserver does not report. Reuse
+    // BrowserPane's existing resize measurement path before allowing show to
+    // flush those fresh bounds; neither its controller nor chrome remounts.
+    window.dispatchEvent(new Event("resize"));
+    setPositionedViewports(viewports);
+  }, [viewports]);
+
+  return (
+    <>
+      {Object.values(byId)
+        .filter((tab) => tab.presentation === "tab")
+        .map((tab) => {
+          const anchor = viewports.get(tab.tabId) ?? null;
+          return (
+            <TerminalViewportBox
+              key={tab.tabId}
+              anchor={anchor}
+              onPointerDownCapture={() => {
+                const paneId = paneIdForElement(anchor);
+                if (paneId === null) return;
+                const workspace = useWorkspaceStore.getState();
+                if (tab.ticketId === null) workspace.focusHomePane(tab.projectId, paneId);
+                else workspace.focusTicketPane(tab.projectId, tab.ticketId, paneId);
+              }}
+            >
+              <div className="flex h-full min-h-0 flex-col">
+                <BrowserPane
+                  tab={tab}
+                  visible={anchor !== null && positionedViewports.get(tab.tabId) === anchor}
+                  api={api}
+                  onTabState={receive}
+                />
+              </div>
+            </TerminalViewportBox>
+          );
+        })}
+    </>
+  );
+}

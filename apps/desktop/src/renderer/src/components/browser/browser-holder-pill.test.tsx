@@ -71,6 +71,19 @@ describe("BrowserHolderPill (VC-239)", () => {
     expect(renderToStaticMarkup(tree)).toContain("Yours");
   });
 
+  it("keeps both Session actions icon-only with the name reserved for hover or focus", () => {
+    const tree = BrowserHolderPill(props());
+    for (const button of findButtons(tree)) {
+      expect((button.props as { size?: string }).size).toBe("icon-sm");
+      expect(
+        React.Children.toArray(button.props.children).every((child) => typeof child !== "string"),
+      ).toBe(true);
+    }
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('aria-label="Held by Fix checkout form"');
+    expect(html).not.toContain(">Fix checkout form<");
+  });
+
   it("wears the Session's colour, and the foreground for the person", () => {
     expect(renderToStaticMarkup(BrowserHolderPill(props()))).toContain("background-color:#d07c00");
     expect(
