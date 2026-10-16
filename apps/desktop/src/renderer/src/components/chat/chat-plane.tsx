@@ -193,12 +193,13 @@ import {
 import { useAttachments } from "@renderer/hooks/use-attachments";
 import { AttachmentStrip } from "@renderer/components/attachments/attachment-strip";
 import { transcriptAttachments } from "@renderer/components/attachments/attachment-model";
-import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useChatSessionsStore, type IdleSend } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 const NO_INTERACTIONS: readonly RendererSessionInteraction[] = [];
 const NO_HELD: readonly HeldMessage[] = [];
+const NO_IDLE_SENDS: readonly IdleSend[] = [];
 const NO_MODELS: readonly ModelAccessModel[] = [];
 const NO_HIDDEN: readonly HiddenModelRef[] = [];
 const EMPTY_MODEL_SELECTION: ComposerModelSelection = {
@@ -377,6 +378,7 @@ export function ChatPlane({
   // lives in the chat-drafts store rather than local state (see stores/chat-drafts.ts).
   const input = useChatDraftsStore((state) => state.drafts[sessionId]?.text ?? "");
   const held = useChatDraftsStore((state) => state.drafts[sessionId]?.held ?? NO_HELD);
+  const idleSends = useStore(sessionsStore, (state) => state.idleSends[sessionId] ?? NO_IDLE_SENDS);
   // Present only before the first message has promoted this identity into a
   // Session. The rest of the plane can render its empty projections unchanged;
   // the few operations that require durability branch explicitly below.
@@ -872,12 +874,30 @@ export function ChatPlane({
           // refused it: it is in the ledger and on screen in the transcript, so
           // handing it back would be inviting a second copy of it. The blocker
           // row owns that recovery.
-          if (outcome === "refused") markHeld(sessionId, message.id, "unsent");
-          else {
+          if (outcome === "refused") {
+            markHeld(sessionId, message.id, "unsent");
+            sessionsStore.getState().forgetIdleSend(sessionId, message.id);
+          } else {
             const live = sessionsStore.getState().sessions[sessionId];
             const projected =
               live?.queue.some((entry) => entry.id === message.id) ||
               live?.transcript.durableMessages.some((entry) => entry.id === message.id);
+            if (message.delivery === "send") {
+              const stillHeld = useChatDraftsStore
+                .getState()
+                .drafts[sessionId]?.held.some((row) => row.id === message.id);
+              const shadow = sessionsStore
+                .getState()
+                .idleSends[sessionId]?.find((row) => row.id === message.id);
+              const stillResident =
+                live !== undefined ||
+                Object.values(sessionsStore.getState().openTabs).some((tabs) =>
+                  tabs.includes(sessionId),
+                );
+              if (stillResident && (stillHeld || projected || shadow?.accepted)) {
+                sessionsStore.getState().rememberIdleSend(sessionId, message, true);
+              } else sessionsStore.getState().forgetIdleSend(sessionId, message.id);
+            }
             if (projected) dropHeld(sessionId, message.id);
             else if (outcome === "delivered")
               amendHeldMessage(sessionId, message.id, (retained) => ({
@@ -955,6 +975,9 @@ export function ChatPlane({
         ...(resources !== undefined && resources.length > 0 ? { resources } : {}),
         ...(attachmentsRef.current.length > 0 ? { attachments: attachmentsRef.current } : {}),
       };
+      if (intent === "send") {
+        sessionsStore.getState().rememberIdleSend(sessionId, message);
+      }
       let importBarrier: Promise<void> | null = null;
       if (launch !== undefined) {
         provisionalDispatches.current += 1;
@@ -986,6 +1009,7 @@ export function ChatPlane({
             useChatDraftsStore
               .getState()
               .drafts[sessionId]?.held.find(({ id }) => id === original.id) ?? original;
+          if (intent === "send") sessionsStore.getState().rememberIdleSend(sessionId, prepared);
           return deliver(prepared, intent);
         },
         launch !== undefined,
@@ -1002,6 +1026,7 @@ export function ChatPlane({
       dispatch,
       provisionalModel,
       sessionId,
+      sessionsStore,
       setDraftAttachments,
     ],
   );
@@ -1128,67 +1153,92 @@ export function ChatPlane({
   }, [blockerPresentation.dismissedKey, dismissedBlockerKey]);
   const blocker = blockerPresentation.blocker;
   const timelineBlocker = blocker?.placement === "timeline" ? blocker : null;
-  // The opening send is already part of the conversation while the host
-  // attaches. Remember its identity across held → queue → transcript ownership;
-  // later Enter presses still belong to the ordinary follow-up strip.
+  // The resident shadow retains both intent and words across view remounts
+  // and queue removal arriving before the scheduler folds transcript frames.
+  // Only positive transcript settlement or explicit refusal retires it.
   const turnEpoch = useStore(
     sessionsStore,
     (state) => state.sessions[sessionId]?.transcript.turnEpoch ?? 0,
   );
-  const openingId = React.useRef<string | null>(null);
-  const openingHeld = held.find(
-    (message) => message.id === openingId.current && message.state === "sending",
-  );
-  const openingQueued = queue.find((message) => message.id === openingId.current);
-  if (
-    openingHeld === undefined &&
-    openingQueued === undefined &&
-    !messages.some((message) => message.id === openingId.current)
-  ) {
-    openingId.current = null;
-  }
-  if (
-    openingId.current === null &&
-    messages.length === 0 &&
-    historyBefore === null &&
-    turnEpoch === 0 &&
-    !working &&
-    !turnActive &&
-    !projection?.turnActive
-  ) {
-    openingId.current =
-      held.find(
-        (message) =>
-          message.state === "sending" &&
-          message.delivery !== "queue" &&
-          message.delivery !== "steer",
-      )?.id ??
-      queue[0]?.id ??
-      null;
-  }
-  const openingPending =
-    openingId.current !== null &&
-    candidateBlocker === null &&
-    interactions.length === 0 &&
-    projection?.status !== "archived" &&
-    !settledMessageIds.has(openingId.current);
-  const openingMessage = openingPending
-    ? (held.find((message) => message.id === openingId.current && message.state === "sending") ??
-      queue.find((message) => message.id === openingId.current))
-    : undefined;
-  const transcriptMessages = React.useMemo(
+  const pendingIdleSends = React.useMemo(() => {
+    const candidates = new Map<string, QueuedMessage>();
+    for (const message of idleSends) {
+      const local = held.find((row) => row.id === message.id);
+      if (local?.state === "unsent" || settledMessageIds.has(message.id)) continue;
+      if (
+        message.accepted ||
+        local?.state === "sending" ||
+        queue.some((row) => row.id === message.id) ||
+        deliveryLabels.get(message.id) === "Pending"
+      ) {
+        candidates.set(message.id, message);
+      }
+    }
+    if (!working && !turnActive && !projection?.turnActive) {
+      for (const message of held) {
+        if (message.state === "sending" && message.delivery === "send")
+          candidates.set(message.id, message);
+      }
+      // A new Session's first host row has unambiguous opening-send intent.
+      if (messages.length === 0 && historyBefore === null && turnEpoch === 0 && queue[0])
+        candidates.set(queue[0].id, queue[0]);
+    }
+    for (const message of [...queue, ...held.filter((row) => row.state === "sending")]) {
+      if (candidates.has(message.id)) candidates.set(message.id, message);
+    }
+    return [...candidates.values()].filter((message) => !settledMessageIds.has(message.id));
+  }, [
+    deliveryLabels,
+    held,
+    historyBefore,
+    idleSends,
+    messages.length,
+    projection?.turnActive,
+    queue,
+    settledMessageIds,
+    turnActive,
+    turnEpoch,
+    working,
+  ]);
+  React.useEffect(() => {
+    const state = sessionsStore.getState();
+    for (const message of pendingIdleSends) {
+      const previous = state.idleSends[sessionId]?.find((row) => row.id === message.id);
+      const accepted =
+        queue.some((row) => row.id === message.id) ||
+        held.some((row) => row.id === message.id && row.deliveryAccepted);
+      if (
+        previous === undefined ||
+        !sameQueuedMessage(previous, message) ||
+        (accepted && !previous.accepted)
+      ) {
+        state.rememberIdleSend(sessionId, message, accepted);
+      }
+    }
+    for (const message of idleSends) {
+      if (!pendingIdleSends.some((row) => row.id === message.id))
+        state.forgetIdleSend(sessionId, message.id);
+    }
+  }, [held, idleSends, pendingIdleSends, queue, sessionId, sessionsStore]);
+  const quietSendIds = React.useMemo(
     () =>
-      openingMessage !== undefined && !durableMessageIds.has(openingMessage.id)
-        ? [...messages, pendingUserMessage(openingMessage)]
-        : messages,
-    [durableMessageIds, messages, openingMessage],
+      candidateBlocker === null && interactions.length === 0 && projection?.status !== "archived"
+        ? new Set(pendingIdleSends.map((message) => message.id))
+        : EMPTY_RESOLVING,
+    [candidateBlocker, interactions.length, pendingIdleSends, projection?.status],
   );
+  const transcriptMessages = React.useMemo(() => {
+    const pending = pendingIdleSends
+      .filter((message) => quietSendIds.has(message.id) && !durableMessageIds.has(message.id))
+      .map(pendingUserMessage);
+    return pending.length === 0 ? messages : [...messages, ...pending];
+  }, [durableMessageIds, messages, pendingIdleSends, quietSendIds]);
   const transcriptDeliveryLabels = React.useMemo(() => {
-    if (!openingPending || openingId.current === null) return deliveryLabels;
+    if (quietSendIds.size === 0) return deliveryLabels;
     const labels = new Map(deliveryLabels);
-    labels.delete(openingId.current);
+    for (const id of quietSendIds) labels.delete(id);
     return labels;
-  }, [deliveryLabels, openingPending]);
+  }, [deliveryLabels, quietSendIds]);
 
   // Held to its identity, and that is what keeps the composer out of the
   // stream's frame budget. `durableMessageIds` is a fresh Set on every flush of
@@ -1204,8 +1254,8 @@ export function ChatPlane({
           queue,
           durableMessageIds,
           provisional !== undefined || hasReconciledSessionSnapshot(projection),
-        ).filter((message) => !openingPending || message.id !== openingId.current),
-      [durableMessageIds, held, openingPending, projection, provisional, queue],
+        ).filter((message) => !quietSendIds.has(message.id)),
+      [durableMessageIds, held, projection, provisional, queue, quietSendIds],
     ),
     sameQueuedMessage,
   );
@@ -1264,6 +1314,7 @@ export function ChatPlane({
           dropHeld: () => {
             options?.restoreDraft?.();
             dropHeld(sessionId, entry.id);
+            sessionsStore.getState().forgetIdleSend(sessionId, entry.id);
           },
         });
         if (!gone) {
@@ -1707,11 +1758,11 @@ export function ChatPlane({
   const pendingMessages = held.filter(
     (message) =>
       message.state === "sending" &&
-      !(openingPending && message.id === openingId.current) &&
+      !quietSendIds.has(message.id) &&
       !durableMessageIds.has(message.id) &&
       !queue.some((entry) => entry.id === message.id),
   );
-  const turnRunning = working || turnActive || openingPending;
+  const turnRunning = working || turnActive || quietSendIds.size > 0;
 
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 

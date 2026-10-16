@@ -1,6 +1,7 @@
 /** Production ChatPlane with frozen renderer/store inputs, not a drawn facsimile.
- * ?state=attaching|sending|handoff|first-token|thinking|tool|between-steps|text|steering|queued|error selects a proof state.
+ * ?state=attaching|history-attaching|sending|handoff|first-token|thinking|tool|between-steps|text|steering|queued|error selects a proof state.
  * Attaching simulates local-held → host-queued → turn-open ownership without a queue strip.
+ * History-attaching repeats that idle Send with a completed turn and no live executor.
  * Steering has no delivery tab; queued remains a follow-up behind a running turn.
  * Also: background|moved-background|tools-updated|compaction surface audit fixtures.
  * No runtime or provider connection; these screenshots prove presentation only.
@@ -42,6 +43,31 @@ const selection = {
 } as const;
 const store = createChatSessionsStore();
 const state = new URLSearchParams(window.location.search).get("state") ?? "sending";
+const attaching = state === "attaching" || state === "history-attaching";
+const historyMessages: UIMessage[] =
+  state === "history-attaching"
+    ? [
+        {
+          id: "history-request",
+          role: "user",
+          parts: [{ type: "text", text: "Review the previous release first." }],
+        },
+        {
+          id: "history-reply",
+          role: "assistant",
+          parts: [{ type: "text", text: "The previous release is checked." }],
+        },
+      ]
+    : [];
+function idleTranscript() {
+  return {
+    ...seedSlice("ready").transcript,
+    messages: historyMessages,
+    durableMessages: historyMessages,
+    // A completed prior turn has both a start and an end boundary.
+    turnEpoch: historyMessages.length > 0 ? 2 : 0,
+  };
+}
 // Optional exact Git baseline, materialized temporarily by delivery-capture.mjs.
 const baselineModule = import.meta.glob<{ ChatPlane: typeof ChatPlane }>(
   "./chat-waiting-baseline-chat-plane.tsx",
@@ -136,7 +162,7 @@ function acceptedStreamingTranscript(includeReply = true) {
     };
   }
   return appendFrames(
-    seedSlice("ready").transcript,
+    idleTranscript(),
     [
       frame(
         1,
@@ -313,32 +339,29 @@ export function seed() {
     "compaction",
   ].includes(state);
   const error = state === "error" || state === "error-scrolled" || state === "delivery-error";
-  const messages: UIMessage[] = [
-    "attaching",
-    "working",
-    "sending",
-    "handoff",
-    "first-token",
-  ].includes(state)
-    ? []
-    : [
-        {
-          id: "request",
-          role: "user",
-          parts: [{ type: "text", text: "Check the release notes before we ship." }],
-        },
-        ...(error
-          ? []
-          : [
-              {
-                id: "reply",
-                role: "assistant" as const,
-                parts: [
-                  { type: "text" as const, text: "I’m checking the release notes and tests." },
-                ],
-              },
-            ]),
-      ];
+  const messages: UIMessage[] =
+    state === "history-attaching"
+      ? historyMessages
+      : ["attaching", "working", "sending", "handoff", "first-token"].includes(state)
+        ? []
+        : [
+            {
+              id: "request",
+              role: "user",
+              parts: [{ type: "text", text: "Check the release notes before we ship." }],
+            },
+            ...(error
+              ? []
+              : [
+                  {
+                    id: "reply",
+                    role: "assistant" as const,
+                    parts: [
+                      { type: "text" as const, text: "I’m checking the release notes and tests." },
+                    ],
+                  },
+                ]),
+          ];
   if (state === "error-scrolled") {
     for (let index = 1; index <= 16; index++) {
       messages.push(
@@ -380,11 +403,11 @@ export function seed() {
     scheduledResume: null,
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
-    liveExecutor: state === "attaching" ? null : { id: "chat-waiting-fixture-attachment" },
+    liveExecutor: attaching ? null : { id: "chat-waiting-fixture-attachment" },
   };
-  // Startup has no executor or open turn yet. The plane must infer the visible
-  // send/Working presentation from the first message, not invented turn facts.
-  const slice = seedSlice(state === "attaching" ? "starting" : working ? "working" : "ready");
+  // Simulated wiring: an idle Send has no executor or open turn yet, even
+  // when this Session already has history. Do not invent active turn facts.
+  const slice = seedSlice(attaching ? "starting" : working ? "working" : "ready");
   store.setState({
     sessions: {
       [SESSION]: {
@@ -430,7 +453,7 @@ export function seed() {
               messages,
               durableMessages: messages,
               turnActive: working,
-              turnEpoch: working ? 1 : 0,
+              turnEpoch: state === "history-attaching" ? 2 : working ? 1 : 0,
             },
         sessionError: error ? "Context assembly failed before the model could start." : null,
         queue:
@@ -447,17 +470,17 @@ export function seed() {
         text: "",
         attachments: [],
         touchedAt: 0,
-        held: ["attaching", "sending", "steering", "handoff"].includes(state)
+        held: ["attaching", "history-attaching", "sending", "steering", "handoff"].includes(state)
           ? [
               {
-                id: state === "handoff" || state === "attaching" ? "request" : "pending",
+                id: state === "handoff" || attaching ? "request" : "pending",
                 text:
                   state !== "steering"
                     ? "Check the release notes before we ship."
                     : "Focus on the compatibility section first.",
                 state: "sending",
-                // Enter before the first turn is Send; the transport queues
-                // that send while attaching without changing composer intent.
+                // Enter while idle is Send, including a Session with history;
+                // a transport queue does not change that composer intent.
                 delivery: state === "steering" ? "steer" : "send",
               },
             ]
@@ -491,13 +514,11 @@ export function seed() {
   useProjectSessionsStore.setState({ byProject: { [PROJECT]: EMPTY_PROJECT_SESSION_ROWS } });
 }
 export default function ChatPolishScratch() {
-  const [handoff, setHandoff] = React.useState(
-    state === "attaching" ? "held-attaching" : "pending",
-  );
+  const [handoff, setHandoff] = React.useState(attaching ? "held-attaching" : "pending");
   function advanceHandoff() {
     if (handoff === "held-attaching") {
       // Simulated wiring: the host queue takes ownership while attachment is
-      // still pending. No transcript, executor, or turn has appeared yet.
+      // still pending. No new transcript message, executor, or turn yet.
       store.setState(({ sessions }) => ({
         sessions: {
           ...sessions,
@@ -572,7 +593,7 @@ export default function ChatPolishScratch() {
             data-chat-waiting-state={state}
             data-chat-waiting-handoff={handoff}
           >
-            {state === "handoff" || state === "attaching" ? (
+            {state === "handoff" || attaching ? (
               <aside className="absolute top-4 left-2 z-10 flex w-40 flex-col gap-2 text-ui text-muted-foreground">
                 <span>Seeded lab presentation proof</span>
                 <span>{handoff}</span>

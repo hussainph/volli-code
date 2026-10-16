@@ -4,7 +4,8 @@
 - Ticket chat: open a ticket, then press **New chat** (⌘T) in the `Ticket tabs` strip. This opens a *provisional Draft* tab. No Session row exists until the first Send.
 - Project chat: Home, then **New chat** in the `Home tabs` strip.
 - Shortcut: in the New-ticket dialog, **Create & start** (⇧⌘↵) creates the ticket and starts its chat in one step (new-ticket/composer-launch.ts:25).
-- Send: the `Message` textbox, then ↵ or the **Send** button. While the turn runs, **Stop turn** shows.
+- Send: the `Message` textbox, then ↵ or the **Send** button. Any idle Send goes straight to a transcript bubble + **Working**, including an existing Session with history and no live executor while reattaching. While the turn runs, **Stop turn** shows.
+- Enter during a running turn remains a queued follow-up (see 03), not an idle Send.
 
 ## How to get to it (user POV)
 1. Board → open card `DRV-1` (see 01). Its ticket tab `DRV-1` comes to the front.
@@ -38,6 +39,17 @@ volli-drive screenshot vd-xxxx --name ticket-chat
 - The ticket screen has **two** `New chat` buttons: one in the strip and one in the rail's Sessions panel (e2e/lib/smoke-kit.mjs:1561-1584). Either starts a chat. Prefer the one next to tablist `Ticket tabs`.
 - `Message` stays disabled until the composer is ready. If `type` is refused, `wait` and re-snapshot.
 
+## Idle reattach with existing history
+Mapped follow-up path (not covered by the first-send live proof):
+1. Open an existing Ticket or Project chat that has a completed turn and no live executor. Keep its previous user/assistant messages visible.
+2. Type a new message in `Message` and press plain ↵ while no turn is running.
+3. Capture immediately while attaching, after the host queue accepts the send, and as the new turn opens. The new bubble and **Working** must be visible at all three stages, with equal bounds; prior history remains in place. No **Sending…**, **Queued**, delivery tab, composer queue strip, empty-state flash, or normal attachment-pending blocker/Retry.
+4. Wait for the fake reply. Verify a new `turn.started`/`turn.completed` pair and the new user/assistant transcript events on the same Session, using the SQL/CLI reads below. Real attachment or delivery failures must still surface recovery.
+
+The current `volli-drive` CLI always launches a fresh isolated profile; it has no same-profile restart/relaunch command. Do not claim the stop-app → relaunch → reopen path was driven using a fresh `launch`. The Enter/window regression covers history plus a closed binding, queue-before-transcript delivery, and view remounts.
+
+Browser-only presentation counterpart: `/lab/?clean&state=history-attaching#chat-waiting-states` seeds completed history, no live executor, and no active turn. **Advance handoff** exercises held-attaching → queued-attaching → durable-delivered without remounting the production `ChatPlane`. This is **Simulated wiring**, not proof of a live reattach or actual Enter dispatch. Retain the original `state=attaching` first-startup and `state=handoff` accepted→durable no-jump captures, in light and dark.
+
 ## End state that proves it
 - Visible: the transcript (role `log`, ui/ai-elements/conversation.tsx:112) holds a user bubble `hello drive` and an assistant reply `fake-agent: hello drive`. **Stop turn** is gone and the submit button reads `Send` again.
 - SQL: the Session, its turn, and (for a ticket) the worktree. Schema references: `sessions` migrations.ts:546-552 plus `role` at :1771 and `parent_session_id` at :1809; `session_events` at :1853.
@@ -58,7 +70,7 @@ volli-drive state vd-xxxx cli session answer <short-id>             # final mess
 ## Gotchas
 - Opening **New chat** writes nothing durable. No `sessions` row and no worktree exist until the first Send (pi-ticket-chat-smoke.mjs:966-1000). Don't assert on SQL before you've sent.
 - Every Session needs an app-wide default model (`DEFAULT_MODEL_REQUIRED`, host-core/src/session-runtime/sessions.ts:1137-1146). Without `--model fake`, Send fails with an error toast.
-- The first ticket Send creates a git worktree, so the turn takes longer to start. Give the `wait` 30s or more. Verified live (VC-774, `vd-36e738`, ticket and project Drafts; light/dark captures): the first sent bubble stays in the transcript with **Working**, even before attachment finishes. No **Sending…**, **Queued**, or **Sends after this step** tab, no composer queue strip, no empty-state flash, and no attachment-pending blocker/Retry should appear. The host may queue the message internally; that ownership handoff and the turn opening must not move the bubble or Working mark. Capture the attaching and turn-open states, not just the final reply. Queueing a follow-up behind an already running turn is unchanged (see 03).
+- The first ticket Send creates a git worktree, so the turn takes longer to start. Give the `wait` 30s or more. Verified live (VC-774, `vd-36e738`, ticket and project Drafts; light/dark captures): the first sent bubble stays in the transcript with **Working**, even before attachment finishes. No **Sending…**, **Queued**, or **Sends after this step** tab, no composer queue strip, no empty-state flash, and no attachment-pending blocker/Retry should appear. The same presentation contract applies to any plain Enter while idle, including a Session with history/no live executor (use the separate reattach path above; the first-send live evidence does not prove that path). The host may queue the message internally; that ownership handoff and the turn opening must not move the bubble or Working mark. Capture the attaching and turn-open states, not just the final reply. Queueing a follow-up behind an already running turn is unchanged (see 03).
 - Verified live: the first message the model receives is wrapped in Volli's `<ticket …>` + `--- BEGIN TICKET BRIEF ---` / `--- BEGIN SESSION TOOLS ---` blocks. The fake provider echoes only the typed text (`spokenText`), so wait for `fake-agent: <your text>`; the transcript bubble shows only what you typed.
 - The tab label is not stable: it starts as `Chat` and is retitled by auto-titling (shared/auto-title.ts), which also calls the fake model — so the title starts `fake-agent: …`. Find the tab by its position in `Ticket tabs`, not by its label.
 - Assistant prose has no role or label of its own. Match on the text `fake-agent:`.

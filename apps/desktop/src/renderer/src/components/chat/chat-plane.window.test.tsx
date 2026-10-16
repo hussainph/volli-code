@@ -916,6 +916,48 @@ describe("host-owned rows with cloud off", () => {
     expect(remove()).toBeNull();
   });
 
+  it.each(["remove", "edit"] as const)(
+    "retires an accepted idle-send shadow after recovery %s",
+    async (action) => {
+      const { store, cancel } = hostChatStore();
+      await mountPlane(store, modelClient(DEFAULT_SELECTION));
+      await act(async () => {
+        store.getState().rememberIdleSend(SESSION, { id: "q1", text: "host follow-up" }, true);
+        store.getState().settle(SESSION, "Attachment failed");
+      });
+      if (action === "remove") {
+        await act(async () =>
+          container!
+            .querySelector<HTMLButtonElement>(
+              '[aria-label="Remove queued message: host follow-up"]',
+            )!
+            .click(),
+        );
+      } else {
+        const trigger = container!.querySelector<HTMLButtonElement>(
+          '[aria-label="Queued message actions: host follow-up"]',
+        )!;
+        await act(async () =>
+          trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+        );
+        const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+          (node) => node.textContent?.includes("Edit message"),
+        )!;
+        await act(async () => item.click());
+      }
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(store.getState().idleSends[SESSION]).toBeUndefined());
+      await act(async () => store.getState().settle(SESSION, null));
+      expect(container!.querySelector(".is-user")).toBeNull();
+      expect(
+        [...container!.querySelectorAll('[role="status"]')].some((node) =>
+          node.textContent?.includes("Working"),
+        ),
+      ).toBe(false);
+      expect(composer()?.value).toBe(action === "edit" ? "host follow-up" : "");
+    },
+  );
+
   // Cross-Client edit safety: cancel-to-composer persists its recovery copy
   // before asking the host, and that wait is long enough for another Client to
   // edit the row. The cancel must carry the revision of the strip the person
@@ -1866,6 +1908,181 @@ describe("VC-758 visible timeline regressions", () => {
       }));
     });
     assertOpening();
+  });
+
+  it("keeps an idle Enter send after history in the transcript while a closed binding reattaches", async () => {
+    const history: UIMessage[] = [
+      { id: "old-user", role: "user", parts: [{ type: "text", text: "Earlier request" }] },
+      { id: "old-reply", role: "assistant", parts: [{ type: "text", text: "Earlier reply" }] },
+    ];
+    const store = chatStore(history);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: {
+            ...sessions[SESSION]!.projection!,
+            status: "open",
+            modelSelection: DEFAULT_SELECTION,
+          },
+          transcript: { ...sessions[SESSION]!.transcript, turnEpoch: 2, before: 10 },
+        },
+      },
+    }));
+    const result = Promise.withResolvers<unknown>();
+    const submit = vi.fn<(input: ChatCommandRequest) => Promise<unknown>>(() => result.promise);
+    getOrCreateChatClient(SESSION, {
+      rpc: {
+        session: {
+          command: { mutate: submit },
+          projection: {
+            query: async () => {
+              const slice = store.getState().sessions[SESSION]!;
+              return {
+                projection: {
+                  ...slice.projection!,
+                  queueRevision: 1,
+                  queue: slice.queue.map((entry) => ({
+                    id: entry.id,
+                    commandId: entry.id,
+                    state: "queued",
+                    message: {
+                      id: entry.id,
+                      role: "user",
+                      parts: [{ type: "text", text: entry.text }],
+                    },
+                  })),
+                },
+              };
+            },
+          },
+        },
+      } as unknown as ChatSessionRpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "reattach-command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("the host owns reattachment");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () => {
+      const box = composer()!;
+      type(box, "Continue after relaunch");
+    });
+    await act(async () =>
+      composer()!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      ),
+    );
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({
+      command: { kind: "message.submit", delivery: "queue" },
+    });
+    const message = useChatDraftsStore.getState().drafts[SESSION]!.held[0]!;
+    expect(message.delivery).toBe("send");
+    const currentBubble = () =>
+      [...container!.querySelectorAll(".is-user")].find((node) =>
+        node.textContent?.includes(message.text),
+      );
+    const workingMark = () =>
+      [...container!.querySelectorAll('[role="status"]')].find((node) =>
+        node.textContent?.includes("Working"),
+      );
+    let bubble = currentBubble();
+    let working = workingMark();
+    expect(bubble).toBeDefined();
+    expect(working).toBeDefined();
+    const assertSent = () => {
+      expect(currentBubble()).toBe(bubble);
+      expect(workingMark()).toBe(working);
+      expect(container!.querySelectorAll(".is-user")).toHaveLength(2);
+      expect(container!.textContent).toContain("Earlier reply");
+      expect(container!.querySelector('[data-slot="message-delivery"]')).toBeNull();
+      expect(
+        container!.querySelector('[aria-label="Remove queued message: Continue after relaunch"]'),
+      ).toBeNull();
+      expect(
+        bubble!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    };
+    await advanceProgressTime(1000);
+    assertSent();
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [{ id: message.id, text: message.text, queueState: "queued" }],
+          },
+        },
+      }));
+      result.resolve({ sessionId: SESSION, receipt: { status: "accepted" } });
+    });
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+    );
+    assertSent();
+    // Queue updates are synchronous; durable transcript frames may still be
+    // buffered by the stream scheduler. Neither the words nor Working leave.
+    await act(async () =>
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: { ...sessions[SESSION]!, queue: [] },
+        },
+      })),
+    );
+    await advanceProgressTime(1000);
+    assertSent();
+    const markup = bubble!.outerHTML;
+    await act(async () => root?.render(null));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    bubble = currentBubble();
+    working = workingMark();
+    expect(bubble?.outerHTML).toBe(markup);
+    expect(working).toBeDefined();
+    assertSent();
+    await act(async () =>
+      store.setState(({ sessions }) => {
+        const durable: UIMessage = {
+          id: message.id,
+          role: "user",
+          parts: [{ type: "text", text: message.text }],
+        };
+        return {
+          sessions: {
+            ...sessions,
+            [SESSION]: {
+              ...sessions[SESSION]!,
+              queue: [],
+              lifecycle: "working",
+              projection: {
+                ...sessions[SESSION]!.projection!,
+                turnActive: true,
+                liveExecutor: { id: "reattached" },
+              },
+              transcript: {
+                ...sessions[SESSION]!.transcript,
+                messages: [...history, durable],
+                durableMessages: [...history, durable],
+                turnActive: true,
+                turnEpoch: 3,
+              },
+            },
+          },
+        };
+      }),
+    );
+    assertSent();
+    expect(store.getState().idleSends[SESSION]).toBeUndefined();
   });
 
   it("returns an opening queue to recovery when a real blocker arrives", async () => {
