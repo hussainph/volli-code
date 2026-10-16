@@ -32,14 +32,14 @@
     "test:coverage": "vp test run --coverage"
   },
   "dependencies": {
-    "@trpc/client": "^11.18.0",
-    "@trpc/server": "^11.18.0"
+    "@trpc/client": "^11.19.0",
+    "@trpc/server": "^11.19.0"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/ws": "^8.18.1",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   }
 }
