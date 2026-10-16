@@ -54,6 +54,7 @@ export interface SplitViewDividerProps {
    * that speaks — the plane being the thing the ratio is actually about.
    */
   presentational?: boolean;
+  style?: React.CSSProperties;
 }
 
 export function SplitViewDivider({
@@ -61,6 +62,7 @@ export function SplitViewDivider({
   ratio,
   onChange,
   presentational = false,
+  style,
 }: SplitViewDividerProps) {
   const vertical = direction === "row";
   const dragRef = React.useRef<{
@@ -103,6 +105,7 @@ export function SplitViewDivider({
 
   return (
     <div
+      style={style}
       role={presentational ? "presentation" : "separator"}
       aria-hidden={presentational || undefined}
       aria-orientation={presentational ? undefined : vertical ? "vertical" : "horizontal"}

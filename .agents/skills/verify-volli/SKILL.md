@@ -21,9 +21,12 @@ Never run the app any other way (`pnpm dev`, `pnpm start`, a smoke) to "check so
 alias volli-drive='node apps/desktop/e2e/volli-drive/cli.mjs'
 volli-drive doctor                      # preflight, no id: is the bundle about to launch guarded?
 volli-drive launch                      # --fixture basic|empty  --model fake|env  (dev build only)
+volli-drive launch --fake-script replies.json  # scripted tool-enabled fake turns; refinements still echo
 ```
 
 `launch` builds first if the bundle is missing or predates the guard (`--no-build` refuses instead), then prints the instance id (`vd-xxxxxx`), the evidence dir, timings, memory and the guard status. 10–16 s to ready on an M-series Mac. Fixture `basic`: project **Drive Project** (prefix `DRV`), tickets DRV-1 (Todo), DRV-2 (Backlog), DRV-3 (Doing), DRV-4 (Needs Review), fake model pinned for `global` and `ticket` purposes.
+
+`--fake-script` takes a JSON array of the fake provider's replies (`{text?, toolCalls?}`), consumed only by tool-enabled agent requests. Tool-free auto-title requests do not consume the sequence. Use it to exercise real Browser tool calls or questions through the loopback provider, not to inject renderer state. It requires `--model fake` and cannot be combined with remote acceptance.
 
 After changing desktop code, `pnpm run build` (≈15 s) and launch a fresh instance; a running instance never picks up new code.
 
@@ -90,6 +93,7 @@ volli-drive list                    # nothing of yours should remain live
 | 03 | Queue a follow-up while a turn runs (VC-675) | [features/03-queue-follow-up.md](features/03-queue-follow-up.md) |
 | 04 | Reopen a long Session: bounded history, plan card, `/copy`, scroll (VC-315) | [features/04-reopen-long-session.md](features/04-reopen-long-session.md) |
 | 05 | Settings: toggle the `cloud` flag | [features/05-settings-cloud-flag.md](features/05-settings-cloud-flag.md) |
+| 06 | Browser: grouped pairs, reveal, close and Undo | [features/06-browser-pairs.md](features/06-browser-pairs.md) |
 
 01 and 02 were driven end to end on the live build (VC-703); 03–05 are mapped from code and carry `UNVERIFIED:` marks — confirm them live and remove the marks as you go. When the app changes under a mapped feature, update its file in the same PR.
 

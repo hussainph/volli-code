@@ -17,16 +17,10 @@
  *  • OWNED OR A CHILD'S. `sessionBrowserTabs` already says this: a parent that
  *    started a Session is answerable for the tabs it opened, and never for a
  *    sibling's or a person's. Children are read off the listing's provenance.
- *  • HOST FIRST. The island names a tab by its host, so the fallback chain is
- *    hostname → title → the new-tab name — the reverse of
- *    `browserTabDisplayTitle`, which the strip uses and which puts the title
- *    first. The start-page guard is shared: a brand-new tab is "New Tab", never
- *    the raw `about:blank` the address bar deliberately hides.
- *
- * HELD TABS (VC-239) are a different fact from ownership. `heldBy` says who is
- * driving a tab right now; the strip dot and the holder pill already show it,
- * and the cluster does not repeat it in v1. When it does, this is the
- * projection site: read `tab.heldBy` beside `ownerSessionId` below.
+ *  • TITLE FIRST. The page title leads each row, with host:port/path beneath
+ *    it. Compact announcements retain the hostname. A waiting driver or load
+ *    failure raises the tab ahead of ordinary rows; presentation never makes
+ *    a row inert. The mount decides how to focus or pair the requested tab.
  *
  * THE NOW CHANNEL IS A DIFF. The store is a live push cache with no history,
  * so "opened", "loaded", "failed" and "closed" are not events it carries —
@@ -52,8 +46,10 @@ import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import type { BrowserCardHost } from "@renderer/components/browser/browser-tab-card";
 import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { toastError } from "@renderer/lib/toast";
+import { SESSION_ACTIVITY_LABEL } from "@renderer/components/ui/session-activity-status";
 import {
   BROWSER_NEW_TAB_TITLE,
+  browserTabDisplayTitle,
   browserTabOwnerLabel,
   previewedBrowserTab,
   sessionBrowserTabs,
@@ -65,6 +61,7 @@ import {
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
 import type { IslandFlashPush } from "./use-island-flash";
+import { closeBrowserTabWithUndo, useClosingBrowserTabIds } from "./use-island-tabs-close";
 
 /* ------------------------------------------------------------- the plumbing */
 
@@ -141,6 +138,17 @@ export function islandTabHost(tab: Pick<BrowserTabState, "url" | "title">): stri
   return title.length > 0 ? title : BROWSER_NEW_TAB_TITLE;
 }
 
+/** Keep ports and paths: localhost alone cannot identify a working page. */
+function addressOf(url: string): string {
+  if (isBrowserStartUrl(url)) return BROWSER_NEW_TAB_TITLE;
+  try {
+    const parsed = new URL(url);
+    return parsed.host ? `${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}` : url;
+  } catch {
+    return url;
+  }
+}
+
 function hostnameOf(url: string): string | null {
   try {
     const host = new URL(url).hostname;
@@ -165,6 +173,9 @@ export function islandTabOf(
   return {
     id: tab.tabId,
     host: islandTabHost(tab),
+    title: browserTabDisplayTitle(tab),
+    detail: addressOf(tab.url),
+    needsAttention: tab.error !== null,
     state: tab.loading ? "loading" : "ready",
     promoted: tab.presentation !== "headless",
     surface: tab.presentation === "headless" ? null : tab.presentation,
@@ -204,7 +215,7 @@ function seenOf(tab: BrowserTabState): SeenTab {
 }
 
 const PRESENTATION_EVENT: Record<BrowserTabState["presentation"], string> = {
-  preview: "Pinned here",
+  preview: "Shown",
   tab: "Opened as tab",
   headless: "Hidden",
 };
@@ -254,9 +265,11 @@ export function useIslandTabs(
   deps: {
     /** Where `replayTab` opens the Browser replay (VC-453); omitted, it opens nowhere. */
     openTrace?: ((request: BrowserTraceRequest) => void) | undefined;
+    /** Focus an existing pair or open beside its owning chat. The mount owns layout. */
+    openBrowserBeside?: ((tabId: string, ownerSessionId: string) => Promise<void>) | undefined;
   } = {},
 ): IslandTabsFeed {
-  const { openTrace } = deps;
+  const { openTrace, openBrowserBeside } = deps;
   const browser = useChatBrowserTabs(sessionId, projectId);
   // Hydration is the baseline. A chat can mount before main has answered the
   // project's listing, and the tabs that arrive with that answer existed all
@@ -277,13 +290,27 @@ export function useIslandTabs(
   const titleOf = browser?.sessionTitle;
   const api = browser?.api;
 
-  const tabs = React.useMemo<readonly IslandTab[]>(
-    () =>
-      rawTabs === undefined || titleOf === undefined
-        ? NO_TABS
-        : rawTabs.map((tab) => islandTabOf(tab, sessionId, titleOf)),
-    [rawTabs, sessionId, titleOf],
-  );
+  const closingIds = useClosingBrowserTabIds();
+  const rows = useProjectSessionsStore((state) => state.byProject[projectId]);
+  const tabs = React.useMemo<readonly IslandTab[]>(() => {
+    if (rawTabs === undefined || titleOf === undefined) return NO_TABS;
+    return rawTabs
+      .filter((tab) => !closingIds.has(tab.tabId))
+      .map((tab) => {
+        const projected = islandTabOf(tab, sessionId, titleOf);
+        const holder = tab.heldBy;
+        if (holder?.kind === "session") {
+          const driver = rows?.chat.find((row) => row.sessionId === holder.sessionId);
+          if (driver?.activity === "waiting") projected.needsAttention = true;
+          projected.detail =
+            driver?.activity === "waiting"
+              ? `${holder.name} · ${SESSION_ACTIVITY_LABEL.waiting}`
+              : projected.detail;
+        }
+        return projected;
+      })
+      .toSorted((a, b) => Number(Boolean(b.needsAttention)) - Number(Boolean(a.needsAttention)));
+  }, [closingIds, rawTabs, rows, sessionId, titleOf]);
 
   const seen = React.useRef<Map<string, SeenTab> | null>(null);
   React.useEffect(() => {
@@ -337,20 +364,27 @@ export function useIslandTabs(
   const actions = React.useMemo<IslandTabsFeed["actions"]>(
     () => ({
       closeTab: (tabId) => {
-        void request(
-          api === undefined ? undefined : () => api.close({ tabId }),
-          "close",
-          "Close refused",
-          hostOf(tabId),
-        );
+        const tab = rawTabs?.find((one) => one.tabId === tabId);
+        if (api === undefined) return;
+        if (tab === undefined) {
+          void request(() => api.close({ tabId }), "close", "Close refused", hostOf(tabId));
+          return;
+        }
+        const host = hostOf(tabId);
+        void closeBrowserTabWithUndo(api, tab, () => flash("Close refused", host));
       },
-      // VC-238's Show: the pinned preview above this chat's composer. The
-      // cheap reveal; "Open as tab" stays on the preview chrome and the card.
       promoteTab: (tabId) => {
+        const tab = rawTabs?.find((one) => one.tabId === tabId);
         void request(
           api === undefined
             ? undefined
-            : () => api.setPresentation({ tabId, presentation: "preview" }),
+            : async () => {
+                if (openBrowserBeside !== undefined && tab?.ownerSessionId != null) {
+                  await openBrowserBeside(tabId, tab.ownerSessionId);
+                  return { ok: true };
+                }
+                return api.setPresentation({ tabId, presentation: "tab" });
+              },
           "show",
           "Show refused",
           hostOf(tabId),
@@ -365,7 +399,7 @@ export function useIslandTabs(
         openTrace({ sessionId: owner, tabId, pictureId: null });
       },
     }),
-    [api, hostOf, openTrace, rawTabs, request],
+    [api, flash, hostOf, openBrowserBeside, openTrace, rawTabs, request],
   );
 
   return React.useMemo(() => ({ model: { tabs }, actions }), [tabs, actions]);

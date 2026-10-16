@@ -1,5 +1,6 @@
 import {
   paneForTab,
+  pairForTab,
   primaryPaneId,
   SPLIT_VIEW_ROOT_PANE_ID,
   splitViewPanes,
@@ -19,11 +20,17 @@ export interface ProvisionalPaneLayoutHost {
   readSplitView(): SplitViewState | null;
   /** Save a first-content claim without moving pane focus. */
   claimTab(tabId: string, paneId: string, front: boolean): void;
+  /** Front an ordinary Draft when its former pair slot is already occupied. */
+  activateTab?(tabId: string): void;
 }
 
 export function placementPaneId(split: SplitViewState | null, paneId: string): string {
   if (split === null) return SPLIT_VIEW_ROOT_PANE_ID;
-  return splitViewPanes(split).some((pane) => pane.id === paneId) ? paneId : primaryPaneId(split);
+  const panes =
+    split.pairs === undefined
+      ? splitViewPanes(split)
+      : [...splitViewPanes(split), ...split.pairs.flatMap((pair) => [pair.first, pair.second])];
+  return panes.some((pane) => pane.id === paneId) ? paneId : primaryPaneId(split);
 }
 
 interface HostEntry {
@@ -80,7 +87,17 @@ function commitReadyPlacements(): void {
         const tabId = chatTabId(sessionId);
         entry.host.claimTab(tabId, placementPaneId(latest, placement.paneId), placement.front);
         const saved = entry.host.readSplitView();
-        if (saved !== null && paneForTab(saved, tabId) === null) continue;
+        if (saved?.pairs !== undefined) {
+          // Inactive Drafts and occupied destinations are ordinary tabs, not
+          // failed claims waiting forever for a hidden per-pane stack. Only a
+          // still-focused foreground Draft should change ordinary selection.
+          if (
+            pairForTab(saved, tabId) === null &&
+            placement.front &&
+            placementPaneId(latest, placement.paneId) === saved.focusedPaneId
+          )
+            entry.host.activateTab?.(tabId);
+        } else if (saved !== null && paneForTab(saved, tabId) === null) continue;
         useProvisionalPaneLayoutStore.getState().remove(ownerId, sessionId);
         const chat = useChatSessionsStore.getState();
         if (chat.provisionalActive[ownerId] === sessionId) chat.setProvisionalActive(ownerId, null);

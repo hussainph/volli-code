@@ -175,6 +175,7 @@ import { useFileIndex } from "@renderer/hooks/use-file-index";
 import { delayUntil } from "@renderer/lib/boundary-timer";
 
 import { BrowserPreview } from "@renderer/components/browser/browser-preview";
+import { showBrowserTab } from "@renderer/components/browser/show-browser-tab";
 import { BrowserCardHostContext } from "@renderer/components/browser/browser-tab-card";
 import { BrowserTraceDialog } from "@renderer/components/browser/browser-trace-dialog";
 import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
@@ -335,16 +336,33 @@ export function ChatPlane({
     [projectId, sessionId],
   );
   const cardHost = browser?.cardHost ?? null;
-  const tracedCardHost = React.useMemo(
-    () => (cardHost === null ? null : { ...cardHost, openTrace: setTraceRequest }),
+  const revealBrowserTab = React.useCallback(
+    async (tabId: string) => {
+      if (cardHost !== null) await showBrowserTab(cardHost.api, tabId);
+    },
     [cardHost],
+  );
+  const openBrowserBeside = React.useCallback(
+    async (tabId: string) => {
+      if (cardHost !== null) await showBrowserTab(cardHost.api, tabId, "beside-owner");
+    },
+    [cardHost],
+  );
+  const tracedCardHost = React.useMemo(
+    () =>
+      cardHost === null
+        ? null
+        : { ...cardHost, openTrace: setTraceRequest, openBeside: openBrowserBeside },
+    [cardHost, openBrowserBeside],
   );
   const island = useActivityIsland(sessionId, projectId, {
     ...(store === undefined ? {} : { store }),
     ...(shellsApi === undefined ? {} : { openShellOutput: setOpenShellId }),
     peekSession: setPeekedAgentId,
     ...(onOpenSession === undefined ? {} : { openSession: onOpenSession }),
-    ...(browser === null ? {} : { openTrace: setTraceRequest }),
+    ...(browser === null
+      ? {}
+      : { openTrace: setTraceRequest, openBrowserBeside: revealBrowserTab }),
   });
   // The peeked child as the island models it; a child that left the listing
   // while peeked closes the overlay with it.

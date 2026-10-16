@@ -12,6 +12,8 @@ import { splitFirstChildStyle, type SplitViewGridProps } from "./split-view-grid
 
 interface SplitViewTabBarProps {
   view: ResolvedSplitView;
+  /** One strip for the whole area's ordinary tabs and grouped pairs. */
+  tabs?: { ids: readonly string[]; activeTabId: string };
   /** Only the last strip carries the surface-wide actions. */
   renderStrip(pane: ResolvedSplitViewPane, last: boolean): React.ReactNode;
   onResizeSplit: SplitViewGridProps["onResizeSplit"];
@@ -36,7 +38,24 @@ interface SplitViewTabBarProps {
  * the two halves disagree — clicking a pane's tabs would move focus (the
  * activation does that) while clicking the space beside them would not.
  */
-export function SplitViewTabBar({ railWidth = 0, ...props }: SplitViewTabBarProps) {
+export function SplitViewTabBar({ railWidth = 0, tabs, ...props }: SplitViewTabBarProps) {
+  if (tabs !== undefined) {
+    return (
+      <div data-slot="split-view-tab-bar" className="flex min-w-0 shrink-0 flex-col bg-rail">
+        {props.renderStrip(
+          {
+            kind: "pane",
+            id: "root",
+            tabIds: tabs.ids,
+            activeTabId: tabs.activeTabId,
+            index: 0,
+            isPrimary: true,
+          },
+          true,
+        )}
+      </div>
+    );
+  }
   return (
     <div
       data-slot="split-view-tab-bar"

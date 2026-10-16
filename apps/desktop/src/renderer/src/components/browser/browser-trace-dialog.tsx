@@ -31,6 +31,8 @@
 import * as React from "react";
 import { CaretLeftIcon } from "@phosphor-icons/react/dist/csr/CaretLeft";
 import { CaretRightIcon } from "@phosphor-icons/react/dist/csr/CaretRight";
+import { FilmStripIcon } from "@phosphor-icons/react/dist/csr/FilmStrip";
+import { CursorClickIcon } from "@phosphor-icons/react/dist/csr/CursorClick";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 
 import {
@@ -211,7 +213,8 @@ function TraceReplay({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Tall enough that the content's close button (top-4 right-4) lands in it. */}
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border pr-12 pl-4">
-        <DialogTitle className="min-w-0 truncate text-ui font-medium">Browser replay</DialogTitle>
+        <FilmStripIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <DialogTitle className="min-w-0 truncate text-ui font-semibold">Browser replay</DialogTitle>
         {timeline.length > 0 ? (
           <span className="shrink-0 text-ui text-muted-foreground tabular-nums" data-trace-position>
             Step {at + 1} of {timeline.length}
@@ -223,10 +226,17 @@ function TraceReplay({
         <div className="m-4 flex-1 animate-pulse rounded-md bg-muted/50" aria-hidden />
       ) : current === null || facts === null ? (
         <div
-          className="flex flex-1 items-center justify-center text-ui text-muted-foreground"
+          className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center text-ui text-muted-foreground"
           data-trace-empty
         >
-          Nothing recorded for this Session
+          <div className="relative flex size-16 items-center justify-center rounded-container border border-border bg-card shadow-raised">
+            <FilmStripIcon aria-hidden className="size-8" />
+            <CursorClickIcon
+              aria-hidden
+              className="absolute -right-2 -bottom-2 size-6 text-primary-text"
+            />
+          </div>
+          <span className="font-medium text-foreground">Nothing recorded for this Session</span>
         </div>
       ) : (
         <>
@@ -251,12 +261,12 @@ function TraceReplay({
                   <span className="truncate font-mono">{facts.trouble}</span>
                 </span>
               )}
-              <span className="ml-auto shrink-0 text-muted-foreground tabular-nums">
+              <span className="ml-auto shrink-0 font-mono text-muted-foreground tabular-nums">
                 <time dateTime={new Date(current.step.at).toISOString()}>{facts.time}</time>
                 {` · ${facts.offset}`}
               </span>
             </div>
-            <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 text-muted-foreground">
               <BrowserTabMark driven />
               {facts.tab === null ? null : <span className="shrink-0">{facts.tab}</span>}
               {facts.title === null ? null : (
@@ -342,7 +352,7 @@ function Frame({
         />
       )}
       {shown?.asOf == null || drawn === null ? null : (
-        <span className="absolute top-5 left-5 rounded-sm bg-background/80 px-1.5 py-0.5 text-label text-muted-foreground">
+        <span className="absolute top-5 left-5 rounded-control border border-border bg-background px-2 py-1 text-ui text-muted-foreground shadow-raised">
           As of step {shown.asOf}
         </span>
       )}
@@ -382,7 +392,7 @@ function ScrubTrack({
       aria-valuetext={`Step ${index + 1} of ${timeline.length}: ${label}`}
       data-trace-scrub=""
       className={cn(
-        "flex h-6 min-w-0 flex-1 cursor-pointer touch-none items-center rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+        "flex h-6 min-w-0 flex-1 cursor-default touch-none items-center rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
         timeline.length <= 120 && "gap-px",
       )}
       onPointerDown={(event) => {
@@ -401,7 +411,7 @@ function ScrubTrack({
             position === index
               ? "h-4 bg-primary"
               : frame.step.outcome === "ok" && frame.step.error === null
-                ? "h-2 bg-muted-foreground/35"
+                ? "h-2 bg-muted-foreground/30"
                 : "h-2 bg-destructive/70",
           )}
         />

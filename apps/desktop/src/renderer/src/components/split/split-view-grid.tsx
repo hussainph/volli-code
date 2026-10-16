@@ -38,6 +38,8 @@ import { cn } from "@renderer/lib/utils";
  */
 export interface SplitViewGridProps {
   view: ResolvedSplitView;
+  /** Browser chrome stays resident while the selected pair changes. */
+  retainedTabIds?: readonly string[];
   /** A lower pane's tab strip, or null when it holds no tabs. */
   renderStrip(pane: ResolvedSplitViewPane): React.ReactNode;
   /** What the pane's front tab draws — or its empty-pane menu. */
@@ -77,7 +79,21 @@ export function SplitViewGrid({
   renderOverlay,
   onFocusPane,
   onResizeSplit,
+  retainedTabIds,
 }: SplitViewGridProps) {
+  if (retainedTabIds !== undefined) {
+    return (
+      <PairPlane
+        view={view}
+        retainedTabIds={retainedTabIds}
+        renderStrip={renderStrip}
+        renderContent={renderContent}
+        renderOverlay={renderOverlay}
+        onFocusPane={onFocusPane}
+        onResizeSplit={onResizeSplit}
+      />
+    );
+  }
   return (
     <SplitViewNodeView
       node={view.root}
@@ -168,6 +184,99 @@ function SplitViewCell({
         {renderContent(pane)}
         {renderOverlay?.(pane)}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Pair members are siblings keyed by tab identity, not children of a layout
+ * branch. Changing geometry therefore never recreates a BrowserPane controller.
+ * Terminals keep using their resident viewport anchors.
+ */
+const NO_RETAINED_TABS: readonly string[] = [];
+
+function PairPlane({
+  view,
+  retainedTabIds = NO_RETAINED_TABS,
+  renderContent,
+  renderOverlay,
+  onFocusPane,
+  onResizeSplit,
+}: SplitViewGridProps) {
+  const branch = view.root.kind === "split" ? view.root : null;
+  const row = branch?.direction !== "column";
+  const tracks =
+    branch === null
+      ? "minmax(0, 1fr)"
+      : `minmax(0, ${branch.ratio}fr) 6px minmax(0, ${1 - branch.ratio}fr)`;
+  const entries = new Map<string, ResolvedSplitViewPane>();
+  for (const tabId of retainedTabIds) {
+    entries.set(tabId, {
+      kind: "pane",
+      id: `retained:${tabId}`,
+      tabIds: [tabId],
+      activeTabId: tabId,
+      index: -1,
+      isPrimary: false,
+    });
+  }
+  for (const pane of view.panes) entries.set(pane.activeTabId ?? `empty:${pane.id}`, pane);
+  return (
+    <div
+      data-slot="pair-plane"
+      className="relative grid min-h-0 min-w-0 flex-1 overflow-hidden"
+      style={row ? { gridTemplateColumns: tracks } : { gridTemplateRows: tracks }}
+    >
+      {[...entries]
+        .toSorted(([, left], [, right]) => {
+          const a = view.panes.indexOf(left);
+          const b = view.panes.indexOf(right);
+          return (a < 0 ? Number.MAX_SAFE_INTEGER : a) - (b < 0 ? Number.MAX_SAFE_INTEGER : b);
+        })
+        .map(([key, pane]) => {
+          const index = view.panes.indexOf(pane);
+          const shown = index !== -1;
+          const split = branch !== null;
+          return (
+            <div
+              key={key}
+              data-slot="split-view-pane"
+              data-pane-id={shown ? pane.id : undefined}
+              data-focused={shown && split && pane.id === view.focusedPaneId ? "true" : undefined}
+              aria-label={shown && split ? paneCellLabel(pane, view.panes.length) : undefined}
+              aria-hidden={!shown || undefined}
+              onPointerDownCapture={() => {
+                if (shown) onFocusPane(pane.id);
+              }}
+              style={{
+                display: shown ? undefined : "none",
+                ...(row
+                  ? { gridColumn: index * 2 + 1, gridRow: 1 }
+                  : { gridRow: index * 2 + 1, gridColumn: 1 }),
+              }}
+              className={cn(
+                "relative flex min-h-0 min-w-0 flex-col overflow-hidden",
+                shown &&
+                  split &&
+                  (pane.id === view.focusedPaneId
+                    ? "ring-1 ring-primary/50 ring-inset"
+                    : "ring-1 ring-border/50 ring-inset"),
+              )}
+            >
+              {renderContent(pane)}
+              {shown ? renderOverlay?.(pane) : null}
+            </div>
+          );
+        })}
+      {branch === null ? null : (
+        <SplitViewDivider
+          key="pair-divider"
+          direction={branch.direction}
+          ratio={branch.ratio}
+          style={row ? { gridColumn: 2, gridRow: 1 } : { gridRow: 2, gridColumn: 1 }}
+          onChange={(ratio) => onResizeSplit(branch.id, ratio)}
+        />
+      )}
     </div>
   );
 }

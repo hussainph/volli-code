@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  groupedSplitView,
+  pairTabs,
+  pairForTab,
+  projectSplitView,
+  unpairTab,
   activateTab,
   activeTabInSplitView,
   claimTabInPane,
@@ -756,9 +761,11 @@ describe("sanitizeSplitView", () => {
   };
 
   it("restores a tree it can draw", () => {
-    expect(sanitizeSplitView(stored)).toEqual(
-      view(branch("s1", "row", pane("p1", ["a", "b"], "b"), pane("p2", ["c"]), 0.4), "p2"),
-    );
+    expect(sanitizeSplitView(stored)).toEqual({
+      ...view(branch("s1", "row", pane("p1", ["b"]), pane("p2", ["c"]), 0.4), "p2"),
+      pairs: [branch("s1", "row", pane("p1", ["b"]), pane("p2", ["c"]), 0.4)],
+      selectedTabId: "c",
+    });
   });
 
   it("degrades anything that is not a split-view object", () => {
@@ -799,58 +806,23 @@ describe("sanitizeSplitView", () => {
     ).toBeNull();
   });
 
-  it("keeps a tab id in one pane only, first mention winning", () => {
-    const restored = sanitizeSplitView({
-      ...stored,
-      root: { ...stored.root, second: { kind: "pane", id: "p2", tabIds: ["b", "c"] } },
-    });
-
-    expect(restored?.root.kind === "split" && restored.root.second).toEqual(
-      pane("p2", ["c"], null),
-    );
+  it("degrades legacy empty/invalid front tabs rather than claiming other tabs", () => {
+    for (const second of [
+      pane("p2", ["b", "c"], null),
+      pane("p2", [], null),
+      pane("p2", ["c"], "a"),
+    ]) {
+      expect(sanitizeSplitView({ ...stored, root: { ...stored.root, second } })).toBeNull();
+    }
   });
 
-  it("drops tab ids that are not usable ids, and a list that is not one", () => {
+  it("retains unhydrated front identities but releases background tabs", () => {
     const restored = sanitizeSplitView({
       ...stored,
-      root: {
-        ...stored.root,
-        first: { kind: "pane", id: "p1", tabIds: ["a", 7, "", null, "b"], activeTabId: "a" },
-        second: { kind: "pane", id: "p2", tabIds: "nonsense", activeTabId: "c" },
-      },
+      root: { ...stored.root, second: pane("p2", ["chat:late"], "chat:late") },
     });
-
-    expect(restored?.root.kind === "split" && restored.root.first).toEqual(pane("p1", ["a", "b"]));
-    expect(restored?.root.kind === "split" && restored.root.second).toEqual(pane("p2", [], null));
-  });
-
-  it("never prunes a tab id merely because nothing on screen answers to it", () => {
-    // The tolerant read, stated once more: a Session that has not hydrated
-    // looks exactly like a Session that is gone.
-    const restored = sanitizeSplitView({
-      ...stored,
-      root: {
-        ...stored.root,
-        second: { kind: "pane", id: "p2", tabIds: ["chat:not-hydrated-yet"], activeTabId: null },
-      },
-    });
-
-    expect(restored?.root.kind === "split" && restored.root.second).toEqual(
-      pane("p2", ["chat:not-hydrated-yet"], null),
-    );
-  });
-
-  it("drops a front tab its own pane does not hold", () => {
-    // Internal consistency is shape, so this one IS checked — and costs
-    // nothing, since `resolveSplitView` fronts the pane's first live tab.
-    const restored = sanitizeSplitView({
-      ...stored,
-      root: { ...stored.root, second: { kind: "pane", id: "p2", tabIds: ["c"], activeTabId: "a" } },
-    });
-
-    expect(restored?.root.kind === "split" && restored.root.second).toEqual(
-      pane("p2", ["c"], null),
-    );
+    expect(pairForTab(restored, "chat:late")).not.toBeNull();
+    expect(pairForTab(restored, "a")).toBeNull();
   });
 
   it("clamps a stored ratio, and replaces one that is not a number", () => {
@@ -871,12 +843,12 @@ describe("sanitizeSplitView", () => {
   });
 
   it("refuses a tree deeper than a person could have arranged", () => {
-    expect(sanitizeSplitView(nest(5))).not.toBeNull();
+    expect(sanitizeSplitView(nest(5))).toBeNull(); // Valid legacy shape, but no front tabs to pair.
     expect(sanitizeSplitView(nest(6))).toBeNull();
   });
 
   it("refuses a tree with more panes than a surface could show", () => {
-    expect(sanitizeSplitView(balanced(3))).not.toBeNull(); // 8 panes
+    expect(sanitizeSplitView(balanced(3))).toBeNull(); // 8 panes
     expect(sanitizeSplitView(balanced(4))).toBeNull(); // 16
   });
 
@@ -888,12 +860,7 @@ describe("sanitizeSplitView", () => {
         "focusedPaneId":"__proto__"}`,
     ) as unknown;
 
-    expect(sanitizeSplitView(hostile)).toEqual(
-      view(
-        branch("s1", "row", pane("p1", ["__proto__"], "__proto__"), pane("__proto__", [], null)),
-        "__proto__",
-      ),
-    );
+    expect(sanitizeSplitView(hostile)).toBeNull();
     expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
   });
 
@@ -1031,4 +998,476 @@ describe("resolveSplitView", () => {
 
     expect(JSON.stringify(state)).toBe(before);
   });
+});
+
+describe("grouped tab pairs", () => {
+  const make = () =>
+    pairTabs(
+      groupedSplitView(["board", "a", "b", "c", "d"], "a"),
+      "a",
+      "b",
+      "right",
+      minter(),
+      "root",
+    );
+  const live = ["board", "a", "b", "c", "d"];
+
+  it("selects unrelated tabs full width and restores the exact pair and ratio", () => {
+    const pair = make();
+    const sized = setSplitRatio(pair, pair.root.id, 0.35);
+    const away = activateTab(sized, "c");
+    expect(away.root.kind).toBe("pane");
+    expect(isSinglePane(away)).toBe(false); // Hidden pair is still persisted.
+    expect(projectSplitView(away, live, "c", "board").panes.map((p) => p.activeTabId)).toEqual([
+      "c",
+    ]);
+    const back = activateTab(away, "a");
+    expect(back.root).toBe(sized.root);
+    expect(pairForTab(back, "b")).toBe(pairForTab(sized, "a"));
+    expect(activateTab(back, "a")).toBe(back);
+    expect(activateTab(away, "c")).toBe(away);
+  });
+
+  it("keeps multiple independent pairs and releases old partners on explicit re-pairing", () => {
+    const mint = minter();
+    let state = pairTabs(groupedSplitView([], "a"), "a", "b", "right", mint, "root");
+    state = pairTabs(state, "c", "d", "down", mint);
+    expect(state.pairs).toHaveLength(2);
+    expect(state.root.kind === "split" && state.root.direction).toBe("column");
+    state = pairTabs(state, "a", "d", "right", mint);
+    expect(state.pairs).toHaveLength(1);
+    expect(pairForTab(state, "b")).toBeNull();
+    expect(pairForTab(state, "c")).toBeNull();
+    expect(pairTabs(state, "a", "a", "right", mint)).toBe(state);
+    expect(pairTabs(state, "", "b", "right", mint)).toBe(state);
+    expect(pairTabs(state, "a", "", "right", mint)).toBe(state);
+    expect(pairTabs(state, "a", "d", "right", mint)).toBe(state);
+  });
+
+  it("uses the first two legacy fronts only; all background and later-pane tabs are ordinary", () => {
+    const old = view(
+      branch(
+        "s",
+        "column",
+        branch("nested", "row", pane("p1", ["bg", "a"], "a"), pane("p2", ["b", "bg2"], "b")),
+        pane("p3", ["c"]),
+      ),
+      "p3",
+    );
+    const state = sanitizeSplitView(JSON.parse(JSON.stringify(old)))!;
+    expect(state.pairs).toHaveLength(1);
+    expect(state.selectedTabId).toBe("c");
+    expect(state.root.kind).toBe("pane");
+    for (const id of ["bg", "bg2", "c"]) expect(pairForTab(state, id)).toBeNull();
+    expect(
+      projectSplitView(state, ["board", "bg", "a", "b", "bg2", "c"], "a", "board").panes.map(
+        (p) => p.activeTabId,
+      ),
+    ).toEqual(["a", "b"]);
+  });
+
+  it("fills only an explicitly empty partner and then never absorbs other selections", () => {
+    const mint = minter();
+    const empty = splitPane(groupedSplitView(live, "a"), "root", "down", {}, mint);
+    expect(activeTabInSplitView(empty)).toBeNull();
+    const filled = activateTab(empty, "b");
+    expect(filled.pairs![0]!.second.activeTabId).toBe("b");
+    expect(activateTab(filled, "c").root.kind).toBe("pane");
+    expect(pairForTab(activateTab(filled, "c"), "b")).not.toBeNull();
+    expect(splitPane(filled, "root", "right", { tabId: "c" }, mint)).toBe(filled);
+    expect(splitPane(filled, "gone", "right", {}, mint)).toBe(filled);
+    expect(splitPane(groupedSplitView([], null), "root", "right", {}, mint).root.kind).toBe("pane");
+  });
+
+  it("allows Board/Body as either member, without forcing them primary", () => {
+    const state = pairTabs(groupedSplitView([], "a"), "a", "board", "right", minter());
+    const resolved = resolveSplitView(state, ["a"], "board");
+    expect(resolved.panes.map((p) => p.activeTabId)).toEqual(["a", "board"]);
+    expect(resolved.activeTabId).toBe("board");
+    expect(focusAdjacentPane(state, "left").selectedTabId).toBe("a");
+    expect(focusAdjacentPane(state, "right")).toBe(state);
+    expect(focusPane(state, "gone")).toBe(state);
+  });
+
+  it("unpairs on close of either member, including a background pair", () => {
+    const state = make();
+    expect(removeTab(state, "b").selectedTabId).toBe("a");
+    expect(removeTab(state, "a").selectedTabId).toBe("b");
+    expect(removeTab(state, "missing")).toBe(state);
+    const away = activateTab(state, "c");
+    expect(removeTab(away, "b").selectedTabId).toBe("c");
+    expect(removeTab(away, "c").selectedTabId).toBeNull();
+    expect(unpairTab(state, "missing")).toBe(state);
+    expect(closePane(state, "root").pairs).toHaveLength(0);
+    expect(closePane(state, "m1").selectedTabId).toBe("a");
+    expect(closePane(state, "gone")).toBe(state);
+  });
+
+  it("focuses empty menus, refuses third members and can explicitly fill the menu by move", () => {
+    const empty = splitPane(groupedSplitView(live, "a"), "root", "right", {}, minter());
+    const first = focusPane(empty, "root");
+    expect(focusPane(first, "m1").focusedPaneId).toBe("m1");
+    const filled = moveTabToPane(first, "b", "m1");
+    expect(filled.selectedTabId).toBe("b");
+    expect(moveTabToPane(filled, "c", "m1")).toBe(filled);
+    expect(moveTabToPane(filled, "b", "m1")).toBe(filled);
+    expect(moveTabToPane(filled, "c", "gone")).toBe(filled);
+    expect(reorderPaneTabs(filled, "root", ["c"])).toBe(filled);
+    expect(setSplitRatio(filled, "gone", 0.3)).toBe(filled);
+    expect(setSplitRatio(filled, filled.root.id, 0.5)).toBe(filled);
+  });
+
+  it("keeps background draft claims from stealing focus or introducing hidden pane stacks", () => {
+    const state = splitPane(groupedSplitView(live, "a"), "root", "right", {}, minter());
+    expect(claimTabInPane(state, "b", "m1", false)).toBe(state);
+    expect(claimTabInPane(state, "a", "m1", true)).toBe(state);
+    expect(claimTabInPane(state, "b", "gone", true)).toBe(state);
+    expect(claimTabInPane(state, "b", "m1", true).selectedTabId).toBe("b");
+    const unfocused = focusPane(state, "root");
+    const claimed = claimTabInPane(unfocused, "b", "m1", true);
+    expect(claimed.selectedTabId).toBe("a");
+    expect(claimed.focusedPaneId).toBe("root");
+    expect(claimed.pairs![0]!.second.activeTabId).toBe("b");
+  });
+
+  it("follows renamed members and absorbs existing destinations", () => {
+    const state = make();
+    expect(renamedTabInSplitView(state, "missing", "z")).toBe(state);
+    const renamed = renamedTabInSplitView(state, "b", "z");
+    expect(renamed.selectedTabId).toBe("z");
+    expect(pairForTab(renamed, "z")?.second.tabIds).toEqual(["z"]);
+    const background = renamedTabInSplitView(activateTab(state, "c"), "a", "z");
+    expect(background.selectedTabId).toBe("c");
+    const absorbed = renamedTabInSplitView(state, "a", "b");
+    expect(absorbed.pairs).toHaveLength(0);
+  });
+
+  it("tolerates missing live members without destroying saved membership", () => {
+    const state = make();
+    expect(projectSplitView(state, ["a"], "a", "board").panes.map((p) => p.activeTabId)).toEqual([
+      "a",
+    ]);
+    expect(projectSplitView(state, [], "b", "board").activeTabId).toBe("board");
+    expect(projectSplitView(null, [], null, "board").activeTabId).toBe("board");
+    expect(projectSplitView(twoPanes(), ["a", "c"], "a", "board").panes).toHaveLength(2);
+    expect(state.pairs).toHaveLength(1);
+  });
+
+  it("round-trips multiple pairs, ordinary selections and empty partner focus through JSON", () => {
+    const mint = minter();
+    let state = pairTabs(groupedSplitView([], "a"), "a", "b", "right", mint);
+    state = pairTabs(state, "c", null, "down", mint);
+    expect(sanitizeSplitView(JSON.parse(JSON.stringify(state)))).toEqual(state);
+    const away = activateTab(focusPane(state, state.pairs![1]!.first.id), "d");
+    expect(sanitizeSplitView(JSON.parse(JSON.stringify(away)))).toEqual(away);
+    expect(sanitizeSplitView({ pairs: [] })).toBeNull();
+    expect(sanitizeSplitView({ pairs: "wrong" })).toBeNull();
+    expect(
+      sanitizeSplitView({ pairs: [state.pairs![0], state.pairs![0]], selectedTabId: "a" })?.pairs,
+    ).toHaveLength(1);
+    expect(
+      sanitizeSplitView({
+        pairs: [null, pane("p"), branch("s", "row", pane("x", []), pane("y", []))],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("grouped tolerant-read edges", () => {
+  it("preserves other pairs during resize, rename, fill, and background unpair", () => {
+    const mint = minter();
+    let state = pairTabs(singlePaneSplitView([], "a"), "a", "b", "right", mint, "root");
+    state = pairTabs(state, "c", null, "down", mint, "root");
+    expect(state.pairs![1]!.first.id).not.toBe("root");
+    const first = state.pairs![0]!;
+    const pending = state.pairs![1]!;
+    expect(pairTabs(state, "c", null, "down", mint)).toBe(state);
+    const filled = activateTab(state, "d");
+    expect(filled.pairs![0]).toBe(first);
+    expect(setSplitRatio(filled, first.id, 0.3).pairs![1]).toBe(filled.pairs![1]);
+    expect(renamedTabInSplitView(filled, "a", "z").pairs![1]).toBe(filled.pairs![1]);
+    expect(closePane(filled, first.first.id).selectedTabId).toBe("d");
+    expect(moveTabToPane(filled, "z", first.first.id)).toBe(filled);
+    expect(moveTabToPane(filled, "a", first.first.id).selectedTabId).toBe("a");
+    expect(pairTabs(filled, "b", "a", "right", mint).pairs).toHaveLength(2);
+    const absentSelected = { ...state, selectedTabId: undefined };
+    expect(claimTabInPane(absentSelected, "d", pending.second.id, true).selectedTabId).toBe("d");
+    const background = { ...focusPane(state, first.first.id), selectedTabId: undefined };
+    expect(claimTabInPane(background, "d", pending.second.id, true).selectedTabId).toBeNull();
+    expect(closePane(absentSelected, first.first.id).selectedTabId).toBeNull();
+    expect(unpairTab(absentSelected, "a").selectedTabId).toBeNull();
+    expect(setSplitRatio(absentSelected, first.id, 0.3).selectedTabId).toBeNull();
+    expect(renamedTabInSplitView(absentSelected, "a", "z").selectedTabId).toBeNull();
+    expect(closePane(state, pending.first.id).selectedTabId).toBeNull();
+    expect(closePane(filled, pending.first.id).selectedTabId).toBe("d");
+  });
+
+  it("falls back from empty legacy focused panes and malformed additive fields", () => {
+    const old = view(
+      branch("s", "row", branch("n", "row", pane("a", ["a"]), pane("b", ["b"])), pane("empty")),
+      "empty",
+    );
+    expect(sanitizeSplitView(old)?.selectedTabId).toBe("a");
+    const valid = branch("s", "row", pane("a", ["a"]), pane("b", ["b"]));
+    expect(sanitizeSplitView({ pairs: [valid] })?.selectedTabId).toBe("a");
+    expect(sanitizeSplitView({ pairs: [valid], selectedTabId: null })?.selectedTabId).toBeNull();
+    expect(
+      sanitizeSplitView({ pairs: [{ ...valid, first: { ...valid.first, tabIds: "bad" } }] })
+        ?.pairs?.[0]?.first.activeTabId,
+    ).toBeNull();
+    const invalid = [
+      { ...valid, first: pane("a", ["a"], null) },
+      { ...valid, first: pane("a", ["a", "extra"]) },
+      { ...valid, second: pane("b", ["b", "extra"]) },
+      { ...valid, second: pane("b", ["b"], null) },
+      { ...valid, first: branch("nested", "row", pane("p1"), pane("p2")) },
+      { ...valid, second: branch("nested", "row", pane("p1"), pane("p2")) },
+    ];
+    for (const pair of invalid) expect(sanitizeSplitView({ pairs: [pair] })).toBeNull();
+    const duplicateTab = branch("other", "row", pane("p3", ["a"]), pane("p4", ["other"]));
+    expect(sanitizeSplitView({ pairs: [valid, duplicateTab] })?.pairs).toHaveLength(1);
+  });
+});
+
+// Frozen pre-pair persisted-state codec, copied from the shipping implementation.
+// Keep this independent of the new sanitizer: an old reader must ignore additive
+// metadata, recover all tabs from the live strip, and never see a new node kind.
+function canary7CollectPanes(node: SplitViewNode, out: SplitViewPane[]): void {
+  if (node.kind === "pane") {
+    out.push(node);
+    return;
+  }
+  canary7CollectPanes(node.first, out);
+  canary7CollectPanes(node.second, out);
+}
+function canary7ReadSplitView(raw: unknown): SplitViewState | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const { root, focusedPaneId } = raw as { root?: unknown; focusedPaneId?: unknown };
+  const node = canary7SanitizeNode(root, new Set<string>(), new Set<string>(), 1);
+  if (node === null || node.kind === "pane") return null;
+  const panes: SplitViewPane[] = [];
+  canary7CollectPanes(node, panes);
+  if (panes.length > 8) return null;
+  const focused = panes.find((leaf) => leaf.id === focusedPaneId);
+  return { root: node, focusedPaneId: focused?.id ?? panes[0]!.id };
+}
+
+function canary7SanitizeNode(
+  raw: unknown,
+  nodeIds: Set<string>,
+  tabIds: Set<string>,
+  depth: number,
+): SplitViewNode | null {
+  if (depth > 6) return null;
+  if (typeof raw !== "object" || raw === null) return null;
+  const record = raw as {
+    kind?: unknown;
+    id?: unknown;
+    tabIds?: unknown;
+    activeTabId?: unknown;
+    direction?: unknown;
+    ratio?: unknown;
+    first?: unknown;
+    second?: unknown;
+  };
+  // A repeated id is unaddressable — focus, resize and every drop name nodes by
+  // id, so two nodes answering to one name is a tree we cannot operate on.
+  if (typeof record.id !== "string" || record.id.length === 0 || nodeIds.has(record.id)) {
+    return null;
+  }
+  nodeIds.add(record.id);
+  if (record.kind === "pane") {
+    const claimed: string[] = [];
+    for (const tabId of Array.isArray(record.tabIds) ? record.tabIds : []) {
+      if (typeof tabId !== "string" || tabId.length === 0 || tabIds.has(tabId)) continue;
+      tabIds.add(tabId);
+      claimed.push(tabId);
+    }
+    const active = record.activeTabId;
+    return {
+      kind: "pane",
+      id: record.id,
+      tabIds: claimed,
+      activeTabId: typeof active === "string" && claimed.includes(active) ? active : null,
+    };
+  }
+  if (record.kind !== "split") return null;
+  if (record.direction !== "row" && record.direction !== "column") return null;
+  const first = canary7SanitizeNode(record.first, nodeIds, tabIds, depth + 1);
+  if (first === null) return null;
+  const second = canary7SanitizeNode(record.second, nodeIds, tabIds, depth + 1);
+  if (second === null) return null;
+  return {
+    kind: "split",
+    id: record.id,
+    direction: record.direction,
+    ratio:
+      typeof record.ratio === "number" && Number.isFinite(record.ratio)
+        ? Math.min(0.85, Math.max(0.15, record.ratio))
+        : 0.5,
+    first,
+    second,
+  };
+}
+
+describe("N−1 persisted split compatibility", () => {
+  it("the frozen old codec opens a selected pair and recovers every other live tab", () => {
+    const mint = minter();
+    let state = pairTabs(groupedSplitView([], "a"), "a", "b", "right", mint);
+    state = pairTabs(state, "c", "board", "down", mint);
+    const readByOldBuild = canary7ReadSplitView(JSON.parse(JSON.stringify(state)))!;
+    expect(readByOldBuild).not.toHaveProperty("pairs");
+    const oldProjection = resolveSplitView(
+      readByOldBuild,
+      ["board", "a", "b", "c", "ordinary"],
+      "board",
+    );
+    expect(oldProjection.panes.flatMap((leaf) => leaf.tabIds).toSorted()).toEqual([
+      "a",
+      "b",
+      "board",
+      "c",
+      "ordinary",
+    ]);
+    expect(oldProjection.root.kind).toBe("split");
+  });
+
+  it("the frozen old codec degrades a full-width ordinary selection to no split", () => {
+    const state = activateTab(
+      pairTabs(groupedSplitView([], "a"), "a", "b", "right", minter()),
+      "ordinary",
+    );
+    expect(canary7ReadSplitView(JSON.parse(JSON.stringify(state)))).toBeNull();
+    const restored = sanitizeSplitView(JSON.parse(JSON.stringify(state)))!;
+    expect(pairForTab(restored, "a")).not.toBeNull();
+    expect(restored.selectedTabId).toBe("ordinary");
+  });
+});
+
+describe("renderer-local paired Draft projections", () => {
+  it("honors root overlays without persisting Draft IDs into membership", () => {
+    const state = splitPane(groupedSplitView(["a"], "a"), "root", "right", {}, minter());
+    const root = state.root as SplitViewBranch;
+    const overlay = {
+      ...state,
+      root: { ...root, second: pane("m1", ["chat:draft"], "chat:draft") },
+    };
+    expect(
+      resolveSplitView(overlay, ["a", "chat:draft"], "board").panes.map((leaf) => leaf.activeTabId),
+    ).toEqual(["a", "chat:draft"]);
+    expect(
+      projectSplitView(overlay, ["a", "chat:draft"], "chat:draft", "board").panes.map(
+        (leaf) => leaf.activeTabId,
+      ),
+    ).toEqual(["a", "chat:draft"]);
+    expect(
+      projectSplitView(overlay, ["a", "chat:draft", "other"], "other", "board").panes.map(
+        (leaf) => leaf.activeTabId,
+      ),
+    ).toEqual(["other"]);
+    expect(state.pairs![0]!.second.activeTabId).toBeNull();
+  });
+});
+
+describe("ordinary Draft selection beside saved pairs", () => {
+  it.each(["first", "second"] as const)(
+    "does not replace the occupied %s member with an unrelated empty Draft",
+    (side) => {
+      const state = pairTabs(groupedSplitView([], "a"), "a", "b", "right", minter());
+      const root = state.root as SplitViewBranch;
+      const overlay = {
+        ...state,
+        root: { ...root, [side]: pane(`${side}-local`, ["chat:draft"], "chat:draft") },
+      };
+      expect(
+        projectSplitView(overlay, ["a", "b", "chat:draft"], "chat:draft", "board").panes.map(
+          (leaf) => leaf.activeTabId,
+        ),
+      ).toEqual(["chat:draft"]);
+      expect(
+        projectSplitView(overlay, ["a", "b", "chat:draft"], "a", "board").panes.map(
+          (leaf) => leaf.activeTabId,
+        ),
+      ).toEqual(["a", "b"]);
+      expect(state.pairs![0]!.second.activeTabId).toBe("b");
+    },
+  );
+});
+
+describe.each(["first", "second"] as const)("pending %s pair member", (side) => {
+  const make = (mint = minter()) =>
+    pairTabs(
+      groupedSplitView([], "ordinary"),
+      side === "first" ? null : "browser:b",
+      side === "second" ? null : "browser:b",
+      "right",
+      mint,
+    );
+  it("round-trips, focuses and fills either placeholder without changing the real member", () => {
+    const state = make();
+    const pair = state.pairs![0]!;
+    expect(state.focusedPaneId).toBe(pair[side].id);
+    expect(state.selectedTabId).toBe("browser:b");
+    expect(
+      pairTabs(state, pair.first.activeTabId, pair.second.activeTabId, "right", minter()),
+    ).toBe(state);
+    expect(sanitizeSplitView(JSON.parse(JSON.stringify(state)))).toEqual(state);
+    expect(sanitizeSplitView({ pairs: [pair] })?.selectedTabId).toBe("browser:b");
+    expect(resolveSplitView(state, ["browser:b"], "board").panes.map((p) => p.activeTabId)).toEqual(
+      [pair.first.activeTabId, pair.second.activeTabId],
+    );
+    const owner = side === "first" ? pair.second : pair.first;
+    const away = focusPane(state, owner.id);
+    const back = focusPane(away, pair[side].id);
+    expect(back.focusedPaneId).toBe(pair[side].id);
+    expect(back.selectedTabId).toBe("browser:b");
+    for (const filled of [
+      activateTab(state, "chat:earned"),
+      moveTabToPane(state, "chat:earned", pair[side].id),
+      claimTabInPane(state, "chat:earned", pair[side].id, true),
+    ]) {
+      expect(filled.pairs![0]![side].activeTabId).toBe("chat:earned");
+      expect(filled.pairs![0]![side === "first" ? "second" : "first"]).toBe(owner);
+      expect(splitViewPanes(filled)).toHaveLength(2);
+    }
+    const hidden = activateTab(away, "ordinary");
+    const claimed = claimTabInPane(hidden, "chat:earned", pair[side].id, true);
+    expect(claimed.selectedTabId).toBe("ordinary");
+    expect(claimed.focusedPaneId).toBe("root");
+    expect(claimed.pairs![0]![side].activeTabId).toBe("chat:earned");
+    expect(closePane(state, pair[side].id).selectedTabId).toBe("browser:b");
+  });
+  it("projects a local passenger only in its empty slot, preserves ordering and waits for the live anchor", () => {
+    const state = make();
+    const pair = state.pairs![0]!;
+    const overlay = { ...state, root: { ...pair, [side]: pane(pair[side].id, ["chat:local"]) } };
+    expect(
+      projectSplitView(overlay, ["browser:b", "chat:local"], "chat:local", "board").panes.map(
+        (p) => p.activeTabId,
+      ),
+    ).toEqual(side === "first" ? ["chat:local", "browser:b"] : ["browser:b", "chat:local"]);
+    expect(
+      projectSplitView(overlay, ["chat:local"], "chat:local", "board").panes.map(
+        (p) => p.activeTabId,
+      ),
+    ).toEqual(["chat:local"]);
+    expect(state.pairs![0]![side].activeTabId).toBeNull();
+    const old = canary7ReadSplitView(JSON.parse(JSON.stringify(state)))!;
+    expect(old.root.kind).toBe("split");
+    expect(
+      resolveSplitView(old, ["board", "browser:b", "ordinary"], "board")
+        .panes.flatMap((p) => p.tabIds)
+        .toSorted(),
+    ).toEqual(["board", "browser:b", "ordinary"]);
+  });
+});
+
+it("keeps unrelated pending slots when pairing a new nullable member and rejects two empty members", () => {
+  const mint = minter();
+  const first = pairTabs(groupedSplitView([], "a"), null, "a", "right", mint);
+  const second = pairTabs(first, "b", null, "right", mint);
+  expect(second.pairs).toHaveLength(2);
+  expect(second.pairs![0]).toBe(first.pairs![0]);
+  expect(pairTabs(second, null, null, "right", mint)).toBe(second);
+  expect(pairTabs(first, null, "a", "down", mint).pairs![0]!.direction).toBe("column");
 });

@@ -43,11 +43,13 @@ import {
   type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
+  type DragMoveEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 
 import {
   isSplitZoneId,
+  parseSplitZoneId,
   splitDropAccepts,
   splitTabDropOperation,
   subscribeSplitDrag,
@@ -95,6 +97,9 @@ export interface SplitDndProps {
   /** A Session or file row dropped on a zone. */
   onNativeDrop(payload: SplitDragPayload, paneId: string, zone: SplitDropZone): void;
   children: React.ReactNode;
+  /** A tab released on another member's left/right edge forms a bounded pair. */
+  onPairTabs?(firstTabId: string, secondTabId: string): void;
+  onUnpairTab?(tabId: string): void;
 }
 
 /**
@@ -136,7 +141,41 @@ const splitCollision: CollisionDetection = (args) => {
   return inBand.length === 0 ? [] : closestCenter({ ...args, droppableContainers: inBand });
 };
 
-export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: SplitDndProps) {
+export function SplitDnd({
+  origin,
+  panes,
+  onTabDrop,
+  onNativeDrop,
+  onPairTabs,
+  onUnpairTab,
+  children,
+}: SplitDndProps) {
+  const areaRef = React.useRef<HTMLDivElement>(null);
+  const previewRef = React.useRef<HTMLElement | null>(null);
+  const clearPairPreview = React.useCallback(() => {
+    previewRef.current?.removeAttribute("data-pair-drop-edge");
+    previewRef.current = null;
+  }, []);
+  const pairDrop = React.useCallback(
+    (event: DragMoveEvent | DragEndEvent) => {
+      if (onPairTabs === undefined || !(event.activatorEvent instanceof MouseEvent)) return null;
+      const x = event.activatorEvent.clientX + event.delta.x;
+      const y = event.activatorEvent.clientY + event.delta.y;
+      const area = areaRef.current;
+      for (const target of area?.querySelectorAll<HTMLElement>("[data-pair-target-id]") ?? []) {
+        if (target.closest("[data-split-area]") !== area) continue;
+        const id = target.dataset.pairTargetId;
+        if (id === undefined || id === String(event.active.id)) continue;
+        const rect = target.getBoundingClientRect();
+        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+        const fraction = (x - rect.left) / rect.width;
+        if (fraction > 0.25 && fraction < 0.75) return null;
+        return { target, id, edge: fraction <= 0.25 ? "left" : "right" } as const;
+      }
+      return null;
+    },
+    [onPairTabs],
+  );
   const sensors = useSurfaceSensors();
   const reducedMotion = useReducedMotion();
   const [activeTabId, setActiveTabId] = React.useState<string | null>(null);
@@ -156,9 +195,28 @@ export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: S
   }, []);
 
   const handleDragEnd = React.useCallback(
-    ({ active, over }: DragEndEvent) => {
+    (event: DragEndEvent) => {
+      const { active, over } = event;
       setActiveTabId(null);
       setGhostLabel(null);
+      clearPairPreview();
+      const pair = pairDrop(event);
+      if (pair !== null && onPairTabs !== undefined) {
+        const moving = String(active.id);
+        onPairTabs(
+          pair.edge === "left" ? moving : pair.id,
+          pair.edge === "left" ? pair.id : moving,
+        );
+        return;
+      }
+      if (
+        over !== null &&
+        parseSplitZoneId(String(over.id))?.zone === "center" &&
+        onUnpairTab !== undefined
+      ) {
+        onUnpairTab(String(active.id));
+        return;
+      }
       const operation = splitTabDropOperation({
         activeId: String(active.id),
         overId: over === null ? null : String(over.id),
@@ -166,13 +224,14 @@ export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: S
       });
       if (operation !== null) onTabDrop(operation);
     },
-    [onTabDrop],
+    [onTabDrop, onPairTabs, onUnpairTab, pairDrop, clearPairPreview],
   );
 
   const handleDragCancel = React.useCallback(() => {
     setActiveTabId(null);
     setGhostLabel(null);
-  }, []);
+    clearPairPreview();
+  }, [clearPairPreview]);
 
   const state = React.useMemo<SplitDndState>(
     () => ({ activeTabId, nativePayload, onNativeDrop }),
@@ -185,10 +244,22 @@ export function SplitDnd({ origin, panes, onTabDrop, onNativeDrop, children }: S
       collisionDetection={splitCollision}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragMove={(event) => {
+        clearPairPreview();
+        const pair = pairDrop(event);
+        if (pair !== null) {
+          pair.target.setAttribute("data-pair-drop-edge", pair.edge);
+          previewRef.current = pair.target;
+        }
+      }}
       onDragCancel={handleDragCancel}
     >
       <SplitDndStateContext.Provider value={state}>
-        <TabStripSurface>{children}</TabStripSurface>
+        <TabStripSurface>
+          <div ref={areaRef} data-split-area className="contents">
+            {children}
+          </div>
+        </TabStripSurface>
       </SplitDndStateContext.Provider>
       <DragOverlay
         // The tab returns to its slot in the time a dropdown opens. `null`

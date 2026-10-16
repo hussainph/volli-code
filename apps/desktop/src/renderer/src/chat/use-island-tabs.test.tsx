@@ -31,8 +31,11 @@ import {
   type IslandTabsFeed,
 } from "./use-island-tabs";
 
+vi.mock("sonner", () => ({ toast: vi.fn() }));
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 import { toastError } from "@renderer/lib/toast";
+import { toast } from "sonner";
+import { useClosingBrowserTabIds } from "./use-island-tabs-close";
 
 const SESSION = "s-parent";
 const CHILD = "s-child";
@@ -109,7 +112,10 @@ let container: HTMLElement | null = null;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.useFakeTimers();
   vi.mocked(toastError).mockClear();
+  vi.mocked(toast).mockClear();
+  useClosingBrowserTabIds.setState(new Set(), true);
   registry([]);
   listing([]);
   container = document.createElement("div");
@@ -124,6 +130,8 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
+  vi.clearAllTimers();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -131,6 +139,7 @@ afterEach(async () => {
 async function mount(
   browser: BrowserApi | null = api(),
   openTrace?: (request: BrowserTraceRequest) => void,
+  openBrowserBeside?: (tabId: string, ownerSessionId: string) => Promise<void>,
 ) {
   // `null` is the UI lab: no bridge at all.
   vi.stubGlobal("api", browser === null ? undefined : { browser });
@@ -138,7 +147,7 @@ async function mount(
   const flashes: IslandFlash[] = [];
   function Probe() {
     const channel = useIslandFlash();
-    const feed = useIslandTabs(SESSION, PROJECT, channel.push, { openTrace });
+    const feed = useIslandTabs(SESSION, PROJECT, channel.push, { openTrace, openBrowserBeside });
     seen.push({ feed, flash: channel.flash });
     if (channel.flash !== null && flashes.at(-1)?.id !== channel.flash.id) {
       flashes.push(channel.flash);
@@ -201,6 +210,49 @@ describe("projection", () => {
       ["p", true, "preview", "loading"],
       ["t", true, "tab", "ready"],
     ]);
+  });
+
+  it("keeps title, port and path distinct, and raises failed and waiting tabs", async () => {
+    listing([{ sessionId: CHILD, title: "Driver" }]);
+    useProjectSessionsStore.setState((state) => ({
+      byProject: {
+        ...state.byProject,
+        [PROJECT]: {
+          ...state.byProject[PROJECT]!,
+          chat: state.byProject[PROJECT]!.chat.map((row) =>
+            Object.assign({}, row, {
+              activity: "waiting" as const,
+            }),
+          ),
+        },
+      },
+    }));
+    registry([
+      tab({ tabId: "ordinary", title: "Settings", url: "http://localhost:5173/settings?q=1#top" }),
+      tab({ tabId: "failed", error: "net::ERR_FAILED" }),
+      tab({
+        tabId: "waiting",
+        heldBy: { kind: "session", sessionId: CHILD, name: "Driver", color: "red" },
+      }),
+      tab({
+        tabId: "unknown-driver",
+        heldBy: { kind: "session", sessionId: "other", name: "Other", color: "red" },
+      }),
+      tab({ tabId: "local-file", title: "File", url: "file:///tmp/report.html" }),
+      tab({ tabId: "bad-url", title: "Broken", url: "not a url" }),
+      tab({ tabId: "blank", title: "", url: "about:blank" }),
+    ]);
+    const probe = await mount();
+    const tabs = probe.latest().feed.model.tabs;
+    expect(tabs.slice(0, 2).map((row) => row.id)).toEqual(["failed", "waiting"]);
+    expect(tabs.find((row) => row.id === "ordinary")).toMatchObject({
+      title: "Settings",
+      detail: "localhost:5173/settings?q=1#top",
+    });
+    expect(tabs.find((row) => row.id === "waiting")?.detail).toContain("Driver");
+    expect(tabs.find((row) => row.id === "local-file")?.detail).toBe("file:///tmp/report.html");
+    expect(tabs.find((row) => row.id === "bad-url")?.detail).toBe("not a url");
+    expect(tabs.find((row) => row.id === "blank")?.detail).toBe("New Tab");
   });
 
   it("keeps the same slice object while the registry says the same thing", async () => {
@@ -276,11 +328,56 @@ describe("verbs", () => {
     const probe = await mount(browser);
 
     await act(async () => probe.latest().feed.actions.closeTab("two"));
+    expect(probe.latest().feed.model.tabs.map((row) => row.id)).toEqual(["one"]);
+    expect(browser.close).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
     expect(browser.close).toHaveBeenCalledWith({ tabId: "two" });
 
     await act(async () => probe.latest().feed.actions.promoteTab("one"));
-    expect(browser.setPresentation).toHaveBeenCalledWith({ tabId: "one", presentation: "preview" });
+    expect(browser.setPresentation).toHaveBeenCalledWith({ tabId: "one", presentation: "tab" });
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("uses the mount's beside-chat callback with the actual owner, surfacing failure", async () => {
+    listing([{ sessionId: CHILD, title: "Driver" }]);
+    registry([tab({ tabId: "childs", ownerSessionId: CHILD })]);
+    const beside = vi.fn(async () => {});
+    const browser = api();
+    const probe = await mount(browser, undefined, beside);
+    await act(async () => probe.latest().feed.actions.promoteTab("childs"));
+    expect(beside).toHaveBeenCalledWith("childs", CHILD);
+    expect(browser.setPresentation).not.toHaveBeenCalled();
+    beside.mockRejectedValueOnce(new Error("pair refused"));
+    await act(async () => probe.latest().feed.actions.promoteTab("childs"));
+    expect(toastError).toHaveBeenCalledWith("Could not show Browser Tab: pair refused");
+    await act(async () => probe.latest().feed.actions.promoteTab("gone"));
+    expect(browser.setPresentation).toHaveBeenCalledWith({ tabId: "gone", presentation: "tab" });
+  });
+
+  it("undo keeps an agent's original identity and presentation without opening a replacement", async () => {
+    const browser = api();
+    registry([tab({ tabId: "one", presentation: "tab" })]);
+    const probe = await mount(browser);
+    await act(async () => probe.latest().feed.actions.closeTab("one"));
+    expect(browser.setPresentation).toHaveBeenCalledWith({
+      tabId: "one",
+      presentation: "headless",
+    });
+    expect(probe.latest().feed.model.tabs).toEqual([]);
+    const options = vi.mocked(toast).mock.calls.at(-1)?.[1];
+    const undo = options?.action;
+    expect(undo).toMatchObject({ label: "Undo" });
+    await act(async () => {
+      if (undo && typeof undo === "object" && "onClick" in undo) undo.onClick({} as never);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(browser.setPresentation).toHaveBeenLastCalledWith({ tabId: "one", presentation: "tab" });
+    expect(browser.close).not.toHaveBeenCalled();
+    expect(probe.latest().feed.model.tabs.map((row) => row.id)).toEqual(["one"]);
   });
 
   it("replay opens the tab's OWNER's trace at that tab — a child's tab is the child's record (VC-453)", async () => {
@@ -318,6 +415,7 @@ describe("verbs", () => {
     await act(async () => {
       probe.latest().feed.actions.closeTab("one");
       registry([]);
+      await vi.advanceTimersByTimeAsync(5000);
     });
     expect(probe.lines()).toContain("Close refused · github.com");
     expect(probe.lines().join(" ")).not.toContain("one");
@@ -342,7 +440,10 @@ describe("verbs", () => {
     registry([tab({ tabId: "one" })]);
     const probe = await mount(browser);
 
-    await act(async () => probe.latest().feed.actions.closeTab("one"));
+    await act(async () => {
+      probe.latest().feed.actions.closeTab("one");
+      await vi.advanceTimersByTimeAsync(5000);
+    });
     expect(toastError).toHaveBeenCalledWith("Could not close Browser Tab: tab is held");
     expect(probe.lines()).toEqual(["Close refused · github.com"]);
 
@@ -476,7 +577,7 @@ describe("the now channel", () => {
     await act(async () => registry([tab({ tabId: "one", presentation: "tab" })]));
     await act(async () => registry([tab({ tabId: "one", presentation: "headless" })]));
     expect(probe.lines()).toEqual([
-      "Pinned here · github.com",
+      "Shown · github.com",
       "Opened as tab · github.com",
       "Hidden · github.com",
     ]);
@@ -491,6 +592,6 @@ describe("the now channel", () => {
     await act(async () => registry([tab({ tabId: "one", presentation: "preview" })]));
     const ids = probe.flashes.map((flash) => flash.id);
     expect(new Set(ids).size).toBe(3);
-    expect(probe.lines()[2]).toBe("Pinned here · github.com");
+    expect(probe.lines()[2]).toBe("Shown · github.com");
   });
 });

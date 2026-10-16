@@ -48,6 +48,25 @@ describe("packed mode", () => {
   });
 });
 
+describe("scripted fake turns", () => {
+  for (const [args, message] of [
+    [["--model", "env", "--fake-script", "unused.json"], /requires --model fake/],
+    [["--fake-script", join(DRIVE, "..", "..", "package.json")], /must contain a JSON array/],
+  ]) {
+    it(`rejects invalid script setup ${args.join(" ")} before reserving an instance`, async () => {
+      const home = join(root, "script-home");
+      const evidence = join(root, "script-evidence");
+      const result = await execFileAsync(process.execPath, [CLI, "launch", ...args], {
+        env: { ...process.env, VOLLI_DRIVE_HOME: home, VOLLI_DRIVE_EVIDENCE: evidence },
+      }).catch((error) => error);
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, message);
+      assert.equal(existsSync(join(home, "instances")), false);
+      assert.equal(existsSync(evidence), false);
+    });
+  }
+});
+
 describe("every launch path goes through assertLaunchable", () => {
   it("the supervisor calls it immediately before its one Electron launch", () => {
     const source = read("supervisor.mjs");

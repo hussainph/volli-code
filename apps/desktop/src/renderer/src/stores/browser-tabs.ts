@@ -52,10 +52,17 @@ export async function hydrateBrowserTabs(
 }
 
 /** The app-lifetime push subscription that keeps tab titles and chrome live. */
-export function subscribeBrowserTabs(api: BrowserApi): () => void {
+export function subscribeBrowserTabs(
+  api: BrowserApi,
+  onClosed?: (tab: BrowserTabState) => void,
+): () => void {
   return api.onTabState((event) => {
     if (event.tab !== undefined) useBrowserTabsStore.getState().receive(event.tab);
-    else useBrowserTabsStore.getState().remove(event.closedTabId);
+    else {
+      const tab = useBrowserTabsStore.getState().byId[event.closedTabId];
+      if (tab !== undefined) onClosed?.(tab);
+      useBrowserTabsStore.getState().remove(event.closedTabId);
+    }
   });
 }
 
