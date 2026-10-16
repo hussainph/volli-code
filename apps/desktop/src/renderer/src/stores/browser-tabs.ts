@@ -68,9 +68,9 @@ export function subscribeBrowserTabs(
 
 /**
  * The tabs a workspace strip draws (VC-238): a person's own, and the agent
- * tabs a person promoted there. Headless and previewed agent tabs are
- * elsewhere — nowhere, and above the owning chat's composer — and both strips
- * read this one rule rather than each looking at `createdBy`.
+ * tabs a person promoted there. Headless and legacy preview tabs remain
+ * reachable through the Island; both strips read this one rule rather than
+ * each looking at `createdBy`.
  */
 export function stripBrowserTabs(tabs: readonly BrowserTabState[]): BrowserTabState[] {
   return tabs.filter((tab) => tab.presentation === "tab");
@@ -90,18 +90,6 @@ export function sessionBrowserTabs(
     (tab) =>
       tab.ownerSessionId !== null &&
       (tab.ownerSessionId === sessionId || childSessionIds.has(tab.ownerSessionId)),
-  );
-}
-
-/** The tab pinned above this chat's composer, or null. Main keeps it to one per Session. */
-export function previewedBrowserTab(
-  byId: Readonly<Record<string, BrowserTabState>>,
-  sessionId: string,
-): BrowserTabState | null {
-  return (
-    Object.values(byId).find(
-      (tab) => tab.ownerSessionId === sessionId && tab.presentation === "preview",
-    ) ?? null
   );
 }
 

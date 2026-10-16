@@ -9,9 +9,9 @@
  * for URL, title, loading and error; once it is gone the card says so and
  * keeps the facet's last facts, so a reopened chat still reads.
  *
- * The person decides where a tab is drawn — Show pins it above this chat's
- * composer, Open as tab promotes it into the strip, Hide returns it to
- * headless — and the model never can. Every action here is a request to main
+ * The person decides where a tab is drawn: Open beside chat pairs it with
+ * its owner, or Open as tab promotes it into the strip when no paired host
+ * is available. The model never can. Every action here is a request to main
  * through the same preload bridge the Browser pane uses; main answers with a
  * state push, and a refused request is a toast, like every failed mutation.
  *

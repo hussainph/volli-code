@@ -18,6 +18,9 @@ import type { BrowserTabState } from "../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
 import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { BROWSER_NEW_TAB_TITLE, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
+import { showBrowserTab } from "@renderer/components/browser/show-browser-tab";
+import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
@@ -195,7 +198,7 @@ describe("projection", () => {
     ]);
   });
 
-  it("tells headless from the two promoted places, and loading from ready", async () => {
+  it("treats legacy previews as headless, keeping them listed and showable", async () => {
     registry([
       tab({ tabId: "h" }),
       tab({ tabId: "p", presentation: "preview", loading: true }),
@@ -207,7 +210,7 @@ describe("projection", () => {
       probe.latest().feed.model.tabs.map((one) => [one.id, one.promoted, one.surface, one.state]),
     ).toEqual([
       ["h", false, null, "ready"],
-      ["p", true, "preview", "loading"],
+      ["p", false, null, "loading"],
       ["t", true, "tab", "ready"],
     ]);
   });
@@ -281,7 +284,7 @@ describe("projection", () => {
 });
 
 describe("the plane's own reading", () => {
-  it("names the owner of a tab the plane draws, for the preview's 'Driven by'", async () => {
+  it("shares the transcript host and session titles with the plane", async () => {
     listing([{ sessionId: CHILD, title: "Read the docs" }]);
     registry([tab({ tabId: "mine" }), tab({ tabId: "childs", ownerSessionId: CHILD })]);
     let seen: ChatBrowserTabs | null = null;
@@ -295,8 +298,8 @@ describe("the plane's own reading", () => {
     });
 
     const chat = seen as unknown as ChatBrowserTabs;
-    expect(chat.ownerLabel(tab({ tabId: "mine" }))).toBe("this Session");
-    expect(chat.ownerLabel(tab({ tabId: "childs", ownerSessionId: CHILD }))).toBe("Read the docs");
+    expect(chat.cardHost?.sessionId).toBe(SESSION);
+    expect(chat.sessionTitle(CHILD)).toBe("Read the docs");
     expect(chat.listed).toBe(true);
   });
 });
@@ -338,6 +341,47 @@ describe("verbs", () => {
     await act(async () => probe.latest().feed.actions.promoteTab("one"));
     expect(browser.setPresentation).toHaveBeenCalledWith({ tabId: "one", presentation: "tab" });
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("opens a legacy preview from the Island beside its owner without losing its identity", async () => {
+    const legacy = tab({ tabId: "legacy", presentation: "preview" });
+    registry([legacy]);
+    useWorkspaceStore.setState({ byProject: {} });
+    // Session attachment is outside this path; the layout and registry are real.
+    const adopt = vi
+      .spyOn(useChatSessionsStore.getState(), "adoptChatSession")
+      .mockImplementation(() => {});
+    const browser = api({
+      setPresentation: vi.fn(async ({ tabId, presentation }) => ({
+        ok: true as const,
+        tab: { ...legacy, tabId, presentation },
+      })),
+    });
+    try {
+      const probe = await mount(browser, undefined, (tabId) => showBrowserTab(browser, tabId));
+      expect(probe.latest().feed.model.tabs).toMatchObject([
+        { id: "legacy", promoted: false, surface: null },
+      ]);
+      await act(async () => probe.latest().feed.actions.promoteTab("legacy"));
+      expect(browser.setPresentation).toHaveBeenCalledExactlyOnceWith({
+        tabId: "legacy",
+        presentation: "tab",
+      });
+      expect(useBrowserTabsStore.getState().byId.legacy).toEqual({
+        ...legacy,
+        presentation: "tab",
+      });
+      expect(probe.latest().feed.model.tabs).toMatchObject([
+        { id: "legacy", promoted: true, surface: "tab" },
+      ]);
+      expect(useWorkspaceStore.getState().byProject[PROJECT]?.homeSplitView?.pairs).toMatchObject([
+        { first: { activeTabId: `chat:${SESSION}` }, second: { activeTabId: "browser:legacy" } },
+      ]);
+      expect(useWorkspaceStore.getState().byProject[PROJECT]?.homeActiveTab).toBe("browser:legacy");
+    } finally {
+      adopt.mockRestore();
+      useWorkspaceStore.setState({ byProject: {} });
+    }
   });
 
   it("uses the mount's beside-chat callback with the actual owner, surfacing failure", async () => {
@@ -577,7 +621,7 @@ describe("the now channel", () => {
     await act(async () => registry([tab({ tabId: "one", presentation: "tab" })]));
     await act(async () => registry([tab({ tabId: "one", presentation: "headless" })]));
     expect(probe.lines()).toEqual([
-      "Shown · github.com",
+      "Hidden · github.com",
       "Opened as tab · github.com",
       "Hidden · github.com",
     ]);
@@ -592,6 +636,6 @@ describe("the now channel", () => {
     await act(async () => registry([tab({ tabId: "one", presentation: "preview" })]));
     const ids = probe.flashes.map((flash) => flash.id);
     expect(new Set(ids).size).toBe(3);
-    expect(probe.lines()[2]).toBe("Shown · github.com");
+    expect(probe.lines()[2]).toBe("Hidden · github.com");
   });
 });

@@ -77,9 +77,10 @@ export interface IslandTab {
    */
   promoted: boolean;
   /**
-   * Where a promoted tab is drawn: `preview` is the legacy composer preview,
-   * `tab` is out in the workspace strip, `null` is headless. Every row remains
-   * showable regardless of presentation; this is not an inert-state caption.
+   * Where a promoted tab is drawn: `tab` is in the workspace strip and `null`
+   * is headless. `preview` remains accepted for older display fixtures; the
+   * renderer treats legacy preview tabs as headless, without a miniature UI.
+   * Every row remains showable regardless of presentation.
    */
   surface: "preview" | "tab" | null;
   /**
@@ -226,19 +227,13 @@ export const EMPTY_ACTIVITY_ISLAND: ActivityIslandModel = {
 
 /**
  * What a card can do. Every row is its obvious promotion (row = verb): a tab
- * is pinned as this chat's preview, a subagent peeks in an overlay, a shell
- * opens its output, a plan step jumps. The destructive three — close, stop,
- * kill — arm on first press in the UI; by the time one of these is called the
- * person has pressed twice. The wiring ticket implements these against the
- * runtime; the island never learns what they do.
+ * opens beside its owning chat, a subagent peeks in an overlay, a shell opens
+ * its output, a plan step jumps. Tab close is immediate with Undo; stop and
+ * kill arm on first press in the UI. The mount owns runtime wiring.
  */
 export interface ActivityIslandActions {
   closeTab(id: string): void;
-  /**
-   * Pin the tab above this chat's composer — VC-238's Show, the cheap reveal.
-   * "Open as tab" stays where VC-238 put it, on the preview chrome and the
-   * transcript card; the island never promotes straight to the strip.
-   */
+  /** Reveal the tab, pairing it beside its owning chat when not already grouped. */
   promoteTab(id: string): void;
   /**
    * Opens the Browser replay (VC-453) of what the tab's Session did in it —

@@ -8,7 +8,7 @@
  *
  * It is built on {@link useChatBrowserTabs}, which moved here from
  * `chat-plane.tsx` rather than being copied: the plane still calls it for the
- * pinned preview and the transcript card's host, and there is exactly one
+ * transcript card's host, and there is exactly one
  * account of which tabs this chat answers for. Null where there is no bridge
  * — the UI lab — and the feed is simply empty there.
  *
@@ -51,7 +51,6 @@ import {
   BROWSER_NEW_TAB_TITLE,
   browserTabDisplayTitle,
   browserTabOwnerLabel,
-  previewedBrowserTab,
   sessionBrowserTabs,
   useBrowserTabsStore,
 } from "@renderer/stores/browser-tabs";
@@ -67,7 +66,7 @@ import { closeBrowserTabWithUndo, useClosingBrowserTabIds } from "./use-island-t
 
 /**
  * What this chat knows about the Browser Tabs its Sessions hold (VC-238): the
- * inventory the island counts, the one tab pinned as its preview, and the host
+ * inventory the island counts and the host
  * a row's card needs to act. Null where there is no bridge — the UI lab — so
  * every browser surface in the chat simply does not exist there.
  *
@@ -78,7 +77,6 @@ import { closeBrowserTabWithUndo, useClosingBrowserTabIds } from "./use-island-t
 export interface ChatBrowserTabs {
   api: BrowserApi;
   tabs: BrowserTabState[];
-  preview: BrowserTabState | null;
   /**
    * Whether the project's Session listing has arrived. Until it has, `tabs`
    * is answerable for this Session's own tabs ONLY: children are read off the
@@ -90,7 +88,6 @@ export interface ChatBrowserTabs {
    */
   listed: boolean;
   sessionTitle(sessionId: string): string | null;
-  ownerLabel(tab: BrowserTabState): string;
   cardHost: BrowserCardHost;
 }
 
@@ -104,7 +101,6 @@ export function useChatBrowserTabs(sessionId: string, projectId: string): ChatBr
   const tabs = useBrowserTabsStore(
     useShallow((state) => sessionBrowserTabs(state.byId, sessionId, children)),
   );
-  const preview = useBrowserTabsStore((state) => previewedBrowserTab(state.byId, sessionId));
   const sessionTitle = React.useCallback((id: string) => sessionTitleOf(rows, id), [rows]);
   const cardHost = React.useMemo(
     () => (api === undefined ? null : { sessionId, api, sessionTitle }),
@@ -114,10 +110,8 @@ export function useChatBrowserTabs(sessionId: string, projectId: string): ChatBr
   return {
     api,
     tabs,
-    preview,
     listed: rows !== undefined,
     sessionTitle,
-    ownerLabel: (tab) => browserTabOwnerLabel(tab, sessionId, sessionTitle),
     cardHost,
   };
 }
@@ -177,8 +171,10 @@ export function islandTabOf(
     detail: addressOf(tab.url),
     needsAttention: tab.error !== null,
     state: tab.loading ? "loading" : "ready",
-    promoted: tab.presentation !== "headless",
-    surface: tab.presentation === "headless" ? null : tab.presentation,
+    // The wire still accepts legacy previews, but there is no miniature UI.
+    // Keep them reachable exactly like headless tabs until explicitly shown.
+    promoted: tab.presentation === "tab",
+    surface: tab.presentation === "tab" ? "tab" : null,
     owner: tab.ownerSessionId === sessionId ? null : browserTabOwnerLabel(tab, sessionId, titleOf),
   };
 }
@@ -215,7 +211,7 @@ function seenOf(tab: BrowserTabState): SeenTab {
 }
 
 const PRESENTATION_EVENT: Record<BrowserTabState["presentation"], string> = {
-  preview: "Shown",
+  preview: "Hidden",
   tab: "Opened as tab",
   headless: "Hidden",
 };
