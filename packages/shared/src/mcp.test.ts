@@ -1,3 +1,6 @@
+import Ajv from "ajv";
+import Ajv2019 from "ajv/dist/2019.js";
+import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -139,7 +142,6 @@ describe("sanitizeMcpToolDefinition", () => {
       type: "object",
       properties: { query: { type: "string", minLength: 1 }, hidden: false },
       required: ["query"],
-      additionalProperties: false,
       // Annotations are data, not schemas or dialect declarations to resolve.
       examples: [{ $schema: "urn:annotation-only" }],
     } as const;
@@ -159,13 +161,16 @@ describe("sanitizeMcpToolDefinition", () => {
   it.each([
     "http://json-schema.org/draft-07/schema#",
     "https://json-schema.org/draft/2019-09/schema",
-  ])("validates tuple items using the declared dialect %s", ($schema) => {
+  ])("refuses provider-incompatible tuple items under %s without translating them", ($schema) => {
     const tuple = { type: "array", items: [{ type: "string" }], additionalItems: false };
-    expect(
-      sanitizeMcpToolDefinition(
-        toolCandidate({ inputSchema: { $schema, type: "object", properties: { tuple } } }),
-      ).ok,
-    ).toBe(true);
+    const inputSchema = { $schema, type: "object", properties: { tuple } };
+    const wire = JSON.stringify(inputSchema);
+    expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema }))).toEqual({
+      ok: false,
+      reason:
+        "input schema uses tuple `items` arrays, which model providers reject; the server should use 2020-12 `prefixItems`",
+    });
+    expect(JSON.stringify(inputSchema)).toBe(wire);
     for (const declaration of [{}, { $schema: "https://json-schema.org/draft/2020-12/schema" }]) {
       expect(
         sanitizeMcpToolDefinition(
@@ -196,7 +201,6 @@ describe("sanitizeMcpToolDefinition", () => {
   });
 
   it.each([
-    "",
     "urn:unknown",
     "https://example.com/custom-meta-schema",
     "http://json-schema.org/draft-04/schema#",
@@ -225,14 +229,283 @@ describe("sanitizeMcpToolDefinition", () => {
       type: "object",
       properties: { query: { $ref: "https://example.com/remote-definition" } },
     };
-    expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: schema })).ok).toBe(true);
+    expect(sanitizeMcpToolDefinition(toolCandidate({ outputSchema: schema })).ok).toBe(true);
     const customMeta = { ...schema, $id: "urn:untrusted-meta" };
-    expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: customMeta })).ok).toBe(true);
+    expect(sanitizeMcpToolDefinition(toolCandidate({ outputSchema: customMeta })).ok).toBe(true);
     expect(
       sanitizeMcpToolDefinition(
         toolCandidate({ inputSchema: { type: "object", $schema: "urn:untrusted-meta" } }),
       ).ok,
     ).toBe(false);
+  });
+
+  it("preserves the pre-VC-621 Ajv2020 acceptance set and exact schema over a corpus", () => {
+    // A fresh, unaliased validator is the check shipped before #733. Do not
+    // replace this oracle with the new dialect selection or body validation.
+    const baseline = new Ajv2020({ addUsedSchema: false, strict: false, validateFormats: false });
+    const declarations = [
+      undefined,
+      "",
+      "https://json-schema.org/draft/2020-12/schema",
+      "https://json-schema.org/draft/2020-12/schema#",
+      "http://json-schema.org/schema",
+      ...[
+        "core",
+        "applicator",
+        "validation",
+        "unevaluated",
+        "format-annotation",
+        "content",
+        "meta-data",
+      ].flatMap((meta) => [
+        `https://json-schema.org/draft/2020-12/meta/${meta}`,
+        `https://json-schema.org/draft/2020-12/meta/${meta}#`,
+      ]),
+    ];
+    const bodies = [
+      {},
+      {
+        properties: { query: { type: "string" } },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      { properties: { pair: { type: "array", prefixItems: [{ type: "string" }], items: false } } },
+      { properties: { pair: { type: "array", items: [{ type: "string" }] } } },
+      { properties: { query: { type: "not-a-type" } } },
+      { dependencies: { query: ["limit"] } },
+      { $defs: { query: { type: "string" } }, properties: { query: { $ref: "#/$defs/query" } } },
+      {
+        definitions: { query: { type: "string" } },
+        properties: { query: { $ref: "#/definitions/query" } },
+      },
+      { examples: [{ $schema: "urn:annotation", items: [1] }] },
+    ];
+    let accepted = 0;
+    for (const $schema of declarations) {
+      for (const body of bodies) {
+        const schema = { type: "object", ...($schema === undefined ? {} : { $schema }), ...body };
+        if (!baseline.validateSchema(schema)) continue;
+        accepted += 1;
+        const result = sanitizeMcpToolDefinition(
+          toolCandidate({ inputSchema: schema, outputSchema: schema }),
+        );
+        expect(result.ok, JSON.stringify(schema)).toBe(true);
+        if (!result.ok) throw new Error(result.reason);
+        expect(result.definition.inputSchema).toBe(schema);
+        expect(result.definition.outputSchema).toBe(schema);
+        const frozen = [result.definition];
+        expect(validateMcpToolDefinitions(frozen)).toBe(frozen);
+      }
+    }
+    expect(accepted).toBeGreaterThan(100);
+  });
+
+  it("checks 2020-12 keywords even when draft-07 treats them as annotations", () => {
+    expect(
+      sanitizeMcpToolDefinition(
+        toolCandidate({
+          inputSchema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            $defs: { query: { type: 7 } },
+          },
+        }),
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        "input schema is not compatible with JSON Schema 2020-12 required by model providers; the server should publish a 2020-12-compatible schema",
+    });
+  });
+
+  it.each([
+    [
+      "dependencies",
+      { properties: { query: { type: "object", dependencies: { a: ["b"] } } } },
+      "dependentRequired` or `dependentSchemas",
+    ],
+    [
+      "dependencies",
+      { dependencies: { query: { required: ["limit"] } } },
+      "dependentRequired` or `dependentSchemas",
+    ],
+    ["$recursiveRef", { properties: { query: { $recursiveRef: "#" } } }, "$dynamicRef"],
+    [
+      "$ref",
+      {
+        definitions: { query: { type: "string" } },
+        properties: { query: { $ref: "#/definitions/query" } },
+      },
+      "inline referenced schemas",
+    ],
+    [
+      "$ref",
+      { $defs: { query: { type: "string" } }, properties: { query: { $ref: "#/$defs/query" } } },
+      "inline referenced schemas",
+    ],
+    [
+      "$ref",
+      { properties: { query: { $ref: "https://example.invalid/schema" } } },
+      "inline referenced schemas",
+    ],
+    ["additionalProperties", { additionalProperties: false }, "inside `properties`"],
+    ["allOf", { allOf: [{ required: ["query"] }] }, "inside `properties`"],
+  ])(
+    "refuses newly admitted legacy semantics or lost provider constraints: %s (%#)",
+    (keyword, body, remedy) => {
+      for (const $schema of [
+        "http://json-schema.org/draft-07/schema#",
+        "https://json-schema.org/draft/2019-09/schema",
+      ]) {
+        const inputSchema = { $schema, type: "object", ...body };
+        const result = sanitizeMcpToolDefinition(toolCandidate({ inputSchema }));
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error("Unexpected provider-incompatible schema");
+        expect(result.reason).toContain(keyword);
+        expect(result.reason).toContain(remedy);
+        expect(result.reason).not.toContain("example.invalid");
+      }
+    },
+  );
+
+  it("refuses 2019-09 boolean recursive anchors that do not match the 2020-12 body", () => {
+    expect(
+      sanitizeMcpToolDefinition(
+        toolCandidate({
+          inputSchema: {
+            $schema: "https://json-schema.org/draft/2019-09/schema",
+            type: "object",
+            $recursiveAnchor: true,
+          },
+        }),
+      ),
+    ).toEqual({
+      ok: false,
+      reason:
+        "input schema is not compatible with JSON Schema 2020-12 required by model providers; the server should publish a 2020-12-compatible schema",
+    });
+    expect(
+      sanitizeMcpToolDefinition(
+        toolCandidate({
+          inputSchema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            $recursiveAnchor: "anchor",
+          },
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: expect.stringContaining("$dynamicAnchor") });
+  });
+
+  it.each([
+    { properties: { value: { not: { dependencies: { a: ["b"] } } } } },
+    { properties: { value: { allOf: [{ dependencies: { a: ["b"] } }] } } },
+    { properties: { value: { dependentSchemas: { a: { $dynamicRef: "#anchor" } } } } },
+  ])("checks unsupported semantics through single, array and map schema positions (%#)", (body) => {
+    expect(
+      sanitizeMcpToolDefinition(
+        toolCandidate({
+          inputSchema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            ...body,
+          },
+        }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it("accepts provider-preserved combinators and schema maps inside properties", () => {
+    expect(
+      sanitizeMcpToolDefinition(
+        toolCandidate({
+          inputSchema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              query: {
+                type: "object",
+                additionalProperties: { type: "string" },
+                allOf: [{ required: ["a"] }, true],
+                patternProperties: { "^a": { type: "string" } },
+              },
+              list: { type: "array", items: { type: "string" }, contains: { type: "string" } },
+            },
+          },
+        }),
+      ).ok,
+    ).toBe(true);
+  });
+
+  it.each([false, { type: "number" }])(
+    "refuses prefixItems that would weaken old-draft items constraints (%#)",
+    (items) => {
+      const options = { strict: false, validateFormats: false };
+      const provider = new Ajv2020(options);
+      for (const [$schema, own] of [
+        ["http://json-schema.org/draft-07/schema#", new Ajv(options)],
+        ["https://json-schema.org/draft/2019-09/schema", new Ajv2019(options)],
+      ] as const) {
+        const body = {
+          type: "object",
+          properties: {
+            list: { type: "array", prefixItems: [{ type: "string" }], items },
+          },
+        };
+        const schema = { $schema, ...body };
+        expect(own.validateSchema(schema)).toBe(true);
+        expect(provider.validateSchema(body)).toBe(true);
+        // Synthetic test-only compilation proves why dual meta-validation
+        // alone cannot admit this unchanged schema. Production never compiles
+        // server schemas or resolves/registers their references.
+        expect(own.compile(schema)({ list: ["x"] })).toBe(false);
+        expect(provider.compile(body)({ list: ["x"] })).toBe(true);
+        const before = JSON.stringify(schema);
+        expect(sanitizeMcpToolDefinition(toolCandidate({ inputSchema: schema }))).toEqual({
+          ok: false,
+          reason:
+            "input schema uses `prefixItems`, which model providers cannot preserve for this dialect; the server should declare 2020-12 to use `prefixItems` without changing legacy `items` semantics",
+        });
+        expect(JSON.stringify(schema)).toBe(before);
+        const output = sanitizeMcpToolDefinition(toolCandidate({ outputSchema: schema }));
+        expect(output.ok).toBe(true);
+        if (!output.ok) throw new Error(output.reason);
+        expect(output.definition.outputSchema).toBe(schema);
+      }
+    },
+  );
+
+  it("keeps old-draft output tuples unchanged because output schemas are not sent to providers", () => {
+    const outputSchema = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        pair: { type: "array", items: [{ type: "string" }], additionalItems: false },
+      },
+    };
+    const result = sanitizeMcpToolDefinition(toolCandidate({ outputSchema }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.definition.outputSchema).toBe(outputSchema);
+  });
+
+  it("visits schema positions, not literal JSON annotations or property names", () => {
+    const inputSchema = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        dependencies: { type: "string" },
+        list: { type: "array", items: { type: "string" }, additionalItems: false },
+        query: { type: "string", default: { $ref: "literal", dependencies: { a: ["b"] } } },
+      },
+      examples: [{ $ref: "literal", items: [1], dependencies: { a: ["b"] } }],
+      // Unreferenced definitions are not provider assertions.
+      definitions: { unused: { type: "string" } },
+    };
+    const result = sanitizeMcpToolDefinition(toolCandidate({ inputSchema }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.definition.inputSchema).toBe(inputSchema);
   });
 
   it.each([

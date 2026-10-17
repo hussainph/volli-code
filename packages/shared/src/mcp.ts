@@ -341,9 +341,11 @@ const JSON_SCHEMA_2020 = new Ajv2020(JSON_SCHEMA_OPTIONS);
 /**
  * Only bundled, recognized meta-schemas: never fetch a server's $schema URI.
  * Each draft gets its own validator, not merely an alias of the 2020-12
- * meta-schema (draft-07/2019-09 allow tuple `items`, for example).
- * Undeclared schemas keep the existing 2020-12 default. This is meta-schema
- * validation only; compiling a server's schema here would resolve its $refs
+ * meta-schema. Newly admitted input schemas must also pass 2020-12 body
+ * validation and the lossless provider subset below; old tuple `items`, for
+ * example, must never enter a frozen Session's provider declarations.
+ * Keep the pre-VC-621 Ajv2020 acceptance path for durable replay compatibility.
+ * This is meta-schema validation only; compiling a server's schema here would resolve its $refs
  * and retain untrusted schemas in Ajv's cache across catalog refreshes.
  */
 const JSON_SCHEMA_VALIDATORS = new Map([
@@ -359,7 +361,8 @@ for (const [uri, validator] of [...JSON_SCHEMA_VALIDATORS]) {
   const alias = uri.replace(/^https?:/, uri.startsWith("https:") ? "http:" : "https:");
   // This fixed host-authored wrapper needs no meta-validation at registration.
   // Ajv would compile it eagerly and violate renderer CSP on module import.
-  // Server schemas still undergo validateSchema below, on the host at discovery.
+  // Server schemas still undergo validateSchema below at discovery and replay.
+  // Renderer replay's pre-existing CSP limitation is tracked separately (VC-636).
   validator.addMetaSchema({ $ref: uri }, alias, false);
   JSON_SCHEMA_VALIDATORS.set(alias, validator);
 }
@@ -489,6 +492,99 @@ export function isMcpToolId(value: unknown): value is McpToolId {
   return typeof value === "string" && value.startsWith("mcp__") && PROVIDER_NAME.test(value);
 }
 
+// Pi's non-strict Anthropic adapter projects only root type/properties/required.
+// Do not expand old-draft admission to assertions this projection would drop.
+// This is deliberately NOT applied to the original Ajv2020 acceptance path:
+// changing it would invalidate already frozen Sessions, not fix their schemas.
+const PROJECTED_ROOT_ASSERTIONS = [
+  "additionalProperties",
+  "patternProperties",
+  "propertyNames",
+  "unevaluatedProperties",
+  "minProperties",
+  "maxProperties",
+  "dependentRequired",
+  "dependentSchemas",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "not",
+  "if",
+  "then",
+  "else",
+  "const",
+  "enum",
+] as const;
+const LEGACY_PROVIDER_KEYWORDS = new Map([
+  ["dependencies", "use 2020-12 `dependentRequired` or `dependentSchemas`"],
+  ["prefixItems", "declare 2020-12 to use `prefixItems` without changing legacy `items` semantics"],
+  ["$recursiveRef", "use 2020-12 `$dynamicRef`"],
+  ["$recursiveAnchor", "use 2020-12 `$dynamicAnchor`"],
+  ["$ref", "inline referenced schemas"],
+  ["$dynamicRef", "inline referenced schemas"],
+]);
+const SINGLE_SCHEMA_KEYWORDS = [
+  "additionalProperties",
+  "unevaluatedProperties",
+  "propertyNames",
+  "contains",
+  "items",
+  "unevaluatedItems",
+  "not",
+  "if",
+  "then",
+  "else",
+  "contentSchema",
+] as const;
+const ARRAY_SCHEMA_KEYWORDS = ["allOf", "anyOf", "oneOf", "prefixItems"] as const;
+const MAP_SCHEMA_KEYWORDS = [
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+] as const;
+
+/** Only schema positions, never examples/defaults/extension data or property names. */
+function legacyProviderFailure(schema: Record<string, unknown> | boolean): string | null {
+  if (typeof schema === "boolean") return null;
+  for (const [keyword, remedy] of LEGACY_PROVIDER_KEYWORDS) {
+    if (schema[keyword] !== undefined) {
+      return `input schema uses \`${keyword}\`, which model providers cannot preserve for this dialect; the server should ${remedy}`;
+    }
+  }
+  // Meta-validation has already checked each child shape. No $ref resolution,
+  // registration, rewriting or unbounded traversal is needed here.
+  for (const keyword of SINGLE_SCHEMA_KEYWORDS) {
+    const child = schema[keyword] as Record<string, unknown> | boolean | undefined;
+    if (child !== undefined) {
+      const failure = legacyProviderFailure(child);
+      if (failure !== null) return failure;
+    }
+  }
+  for (const keyword of ARRAY_SCHEMA_KEYWORDS) {
+    const children = schema[keyword] as readonly (Record<string, unknown> | boolean)[] | undefined;
+    if (children !== undefined) {
+      for (const child of children) {
+        const failure = legacyProviderFailure(child);
+        if (failure !== null) return failure;
+      }
+    }
+  }
+  for (const keyword of MAP_SCHEMA_KEYWORDS) {
+    const children = schema[keyword] as
+      | Record<string, Record<string, unknown> | boolean>
+      | undefined;
+    if (children !== undefined) {
+      for (const child of Object.values(children)) {
+        const failure = legacyProviderFailure(child);
+        if (failure !== null) return failure;
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * Why a published schema cannot be used, or `null` when it can.
  *
@@ -558,6 +654,15 @@ function schemaFailure(value: unknown, label: "input schema" | "output schema"):
   const encoded = JSON.stringify(value);
   if (encoded.length > MCP_SCHEMA_MAX_CHARS) return `${label} is too large`;
   try {
+    // Keep every schema the original check accepted, identically. This includes
+    // empty $schema and bundled 2020-12 /meta/* URIs, not only the main schema
+    // URI. Frozen definitions are revalidated on attach by the event codec.
+    if (JSON_SCHEMA_2020.validateSchema(value)) return null;
+  } catch {
+    // A recognized old-draft declaration has no meta-schema in Ajv2020.
+    // Try only our fixed bundled dialects below, never a server's URI.
+  }
+  try {
     const dialect = root["$schema"];
     // An empty fragment identifies the same meta-schema. Normalize only the
     // lookup key: keep the declaration and the entire advertised schema intact.
@@ -568,7 +673,30 @@ function schemaFailure(value: unknown, label: "input schema" | "output schema"):
           ? JSON_SCHEMA_VALIDATORS.get(dialect.replace(/#$/, ""))
           : undefined;
     if (validator === undefined) throw new Error("Unsupported JSON Schema dialect");
-    return validator.validateSchema(value) ? null : `${label} must be valid JSON Schema`;
+    if (!validator.validateSchema(value)) return `${label} must be valid JSON Schema`;
+    // Outputs never reach a model provider. Keep their own-dialect validation.
+    if (label === "output schema") return null;
+    // A validation-only shallow view chooses the 2020-12 meta-schema without
+    // changing the advertised object, its declaration or any frozen bytes.
+    const { $schema: _declaration, ...body } = root;
+    if (!JSON_SCHEMA_2020.validateSchema(body)) {
+      if (
+        JSON_SCHEMA_2020.errors?.some(
+          (error) => error.keyword === "type" && error.instancePath.endsWith("/items"),
+        )
+      ) {
+        return "input schema uses tuple `items` arrays, which model providers reject; the server should use 2020-12 `prefixItems`";
+      }
+      return "input schema is not compatible with JSON Schema 2020-12 required by model providers; the server should publish a 2020-12-compatible schema";
+    }
+    const legacyFailure = legacyProviderFailure(root);
+    if (legacyFailure !== null) return legacyFailure;
+    for (const keyword of PROJECTED_ROOT_ASSERTIONS) {
+      if (root[keyword] !== undefined) {
+        return `input schema uses root \`${keyword}\`, which model providers omit; the server should put constraints inside \`properties\` or publish a supported tool schema`;
+      }
+    }
+    return null;
   } catch {
     return `${label} must be valid JSON Schema`;
   }
