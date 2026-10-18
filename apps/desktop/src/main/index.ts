@@ -288,9 +288,11 @@ import { readCliStatus } from "./cli-status";
 import {
   readAllowPrerelease,
   readUpdateChannel,
+  readUpdateLastCheck,
   runningBuildKind,
   startAutoUpdate,
   writeUpdateChannel,
+  writeUpdateLastCheck,
 } from "./auto-update";
 import {
   PACKAGED_RENDERER_CURSOR_URL,
@@ -2406,6 +2408,14 @@ const appStartup = app.whenReady().then(async () => {
     // when no window is left to show it (macOS keeps the app alive).
     hasUpdateSurface: () =>
       BrowserWindow.getAllWindows().some((window) => !window.webContents.isDestroyed()),
+    // Settings → Updates' "Last check" survives a relaunch (VC-294); on a
+    // broken db it lives for this run only, like the channel below.
+    lastCheck: dbHandle.ok
+      ? {
+          read: () => readUpdateLastCheck(dbHandle.db),
+          write: (check) => writeUpdateLastCheck(dbHandle.db, check),
+        }
+      : undefined,
   });
   // The sidebar's door onto that updater (VC-59) — same guarded invoke
   // surface as everything else, and like startAutoUpdate itself deliberately

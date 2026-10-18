@@ -2446,9 +2446,26 @@ export interface VolliSystemIpcContract {
  * Where the updater is in its check→download→install lifecycle, as the
  * renderer's download icon renders it. `idle` covers both "never checked" and
  * "checked, up to date" — either way there is nothing to show or do beyond
- * offering a manual check.
+ * offering a manual check. Which of the two it is lives in
+ * {@link UpdateUiState.lastCheck}, not here.
  */
 export type UpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "error";
+
+/**
+ * What the most recent check that ANSWERED said (VC-294): the feed had
+ * nothing newer, had a newer version (whose download then began), or the
+ * check or its download failed. Main persists it, so Settings → Updates can
+ * still say "Up to date · 3h ago" or "Check failed" after a relaunch.
+ */
+export interface UpdateLastCheck {
+  /** When the check settled (epoch ms). */
+  at: number;
+  result: "up-to-date" | "available" | "error";
+  /** The version on offer when `available`; null otherwise. */
+  version: string | null;
+  /** The failure's message when `error`; null otherwise. */
+  error: string | null;
+}
 
 /**
  * The updater's whole user-facing state (VC-59): one snapshot the renderer
@@ -2471,6 +2488,8 @@ export interface UpdateUiState {
   percent: number | null;
   /** The last failure's message while `error`; null otherwise. */
   error: string | null;
+  /** The last answered check, this run or a previous one; null when none was ever recorded. */
+  lastCheck: UpdateLastCheck | null;
 }
 
 export type UpdateStateResult = Result<{ state: UpdateUiState }>;

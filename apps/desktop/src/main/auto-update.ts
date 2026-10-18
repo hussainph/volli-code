@@ -27,7 +27,7 @@ import { errorMessage, type ExperimentBuildKind } from "@volli/shared";
 
 import type { NotificationRequest } from "./notifications/dispatch";
 
-import type { UpdateUiState } from "../ipc/contract";
+import type { UpdateLastCheck, UpdateUiState } from "../ipc/contract";
 import { setAppState, prepared } from "@volli/host-core/db";
 
 /**
@@ -125,6 +125,54 @@ export function writeUpdateChannel(
   return channel;
 }
 
+/**
+ * The `app_state` key behind Settings → Updates' "Last check" row (VC-294):
+ * the {@link UpdateLastCheck} of the most recent check that answered, as JSON.
+ * Durable: never rename it.
+ */
+export const UPDATE_LAST_CHECK_APP_STATE_KEY = "volli:update-last-check";
+
+const LAST_CHECK_RESULTS: ReadonlySet<string> = new Set<UpdateLastCheck["result"]>([
+  "up-to-date",
+  "available",
+  "error",
+]);
+
+/**
+ * Reads the last recorded check back, tolerantly: an absent row, malformed
+ * JSON, a missing field or a result this build does not know all read as
+ * "never checked" — a status line is not worth failing an updater over, and a
+ * newer build may well have written a result kind this one has never heard of.
+ */
+export function readUpdateLastCheck(db: Database.Database): UpdateLastCheck | null {
+  const row = prepared<[string], { value: string }>(
+    db,
+    "SELECT value FROM app_state WHERE key = ?",
+  ).get(UPDATE_LAST_CHECK_APP_STATE_KEY);
+  if (row === undefined) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.value);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const { at, result, version, error } = parsed as Record<string, unknown>;
+  if (typeof at !== "number" || !Number.isFinite(at)) return null;
+  if (typeof result !== "string" || !LAST_CHECK_RESULTS.has(result)) return null;
+  return {
+    at,
+    result: result as UpdateLastCheck["result"],
+    version: typeof version === "string" ? version : null,
+    error: typeof error === "string" ? error : null,
+  };
+}
+
+/** Records one answered check, as {@link readUpdateLastCheck} reads it. */
+export function writeUpdateLastCheck(db: Database.Database, check: UpdateLastCheck): void {
+  setAppState(db, UPDATE_LAST_CHECK_APP_STATE_KEY, JSON.stringify(check), check.at);
+}
+
 const INITIAL_CHECK_DELAY_MS = 30_000;
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -202,6 +250,19 @@ export interface AutoUpdateDeps {
    * describes them as the two different things they are.
    */
   hasUpdateSurface(): boolean;
+  /**
+   * Where the last answered check is kept across launches (VC-294) — the
+   * `app_state` row above. Optional for the same reason as the channel seam in
+   * `update-ipc.ts`: the updater runs on a broken db too, and then the last
+   * check simply lives for this run only. A store that throws is logged and
+   * otherwise ignored; it never reaches the updater.
+   */
+  lastCheck?: {
+    read(): UpdateLastCheck | null;
+    write(check: UpdateLastCheck): void;
+  };
+  /** The clock behind {@link UpdateLastCheck.at}; `Date.now` by default. */
+  now?: () => number;
 }
 
 export interface AutoUpdateHandle {
@@ -226,6 +287,15 @@ export interface AutoUpdateHandle {
  * doing.
  */
 export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
+  const now = deps.now ?? Date.now;
+  const readLastCheck = (): UpdateLastCheck | null => {
+    try {
+      return deps.lastCheck?.read() ?? null;
+    } catch (error) {
+      deps.log(`[updater] could not read the last check: ${errorMessage(error)}`);
+      return null;
+    }
+  };
   /**
    * The one mutable snapshot. Transitions REPLACE it (never mutate) so every
    * `onStateChange` payload is a stable value a renderer can hold.
@@ -237,6 +307,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     targetVersion: null,
     percent: null,
     error: null,
+    lastCheck: readLastCheck(),
   };
 
   if (!deps.isPackaged) {
@@ -258,12 +329,28 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
       merged.phase === current.phase &&
       merged.targetVersion === current.targetVersion &&
       merged.percent === current.percent &&
-      merged.error === current.error
+      merged.error === current.error &&
+      merged.lastCheck === current.lastCheck
     ) {
       return; // no actual change — never re-broadcast an identical state
     }
     current = merged;
     deps.onStateChange(merged);
+  };
+
+  /**
+   * Records what a check answered — in memory first, then the store. Only a
+   * real answer is a "last check": a check that settled with no event (an
+   * inactive updater, a coalesced call) said nothing and records nothing.
+   */
+  const recordCheck = (check: Omit<UpdateLastCheck, "at">): UpdateLastCheck => {
+    const recorded: UpdateLastCheck = { at: now(), ...check };
+    try {
+      deps.lastCheck?.write(recorded);
+    } catch (error) {
+      deps.log(`[updater] could not record the last check: ${errorMessage(error)}`);
+    }
+    return recorded;
   };
 
   const { updater } = deps;
@@ -291,7 +378,13 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     deps.log(`[updater] update available: ${info.version} — downloading`);
     // `autoDownload` is on, so "available" means the download is beginning —
     // 0% until the first progress event lands.
-    setState({ phase: "downloading", targetVersion: info.version, percent: 0, error: null });
+    setState({
+      phase: "downloading",
+      targetVersion: info.version,
+      percent: 0,
+      error: null,
+      lastCheck: recordCheck({ result: "available", version: info.version, error: null }),
+    });
   });
   // NOT logged: progress fires steadily through a download and would drown the
   // `[updater]` log; the state broadcast is its surface.
@@ -300,16 +393,30 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   });
   updater.on("update-not-available", (info) => {
     deps.log(`[updater] up to date (latest: ${info.version})`);
-    setState({ phase: "idle", targetVersion: null, percent: null, error: null });
+    setState({
+      phase: "idle",
+      targetVersion: null,
+      percent: null,
+      error: null,
+      lastCheck: recordCheck({ result: "up-to-date", version: null, error: null }),
+    });
   });
-  updater.on("error", (error) => {
-    deps.log(`[updater] error: ${errorMessage(error)}`);
+  /** A failed check or download: always the last check, only sometimes the phase. */
+  const fail = (message: string): void => {
+    const lastCheck = recordCheck({ result: "error", version: null, error: message });
     // Same guarantee: a failed RE-check (offline, feed briefly gone) must not
     // hide a staged, installable update behind an error tint — `downloaded`
     // is only left by a real outcome (a newer download starting, the feed
     // answering up-to-date), never by a check that told us nothing new.
-    if (current.phase === "downloaded") return;
-    setState({ phase: "error", percent: null, error: errorMessage(error) });
+    if (current.phase === "downloaded") {
+      setState({ lastCheck });
+      return;
+    }
+    setState({ phase: "error", percent: null, error: message, lastCheck });
+  };
+  updater.on("error", (error) => {
+    deps.log(`[updater] error: ${errorMessage(error)}`);
+    fail(errorMessage(error));
   });
 
   // One notification per downloaded version. Long-lived instances can see
@@ -339,6 +446,7 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   // become an unhandled rejection. Shared by the schedule and the sidebar's
   // explicit check.
   const checkNow = async (): Promise<void> => {
+    const startedAt = now();
     // Eager, ahead of the `checking-for-update` event: the click must respond
     // even while electron-updater is still deciding whether to check at all.
     // Unless a download is already staged — the badge outranks the spinner
@@ -356,9 +464,16 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
         setState({ phase: "idle" });
       }
     } catch (error) {
-      deps.log(`[updater] check failed: ${errorMessage(error)}`);
-      if (current.phase === "downloaded") return;
-      setState({ phase: "error", percent: null, error: errorMessage(error) });
+      const message = errorMessage(error);
+      deps.log(`[updater] check failed: ${message}`);
+      // electron-updater usually reports one failure twice — the `error` event
+      // and this rejection. When the event already recorded it during this
+      // check, the rejection is not a second check.
+      const recorded = current.lastCheck;
+      if (recorded?.result === "error" && recorded.error === message && recorded.at >= startedAt) {
+        return;
+      }
+      fail(message);
     }
   };
   const check = () => {
