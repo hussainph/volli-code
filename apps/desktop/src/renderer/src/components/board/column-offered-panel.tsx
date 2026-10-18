@@ -165,6 +165,7 @@ function OfferedRow({
       // never moved.
       {...{ [OFFERED_ROW_ATTRIBUTE]: expanded && !inert ? row : undefined }}
       data-offered-row-inert={inert ? "true" : undefined}
+      aria-disabled={inert ? "true" : undefined}
       aria-current={chosen ? "true" : undefined}
       className={cn(
         "flex items-center gap-2 rounded-md border text-left text-ui",

@@ -1004,9 +1004,10 @@ into large landing targets — every row with a digit plus `Move only` — and t
 picker, not the pointer, is what a release obeys, so every release under ⌥ lands
 on a named target. Landing on a named Automation opens the same delay window a
 plain drop into an armed column opens, with the same single Cancel; `Move only`
-moves the ticket and starts nothing. Over the card's own column the rows are drawn
-inert and `Move only` is lit: a release there is not an arrival, so it starts
-nothing whichever row is named. ⌥ is a state rather than an edge: the column is
+moves the ticket and starts nothing. Over the column every lifted card already
+stands in, the Offered list is drawn inert at both sizes — the compact list
+and the ⌥ picker — with `Move only` lit: a release there is not an arrival, so
+it starts nothing whichever row is named. ⌥ is a state rather than an edge: the column is
 expanded whenever ⌥ is held over it, however the two became true. Escape ends
 the drag; ⌥-up only closes the picker.
 _Avoid_: palette, radial menu, drag menu

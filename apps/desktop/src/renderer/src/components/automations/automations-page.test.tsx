@@ -10,7 +10,8 @@
  * clicks. A static render would prove the markup and none of the promises.
  */
 import { createRoot, type Root } from "react-dom/client";
-import { act } from "react";
+import { act, type ComponentProps } from "react";
+import type { DragEndEvent } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_CODE_MODE_POLICY,
@@ -46,6 +47,23 @@ vi.mock("./run-automation", () => ({
   runAutomationOnTicket: vi.fn(),
   runAutomationForProject: vi.fn(),
 }));
+
+// jsdom performs no layout, so no real pointer or keyboard drag can aim at a
+// lane row. The lane's own drop handler is captured off its `DndContext`
+// instead, and handed the event dnd-kit would have handed it.
+const laneDnd = vi.hoisted(() => ({
+  onDragEnd: null as ((event: DragEndEvent) => void) | null,
+}));
+vi.mock("@dnd-kit/core", async (importActual) => {
+  const actual = await importActual<typeof import("@dnd-kit/core")>();
+  return {
+    ...actual,
+    DndContext: (props: ComponentProps<typeof actual.DndContext>) => {
+      laneDnd.onDragEnd = props.onDragEnd ?? null;
+      return <actual.DndContext {...props} />;
+    },
+  };
+});
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -1232,6 +1250,37 @@ describe("the lane view", () => {
       expect(row.getAttribute("aria-roledescription")).toBe("sortable");
       expect(row.textContent).not.toMatch(/\d/);
     }
+  });
+
+  it("stores the rank a drop of a row ranked past the ninth asks for", async () => {
+    const crowd = Array.from({ length: 11 }, (_, index) =>
+      automation({ id: `crowd-${index}`, trigger: { kind: "columns", columns: ["doing"] } }),
+    );
+    const authored = crowd.map((row) => row.id).toReversed();
+    await mount({
+      automations: crowd,
+      orders: [{ projectId: "p1", status: "doing", rankedAutomationIds: authored, orderedAt: 1 }],
+    });
+    await openLanes();
+    const eleventh = document.querySelector('[data-lane-row="doing:crowd-0"]');
+    expect(eleventh?.getAttribute("data-lane-digit")).toBeNull();
+
+    // The eleventh row, dropped on the first.
+    await act(async () => {
+      laneDnd.onDragEnd?.({
+        active: { id: "doing:crowd-0" },
+        over: { id: "doing:crowd-10" },
+      } as DragEndEvent);
+    });
+
+    expect(doors.setColumnOrder).toHaveBeenCalledTimes(1);
+    expect(doors.setColumnOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "p1",
+        status: "doing",
+        rankedAutomationIds: ["crowd-0", ...authored.slice(0, -1)],
+      }),
+    );
   });
 
   it("marks an armed-but-switched-off bolt, tooltip, menu row, and authored lane digit alike", async () => {

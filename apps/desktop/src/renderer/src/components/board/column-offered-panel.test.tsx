@@ -102,7 +102,9 @@ describe("the Offered panel over the card's own column", () => {
     ]);
     for (const row of panel.querySelectorAll('[data-offered-row-inert="true"]')) {
       expect(row.className).toContain("opacity-50");
+      expect(row.getAttribute("aria-disabled")).toBe("true");
     }
+    expect(panel.querySelectorAll('[aria-disabled="true"]')).toHaveLength(ROWS.length);
     // The armed row is no default here: a plain release starts nothing either.
     expect(panel.textContent).not.toContain("default");
   });

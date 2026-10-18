@@ -842,6 +842,36 @@ describe("a released card whose landing column runs an automation", () => {
     expect(loopErrors()).toEqual([]);
   });
 
+  it("draws no column inert for a group lifted from two columns, since some of it arrives", async () => {
+    useBoardStore.setState({ selectedByProject: { p1: ["t1", "t3"] } });
+    await mountBoard();
+    const card = columnNamed("doing").querySelector("article")!;
+    const from = centre(card);
+    await act(async () => {
+      card.parentElement!.dispatchEvent(pointerEvent("pointerdown", from, true));
+    });
+    await move({ x: from.x, y: from.y + 6 }, true);
+    await move({ x: from.x, y: 500 }, true);
+    expect(document.querySelector("[data-board-drag]")).not.toBeNull();
+    expect(grown("doing")).toBe(true);
+
+    // The Todo card would arrive in Doing, so Doing's rows stay live targets.
+    const panel = columnNamed("doing").querySelector("[data-offered-panel]")!;
+    expect(panel.getAttribute("data-offered-inert")).toBeNull();
+    expect(panel.querySelector("[data-offered-row-inert]")).toBeNull();
+    expect(panel.querySelector('[aria-current="true"]')?.getAttribute("data-offered-row")).toBe(
+      "0",
+    );
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+      );
+    });
+    expect(document.querySelector("[data-board-drag]")).toBeNull();
+    expect(loopErrors()).toEqual([]);
+  });
+
   it(
     "lands in the destination column, triggers the automation once, and logs no render loop",
     async () => {
