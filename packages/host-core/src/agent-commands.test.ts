@@ -6031,6 +6031,172 @@ describe("agent command service", () => {
     expect(data.skipped.map((entry) => entry.ticket)).toEqual(["VC-2"]);
   });
 
+  /**
+   * A project with `done` Done tickets and `active` not-Done tickets, every one
+   * of them holding a retained worktree whose working tree is dirty on the same
+   * file. Ticket numbers 1..done are Done; the rest are active.
+   */
+  const doneAndActiveScenario = (done: number, active: number) => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const statuses = ["backlog", "todo", "doing", "needs_review"] as const;
+    for (let number = 1; number <= done + active; number += 1) {
+      insertTicket(
+        ctx.db,
+        testTicket("project-one", {
+          id: `ticket-${number}`,
+          ticketNumber: number,
+          status: number <= done ? "done" : statuses[number % statuses.length]!,
+          order: number,
+          worktreePath: `/wt/VC-${number}`,
+          branch: `volli/VC-${number}-work`,
+          baseBranch: "main",
+        }),
+      );
+    }
+    return scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+      if (args[0] === "merge-base") return "base-sha\n";
+      // Every worktree, Done or not, has the same uncommitted edit (the diff
+      // against the base includes the working tree) and the same new file.
+      if (args[0] === "diff") return rawModified(["src/shared.ts"]);
+      if (args[0] === "status") return "? src/new.ts\u0000";
+      return "";
+    });
+  };
+
+  it("scans only the worktrees of tickets that are not Done (VC-802)", async () => {
+    const scripted = doneAndActiveScenario(200, 30);
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      git: scripted.git,
+      gitAsync: scripted.gitAsync,
+      worktreeExists: () => true,
+    });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "conflicts",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const data = res.data as {
+      scanned: number;
+      worktrees: { ticket: string }[];
+      overlaps: { path: string; tickets: string[] }[];
+      skipped: { ticket: string }[];
+    };
+    const activeIds = Array.from({ length: 30 }, (_, index) => `VC-${201 + index}`);
+    // Done is out of scope, not skipped: it is in neither list.
+    expect(data.scanned).toBe(30);
+    expect(data.skipped).toEqual([]);
+    expect(data.worktrees.map(({ ticket }) => ticket).toSorted()).toEqual(activeIds.toSorted());
+    // A Done ticket's dirty worktree never reaches the matrix.
+    expect(data.overlaps.map(({ path }) => path)).toEqual(["src/new.ts", "src/shared.ts"]);
+    for (const overlap of data.overlaps) {
+      expect(overlap.tickets.toSorted()).toEqual(activeIds.toSorted());
+    }
+    // Git ran only in the 30 active worktrees, four reads each.
+    const touchedWorktrees = new Set(scripted.calls.map(({ cwd }) => cwd));
+    expect(touchedWorktrees.size).toBe(30);
+    for (let number = 1; number <= 200; number += 1) {
+      expect(touchedWorktrees.has(`/wt/VC-${number}`)).toBe(false);
+    }
+    expect(scripted.calls).toHaveLength(30 * 4);
+  });
+
+  it("answers within the CLI bound and names worktrees the deadline cut off (VC-802)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    for (let number = 1; number <= 12; number += 1) {
+      insertTicket(
+        ctx.db,
+        testTicket("project-one", {
+          id: `ticket-${number}`,
+          ticketNumber: number,
+          status: "doing",
+          order: number,
+          worktreePath: `/wt/VC-${number}`,
+          branch: `volli/VC-${number}-work`,
+          baseBranch: "main",
+        }),
+      );
+    }
+    // VC-1 and VC-2 answer at once; every other worktree's git never returns,
+    // the way a read wedged on a contended index lock does.
+    const scripted = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+      if (args[0] === "merge-base") return "base-sha\n";
+      return "";
+    });
+    const gitAsync: typeof scripted.gitAsync = (args, cwd) =>
+      cwd === "/wt/VC-1" || cwd === "/wt/VC-2"
+        ? scripted.gitAsync(args, cwd)
+        : new Promise<string>(() => {});
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      git: scripted.git,
+      gitAsync,
+      worktreeExists: () => true,
+    });
+
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const pending = service
+        .execute({ v: 1, cmd: "conflicts", args: {}, ctx: { cwd: "/repo/volli", env: {} } })
+        .finally(() => {
+          settled = true;
+        });
+      // Strictly inside the CLI's default 10 s wait for an answer.
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(settled).toBe(true);
+      const res = await pending;
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      const data = res.data as {
+        scanned: number;
+        worktrees: { ticket: string }[];
+        skipped: { ticket: string; reason: string }[];
+      };
+      expect(data.worktrees.map(({ ticket }) => ticket)).toEqual(["VC-1", "VC-2"]);
+      expect(data.scanned).toBe(2);
+      // Nothing is dropped: every worktree the deadline cut off — in flight or
+      // never started — is named, in board order.
+      expect(data.skipped.map(({ ticket }) => ticket)).toEqual(
+        Array.from({ length: 10 }, (_, index) => `VC-${index + 3}`),
+      );
+      for (const { reason } of data.skipped) {
+        expect(reason).toMatch(/not scanned before the deadline/i);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("exposes worktree identity through ticket.show fields and ticket.brief prose", async () => {
     ctx = openTestDb();
     insertProject(
