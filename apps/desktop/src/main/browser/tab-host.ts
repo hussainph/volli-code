@@ -775,6 +775,23 @@ export class BrowserTabHost extends BrowserTabRegistry<
     return { ...entry.state };
   }
 
+  /**
+   * Gives keyboard focus back to one shown page, after an app shortcut taken
+   * from it turned out to mean nothing to the renderer (VC-301). Main moved
+   * focus to the app before the renderer could decide, and a key that did
+   * nothing must not also strand the person outside the page they were typing
+   * in.
+   *
+   * Quiet for a tab that is gone or off screen, like {@link hide}: it asks for
+   * an end state, and a page nobody can see has no focus to return to.
+   */
+  focusPage(tabId: string): void {
+    const entry = this.tabs.get(tabId);
+    if (entry === undefined || entry.parent.kind !== "window") return;
+    const contents = entry.view.webContents;
+    if (!contents.isDestroyed()) contents.focus();
+  }
+
   /** Toggles Chromium DevTools inside this tab's measured plane. */
   toggleDevTools(tabId: string): void {
     const entry = this.requireTab(tabId);

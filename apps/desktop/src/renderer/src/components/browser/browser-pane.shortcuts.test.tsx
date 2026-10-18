@@ -62,7 +62,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function draw(panes: { tab: BrowserTabState; visible: boolean; onClose?: () => void }[]): void {
+interface DrawnPane {
+  tab: BrowserTabState;
+  visible: boolean;
+  onClose?: () => void;
+  onFocusPane?: () => void;
+}
+
+function draw(panes: DrawnPane[]): void {
   act(() => {
     root.render(
       <>
@@ -74,6 +81,7 @@ function draw(panes: { tab: BrowserTabState; visible: boolean; onClose?: () => v
             api={api}
             onTabState={() => undefined}
             onClose={pane.onClose}
+            onFocusPane={pane.onFocusPane}
           />
         ))}
       </>,
@@ -114,6 +122,40 @@ describe("BrowserPane app shortcuts", () => {
 
     expect(latest).toHaveBeenCalledOnce();
     expect(stale).not.toHaveBeenCalled();
+  });
+
+  it("reports ⌘W as not acted on for a pane its surface gave no close", () => {
+    draw([{ tab: tab("tab-1"), visible: true }]);
+
+    expect(runBrowserAppShortcut({ tabId: "tab-1", shortcut: { kind: "close-tab" } })).toBe(false);
+  });
+
+  it("focuses its own split-view pane before a chord from inside the page is replayed", () => {
+    const focusFirst = vi.fn();
+    const focusSecond = vi.fn();
+    draw([
+      { tab: tab("tab-1"), visible: true, onFocusPane: focusFirst },
+      { tab: tab("tab-2"), visible: true, onFocusPane: focusSecond },
+    ]);
+
+    runBrowserAppShortcut({
+      tabId: "tab-2",
+      shortcut: {
+        kind: "replay",
+        chord: {
+          key: "ArrowRight",
+          code: "ArrowRight",
+          metaKey: true,
+          ctrlKey: true,
+          altKey: false,
+          shiftKey: false,
+          repeat: false,
+        },
+      },
+    });
+
+    expect(focusSecond).toHaveBeenCalledOnce();
+    expect(focusFirst).not.toHaveBeenCalled();
   });
 
   it("returns focus to the pane's own address bar on ⌘L, with the address selected", () => {

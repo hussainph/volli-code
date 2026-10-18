@@ -97,6 +97,10 @@ export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
       host.toggleDevTools(input.tabId);
       return { ok: true };
     },
+    "volli:browser-focus-page": (input: BrowserTabIdInput): Result => {
+      host.focusPage(input.tabId);
+      return { ok: true };
+    },
     // Where a Session's tab is drawn is the person's decision and main's fact
     // (VC-238): the renderer asks, main answers with the tab as it now stands.
     "volli:browser-set-presentation": (input: BrowserTabSetPresentationInput) => ({

@@ -49,6 +49,7 @@ let host: {
   pictureOf: ReturnType<typeof vi.fn>;
   tracesOf: ReturnType<typeof vi.fn>;
   show: ReturnType<typeof vi.fn>;
+  focusPage: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -58,6 +59,7 @@ beforeEach(() => {
     pictureOf: vi.fn(() => "data:image/png;base64,AAA"),
     tracesOf: vi.fn(() => []),
     show: vi.fn(),
+    focusPage: vi.fn(),
   };
   registerBrowserTabIpcHandlers(host as unknown as BrowserTabHost);
 });
@@ -120,6 +122,11 @@ describe("Browser Tab IPC (VC-238)", () => {
       error: "Invalid Browser Trace request",
     });
     expect(host.tracesOf).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands keyboard focus back to the named page (VC-301)", () => {
+    expect(invoke("volli:browser-focus-page", { tabId: "opaque-1" })).toEqual({ ok: true });
+    expect(host.focusPage).toHaveBeenCalledWith("opaque-1");
   });
 
   it("refuses a malformed request at the guard, before the host is asked anything", () => {
