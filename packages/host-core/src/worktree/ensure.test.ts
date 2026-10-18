@@ -12,7 +12,7 @@ import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-hel
 import { getTicketRow, insertTicket } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import { ensure } from "./ensure";
-import { runGitCapturing, runGitCapturingAsync } from "./git";
+import { GitError, runGitCapturing, runGitCapturingAsync } from "./git";
 import { resetPhasesForTest } from "./phase";
 import { readWorktreeStatus } from "./read";
 import { resetRepositoryTurnsForTest } from "./repository-turn";
@@ -446,6 +446,53 @@ describe("ensure — failure", () => {
     expect(failed?.payload).toMatchObject({ kind: "worktree_failed", stage: "copy" });
   });
 
+  it("reports a timed-out `worktree add` as a timeout, not git's progress stderr, and does not retry it", async () => {
+    // What a real kill captured: git's own "Preparing worktree" line followed
+    // by carriage-return progress frames, long enough that the event's
+    // trailing-slice trim used to drop everything but progress.
+    const progress = Array.from(
+      { length: 200 },
+      (_, i) => `Updating files: ${i}% (${i}/3650)\r`,
+    ).join("");
+    const projectPath = tempDir("proj");
+    seed(projectPath);
+    const home = tempDir("home");
+    const { git, gitAsync, countMatching } = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        return `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\n`;
+      }
+      if (args[0] === "rev-parse" && args[1] === "--verify") {
+        if (args[3] === "refs/heads/main") return "sha\n";
+        throw new Error("no such ref");
+      }
+      if (args[0] === "worktree" && args[1] === "add") {
+        throw new GitError(
+          "Git command timed out after 120000ms.",
+          `Preparing worktree (new branch '${BRANCH}')\n${progress}`,
+          args,
+          true,
+        );
+      }
+      return "";
+    });
+
+    const result = await ensure(
+      { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" },
+      "ticket-1",
+    );
+
+    expect(result).toEqual({ ok: false, error: "Git command timed out after 120000ms." });
+    // A deadline is not a stale registration: prune-and-retry would only run
+    // the whole checkout a second time inside the repository's turn.
+    expect(countMatching(["worktree", "add"])).toBe(1);
+    const failed = listTicketEvents(ctx.db, "ticket-1").find(
+      (e) => e.payload.kind === "worktree_failed",
+    );
+    expect(failed?.payload).toMatchObject({ kind: "worktree_failed", stage: "create" });
+    const stderr = (failed!.payload as { stderr: string }).stderr;
+    expect(stderr).toMatch(/Git command timed out after 120000ms\.$/);
+  });
+
   it("errors on an unknown ticket without touching phases", async () => {
     const { git, gitAsync } = scriptedGit(() => "");
     const result = await ensure({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "nope");
@@ -603,6 +650,52 @@ describe("ensure → worktree status, against a real repository (VC-98)", () => 
       baseBranch: "main",
     });
   });
+});
+
+describe("ensure — a `worktree add` slower than the read deadline (VC-785)", () => {
+  it("completes through the production runner when a post-checkout hook sleeps past 8 s", async () => {
+    // The ticket's acceptance, at production scale on purpose: the runner a
+    // Session start really uses, and a hook that outlasts its 8 s read
+    // deadline. Under one shared SIGKILL deadline this add died mid-hook and
+    // the Session never started.
+    const projectPath = tempDir("slow-hook-repo");
+    runRepoGit(projectPath, ["init", "-b", "main"]);
+    writeFileSync(join(projectPath, "README.md"), "# repo\n");
+    runRepoGit(projectPath, ["add", "README.md"]);
+    runRepoGit(projectPath, ["commit", "-m", "initial"]);
+    const marker = join(projectPath, "post-checkout.ran");
+    mkdirSync(join(projectPath, ".git", "hooks"), { recursive: true });
+    writeFileSync(
+      join(projectPath, ".git", "hooks", "post-checkout"),
+      `#!/bin/sh\nsleep 10\ntouch "${marker}"\n`,
+      { mode: 0o755 },
+    );
+    insertProject(
+      ctx.db,
+      testProject({ id: "p1", path: projectPath, ticketPrefix: "VC", baseBranch: "main" }),
+    );
+    insertTicket(
+      ctx.db,
+      testTicket("p1", { id: "t1", ticketNumber: 12, title: "MCP server", usesWorktree: true }),
+    );
+
+    const outcome = await ensure(
+      {
+        db: ctx.db,
+        git: poisonedSyncGit,
+        gitAsync: runGitCapturingAsync,
+        home: tempDir("slow-hook-home"),
+        blobsRoot: blobsRoot(tempDir("slow-hook-userdata")),
+      },
+      "t1",
+    );
+
+    expect(outcome).toMatchObject({ ok: true, value: { created: true } });
+    expect(existsSync(marker)).toBe(true);
+    const worktreePath = getTicketRow(ctx.db, "t1")!.worktree_path!;
+    expect(existsSync(join(worktreePath, "README.md"))).toBe(true);
+    expect(repoGitOut(projectPath, ["worktree", "list", "--porcelain"])).not.toContain("locked");
+  }, 60_000);
 });
 
 /** Real git's stdout, trimmed — for reading back what the checkout is on. */

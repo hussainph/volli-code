@@ -63,8 +63,9 @@
  *    this.
  *  - A change must be BOUNDED. Waiting here has no deadline, so an unbounded
  *    change stops every Session start in that project for as long as it runs.
- *    Today that holds because every change is git under a runner deadline
- *    (`GIT_COMMAND_TIMEOUT_MS`, worst case a prune-add-prune-add retry).
+ *    Today that holds because every change is git under the runner's mutation
+ *    backstop (`GIT_MUTATION_TIMEOUT_MS`; worst case a prune-add-prune-add
+ *    retry, and a timed-out add is not retried).
  *    A change with no deadline of its own does not belong in here.
  *
  * The word is CONTEXT.md's. A Tab hold is "one party's turn to drive" a shared
