@@ -276,6 +276,45 @@ describe("createHostMaintenance", () => {
     ]);
   });
 
+  it("releases, once at start, the terminals a previous launch left parked (VC-833)", async () => {
+    recordingLoops();
+    const ledger = new SpawnLedger(testDb.db, { createId: () => "row-1" });
+    const startedAt = Date.now() - 60_000;
+    ledger.recordSpawn({
+      sessionId: "session-1",
+      ticketId: null,
+      projectId: null,
+      kind: "terminal",
+      pid: 4100,
+      pgid: 4100,
+      startedAt,
+      cwd: "/w",
+      command: "/bin/zsh",
+    });
+    ledger.markParked("row-1", startedAt + 1);
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const processes = vi.fn(async () => [
+      { pid: 4100, ppid: 1, pgid: 4100, startedAt, rssBytes: 0, tty: null, command: "", cwd: null },
+    ]);
+    const signal = vi.fn();
+    const maintenance = createHostMaintenance({
+      db: testDb.db,
+      ports: { events, attention },
+      worktrees,
+      processReaders: readers(),
+      parkedTerminals: { processes, signal },
+    });
+    expect(processes).not.toHaveBeenCalled();
+    maintenance.start();
+    maintenance.start();
+    maintenance.stop();
+    await maintenance.settled();
+    expect(processes).toHaveBeenCalledOnce();
+    expect(signal.mock.calls).toEqual([[-4100, "SIGCONT"]]);
+    expect(maintenance.spawnLedger.listParkedTerminals(Date.now())).toEqual([]);
+    info.mockRestore();
+  });
+
   it("stops without building a retention watch nobody started", () => {
     const { calls } = recordingLoops();
     const maintenance = createHostMaintenance({

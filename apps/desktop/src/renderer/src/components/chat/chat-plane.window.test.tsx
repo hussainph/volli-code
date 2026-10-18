@@ -285,13 +285,13 @@ function hostChatStore(
     signal: null,
     modelSelection: DEFAULT_SELECTION,
     modelTier: null,
-    turnActive: false,
+    turnActive: true,
     lastActivityAt: 0,
     bornTicketless: true,
     scheduledResume: null,
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
-    liveExecutor: null,
+    liveExecutor: { id: "running-executor" },
     queue: [hostRow("host follow-up", options)],
     queueRevision: 1,
   };
@@ -915,6 +915,48 @@ describe("host-owned rows with cloud off", () => {
     expect(cancel).toHaveBeenCalledTimes(2);
     expect(remove()).toBeNull();
   });
+
+  it.each(["remove", "edit"] as const)(
+    "retires an accepted idle-send shadow after recovery %s",
+    async (action) => {
+      const { store, cancel } = hostChatStore();
+      await mountPlane(store, modelClient(DEFAULT_SELECTION));
+      await act(async () => {
+        store.getState().rememberIdleSend(SESSION, { id: "q1", text: "host follow-up" }, true);
+        store.getState().settle(SESSION, "Attachment failed");
+      });
+      if (action === "remove") {
+        await act(async () =>
+          container!
+            .querySelector<HTMLButtonElement>(
+              '[aria-label="Remove queued message: host follow-up"]',
+            )!
+            .click(),
+        );
+      } else {
+        const trigger = container!.querySelector<HTMLButtonElement>(
+          '[aria-label="Queued message actions: host follow-up"]',
+        )!;
+        await act(async () =>
+          trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })),
+        );
+        const item = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+          (node) => node.textContent?.includes("Edit message"),
+        )!;
+        await act(async () => item.click());
+      }
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(store.getState().idleSends[SESSION]).toBeUndefined());
+      await act(async () => store.getState().settle(SESSION, null));
+      expect(container!.querySelector(".is-user")).toBeNull();
+      expect(
+        [...container!.querySelectorAll('[role="status"]')].some((node) =>
+          node.textContent?.includes("Working"),
+        ),
+      ).toBe(false);
+      expect(composer()?.value).toBe(action === "edit" ? "host follow-up" : "");
+    },
+  );
 
   // Cross-Client edit safety: cancel-to-composer persists its recovery copy
   // before asking the host, and that wait is long enough for another Client to
@@ -1721,7 +1763,7 @@ describe("/copy on a Session holding only its newest window (VC-315)", () => {
 describe("VC-758 visible timeline regressions", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => disposeChatClient(SESSION));
-  it("shows the message immediately while promotion is pending", async () => {
+  it("shows the first message as sent with Working while promotion is pending", async () => {
     const { store } = provisionalChatStore(() => new Promise<boolean>(() => {}));
     await mountPlane(store, modelClient(DEFAULT_SELECTION));
     await act(async () => {
@@ -1736,9 +1778,352 @@ describe("VC-758 visible timeline regressions", () => {
     expect(container?.textContent).toContain("waiting on promotion");
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(600);
-    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
-      "Sending…",
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    expect(container?.querySelector('[role="status"]')?.textContent).toContain("Working");
+  });
+
+  it("keeps the opening bubble and Working in place through host queue and turn ownership", async () => {
+    const store = chatStore([]);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: {
+            ...sessions[SESSION]!.projection!,
+            status: "open",
+            modelSelection: DEFAULT_SELECTION,
+          },
+        },
+      },
+    }));
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "opening", text: "First words", delivery: "send" });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    const bubble = container!.querySelector(".is-user");
+    const workingMark = () =>
+      [...container!.querySelectorAll('[role="status"]')].find((node) =>
+        node.textContent?.includes("Working"),
+      );
+    const working = workingMark();
+    const assertOpening = () => {
+      expect(container!.querySelectorAll(".is-user")).toHaveLength(1);
+      expect(container!.querySelector(".is-user")).toBe(bubble);
+      expect(workingMark()).toBe(working);
+      expect(working?.textContent).toContain("Working");
+      expect(container!.querySelector('[data-slot="message-delivery"]')).toBeNull();
+      expect(
+        container!.querySelector('[aria-label="Remove queued message: First words"]'),
+      ).toBeNull();
+      expect(
+        bubble!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    };
+    assertOpening();
+    await advanceProgressTime(1000);
+    assertOpening();
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [{ id: "opening", text: "First words", queueState: "queued" }],
+          },
+        },
+      }));
+      drafts.dropHeld(SESSION, "opening");
+    });
+    assertOpening();
+    // Durable intent can precede the actual turn and delivery receipt too.
+    const pendingFrame: ChatSessionFrame = {
+      sessionId: SESSION,
+      sequence: 1,
+      event: {
+        id: "opening-command-event",
+        sessionId: SESSION,
+        sequence: 1,
+        occurredAt: 1,
+        recordedAt: 1,
+        attachmentId: null,
+        commandId: "opening-command",
+        provenance: { source: { kind: "system", id: "runtime", detail: null }, venue: null },
+        payload: {
+          kind: "command.recorded",
+          command: {
+            id: "opening-command",
+            sessionId: SESSION,
+            createdAt: 1,
+            route: null,
+            intent: {
+              kind: "message.submit",
+              reference: { id: "artifact", mediaType: null, digest: null },
+            },
+          },
+        },
+      },
+      transcript: {
+        message: { id: "opening", role: "user", parts: [{ type: "text", text: "First words" }] },
+      },
+    };
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [],
+            transcript: appendFrames(sessions[SESSION]!.transcript, [pendingFrame]),
+          },
+        },
+      }));
+    });
+    await advanceProgressTime(1000);
+    expect(
+      messageDeliveryLabels(store.getState().sessions[SESSION]!.transcript.frames).get("opening"),
+    ).toBe("Pending");
+    assertOpening();
+    await act(async () => {
+      const message: UIMessage = {
+        id: "opening",
+        role: "user",
+        parts: [{ type: "text", text: "First words" }],
+      };
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [],
+            lifecycle: "working",
+            transcript: {
+              ...EMPTY_TRANSCRIPT,
+              turnActive: true,
+              turnEpoch: 1,
+              messages: [message],
+              durableMessages: [message],
+            },
+          },
+        },
+      }));
+    });
+    assertOpening();
+  });
+
+  it("keeps an idle Enter send after history in the transcript while a closed binding reattaches", async () => {
+    const history: UIMessage[] = [
+      { id: "old-user", role: "user", parts: [{ type: "text", text: "Earlier request" }] },
+      { id: "old-reply", role: "assistant", parts: [{ type: "text", text: "Earlier reply" }] },
+    ];
+    const store = chatStore(history);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: {
+            ...sessions[SESSION]!.projection!,
+            status: "open",
+            modelSelection: DEFAULT_SELECTION,
+          },
+          transcript: { ...sessions[SESSION]!.transcript, turnEpoch: 2, before: 10 },
+        },
+      },
+    }));
+    const result = Promise.withResolvers<unknown>();
+    const submit = vi.fn<(input: ChatCommandRequest) => Promise<unknown>>(() => result.promise);
+    getOrCreateChatClient(SESSION, {
+      rpc: {
+        session: {
+          command: { mutate: submit },
+          projection: {
+            query: async () => {
+              const slice = store.getState().sessions[SESSION]!;
+              return {
+                projection: {
+                  ...slice.projection!,
+                  queueRevision: 1,
+                  queue: slice.queue.map((entry) => ({
+                    id: entry.id,
+                    commandId: entry.id,
+                    state: "queued",
+                    message: {
+                      id: entry.id,
+                      role: "user",
+                      parts: [{ type: "text", text: entry.text }],
+                    },
+                  })),
+                },
+              };
+            },
+          },
+        },
+      } as unknown as ChatSessionRpc,
+      store,
+      scheduler: { schedule: () => () => undefined },
+      newCommandId: () => "reattach-command",
+      createSession: async () => {
+        throw new Error("not under test");
+      },
+      attachSession: async () => {
+        throw new Error("the host owns reattachment");
+      },
+      notify: () => undefined,
+      renameSession: () => undefined,
+    });
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    await act(async () => {
+      const box = composer()!;
+      type(box, "Continue after relaunch");
+    });
+    await act(async () =>
+      composer()!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      ),
     );
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({
+      command: { kind: "message.submit", delivery: "queue" },
+    });
+    const message = useChatDraftsStore.getState().drafts[SESSION]!.held[0]!;
+    expect(message.delivery).toBe("send");
+    const currentBubble = () =>
+      [...container!.querySelectorAll(".is-user")].find((node) =>
+        node.textContent?.includes(message.text),
+      );
+    const workingMark = () =>
+      [...container!.querySelectorAll('[role="status"]')].find((node) =>
+        node.textContent?.includes("Working"),
+      );
+    let bubble = currentBubble();
+    let working = workingMark();
+    expect(bubble).toBeDefined();
+    expect(working).toBeDefined();
+    const assertSent = () => {
+      expect(currentBubble()).toBe(bubble);
+      expect(workingMark()).toBe(working);
+      expect(container!.querySelectorAll(".is-user")).toHaveLength(2);
+      expect(container!.textContent).toContain("Earlier reply");
+      expect(container!.querySelector('[data-slot="message-delivery"]')).toBeNull();
+      expect(
+        container!.querySelector('[aria-label="Remove queued message: Continue after relaunch"]'),
+      ).toBeNull();
+      expect(
+        bubble!.compareDocumentPosition(working!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    };
+    await advanceProgressTime(1000);
+    assertSent();
+    await act(async () => {
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            queue: [{ id: message.id, text: message.text, queueState: "queued" }],
+          },
+        },
+      }));
+      result.resolve({ sessionId: SESSION, receipt: { status: "accepted" } });
+    });
+    await vi.waitFor(() =>
+      expect(useChatDraftsStore.getState().drafts[SESSION]?.held ?? []).toEqual([]),
+    );
+    assertSent();
+    // Queue updates are synchronous; durable transcript frames may still be
+    // buffered by the stream scheduler. Neither the words nor Working leave.
+    await act(async () =>
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: { ...sessions[SESSION]!, queue: [] },
+        },
+      })),
+    );
+    await advanceProgressTime(1000);
+    assertSent();
+    const markup = bubble!.outerHTML;
+    await act(async () => root?.render(null));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    bubble = currentBubble();
+    working = workingMark();
+    expect(bubble?.outerHTML).toBe(markup);
+    expect(working).toBeDefined();
+    assertSent();
+    await act(async () =>
+      store.setState(({ sessions }) => {
+        const durable: UIMessage = {
+          id: message.id,
+          role: "user",
+          parts: [{ type: "text", text: message.text }],
+        };
+        return {
+          sessions: {
+            ...sessions,
+            [SESSION]: {
+              ...sessions[SESSION]!,
+              queue: [],
+              lifecycle: "working",
+              projection: {
+                ...sessions[SESSION]!.projection!,
+                turnActive: true,
+                liveExecutor: { id: "reattached" },
+              },
+              transcript: {
+                ...sessions[SESSION]!.transcript,
+                messages: [...history, durable],
+                durableMessages: [...history, durable],
+                turnActive: true,
+                turnEpoch: 3,
+              },
+            },
+          },
+        };
+      }),
+    );
+    assertSent();
+    expect(store.getState().idleSends[SESSION]).toBeUndefined();
+  });
+
+  it("returns an opening queue to recovery when a real blocker arrives", async () => {
+    const store = chatStore([]);
+    store.setState(({ sessions }) => ({
+      sessions: {
+        ...sessions,
+        [SESSION]: {
+          ...sessions[SESSION]!,
+          projection: { ...sessions[SESSION]!.projection!, modelSelection: DEFAULT_SELECTION },
+          queue: [{ id: "blocked", text: "Blocked words", queueState: "queued" }],
+        },
+      },
+    }));
+    await mountPlane(store, modelClient(DEFAULT_SELECTION));
+    expect(container!.querySelector(".is-user")?.textContent).toContain("Blocked words");
+    expect(container!.textContent).toContain("Working");
+    await act(async () =>
+      store.setState(({ sessions }) => ({
+        sessions: {
+          ...sessions,
+          [SESSION]: {
+            ...sessions[SESSION]!,
+            lifecycle: "error",
+            sessionError: "Attachment failed",
+          },
+        },
+      })),
+    );
+    expect(container!.querySelector('[data-slot="session-blocker"]')?.textContent).toContain(
+      "Attachment failed",
+    );
+    expect(
+      container!.querySelector('[aria-label="Remove queued message: Blocked words"]'),
+    ).not.toBeNull();
+    expect(container!.querySelector(".is-user")).toBeNull();
+    expect(
+      [...container!.querySelectorAll('[role="status"]')].some((node) =>
+        node.textContent?.includes("Working"),
+      ),
+    ).toBe(false);
   });
 
   it("removes delayed sending state on acceptance and keeps the same quiet bubble through durable handoff", async () => {
@@ -1866,7 +2251,7 @@ describe("VC-758 visible timeline regressions", () => {
     await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
     expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await advanceProgressTime(600);
-    expect(container?.textContent).toContain("Sends after this step");
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
     await act(async () => result.resolve({ sessionId: SESSION, receipt: { status: "accepted" } }));
     await vi.waitFor(() =>
       expect(useChatDraftsStore.getState().drafts[SESSION]?.held[0]).toMatchObject({
@@ -1914,14 +2299,14 @@ it("VC-758 keeps Working above undelivered steering even while the stream report
   expect(status?.textContent).toContain("Working");
   expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
   await advanceProgressTime(600);
-  expect(container?.textContent).toContain("Sends after this step");
-  // The current user message precedes the mark; the held steering follows it.
-  const pending = [...(container?.querySelectorAll('[data-slot="message-delivery"]') ?? [])].find(
-    (node) => node.textContent?.includes("Sends after this step"),
+  expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+  // Steering still follows Working; only its redundant delivery tab is gone.
+  const pending = [...(container?.querySelectorAll(".is-user") ?? [])].find((node) =>
+    node.textContent?.includes("focus here"),
   );
   expect(pending).toBeDefined();
   expect(status!.compareDocumentPosition(pending!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-  expect(container?.querySelector('[data-slot="message-delivery"]')).not.toBeNull();
+  expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
 });
 
 async function advanceProgressTime(ms: number) {
@@ -2134,6 +2519,74 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     await advanceProgressTime(1);
     expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
       "Sending…",
+    );
+  });
+
+  const submitted = (sequence: number, commandId: string, message: UIMessage) =>
+    frame(
+      sequence,
+      {
+        kind: "command.recorded",
+        command: {
+          id: commandId,
+          sessionId: SESSION,
+          createdAt: 0,
+          route: null,
+          intent: {
+            kind: "message.submit",
+            reference: { id: `artifact-${sequence}`, mediaType: null, digest: null },
+          },
+        },
+      },
+      message,
+    );
+
+  it("keeps the wait's clock from the hold when ownership hands off part-way through it", async () => {
+    vi.useFakeTimers();
+    const store = chatStore([]);
+    const message: UIMessage = {
+      id: "handoff-mid-wait",
+      role: "user",
+      parts: [{ type: "text", text: "Halfway there" }],
+    };
+    useChatDraftsStore
+      .getState()
+      .holdMessage(SESSION, { id: message.id, text: "Halfway there", delivery: "send" });
+    await mountPlane(store);
+    await advanceProgressTime(300);
+    await ingest(store, [submitted(1, "held-command", message)]);
+    expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
+    await advanceProgressTime(299);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(1);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Sending…",
+    );
+  });
+
+  it("never holds a wait longer than 600ms after the tab mounted when its stamp arrives late", async () => {
+    vi.useFakeTimers();
+    const store = chatStore([]);
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "late-stamp", text: "Line up", delivery: "queue" });
+    // Accepted before the tab mounts: "Queued", with no pending stamp yet.
+    drafts.amendHeldMessage(SESSION, "late-stamp", (held) => ({ ...held, deliveryAccepted: true }));
+    await mountPlane(store);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(300);
+    // Pending again, so the message is stamped now — 300ms after the tab mounted.
+    await act(async () =>
+      drafts.amendHeldMessage(SESSION, "late-stamp", (held) => {
+        const next = { ...held };
+        delete next.deliveryAccepted;
+        return next;
+      }),
+    );
+    await advanceProgressTime(299);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(1);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Queuing…",
     );
   });
 

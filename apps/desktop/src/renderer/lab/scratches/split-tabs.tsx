@@ -407,7 +407,7 @@ function PaneBody({
   onFocus,
 }: PaneBodyProps): React.JSX.Element {
   const token = React.useRef<object>({});
-  const started = React.useRef<number>(Date.now());
+  const [started] = React.useState(() => Date.now());
 
   React.useEffect(() => {
     onInstance(pane.id, token.current);
@@ -477,7 +477,7 @@ function PaneBody({
           className="font-mono text-label tabular-nums text-muted-foreground"
           title="How long this pane has been running. Back to 00:00 means it was killed and rebuilt."
         >
-          {elapsed(now - started.current)}
+          {elapsed(now - started)}
         </span>
         <span
           className="h-0.5 w-10 shrink-0 overflow-hidden rounded-full bg-muted"

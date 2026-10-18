@@ -225,6 +225,9 @@ export function renderResumeArgv(template: readonly string[], harnessSessionId: 
  *    <resume.latest...>`.
  * 3. Otherwise (a harness declaring neither, or declaring only empty argv) →
  *    `null` — the caller falls back to a fresh launch, and says so.
+ *
+ * The docs' per-harness resume table is this function's output for each
+ * built-in (`harness/resume-reference.ts`).
  */
 export function buildResumeCommand(
   adapter: HarnessAdapter,

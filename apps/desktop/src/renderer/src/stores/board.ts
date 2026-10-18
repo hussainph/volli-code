@@ -783,22 +783,39 @@ export function createBoardStore(gateway: BoardGateway = defaultGateway) {
         // body a person wrote. A row already on the board keeps whatever mark it
         // had: the roster did not read its body either way.
         const unloaded = { ...get().unloadedTicketBodies };
-        for (const row of tickets) if (!bodyById.has(row.id)) unloaded[row.id] = true;
+        // The marks move only when the board's membership does: an arrival or
+        // a departure. Neither happens on a refresh that read back the same rows.
+        let membershipChanged = false;
+        for (const row of tickets) {
+          if (bodyById.has(row.id)) continue;
+          unloaded[row.id] = true;
+          membershipChanged = true;
+        }
         // And a ticket that LEFT the board takes its mark with it, so an archive
         // and an unarchive cannot leave a stale entry behind forever.
         const survivingIds = new Set(tickets.map((row) => row.id));
-        for (const ticket of previous) if (!survivingIds.has(ticket.id)) delete unloaded[ticket.id];
+        for (const ticket of previous) {
+          if (survivingIds.has(ticket.id)) continue;
+          delete unloaded[ticket.id];
+          membershipChanged = true;
+        }
+        const previousLabels = get().labelsByProject[projectId] ?? [];
+        const nextLabels = preserveIdentities(previousLabels, labels, sameLabel);
+        const sliceChanged = next !== previous;
+        const labelsChanged =
+          !(projectId in get().labelsByProject) || nextLabels !== previousLabels;
+        // Nothing changed, nothing written (VC-447): a new outer map would
+        // re-render every whole-map subscriber (the command palette reads all
+        // of `ticketsByProject`) even with every slice inside it kept.
+        if (!sliceChanged && !labelsChanged && !membershipChanged) return;
         set({
-          ticketsByProject: { ...get().ticketsByProject, [projectId]: next },
-          labelsByProject: {
-            ...get().labelsByProject,
-            [projectId]: preserveIdentities(
-              get().labelsByProject[projectId] ?? [],
-              labels,
-              sameLabel,
-            ),
-          },
-          unloadedTicketBodies: unloaded,
+          ...(sliceChanged
+            ? { ticketsByProject: { ...get().ticketsByProject, [projectId]: next } }
+            : {}),
+          ...(labelsChanged
+            ? { labelsByProject: { ...get().labelsByProject, [projectId]: nextLabels } }
+            : {}),
+          ...(membershipChanged ? { unloadedTicketBodies: unloaded } : {}),
         });
         // The same re-home a wholesale hydrate does, for the same reason: a CLI
         // archive or another window's mutation drops a ticket here with no local

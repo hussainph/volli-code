@@ -59,8 +59,9 @@ describe("vendored Pi execution tools", () => {
       { type: "text", text: "Successfully replaced 2 block(s) in nested/file.txt." },
     ]);
     expect(result.details?.firstChangedLine).toBe(1);
+    // The patch is byte-faithful: CRLF endings and the BOM on line 1 included.
     expect(result.details?.patch).toBe(
-      "--- nested/file.txt\n+++ nested/file.txt\n@@ -1,3 +1,3 @@\n-alpha\n beta\n+delta\n gamma\n",
+      "--- nested/file.txt\n+++ nested/file.txt\n@@ -1,3 +1,3 @@\n-\ufeffalpha\r\n-beta\r\n+\ufeffbeta\r\n+delta\r\n gamma\r\n",
     );
     expect(await readFile(join(env.cwd, "nested/file.txt"), "utf8")).toBe(
       "\ufeffbeta\r\ndelta\r\ngamma\r\n",

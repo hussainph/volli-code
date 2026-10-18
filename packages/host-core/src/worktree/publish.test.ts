@@ -60,22 +60,22 @@ function seedTicket(overrides: { prUrl?: string | null } = {}): {
 
 /**
  * A git runner that answers only what the commit path needs (sequencer probe +
- * status/add/commit). Both required seams are supplied because the commit probes
+ * status/add/commit). The required seam is supplied because the commit probes
  * run on the async runner (VC-383), not on the host repository by accident.
  */
-function commitGit(status: string): Pick<WorktreePorts, "git" | "gitAsync"> {
+function commitGit(status: string): Pick<WorktreePorts, "gitAsync"> {
   const scripted = scriptedGit((args) => {
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return "/repo/.worktrees/VC-1/.git";
     if (args[0] === "status") return status;
     return "";
   });
-  return { git: scripted.git, gitAsync: scripted.gitAsync };
+  return { gitAsync: scripted.gitAsync };
 }
 
-/** A git that answers every probe with nothing, on both seams. */
-function emptyGit(): Pick<WorktreePorts, "git" | "gitAsync"> {
+/** A git that answers every probe with nothing. */
+function emptyGit(): Pick<WorktreePorts, "gitAsync"> {
   const scripted = scriptedGit(() => "");
-  return { git: scripted.git, gitAsync: scripted.gitAsync };
+  return { gitAsync: scripted.gitAsync };
 }
 
 function events(db: TestDb["db"], ticketId: string): TicketEvent[] {

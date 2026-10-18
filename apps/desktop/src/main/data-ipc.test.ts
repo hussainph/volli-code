@@ -73,9 +73,8 @@ import {
 
 // Keep the production detector entrypoints observable. Project-create tests
 // usually inject a detector; this seam also verifies the uninjected default.
-const { detectAsync, detectSync } = vi.hoisted(() => ({
+const { detectAsync } = vi.hoisted(() => ({
   detectAsync: vi.fn<(path: string) => Promise<string | null>>(),
-  detectSync: vi.fn<(path: string) => string | null>(),
 }));
 
 vi.mock("../../../../packages/host-core/src/project-base-branch", async (importOriginal) => ({
@@ -83,7 +82,6 @@ vi.mock("../../../../packages/host-core/src/project-base-branch", async (importO
     typeof import("../../../../packages/host-core/src/project-base-branch")
   >()),
   detectProjectBaseBranchAsync: detectAsync,
-  detectProjectBaseBranch: detectSync,
 }));
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
@@ -198,9 +196,9 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
   ensure: vi.fn(),
-  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` and by the
-  // commit/push handlers' deps — needs a stub export so that value import
-  // doesn't throw under strict ESM mocking.
+  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps`, the
+  // commit/push handlers' deps and the orphan cleanup's gate port — needs a
+  // stub export so that value import doesn't throw under strict ESM mocking.
   runGitCapturing: vi.fn(),
   runGitCapturingAsync: vi.fn(),
   runNet: vi.fn(),
@@ -275,6 +273,8 @@ import {
   trimFinishedWorktree,
   orphanCleanupEngine,
   acquireDeletionLease,
+  runGitCapturing,
+  runGitCapturingAsync,
 } from "@volli/host-core/worktree";
 import {
   updateTicketFieldsCommand,
@@ -698,7 +698,6 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     const path = freshProjectDir();
     const branch = deferredBranch();
     detectAsync.mockReturnValue(branch.promise);
-    detectSync.mockReturnValue("sync-default");
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
 
     const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
@@ -706,7 +705,6 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
       name: "Volli Code",
     });
     await vi.waitFor(() => expect(detectAsync).toHaveBeenCalledExactlyOnceWith(path));
-    expect(detectSync).not.toHaveBeenCalled();
     expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
       ok: true,
       data: { projects: [] },
@@ -4296,6 +4294,12 @@ describe("volli:worktree-orphans", () => {
       expect(result).toEqual({ ok: true, run, receipt });
       expect(vi.mocked(cleanupOrphans)).toHaveBeenCalledWith(
         expect.objectContaining({
+          // The blocking runner reaches the gate's reads and nothing else; the
+          // removal and the prune ride the async one (VC-786).
+          worktree: expect.objectContaining({
+            gateGit: runGitCapturing,
+            gitAsync: runGitCapturingAsync,
+          }),
           busyWorktreeSites: noBusySites,
           releaseAgentSites: noAgentSites,
           engine: expect.anything(),

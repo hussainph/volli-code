@@ -10,12 +10,14 @@
  * clicks. A static render would prove the markup and none of the promises.
  */
 import { createRoot, type Root } from "react-dom/client";
-import { act } from "react";
+import { act, type ComponentProps } from "react";
+import type { DragEndEvent } from "@dnd-kit/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  MAX_OFFERED_DIGITS,
   NO_AUTOMATION_TRIGGER,
 } from "@volli/shared";
 import type {
@@ -45,6 +47,23 @@ vi.mock("./run-automation", () => ({
   runAutomationOnTicket: vi.fn(),
   runAutomationForProject: vi.fn(),
 }));
+
+// jsdom performs no layout, so no real pointer or keyboard drag can aim at a
+// lane row. The lane's own drop handler is captured off its `DndContext`
+// instead, and handed the event dnd-kit would have handed it.
+const laneDnd = vi.hoisted(() => ({
+  onDragEnd: null as ((event: DragEndEvent) => void) | null,
+}));
+vi.mock("@dnd-kit/core", async (importActual) => {
+  const actual = await importActual<typeof import("@dnd-kit/core")>();
+  return {
+    ...actual,
+    DndContext: (props: ComponentProps<typeof actual.DndContext>) => {
+      laneDnd.onDragEnd = props.onDragEnd ?? null;
+      return <actual.DndContext {...props} />;
+    },
+  };
+});
 
 let root: Root | null = null;
 let container: HTMLElement | null = null;
@@ -1185,6 +1204,83 @@ describe("the lane view", () => {
     const row = document.querySelector('[data-lane-row="doing:shared"]');
     expect(row?.getAttribute("data-lane-digit")).toBe("1");
     expect(row?.getAttribute("data-lane-arming")).toBe("ready");
+  });
+
+  it("draws rows ranked past the ninth without a digit, still in place and draggable", async () => {
+    const crowd = Array.from({ length: 11 }, (_, index) =>
+      automation({
+        id: `crowd-${index}`,
+        // Lettered, so a digit in a row's text can only be a printed digit.
+        name: `Crowd ${String.fromCharCode(65 + index)}`,
+        trigger: { kind: "columns", columns: ["doing"] },
+      }),
+    );
+    await mount({
+      automations: crowd,
+      orders: [
+        {
+          projectId: "p1",
+          status: "doing",
+          rankedAutomationIds: crowd.map((row) => row.id).toReversed(),
+          orderedAt: 1,
+        },
+      ],
+    });
+    await openLanes();
+
+    const rows = [...document.querySelectorAll('[data-lane-row^="doing:"]')];
+    expect(rows.map((row) => row.getAttribute("data-lane-row"))).toEqual(
+      crowd.map((row) => `doing:${row.id}`).toReversed(),
+    );
+    expect(rows.map((row) => row.getAttribute("data-lane-digit"))).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      null,
+      null,
+    ]);
+    // dnd-kit's own sortable attributes: the digitless rows drag like the rest.
+    for (const row of rows.slice(MAX_OFFERED_DIGITS)) {
+      expect(row.getAttribute("aria-roledescription")).toBe("sortable");
+      expect(row.textContent).not.toMatch(/\d/);
+    }
+  });
+
+  it("stores the rank a drop of a row ranked past the ninth asks for", async () => {
+    const crowd = Array.from({ length: 11 }, (_, index) =>
+      automation({ id: `crowd-${index}`, trigger: { kind: "columns", columns: ["doing"] } }),
+    );
+    const authored = crowd.map((row) => row.id).toReversed();
+    await mount({
+      automations: crowd,
+      orders: [{ projectId: "p1", status: "doing", rankedAutomationIds: authored, orderedAt: 1 }],
+    });
+    await openLanes();
+    const eleventh = document.querySelector('[data-lane-row="doing:crowd-0"]');
+    expect(eleventh?.getAttribute("data-lane-digit")).toBeNull();
+
+    // The eleventh row, dropped on the first.
+    await act(async () => {
+      laneDnd.onDragEnd?.({
+        active: { id: "doing:crowd-0" },
+        over: { id: "doing:crowd-10" },
+      } as DragEndEvent);
+    });
+
+    expect(doors.setColumnOrder).toHaveBeenCalledTimes(1);
+    expect(doors.setColumnOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "p1",
+        status: "doing",
+        rankedAutomationIds: ["crowd-0", ...authored.slice(0, -1)],
+      }),
+    );
   });
 
   it("marks an armed-but-switched-off bolt, tooltip, menu row, and authored lane digit alike", async () => {

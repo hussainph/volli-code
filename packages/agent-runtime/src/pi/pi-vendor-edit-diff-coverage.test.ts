@@ -1,34 +1,57 @@
 import { applyPatch } from "diff";
 import { describe, expect, it } from "vite-plus/test";
 import {
-  applyEditsToNormalizedContent,
+  applyEditsToContent,
   applyReplacementsPreservingUnchangedLines,
-  detectLineEnding,
   fuzzyFindText,
   generateDiffString,
   generateUnifiedPatch,
   normalizeForFuzzyMatch,
   normalizeToLF,
-  restoreLineEndings,
   stripBom,
 } from "./vendor/pi-harness/tools/edit-diff";
 
 // The copied editor must match the original snapshot, never cascade edits or
 // silently normalize untouched file bytes when a fuzzy match is needed.
 describe("vendored edit matching and preservation", () => {
+  it.each(["", "one\rtwo", "one\ntwo\r\n", "one\r\ntwo\n"])(
+    "normalizes every line ending in %j to LF for matching only",
+    (content) => {
+      const normalized = normalizeToLF(content);
+      expect(normalized).not.toContain("\r");
+      expect(normalized.split("\n")).toHaveLength(content.split(/\r\n|\n|\r/).length);
+    },
+  );
+
   it.each([
-    ["", "\n"],
-    ["one\rtwo", "\n"],
-    ["one\ntwo\r\n", "\n"],
-    ["one\r\ntwo\n", "\r\n"],
-  ] as const)("detects the first newline style in %j", (content, ending) => {
-    expect(detectLineEnding(content)).toBe(ending);
-    const normalized = normalizeToLF(content);
-    expect(normalized).not.toContain("\r");
-    expect(restoreLineEndings(normalized, ending)).toBe(
-      ending === "\r\n" ? normalized.replaceAll("\n", "\r\n") : normalized,
-    );
-  });
+    {
+      content: "a\r\nb\nc\r\n",
+      edits: [{ oldText: "c", newText: "C" }],
+      newContent: "a\r\nb\nC\r\n",
+    },
+    {
+      content: "10%\r20%\r30%\ndone\n",
+      edits: [{ oldText: "done", newText: "finished" }],
+      newContent: "10%\r20%\r30%\nfinished\n",
+    },
+    {
+      content: "a\r\nb\nc\rd",
+      edits: [
+        { oldText: "d", newText: "D\nE" },
+        { oldText: "a\nb", newText: "A\nB" },
+      ],
+      newContent: "A\r\nB\r\nc\rD\rE",
+    },
+    { content: "solo", edits: [{ oldText: "solo", newText: "a\nb" }], newContent: "a\nb" },
+  ])(
+    "splices edits into $content without touching other line endings",
+    ({ content, edits, newContent }) => {
+      expect(applyEditsToContent(content, edits, "file.txt")).toEqual({
+        baseContent: content,
+        newContent,
+      });
+    },
+  );
 
   it("strips only a leading BOM and normalizes Unicode punctuation and trailing space", () => {
     expect(stripBom("\ufefftext\ufeff")).toEqual({ bom: "\ufeff", text: "text\ufeff" });
@@ -64,7 +87,7 @@ describe("vendored edit matching and preservation", () => {
 
   it("matches a reversed multi-edit list against one original, including CRLF arguments", () => {
     expect(
-      applyEditsToNormalizedContent(
+      applyEditsToContent(
         "alpha\nbeta\ngamma\n",
         [
           { oldText: "beta\r\ngamma", newText: "third\r\nfourth" },
@@ -81,7 +104,7 @@ describe("vendored edit matching and preservation", () => {
   it("preserves duplicated normalized lines by their matched offsets, not diff alignment", () => {
     const original = "‘same’  \nfirst ‘target’  \n‘same’\t\nnext ‘target’  \n‘keep’\t\n";
     expect(
-      applyEditsToNormalizedContent(
+      applyEditsToContent(
         original,
         [
           { oldText: "first 'target'", newText: "FIRST" },
@@ -98,7 +121,7 @@ describe("vendored edit matching and preservation", () => {
   it("groups disjoint edits sharing touched lines and preserves all other line blocks", () => {
     const original = "‘keep’  \n‘alpha’ and ‘beta’  \n‘gamma’  \n‘tail’\t";
     expect(
-      applyEditsToNormalizedContent(
+      applyEditsToContent(
         original,
         [
           { oldText: "'beta'\n'gamma'", newText: "B\nG" },
@@ -167,7 +190,7 @@ describe("vendored edit matching and preservation", () => {
       message: "edits[1] and edits[0] overlap",
     },
   ])("refuses unsafe replacements: $message", ({ text, edits, message }) => {
-    expect(() => applyEditsToNormalizedContent(text, edits, "file.txt")).toThrow(message);
+    expect(() => applyEditsToContent(text, edits, "file.txt")).toThrow(message);
   });
 
   it("rejects invalid preservation coordinates rather than splicing unrelated lines", () => {

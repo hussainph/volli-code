@@ -47,11 +47,11 @@ afterEach(() => {
 
 /** A git that reports the worktree clean, so `remove` proceeds to delete it. */
 /**
- * A git that reads the worktree as clean, on BOTH required seams: the reclaim's
- * remove runs its probes on the async runner (VC-383), so this fixture must
- * supply that seam rather than accidentally exercising the host repository.
+ * A git that reads the worktree as clean, on the required async seam: the
+ * reclaim's remove runs its probes there (VC-383), so this fixture must supply
+ * it rather than accidentally exercising the host repository.
  */
-function cleanGit(wt: string): Pick<WorktreePorts, "git" | "gitAsync"> {
+function cleanGit(wt: string): Pick<WorktreePorts, "gitAsync"> {
   const git = (args: readonly string[]): string => {
     if (args[0] === "worktree" && args[1] === "list") {
       return `worktree ${wt}\nHEAD abc\nbranch refs/heads/volli/VC-1-x\n`;
@@ -59,7 +59,7 @@ function cleanGit(wt: string): Pick<WorktreePorts, "git" | "gitAsync"> {
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return wt;
     return "";
   };
-  return { git, gitAsync: async (args) => git(args) };
+  return { gitAsync: async (args) => git(args) };
 }
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -393,6 +393,9 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
     seedProject();
     const wt = mkdtempSync(join(tmpdir(), "volli-reclaim-unstamped-"));
     tempDirs.push(wt);
+    // Past a one-day dwell but still inside the Done discovery grace (VC-836),
+    // so the cycle does look for a PR — and finds one.
+    setRetentionTtlDays(ctx.db, 1, 0);
     seedTicket({
       status: "done",
       prUrl: null,
@@ -407,19 +410,19 @@ describe("pollRetention — worktree reclaim (VC-113)", () => {
         };
       }
       return { stdout: "" };
-    }, 100 * DAY);
+    }, 2 * DAY);
     const brokenDeps: RetentionPollPorts = {
       ...deps,
       db: dbWithBrokenTransaction(ctx.db),
       reclaim: {
         worktree: { db: ctx.db, ...cleanGit(wt), blobsRoot: "unused" },
-        now: () => 100 * DAY,
+        now: () => 2 * DAY,
       },
     };
 
     const result = await pollRetention(brokenDeps, createRetentionStore());
 
-    // The ticket is ancient and clean, but the cycle saw an OPEN PR it could
+    // The ticket is past its dwell and clean, but the cycle saw an OPEN PR it could
     // not persist — reclaiming on a "no PR" verdict a failed write faked would
     // be exactly the too-aggressive deletion this ticket is about.
     expect(result.changed).toBe(false);
@@ -1003,5 +1006,339 @@ describe("RetentionWatcher — settled(): stop, then drain before the database c
     } finally {
       errors.mockRestore();
     }
+  });
+});
+
+// VC-836: a merged or closed PR does not change, so the watch must not re-read
+// it every cycle — on a board of finished tickets that was hundreds of `gh`
+// calls per "60 s" cycle, a cycle measured in minutes, and most of the user's
+// GitHub API budget.
+describe("pollRetention — terminal PRs are not re-polled (VC-836)", () => {
+  /** Inserts a candidate ticket with its own id, branch and (optional) pr_url. */
+  function seedNamed(opts: {
+    id: string;
+    status: "needs_review" | "done";
+    prUrl: string | null;
+    worktreePath?: string;
+    doneAt?: number;
+  }): void {
+    insertTicket(
+      ctx.db,
+      testTicket("p1", {
+        id: opts.id,
+        status: opts.status,
+        worktreePath: opts.worktreePath ?? `/repo/wt-${opts.id}`,
+        branch: `volli/${opts.id}`,
+      }),
+    );
+    if (opts.prUrl) updateTicketFields(ctx.db, opts.id, { prUrl: opts.prUrl }, 1);
+    if (opts.doneAt !== undefined) {
+      recordTicketEvent(
+        ctx.db,
+        opts.id,
+        { kind: "status_changed", from: "needs_review", to: "done" },
+        opts.doneAt,
+      );
+    }
+  }
+
+  /** The durable fact an earlier launch left behind when it saw the merge. */
+  function recordMerged(ticketId: string, url: string): void {
+    recordTicketEvent(ctx.db, ticketId, { kind: "pr_merged", url }, 1, { kind: "automation" });
+  }
+
+  it("does not poll a merged PR again on the next cycle", async () => {
+    seedProject();
+    seedTicket({ prUrl: "https://x/pull/7" });
+    const { run, calls } = scriptedNet(() =>
+      prView({ state: "MERGED", mergedAt: "2026-07-20T00:00:00Z" }),
+    );
+    const deps: RetentionPollPorts = { db: ctx.db, net: run, now: () => 1000, notify: () => {} };
+    const store = createRetentionStore();
+
+    await pollRetention(deps, store);
+    expect(calls).toHaveLength(1);
+    await pollRetention(deps, store);
+    await pollRetention(deps, store);
+
+    expect(calls).toHaveLength(1);
+    expect(getRetentionState(deps, store, "t1")!.prState).toBe("merged");
+  });
+
+  it("does not poll a closed PR again, but polls once its pr_url changes", async () => {
+    seedProject();
+    seedTicket({ prUrl: "https://x/pull/7" });
+    const { run, calls } = scriptedNet((_file, args) =>
+      args[2] === "https://x/pull/7" ? prView({ state: "CLOSED" }) : prView(),
+    );
+    const deps: RetentionPollPorts = { db: ctx.db, net: run, now: () => 1000, notify: () => {} };
+    const store = createRetentionStore();
+
+    await pollRetention(deps, store);
+    await pollRetention(deps, store);
+    expect(calls).toHaveLength(1);
+
+    updateTicketFields(ctx.db, "t1", { prUrl: "https://x/pull/8" }, 2);
+    await pollRetention(deps, store);
+    expect(calls.map((call) => call.args[2])).toEqual(["https://x/pull/7", "https://x/pull/8"]);
+    expect(getRetentionState(deps, store, "t1")!.prState).toBe("open");
+  });
+
+  it("re-polls a merged PR whose one-shot merge write failed, so the event is retried", async () => {
+    seedProject();
+    seedTicket({ prUrl: "https://x/pull/7" });
+    let failWrite = true;
+    const { run, calls } = scriptedNet(() => {
+      // The merge write lands in the same cycle as this read; deleting the
+      // event table's parent row on the first read makes that write throw.
+      if (failWrite) ctx.db.prepare("DELETE FROM tickets WHERE id = ?").run("t1");
+      return prView({ state: "MERGED" });
+    });
+    const deps: RetentionPollPorts = { db: ctx.db, net: run, now: () => 1000, notify: () => {} };
+    const store = createRetentionStore();
+
+    await pollRetention(deps, store);
+    expect(store.notifiedMerged.has("t1")).toBe(false);
+
+    failWrite = false;
+    seedTicket({ prUrl: "https://x/pull/7" });
+    await pollRetention(deps, store);
+    expect(calls).toHaveLength(2);
+    expect(
+      listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "pr_merged"),
+    ).toHaveLength(1);
+  });
+
+  it("500 Done tickets merged in an earlier launch and 10 open PRs cost 10 gh calls a cycle", async () => {
+    seedProject();
+    for (let i = 0; i < 500; i += 1) {
+      const url = `https://x/pull/m${i}`;
+      seedNamed({ id: `m${i}`, status: "done", prUrl: url, doneAt: 0 });
+      recordMerged(`m${i}`, url);
+    }
+    for (let i = 0; i < 10; i += 1) {
+      seedNamed({ id: `o${i}`, status: "needs_review", prUrl: `https://x/pull/o${i}` });
+    }
+    const { run, calls } = scriptedNet((_file, args) =>
+      String(args[2]).includes("/pull/m") ? prView({ state: "MERGED" }) : prView(),
+    );
+    const notifications: Notified[] = [];
+    const deps: RetentionPollPorts = {
+      db: ctx.db,
+      net: run,
+      now: () => DAY,
+      notify: (request) => notifications.push(request),
+    };
+    const store = createRetentionStore();
+
+    await pollRetention(deps, store);
+    expect(calls).toHaveLength(10);
+    expect(
+      calls.every((call) => call.args[1] === "view" && /\/pull\/o\d/.test(call.args[2]!)),
+    ).toBe(true);
+    // The durable fact still answers the composed state, and nothing re-notifies.
+    expect(getRetentionState(deps, store, "m0")!.prState).toBe("merged");
+    expect(notifications).toEqual([]);
+
+    // Open PRs keep their cadence: the next cycle reads them again.
+    await pollRetention(deps, store);
+    expect(calls).toHaveLength(20);
+  });
+
+  it("reclaims a ticket merged in an earlier launch on schedule, without a gh call", async () => {
+    seedProject();
+    const wt = mkdtempSync(join(tmpdir(), "volli-reclaim-durable-"));
+    tempDirs.push(wt);
+    seedTicket({
+      status: "done",
+      prUrl: "https://x/pull/1",
+      branch: "volli/VC-1-x",
+      worktreePath: wt,
+      doneAt: 0,
+    });
+    recordMerged("t1", "https://x/pull/1");
+    const { run, calls } = scriptedNet(() => {
+      throw netFailure({ stderr: "API rate limit exceeded", code: 1 });
+    });
+
+    await pollRetention(
+      {
+        db: ctx.db,
+        net: run,
+        now: () => 100 * DAY,
+        notify: () => {},
+        reclaim: {
+          worktree: { db: ctx.db, ...cleanGit(wt), blobsRoot: "unused" },
+          now: () => 100 * DAY,
+        },
+      },
+      createRetentionStore(),
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBeNull();
+  });
+
+  it("trims a ticket merged in an earlier launch outside Done, without a gh call", async () => {
+    seedProject();
+    const root = mkdtempSync(join(tmpdir(), "volli-watch-trim-durable-"));
+    tempDirs.push(root);
+    const git = (args: readonly string[]) =>
+      execFileSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Volli Test",
+          GIT_AUTHOR_EMAIL: "test@volli.local",
+          GIT_COMMITTER_NAME: "Volli Test",
+          GIT_COMMITTER_EMAIL: "test@volli.local",
+        },
+      });
+    git(["init", "-q", "-b", "main"]);
+    writeFileSync(join(root, ".gitignore"), "node_modules/\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "fixture"]);
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "index.js"), "1\n");
+    seedTicket({ status: "needs_review", prUrl: "https://x/pull/1", worktreePath: root });
+    recordMerged("t1", "https://x/pull/1");
+    const { run, calls } = scriptedNet(() => {
+      throw netFailure({ stderr: "API rate limit exceeded", code: 1 });
+    });
+
+    await pollRetention(
+      {
+        db: ctx.db,
+        net: run,
+        now: () => 1000,
+        notify: () => {},
+        trim: {
+          worktree: {
+            db: ctx.db,
+            git: runGitCapturing,
+            gitAsync: runGitCapturingAsync,
+            blobsRoot: "unused",
+          },
+          now: () => 1000,
+          busySites: async () => [],
+        },
+      },
+      createRetentionStore(),
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(existsSync(join(root, "node_modules"))).toBe(false);
+  });
+
+  it("polls a PR whose pr_merged event names a different, earlier PR", async () => {
+    seedProject();
+    seedTicket({ prUrl: "https://x/pull/8" });
+    recordMerged("t1", "https://x/pull/7");
+    const { run, calls } = scriptedNet(() => prView());
+    const deps: RetentionPollPorts = { db: ctx.db, net: run, now: () => 1000, notify: () => {} };
+    const store = createRetentionStore();
+
+    await pollRetention(deps, store);
+
+    expect(calls).toHaveLength(1);
+    expect(getRetentionState(deps, store, "t1")!.prState).toBe("open");
+  });
+});
+
+describe("pollRetention — Done discovery is bounded (VC-836)", () => {
+  it("stops discovering a PR for a Done ticket past the grace period, and still reclaims it by dwell", async () => {
+    seedProject();
+    const wt = mkdtempSync(join(tmpdir(), "volli-discover-grace-"));
+    tempDirs.push(wt);
+    seedTicket({ status: "done", prUrl: null, worktreePath: wt, doneAt: 0 });
+    const { run, calls } = scriptedNet(() => ({ stdout: "[]" }));
+
+    await pollRetention(
+      {
+        db: ctx.db,
+        net: run,
+        now: () => 100 * DAY,
+        notify: () => {},
+        reclaim: {
+          worktree: { db: ctx.db, ...cleanGit(wt), blobsRoot: "unused" },
+          now: () => 100 * DAY,
+        },
+      },
+      createRetentionStore(),
+    );
+
+    expect(calls).toHaveLength(0);
+    expect(getTicketRow(ctx.db, "t1")!.worktree_path).toBeNull();
+  });
+
+  it("still discovers for a Done ticket inside the grace period, and for any ticket not in Done", async () => {
+    seedProject();
+    seedTicket({ status: "done", prUrl: null, doneAt: 0 });
+    insertTicket(
+      ctx.db,
+      testTicket("p1", {
+        id: "t2",
+        status: "needs_review",
+        worktreePath: "/repo/wt2",
+        branch: "volli/VC-2-y",
+      }),
+    );
+    const { run, calls } = scriptedNet(() => ({ stdout: "[]" }));
+
+    await pollRetention(
+      { db: ctx.db, net: run, now: () => DAY, notify: () => {} },
+      createRetentionStore(),
+    );
+
+    expect(calls.map((call) => call.args[3])).toEqual(["volli/VC-1-x", "volli/VC-2-y"]);
+  });
+});
+
+describe("pollRetention — ghCwd needs a usable .git, not just a directory (VC-836)", () => {
+  /** Polls one ticket whose worktree is `wt`, returning the cwd its `gh` call used. */
+  async function cwdFor(wt: string): Promise<string | undefined> {
+    const projectDir = mkdtempSync(join(tmpdir(), "volli-ghcwd-project-"));
+    tempDirs.push(projectDir);
+    insertProject(ctx.db, testProject({ id: "p1", path: projectDir }));
+    seedTicket({ prUrl: "https://x/pull/7", worktreePath: wt });
+    const { run, calls } = scriptedNet((_file, _args, cwd) => {
+      if (cwd !== projectDir && cwd !== wt) throw new Error("unexpected cwd");
+      return prView({ state: "MERGED" });
+    });
+    const deps: RetentionPollPorts = { db: ctx.db, net: run, now: () => 1000, notify: () => {} };
+    const store = createRetentionStore();
+    await pollRetention(deps, store);
+    // The PR state still resolves from wherever `gh` ran.
+    expect(getRetentionState(deps, store, "t1")!.prState).toBe("merged");
+    return calls[0]?.cwd === projectDir ? "project" : calls[0]?.cwd === wt ? "worktree" : undefined;
+  }
+
+  it("runs gh in the project root when the stamped dir is an empty leftover", async () => {
+    const wt = mkdtempSync(join(tmpdir(), "volli-ghcwd-empty-"));
+    tempDirs.push(wt);
+    expect(await cwdFor(wt)).toBe("project");
+  });
+
+  it("runs gh in the project root when the stamped dir's gitfile dangles", async () => {
+    const wt = mkdtempSync(join(tmpdir(), "volli-ghcwd-dangling-"));
+    tempDirs.push(wt);
+    writeFileSync(join(wt, ".git"), `gitdir: ${join(wt, "no-such-gitdir")}\n`);
+    expect(await cwdFor(wt)).toBe("project");
+  });
+
+  it("runs gh in the worktree when its gitfile resolves", async () => {
+    const wt = mkdtempSync(join(tmpdir(), "volli-ghcwd-linked-"));
+    tempDirs.push(wt);
+    mkdirSync(join(wt, "admin"));
+    writeFileSync(join(wt, ".git"), "gitdir: admin\n");
+    expect(await cwdFor(wt)).toBe("worktree");
+  });
+
+  it("runs gh in the worktree when it holds a .git directory", async () => {
+    const wt = mkdtempSync(join(tmpdir(), "volli-ghcwd-repo-"));
+    tempDirs.push(wt);
+    mkdirSync(join(wt, ".git"));
+    expect(await cwdFor(wt)).toBe("worktree");
   });
 });

@@ -21,10 +21,19 @@ import { PrefShell } from "@renderer/components/settings/kit";
 import { EMPTY_PAGE } from "@renderer/components/ui/empty-classes";
 import { useSelectedProject } from "@renderer/hooks/use-selected-project";
 import { cn } from "@renderer/lib/utils";
+import { useUiStore } from "@renderer/stores/ui";
 
 export function ConfigurePage() {
   const project = useSelectedProject();
-  const [activeKey, setActiveKey] = React.useState("skills");
+  // A pane asked for by name (⌘K, VC-303): taken on mount, or while the page
+  // is already showing another one, then spent so the next visit is ordinary.
+  const requested = useUiStore((state) => state.configureCategory);
+  const [activeKey, setActiveKey] = React.useState(() => requested ?? "skills");
+  React.useEffect(() => {
+    if (requested === null) return;
+    setActiveKey(requested);
+    useUiStore.getState().consumeConfigureCategory();
+  }, [requested]);
 
   const groups = React.useMemo(() => (project === null ? [] : configureGroups(project)), [project]);
 

@@ -2,15 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 // Import the adapter directly: the package root's lazy autoUpdater getter loads Electron.
 import { AppImageUpdater } from "electron-updater/out/AppImageUpdater";
 
-import type { UpdateUiState } from "../ipc/contract";
+import type { UpdateLastCheck, UpdateUiState } from "../ipc/contract";
 import type { NotificationRequest } from "./notifications/dispatch";
 import {
   readAllowPrerelease,
   readUpdateChannel,
+  readUpdateLastCheck,
   runningBuildKind,
   writeUpdateChannel,
+  writeUpdateLastCheck,
   startAutoUpdate,
   UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY,
+  UPDATE_LAST_CHECK_APP_STATE_KEY,
   type AutoUpdaterLike,
 } from "./auto-update";
 import { setAppState } from "@volli/host-core/db";
@@ -89,6 +92,8 @@ interface Harness {
   start(overrides?: {
     isPackaged?: boolean;
     allowPrerelease?: boolean;
+    lastCheck?: Parameters<typeof startAutoUpdate>[0]["lastCheck"];
+    now?: () => number;
   }): ReturnType<typeof startAutoUpdate>;
 }
 
@@ -114,6 +119,8 @@ function makeHarness(): Harness {
         log: (line) => logs.push(line),
         onStateChange: (state) => stateChanges.push(state),
         hasUpdateSurface: () => surface.present,
+        lastCheck: overrides.lastCheck,
+        now: overrides.now,
       }),
   };
 }
@@ -424,6 +431,7 @@ describe("startAutoUpdate", () => {
       targetVersion: null,
       percent: null,
       error: null,
+      lastCheck: null,
     });
 
     harness.updater.emit("checking-for-update");
@@ -510,6 +518,239 @@ describe("startAutoUpdate", () => {
     ]);
     // The download itself still logs every time — only the notification dedupes.
     expect(harness.logs.filter((line) => line.includes("downloaded 0.2.0"))).toHaveLength(2);
+    handle.stop();
+  });
+});
+
+describe("the last check's store (VC-294)", () => {
+  it("round-trips an answered check", () => {
+    ctx = openTestDb();
+    const check: UpdateLastCheck = {
+      at: 1_700_000,
+      result: "error",
+      version: null,
+      error: "offline",
+    };
+    writeUpdateLastCheck(ctx.db, check);
+    expect(readUpdateLastCheck(ctx.db)).toEqual(check);
+
+    const found: UpdateLastCheck = {
+      at: 1_800_000,
+      result: "available",
+      version: "0.3.0",
+      error: null,
+    };
+    writeUpdateLastCheck(ctx.db, found);
+    expect(readUpdateLastCheck(ctx.db)).toEqual(found);
+
+    const download: UpdateLastCheck = {
+      at: 1_900_000,
+      result: "download-error",
+      version: "0.3.0",
+      error: "ENOSPC",
+    };
+    writeUpdateLastCheck(ctx.db, download);
+    expect(readUpdateLastCheck(ctx.db)).toEqual(download);
+  });
+
+  it("reads never-checked when the row is absent", () => {
+    ctx = openTestDb();
+    expect(readUpdateLastCheck(ctx.db)).toBeNull();
+  });
+
+  it.each([
+    ["malformed JSON", "not-json{"],
+    ["a non-object", "42"],
+    ["null", "null"],
+    ["no timestamp", JSON.stringify({ result: "up-to-date" })],
+    ["a non-finite timestamp", '{"at":1e999,"result":"up-to-date"}'],
+    ["a result this build does not know", JSON.stringify({ at: 1, result: "rolled-back" })],
+    ["a non-string result", JSON.stringify({ at: 1, result: 3 })],
+  ])("reads never-checked from %s rather than failing", (_label, value) => {
+    ctx = openTestDb();
+    setAppState(ctx.db, UPDATE_LAST_CHECK_APP_STATE_KEY, value, 1);
+    expect(readUpdateLastCheck(ctx.db)).toBeNull();
+  });
+
+  it("fills missing or mistyped optional fields with null", () => {
+    ctx = openTestDb();
+    setAppState(
+      ctx.db,
+      UPDATE_LAST_CHECK_APP_STATE_KEY,
+      JSON.stringify({ at: 5, result: "up-to-date", version: 7, extra: true }),
+      1,
+    );
+    expect(readUpdateLastCheck(ctx.db)).toEqual({
+      at: 5,
+      result: "up-to-date",
+      version: null,
+      error: null,
+    });
+  });
+});
+
+/** An in-memory stand-in for the app_state row. */
+function memoryStore(initial: UpdateLastCheck | null = null) {
+  const store = {
+    value: initial,
+    writes: [] as UpdateLastCheck[],
+    read: () => store.value,
+    write: (check: UpdateLastCheck) => {
+      store.writes.push(check);
+      store.value = check;
+    },
+  };
+  return store;
+}
+
+describe("startAutoUpdate's last check (VC-294)", () => {
+  it("starts from the stored check — packaged or dev — so a relaunch still knows", () => {
+    vi.useFakeTimers();
+    const stored: UpdateLastCheck = { at: 9, result: "up-to-date", version: null, error: null };
+    const packaged = makeHarness().start({ lastCheck: memoryStore(stored) });
+    expect(packaged.state().lastCheck).toEqual(stored);
+    packaged.stop();
+
+    const dev = makeHarness().start({ isPackaged: false, lastCheck: memoryStore(stored) });
+    expect(dev.state().lastCheck).toEqual(stored);
+  });
+
+  it("records each answer with its time, in memory and in the store", () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const store = memoryStore();
+    let clock = 100;
+    const handle = harness.start({ lastCheck: store, now: () => clock });
+
+    harness.updater.emit("checking-for-update");
+    expect(handle.state().lastCheck).toBeNull();
+
+    harness.updater.emit("update-not-available", { version: "0.1.0" });
+    expect(handle.state().lastCheck).toEqual({
+      at: 100,
+      result: "up-to-date",
+      version: null,
+      error: null,
+    });
+
+    clock = 200;
+    harness.updater.emit("update-available", { version: "0.2.0" });
+    expect(handle.state().lastCheck).toEqual({
+      at: 200,
+      result: "available",
+      version: "0.2.0",
+      error: null,
+    });
+
+    // A failure while downloading is the download's, and names its version.
+    clock = 300;
+    harness.updater.emit("error", new Error("ENOSPC"));
+    expect(handle.state()).toMatchObject({
+      phase: "error",
+      lastCheck: { at: 300, result: "download-error", version: "0.2.0", error: "ENOSPC" },
+    });
+
+    // Any other failure is the check's.
+    clock = 400;
+    harness.updater.emit("error", new Error("feed unreachable"));
+    expect(handle.state().lastCheck).toEqual({
+      at: 400,
+      result: "error",
+      version: null,
+      error: "feed unreachable",
+    });
+
+    expect(store.writes.map((check) => check.result)).toEqual([
+      "up-to-date",
+      "available",
+      "download-error",
+      "error",
+    ]);
+    // Every recorded answer was announced, so an open pane shows it at once.
+    expect(harness.stateChanges.at(-1)?.lastCheck).toEqual(store.value);
+    handle.stop();
+  });
+
+  it("records nothing for a check that settled without an answer", async () => {
+    vi.useFakeTimers();
+    const store = memoryStore();
+    const handle = makeHarness().start({ lastCheck: store });
+
+    await handle.checkNow();
+
+    expect(handle.state()).toMatchObject({ phase: "idle", lastCheck: null });
+    expect(store.writes).toEqual([]);
+    handle.stop();
+  });
+
+  it("records a rejected check once, even when the error event reported it too", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const store = memoryStore();
+    const handle = harness.start({ lastCheck: store });
+
+    // Rejection alone (no event): still the last check.
+    harness.updater.failNextCheckWith = new Error("offline");
+    await handle.checkNow();
+    expect(store.writes).toHaveLength(1);
+    expect(handle.state().lastCheck).toMatchObject({ result: "error", error: "offline" });
+
+    // Event and rejection for the same failure: one check, one record.
+    harness.updater.checkForUpdates = () => {
+      harness.updater.emit("error", new Error("feed unreachable"));
+      return Promise.reject(new Error("feed unreachable"));
+    };
+    await handle.checkNow();
+    expect(store.writes.map((check) => check.error)).toEqual(["offline", "feed unreachable"]);
+
+    // The same failure on a LATER check is a new check, and gets a new time.
+    // (The clock moves without firing the schedule's own timers.)
+    vi.setSystemTime(Date.now() + 60_000);
+    await handle.checkNow();
+    expect(store.writes).toHaveLength(3);
+    expect(store.writes[2]?.at).toBeGreaterThan(store.writes[1]?.at ?? Infinity);
+    handle.stop();
+  });
+
+  it("a failed re-check over a staged download updates the last check but keeps the badge", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const store = memoryStore();
+    const handle = harness.start({ lastCheck: store });
+
+    harness.updater.emit("update-downloaded", { version: "0.2.0" });
+    harness.updater.failNextCheckWith = new Error("offline");
+    await handle.checkNow();
+
+    expect(handle.state()).toMatchObject({
+      phase: "downloaded",
+      targetVersion: "0.2.0",
+      error: null,
+      lastCheck: { result: "error", error: "offline" },
+    });
+    handle.stop();
+  });
+
+  it("a store that throws is logged and never reaches the updater", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start({
+      lastCheck: {
+        read: () => {
+          throw new Error("db closed");
+        },
+        write: () => {
+          throw new Error("disk full");
+        },
+      },
+    });
+
+    expect(handle.state().lastCheck).toBeNull();
+    harness.updater.emit("update-not-available", { version: "0.1.0" });
+
+    expect(handle.state().lastCheck).toMatchObject({ result: "up-to-date" });
+    expect(harness.logs).toContain("[updater] could not read the last check: db closed");
+    expect(harness.logs).toContain("[updater] could not record the last check: disk full");
     handle.stop();
   });
 });

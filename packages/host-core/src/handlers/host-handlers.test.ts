@@ -13,6 +13,7 @@ import {
   type ActiveAddHost,
   type AddHostEvent,
   type AddHostFacts,
+  type BrowserAppShortcutEvent,
   type DataChangedEvent,
   type HandlerCall,
   type ModelAccessSnapshot,
@@ -31,7 +32,7 @@ import { getTicketRow } from "../db/tickets-repo";
 import { BrowserPictureStore } from "../browser/picture-store";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
-import { runGitCapturing, runGitCapturingAsync } from "../worktree/git";
+import { runGitCapturingAsync } from "../worktree/git";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
 import {
   createHostHandlers,
@@ -39,6 +40,7 @@ import {
   type HostHandlerOptions,
   type HostHandlers,
 } from "./host-handlers";
+import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { RemoteHostsPort } from "./remote-hosts-port";
 
 vi.mock("../session-runtime/model-access-preferences", async (importOriginal) => ({
@@ -110,7 +112,7 @@ function sealedMap(options: Partial<HostHandlerOptions> = {}) {
       automations: automations(),
       busyWorktreeSites: async () => [],
       now: () => 50,
-      worktree: { db: ctx.db, git: runGitCapturing, gitAsync: runGitCapturingAsync, blobsRoot: "" },
+      worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "" },
       ...options,
     },
   );
@@ -1271,5 +1273,42 @@ describe("moving a foreground command", () => {
         },
       })["shells.moveToBackground"](input, WINDOW),
     ).toThrow(failure);
+  });
+});
+
+// Browser page shortcuts (VC-301): desktop main's Browser Tab host, through
+// its port; absent everywhere else.
+describe("Browser page shortcuts", () => {
+  const EVENT: BrowserAppShortcutEvent = { tabId: "opaque-1", shortcut: { kind: "close-tab" } };
+
+  it("answers unavailable for both keys on a host with no Browser Tabs (hostd)", async () => {
+    for (const map of [handlers(), handlers({ browserShortcuts: null })]) {
+      const calls: (() => unknown)[] = [
+        () => map["browserShortcuts.subscribe"](undefined, WINDOW, sink()),
+        () => map["browserShortcuts.focusPage"]({ tabId: "opaque-1" }, WINDOW),
+      ];
+      for (const call of calls) {
+        expect(await unavailable(call)).toBe("Browser Tab shortcuts are unavailable on this host");
+      }
+    }
+  });
+
+  it("feeds the window every shortcut a page hands back, and answers the port's unsubscribe", async () => {
+    const unsubscribe = vi.fn();
+    const port = {
+      subscribe: vi.fn((listener: (event: BrowserAppShortcutEvent) => void) => {
+        listener(EVENT);
+        return unsubscribe;
+      }),
+      focusPage: vi.fn(),
+    } satisfies BrowserShortcutsPort;
+    const map = handlers({ browserShortcuts: port });
+    const shortcuts = sink();
+
+    expect(await map["browserShortcuts.subscribe"](undefined, WINDOW, shortcuts)).toBe(unsubscribe);
+    expect(shortcuts.emit).toHaveBeenCalledWith(EVENT);
+
+    expect(await map["browserShortcuts.focusPage"]({ tabId: "opaque-1" }, WINDOW)).toBeNull();
+    expect(port.focusPage).toHaveBeenCalledWith("opaque-1");
   });
 });

@@ -1401,7 +1401,7 @@ export type CliIpcChannel = keyof VolliCliIpcContract;
 // ---- support metadata -------------------------------------------------------
 
 /**
- * The six facts a support report needs and the renderer cannot know (VC-293, VC-633).
+ * The facts a support report needs and the renderer cannot know (VC-293, VC-633, VC-294).
  *
  * An ALLOWLIST, and written as a closed shape for that reason: every field is
  * named here, main assembles exactly these, and the report prints them. The
@@ -1430,6 +1430,14 @@ export interface SupportInfo {
    * Version numbers and words only; never a row of data.
    */
   migrationHistory: string;
+  /**
+   * The updater's last answered check (VC-294) as one line: its ISO time and
+   * result, a failure only as `summarizeUpdateFailure`'s redacted sentence —
+   * never the raw updater text, which can carry feed URLs and response
+   * headers. "none recorded" when there is none. Not required: a report is
+   * complete without it.
+   */
+  lastUpdateCheck: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;
@@ -1518,6 +1526,21 @@ export interface AppearanceSetProjectInput {
  */
 export type { FirstPaintHint };
 
+/**
+ * What the renderer reports after every durable paint: the {@link FirstPaintHint}
+ * main stores for the next launch, plus the one color main needs live and
+ * cannot derive itself.
+ *
+ * `planeBackground` is the painted `--background` token (not `--card`): the rung
+ * the workbench inset and a Browser pane's plane are drawn in (VC-302). It
+ * differs from the hint's `background`, which is the canvas's base fill at the
+ * window edge. Main hands it to Browser Tab views live and never stores it, so
+ * it is checked on its own and a bad value never costs the stored hint.
+ */
+export interface FirstPaintReport extends FirstPaintHint {
+  planeBackground?: string;
+}
+
 export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;
 export type ThemeSetProjectResult = Result<{ project: Project; value: ThemeStatePayload }>;
 /**
@@ -1567,8 +1590,9 @@ export interface VolliThemeIpcContract {
    * Records what the renderer actually resolved and painted, so the NEXT launch
    * can construct its window with the right edge color and the right mode class
    * before anything runs. A hint, never an authority — see {@link FirstPaintHint}.
+   * Also carries the live card color for Browser Tab planes ({@link FirstPaintReport}).
    */
-  "volli:theme-first-paint-set": { args: [input: FirstPaintHint]; result: Result };
+  "volli:theme-first-paint-set": { args: [input: FirstPaintReport]; result: Result };
   /** Rewrites keys in a Volli ghostty overlay — global or per-project. Never the user's own config. */
   "volli:theme-terminal-overlay-write": {
     args: [input: TerminalOverlayWriteInput];
@@ -2446,9 +2470,27 @@ export interface VolliSystemIpcContract {
  * Where the updater is in its check→download→install lifecycle, as the
  * renderer's download icon renders it. `idle` covers both "never checked" and
  * "checked, up to date" — either way there is nothing to show or do beyond
- * offering a manual check.
+ * offering a manual check. Which of the two it is lives in
+ * {@link UpdateUiState.lastCheck}, not here.
  */
 export type UpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "error";
+
+/**
+ * What the most recent check that ANSWERED said (VC-294): the feed had
+ * nothing newer, had a newer version (whose download then began), the check
+ * failed, or the download it started failed. Main persists it, so Settings →
+ * Updates' Status row can still say "Up to date · 3h ago" or "Check failed"
+ * after a relaunch.
+ */
+export interface UpdateLastCheck {
+  /** When the check settled (epoch ms). */
+  at: number;
+  result: "up-to-date" | "available" | "error" | "download-error";
+  /** The version on offer when `available`, or the one whose download failed; null otherwise. */
+  version: string | null;
+  /** The failure's message when `error` or `download-error`; null otherwise. */
+  error: string | null;
+}
 
 /**
  * The updater's whole user-facing state (VC-59): one snapshot the renderer
@@ -2471,6 +2513,8 @@ export interface UpdateUiState {
   percent: number | null;
   /** The last failure's message while `error`; null otherwise. */
   error: string | null;
+  /** The last answered check, this run or a previous one; null when none was ever recorded. */
+  lastCheck: UpdateLastCheck | null;
 }
 
 export type UpdateStateResult = Result<{ state: UpdateUiState }>;

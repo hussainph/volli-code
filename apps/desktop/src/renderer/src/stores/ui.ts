@@ -390,6 +390,15 @@ interface UiState {
    * nobody asked for the second time. One press, one launch.
    */
   settingsSignInProviderId: string | null;
+  /**
+   * A Configure pane someone asked for by name, or null (VC-303).
+   *
+   * Configure owns its own selected pane, so this is a REQUEST rather than a
+   * mirror of it: ⌘K sets it, the page takes it — on mount, or while already
+   * on screen — and spends it ({@link UiState.consumeConfigureCategory}), so
+   * a later visit opens wherever the page itself would. Session-only.
+   */
+  configureCategory: string | null;
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
   /** Project switcher rail hidden? Persisted app-wide (see module doc). */
@@ -477,6 +486,10 @@ interface UiState {
    * anyway — not an auth flow.
    */
   consumeSettingsSignIn(): void;
+  /** Ask Configure to show one pane; the page spends it on arrival. */
+  requestConfigureCategory(key: string): void;
+  /** Spend {@link UiState.configureCategory} — the Configure page took it. */
+  consumeConfigureCategory(): void;
   setNewTicketOpen(open: boolean): void;
   /** Show one closed Session's saved record. Replaces whichever was open. */
   openSessionDetail(projectId: string, sessionId: string): void;
@@ -579,6 +592,7 @@ export function createUiStore(storage?: StateStorage) {
         settingsOpen: false,
         settingsCategory: null,
         settingsSignInProviderId: null,
+        configureCategory: null,
         newTicketOpen: false,
         sessionDetail: null,
         workspaceRailHidden: false,
@@ -607,6 +621,8 @@ export function createUiStore(storage?: StateStorage) {
             settingsSignInProviderId: signInProviderId ?? null,
           }),
         consumeSettingsSignIn: () => set({ settingsSignInProviderId: null }),
+        requestConfigureCategory: (key) => set({ configureCategory: key }),
+        consumeConfigureCategory: () => set({ configureCategory: null }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
         openSessionDetail: (projectId, sessionId) =>
           set({ sessionDetail: { projectId, sessionId } }),
