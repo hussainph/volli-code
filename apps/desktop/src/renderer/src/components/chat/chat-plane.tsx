@@ -3013,8 +3013,8 @@ function MessageDelivery({ label, since }: { label: string; since: number | unde
   const failed = label === "Not delivered" || label === "Delivery unconfirmed";
   // The clock is read once, at mount, so the wait does not restart per render.
   // A stamp present at mount ends the wait at `since + 600`. A stamp that
-  // arrives later can end it earlier than that, at 600ms after mount, but never
-  // sooner than 600ms after the tab mounted.
+  // arrives later can end it before `since + 600`, but never sooner than
+  // 600ms after the tab mounted.
   const [mountedAt] = React.useState(() => Date.now());
   const remaining =
     since === undefined ? 600 : Math.min(600, Math.max(0, 600 - (mountedAt - since)));
