@@ -193,6 +193,21 @@ describe("the feed while its first read is in flight (VC-383)", () => {
   });
 });
 
+/** An Escape keydown, composing (an IME's own, keyCode 229) or plain. */
+function escape(target: HTMLElement, isComposing: boolean): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "Escape",
+    isComposing,
+    keyCode: isComposing ? 229 : 27,
+    bubbles: true,
+    cancelable: true,
+  });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
 /**
  * VC-806: Chromium on macOS delivers the Escape that closes an IME's candidate
  * window as a `keydown` with `isComposing` set. That keystroke is the IME's —
@@ -243,20 +258,6 @@ describe("a comment being edited", () => {
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     });
     return textarea;
-  }
-
-  function escape(target: HTMLElement, isComposing: boolean): KeyboardEvent {
-    const event = new KeyboardEvent("keydown", {
-      key: "Escape",
-      isComposing,
-      keyCode: isComposing ? 229 : 27,
-      bubbles: true,
-      cancelable: true,
-    });
-    act(() => {
-      target.dispatchEvent(event);
-    });
-    return event;
   }
 
   it("stays in edit mode, draft intact, on a composing Escape", async () => {

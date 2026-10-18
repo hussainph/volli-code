@@ -62,7 +62,11 @@ vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
     ref,
   }: ComponentProps<typeof MonacoDocumentEditor>) {
     // The title's Enter hands focus to the body through this handle.
-    useImperativeHandle(ref, () => ({ focus: mocks.editorFocus, insertAtCursor: () => {} }));
+    useImperativeHandle(ref, () => ({
+      focus: mocks.editorFocus,
+      insertAtCursor: () => false,
+      markSaved: () => {},
+    }));
     return (
       <textarea
         aria-label={ariaLabel}
