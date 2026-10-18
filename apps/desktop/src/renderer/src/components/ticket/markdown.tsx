@@ -1,5 +1,8 @@
 import * as React from "react";
-import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
+import DOMPurify, {
+  type Config as DOMPurifyConfig,
+  type UponSanitizeElementHookEvent,
+} from "dompurify";
 import { Marked } from "marked";
 import { markdownImageNotice, resolveMarkdownImageSrc } from "@volli/shared";
 
@@ -45,17 +48,72 @@ export const ALLOWED_URI_REGEXP =
   /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix|volli-blob):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
 
 /**
- * `data:` is admitted on `<img>` ONLY.
+ * The sanitizer's configuration: DOMPurify's defaults, narrowed to what a
+ * comment can carry without reaching outside its own box (VC-839).
  *
- * The resolver has already narrowed data URIs to `data:image/*`, so this is the
- * second of two gates rather than the only one; scoping it to the tag as well
- * means a future caller cannot turn it into a `data:text/html` link by reusing
- * this config.
+ * A comment is written by any Session, so its body is whatever a prompt
+ * injection in a repository file, a web page or an MCP result made it — and
+ * DOMPurify's DEFAULT allowlists are written to stop script, not to keep one
+ * fragment from styling or impersonating the page around it. They keep:
+ *
+ *  - `<style>` and `style=`, which the renderer CSP's `style-src
+ *    'unsafe-inline'` lets through, so one comment could blank the whole app
+ *    (`*{display:none}`) or draw a `position:fixed` fake dialog over it;
+ *  - `<form action method>` with `<input>`, `<button>`, `<textarea>`,
+ *    `<select>`, whose GET submission is a navigation main hands to the
+ *    person's browser — with what they typed in the query string;
+ *  - `<dialog>` and the `popover*` attributes, which draw in the top layer
+ *    above every other surface.
+ *
+ * None of these is anything markdown produces. Everything else in the default
+ * lists stays, so the GFM marked emits and the inline HTML people write in
+ * comments (`<details>`, `<kbd>`, `<sup>`) renders as before. The one input
+ * markdown DOES produce, a task list's disabled checkbox, is kept by
+ * {@link keepOnlyTaskCheckboxes}.
+ *
+ * `data:` is admitted on `<img>` ONLY. The resolver has already narrowed data
+ * URIs to `data:image/*`, so this is the second of two gates rather than the
+ * only one; scoping it to the tag as well means a future caller cannot turn it
+ * into a `data:text/html` link by reusing this config.
  */
 const SANITIZE_CONFIG: DOMPurifyConfig = {
   ALLOWED_URI_REGEXP,
   ADD_DATA_URI_TAGS: ["img"],
+  FORBID_TAGS: ["style", "form", "button", "textarea", "select", "option", "dialog"],
+  FORBID_ATTR: [
+    "style",
+    "action",
+    "method",
+    "formaction",
+    "popover",
+    "popovertarget",
+    "popovertargetaction",
+  ],
 };
+
+/**
+ * Removes every `<input>` that is not a GFM task-list checkbox — `type=checkbox`
+ * and `disabled`, the shape marked writes for `- [ ]` / `- [x]`. A text field
+ * in a comment can only ever be asking a person to type something into it.
+ */
+function keepOnlyTaskCheckboxes(node: Node, event: UponSanitizeElementHookEvent): void {
+  if (event.tagName !== "input" || !(node instanceof Element)) return;
+  const taskCheckbox =
+    node.getAttribute("type")?.toLowerCase() === "checkbox" && node.hasAttribute("disabled");
+  if (!taskCheckbox) node.remove();
+}
+
+/**
+ * This surface's own DOMPurify instance, so the hook above cannot leak into any
+ * other caller of the shared default one.
+ *
+ * Registered only where DOMPurify works at all: without a DOM (a Node-only
+ * test importing this module through a component tree) the instance has
+ * neither `addHook` nor `sanitize`, so rendering still throws rather than
+ * passing markup through unsanitized.
+ */
+const purifier = DOMPurify();
+if (purifier.isSupported) purifier.addHook("uponSanitizeElement", keepOnlyTaskCheckboxes);
 
 /** Escapes a string for interpolation into an HTML attribute or text node. */
 function escapeHtml(value: string): string {
@@ -96,7 +154,7 @@ export function Markdown({ source, className }: { source: string; className?: st
       },
     });
     const raw = renderer.parse(source, { async: false, gfm: true });
-    return DOMPurify.sanitize(raw, SANITIZE_CONFIG);
+    return purifier.sanitize(raw, SANITIZE_CONFIG);
   }, [source, byName]);
 
   return <div className={cn("typeset", className)} dangerouslySetInnerHTML={{ __html: html }} />;
