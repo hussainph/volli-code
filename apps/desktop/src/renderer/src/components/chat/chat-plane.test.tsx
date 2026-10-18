@@ -110,7 +110,9 @@ describe("a user turn that delivered a skill", () => {
     const html = turn(message);
 
     expect(html).toContain("can you tell me what /hussain-sol does?");
-    expect(html).toContain('aria-label="Skills delivered with this message"');
+    // A labelled generic div is ignored by assistive tech; the role makes the
+    // label count (VC-516).
+    expect(html).toContain('role="group" aria-label="Skills delivered with this message"');
     // The chip is the file's one vocabulary for a skill name: a Badge.
     expect(html).toMatch(/data-slot="badge"[^>]*>hussain-sol</);
     expect(html).not.toContain("fifteen kilobytes");

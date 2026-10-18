@@ -11,6 +11,7 @@ function downloaded(version: string): UpdateUiState {
     targetVersion: version,
     percent: null,
     error: null,
+    lastCheck: null,
   };
 }
 

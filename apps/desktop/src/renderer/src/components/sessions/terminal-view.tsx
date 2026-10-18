@@ -104,7 +104,7 @@ export function TerminalView({
     };
   }, [sessionId, isLive]);
 
-  // Hidden terminals pause rendering; a GPU canvas measures as zero while
+  // Hidden terminals pause rendering; xterm's DOM grid measures as zero while
   // hidden, so reveal must unpause and refit. Focus is handled separately so
   // revealing a split tab doesn't focus every leaf in mount order.
   React.useEffect(() => {

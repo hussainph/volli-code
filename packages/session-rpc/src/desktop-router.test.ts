@@ -237,6 +237,23 @@ function host(caller: RouterCaller, overrides: Partial<DesktopRouterHandlers> = 
 }
 
 /** Every handler the slice names, recording what it was called with. */
+/** A Browser page shortcut as main hands it back (VC-301). */
+const SHORTCUT = {
+  tabId: "opaque-1",
+  shortcut: {
+    kind: "replay",
+    chord: {
+      key: "k",
+      code: "KeyK",
+      metaKey: true,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      repeat: false,
+    },
+  },
+} as const;
+
 function recordingHandlers(fixture: Host): DesktopRouterHandlers {
   const record =
     <Output>(key: string, output: Output) =>
@@ -294,6 +311,8 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
     "hostScope.query": record("hostScope.query", { answered: "query" }),
     "hostScope.mutate": record("hostScope.mutate", { answered: "mutate" }),
     "hostScope.subscribe": stream("hostScope.subscribe", { kind: "started" }),
+    "browserShortcuts.subscribe": stream("browserShortcuts.subscribe", SHORTCUT),
+    "browserShortcuts.focusPage": record("browserShortcuts.focusPage", null),
     ...fixture.overrides,
   };
 }
@@ -1066,6 +1085,33 @@ describeContract<Host, DesktopRouter>(
       ).toEqual(refusal);
     });
 
+    // Browser page shortcuts (VC-301): desktop main's Browser Tab host, the window's alone.
+    it("streams the window every Browser page shortcut until it stops, and hands focus back", async () => {
+      const fixture = host(LOCAL_DESKTOP_CALLER);
+      const client = await connect(fixture);
+      const stream = collect((handlers) =>
+        client.browserShortcuts.subscribe.subscribe(undefined, handlers),
+      );
+      await vi.waitFor(() => expect(stream.values).toEqual([SHORTCUT]));
+      const close = { tabId: "opaque-2", shortcut: { kind: "close-tab" } } as const;
+      await fixture.sinks.get("browserShortcuts.subscribe")!.emit(close);
+      await vi.waitFor(() => expect(stream.values).toEqual([SHORTCUT, close]));
+      stream.unsubscribe();
+      await vi.waitFor(() => expect(fixture.unsubscribed).toEqual(["browserShortcuts.subscribe"]));
+
+      expect(await client.browserShortcuts.focusPage.mutate({ tabId: "opaque-1" })).toBeNull();
+      expect(fixture.calls).toEqual([
+        { key: "browserShortcuts.subscribe", input: undefined, call: WINDOW_CALL },
+        { key: "browserShortcuts.focusPage", input: { tabId: "opaque-1" }, call: WINDOW_CALL },
+      ]);
+      for (const input of [{ tabId: "" }, { tabId: "t".repeat(257) }, { tabId: "a", extra: 1 }]) {
+        expect(
+          await expectHostError(client.browserShortcuts.focusPage.mutate(input as never)),
+        ).toMatchObject({ code: "BAD_REQUEST" });
+      }
+      expect(fixture.calls).toHaveLength(2);
+    });
+
     it("streams the hosts snapshot, the current first, until the window stops it", async () => {
       const fixture = host(LOCAL_DESKTOP_CALLER);
       const client = await connect(fixture);
@@ -1374,6 +1420,8 @@ describe("the desktop router's grammar", () => {
         "hostScope.query",
         "hostScope.mutate",
         "hostScope.subscribe",
+        "browserShortcuts.subscribe",
+        "browserShortcuts.focusPage",
       ].toSorted(),
     );
     expect(schemas["worktree.trimSettings"]).toMatchObject({

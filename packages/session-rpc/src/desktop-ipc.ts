@@ -155,7 +155,8 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // Its compatibility classes (VC-725) govern the schema gate, not exposure:
   // host commands (`project.reorder`, `worktree.trimSettings`) are
   // additive-only across supported skew, while the client-local families
-  // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`) ship with this
+  // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`,
+  // `browserShortcuts.*`) ship with this
   // renderer and main in one bundle and are not cross-version promises.
   "shells.moveToBackground": "ipc",
   "project.reorder": "ipc",
@@ -197,6 +198,9 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hostScope.query": "ipc",
   "hostScope.mutate": "ipc",
   "hostScope.subscribe": "ipc",
+  // App shortcuts out of a focused Browser page (VC-301).
+  "browserShortcuts.subscribe": "ipc",
+  "browserShortcuts.focusPage": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

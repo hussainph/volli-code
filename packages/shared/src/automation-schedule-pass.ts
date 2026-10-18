@@ -35,6 +35,31 @@
 import type { AutomationMissedReason } from "./automation";
 import { nextScheduleOccurrence, type AutomationSchedule } from "./automation-schedule";
 
+/**
+ * How late a Run may still start, in milliseconds — the `graceMs` the host
+ * timer passes to {@link evaluateSchedulePass}.
+ *
+ * Two minutes. VC-112's contract is that a Run may start late but never early,
+ * and this is where "late" stops meaning late and starts meaning missed. A
+ * timer that fires a few seconds behind, a machine briefly busy at 09:00, a
+ * process that took a moment to boot — all inside, and exactly this late still
+ * runs. A closed app, a slept laptop, a machine off for the weekend — all
+ * outside, and all recorded as Skipped occurrences instead, because starting
+ * unattended work hours after anyone expected it is how a person learns to
+ * switch the feature off.
+ *
+ * The window says only WHETHER an occurrence still runs. What the resulting
+ * skip then claims about the world is a separate question the policy answers
+ * from `watchingSince`: an occurrence older than this process says the app was
+ * closed, and one this running process simply failed to reach says that
+ * instead.
+ *
+ * Here rather than beside the timer because two callers must agree on it: the
+ * host timer that enforces it, and the schedule control that states it to the
+ * person setting the schedule (VC-298).
+ */
+export const AUTOMATION_SCHEDULE_LATE_GRACE_MS = 2 * 60_000;
+
 export interface SchedulePassInput {
   schedule: AutomationSchedule;
   /** The Automation's durable id — what the stagger is derived from. */

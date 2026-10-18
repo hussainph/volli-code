@@ -1525,6 +1525,10 @@ export function TicketDetail({
               visible
               api={browserApi}
               onTabState={useBrowserTabsStore.getState().receive}
+              // ⌘W from inside the page closes THIS pane's tab, and a chord
+              // from inside it starts from THIS pane (VC-301).
+              onClose={() => closeTab(tab)}
+              onFocusPane={() => focusTicketPane(projectId, ticket.id, pane.id)}
             />
           ) : null}
           {tab.kind === "session" ? (

@@ -154,7 +154,6 @@ describe("Working visual and screen-reader lifetimes", () => {
 describe("calm message delivery timing", () => {
   it.each([
     ["send", "Sending…"],
-    ["steer", "Sends after this step"],
     ["queue", "Queuing…"],
   ] as const)("delays %s state 600ms but never delays the words", async (delivery, copy) => {
     await render(
@@ -171,6 +170,18 @@ describe("calm message delivery timing", () => {
     expect(footer()?.textContent).toBe(copy);
     expect(footer()?.closest(".is-user")).not.toBeNull();
     expect(container.textContent).not.toContain("Pending");
+  });
+
+  it("never adds a tab to held steering", async () => {
+    await render(
+      <PendingMessage
+        message={{ id: "steer", text: "Keep these words", state: "sending", delivery: "steer" }}
+        context={context}
+      />,
+    );
+    await advance(5000);
+    expect(container.textContent).toContain("Keep these words");
+    expect(footer()).toBeNull();
   });
 
   it.each(["Pending", "Delivered", "Delivery unconfirmed"] as const)(
