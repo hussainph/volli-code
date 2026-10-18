@@ -131,7 +131,9 @@ export function ArchiveRow({
             {branch !== null ? (
               <>
                 <span aria-hidden>·</span>
-                <span className="truncate font-mono">{branch}</span>
+                <span className="truncate font-mono" title={branch}>
+                  {branch}
+                </span>
               </>
             ) : null}
             {prUrl !== null ? (
@@ -186,9 +188,10 @@ export function ArchiveRow({
  * One archived ticket, read-only: its identity, title, retained column and
  * labels, the branch and PR it kept, and its body — everything needed to know
  * what it was without restoring it. Navigation only: Restore and Delete live
- * on the list's rows, never here, so reading a ticket can't change it.
+ * on the list's rows, never here, so reading a ticket can't change it. Escape
+ * steps back to the list before it closes the dialog.
  */
-export function ArchiveInspect({
+function ArchiveInspect({
   project,
   ticket,
   onBack,
@@ -269,7 +272,17 @@ export function ArchiveInspect({
  * (CONCEPT #16/#92), so it's gated behind an explicit "this can't be undone"
  * step.
  */
-export function ArchiveList({ project }: { project: Project }) {
+function ArchiveList({
+  project,
+  escapeBack,
+}: {
+  project: Project;
+  /**
+   * Set while a ticket is open read-only: what the dialog's Escape does
+   * instead of closing, so Escape steps back to the list first.
+   */
+  escapeBack: React.RefObject<(() => void) | null>;
+}) {
   const archived = useBoardStore((state) => state.archivedByProject[project.id]);
   const canWrite = useCanWrite(project.id);
   const [pendingDelete, setPendingDelete] = React.useState<ArchivedTicket | null>(null);
@@ -305,17 +318,20 @@ export function ArchiveList({ project }: { project: Project }) {
 
   React.useEffect(load, [load]);
 
+  const back = (): void => {
+    if (inspecting === undefined) return;
+    returnTo.current = inspecting.id;
+    setInspectingId(null);
+  };
+  React.useEffect(() => {
+    escapeBack.current = inspecting === undefined ? null : back;
+    return () => {
+      escapeBack.current = null;
+    };
+  });
+
   if (inspecting !== undefined) {
-    return (
-      <ArchiveInspect
-        project={project}
-        ticket={inspecting}
-        onBack={() => {
-          returnTo.current = inspecting.id;
-          setInspectingId(null);
-        }}
-      />
-    );
+    return <ArchiveInspect project={project} ticket={inspecting} onBack={back} />;
   }
 
   const searching = query.trim() !== "";
@@ -431,10 +447,19 @@ export function ArchiveDialog({
   onOpenChange(open: boolean): void;
 }) {
   const project = useSelectedProject();
+  const escapeBack = React.useRef<(() => void) | null>(null);
 
   return (
     <Dialog open={open && project !== null} onOpenChange={onOpenChange}>
-      <DialogContent>{project !== null && <ArchiveList project={project} />}</DialogContent>
+      <DialogContent
+        onEscapeKeyDown={(event) => {
+          if (escapeBack.current === null) return;
+          event.preventDefault();
+          escapeBack.current();
+        }}
+      >
+        {project !== null && <ArchiveList project={project} escapeBack={escapeBack} />}
+      </DialogContent>
     </Dialog>
   );
 }

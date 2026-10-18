@@ -5,16 +5,30 @@ import type { ArchivedTicket, Project } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { hostWorld, type HostWorld } from "@renderer/components/hosts/hosts.test-support";
-import { Dialog, DialogContent } from "@renderer/components/ui/dialog";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useBoardStore } from "@renderer/stores/board";
 
 import {
   ARCHIVE_SEARCH_THRESHOLD,
-  ArchiveList,
+  ArchiveDialog,
   ArchiveRow,
   matchesArchiveQuery,
 } from "./archive-dialog";
+
+/**
+ * The handlers' own write gate, separately from the disabled control: a host
+ * that drops between a render and a click leaves the button enabled for that
+ * click, which is the case `canWriteNow` exists for. `null` defers to the real
+ * read.
+ */
+const writeGate = vi.hoisted(() => ({ override: null as boolean | null }));
+vi.mock("@renderer/components/hosts/use-hosts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@renderer/components/hosts/use-hosts")>();
+  return {
+    ...actual,
+    canWriteNow: (projectId: string | null) => writeGate.override ?? actual.canWriteNow(projectId),
+  };
+});
 
 const project: Project = {
   id: "remote",
@@ -106,10 +120,14 @@ afterEach(async () => {
   await world?.cleanup();
   world = null;
   useBoardStore.setState({ archivedByProject: {}, labelsByProject: {} });
+  writeGate.override = null;
   vi.restoreAllMocks();
 });
 
-/** Mounts the Archive body over `tickets`, with the load and both writes stubbed. */
+/**
+ * Mounts the Archive dialog over `tickets` for the world's selected project
+ * ("remote", prefix VC), with the load and both writes stubbed.
+ */
 async function renderArchive(
   tickets: ArchivedTicket[],
   { offline = false }: { offline?: boolean } = {},
@@ -127,16 +145,13 @@ async function renderArchive(
     unarchiveTicket,
     deleteArchivedTicket,
   });
+  const onOpenChange = vi.fn();
   await world.render(
     <TooltipProvider>
-      <Dialog open>
-        <DialogContent>
-          <ArchiveList project={project} />
-        </DialogContent>
-      </Dialog>
+      <ArchiveDialog open onOpenChange={onOpenChange} />
     </TooltipProvider>,
   );
-  return { unarchiveTicket, deleteArchivedTicket };
+  return { unarchiveTicket, deleteArchivedTicket, onOpenChange };
 }
 
 function dialog(): HTMLElement {
@@ -180,6 +195,14 @@ function many(count: number): ArchivedTicket[] {
   );
 }
 
+async function pressEscape(): Promise<void> {
+  await act(async () => {
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+  });
+}
+
 describe("ArchiveList — inspect", () => {
   it("opens a row read-only without restoring, and Back returns to its row", async () => {
     const { unarchiveTicket, deleteArchivedTicket } = await renderArchive([
@@ -214,6 +237,20 @@ describe("ArchiveList — inspect", () => {
     expect(document.activeElement).toBe(rowTarget("t1"));
     expect(unarchiveTicket).not.toHaveBeenCalled();
     expect(deleteArchivedTicket).not.toHaveBeenCalled();
+  });
+
+  it("Escape steps back to the list first, and only then closes the dialog", async () => {
+    const { onOpenChange } = await renderArchive([archived()]);
+
+    await act(async () => rowTarget("t1").click());
+    expect(dialog().querySelector('[data-slot="dialog-title"]')?.textContent).toBe("MCP server");
+    await pressEscape();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(dialog().querySelector('[data-slot="dialog-title"]')?.textContent).toBe("Archive");
+    expect(document.activeElement).toBe(rowTarget("t1"));
+
+    await pressEscape();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("says so when the archived ticket had no description", async () => {
@@ -290,19 +327,33 @@ describe("ArchiveList — restore and delete stay apart", () => {
     expect(deleteArchivedTicket).not.toHaveBeenCalled();
   });
 
-  it("offline: Restore and Delete stand down, and inspecting still works", async () => {
-    const { unarchiveTicket } = await renderArchive([archived({ body: "Still readable." })], {
-      offline: true,
-    });
+  it("offline: Restore and Delete are disabled, and inspecting still works", async () => {
+    await renderArchive([archived({ body: "Still readable." })], { offline: true });
     const restore = buttonNamed("Restore", dialog());
     expect(restore.disabled).toBe(true);
     expect(restore.hasAttribute("data-host-read-only")).toBe(true);
     expect(buttonNamed("Delete permanently", dialog()).disabled).toBe(true);
-    // A disabled button swallows the click; the handler's own gate is the second check.
-    await act(async () => restore.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(unarchiveTicket).not.toHaveBeenCalled();
 
     await act(async () => rowTarget("t1").click());
     expect(dialog().textContent).toContain("Still readable.");
+  });
+
+  it("a host that stops serving after the render: Restore and the confirm's Delete still write nothing", async () => {
+    const { unarchiveTicket, deleteArchivedTicket } = await renderArchive([archived()]);
+    const restore = buttonNamed("Restore", dialog());
+    await act(async () => buttonNamed("Delete permanently", dialog()).click());
+    const confirmDelete = buttonNamed(
+      "Delete",
+      document.querySelector<HTMLElement>('[role="alertdialog"]')!,
+    );
+    // Both controls drew enabled; the gate is the handlers' own read at click time.
+    expect(restore.disabled).toBe(false);
+    expect(confirmDelete.disabled).toBe(false);
+    writeGate.override = false;
+
+    await act(async () => confirmDelete.click());
+    expect(deleteArchivedTicket).not.toHaveBeenCalled();
+    await act(async () => restore.click());
+    expect(unarchiveTicket).not.toHaveBeenCalled();
   });
 });
