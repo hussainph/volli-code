@@ -6,7 +6,7 @@ export * from "./generic";
 export * from "./inherited-env";
 export * from "./launch";
 export * from "./manifest";
-export * from "./resume-reference";
+export { harnessResumeReference, type HarnessResumeReference } from "./resume-reference";
 export * from "./shell-init";
 export * from "./trust";
 export * from "./wrapper";

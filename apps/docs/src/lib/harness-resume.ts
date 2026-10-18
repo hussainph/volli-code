@@ -1,11 +1,7 @@
-import {
-  harnessAdapters,
-  harnessResumeReference,
-  type HarnessResumeReference,
-} from "@volli/shared";
+import { harnessResumeReference, type HarnessResumeReference } from "@volli/shared";
 
 /** The built-in TUIs' resume rows, rendered by the builder itself (VC-401). */
-export const resumeRows: readonly HarnessResumeReference[] = harnessResumeReference(harnessAdapters);
+export const resumeRows: readonly HarnessResumeReference[] = harnessResumeReference();
 
 /** Where a fresh launch's session id comes from — the part of "fresh" that decides how a later resume finds it. */
 export const SESSION_ID_SOURCE_NOTES: Record<HarnessResumeReference["sessionIdSource"], string> = {

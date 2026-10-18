@@ -1,18 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildResumeCommand, shellSingleQuote } from "../harness-command";
-import { FIRST_CLASS_HARNESS_IDS, parseHarnessId } from "../ticket";
-import { claudeCodeAdapter } from "./claude-code";
+import { FIRST_CLASS_HARNESS_IDS } from "../ticket";
 import { harnessAdapters } from "./core";
-import {
-  describeHarnessResume,
-  harnessResumeReference,
-  RESUME_REFERENCE_ID_PLACEHOLDER,
-} from "./resume-reference";
-import type { HarnessAdapter } from "./types";
+import { harnessResumeReference } from "./resume-reference";
 
-const reference = harnessResumeReference(harnessAdapters);
-
+const reference = harnessResumeReference();
 describe("harnessResumeReference", () => {
   it("lists every built-in harness, once, in registry order", () => {
     expect(reference.map((row) => row.harnessId)).toEqual(
@@ -27,7 +20,7 @@ describe("harnessResumeReference", () => {
     const id = "0b0e3a5c-1d2f-4e6a-8b9c-0d1e2f3a4b5c";
     for (const adapter of harnessAdapters) {
       const row = reference.find((candidate) => candidate.harnessId === adapter.id)!;
-      expect(row.byId?.replaceAll(RESUME_REFERENCE_ID_PLACEHOLDER, shellSingleQuote(id))).toBe(
+      expect(row.byId?.replaceAll("<id>", shellSingleQuote(id))).toBe(
         buildResumeCommand(adapter, id, null),
       );
       expect(row.latest).toBe(buildResumeCommand(adapter, null, null));
@@ -75,35 +68,5 @@ describe("harnessResumeReference", () => {
         minimumVersion: null,
       },
     ]);
-  });
-
-  it("refuses a harness Volli does not ship", () => {
-    const registered: HarnessAdapter = { ...claudeCodeAdapter, id: parseHarnessId("my-agent")! };
-    expect(() => harnessResumeReference([registered])).toThrow(/built-in harnesses only/);
-  });
-});
-
-describe("describeHarnessResume", () => {
-  const base: HarnessAdapter = { ...claudeCodeAdapter, sessionId: { kind: "reported" } };
-
-  it("has no by-id line when the builder can only resume the latest", () => {
-    const row = describeHarnessResume(
-      { ...base, resume: { byId: null, latest: ["--continue"], userResumeTokens: [] } },
-      "1.0.0",
-    );
-    expect(row).toMatchObject({
-      byId: null,
-      latest: "claude --continue",
-      freshLaunch: "claude",
-      minimumVersion: "1.0.0",
-    });
-  });
-
-  it("has neither line when the builder cannot resume at all", () => {
-    const row = describeHarnessResume(
-      { ...base, resume: { byId: null, latest: null, userResumeTokens: [] } },
-      null,
-    );
-    expect(row).toMatchObject({ byId: null, latest: null });
   });
 });

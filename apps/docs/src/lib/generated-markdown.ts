@@ -14,7 +14,8 @@ const effectVerbs = (VERB_REGISTRY as readonly VerbEntry[]).filter(
   (verb): verb is EffectVerb => verb.listed && verb.effects !== undefined,
 );
 
-const code = (text: string | null): string => (text === null ? NO_COMMAND : `\`${text}\``);
+/** A command in code font, or {@link NO_COMMAND} where the builder has none. */
+const commandCell = (text: string | null): string => (text === null ? NO_COMMAND : `\`${text}\``);
 
 const bullets = (items: readonly string[]): string => items.map((item) => `- ${item}`).join("\n");
 
@@ -27,7 +28,7 @@ export function expandGeneratedMarkdown(body: string): string {
         "| --- | --- | --- | --- | --- |",
         ...resumeRows.map(
           (row) =>
-            `| ${row.label} (\`${row.harnessId}\`) | ${code(row.byId)} | ${code(row.latest)} | ${code(row.freshLaunch)} ${SESSION_ID_SOURCE_NOTES[row.sessionIdSource]} | ${row.minimumVersion ?? NOT_PINNED} |`,
+            `| ${row.label} (\`${row.harnessId}\`) | ${commandCell(row.byId)} | ${commandCell(row.latest)} | ${commandCell(row.freshLaunch)} ${SESSION_ID_SOURCE_NOTES[row.sessionIdSource]} | ${row.minimumVersion ?? NOT_PINNED} |`,
         ),
       ].join("\n"),
     )
