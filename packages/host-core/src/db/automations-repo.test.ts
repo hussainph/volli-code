@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { createSessionEngine } from "@volli/session-engine";
 import { NO_AUTOMATION_TRIGGER, offeredAutomationsForColumn } from "@volli/shared";
-import type { ModelSelection } from "@volli/shared";
+import type { ModelSelection, SessionAttentionKind } from "@volli/shared";
 
 import {
   clearColumnArming,
@@ -13,6 +14,7 @@ import {
   listAutomationsForProject,
   listColumnArmings,
   listColumnOrders,
+  listPossiblyLiveProjectRunsForAutomation,
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
@@ -25,6 +27,8 @@ import {
   updateAutomation,
 } from "./automations-repo";
 import { insertProject } from "./projects-repo";
+import { chatSessionRecord } from "../session-control/chat-attachment";
+import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { insertSession } from "../session-control/test-support";
 import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
 import type { TestDb } from "./test-helpers";
@@ -1404,5 +1408,257 @@ describe("column order (migration 034)", () => {
     ctx.db.prepare("DELETE FROM projects WHERE id = ?").run(project.id);
 
     expect(listColumnOrders(ctx.db, project.id)).toEqual([]);
+  });
+});
+
+describe("listPossiblyLiveProjectRunsForAutomation (VC-816)", () => {
+  const system = {
+    source: { kind: "system" as const, id: "test", detail: null },
+    venue: { id: "local", kind: "local" as const },
+  };
+  const adapter = {
+    source: { kind: "adapter" as const, id: "pi", detail: null },
+    venue: { id: "local", kind: "local" as const },
+  };
+
+  /**
+   * One Automation's Runs over REAL Session facts, written through the Session
+   * Engine onto the SQLite ledger: the same rows, sequences and kind index a
+   * running host writes, so the narrowing is judged against the fold itself.
+   */
+  function world() {
+    ctx = openTestDb();
+    const project = testProject();
+    insertProject(ctx.db, project);
+    let id = 0;
+    let clock = 1_000;
+    const engine = createSessionEngine({
+      ledger: createSqliteSessionLedger(ctx.db),
+      clock: { now: () => clock++ },
+      ids: { next: (kind) => `${kind}-${++id}` },
+    });
+    const automation = createAutomation(
+      ctx.db,
+      {
+        projectId: project.id,
+        name: "Hourly sweep",
+        instructions: "/sweep",
+        trigger: NO_AUTOMATION_TRIGGER,
+        runtime: null,
+      },
+      1000,
+    );
+
+    async function session(name: string, automationId: string | null = automation.id) {
+      const created = await engine.createSession({
+        commandId: `create-${name}`,
+        projectId: project.id,
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: name,
+        provenance: system,
+      });
+      const sessionId = created.session.id;
+      const attachmentId = `attachment-${name}`;
+      recordAutomationRun(ctx.db, { automationId, ticketId: null, sessionId, model: PIN }, clock++);
+      const observe = (
+        fields: Record<string, unknown>,
+        provenance: typeof system | typeof adapter = system,
+      ) =>
+        engine.observe({
+          id: `${name}-${fields["kind"] as string}-${clock}`,
+          sessionId,
+          occurredAt: clock++,
+          provenance,
+          ...fields,
+        } as Parameters<typeof engine.observe>[0]);
+      return {
+        sessionId,
+        attach: () =>
+          observe({
+            kind: "attachment.opened",
+            attachment: {
+              id: attachmentId,
+              sessionId,
+              adapterId: "pi",
+              venue: { id: "local", kind: "local" },
+              continuity: "fresh",
+              native: { id: `native-${name}`, detail: null },
+              authority: null,
+            },
+          }),
+        close: () => observe({ kind: "attachment.closed", attachmentId, outcome: "completed" }),
+        startTurn: () => observe({ kind: "turn.started", attachmentId, turnId: `turn-${name}` }),
+        completeTurn: () =>
+          observe({ kind: "turn.completed", attachmentId, turnId: `turn-${name}` }),
+        ask: () =>
+          observe(
+            {
+              kind: "interaction.opened",
+              attachmentId,
+              interaction: {
+                id: `question-${name}`,
+                attachmentId,
+                kind: "permission",
+                title: "Allow write?",
+                detail: null,
+                options: [{ id: "once", label: "Allow once", description: null }],
+                multiple: false,
+                native: { id: `native-question-${name}`, detail: null },
+              },
+            },
+            adapter,
+          ),
+        cancelAsk: () =>
+          observe({
+            kind: "interaction.cancelled",
+            attachmentId,
+            interactionId: `question-${name}`,
+            reason: "abandoned",
+          }),
+        raise: (kind: SessionAttentionKind) =>
+          observe({
+            kind: "attention.raised",
+            attachmentId,
+            attention: {
+              id: `attention-${name}`,
+              kind,
+              attachmentId,
+              detail: null,
+              diagnostic: null,
+              ...(kind === "rate_limited" ? { retryAt: null } : {}),
+            },
+          }),
+        clear: () =>
+          observe({ kind: "attention.cleared", attachmentId, attentionId: `attention-${name}` }),
+        archive: () =>
+          engine.submit({
+            commandId: `archive-${name}`,
+            sessionId,
+            intent: { kind: "session.archive" },
+            provenance: system,
+          }),
+      };
+    }
+
+    const candidates = () =>
+      listPossiblyLiveProjectRunsForAutomation(ctx.db, {
+        automationId: automation.id,
+        projectId: project.id,
+      }).map((run) => run.sessionId);
+    const activity = async (sessionId: string) =>
+      chatSessionRecord((await engine.getSession({ sessionId }))!).activity;
+    return { automation, session, candidates, activity };
+  }
+
+  it("keeps exactly the Sessions that could read working or waiting, and agrees with the fold", async () => {
+    const w = world();
+
+    // Quiet by their facts: the bulk of a long schedule's history.
+    const neverAttached = await w.session("never-attached");
+    const finished = await w.session("finished");
+    await finished.attach();
+    await finished.startTurn();
+    await finished.completeTurn();
+    await finished.close();
+    const answered = await w.session("answered");
+    await answered.attach();
+    await answered.ask();
+    await answered.cancelAsk();
+    await answered.close();
+    const cleared = await w.session("cleared");
+    await cleared.attach();
+    await cleared.raise("permission_required");
+    await cleared.clear();
+    await cleared.close();
+    // The world blocked it, not a person: nobody is asked to answer anything.
+    const rateLimited = await w.session("rate-limited");
+    await rateLimited.attach();
+    await rateLimited.raise("rate_limited");
+    await rateLimited.close();
+    // Cut off mid-turn: the close ended the turn, exactly as the fold says.
+    const cutOff = await w.session("cut-off");
+    await cutOff.attach();
+    await cutOff.startTurn();
+    await cutOff.close();
+
+    // Could be live.
+    const attached = await w.session("attached");
+    await attached.attach();
+    const working = await w.session("working");
+    await working.attach();
+    await working.startTurn();
+    // A question outlives the attachment that asked it.
+    const stranded = await w.session("stranded");
+    await stranded.attach();
+    await stranded.ask();
+    await stranded.close();
+    const blocked = await w.session("blocked-on-auth");
+    await blocked.attach();
+    await blocked.raise("auth_required");
+    await blocked.close();
+
+    // Another Automation's live Run is its own schedule's business.
+    await (await w.session("neighbour", null)).attach();
+
+    const kept = w.candidates();
+    expect(kept.toSorted()).toEqual(
+      [attached, working, stranded, blocked].map(({ sessionId }) => sessionId).toSorted(),
+    );
+
+    // The property the guard rests on: every Session the fold reads as
+    // working or waiting is kept. Checked over every Session, not only the
+    // ones named above, so a new state cannot slip between the two lists.
+    const quiet = [neverAttached, finished, answered, cleared, rateLimited, cutOff];
+    for (const { sessionId } of [...quiet, attached, working, stranded, blocked]) {
+      const read = await w.activity(sessionId);
+      if (read === "working" || read === "waiting") expect(kept).toContain(sessionId);
+    }
+    // Not vacuous: the fold does call these two live, and every dropped one quiet.
+    await expect(w.activity(working.sessionId)).resolves.toBe("working");
+    await expect(w.activity(stranded.sessionId)).resolves.toBe("waiting");
+    await expect(w.activity(blocked.sessionId)).resolves.toBe("waiting");
+    for (const { sessionId } of quiet) {
+      await expect(w.activity(sessionId)).resolves.not.toMatch(/^(working|waiting)$/);
+    }
+  });
+
+  it("drops an archived Session even with its question still open", async () => {
+    // The Session Engine refuses every command on an archived Session, so no
+    // one can resume its work or answer its question: it can never be live
+    // again, and an unreadable one must not refuse the schedule's next Run.
+    const w = world();
+    const archived = await w.session("archived");
+    await archived.attach();
+    await archived.ask();
+    await archived.close();
+    expect(w.candidates()).toEqual([archived.sessionId]);
+
+    await archived.archive();
+
+    expect(w.candidates()).toEqual([]);
+  });
+
+  it("keeps a Session whose question was asked again after an earlier one was answered", async () => {
+    // The close must come AFTER the open it names. An earlier answer to the
+    // same id does not close a later ask.
+    const w = world();
+    const reasked = await w.session("reasked");
+    await reasked.attach();
+    await reasked.ask();
+    await reasked.cancelAsk();
+    await reasked.ask();
+    await reasked.close();
+    const reraised = await w.session("reraised");
+    await reraised.attach();
+    await reraised.raise("input_required");
+    await reraised.clear();
+    await reraised.raise("input_required");
+    await reraised.close();
+
+    expect(w.candidates().toSorted()).toEqual([reasked.sessionId, reraised.sessionId].toSorted());
+    await expect(w.activity(reasked.sessionId)).resolves.toBe("waiting");
+    await expect(w.activity(reraised.sessionId)).resolves.toBe("waiting");
   });
 });
