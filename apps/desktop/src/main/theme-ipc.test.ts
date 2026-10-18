@@ -476,13 +476,19 @@ describe("canvas writes (migration 014)", () => {
       { onFirstPaintChanged },
     );
 
-    const hint = { appearance: "light", background: "#f4efe9" } as const;
-    expect(invoke<Result>("volli:theme-first-paint-set", hint)).toEqual({ ok: true });
+    const report = {
+      appearance: "light",
+      background: "#f4efe9",
+      cardBackground: "#fdded2",
+    } as const;
+    expect(invoke<Result>("volli:theme-first-paint-set", report)).toEqual({ ok: true });
 
-    expect(getFirstPaintHint(ctx.db)).toEqual(hint);
+    // The card color is live-only: the stored hint stays the two values main
+    // needs at window construction.
+    expect(getFirstPaintHint(ctx.db)).toEqual({ appearance: "light", background: "#f4efe9" });
     // Fired AFTER the write, so a window never repaints to a background that
     // failed to persist.
-    expect(onFirstPaintChanged).toHaveBeenCalledWith(hint);
+    expect(onFirstPaintChanged).toHaveBeenCalledWith(report);
   });
 
   // `auto` is the one value main cannot act on at window construction, which is
@@ -491,7 +497,11 @@ describe("canvas writes (migration 014)", () => {
     setup();
 
     expect(
-      invoke<Result>("volli:theme-first-paint-set", { appearance: "auto", background: "#141210" }),
+      invoke<Result>("volli:theme-first-paint-set", {
+        appearance: "auto",
+        background: "#141210",
+        cardBackground: "#1c1310",
+      }),
     ).toEqual({ ok: false, error: "Invalid first-paint hint" });
     expect(getFirstPaintHint(ctx.db)).toBeNull();
   });

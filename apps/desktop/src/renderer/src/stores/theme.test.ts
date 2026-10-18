@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   APPEARANCE_APP_STATE_KEY,
   DEFAULT_CANVAS,
+  deriveCanvasTokens,
   THEME_APP_STATE_KEY,
   windowBackground,
   type Appearance,
@@ -987,7 +988,22 @@ describe("the first-paint hint", () => {
     expect(gateway.setFirstPaint).toHaveBeenCalledWith({
       appearance: "light",
       background: windowBackground(TEAL, "light"),
+      cardBackground: deriveCanvasTokens(TEAL, "light")["--background"],
     });
+  });
+
+  // Browser Tab planes sit in the card, and the card is a different rung from
+  // the window edge: painting the edge color there leaves a slab of base fill
+  // inside the pane (VC-302).
+  it("reports the card color apart from the window edge", async () => {
+    const { store, gateway } = freshStore();
+
+    store.getState().hydrateGlobal(appState(TEAL, "dark"));
+    await settle();
+
+    const [report] = vi.mocked(gateway.setFirstPaint).mock.calls.at(-1)!;
+    expect(report.cardBackground).toBe(deriveCanvasTokens(TEAL, "dark")["--background"]);
+    expect(report.cardBackground).not.toBe(report.background);
   });
 
   it("surfaces a failed hint write rather than letting it stop silently", async () => {

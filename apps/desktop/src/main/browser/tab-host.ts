@@ -278,8 +278,8 @@ export class BrowserTabHost extends BrowserTabRegistry<
   private stageWindow: BaseWindow | null = null;
 
   /**
-   * The app theme's background, or null until main first reports one. Every
-   * app-owned plane paints it ({@link BrowserTabSurface}); see
+   * The app theme's card background, or null until the renderer first reports
+   * one. Every app-owned plane paints it ({@link BrowserTabSurface}); see
    * {@link setThemeBackground}.
    */
   private themeBackground: string | null = null;
@@ -538,11 +538,13 @@ export class BrowserTabHost extends BrowserTabRegistry<
   }
 
   /**
-   * Follows the app's effective theme (VC-302): main calls this with the
-   * background the renderer actually painted, once at boot and again on every
-   * change — a theme pick, a project override, the system flipping under
-   * `auto`. Every app-owned plane repaints now; a tab showing a website keeps
-   * the page's own background ({@link BrowserTabSurface}).
+   * Follows the app's effective theme (VC-302): main calls this with the card
+   * background (`--background`) the renderer actually painted, on its first
+   * durable paint and again on every change — a theme pick, a project override,
+   * the system flipping under `auto`. The card, not the window edge, because
+   * that is what a Browser pane's plane sits in. Every app-owned plane
+   * repaints now; a tab showing a website keeps the page's own background
+   * ({@link BrowserTabSurface}).
    *
    * A tab opened before the first call keeps the native default until it, and
    * is repainted by it, so boot order never leaves a tab on the wrong color.

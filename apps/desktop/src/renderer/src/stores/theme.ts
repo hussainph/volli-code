@@ -35,6 +35,7 @@
 import {
   APPEARANCE_APP_STATE_KEY,
   DEFAULT_CANVAS,
+  deriveCanvasTokens,
   editorThemeForAppearance,
   errorMessage,
   isAppearance,
@@ -52,6 +53,7 @@ import type {
   ShippedEditorThemeId,
 } from "@volli/shared";
 import type {
+  FirstPaintReport,
   ProjectCanvasWriteResult,
   Result,
   ThemeStatePayload,
@@ -113,9 +115,10 @@ export interface ThemeGateway {
   /**
    * Records what was actually painted so the NEXT launch can build its window
    * with the right edge color and the right mode class before anything runs. A
-   * cache, never an authority — `{canvas, appearance}` stays the pair.
+   * cache, never an authority — `{canvas, appearance}` stays the pair. The
+   * card color is the live half: Browser Tab planes paint it (VC-302).
    */
-  setFirstPaint(hint: { appearance: ResolvedAppearance; background: string }): Promise<Result>;
+  setFirstPaint(hint: FirstPaintReport): Promise<Result>;
 }
 
 /**
@@ -445,7 +448,13 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * explain.
      */
     const recordFirstPaint = (canvas: Canvas, resolved: ResolvedAppearance): void => {
-      const hint = { appearance: resolved, background: windowBackground(canvas, resolved) };
+      const hint: FirstPaintReport = {
+        appearance: resolved,
+        background: windowBackground(canvas, resolved),
+        // The card rung, not the window edge: what a Browser Tab's plane sits
+        // in and has to match while the app owns it (VC-302).
+        cardBackground: deriveCanvasTokens(canvas, resolved)["--background"],
+      };
       // Started inside a promise so a SYNCHRONOUS throw lands in the same
       // `.catch` as a rejection. `window.api` is not guaranteed to exist in
       // every host this store is constructed in (the renderer's own tests run

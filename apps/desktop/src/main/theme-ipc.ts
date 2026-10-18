@@ -34,7 +34,7 @@ import type {
   AppearanceSetProjectInput,
   CanvasSetGlobalInput,
   CanvasSetProjectInput,
-  FirstPaintHint,
+  FirstPaintReport,
   ProjectCanvasWriteResult,
   Result,
   TerminalOverlayWriteInput,
@@ -102,8 +102,9 @@ export interface ThemeIpcHooks {
    * resizes and before first paint, so a stale one flashes the previous palette
    * at exactly the moments the user notices. Taking the color the renderer
    * actually painted beats re-deriving one in main and hoping the two agree.
+   * The same report carries the card color Browser Tab planes match (VC-302).
    */
-  onFirstPaintChanged?(hint: FirstPaintHint): void;
+  onFirstPaintChanged?(report: FirstPaintReport): void;
 }
 
 /** A project's ticket prefix (the per-project overlay's file name), or a typed error. */
@@ -206,7 +207,7 @@ export function registerThemeIpcHandlers(
       return { ok: true, project };
     },
 
-    "volli:theme-first-paint-set": (input: FirstPaintHint): Result => {
+    "volli:theme-first-paint-set": (input: FirstPaintReport): Result => {
       setFirstPaintHint(db, input, deps.now());
       // After the write, so a window never repaints to a background that failed
       // to persist.

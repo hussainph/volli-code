@@ -2874,13 +2874,19 @@ describe("THEME_IPC descriptor table", () => {
 
     it("refuses an unresolved first-paint appearance, and a background that is not a color", () => {
       const { guard, invalidError } = THEME_IPC["volli:theme-first-paint-set"];
+      const card = { cardBackground: "#1c1310" };
 
-      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(true);
-      expect(guard([{ appearance: "light", background: "#f4efe9" }])).toBe(true);
+      expect(guard([{ appearance: "dark", background: "#141210", ...card }])).toBe(true);
+      expect(guard([{ appearance: "light", background: "#f4efe9", ...card }])).toBe(true);
       // `auto` is the one value main cannot act on at window construction.
-      expect(guard([{ appearance: "auto", background: "#141210" }])).toBe(false);
-      expect(guard([{ appearance: "dark", background: "rebeccapurple" }])).toBe(false);
-      expect(guard([{ appearance: "dark" }])).toBe(false);
+      expect(guard([{ appearance: "auto", background: "#141210", ...card }])).toBe(false);
+      expect(guard([{ appearance: "dark", background: "rebeccapurple", ...card }])).toBe(false);
+      expect(guard([{ appearance: "dark", ...card }])).toBe(false);
+      // The card color Browser Tab planes paint (VC-302) is required and a color.
+      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(false);
+      expect(
+        guard([{ appearance: "dark", background: "#141210", cardBackground: "transparent" }]),
+      ).toBe(false);
       expect(guard([])).toBe(false);
       expect(invalidError).toBe("Invalid first-paint hint");
     });

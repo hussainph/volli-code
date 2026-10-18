@@ -1566,6 +1566,9 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       const [input] = args;
       if (!isRecord(input)) return false;
       if (input["appearance"] !== "light" && input["appearance"] !== "dark") return false;
+      if (typeof input["cardBackground"] !== "string" || !isHexColor(input["cardBackground"])) {
+        return false;
+      }
       return typeof input["background"] === "string" && isHexColor(input["background"]);
     },
     invalidError: "Invalid first-paint hint",
