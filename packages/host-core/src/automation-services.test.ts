@@ -31,6 +31,7 @@ import {
   listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
+  listPossiblyLiveProjectRunsForAutomation,
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
@@ -363,8 +364,8 @@ describe("runner wiring", () => {
     deps.listRunsForTicket("t1");
     expect(listRunsForTicket).toHaveBeenCalledWith(db, "t1");
     const query = { automationId: "a1", projectId: "p1" };
-    deps.listProjectRunsForAutomation(query);
-    expect(listProjectRunsForAutomation).toHaveBeenCalledWith(db, query);
+    deps.listPossiblyLiveProjectRunsForAutomation(query);
+    expect(listPossiblyLiveProjectRunsForAutomation).toHaveBeenCalledWith(db, query);
 
     deps.onRunStarted!({ projectId: "p1", run: { ticketId: null } as never });
     expect(f.publish).toHaveBeenLastCalledWith("data-changed", { projectId: "p1" });

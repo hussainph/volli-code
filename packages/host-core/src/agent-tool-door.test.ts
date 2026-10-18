@@ -47,7 +47,7 @@ import {
   getAutomation,
   getAutomationRun,
   listAutomationsForProject,
-  listProjectRunsForAutomation,
+  listPossiblyLiveProjectRunsForAutomation,
   listRunsForTicket,
 } from "./db/automations-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
@@ -806,7 +806,8 @@ function automationHarness(options: { host?: "absent" } = {}) {
     },
     findProject: (projectId) => projectId === "project-one" || projectId === "project-two",
     listRunsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
-    listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(db, input),
+    listPossiblyLiveProjectRunsForAutomation: (input) =>
+      listPossiblyLiveProjectRunsForAutomation(db, input),
     sessions: {
       create: async (input) => {
         creates.push(input);

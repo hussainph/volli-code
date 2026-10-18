@@ -21,6 +21,7 @@ import {
   listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
+  listPossiblyLiveProjectRunsForAutomation,
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
@@ -89,7 +90,7 @@ export type AutomationSessionPorts = Omit<
   | "findTicket"
   | "findProject"
   | "listRunsForTicket"
-  | "listProjectRunsForAutomation"
+  | "listPossiblyLiveProjectRunsForAutomation"
   | "onRunStarted"
 >;
 
@@ -169,7 +170,8 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       findTicket: (ticketId) => getTicket(db, ticketId),
       findProject: (projectId) => getProjectById(db, projectId) !== undefined,
       listRunsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
-      listProjectRunsForAutomation: (query) => listProjectRunsForAutomation(db, query),
+      listPossiblyLiveProjectRunsForAutomation: (query) =>
+        listPossiblyLiveProjectRunsForAutomation(db, query),
       ...ports,
       // A Run that names no Ticket (VC-130's schedule Target) OMITS the
       // property rather than sending `undefined` for it: the Electron
