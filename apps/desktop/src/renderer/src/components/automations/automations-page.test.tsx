@@ -16,6 +16,7 @@ import {
   DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
+  MAX_OFFERED_DIGITS,
   NO_AUTOMATION_TRIGGER,
 } from "@volli/shared";
 import type {
@@ -1185,6 +1186,52 @@ describe("the lane view", () => {
     const row = document.querySelector('[data-lane-row="doing:shared"]');
     expect(row?.getAttribute("data-lane-digit")).toBe("1");
     expect(row?.getAttribute("data-lane-arming")).toBe("ready");
+  });
+
+  it("draws rows ranked past the ninth without a digit, still in place and draggable", async () => {
+    const crowd = Array.from({ length: 11 }, (_, index) =>
+      automation({
+        id: `crowd-${index}`,
+        // Lettered, so a digit in a row's text can only be a printed digit.
+        name: `Crowd ${String.fromCharCode(65 + index)}`,
+        trigger: { kind: "columns", columns: ["doing"] },
+      }),
+    );
+    await mount({
+      automations: crowd,
+      orders: [
+        {
+          projectId: "p1",
+          status: "doing",
+          rankedAutomationIds: crowd.map((row) => row.id).toReversed(),
+          orderedAt: 1,
+        },
+      ],
+    });
+    await openLanes();
+
+    const rows = [...document.querySelectorAll('[data-lane-row^="doing:"]')];
+    expect(rows.map((row) => row.getAttribute("data-lane-row"))).toEqual(
+      crowd.map((row) => `doing:${row.id}`).toReversed(),
+    );
+    expect(rows.map((row) => row.getAttribute("data-lane-digit"))).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      null,
+      null,
+    ]);
+    // dnd-kit's own sortable attributes: the digitless rows drag like the rest.
+    for (const row of rows.slice(MAX_OFFERED_DIGITS)) {
+      expect(row.getAttribute("aria-roledescription")).toBe("sortable");
+      expect(row.textContent).not.toMatch(/\d/);
+    }
   });
 
   it("marks an armed-but-switched-off bolt, tooltip, menu row, and authored lane digit alike", async () => {

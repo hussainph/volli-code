@@ -297,6 +297,22 @@ describe("laneDropRank", () => {
       }),
     ).toBeNull();
   });
+
+  it("promotes a row ranked past the ninth, which the lane draws without a digit", () => {
+    const crowd = Array.from({ length: 11 }, (_, index) => `c${index}`);
+    // `c0` is the pinned armed row, so it is drawn but not draggable.
+    expect(
+      laneDropRank({
+        authoredIds: crowd,
+        visibleIds: crowd.slice(1),
+        activeId: laneRowId("doing", "c10"),
+        overId: laneRowId("doing", "c1"),
+      }),
+    ).toEqual({
+      status: "doing",
+      rankedAutomationIds: ["c0", "c10", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"],
+    });
+  });
 });
 
 /* ------------------------------- schedules (VC-130) ----------------------- */
