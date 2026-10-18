@@ -2522,6 +2522,74 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
     );
   });
 
+  const submitted = (sequence: number, commandId: string, message: UIMessage) =>
+    frame(
+      sequence,
+      {
+        kind: "command.recorded",
+        command: {
+          id: commandId,
+          sessionId: SESSION,
+          createdAt: 0,
+          route: null,
+          intent: {
+            kind: "message.submit",
+            reference: { id: `artifact-${sequence}`, mediaType: null, digest: null },
+          },
+        },
+      },
+      message,
+    );
+
+  it("keeps the wait's clock from the hold when ownership hands off part-way through it", async () => {
+    vi.useFakeTimers();
+    const store = chatStore([]);
+    const message: UIMessage = {
+      id: "handoff-mid-wait",
+      role: "user",
+      parts: [{ type: "text", text: "Halfway there" }],
+    };
+    useChatDraftsStore
+      .getState()
+      .holdMessage(SESSION, { id: message.id, text: "Halfway there", delivery: "send" });
+    await mountPlane(store);
+    await advanceProgressTime(300);
+    await ingest(store, [submitted(1, "held-command", message)]);
+    expect(container?.querySelectorAll(".is-user")).toHaveLength(1);
+    await advanceProgressTime(299);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(1);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Sending…",
+    );
+  });
+
+  it("never holds a wait longer than 600ms after the tab mounted when its stamp arrives late", async () => {
+    vi.useFakeTimers();
+    const store = chatStore([]);
+    const drafts = useChatDraftsStore.getState();
+    drafts.holdMessage(SESSION, { id: "late-stamp", text: "Line up", delivery: "queue" });
+    // Accepted before the tab mounts: "Queued", with no pending stamp yet.
+    drafts.amendHeldMessage(SESSION, "late-stamp", (held) => ({ ...held, deliveryAccepted: true }));
+    await mountPlane(store);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(300);
+    // Pending again, so the message is stamped now — 300ms after the tab mounted.
+    await act(async () =>
+      drafts.amendHeldMessage(SESSION, "late-stamp", (held) => {
+        const next = { ...held };
+        delete next.deliveryAccepted;
+        return next;
+      }),
+    );
+    await advanceProgressTime(299);
+    expect(container?.querySelector('[data-slot="message-delivery"]')).toBeNull();
+    await advanceProgressTime(1);
+    expect(container?.querySelector('[data-slot="message-delivery"]')?.textContent).toBe(
+      "Queuing…",
+    );
+  });
+
   it.each(["reasoning", "text", "tool"] as const)(
     "restores Working during a transport retry with stale %s output",
     async (kind) => {
