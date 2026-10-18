@@ -4,37 +4,47 @@ import { cn } from "@renderer/lib/utils";
 import { SPLIT_VIEW_MAX_RATIO, SPLIT_VIEW_MIN_RATIO, type SplitViewDirection } from "@volli/shared";
 
 /**
- * The grip between two surface panes (VC-202).
+ * The grip between two panes — of a surface split (VC-202) AND of the terminal
+ * split inside a terminal pane (`sessions/session-split-layout.tsx`).
  *
- * A deliberate LIFT of `sessions/session-split-layout.tsx`'s `SplitDivider`,
- * not an import of it: the app has one splitting grammar (right/down splits, an
- * active-pane ring, a hairline grip that colours on hover), and a surface split
- * that felt different from the terminal split inside it would be two grammars
- * wearing one word. What is copied is the MECHANICS, which are subtle enough
- * that re-deriving them is how they drift:
+ * ONE component for both since VC-215. It began as a deliberate lift of the
+ * terminal layout's own `SplitDivider`, kept separate so the first surface
+ * split would not put every live PTY in the app behind a refactor; two copies
+ * of mechanics this subtle are how they drift, and they had already drifted —
+ * only this copy told AT where it stood. The app has one splitting grammar
+ * (right/down splits, an active-pane ring, a hairline grip that colours on
+ * hover), and now one grip. The mechanics:
  *
  *  • ONE RATIO PER FRAME. Every write re-renders the pane tree, and inside these
  *    panes sit editors, chat transcripts and terminals that reflow — a terminal
- *    pane additionally sends a PTY resize over IPC per write. A trackpad samples
- *    past 120Hz; the pointer cannot be in two places within one frame, so only a
- *    frame's last sample could ever have decided where the divider lands.
- *  • The parent rect is read PER FRAME rather than cached at the press: this box
- *    is not the drag's to own, and a rail toggle or a full-screen shortcut can
- *    resize it mid-drag.
+ *    pane additionally refits its engine and sends a PTY resize over IPC per
+ *    write, for both sides of the split and again for every pane of a nested
+ *    one. A trackpad samples past 120Hz; the pointer cannot be in two places
+ *    within one frame, so only a frame's last sample could ever have decided
+ *    where the divider lands.
+ *  • The parent rect is read PER WRITE rather than cached at the press: this
+ *    box is not the drag's to own, and a rail toggle or a full-screen shortcut
+ *    can resize it mid-drag.
  *  • The frame a released drag was waiting on is landed by hand, or the panes
  *    settle one sample short of the cursor.
+ *  • The keyboard holds the SAME px floor the pointer does. A 3% step is a
+ *    share, and a share of a wide box is many pixels: without the floor a few
+ *    presses walked a pane below the size no drag could reach.
  *
- * What differs is the floor: a surface pane holds a strip, an editor or a board,
- * so it may not be squeezed to a terminal's 96px. {@link MIN_PANE_PX} is 240 —
- * the width at which a folder tab plus its close is still legible.
- *
- * The terminal's own copy stays where it is. Unifying them is a follow-up worth
- * doing calmly; doing it in the same change that first split a surface would
- * have put every live PTY in the app behind one refactor.
+ * What differs between the two callers is the floor and the model's clamp. A
+ * surface pane holds a strip, an editor or a board, so it may not be squeezed
+ * below {@link SURFACE_MIN_PANE_PX} — the width at which a folder tab plus its
+ * close is still legible; a terminal pane passes its own 96px.
  */
 
 /** No pane of a surface split is squeezed below this. */
-const MIN_PANE_PX = 240;
+export const SURFACE_MIN_PANE_PX = 240;
+
+/** The surface split model's own clamp — what AT is told by default. */
+const SURFACE_VALUE_RANGE = [SPLIT_VIEW_MIN_RATIO, SPLIT_VIEW_MAX_RATIO] as const;
+
+/** One arrow-key press moves the divider by this share of the box. */
+const KEYBOARD_STEP = 0.03;
 
 export interface SplitViewDividerProps {
   /** `row` divides left/right (a vertical grip); `column` divides top/bottom. */
@@ -42,6 +52,15 @@ export interface SplitViewDividerProps {
   /** The first pane's current share, for the keyboard's relative steps. */
   ratio: number;
   onChange(ratio: number): void;
+  /** Neither pane is squeezed below this, by pointer or keyboard. Default 240. */
+  minPanePx?: number;
+  /**
+   * The share the owning MODEL clamps to, as `[min, max]` — what AT is told the
+   * range is. Defaults to the surface split's own clamp.
+   */
+  valueRange?: readonly [min: number, max: number];
+  /** Overrides the default "Resize left and right panes"-style name. */
+  label?: string;
   /**
    * Draw the grip, but keep it out of the accessibility tree and the tab order.
    *
@@ -60,6 +79,9 @@ export function SplitViewDivider({
   direction,
   ratio,
   onChange,
+  minPanePx = SURFACE_MIN_PANE_PX,
+  valueRange = SURFACE_VALUE_RANGE,
+  label,
   presentational = false,
 }: SplitViewDividerProps) {
   const vertical = direction === "row";
@@ -79,16 +101,26 @@ export function SplitViewDivider({
     };
   }, []);
 
-  const ratioFromPointer = (parent: HTMLElement, clientX: number, clientY: number): number => {
+  /** The box's size along the split axis, read now — never cached. */
+  const measure = (parent: HTMLElement): { start: number; total: number } => {
     const rect = parent.getBoundingClientRect();
-    const total = vertical ? rect.width : rect.height;
-    const position = vertical ? clientX - rect.left : clientY - rect.top;
-    // The clamp is a share, so it has to be recomputed against the box: 240px
-    // is a third of a narrow window and a tenth of a wide one. 0.45 is the
-    // floor's own floor — below that a box is too small for two panes at all,
-    // and the divider stops trying to hold a size it cannot.
-    const minRatio = Math.min(0.45, MIN_PANE_PX / Math.max(total, 1));
-    return Math.min(1 - minRatio, Math.max(minRatio, position / Math.max(total, 1)));
+    return vertical
+      ? { start: rect.left, total: Math.max(rect.width, 1) }
+      : { start: rect.top, total: Math.max(rect.height, 1) };
+  };
+
+  // The clamp is a share, so it has to be recomputed against the box: 240px is
+  // a third of a narrow window and a tenth of a wide one. 0.45 is the floor's
+  // own floor — below that a box is too small for two panes at all, and the
+  // divider stops trying to hold a size it cannot.
+  const clampToFloor = (next: number, total: number): number => {
+    const minRatio = Math.min(0.45, minPanePx / total);
+    return Math.min(1 - minRatio, Math.max(minRatio, next));
+  };
+
+  const ratioFromPointer = (parent: HTMLElement, clientX: number, clientY: number): number => {
+    const { start, total } = measure(parent);
+    return clampToFloor(((vertical ? clientX : clientY) - start) / total, total);
   };
 
   function endDrag(event: React.PointerEvent<HTMLDivElement>, release: boolean): void {
@@ -97,6 +129,9 @@ export function SplitViewDivider({
     dragRef.current = null;
     if (release) event.currentTarget.releasePointerCapture(event.pointerId);
     if (drag.frame === null) return;
+    // The frame the last sample was waiting on will never run. Land it here, or
+    // the panes settle one sample short of where the pointer was released —
+    // visible as a divider that stops just shy of the cursor.
     window.cancelAnimationFrame(drag.frame);
     onChange(ratioFromPointer(drag.parent, drag.x, drag.y));
   }
@@ -109,15 +144,13 @@ export function SplitViewDivider({
       aria-label={
         presentational
           ? undefined
-          : vertical
-            ? "Resize left and right panes"
-            : "Resize top and bottom panes"
+          : (label ?? (vertical ? "Resize left and right panes" : "Resize top and bottom panes"))
       }
       // Where it stands, as a percentage of the model's own clamp — the px
-      // floor is a live-layout fact AT cannot usefully be told, but 15–85 and
-      // the current share are stable answers to "how far can this go".
-      aria-valuemin={presentational ? undefined : Math.round(SPLIT_VIEW_MIN_RATIO * 100)}
-      aria-valuemax={presentational ? undefined : Math.round(SPLIT_VIEW_MAX_RATIO * 100)}
+      // floor is a live-layout fact AT cannot usefully be told, but the model's
+      // range and the current share are stable answers to "how far can this go".
+      aria-valuemin={presentational ? undefined : Math.round(valueRange[0] * 100)}
+      aria-valuemax={presentational ? undefined : Math.round(valueRange[1] * 100)}
       aria-valuenow={presentational ? undefined : Math.round(ratio * 100)}
       tabIndex={presentational ? -1 : 0}
       data-slot="split-view-divider"
@@ -158,7 +191,15 @@ export function SplitViewDivider({
         const increment = vertical ? event.key === "ArrowRight" : event.key === "ArrowDown";
         if (!decrement && !increment) return;
         event.preventDefault();
-        onChange(ratio + (increment ? 0.03 : -0.03));
+        const parent = event.currentTarget.parentElement;
+        const next = ratio + (increment ? KEYBOARD_STEP : -KEYBOARD_STEP);
+        const clamped = parent === null ? next : clampToFloor(next, measure(parent).total);
+        // A press never moves the divider against its own arrow, and one that
+        // cannot move it writes nothing — at the floor a held key would
+        // otherwise refit every pane (and resize every PTY) per repeat for a
+        // ratio that never changes.
+        if (increment ? clamped <= ratio : clamped >= ratio) return;
+        onChange(clamped);
       }}
     >
       <span

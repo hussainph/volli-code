@@ -14,7 +14,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { SplitViewDivider } from "./split-view-divider";
+import { SplitViewDivider, type SplitViewDividerProps } from "./split-view-divider";
 
 /** The box the divider measures itself against: 1000 × 400 at the origin. */
 const PARENT = { left: 0, top: 0, width: 1000, height: 400 };
@@ -52,12 +52,13 @@ function render(
   onChange: (ratio: number) => void,
   direction: "row" | "column" = "row",
   ratio = 0.5,
+  extra: Partial<SplitViewDividerProps> = {},
 ): HTMLElement {
   act(() => {
     // A parent to measure: the divider reads its own parentElement's box.
     root?.render(
       <div>
-        <SplitViewDivider direction={direction} ratio={ratio} onChange={onChange} />
+        <SplitViewDivider direction={direction} ratio={ratio} onChange={onChange} {...extra} />
       </div>,
     );
   });
@@ -74,6 +75,12 @@ function pointer(type: string, x: number, y: number): Event {
   const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
   Object.defineProperty(event, "pointerId", { value: 1 });
   return event;
+}
+
+function press(grip: HTMLElement, key: string): void {
+  act(() => {
+    grip.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
 }
 
 function drag(grip: HTMLElement, type: string, x: number, y: number): void {
@@ -207,5 +214,69 @@ describe("SplitViewDivider", () => {
     expect(grip.getAttribute("aria-valuenow")).toBe("30");
     expect(grip.getAttribute("aria-valuemin")).toBe("15");
     expect(grip.getAttribute("aria-valuemax")).toBe("85");
+  });
+
+  it("holds the pointer's px floor on the keyboard too, on a wide box", () => {
+    // 1000px wide: the floor is 0.24, well inside the model's 0.15. A 3% step
+    // from 0.25 would land at 0.22 — 220px, a pane no drag could ever make.
+    const onChange = vi.fn();
+    const grip = render(onChange, "row", 0.25);
+
+    press(grip, "ArrowLeft");
+    expect(onChange).toHaveBeenLastCalledWith(0.24);
+
+    // And from the far end, the same floor mirrored.
+    const far = vi.fn();
+    const farGrip = render(far, "row", 0.75);
+    press(farGrip, "ArrowRight");
+    expect(far).toHaveBeenLastCalledWith(0.76);
+  });
+
+  it("writes nothing for a press that cannot move it", () => {
+    // At the floor a held arrow would otherwise refit every pane — and resize
+    // every PTY — once per key repeat, for a ratio that never changes.
+    const onChange = vi.fn();
+    const grip = render(onChange, "row", 0.24);
+
+    press(grip, "ArrowLeft");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("never moves against its own arrow, even from below a floor the box shrank onto", () => {
+    // 0.1 was legal in a wider box; in this one the floor is 0.24. The arrow
+    // pointing away from the floor lands on it; the one pointing into it is a
+    // no-op, not a jump the wrong way.
+    const onChange = vi.fn();
+    const grip = render(onChange, "row", 0.1);
+
+    press(grip, "ArrowLeft");
+    expect(onChange).not.toHaveBeenCalled();
+
+    press(grip, "ArrowRight");
+    expect(onChange).toHaveBeenLastCalledWith(0.24);
+  });
+
+  it("takes a caller's floor, range and name — the terminal split's", () => {
+    const onChange = vi.fn();
+    const grip = render(onChange, "column", 0.3, {
+      minPanePx: 96,
+      valueRange: [0.1, 0.9],
+      label: "Resize top and bottom terminal panes",
+    });
+
+    expect(grip.getAttribute("aria-label")).toBe("Resize top and bottom terminal panes");
+    expect(grip.getAttribute("aria-valuemin")).toBe("10");
+    expect(grip.getAttribute("aria-valuemax")).toBe("90");
+    expect(grip.getAttribute("aria-valuenow")).toBe("30");
+
+    // 96px of a 400px height: 0.24, by pointer and by keyboard alike.
+    drag(grip, "pointerdown", 0, 0);
+    expect(onChange).toHaveBeenLastCalledWith(0.24);
+    drag(grip, "pointerup", 0, 0);
+
+    const keyed = vi.fn();
+    const keyedGrip = render(keyed, "column", 0.25, { minPanePx: 96 });
+    press(keyedGrip, "ArrowUp");
+    expect(keyed).toHaveBeenLastCalledWith(0.24);
   });
 });
