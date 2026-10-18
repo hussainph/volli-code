@@ -48,18 +48,19 @@ export function ticketBranchName(ticketId: string, title: string): string {
 }
 
 /**
- * `volli/<DISPLAY-ID>` then anything that is not another digit. The display id
- * is a ticket prefix (`isValidPrefix`: a letter then up to four letters or
- * digits, never a hyphen) and a ticket number, so the first `-<digits>` closes
- * it and no slug can be mistaken for part of the id: `volli/VC-2-3-things` is
- * VC-2's. What follows the number is the branch's own business — `-<slug>`,
- * or a stacked-PR suffix cut from the same ticket (`volli/VC-627c-venue`,
- * VC-659) — so only a further digit refuses it: `volli/VC-6270` is VC-6270's,
- * never VC-627's. The lookahead keeps the match linear (CodeQL
- * js/polynomial-redos, #429): it is anchored, and `\d+` can only give back
- * digits the lookahead then rejects.
+ * `volli/<DISPLAY-ID>`, an optional one-letter stacked-PR slice (`c` in
+ * `volli/VC-627c-venue`, VC-659), then either the end or `-<slug>`. The
+ * display id is a ticket prefix (`isValidPrefix`: a letter then up to four
+ * letters or digits, never a hyphen) and a ticket number, so the first
+ * `-<digits>` closes it and no slug can be mistaken for part of the id:
+ * `volli/VC-2-3-things` is VC-2's, and a slice cut as `volli/VC-627-b-…` is
+ * VC-627's through its slug. Anything else after the number is refused —
+ * `volli/VC-6270` is VC-6270's, never VC-627's, and `volli/VC-627.bak` or
+ * `volli/VC-627_x` belong to no ticket. Linear (CodeQL js/polynomial-redos,
+ * #429): it is anchored, and `\d+` can only give back digits, which neither
+ * the slice letter nor `-` nor the end can match.
  */
-const TICKET_BRANCH = /^volli\/([A-Z][A-Z0-9]{0,4}-\d+)(?!\d)/;
+const TICKET_BRANCH = /^volli\/([A-Z][A-Z0-9]{0,4}-\d+)[a-z]?(?:-|$)/;
 
 /**
  * The display id a ticket branch names (`"VC-12"` for `volli/VC-12-mcp-server`

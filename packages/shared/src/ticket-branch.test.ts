@@ -90,6 +90,12 @@ describe("ticketBranchDisplayId", () => {
     ["volli/ABCDEF-1-prefix-too-long"],
     ["feature/volli/VC-12-nested"],
     ["refs/heads/volli/VC-12-full-ref"],
+    // Only a one-letter slice or a slug may follow the number (VC-659).
+    ["volli/VC-627.bak"],
+    ["volli/VC-627_x"],
+    ["volli/VC-627C-uppercase-slice"],
+    ["volli/VC-627cd-two-letter-slice"],
+    ["volli/VC-627c.bak"],
   ])("reads %s as no ticket", (branch) => {
     expect(ticketBranchDisplayId(branch)).toBeNull();
   });
@@ -139,6 +145,8 @@ describe("classifyTicketWorktreeCheckout", () => {
   it.each([
     ["another ticket's branch", "volli/VC-298-something-else"],
     ["a ticket whose number only extends this one", "volli/VC-2970"],
+    ["a backup copy of this ticket's branch name", "volli/VC-297.bak"],
+    ["an underscore suffix on this ticket's number", "volli/VC-297_x"],
     ["a ticket whose number only starts the same", "volli/VC-2970-lookalike"],
     ["the same number under another prefix", "volli/VD-297-other-project"],
     ["a branch outside the convention", "fix/browser-tab-smoke-popup-flake"],

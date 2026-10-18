@@ -705,9 +705,9 @@ describe("ensure — the ticket's worktree on another branch, against a real rep
     expect(worktreeEvents().slice(before)).toHaveLength(1);
   });
 
-  it("adopts a stacked PR branch the previous Session left checked out (VC-659)", async () => {
-    // What happened to VC-627: its Session cut `volli/VC-627c-…` for a stacked
-    // PR and left the worktree there, and every later start refused to attach.
+  it("adopts a stacked PR branch of the same ticket left checked out (VC-659)", async () => {
+    // A stacked-PR slice of this same ticket is its work, adopted as it stands
+    // (VC-659).
     const { worktreePath, deps } = await materializedTicket();
     runRepoGit(worktreePath, ["switch", "-c", "volli/VC-12c-stable-venue"]);
     const head = commitIn(worktreePath, "venue.txt");

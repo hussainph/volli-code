@@ -46,7 +46,6 @@ import type Database from "better-sqlite3";
 import { displayTicketId, sessionOriginFromActor } from "@volli/shared";
 import type {
   AgentModelTier,
-  CommandReceipt,
   ModelSelection,
   Project,
   ReasoningLevel,
@@ -55,6 +54,7 @@ import type {
 } from "@volli/shared";
 
 import type { SessionStartedNotice } from "@volli/shared";
+import { attachRefusal } from "./attach-refusal";
 import type { AutoTitleRequest } from "./auto-title";
 import type { TicketSessionDelegation } from "./delegation-policy";
 import type { Sessions, SessionModelOverride } from "./sessions";
@@ -141,13 +141,6 @@ export type StartSessionResult = {
       attachFailure: string;
     }
 );
-
-/** Why a start's attach was not ready, from the receipt it answered with. */
-function attachFailure(receipt: CommandReceipt | null): string {
-  if (receipt === null) return "the attach reported no receipt";
-  if (receipt.status === "rejected") return receipt.detail ?? receipt.code;
-  return `the attach is ${receipt.status}`;
-}
 
 /**
  * Start one Ticket Session and return as its attachment settles.
@@ -239,7 +232,7 @@ export async function startSessionOperation(
     ticketDisplayId: displayId,
     ...(started.state === "ready"
       ? { state: "ready" as const }
-      : { state: "needs-recovery" as const, attachFailure: attachFailure(started.receipt) }),
+      : { state: "needs-recovery" as const, attachFailure: attachRefusal(started.receipt) }),
     model: started.model,
     title,
   };

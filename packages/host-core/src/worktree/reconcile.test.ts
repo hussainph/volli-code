@@ -176,6 +176,10 @@ describe("reconcile matrix", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toMatch(/in detached HEAD state with uncommitted changes;/);
+      // Committing on a detached HEAD and then checking out would strand the commit.
+      expect(result.error).toMatch(
+        /Stash those changes \(or commit them to a branch\), check out volli\/VC-1-x there/,
+      );
     }
   });
 
@@ -240,8 +244,7 @@ describe("reconcile — a same-ticket branch at the ticket's path is adopted", (
   });
 
   it("adopts a stacked PR branch cut from the same ticket (VC-659)", async () => {
-    // The previous Session left the worktree on its stacked branch
-    // `volli/VC-1c-…`; the next start must open there, not refuse.
+    // A worktree on the stacked slice `volli/VC-1c-…` opens there; nothing moves it.
     const target = tempDir("wt");
     const { gitAsync: git, calls } = listGit(onBranch(target, "volli/VC-1c-stable-venue"));
     const result = await reconcile(git, forTarget(target));

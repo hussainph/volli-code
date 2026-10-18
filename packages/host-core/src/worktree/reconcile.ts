@@ -144,8 +144,14 @@ export async function reconcile(
           : changes
             ? " with uncommitted changes"
             : " with no uncommitted changes";
+      // A commit made on a detached HEAD is stranded by the checkout that
+      // follows it, so there the changes are stashed or committed to a branch.
+      const keep =
+        checkout.kind === "detached"
+          ? "Stash those changes (or commit them to a branch), check out"
+          : "Commit or stash those changes, check out";
       const remedy = changes
-        ? `Commit or stash those changes, check out ${input.branch} there (or remove the worktree), then retry.`
+        ? `${keep} ${input.branch} there (or remove the worktree), then retry.`
         : `Check out ${input.branch} there (or remove the worktree), then retry.`;
       return err(
         `A worktree already exists at ${input.worktreePath} ${state}${tree}; ` +

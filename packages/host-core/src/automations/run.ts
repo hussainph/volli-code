@@ -28,7 +28,6 @@ import {
   type AutomationRunRefusalCode,
   type AutomationRunTarget,
   type ChatSessionRecord,
-  type CommandReceipt,
   type PromptResource,
   type PromptTemplate,
   type SkillReference,
@@ -36,6 +35,7 @@ import {
 } from "@volli/shared";
 
 import type { AutomationEngine, AutomationRunDelivery, AutomationRunPlan } from "./engine";
+import { attachRefusal } from "../session-runtime/attach-refusal";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import {
   StructuredSessionsError,
@@ -256,20 +256,6 @@ export interface AutomationRunner {
 /** One refusal shape, so the IPC layer never has to parse a bare string. */
 function refuse(code: AutomationRunRefusalCode, error: string): AutomationRunRefusal {
   return { ok: false, code, error };
-}
-
-/**
- * Why an attach was not ready, in words, from the receipt it answered with.
- *
- * A rejected attach carries the diagnosis a person needs — an unpreparable
- * worktree names the path and git's reason — and that sentence is the reason
- * this Run has no first turn. The other statuses have no such sentence, so they
- * are named as what they are rather than dressed up as one.
- */
-function attachRefusal(receipt: CommandReceipt | null): string {
-  if (receipt === null) return "the attach reported no receipt";
-  if (receipt.status === "rejected") return receipt.detail ?? receipt.code;
-  return `the attach is ${receipt.status}`;
 }
 
 interface InstructionDeliveryFailure {

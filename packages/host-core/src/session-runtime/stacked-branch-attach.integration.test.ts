@@ -5,11 +5,11 @@
  * and the real `ensure` pipeline against a real repository — only the executor
  * is a stand-in, since what is under test is whether it is ever reached.
  *
- * VC-627's follow-up Sessions failed four times as a bare "needs recovery"
- * because its worktree sat on the stacked branch `volli/VC-627c-…` its
- * previous Session had cut. That branch is the ticket's own work and must be
- * attached on; a branch that is not the ticket's must refuse with a reason the
- * starting caller can act on.
+ * A ticket's worktree on a stacked-PR branch of the same ticket
+ * (`volli/VC-627c-…`) is the ticket's own work: the start attaches there and
+ * submits its kickoff. A branch that is not the ticket's refuses, and the
+ * start's result carries a reason naming the branch, the uncommitted work and
+ * the branch the ticket expects (VC-659).
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -101,8 +101,8 @@ class Executor implements NativeHarnessAdapter {
 }
 
 /**
- * VC-627 as it was found: its worktree materialized on the ticket's branch,
- * then moved by the previous Session onto `checkout`, with one commit there.
+ * A VC-627 ticket whose worktree was materialized on the ticket's branch and
+ * then moved onto `checkout`, with one commit there.
  */
 function ticketLeftOn(checkout: string) {
   ctx = openTestDb();
@@ -207,8 +207,8 @@ describe("starting a Session on a ticket whose worktree is on another branch (VC
     await world.kickoffSent;
 
     expect(started).toMatchObject({ ticketDisplayId: "VC-627", state: "ready" });
-    // The executor runs in the ticket's worktree, which was left exactly where
-    // the previous Session put it: adopted, never switched.
+    // The executor runs in the ticket's worktree, on the branch it was found
+    // on: adopted, never switched.
     expect(world.executor.directories).toEqual([world.worktreePath]);
     expect(git(world.worktreePath, ["branch", "--show-current"])).toBe(stacked);
     expect(getTicketRow(ctx!.db, "ticket-1")?.branch).toBe(stacked);
