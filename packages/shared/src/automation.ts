@@ -877,8 +877,18 @@ export function offeredAutomationsForColumn(
   return ranked;
 }
 
+/** What a column's pinned Offered list is composed from. */
+export interface OfferedAutomationsInput {
+  automations: readonly Automation[];
+  status: TicketStatus;
+  rankedAutomationIds?: readonly string[];
+  /** The armed record that is also switched on here, or `null`. */
+  effectiveArmedAutomationId?: string | null;
+}
+
 /**
- * The DRAG-TIME list for `status`: the digits `1`–`9`, in the order they read.
+ * The PINNED list for `status`, uncapped: the order the digits read, with every
+ * row past the ninth still in it.
  *
  * Two things happen to the authored rank here, and the ORDER of the two is the
  * rule rather than an implementation detail:
@@ -905,41 +915,49 @@ export function offeredAutomationsForColumn(
  * An `effectiveArmedAutomationId` this column does not offer is ignored rather
  * than an error — the same stale-arming tolerance {@link armedAutomationFor}
  * has, whose armed-first shape this generalises.
+ *
+ * The lane draws this whole list (rows past the ninth without a digit, so they
+ * stay visible and draggable); the drag reads its first nine through
+ * {@link offeredAutomationsInDigitOrder}. One list, cut in one place, so the
+ * digit a lane prints and the digit a drag answers cannot disagree.
  */
-export function offeredAutomationsInDigitOrder(input: {
-  automations: readonly Automation[];
-  status: TicketStatus;
-  rankedAutomationIds?: readonly string[];
-  /** The armed record that is also switched on here, or `null`. */
-  effectiveArmedAutomationId?: string | null;
-}): readonly Automation[] {
+export function offeredAutomationsInPinnedOrder(
+  input: OfferedAutomationsInput,
+): readonly Automation[] {
   const ranked = offeredAutomationsForColumn(
     input.automations,
     input.status,
     input.rankedAutomationIds ?? [],
   );
   const armed = ranked.find((automation) => automation.id === input.effectiveArmedAutomationId);
-  if (armed === undefined) return ranked.slice(0, MAX_OFFERED_DIGITS);
-  return [armed, ...ranked.filter((automation) => automation.id !== armed.id)].slice(
-    0,
-    MAX_OFFERED_DIGITS,
-  );
+  if (armed === undefined) return ranked;
+  return [armed, ...ranked.filter((automation) => automation.id !== armed.id)];
+}
+
+/**
+ * The DRAG-TIME list for `status`: the digits `1`–`9`, in the order they read —
+ * the first {@link MAX_OFFERED_DIGITS} rows of
+ * {@link offeredAutomationsInPinnedOrder}, so the pin lands before the cap.
+ */
+export function offeredAutomationsInDigitOrder(
+  input: OfferedAutomationsInput,
+): readonly Automation[] {
+  return offeredAutomationsInPinnedOrder(input).slice(0, MAX_OFFERED_DIGITS);
 }
 
 /**
  * The rank to STORE after a lane drop, given the lane's new drawn order.
  *
- * The lane draws the pinned, capped list; the record stores the authored,
- * uncapped one. Two rows are therefore on screen that this write must not
- * disturb — the armed row pinned to slot 1, and everything ranked past the
- * ninth, which is not drawn at all — so the arithmetic is "refill the slots the
- * lane actually moved" rather than "take the lane's list as the new order":
+ * The lane draws the pinned list; the record stores the authored one. The two
+ * differ by the armed row pinned to slot 1, which this write must not disturb,
+ * so the arithmetic is "refill the slots the lane actually moved" rather than
+ * "take the lane's list as the new order":
  *
  *  - every authored slot holding one of `reorderedIds` takes the next id from
  *    `reorderedIds`, in the lane's new order;
  *  - every other slot keeps its own occupant, which is exactly how the armed
- *    row keeps its authored rank (so disarming returns it there) and how a
- *    row past the digit cap keeps its place under rows it cannot see.
+ *    row keeps its authored rank (so disarming returns it there), and how
+ *    any authored id a caller leaves out of `reorderedIds` keeps its place.
  *
  * `reorderedIds` may name ids `authoredIds` does not; those are dropped, since
  * the authored list is what the record stores.

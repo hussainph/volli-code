@@ -297,10 +297,10 @@ export function parseLaneRowId(id: string): { status: TicketStatus; automationId
  *    arranging digits. Rank is what a lane owns.
  *  - **A drop on its own slot**, which changes no order at all.
  *
- * `visibleIds` is what the lane DRAWS as draggable, in drawn order: the armed
- * row pinned to slot 1 is not among them, and neither is anything ranked past
- * the digit cap. {@link columnRankAfterLaneDrop} is what puts the moved rows
- * back into the authored list without disturbing either.
+ * `visibleIds` is what the lane DRAWS as draggable, in drawn order — every
+ * offered row, digitless ones past the ninth included, except the armed row
+ * pinned to slot 1. {@link columnRankAfterLaneDrop} is what puts the moved rows
+ * back into the authored list without disturbing that pin's authored rank.
  */
 export function laneDropRank(input: {
   authoredIds: readonly string[];
