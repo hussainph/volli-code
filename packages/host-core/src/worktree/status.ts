@@ -25,6 +25,7 @@
  * on the loaded machine where this hurts most.
  */
 import { resolveComparisonRefAsync } from "./comparison-ref";
+import { readOnlyGitAsync } from "./scan";
 import { detectSequencerStateAsync } from "./sequencer";
 import type { RunGitAsync } from "./types";
 
@@ -114,11 +115,19 @@ async function readUnpushed(git: RunGitAsync, input: WorktreeStatusInput): Promi
   }
 }
 
-/** Computes the Details-rail worktree status report (see {@link WorktreeStatusReport}). */
+/**
+ * Computes the Details-rail worktree status report (see {@link WorktreeStatusReport}).
+ *
+ * Every read carries `--no-optional-locks` ({@link readOnlyGitAsync}): this runs
+ * in the background on every watch event, and a plain `git status` holds the
+ * worktree's `index.lock` for its whole run — long enough for an agent's own
+ * `git add`/`commit` in the same worktree to fail with "index.lock: File exists".
+ */
 export async function getWorktreeStatus(
-  git: RunGitAsync,
+  runGit: RunGitAsync,
   input: WorktreeStatusInput,
 ): Promise<WorktreeStatusReport> {
+  const git = readOnlyGitAsync(runGit);
   return {
     uncommitted: await readUncommitted(git, input.worktreePath),
     sequencerActive: (await detectSequencerStateAsync(git, input.worktreePath)) === "active",

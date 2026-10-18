@@ -61,7 +61,7 @@ import { testHostHandlers, type TestHandlerPorts } from "./testing/host-handlers
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
 import { createSessionTokenRegistry } from "./session-tokens";
-import { scriptedGit } from "./worktree/scripted-git";
+import { scriptedGit, scriptedReadOnlyGit } from "./worktree/scripted-git";
 import * as worktree from "./worktree";
 import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
@@ -4911,7 +4911,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "status") return " M src/a.ts\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
@@ -5111,7 +5111,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
       if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
@@ -5183,7 +5183,7 @@ describe("agent command service", () => {
     );
     const numstat =
       Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
       return "";
@@ -5780,7 +5780,7 @@ describe("agent command service", () => {
       );
       void paths;
     }
-    const { git, gitAsync } = scriptedGit((args, cwd) => {
+    const { git, gitAsync } = scriptedReadOnlyGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5860,7 +5860,7 @@ describe("agent command service", () => {
         }),
       );
     }
-    const { git, gitAsync } = scriptedGit((args, cwd) => {
+    const { git, gitAsync } = scriptedReadOnlyGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5948,7 +5948,7 @@ describe("agent command service", () => {
         baseBranch: "main",
       }),
     );
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { git, gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) return rawModified(["package.json"]);

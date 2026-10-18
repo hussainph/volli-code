@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { scriptedGit } from "./scripted-git";
+import { scriptedReadOnlyGit } from "./scripted-git";
 import { getWorktreeStatus } from "./status";
 
 let dirs: string[] = [];
@@ -32,7 +32,7 @@ function statusGit(
     hasRemoteRef?: boolean;
   } = {},
 ) {
-  return scriptedGit((args) => {
+  return scriptedReadOnlyGit((args) => {
     if (args[0] === "status") return (over.status ?? (() => ""))();
     if (args[0] === "rev-parse" && args[1] === "--verify") {
       if (over.hasRemoteRef) return "abc123\n";
