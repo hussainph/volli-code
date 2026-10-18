@@ -3,6 +3,7 @@ import {
   closeSync,
   copyFileSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -150,6 +151,16 @@ afterEach(() => {
 function expectNoTemporaryFiles(): void {
   if (!existsSync(dirname(destination))) return;
   expect(readdirSync(dirname(destination)).filter((name) => name.startsWith(".blob-"))).toEqual([]);
+}
+
+/** The inode at `path` and its bytes, read through one descriptor. */
+function readInode(path: string): { ino: number; bytes: Buffer } {
+  const fd = openSync(path, "r");
+  try {
+    return { ino: fstatSync(fd).ino, bytes: readFileSync(fd) };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function stagingFile(path: string, ageMs = 2 * 60 * 60 * 1000): string {
@@ -367,11 +378,10 @@ describe("blob atomic publication and descriptor safety", () => {
     let winner: number | undefined;
     state.beforeLink = (path) => {
       writeFileSync(path, bytes, { flag: "wx" });
-      winner = statSync(path).ino;
+      winner = readInode(path).ino;
     };
     expect(writeBlob(root, bytes)).toBe(hash);
-    expect(statSync(destination).ino).toBe(winner);
-    expect(readFileSync(destination)).toEqual(bytes);
+    expect(readInode(destination)).toEqual({ ino: winner, bytes });
     expectNoTemporaryFiles();
   });
 
@@ -521,7 +531,7 @@ describe("blob durability and torn-file repair", () => {
     try {
       writeBlob(root, bytes);
       expect(readFileSync(reader, "utf8")).toBe("torn");
-      expect(readFileSync(destination)).toEqual(bytes);
+      expect(readInode(destination).bytes).toEqual(bytes);
     } finally {
       closeSync(reader);
     }
