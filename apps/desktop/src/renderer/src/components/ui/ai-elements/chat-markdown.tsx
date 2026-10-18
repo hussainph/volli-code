@@ -41,10 +41,14 @@ import { cn } from "@renderer/lib/utils";
  */
 type RehypePlugins = NonNullable<React.ComponentProps<typeof Streamdown>["rehypePlugins"]>;
 
-/** As much of `rehype-sanitize`'s schema as this app reads: URL protocols, and which tags survive. */
+/**
+ * As much of `rehype-sanitize`'s schema as this app reads: URL protocols, which
+ * tags survive, and the per-tag attribute rules (where `className` is narrowed).
+ */
 interface SanitizeSchemaLike {
   protocols?: Record<string, readonly string[] | undefined>;
   tagNames?: readonly string[];
+  attributes?: Record<string, readonly unknown[] | undefined>;
 }
 
 /**
@@ -65,6 +69,31 @@ const chatSanitizeSchema: SanitizeSchemaLike = (() => {
  * safe direction for a wrong answer about untrusted markup.
  */
 export const CHAT_SANITIZED_TAG_NAMES: ReadonlySet<string> = new Set(chatSanitizeSchema.tagNames);
+
+/**
+ * Whether the chat renderer's sanitizer keeps the class `token` on a `tagName`
+ * element: `language-*` on `code`, `task-list-item` on `li`, and the few
+ * others the schema names for that one tag (VC-839).
+ *
+ * Read the way `hast-util-sanitize` reads the schema — an entry
+ * `['className', ...values]` under the tag or `*`, each value a literal class
+ * or a pattern one class must match. A bare `'className'` entry would admit
+ * any class, and the schema Streamdown ships has none. Read leniently like the
+ * tag list: a shape this does not recognise admits no class, never every one.
+ */
+export function chatSanitizerKeepsClass(tagName: string, token: string): boolean {
+  const rules = [
+    ...(chatSanitizeSchema.attributes?.[tagName] ?? []),
+    ...(chatSanitizeSchema.attributes?.["*"] ?? []),
+  ];
+  return rules.some((rule) => {
+    if (rule === "className") return true;
+    if (!Array.isArray(rule) || rule[0] !== "className") return false;
+    return rule
+      .slice(1)
+      .some((value: unknown) => (value instanceof RegExp ? value.test(token) : value === token));
+  });
+}
 
 export const chatRehypePlugins: RehypePlugins = sanitizedRehypePlugins();
 

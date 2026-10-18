@@ -125,11 +125,12 @@ describe("ALLOWED_URI_REGEXP", () => {
  *
  * A comment is written by any Session, so its body can be whatever a prompt
  * injection in a repository file, a web page or an MCP result put there.
- * DOMPurify's DEFAULT allowlists keep `<style>`, `style=`, `<form action>`,
- * `<button>` and `popover*`, and nothing about where a comment is drawn
- * contains them: one global sheet restyles the whole app, a fixed overlay draws
- * over it, and a GET form hands what a person typed to `will-navigate`, which
- * opens it in their browser.
+ * DOMPurify's DEFAULT allowlists kept `<style>`, `style=`, `<form action>`,
+ * `<button>`, `popover*` and any `class`, and nothing about where a comment is
+ * drawn contains them: one global sheet or one `fixed inset-0` box covers the
+ * whole app, and a GET form hands what a person typed to `will-navigate`,
+ * which opens it in their browser. The policy is now the file Preview's
+ * allowlist, so these pin both what it refuses and what it still draws.
  */
 describe("Markdown sanitization (VC-839)", () => {
   // The body from the ticket, byte for byte: the one DOMPurify's defaults kept.
@@ -155,15 +156,34 @@ describe("Markdown sanitization (VC-839)", () => {
     expect(html).toContain("Re-authenticate");
   });
 
-  it("strips a comment body as an MCP install failure records it", () => {
-    // `mcp.install` records a comment carrying the remote server's own error
-    // text, so a server that answers with markup reaches this renderer with no
-    // agent choosing the words.
-    const html = render(
-      "Installed MCP server `remote` failed: <style>*{display:none!important}</style>",
-    );
+  it("strips the app's own utility classes, which draw a full-window overlay without a style", () => {
+    // Every one of these utilities is in the app's stylesheet.
+    const html = render('<div class="fixed inset-0 z-50 bg-background"></div>');
+    expect(html).not.toContain("fixed");
+    expect(html).not.toContain("inset-0");
+    expect(html).toBe('<div class="typeset"><div></div></div>');
+  });
+
+  it("strips a comment body exactly as an MCP install failure records it", () => {
+    // `mcp.install` records this comment with the remote server's own error
+    // text as `detail`, in a paragraph of its own (`mcp/verbs.ts`), so markup
+    // there is parsed as an HTML BLOCK with no agent choosing the words.
+    const detail = '<style>*{display:none!important}</style><div class="fixed inset-0">x</div>';
+    const body = [
+      "**MCP install** — failed",
+      "",
+      "Could not install remote.",
+      "",
+      detail,
+      "",
+      "provenance: none recorded",
+    ].join("\n");
+    const html = render(body);
     expect(html).not.toContain("<style");
     expect(html).not.toContain("display:none");
+    expect(html).not.toContain("fixed");
+    expect(html).toContain("<strong>MCP install</strong> — failed");
+    expect(html).toContain("<p>provenance: none recorded</p>");
   });
 
   it.each([
@@ -173,45 +193,97 @@ describe("Markdown sanitization (VC-839)", () => {
     ["a dialog", "<dialog open>fake</dialog>", "<dialog"],
     ["a popover", '<div popover id="p">fake</div>', "popover"],
     ["a popover target", '<a popovertarget="p" popovertargetaction="show">x</a>', "popover"],
+    ["a command", '<a command="show-modal" commandfor="p">x</a>', "command"],
+    ["a form action", '<div action="https://evil.example">x</div>', "action"],
+    ["a formaction", '<a formaction="https://evil.example">x</a>', "formaction"],
     ["a form method", '<div method="post">x</div>', "method"],
     ["an inline style", '<span style="color:red">x</span>', "style="],
     ["a text input", '<input name="key" placeholder="Paste your API key">', "<input"],
     ["an enabled checkbox", '<input type="checkbox">', "<input"],
+    ["a label pointing at an app control", '<label for="composer">x</label>', "<label"],
+    ["an id in the app's namespace", '<div id="root">x</div>', "id="],
+    ["a tabindex", '<div tabindex="0">x</div>', "tabindex"],
+    ["inert", "<div inert>x</div>", "inert"],
+    ["an unknown class on a known tag", '<code class="language-ts fixed">x</code>', "fixed"],
+    ["svg", "<svg><text>s</text></svg>", "<svg"],
+    ["math", "<math><mi>m</mi></math>", "<math"],
+    ["video", "<video>v</video>", "<video"],
+    ["audio", "<audio>a</audio>", "<audio"],
+    ["canvas", "<canvas>c</canvas>", "<canvas"],
+    ["an image map", '<map name="m"><area href="https://evil.example"></map>', "<area"],
+    ["marquee", "<marquee>m</marquee>", "<marquee"],
+    ["search", "<search>s</search>", "<search"],
   ])("removes %s", (_label: string, source: string, forbidden: string) => {
     expect(render(source)).not.toContain(forbidden);
   });
 
-  it("keeps a task list's disabled checkboxes", () => {
-    const html = render("- [ ] todo\n- [x] done");
-    expect(html).toContain('<input disabled="" type="checkbox"> todo');
-    expect(html).toContain('<input checked="" disabled="" type="checkbox"> done');
+  it("drops a dropped element's text with it, rather than leaving a stylesheet as prose", () => {
+    expect(render("<style>body{display:none}</style>")).toBe('<div class="typeset"></div>');
   });
 
-  it("keeps ordinary GFM markup as marked wrote it", () => {
+  it("renders a rich comment byte-for-byte as marked writes it", () => {
+    const png = "data:image/png;base64,iVBORw0KGgo=";
     const source = [
-      "# Title",
+      "## Plan",
       "",
-      "A [link](https://example.com) and `code` and ~~gone~~ and **bold**.",
+      "Press <kbd>Cmd</kbd>+<kbd>K</kbd>, see note<sup>1</sup> and [docs](https://example.com/docs).",
+      "",
+      "<details>",
+      "<summary>Logs</summary>",
       "",
       "```ts",
       "const x = 1;",
       "```",
       "",
+      "</details>",
+      "",
       "| a | b |",
       "|:-|-:|",
-      "| 1 | 2 |",
+      "| `1` | ~~2~~ |",
+      "",
+      "- [ ] todo",
+      "- [x] **done**",
+      "",
+      `![pixel](${png})`,
       "",
       "> quoted",
     ].join("\n");
-    const html = render(source);
-    expect(html).toContain('<a href="https://example.com">link</a>');
-    expect(html).toContain("<code>code</code>");
-    expect(html).toContain("<del>gone</del>");
-    expect(html).toContain("<strong>bold</strong>");
-    expect(html).toContain('<pre><code class="language-ts">const x = 1;');
-    expect(html).toContain('<th align="left">a</th>');
-    expect(html).toContain('<td align="right">2</td>');
-    expect(html).toContain("<blockquote>");
+    expect(render(source)).toBe(
+      [
+        '<div class="typeset"><h2>Plan</h2>',
+        '<p>Press <kbd>Cmd</kbd>+<kbd>K</kbd>, see note<sup>1</sup> and <a href="https://example.com/docs">docs</a>.</p>',
+        "<details>",
+        '<summary>Logs</summary><pre><code class="language-ts">const x = 1;',
+        "</code></pre>",
+        "</details><table>",
+        "<thead>",
+        "<tr>",
+        '<th align="left">a</th>',
+        '<th align="right">b</th>',
+        "</tr>",
+        "</thead>",
+        "<tbody><tr>",
+        '<td align="left"><code>1</code></td>',
+        '<td align="right"><del>2</del></td>',
+        "</tr>",
+        "</tbody></table>",
+        "<ul>",
+        '<li><input disabled="" type="checkbox"> todo</li>',
+        '<li><input checked="" disabled="" type="checkbox"> <strong>done</strong></li>',
+        "</ul>",
+        `<p><img src="${png}" alt="pixel" loading="lazy"></p>`,
+        "<blockquote>",
+        "<p>quoted</p>",
+        "</blockquote>",
+        "</div>",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps the renderer's own image notice class", () => {
+    expect(render("![x](https://example.com/a.png)")).toContain(
+      '<span class="typeset-image-missing">',
+    );
   });
 
   it("keeps a volli-blob image through the real sanitizer", () => {
