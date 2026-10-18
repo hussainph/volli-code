@@ -23,6 +23,7 @@ import { errorMessage } from "@volli/shared";
 import type { UpdateChannel } from "../../../../../ipc/contract";
 import { CONTROL_W, Health, PrefRow, PrefSection } from "@renderer/components/settings/kit";
 import { Button } from "@renderer/components/ui/button";
+import { useNow } from "@renderer/components/hosts/use-hosts";
 import { Notice } from "@renderer/components/ui/notice";
 import {
   Select,
@@ -59,6 +60,9 @@ export function UpdatesPane() {
   const [channelError, setChannelError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [reads, setReads] = React.useState(0);
+  // The clock behind "· 3h ago", read outside render (react/purity) and
+  // ticking so the age keeps up while the pane stays open.
+  const now = useNow(true, 30_000);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -99,7 +103,7 @@ export function UpdatesPane() {
   }
 
   const ready = state?.phase === "downloaded" && state.targetVersion !== null;
-  const status = state === null ? null : updateStatus(state, Date.now());
+  const status = state === null ? null : updateStatus(state, now);
 
   return (
     <>
