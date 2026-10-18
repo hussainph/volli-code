@@ -9,7 +9,10 @@
  * the send.
  *
  * ── WHAT IT HAS TO RESOLVE BEFORE IT CAN ANSWER ───────────────────────────
- * The report needs two facts:
+ * The report needs to know which surface is in front first:
+ * `visibleNotificationSurface`, the same resolution the decision reads, so the
+ * remembered ticket behind a Home Session tab or under Settings is never the
+ * strip a terminal or chat item is looked up in. Then two facts about it:
  *
  *  - **Which Session a terminal tab is showing.** A terminal tab's id is a bare
  *    session uuid, indistinguishable by shape from a file or browser tab id, so
@@ -45,10 +48,14 @@ import {
   subscribeClaimedSessionItems,
 } from "@renderer/chat/session-item-reveal";
 import { parseChatTabId } from "@renderer/components/ticket/ticket-chat-tab";
-import { activeNotificationTarget } from "@renderer/lib/notification-target";
+import {
+  activeNotificationTarget,
+  visibleNotificationSurface,
+} from "@renderer/lib/notification-target";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useSessionsStore } from "@renderer/stores/sessions";
+import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 export function useNotificationTargetReport(): void {
@@ -70,15 +77,30 @@ export function useNotificationTargetReport(): void {
       ? DEFAULT_WORKSPACE_UI.homeActiveTab
       : (state.byProject[projectId]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab),
   );
-  const activeTabId = openTicketId === null ? homeActiveTab : activeTicketTabId;
+  const settingsOpen = useUiStore((state) => state.settingsOpen);
+  // Memoized so the report below re-sends when the surface changes, not on
+  // every render that builds an equal object.
+  const surface = React.useMemo(
+    () =>
+      visibleNotificationSurface({
+        projectId,
+        nav,
+        settingsOpen,
+        openTicketId,
+        activeTicketTabId,
+        homeActiveTab,
+      }),
+    [activeTicketTabId, homeActiveTab, nav, openTicketId, projectId, settingsOpen],
+  );
+  const activeTabId = surface?.activeTabId ?? null;
   const chatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);
 
   // The terminal registry answers "is this tab a terminal, and which pane is
   // live in it" — the pane, because that is what a harness alert names and what
   // the person is actually typing into.
   const terminalSessionId = useSessionsStore((state) => {
-    if (activeTabId === null || chatSessionId !== null) return null;
-    const owner = state.byOwner[openTicketId ?? projectId ?? ""];
+    if (surface === null || activeTabId === null || chatSessionId !== null) return null;
+    const owner = state.byOwner[surface.ownerId];
     const tab = owner?.tabs.find((candidate) => candidate.sessionId === activeTabId);
     return tab?.activePaneId ?? null;
   });
@@ -108,15 +130,7 @@ export function useNotificationTargetReport(): void {
 
   React.useEffect(() => {
     window.api.notifications.setActiveTarget(
-      activeNotificationTarget({
-        projectId,
-        nav,
-        openTicketId,
-        activeTicketTabId,
-        homeActiveTab,
-        terminalSessionId,
-        chatItem,
-      }),
+      activeNotificationTarget(surface, { terminalSessionId, chatItem }),
     );
-  }, [activeTicketTabId, chatItem, homeActiveTab, nav, openTicketId, projectId, terminalSessionId]);
+  }, [chatItem, surface, terminalSessionId]);
 }
