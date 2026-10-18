@@ -1526,6 +1526,21 @@ export interface AppearanceSetProjectInput {
  */
 export type { FirstPaintHint };
 
+/**
+ * What the renderer reports after every durable paint: the {@link FirstPaintHint}
+ * main stores for the next launch, plus the one color main needs live and
+ * cannot derive itself.
+ *
+ * `planeBackground` is the painted `--background` token (not `--card`): the rung
+ * the workbench inset and a Browser pane's plane are drawn in (VC-302). It
+ * differs from the hint's `background`, which is the canvas's base fill at the
+ * window edge. Main hands it to Browser Tab views live and never stores it, so
+ * it is checked on its own and a bad value never costs the stored hint.
+ */
+export interface FirstPaintReport extends FirstPaintHint {
+  planeBackground?: string;
+}
+
 export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;
 export type ThemeSetProjectResult = Result<{ project: Project; value: ThemeStatePayload }>;
 /**
@@ -1575,8 +1590,9 @@ export interface VolliThemeIpcContract {
    * Records what the renderer actually resolved and painted, so the NEXT launch
    * can construct its window with the right edge color and the right mode class
    * before anything runs. A hint, never an authority — see {@link FirstPaintHint}.
+   * Also carries the live card color for Browser Tab planes ({@link FirstPaintReport}).
    */
-  "volli:theme-first-paint-set": { args: [input: FirstPaintHint]; result: Result };
+  "volli:theme-first-paint-set": { args: [input: FirstPaintReport]; result: Result };
   /** Rewrites keys in a Volli ghostty overlay — global or per-project. Never the user's own config. */
   "volli:theme-terminal-overlay-write": {
     args: [input: TerminalOverlayWriteInput];

@@ -249,7 +249,7 @@ import { confirmDestructiveClose, prepareTerminalQuit, registerTerminalIpcHandle
 import { ensureHarnessWorkspaceFiles } from "./harness-workspace";
 import { clientEventSink } from "./client-event-sink";
 import type { AgentRuntimeEnvironment, PtyManager } from "@volli/host-core/pty";
-import { registerThemeIpcHandlers } from "./theme-ipc";
+import { desktopThemeHooks, registerThemeIpcHandlers } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
 import { firstPaintArguments, resolveFirstPaint } from "./window-theme";
 import { registerFileIpcHandlers } from "./volli-fs-ipc";
@@ -1892,19 +1892,15 @@ const appStartup = app.whenReady().then(async () => {
   // The window background follows the global theme: every window repaints its
   // edge the moment the theme is persisted, so a resize right after a theme
   // change can't reveal the previous palette.
+  //
+  // The renderer has already run the whole pipeline, so main takes the colors
+  // it actually painted rather than re-deriving them and hoping the two agree.
+  // Browser Tab planes composite above the renderer, so its theme cannot show
+  // through them; their app-owned states repaint to the plane rung (VC-302).
   registerThemeIpcHandlers(
     dbHandle,
     { fs: fsDeps, now: Date.now, appearance: currentAppearance },
-    {
-      // The renderer has already run the whole pipeline, so main takes the color
-      // it actually painted rather than re-deriving one and hoping the two
-      // agree. No try/catch — there is nothing here to fail.
-      onFirstPaintChanged: (paint) => {
-        for (const window of BrowserWindow.getAllWindows()) {
-          window.setBackgroundColor(paint.background);
-        }
-      },
-    },
+    desktopThemeHooks({ windows: () => BrowserWindow.getAllWindows(), browserTabs }),
   );
   // Keep the host's former boot point. Nothing schedules before runtime recovery.
   runtimeAutomations.start(recoveredSessionAutomationPorts(readyRuntimeServices));
