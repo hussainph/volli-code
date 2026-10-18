@@ -71,9 +71,9 @@ export interface FileTranscriptArtifactStoreOptions {
 export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
   #ready: Promise<void> | undefined;
   /** Canonical sizes by artifact id; see {@link byteLength}. */
-  readonly #sizes = new Map<string, number>();
+  readonly #sizes = new StartOverCache<number>();
   /** Names a finished directory sync covers since this store last changed them; see {@link ensureDurableName}. */
-  readonly #durableNames = new Set<string>();
+  readonly #durableNames = new StartOverCache<true>();
   /** Callers the next directory sync answers: none of them is covered by one already running. */
   #directorySyncWaiters: DirectorySyncWaiter[] = [];
   #directorySyncRunning = false;
@@ -156,7 +156,6 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
       return null;
     }
     if (size === null) return null;
-    if (this.#sizes.size >= ARTIFACT_SIZE_CACHE_ENTRIES) this.#sizes.clear();
     this.#sizes.set(reference.id, size);
     return size;
   }
@@ -316,7 +315,7 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
           }
           throw error;
         }
-        this.rememberDurableName(destination);
+        this.#durableNames.set(destination, true);
         return;
       }
 
@@ -350,7 +349,7 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
         if (!sameFile(temporaryInfo, installed)) {
           throw new Error("Compressed transcript artifact changed during repair", { cause: error });
         }
-        this.rememberDurableName(destination);
+        this.#durableNames.set(destination, true);
         return;
       }
       // Outside the try: a failed sync must never send a valid winner to repair.
@@ -409,13 +408,7 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
   private async ensureDurableName(path: string): Promise<void> {
     if (this.#durableNames.has(path)) return;
     await this.syncDirectory();
-    this.rememberDurableName(path);
-  }
-
-  /** Bounded like {@link byteLength}'s cache: forgetting a name only costs one later sync. */
-  private rememberDurableName(path: string): void {
-    if (this.#durableNames.size >= DURABLE_NAME_CACHE_ENTRIES) this.#durableNames.clear();
-    this.#durableNames.add(path);
+    this.#durableNames.set(path, true);
   }
 
   /**
@@ -607,13 +600,39 @@ async function readStoredFile(path: string): Promise<StoredFile> {
 }
 
 /**
- * How many artifact sizes a store remembers before it starts over. A size is
- * a few dozen bytes and a window looks at a few hundred, so this holds every
- * size a busy day of opens asks for in well under a megabyte.
+ * How many entries each of a store's caches holds before it starts over. A
+ * window looks at a few hundred artifacts, so this holds every size a busy
+ * day of opens asks for (a few dozen bytes each) and every name it writes (a
+ * path each) in a few megabytes at most.
  */
-const ARTIFACT_SIZE_CACHE_ENTRIES = 16_384;
-/** Names a store remembers as durable: a path each, for about as many artifacts as above. */
-const DURABLE_NAME_CACHE_ENTRIES = 16_384;
+const STORE_CACHE_ENTRIES = 16_384;
+
+/**
+ * A store-life cache that starts over once it holds {@link STORE_CACHE_ENTRIES}
+ * keys. Everything one holds can be found again on disk, so forgetting an
+ * entry costs one more read (a size) or one more directory sync (a durable
+ * name), never a wrong answer.
+ */
+class StartOverCache<V> {
+  readonly #entries = new Map<string, V>();
+
+  get(key: string): V | undefined {
+    return this.#entries.get(key);
+  }
+
+  has(key: string): boolean {
+    return this.#entries.has(key);
+  }
+
+  set(key: string, value: V): void {
+    if (this.#entries.size >= STORE_CACHE_ENTRIES) this.#entries.clear();
+    this.#entries.set(key, value);
+  }
+
+  delete(key: string): void {
+    this.#entries.delete(key);
+  }
+}
 /** A gzip member is at least a 10-byte header and an 8-byte trailer. */
 const GZIP_MIN_BYTES = 18;
 

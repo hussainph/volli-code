@@ -267,8 +267,9 @@ describe("FileTranscriptArtifactStore group-committed directory syncs (VC-465)",
       book.commit(artifacts.write(artifact(`batch ${index}`))),
     );
     const batchSettled = batch.map(settled);
+    // A publication asks for its directory sync in the same microtask run as
+    // its link resolves, so once all eight links are seen, all eight have asked.
     await vi.waitFor(() => expect(disk.links).toHaveLength(8), SLOW_DISK);
-    await new Promise((resolve) => setImmediate(resolve));
     expect(disk.directorySyncs).toHaveLength(1);
     expect(book.commits).toEqual([]);
 
@@ -301,8 +302,8 @@ describe("FileTranscriptArtifactStore group-committed directory syncs (VC-465)",
     const values = Array.from({ length: 5 }, (_, index) => artifact(`doomed ${index}`));
     const batch = values.map((value) => book.commit(artifacts.write(value)));
     const outcomes = Promise.allSettled(batch);
+    // As above: six links seen means six callers waiting on a directory sync.
     await vi.waitFor(() => expect(disk.links).toHaveLength(6), SLOW_DISK);
-    await new Promise((resolve) => setImmediate(resolve));
 
     syncs.release(0);
     await first;
@@ -340,16 +341,20 @@ describe("FileTranscriptArtifactStore group-committed directory syncs (VC-465)",
     await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(1), SLOW_DISK);
 
     // The second write finds the name already there, before its sync finished.
+    // Sync 0's batch was taken before that write began, so only a sync of its
+    // own can answer it: the publisher asks for no other.
     const observer = book.commit(artifacts.write(value));
     const observed = settled(observer);
     await vi.waitFor(() => expect(disk.reads).toContain(name), SLOW_DISK);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(observed.done).toBe(false);
-    expect(book.commits).toEqual([]);
-
     syncs.release(0);
+    await publisher;
+    await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(2), SLOW_DISK);
+    // That sync is held at its gate, so the second write cannot have returned.
+    expect(observed.done).toBe(false);
+    expect(book.commits).toHaveLength(1);
+
     syncs.release(1);
-    await Promise.all([publisher, observer]);
+    await observer;
     expect(book.commits).toHaveLength(2);
     book.expectEveryCommitSurvivesACrash();
 
