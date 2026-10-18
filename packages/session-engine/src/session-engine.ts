@@ -306,11 +306,15 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
    *
    * The limit is the sum of every project's latest `all` count, so it is
    * never below the roster that listings walk, and nothing live is evicted
-   * once every project has been listed whole. Memory is bounded by that
-   * roster: about what one listing of it already holds at its peak. Sessions
-   * are never deleted one by one. They go only with their project, whose
-   * count and rows stay until something lists that project again, so the
-   * cache never holds more than the rosters held at their largest.
+   * once every project has been listed whole. The cache stays resident
+   * between listings with one frozen row per listed Session, so its memory
+   * grows with the roster and not with how often the roster is listed.
+   *
+   * Sessions are never deleted one by one. They go only with their project,
+   * and nothing lists a deleted project again, so that project's count and
+   * rows stay until the host restarts. The cache therefore holds at most one
+   * row for each Session that belonged to a listed project at some point
+   * since the host started, or the floor, whichever is larger.
    */
   const evictListingFolds = (): void => {
     let rosters = 0;
@@ -1134,17 +1138,15 @@ const defaultYieldToHost = (): Promise<void> =>
  * not move, so a limit below a project's roster would be worse than no cache
  * at all: each listing would evict its own earliest entries before reaching
  * its last row, and every visit would pay a full fold AND the bookkeeping.
- * A constant cannot clear real rosters. One profile measured 4,051 Sessions,
- * 3,782 of them in one project, so with this as the bound every listing
- * cold-folded every Session and `volli session list` timed out. The bound is
- * therefore the rosters the cache serves (see `evictListingFolds`), and this
- * number only keeps the cache useful for hosts that never list a whole
- * project, such as Ticket-scoped listings and the attached-Session budget.
+ * No constant clears every roster, so this number is not the bound. The
+ * limit is never below the rosters being listed (see `evictListingFolds`),
+ * and trimming happens only after a listing completes. This floor keeps the
+ * cache useful for hosts that never list a whole project, such as
+ * Ticket-scoped listings and the attached-Session budget.
  *
  * A held row measured 5.6 KB for an ordinary Session and 79.8 KB for a
  * deliberately extreme one — 450 events carrying 150 commands and their
- * receipts (VC-388). Projections read from a real 4,051-Session profile's
- * checkpoints held 16.1 KB each on average (VC-800).
+ * receipts (VC-388).
  */
 export const SESSION_LISTING_CACHE_LIMIT = 256;
 

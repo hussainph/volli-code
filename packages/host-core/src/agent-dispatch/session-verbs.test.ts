@@ -1133,9 +1133,8 @@ describe("executeInWorkspace", () => {
 });
 
 // VC-800: `session list`, `peek` and `show` fold every project's roster through
-// the engine's listing cache. When the rosters together outgrew the cache's
-// fixed limit, every read cold-folded every Session. On a 4,051-Session profile
-// that took longer than the CLI's 10 s bound.
+// the engine's listing cache. The cache's limit is never below those rosters
+// together, so a repeat read folds only the Sessions whose log moved.
 describe("session reads over rosters larger than the fold cache's floor (VC-800)", () => {
   it(
     "re-folds only the Sessions whose log moved, on list, peek and show",

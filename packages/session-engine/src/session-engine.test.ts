@@ -4463,14 +4463,13 @@ describe("listSessions over a project roster (VC-388)", () => {
   });
 
   /**
-   * The defect VC-800 measured on a real profile, at the smallest size that
-   * shows it: a project roster one Session larger than the cache's floor.
+   * A project roster one Session larger than the cache's floor survives a
+   * repeat listing whole (VC-800): the limit is never below the roster.
    *
-   * With the floor as the bound, the first listing evicted its own first row
-   * to store its last one. The repeat listing then missed that first row and
-   * evicted the second to store it, and so on to the end: every visit folded
-   * every Session. At 3,782 Sessions that is what made `volli session list`
-   * time out.
+   * A bound at the floor would fail this. The first listing would evict its
+   * own first row to store its last one. The repeat listing would then miss
+   * that first row and evict the second to store it, and so on to the end, so
+   * every visit would fold every Session.
    *
    * Budgeted like the other roster-sized tests: hundreds of Sessions are well
    * under a second here and several under coverage on a shared CI runner.
@@ -4580,9 +4579,11 @@ describe("listSessions over a project roster (VC-388)", () => {
   /**
    * The bound, which is the half of a cache that has to be proved rather than
    * observed: a memo that never evicts also answers every assertion about hits
-   * and misses, and only grows. When a project's roster shrinks (in practice,
-   * only when the project is deleted and its Sessions go with it), the next
-   * listing trims the cache back to the floor, least recently listed first.
+   * and misses, and only grows. When a listed roster shrinks, the next listing
+   * trims the cache back to the floor, least recently listed first. Rosters
+   * do not shrink in the app, because Sessions go only with their project and
+   * a deleted project is not listed again. What this guards is that the bound
+   * still evicts at all.
    */
   it(
     "trims the cache back to the floor when the roster it served shrinks",
