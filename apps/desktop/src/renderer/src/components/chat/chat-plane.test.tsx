@@ -209,17 +209,15 @@ describe("VC-758 message and work status rows", () => {
       expect(html).not.toContain("Delivered");
     },
   );
-  it("keeps only definite durable refusal visible", () => {
-    for (const label of ["Not delivered"] as const) {
-      const html = renderToStaticMarkup(
-        <ChatTurn
-          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-          context={{ ...context, deliveryLabels: new Map([["user", label]]) }}
-          live={false}
-        />,
-      );
-      expect(html).toContain(`>${label}</span>`);
-    }
+  it("keeps definite durable refusal visible", () => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+        context={{ ...context, deliveryLabels: new Map([["user", "Not delivered"]]) }}
+        live={false}
+      />,
+    );
+    expect(html).toContain(">Not delivered</span>");
   });
   it.each(["send", "steer"] as const)(
     "keeps accepted held %s quiet even before durable proof arrives",

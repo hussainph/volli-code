@@ -231,20 +231,21 @@ describe("calm message delivery timing", () => {
     expect(footer()?.textContent).toBe("Queued");
   });
 
-  it.each(["Not delivered"] as const)(
-    "shows %s immediately even if pending has not reached its delay",
-    async (label) => {
-      await render(
-        <ChatTurn messages={[user]} context={context} live={false} deliveryLabel="Sending…" />,
-      );
-      await advance(100);
-      expect(footer()).toBeNull();
-      await render(
-        <ChatTurn messages={[user]} context={context} live={false} deliveryLabel={label} />,
-      );
-      expect(footer()?.textContent).toBe(label);
-    },
-  );
+  it("shows a durable refusal immediately even if the local wait has not reached its delay", async () => {
+    await render(
+      <ChatTurn messages={[user]} context={context} live={false} deliveryLabel="Sending…" />,
+    );
+    await advance(100);
+    expect(footer()).toBeNull();
+    await render(
+      <ChatTurn
+        messages={[user]}
+        context={{ ...context, deliveryLabels: new Map([[user.id, "Not delivered"]]) }}
+        live={false}
+      />,
+    );
+    expect(footer()?.textContent).toBe("Not delivered");
+  });
 
   it("starts a fresh delay when the same component receives a different message", async () => {
     await render(
