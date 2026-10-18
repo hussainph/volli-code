@@ -1,9 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { BrowserAppKeyChord } from "../../../../ipc/contract";
+import type { BrowserAppKeyChord } from "@volli/shared";
 import { isCommandPaletteKeyEvent } from "@renderer/lib/command-palette-shortcut";
-import { registerBrowserPaneCommands, runBrowserAppShortcut } from "./browser-app-shortcuts";
+import {
+  BROWSER_SHORTCUTS_RESUBSCRIBE_MS,
+  followBrowserAppShortcuts,
+  registerBrowserPaneCommands,
+  runBrowserAppShortcut,
+  type BrowserShortcutsRpc,
+} from "./browser-app-shortcuts";
 
 const cleanups: (() => void)[] = [];
 
@@ -153,5 +159,117 @@ describe("registerBrowserPaneCommands", () => {
 
     expect(secondMount.close).toHaveBeenCalledOnce();
     expect(firstMount.close).not.toHaveBeenCalled();
+  });
+});
+
+/** A timer the test runs by hand: each armed callback, its delay, and its cancel. */
+function timers() {
+  const pending: { run: () => void; ms: number; cancel: ReturnType<typeof vi.fn> }[] = [];
+  const setTimer = (run: () => void, ms: number) => {
+    const cancel = vi.fn();
+    pending.push({ run, ms, cancel });
+    return cancel;
+  };
+  return { pending, setTimer };
+}
+
+describe("followBrowserAppShortcuts", () => {
+  type Handlers = Parameters<BrowserShortcutsRpc["browserShortcuts"]["subscribe"]["subscribe"]>[1];
+
+  function fakeRpc() {
+    const streams: { handlers: Handlers; unsubscribe: ReturnType<typeof vi.fn> }[] = [];
+    const focusPage = vi.fn(async (_input: { tabId: string }) => null);
+    const rpc: BrowserShortcutsRpc = {
+      browserShortcuts: {
+        subscribe: {
+          subscribe: (_input, handlers) => {
+            const unsubscribe = vi.fn();
+            streams.push({ handlers, unsubscribe });
+            return { unsubscribe };
+          },
+        },
+        focusPage: { mutate: focusPage },
+      },
+    };
+    return { rpc, streams, focusPage };
+  }
+
+  it("acts on each shortcut, and keeps focus in the app for one it acted on", () => {
+    const { rpc, streams, focusPage } = fakeRpc();
+    const page = pane("tab-1");
+    cleanups.push(followBrowserAppShortcuts(rpc, timers().setTimer));
+
+    streams[0]!.handlers.onData({ tabId: "tab-1", shortcut: { kind: "close-tab" } });
+
+    expect(page.close).toHaveBeenCalledOnce();
+    expect(focusPage).not.toHaveBeenCalled();
+  });
+
+  it("hands focus back to the page for a shortcut the app had nothing to do with", async () => {
+    const { rpc, streams, focusPage } = fakeRpc();
+    cleanups.push(followBrowserAppShortcuts(rpc, timers().setTimer));
+
+    streams[0]!.handlers.onData({ tabId: "tab-gone", shortcut: { kind: "close-tab" } });
+
+    expect(focusPage).toHaveBeenCalledWith({ tabId: "tab-gone" });
+  });
+
+  it("does not let a failed hand-back escape as an unhandled rejection", async () => {
+    const { rpc, streams, focusPage } = fakeRpc();
+    focusPage.mockRejectedValueOnce(new Error("window gone"));
+    cleanups.push(followBrowserAppShortcuts(rpc, timers().setTimer));
+
+    streams[0]!.handlers.onData({ tabId: "tab-gone", shortcut: { kind: "focus-address" } });
+    await Promise.resolve();
+
+    expect(focusPage).toHaveBeenCalledOnce();
+  });
+
+  it("follows again after a beat when the stream ends in error, and stops for good", () => {
+    const { rpc, streams } = fakeRpc();
+    const { pending, setTimer } = timers();
+    const stop = followBrowserAppShortcuts(rpc, setTimer);
+
+    streams[0]!.handlers.onError(new Error("fell behind"));
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.ms).toBe(BROWSER_SHORTCUTS_RESUBSCRIBE_MS);
+    expect(streams).toHaveLength(1);
+    pending[0]!.run();
+    expect(streams).toHaveLength(2);
+
+    stop();
+    expect(streams[1]!.unsubscribe).toHaveBeenCalledOnce();
+    expect(streams[0]!.unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending re-follow when stopped, and never re-follows after the stop", () => {
+    const { rpc, streams } = fakeRpc();
+    const { pending, setTimer } = timers();
+    const stop = followBrowserAppShortcuts(rpc, setTimer);
+
+    streams[0]!.handlers.onError(new Error("source failed"));
+    stop();
+    expect(pending[0]!.cancel).toHaveBeenCalledOnce();
+
+    // An error that lands after the stop arms nothing.
+    streams[0]!.handlers.onError(new Error("late"));
+    expect(pending).toHaveLength(1);
+  });
+
+  it("re-follows on a real timer by default", () => {
+    vi.useFakeTimers();
+    try {
+      const { rpc, streams } = fakeRpc();
+      const stop = followBrowserAppShortcuts(rpc);
+      streams[0]!.handlers.onError(new Error("fell behind"));
+      vi.advanceTimersByTime(BROWSER_SHORTCUTS_RESUBSCRIBE_MS);
+      expect(streams).toHaveLength(2);
+      streams[1]!.handlers.onError(new Error("again"));
+      stop();
+      vi.advanceTimersByTime(BROWSER_SHORTCUTS_RESUBSCRIBE_MS);
+      expect(streams).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

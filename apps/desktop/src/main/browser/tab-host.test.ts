@@ -5,7 +5,7 @@ import type {
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from "electron";
-import type { BrowserTabState } from "@volli/shared";
+import type { BrowserAppShortcutEvent, BrowserTabState } from "@volli/shared";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -27,7 +27,6 @@ import {
 } from "@volli/host-core/browser";
 
 import { BROWSER_START_URL } from "../../browser-start-page";
-import type { BrowserAppShortcutEvent } from "../../ipc/contract";
 import {
   BROWSER_INTERACTION_QUIET_MS,
   BROWSER_PREVIEW_MAX_PENDING_CAPTURES,

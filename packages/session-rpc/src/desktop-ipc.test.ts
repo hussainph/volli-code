@@ -115,6 +115,8 @@ describe("the desktop's IPC exposure", () => {
       "hostScope.query",
       "hostScope.mutate",
       "hostScope.subscribe",
+      "browserShortcuts.subscribe",
+      "browserShortcuts.focusPage",
     ]);
   });
 

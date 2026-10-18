@@ -66,7 +66,6 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",
-      "volli:browser-focus-page",
       "volli:browser-set-presentation",
       "volli:browser-picture",
       "volli:browser-traces",
@@ -137,7 +136,6 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-show",
       "volli:browser-hide",
       "volli:browser-toggle-devtools",
-      "volli:browser-focus-page",
     ] as const;
     for (const channel of channels) {
       const { guard } = BROWSER_IPC[channel];

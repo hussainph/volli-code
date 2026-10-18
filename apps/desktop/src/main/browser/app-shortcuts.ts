@@ -1,4 +1,4 @@
-import type { BrowserAppShortcut } from "../../ipc/contract";
+import type { BrowserAppShortcut } from "@volli/shared";
 
 /**
  * Which keys pressed inside a Browser page belong to the app (VC-301).

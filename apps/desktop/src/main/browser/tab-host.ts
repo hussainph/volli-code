@@ -8,7 +8,7 @@ import type {
   WebContentsViewConstructorOptions,
   WebPreferences,
 } from "electron";
-import type { RuntimeBrowserConsoleMessage } from "@volli/shared";
+import type { BrowserAppShortcutEvent, RuntimeBrowserConsoleMessage } from "@volli/shared";
 import {
   BROWSER_DEFAULT_BOUNDS,
   browserSessionPartition,
@@ -23,12 +23,7 @@ import {
 } from "@volli/host-core/browser";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
-import type {
-  BrowserAppShortcutEvent,
-  BrowserTabBounds,
-  BrowserTabCaptureFrame,
-  BrowserTabState,
-} from "../../ipc/contract";
+import type { BrowserTabBounds, BrowserTabCaptureFrame, BrowserTabState } from "../../ipc/contract";
 import { browserKeyRoute } from "./app-shortcuts";
 import { debuggerTransport, loadWaiter } from "./webcontents-cdp";
 import { hostLogger } from "@volli/host-core/log";

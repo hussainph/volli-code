@@ -288,10 +288,6 @@ export const BROWSER_IPC: {
     guard: isBrowserTabIdArgs,
     invalidError: "Invalid Browser Tab request",
   },
-  "volli:browser-focus-page": {
-    guard: isBrowserTabIdArgs,
-    invalidError: "Invalid Browser Tab request",
-  },
   "volli:browser-set-presentation": {
     guard: (args): args is IpcArgs<"volli:browser-set-presentation"> => {
       if (!isBrowserTabIdArgs(args)) return false;
