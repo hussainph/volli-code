@@ -79,6 +79,7 @@ import type {
   BrowserTabSetBoundsInput,
   BrowserTabSetPresentationInput,
   BrowserTabStateEvent,
+  BrowserAppShortcutEvent,
   BackgroundShellIdInput,
   BackgroundShellListResult,
   BackgroundShellStateEvent,
@@ -520,6 +521,14 @@ const api = {
       ipcRenderer.on("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
+    },
+    /** Subscribes to app shortcuts a focused page handed back (VC-301); returns the unsubscribe. */
+    onAppShortcut: (callback: (event: BrowserAppShortcutEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: BrowserAppShortcutEvent) =>
+        callback(payload);
+      ipcRenderer.on("volli:browser-app-shortcut" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:browser-app-shortcut" satisfies VolliIpcEvent, listener);
     },
   },
   /** Background shells a Session started (VC-270): the island's shell feed and its two verbs. */

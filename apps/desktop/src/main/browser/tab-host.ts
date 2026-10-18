@@ -23,7 +23,13 @@ import {
 } from "@volli/host-core/browser";
 
 import { isBrowserStartUrl } from "../../browser-start-page";
-import type { BrowserTabBounds, BrowserTabCaptureFrame, BrowserTabState } from "../../ipc/contract";
+import type {
+  BrowserAppShortcutEvent,
+  BrowserTabBounds,
+  BrowserTabCaptureFrame,
+  BrowserTabState,
+} from "../../ipc/contract";
+import { browserKeyRoute } from "./app-shortcuts";
 import { debuggerTransport, loadWaiter } from "./webcontents-cdp";
 import { hostLogger } from "@volli/host-core/log";
 
@@ -47,6 +53,12 @@ export interface BrowserTabHostDependencies extends BrowserTabRegistryPorts {
    * than a BrowserWindow (VC-278).
    */
   createStageWindow: () => BaseWindow;
+  /**
+   * Hands an app shortcut pressed inside a shown page to the window it is
+   * shown in (VC-301; {@link browserKeyRoute}). Absent, every key stays the
+   * page's, which is what a host with no app renderer to route to should do.
+   */
+  deliverAppShortcut?: (window: BrowserWindow, event: BrowserAppShortcutEvent) => void;
 }
 
 /**
@@ -549,6 +561,20 @@ export class BrowserTabHost extends BrowserTabRegistry<
     });
     view.webContents.on("focus", () => {
       if (entry.parent.kind === "window") entry.lastInteractionAt = this.now();
+    });
+    // App chords out of the page (VC-301), taken before the page or the menu
+    // can have them. Only while the page holds native focus on screen: a
+    // person's key cannot arrive any other way, and CDP key events reach this
+    // same hook — an agent pressing ⌘W into a page nobody is focused on is the
+    // page's input, never a close.
+    view.webContents.on("before-input-event", (event, key) => {
+      const deliver = this.deps.deliverAppShortcut;
+      const window = this.windowOf(entry);
+      if (deliver === undefined || window === null || !view.webContents.isFocused()) return;
+      const route = browserKeyRoute(key);
+      if (route.kind === "page") return;
+      event.preventDefault();
+      if (route.kind === "app") deliver(window, { tabId, shortcut: route.shortcut });
     });
     view.webContents.setWindowOpenHandler(({ url }) => {
       // A hostile page can ask indefinitely; the same cap used by every other

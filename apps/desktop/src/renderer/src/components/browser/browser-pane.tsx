@@ -9,6 +9,7 @@ import type {
   Result,
 } from "../../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import { registerBrowserPaneCommands } from "@renderer/components/browser/browser-app-shortcuts";
 import { BrowserChrome } from "@renderer/components/browser/browser-chrome";
 import { BrowserPlaneController } from "@renderer/components/browser/browser-plane";
 import {
@@ -174,11 +175,17 @@ export function BrowserPane({
   visible,
   api,
   onTabState,
+  onClose,
 }: {
   tab: BrowserTabState;
   visible: boolean;
   api: BrowserApi;
   onTabState(tab: BrowserTabState): void;
+  /**
+   * Closes this tab the way its surface's close control does — what ⌘W pressed
+   * inside the page runs (VC-301). Absent, ⌘W in the page does nothing.
+   */
+  onClose?: () => void;
 }) {
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const addressRef = React.useRef<HTMLInputElement>(null);
@@ -201,6 +208,24 @@ export function BrowserPane({
     previousUrlRef.current = next;
     setAddress((current) => (current === previousUrl ? next : current));
   }, [tab.url]);
+
+  // ⌘W and ⌘L pressed inside THIS page come back from main named by tab
+  // (VC-301), so the pane drawing the tab is the one that answers — never the
+  // split view's focused pane. Only while shown: a hidden plane holds no focus
+  // to press them from. The close is read through a ref so a surface's fresh
+  // callback each render does not re-register.
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+  React.useEffect(() => {
+    if (!visible) return;
+    return registerBrowserPaneCommands(tab.tabId, {
+      close: () => onCloseRef.current?.(),
+      focusAddress: () => {
+        addressRef.current?.focus();
+        addressRef.current?.select();
+      },
+    });
+  }, [tab.tabId, visible]);
 
   // A tab that has been sent nowhere yet is a question, so the caret starts in
   // the address bar — the bargain ⌘T makes in every other browser.

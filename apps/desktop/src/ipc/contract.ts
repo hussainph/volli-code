@@ -1981,6 +1981,44 @@ export type BrowserIpcChannel = keyof VolliBrowserIpcContract;
 export type BrowserTabStateEvent =
   | { tab: BrowserTabState; closedTabId?: never }
   | { tab?: never; closedTabId: string };
+
+/**
+ * The `KeyboardEvent` fields of one app chord a Browser page took, enough for
+ * the renderer to replay it through the listeners that already own its meaning.
+ */
+export interface BrowserAppKeyChord {
+  key: string;
+  code: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  repeat: boolean;
+}
+
+/**
+ * An app-owned shortcut pressed while a Browser page held keyboard focus
+ * (VC-301). A native page is a separate WebContents, so the renderer's window
+ * `keydown` listeners never see its keys; main routes the few that belong to
+ * the app back across that boundary instead of letting the page or the menu
+ * keep them.
+ *
+ *  • `replay` — a chord the renderer already binds (⌘K, ⌘1–⌘9, ⌃⌘ + arrow),
+ *    replayed as a window `keydown` so its existing listener and guards decide.
+ *  • `close-tab` — ⌘W, which closes THIS tab through its own surface's close.
+ *  • `focus-address` — ⌘L, which brings focus back into the app, onto this
+ *    tab's address bar.
+ */
+export type BrowserAppShortcut =
+  | { kind: "replay"; chord: BrowserAppKeyChord }
+  | { kind: "close-tab" }
+  | { kind: "focus-address" };
+
+/** One {@link BrowserAppShortcut}, naming the opaque tab whose page took it. */
+export interface BrowserAppShortcutEvent {
+  tabId: string;
+  shortcut: BrowserAppShortcut;
+}
 // ---- background shells (VC-270) ---------------------------------------------
 
 /**
@@ -2712,6 +2750,9 @@ export type VolliIpcEvent =
   // has acknowledged every one; main waits for that, bounded, then destroys.
   | "volli:client-state-flush"
   | "volli:browser-tab-state"
+  // An app shortcut pressed inside a Browser page (VC-301): main took it from
+  // the page before the page or the menu could, and hands it to the renderer.
+  | "volli:browser-app-shortcut"
   // A background shell started, exited, or was forgotten with its Session's
   // attachment (VC-270): one push, one store, the island's shell feed.
   | "volli:shell-state"

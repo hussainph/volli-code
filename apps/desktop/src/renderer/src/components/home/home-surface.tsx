@@ -558,43 +558,56 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     ],
   );
 
+  /**
+   * Close one Browser Tab of this surface — the strip's ×, and ⌘W pressed inside
+   * the page itself (VC-301), which names its own tab rather than a pane.
+   */
+  const closeBrowser = React.useCallback(
+    (tabId: string) => {
+      if (selectedId === null) return;
+      const id = browserTabId(tabId);
+      void browserApi
+        .close({ tabId })
+        .then((result) => {
+          if (!result.ok) {
+            toastError(`Could not close Browser Tab: ${result.error}`);
+            return;
+          }
+          useBrowserTabsStore.getState().remove(tabId);
+          // The split-view half of a close this store does not own — the same
+          // statement the chat and terminal branches make below. While split
+          // it lands the surface on the pane's own successor, so the MRU
+          // return inside closeHomeBrowserTab only ever runs unsplit.
+          removeHomeTabFromSplit(selectedId, id);
+          const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
+          const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
+          const workspace = useWorkspaceStore.getState().byProject[selectedId];
+          const files = workspace?.projectFiles.tabs ?? [];
+          const browsers = stripBrowserTabs(
+            Object.values(useBrowserTabsStore.getState().byId).filter(
+              (tab) => tab.projectId === selectedId && tab.ticketId === null,
+            ),
+          );
+          closeHomeBrowserTab(selectedId, id, [
+            HOME_BOARD_TAB_ID,
+            ...sessions.map((tab) => tab.sessionId),
+            ...chats.map(chatTabId),
+            ...files.map((tab) => fileTabId(tab.relPath)),
+            ...browsers.map((tab) => browserTabId(tab.tabId)),
+          ]);
+        })
+        .catch((reason: unknown) => {
+          toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
+        });
+    },
+    [browserApi, closeHomeBrowserTab, removeHomeTabFromSplit, selectedId],
+  );
+
   const handleClose = React.useCallback(
     (descriptor: HomeTabDescriptor) => {
       if (selectedId === null || descriptor.kind === "board") return;
       if (descriptor.kind === "browser") {
-        void browserApi
-          .close({ tabId: descriptor.tabId })
-          .then((result) => {
-            if (!result.ok) {
-              toastError(`Could not close Browser Tab: ${result.error}`);
-              return;
-            }
-            useBrowserTabsStore.getState().remove(descriptor.tabId);
-            // The split-view half of a close this store does not own — the same
-            // statement the chat and terminal branches make below. While split
-            // it lands the surface on the pane's own successor, so the MRU
-            // return inside closeHomeBrowserTab only ever runs unsplit.
-            removeHomeTabFromSplit(selectedId, descriptor.id);
-            const sessions = useSessionsStore.getState().byOwner[selectedId]?.tabs ?? [];
-            const chats = useChatSessionsStore.getState().openTabs[selectedId] ?? [];
-            const workspace = useWorkspaceStore.getState().byProject[selectedId];
-            const files = workspace?.projectFiles.tabs ?? [];
-            const browsers = stripBrowserTabs(
-              Object.values(useBrowserTabsStore.getState().byId).filter(
-                (tab) => tab.projectId === selectedId && tab.ticketId === null,
-              ),
-            );
-            closeHomeBrowserTab(selectedId, descriptor.id, [
-              HOME_BOARD_TAB_ID,
-              ...sessions.map((tab) => tab.sessionId),
-              ...chats.map(chatTabId),
-              ...files.map((tab) => fileTabId(tab.relPath)),
-              ...browsers.map((tab) => browserTabId(tab.tabId)),
-            ]);
-          })
-          .catch((reason: unknown) => {
-            toastError(`Could not close Browser Tab: ${errorMessage(reason)}`);
-          });
+        closeBrowser(descriptor.tabId);
         return;
       }
       if (descriptor.kind === "chat") {
@@ -626,14 +639,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
     // The controller's own callback, not the controller: its object identity
     // moves whenever a tab, a dirty flag or a pending close does, and this memo
     // also holds the terminal close guard.
-    [
-      browserApi,
-      closeGuard,
-      closeHomeBrowserTab,
-      removeHomeTabFromSplit,
-      requestCloseFile,
-      selectedId,
-    ],
+    [closeBrowser, closeGuard, removeHomeTabFromSplit, requestCloseFile, selectedId],
   );
 
   const handleRename = React.useCallback((descriptor: HomeTabDescriptor, title: string) => {
@@ -906,6 +912,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             visible={visible}
             api={browserApi}
             onTabState={useBrowserTabsStore.getState().receive}
+            onClose={() => closeBrowser(paneBrowserTab.tabId)}
           />
         ) : null}
         {relPath === null &&

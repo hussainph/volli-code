@@ -259,6 +259,9 @@ export default defineConfig(({ mode }) => ({
         // which a permanent Change Set list satisfied forever. Each transition
         // is gated because none of them is visible in a screenshot.
         "src/components/browser/browser-plane-freeze.ts",
+        // Which pane a ⌘W or ⌘L from inside a page acts on (VC-301): a missed
+        // branch here is a close landing on the wrong tab.
+        "src/components/browser/browser-app-shortcuts.ts",
         // Where the Browser replay moves (VC-453): which step a key, a drag or
         // a growing trace lands on. None of it shows in a screenshot.
         "src/components/browser/browser-trace-model.ts",
@@ -693,6 +696,9 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
+        // Which keys leave a Browser page for the app (VC-301). Every branch
+        // is a chord taken from, or left to, a page the person is typing in.
+        "**/src/main/browser/app-shortcuts.ts",
         // The notification delivery boundary (VC-295). Enrolled for the same
         // reason the IPC handlers are: a missed branch here is an alert that
         // escapes a preference, a click that opens nothing, or a suppression

@@ -1525,6 +1525,8 @@ export function TicketDetail({
               visible
               api={browserApi}
               onTabState={useBrowserTabsStore.getState().receive}
+              // ⌘W from inside the page closes THIS pane's tab (VC-301).
+              onClose={() => closeTab(tab)}
             />
           ) : null}
           {tab.kind === "session" ? (

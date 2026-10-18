@@ -1324,6 +1324,11 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     owner: "stays",
     reason: "Native View menu zoom.",
   },
+  "volli:browser-app-shortcut": {
+    placement: "client-local",
+    owner: "stays",
+    reason: "App chords routed out of a focused native Browser page.",
+  },
   "volli:file-changed": {
     placement: "workspace",
     owner: "VC-567",
