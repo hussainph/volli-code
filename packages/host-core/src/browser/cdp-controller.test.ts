@@ -1002,3 +1002,155 @@ describe("BrowserTabController.find (VC-364)", () => {
     await expect(controller.find("save")).rejects.toThrow(/searching/);
   });
 });
+
+describe("BrowserTabController empty trees, failed reads and tree digests (VC-277)", () => {
+  /** A blank document, as Chromium answers it: the root and nothing under it. */
+  const BLANK = {
+    nodes: [{ nodeId: "1", ignored: false, role: { value: "RootWebArea" }, childIds: [] }],
+  };
+
+  it("says a tree with nothing to print is empty, and a tree the bound cut is not", async () => {
+    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": BLANK };
+    const controller = new BrowserTabController(wire(answers).transport);
+
+    expect(await controller.snapshot()).toEqual({
+      text: "",
+      generation: 0,
+      truncated: false,
+      empty: true,
+    });
+
+    answers["Accessibility.getFullAXTree"] = BUTTON_TREE;
+    expect(await controller.snapshot()).toMatchObject({ empty: false });
+
+    // A bound too small for even one line prints nothing, but the page is
+    // not empty, and the answer says it was cut instead.
+    const narrow = new BrowserTabController(wire(answers).transport, { maxSnapshotChars: 5 });
+    expect(await narrow.snapshot()).toEqual({
+      text: "",
+      generation: 0,
+      truncated: true,
+      empty: false,
+    });
+  });
+
+  it("calls a tree whose walk hit its node bound before any content cut, never empty", async () => {
+    // A hidden sprite sheet ahead of the content can spend the whole node
+    // budget on ignored nodes: nothing printed, but the page is not blank.
+    const hidden = Array.from({ length: 20_001 }, (_, index) => ({
+      nodeId: `h${index}`,
+      ignored: true,
+      role: { value: "generic" },
+      childIds: [],
+    }));
+    const sprite = {
+      nodes: [
+        { ...BUTTON_TREE.nodes[0]!, childIds: [...hidden.map((node) => node.nodeId), "2"] },
+        ...hidden,
+        BUTTON_TREE.nodes[1]!,
+      ],
+    };
+    const controller = new BrowserTabController(
+      wire({ "Accessibility.getFullAXTree": sprite }).transport,
+    );
+
+    expect(await controller.snapshot()).toEqual({
+      text: "",
+      generation: 0,
+      truncated: true,
+      empty: false,
+    });
+    expect(await controller.find("save")).toMatchObject({
+      matches: 0,
+      truncated: true,
+      empty: false,
+    });
+  });
+
+  it("fails a read whose answer carried no tree, rather than calling the page empty", async () => {
+    const controller = new BrowserTabController(
+      wire({ "Accessibility.getFullAXTree": {} }).transport,
+    );
+
+    await expect(controller.snapshot()).rejects.toThrow(
+      "The Browser Tab answered without an accessibility tree, so nothing was read.",
+    );
+    await expect(controller.find("save")).rejects.toThrow("answered without an accessibility tree");
+    expect(controller.treeDigest).toBeNull();
+  });
+
+  it("fingerprints what an action could visibly change, whichever read saw it, and nothing else", async () => {
+    const node = (extra: object = {}) => ({
+      nodes: [
+        { ...BUTTON_TREE.nodes[0]!, childIds: ["2", "3"] },
+        BUTTON_TREE.nodes[1]!,
+        {
+          nodeId: "3",
+          ignored: false,
+          role: { value: "checkbox" },
+          name: { value: "Remember me" },
+          backendDOMNodeId: 78,
+          properties: [{ name: "checked", value: { value: "false" } }],
+          ...extra,
+        },
+      ],
+    });
+    const answers: Record<string, unknown> = { "Accessibility.getFullAXTree": node() };
+    const controller = new BrowserTabController(wire(answers).transport);
+    expect(controller.treeDigest).toBeNull();
+
+    await controller.snapshot();
+    const settled = controller.treeDigest;
+    expect(settled).toMatch(/^[0-9a-f]{64}$/);
+    // A find walks the same tree, printing far less: the digest is the page's.
+    await controller.find("remember");
+    expect(controller.treeDigest).toBe(settled);
+
+    // Focus moves on every click, so it is not a change anyone could see.
+    answers["Accessibility.getFullAXTree"] = node({
+      properties: [
+        { name: "checked", value: { value: "false" } },
+        { name: "focused", value: { value: true } },
+      ],
+    });
+    await controller.snapshot();
+    expect(controller.treeDigest).toBe(settled);
+
+    // A state the page flipped, a value it took, and an element it added are.
+    const seen = new Set([settled]);
+    for (const changed of [
+      node({ properties: [{ name: "checked", value: { value: "true" } }] }),
+      node({ value: { value: "on" } }),
+      tree([
+        ["button", "Save", 77],
+        ["dialog", "Composer", 79],
+      ]),
+    ]) {
+      answers["Accessibility.getFullAXTree"] = changed;
+      await controller.snapshot();
+      expect(seen.has(controller.treeDigest)).toBe(false);
+      seen.add(controller.treeDigest);
+    }
+
+    // The digest's walk is bounded like a find's: a change past 20,000 nodes
+    // costs nothing to read and goes unseen.
+    const long = (last: string) =>
+      tree(
+        Array.from({ length: 20_001 }, (_, index): [string, string, number] => [
+          "button",
+          index === 20_000 ? last : `B${index}`,
+          index,
+        ]),
+      );
+    answers["Accessibility.getFullAXTree"] = long("first");
+    await controller.snapshot();
+    const bounded = controller.treeDigest;
+    answers["Accessibility.getFullAXTree"] = long("second");
+    await controller.snapshot();
+    expect(controller.treeDigest).toBe(bounded);
+
+    // A new generation forgets the old page's digest with its refs.
+    controller.syncGeneration(1);
+    expect(controller.treeDigest).toBeNull();
+  });
+});
