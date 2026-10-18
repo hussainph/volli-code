@@ -2453,17 +2453,18 @@ export type UpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "
 
 /**
  * What the most recent check that ANSWERED said (VC-294): the feed had
- * nothing newer, had a newer version (whose download then began), or the
- * check or its download failed. Main persists it, so Settings → Updates can
- * still say "Up to date · 3h ago" or "Check failed" after a relaunch.
+ * nothing newer, had a newer version (whose download then began), the check
+ * failed, or the download it started failed. Main persists it, so Settings →
+ * Updates' Status row can still say "Up to date · 3h ago" or "Check failed"
+ * after a relaunch.
  */
 export interface UpdateLastCheck {
   /** When the check settled (epoch ms). */
   at: number;
-  result: "up-to-date" | "available" | "error";
-  /** The version on offer when `available`; null otherwise. */
+  result: "up-to-date" | "available" | "error" | "download-error";
+  /** The version on offer when `available`, or the one whose download failed; null otherwise. */
   version: string | null;
-  /** The failure's message when `error`; null otherwise. */
+  /** The failure's message when `error` or `download-error`; null otherwise. */
   error: string | null;
 }
 

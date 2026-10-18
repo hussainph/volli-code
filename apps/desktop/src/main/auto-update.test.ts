@@ -542,6 +542,15 @@ describe("the last check's store (VC-294)", () => {
     };
     writeUpdateLastCheck(ctx.db, found);
     expect(readUpdateLastCheck(ctx.db)).toEqual(found);
+
+    const download: UpdateLastCheck = {
+      at: 1_900_000,
+      result: "download-error",
+      version: "0.3.0",
+      error: "ENOSPC",
+    };
+    writeUpdateLastCheck(ctx.db, download);
+    expect(readUpdateLastCheck(ctx.db)).toEqual(download);
   });
 
   it("reads never-checked when the row is absent", () => {
@@ -633,14 +642,30 @@ describe("startAutoUpdate's last check (VC-294)", () => {
       error: null,
     });
 
+    // A failure while downloading is the download's, and names its version.
     clock = 300;
-    harness.updater.emit("error", new Error("download failed"));
+    harness.updater.emit("error", new Error("ENOSPC"));
     expect(handle.state()).toMatchObject({
       phase: "error",
-      lastCheck: { at: 300, result: "error", version: null, error: "download failed" },
+      lastCheck: { at: 300, result: "download-error", version: "0.2.0", error: "ENOSPC" },
     });
 
-    expect(store.writes.map((check) => check.result)).toEqual(["up-to-date", "available", "error"]);
+    // Any other failure is the check's.
+    clock = 400;
+    harness.updater.emit("error", new Error("feed unreachable"));
+    expect(handle.state().lastCheck).toEqual({
+      at: 400,
+      result: "error",
+      version: null,
+      error: "feed unreachable",
+    });
+
+    expect(store.writes.map((check) => check.result)).toEqual([
+      "up-to-date",
+      "available",
+      "download-error",
+      "error",
+    ]);
     // Every recorded answer was announced, so an open pane shows it at once.
     expect(harness.stateChanges.at(-1)?.lastCheck).toEqual(store.value);
     handle.stop();

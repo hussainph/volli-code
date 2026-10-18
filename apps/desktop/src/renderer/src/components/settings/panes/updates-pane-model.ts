@@ -8,6 +8,8 @@
  * current phase while something is happening, and otherwise what the last
  * check that answered said and when, persisted by main across relaunches.
  */
+import { compareVersions } from "@volli/shared";
+
 import type { UpdateUiState } from "../../../../../ipc/contract";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
 import { relativeTime } from "@renderer/lib/relative-time";
@@ -35,6 +37,8 @@ export function updateStatus(state: UpdateUiState, now: number): UpdateStatus {
   const last = state.lastCheck;
   const aged = (word: string): string =>
     last === null ? word : `${word} · ${relativeTime(last.at, now)}`;
+  /** A failure's word: the download's own, or the check's. */
+  const failed = last?.result === "download-error" ? "Download failed" : "Check failed";
   switch (state.phase) {
     case "checking":
       return { state: "working", label: "Checking…", detail: null, action: "Check now" };
@@ -59,12 +63,7 @@ export function updateStatus(state: UpdateUiState, now: number): UpdateStatus {
         action: "Check now",
       };
     case "error":
-      return {
-        state: "error",
-        label: aged("Check failed"),
-        detail: state.error,
-        action: "Retry",
-      };
+      return { state: "error", label: aged(failed), detail: state.error, action: "Retry" };
     case "idle":
       break;
   }
@@ -75,11 +74,21 @@ export function updateStatus(state: UpdateUiState, now: number): UpdateStatus {
   }
   switch (last.result) {
     case "error":
-      return { state: "error", label: aged("Check failed"), detail: last.error, action: "Retry" };
+    case "download-error":
+      return { state: "error", label: aged(failed), detail: last.error, action: "Retry" };
     case "available":
-      // Found by an earlier run whose download never finished — unless that
-      // version is the one running now, in which case it was installed since.
-      if (last.version === state.currentVersion) break;
+      // Found by an earlier run whose download never finished — unless the
+      // running build is already that version or newer (installed since, or
+      // by hand). Then the record is stale, but no check ever said "up to
+      // date" either: say only when the last check was.
+      if (last.version !== null && compareVersions(last.version, state.currentVersion) <= 0) {
+        return {
+          state: "idle",
+          label: `Checked ${relativeTime(last.at, now)}`,
+          detail: null,
+          action: "Check now",
+        };
+      }
       return {
         state: "waiting",
         label: aged(last.version === null ? "Update available" : `Volli ${last.version} available`),
@@ -87,7 +96,6 @@ export function updateStatus(state: UpdateUiState, now: number): UpdateStatus {
         action: "Check now",
       };
     case "up-to-date":
-      break;
+      return { state: "ready", label: aged("Up to date"), detail: null, action: "Check now" };
   }
-  return { state: "ready", label: aged("Up to date"), detail: null, action: "Check now" };
 }

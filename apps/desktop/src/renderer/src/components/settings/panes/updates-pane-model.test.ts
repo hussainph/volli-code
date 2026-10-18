@@ -72,6 +72,24 @@ describe("updateStatus", () => {
     });
   });
 
+  it("names a failed download as the download's failure, not the check's", () => {
+    const failed = checked({ result: "download-error", version: "0.3.0", error: "ENOSPC" });
+    expect(
+      updateStatus(snapshot({ phase: "error", error: "ENOSPC", lastCheck: failed }), NOW),
+    ).toEqual({
+      state: "error",
+      label: "Download failed · 3h ago",
+      detail: "ENOSPC",
+      action: "Retry",
+    });
+    expect(updateStatus(snapshot({ lastCheck: failed }), NOW)).toEqual({
+      state: "error",
+      label: "Download failed · 3h ago",
+      detail: "ENOSPC",
+      action: "Retry",
+    });
+  });
+
   it("shows the phase while something is happening", () => {
     expect(updateStatus(snapshot({ phase: "checking" }), NOW)).toMatchObject({
       state: "working",
@@ -109,12 +127,24 @@ describe("updateStatus", () => {
     expect(
       updateStatus(snapshot({ lastCheck: checked({ result: "available", version: null }) }), NOW),
     ).toMatchObject({ label: "Update available · 3h ago" });
-    // Installed since: the running build IS the version that check found.
+    // Installed since: the running build IS that version, or newer (a hand
+    // install, a numerically later canary). Stale — but never "Up to date",
+    // which no check said.
+    for (const version of ["0.2.0", "0.1.9", "0.2.0-canary.10"]) {
+      expect(
+        updateStatus(snapshot({ lastCheck: checked({ result: "available", version }) }), NOW),
+        version,
+      ).toEqual({ state: "idle", label: "Checked 3h ago", detail: null, action: "Check now" });
+    }
+    // Ordered as versions, not strings: canary.10 is newer than canary.9.
     expect(
       updateStatus(
-        snapshot({ lastCheck: checked({ result: "available", version: "0.2.0" }) }),
+        snapshot({
+          currentVersion: "0.3.0-canary.9",
+          lastCheck: checked({ result: "available", version: "0.3.0-canary.10" }),
+        }),
         NOW,
       ),
-    ).toMatchObject({ state: "ready", label: "Up to date · 3h ago" });
+    ).toMatchObject({ state: "waiting", label: "Volli 0.3.0-canary.10 available · 3h ago" });
   });
 });

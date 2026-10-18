@@ -157,6 +157,13 @@ describe("UpdatesPane", () => {
     expect(toastError).toHaveBeenCalledWith("Couldn't check for updates: bridge gone");
   });
 
+  it("keeps the Status row and a disabled check before the store has a snapshot", async () => {
+    useUpdateStore.setState({ state: null });
+    await render();
+    expect(container.textContent).toContain("Status");
+    expect(button("Check now").disabled).toBe(true);
+  });
+
   it("holds the button while a check runs", async () => {
     useUpdateStore.setState({ state: { ...IDLE, phase: "checking" } });
     await render();

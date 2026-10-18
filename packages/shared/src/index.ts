@@ -3,6 +3,7 @@ export * from "./quick-open-rank";
 export * from "./file-save-policy";
 export * from "./file-workspace";
 export * from "./tab-order";
+export * from "./version-order";
 export * from "./split-view";
 export * from "./board";
 export * from "./ticket";

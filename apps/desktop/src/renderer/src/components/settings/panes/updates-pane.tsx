@@ -166,8 +166,10 @@ export function UpdatesPane() {
           </span>
         </PrefRow>
 
-        {status === null ? null : (
-          <PrefRow label="Status">
+        {/* Always drawn: before the store's first snapshot the button stays,
+            disabled, rather than the row appearing late. */}
+        <PrefRow label="Status">
+          {status === null ? null : (
             <div className="flex min-w-0 flex-col items-end">
               <Health state={status.state}>{status.label}</Health>
               {status.detail === null ? null : (
@@ -179,16 +181,16 @@ export function UpdatesPane() {
                 </span>
               )}
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!state?.supported || state.phase === "checking"}
-              onClick={requestCheck}
-            >
-              {state?.phase === "checking" ? "Checking…" : status.action}
-            </Button>
-          </PrefRow>
-        )}
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={state?.supported !== true || state.phase === "checking"}
+            onClick={requestCheck}
+          >
+            {state?.phase === "checking" ? "Checking…" : (status?.action ?? "Check now")}
+          </Button>
+        </PrefRow>
       </PrefSection>
     </>
   );

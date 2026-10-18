@@ -126,7 +126,7 @@ export function writeUpdateChannel(
 }
 
 /**
- * The `app_state` key behind Settings → Updates' "Last check" row (VC-294):
+ * The `app_state` key behind Settings → Updates' Status row (VC-294):
  * the {@link UpdateLastCheck} of the most recent check that answered, as JSON.
  * Durable: never rename it.
  */
@@ -136,6 +136,7 @@ const LAST_CHECK_RESULTS: ReadonlySet<string> = new Set<UpdateLastCheck["result"
   "up-to-date",
   "available",
   "error",
+  "download-error",
 ]);
 
 /**
@@ -403,7 +404,14 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   });
   /** A failed check or download: always the last check, only sometimes the phase. */
   const fail = (message: string): void => {
-    const lastCheck = recordCheck({ result: "error", version: null, error: message });
+    // `downloading` is only entered on `update-available`, so a failure there
+    // is the download's, not the feed read's — the pane says which.
+    const downloading = current.phase === "downloading";
+    const lastCheck = recordCheck({
+      result: downloading ? "download-error" : "error",
+      version: downloading ? current.targetVersion : null,
+      error: message,
+    });
     // Same guarantee: a failed RE-check (offline, feed briefly gone) must not
     // hide a staged, installable update behind an error tint — `downloaded`
     // is only left by a real outcome (a newer download starting, the feed

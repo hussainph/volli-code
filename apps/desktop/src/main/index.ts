@@ -2408,7 +2408,7 @@ const appStartup = app.whenReady().then(async () => {
     // when no window is left to show it (macOS keeps the app alive).
     hasUpdateSurface: () =>
       BrowserWindow.getAllWindows().some((window) => !window.webContents.isDestroyed()),
-    // Settings → Updates' "Last check" survives a relaunch (VC-294); on a
+    // Settings → Updates' Status row survives a relaunch (VC-294); on a
     // broken db it lives for this run only, like the channel below.
     lastCheck: dbHandle.ok
       ? {
