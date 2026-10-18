@@ -267,6 +267,9 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
         // anyone reloading.
         events.publish("data-changed", { projectId: skip.skip.projectId });
       },
+      // Accepted or completed only. A rejected Run's occurrence is still owed
+      // its skip, so a rejection must not let the timer step over it.
+      runAccepted: async (commandId) => (await engine.replayRun(commandId))?.ok === true,
       startRun: async (request) => {
         // UNATTENDED (VC-133), and this is the case VC-112 names outright:
         // "a column move is attended because a person is right there; a

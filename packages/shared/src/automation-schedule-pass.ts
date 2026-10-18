@@ -15,8 +15,13 @@
  *    returns a Run at all, however narrowly it was missed.
  *  - **The cursor moves forward, once per step.** Each step carries the instant
  *    the caller's cursor should stand at after performing it, so a host that
- *    dies between two steps repeats at most the step it was in — and the
- *    command ids the caller derives from `dueAt` collapse that repeat.
+ *    dies after performing a step and before moving its cursor meets that
+ *    occurrence again. A repeated skip carries the same `dueAt`, so the
+ *    command id the caller derives from it collapses the repeat. A Run does
+ *    not repeat as a Run: a relaunch re-stamps `watchingSince`, so its
+ *    occurrence comes back as a skip, which is a different command. Only the
+ *    caller can ask its ledger whether that Run was accepted, so stepping
+ *    over it is the caller's job (see the host timer).
  *  - **A skip says something true.** The reason is derived from `watchingSince`
  *    rather than assumed, because "Volli wasn't running" is a claim about this
  *    process and only this process can make it.

@@ -76,6 +76,7 @@ function fixture(over: Partial<HostAutomationsInput> = {}) {
   const engine = {
     enabledAutomationIds: vi.fn(async () => ["a1"]),
     recordSkip: vi.fn(async (_input: unknown): Promise<unknown> => ({ ok: true })),
+    replayRun: vi.fn(async (_commandId: string): Promise<unknown> => null),
   };
   const service = { kind: "service" };
   const runner = {
@@ -518,6 +519,19 @@ describe("scheduler wiring", () => {
     f.engine.recordSkip.mockResolvedValueOnce({ ok: false, error: "ledger refused" });
     await expect(recordSkip(input)).rejects.toThrow("ledger refused");
     expect(f.publish).toHaveBeenCalledOnce();
+  });
+
+  it("answers a Run as accepted only when its command was accepted or completed", async () => {
+    const f = fixture();
+    f.automations.start(() => f.sessionPorts);
+    const { runAccepted } = f.schedulerPorts();
+    await expect(runAccepted("c1")).resolves.toBe(false);
+    expect(f.engine.replayRun).toHaveBeenCalledWith("c1");
+    f.engine.replayRun.mockResolvedValueOnce({ ok: true, value: { run: null } });
+    await expect(runAccepted("c1")).resolves.toBe(true);
+    // A rejected Run still owes its occurrence a skip.
+    f.engine.replayRun.mockResolvedValueOnce({ ok: false, code: "RUN_FAILED", error: "No" });
+    await expect(runAccepted("c1")).resolves.toBe(false);
   });
 
   it("starts a schedule's Run unattended and narrows its outcome", async () => {
