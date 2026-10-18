@@ -33,8 +33,9 @@ new executable tools and the last-cold provider declaration epoch separately:
   connections Sessions already held to it. Enabling it again makes the same calls
   work, with no reattach. A removed server's tools likewise remain named and
   return `MCP tool <name> is unavailable: its server was removed.`; restoring its
-  original ID restores calling. Older app builds may require that configuration
-  to reattach. See [Recovering](#recovering-from-a-failed-or-regretted-change).
+  original ID restores calling from the Session's next attachment (until then a
+  call says the server was added again and needs it). Older app builds may
+  require that configuration to reattach. See [Recovering](#recovering-from-a-failed-or-regretted-change).
 
 Older builds skip refresh facts and use the immutable birth surface. Existing
 MCP schemas, routes and descriptions remain frozen; arbitrary upstream changes
@@ -587,8 +588,10 @@ describes the structured half of a result (see
 
 Sessions keep the tool names and can reattach, but calls return a named
 unavailable error. **Re-add the server under the same id** — the removal's audit
-record contains its transport — to restore calling. Pre-refresh app builds may
-also need that configuration restored before they can reattach.
+record contains its transport — to restore calling from each Session's next
+attachment; a Session still attached from before says so until then.
+Pre-refresh app builds may also need that configuration restored before they can
+reattach.
 
 To avoid this entirely, prefer **`server_disable`**. It keeps the configuration, so
 existing Sessions still reattach, while new root Sessions are not offered the

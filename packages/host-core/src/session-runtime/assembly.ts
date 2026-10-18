@@ -396,8 +396,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     // Read at every call, so a server a person disables or
                     // removes answers by name and is never contacted, and one
                     // they enable again works with no reattach (VC-771).
-                    configured: (serverId) =>
-                      mcpSettings.list(scope.projectId).find((server) => server.id === serverId),
+                    configured: (serverId) => mcpSettings.configured(scope.projectId, serverId),
                     // Credentials are resolved per connection and tokens per
                     // request, so this attachment sees a sign-in or a stored
                     // value a person adds while it runs (VC-470).
@@ -428,7 +427,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                   });
                   const routed = host.routed(bound.call);
                   return {
-                    call: (request, signal, ask) => routed.call(request, signal, ask),
+                    call: routed.call,
                     dispose: bound.dispose,
                   };
                 },

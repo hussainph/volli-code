@@ -185,6 +185,28 @@ describe("McpSettingsService", () => {
     expect(settings.surfaceRevision("p1")).toBe(5);
   });
 
+  it("answers whether a server is configured and enabled, re-reading only after a change (VC-771)", async () => {
+    const settings = service();
+    expect(settings.configured("p1", "server-1")).toBeUndefined();
+    await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+    // Another project's id is not this project's server.
+    expect(settings.configured("other-project", "server-1")).toBeUndefined();
+
+    // A write behind the service's back (nothing in the app does this) goes
+    // unseen: the answer is remembered, not re-read per call.
+    ctx.db.prepare("UPDATE mcp_servers SET enabled = 0 WHERE id = 'server-1'").run();
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+
+    // A change through the service is seen at once.
+    settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+    settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: false });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: false });
+    settings.remove({ projectId: "p1", serverId: "server-1" });
+    expect(settings.configured("p1", "server-1")).toBeUndefined();
+  });
+
   it("stops a server for Sessions that hold its tools when a person disables or removes it (VC-771)", async () => {
     const settings = service();
     await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
@@ -198,7 +220,7 @@ describe("McpSettingsService", () => {
       workspacePath: "/repo/project",
       servers: serversForFrozenMcpTools(settings.list("p1"), settings.selectedTools("p1")),
       open,
-      configured: (serverId) => settings.list("p1").find((server) => server.id === serverId),
+      configured: (serverId) => settings.configured("p1", serverId),
     });
     const call = { serverId: "server-1", toolName: "echo", arguments: {}, toolCallId: "c1" };
     const signal = new AbortController().signal;
@@ -214,8 +236,18 @@ describe("McpSettingsService", () => {
         isError: false,
       });
       expect(open).toHaveBeenCalledTimes(2);
-      settings.remove({ projectId: "p1", serverId: "server-1" });
+      // Saved again, switched off in the same edit.
+      await settings.save({
+        projectId: "p1",
+        server: { ...draft, enabled: false },
+        enabledTools: ["echo"],
+      });
       await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledTimes(2));
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+      await host.port.call(call, signal);
+      expect(open).toHaveBeenCalledTimes(3);
+      settings.remove({ projectId: "p1", serverId: "server-1" });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledTimes(3));
     } finally {
       await host.close();
     }

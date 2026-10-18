@@ -711,6 +711,7 @@ describe("runtime attachment assembly", () => {
       ...options,
       mcpSettings: {
         list: () => [],
+        configured: () => undefined,
         opener: () => open,
         credentials: {},
       } as unknown as RuntimeAssemblyOptions["mcpSettings"],
@@ -767,6 +768,7 @@ describe("runtime attachment assembly", () => {
       ...options,
       mcpSettings: {
         list: () => [configured],
+        configured: () => configured,
         opener: () => open,
         credentials: { revision: () => 0, accessRevision: () => 0 },
       } as unknown as RuntimeAssemblyOptions["mcpSettings"],

@@ -24,19 +24,22 @@ import type { McpSignInOutcome } from "./oauth";
 /**
  * Why a call to a server whose tools this Session holds will not run, said by
  * name (VC-771). Removed and disabled read alike: the tool keeps its name, the
- * call returns this, and nothing is started or contacted.
+ * call returns this, and nothing is started or contacted. A server added again
+ * under its old id after this attachment bound its transports has none here,
+ * so that call waits for the Session's next attachment.
  */
-export function mcpServerUnavailableResult(
+function unavailableText(
   toolName: string,
   configured: { readonly enabled: boolean } | undefined,
-): RuntimeMcpCallResult | undefined {
-  if (configured === undefined) {
-    return errorResult(`MCP tool ${toolName} is unavailable: its server was removed.`);
-  }
+  bound: boolean,
+): string | undefined {
+  if (configured === undefined)
+    return `MCP tool ${toolName} is unavailable: its server was removed.`;
   if (!configured.enabled) {
-    return errorResult(
-      `MCP tool ${toolName} is unavailable: its server is disabled in Settings. Ask the person to enable it.`,
-    );
+    return `MCP tool ${toolName} is unavailable: its server is disabled in Settings. Ask the person to enable it.`;
+  }
+  if (!bound) {
+    return `MCP tool ${toolName} is unavailable: its server was added again after this Session attached, so it can be called once the Session next attaches.`;
   }
   return undefined;
 }
@@ -103,8 +106,9 @@ export interface McpSessionHostOptions {
   /**
    * The server as it is configured now, read at every call (VC-771): absent
    * once removed, `enabled: false` once disabled. Either one answers the call
-   * with {@link mcpServerUnavailableResult} and contacts nothing; re-enabling
-   * makes the next call work again. Defaults to the bound copy.
+   * by name and contacts nothing; re-enabling makes the next call work again.
+   * Read twice per call (before and behind the budget), so it must be cheap.
+   * Defaults to the bound copy.
    */
   configured?: (serverId: string) => { readonly enabled: boolean } | undefined;
 }
@@ -471,13 +475,15 @@ export class McpSessionHost {
    * or that this attachment never bound (VC-771). A refused server's idle
    * connection is closed, in case nobody else told this host.
    */
-  #refused(request: RuntimeMcpCall): RuntimeMcpCallResult | undefined {
-    const configured = this.#servers.has(request.serverId)
-      ? this.#configured(request.serverId)
-      : undefined;
-    const refused = mcpServerUnavailableResult(request.toolName, configured);
-    if (refused !== undefined) this.disconnect(request.serverId);
-    return refused;
+  #refuseAndDisconnect(request: RuntimeMcpCall): RuntimeMcpCallResult | undefined {
+    const text = unavailableText(
+      request.toolName,
+      this.#configured(request.serverId),
+      this.#servers.has(request.serverId),
+    );
+    if (text === undefined) return undefined;
+    this.disconnect(request.serverId);
+    return errorResult(text);
   }
 
   #retire(serverId: string, entry: ClientEntry): void {
@@ -499,7 +505,7 @@ export class McpSessionHost {
     if (this.#closed) throw new Error("MCP attachment is closed");
     // Checked again here, behind the per-server budget: a call that queued
     // before the person disabled the server must not open it after.
-    const refused = this.#refused(request);
+    const refused = this.#refuseAndDisconnect(request);
     if (refused !== undefined) return refused;
     const server = this.#servers.get(request.serverId)!;
     signal.throwIfAborted();
@@ -574,7 +580,7 @@ export class McpSessionHost {
       call: async (request, signal, ask) => {
         // Answered before the budget, so a call to a disabled or removed
         // server never queues behind calls still running on it.
-        const refused = this.#refused(request);
+        const refused = this.#refuseAndDisconnect(request);
         if (refused !== undefined) return refused;
         let blocked: McpConnectionBlock;
         try {

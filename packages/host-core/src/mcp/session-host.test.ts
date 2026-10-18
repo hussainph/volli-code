@@ -18,7 +18,6 @@ import {
   exceedsHostBound,
   McpCallBlocked,
   McpSessionHost,
-  mcpServerUnavailableResult,
   serversForFrozenMcpTools,
 } from "./session-host";
 
@@ -870,10 +869,31 @@ describe("McpSessionHost with a server a person disabled (VC-771)", () => {
     isError: true,
   };
 
-  it("names removed and disabled alike, and nothing for an enabled server", () => {
-    expect(mcpServerUnavailableResult("lookup", undefined)).toEqual(removed);
-    expect(mcpServerUnavailableResult("lookup", { enabled: false })).toEqual(disabled);
-    expect(mcpServerUnavailableResult("lookup", { enabled: true })).toBeUndefined();
+  it("says a server added again after attach needs the next attachment, and contacts nothing", async () => {
+    let configured = { enabled: true };
+    const open = vi.fn(async () => client(async () => ({ content: [], isError: false })));
+    // Removed when this attachment bound its transports, so it holds none for it.
+    const host = new McpSessionHost({
+      workspacePath: "/workspace",
+      servers: [],
+      open,
+      configured: () => configured,
+    });
+    const signal = new AbortController().signal;
+
+    await expect(host.port.call(call, signal)).resolves.toEqual({
+      content: [
+        {
+          type: "text",
+          text: "MCP tool lookup is unavailable: its server was added again after this Session attached, so it can be called once the Session next attaches.",
+        },
+      ],
+      isError: true,
+    });
+    configured = { enabled: false };
+    await expect(host.port.call(call, signal)).resolves.toEqual(disabled);
+    expect(open).not.toHaveBeenCalled();
+    await host.close();
   });
 
   it("reads enablement live: disabled contacts nothing, enabled again works with no reattach", async () => {
