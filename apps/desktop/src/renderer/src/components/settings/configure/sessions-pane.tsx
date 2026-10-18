@@ -56,9 +56,9 @@ import { writeThrough } from "@renderer/stores/mutate";
 import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 import { boardApi } from "@renderer/lib/board-protocol";
-import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { useLatestAsync, type LatestAsyncGuard } from "@renderer/hooks/use-latest-async";
 
-import { ContentPreviewDialog, type PreviewBody } from "./content-preview-dialog";
+import { ContentPreviewDialog, type PreviewState } from "./content-preview-dialog";
 import {
   instructionFiles,
   type InstructionFile,
@@ -276,39 +276,34 @@ function modelKey(model: Pick<ModelAccessModel, "providerId" | "modelId">): stri
 /**
  * The repo-root instruction files this project actually has (VC-305).
  *
- * Each row is derived from the root's listing — present or not in this repo —
- * and only a present file offers Preview and Reveal. No row is marked as the
- * loaded one, because the runtime loads neither: see `instruction-files.ts`.
- * The hint says so once, since the old copy claimed the opposite.
+ * Each row is derived from the root's listing — a file, a symlink, or not in
+ * this repo — and only what can actually be read is offered: a file gets
+ * Preview and Reveal, a symlink Reveal alone (file reads refuse symlinks), a
+ * missing one nothing. No row is marked as the loaded one; see
+ * `instruction-files.ts` for who reads which.
  *
  * Inspection only. Nothing here writes, so a read-only (remote) project shows
- * the same rows with the same two read actions.
+ * the same rows with the same read actions.
  */
 function InstructionsSection({ project }: { project: Project }) {
-  const [listing, setListing] = React.useState<AsyncState<readonly InstructionFile[]>>({
-    status: "loading",
-  });
+  const [listing, setListing] = React.useState<FileListing>(LOADING);
   const [previewing, setPreviewing] = React.useState<InstructionFileName | null>(null);
-  const [body, setBody] = React.useState<AsyncState<PreviewBody>>({ status: "loading" });
+  const [body, setBody] = React.useState<PreviewState>(LOADING);
   const listGuard = useLatestAsync();
   const bodyGuard = useLatestAsync();
 
-  const check = React.useCallback(async () => {
-    const token = listGuard.claim();
-    setListing({ status: "loading" });
-    const retry = () => void check();
-    try {
+  const check = React.useCallback(async (): Promise<void> => {
+    const failed = (message: string) => ({
+      status: "error" as const,
+      message,
+      onRetry: () => void check(),
+    });
+    await settleLatest(listGuard, setListing, failed, async (): Promise<FileListing> => {
       const result = await window.api.fs.listDirectory(project.path);
-      if (!listGuard.isCurrent(token)) return;
-      setListing(
-        result.ok
-          ? { status: "ready", data: instructionFiles(result.entries) }
-          : { status: "error", message: result.error, onRetry: retry },
-      );
-    } catch (error) {
-      if (!listGuard.isCurrent(token)) return;
-      setListing({ status: "error", message: errorMessage(error), onRetry: retry });
-    }
+      return result.ok
+        ? { status: "ready", data: instructionFiles(result.entries) }
+        : failed(result.error);
+    });
   }, [project.path, listGuard]);
 
   React.useEffect(() => {
@@ -317,25 +312,21 @@ function InstructionsSection({ project }: { project: Project }) {
   }, [check, listGuard]);
 
   const read = React.useCallback(
-    async (name: InstructionFileName) => {
-      const token = bodyGuard.claim();
-      setBody({ status: "loading" });
-      const retry = () => void read(name);
-      try {
+    async (name: InstructionFileName): Promise<void> => {
+      const failed = (message: string) => ({
+        status: "error" as const,
+        message,
+        onRetry: () => void read(name),
+      });
+      await settleLatest(bodyGuard, setBody, failed, async (): Promise<PreviewState> => {
         const result = await window.api.files.read({ projectId: project.id, relPath: name });
-        if (!bodyGuard.isCurrent(token)) return;
-        if (!result.ok) {
-          setBody({ status: "error", message: result.error, onRetry: retry });
-        } else if (result.content.type !== "text") {
-          setBody({ status: "error", message: `${name} is not a text file.`, onRetry: retry });
-        } else {
-          const { text, truncated } = result.content;
-          setBody({ status: "ready", data: { text, truncated } });
+        if (!result.ok) return failed(result.error);
+        if (result.content.type !== "text") {
+          return { status: "unavailable", message: `${name} is not a text file.` };
         }
-      } catch (error) {
-        if (!bodyGuard.isCurrent(token)) return;
-        setBody({ status: "error", message: errorMessage(error), onRetry: retry });
-      }
+        const { text, truncated } = result.content;
+        return { status: "ready", data: { text, truncated } };
+      });
     },
     [project.id, bodyGuard],
   );
@@ -354,8 +345,9 @@ function InstructionsSection({ project }: { project: Project }) {
         icon={BookOpenIcon}
         hint={
           <>
-            Chats read whichever of these the repo has when the work calls for it. Volli
-            doesn&rsquo;t add them to the prompt.
+            Chats read whichever of these the repo has when the work calls for it; Volli
+            doesn&rsquo;t add them to the prompt. Terminal harnesses load their own: Claude Code
+            reads CLAUDE.md, Codex, Cursor and OpenCode read AGENTS.md.
           </>
         }
         action={
@@ -372,25 +364,25 @@ function InstructionsSection({ project }: { project: Project }) {
             <ItemRow
               key={file.name}
               name={file.name}
-              meta={file.present ? "repo root" : "not in this repo"}
+              meta={INSTRUCTION_META[file.state]}
               testId={`instruction-file-${file.name}`}
             >
-              {file.present ? (
-                <>
-                  <RowAction
-                    label={`Preview ${file.name}`}
-                    hint="Preview"
-                    icon={EyeIcon}
-                    onAct={() => preview(file.name)}
-                  />
-                  <RowAction
-                    label={`Reveal ${file.name} in Finder`}
-                    hint="Reveal in Finder"
-                    icon={ArrowSquareOutIcon}
-                    onAct={() => void reveal(`${project.path}/${file.name}`)}
-                  />
-                </>
+              {file.state === "file" ? (
+                <RowAction
+                  label={`Preview ${file.name}`}
+                  hint="Preview"
+                  icon={EyeIcon}
+                  onAct={() => preview(file.name)}
+                />
               ) : null}
+              {file.state === "missing" ? null : (
+                <RowAction
+                  label={`Reveal ${file.name} in Finder`}
+                  hint="Reveal in Finder"
+                  icon={ArrowSquareOutIcon}
+                  onAct={() => void reveal(`${project.path}/${file.name}`)}
+                />
+              )}
             </ItemRow>
           ))
         }
@@ -407,6 +399,37 @@ function InstructionsSection({ project }: { project: Project }) {
       />
     </>
   );
+}
+
+const LOADING = { status: "loading" } as const;
+
+type FileListing = AsyncState<readonly InstructionFile[]>;
+
+const INSTRUCTION_META: Record<InstructionFile["state"], string> = {
+  file: "repo root",
+  link: "symlink at repo root",
+  missing: "not in this repo",
+};
+
+/**
+ * One token-guarded read: claim, show loading, settle with whatever `load`
+ * answers — or `failed` if it threw — unless a later read has claimed since.
+ */
+async function settleLatest<S>(
+  guard: LatestAsyncGuard,
+  set: (state: S | typeof LOADING) => void,
+  failed: (message: string) => S,
+  load: () => Promise<S>,
+): Promise<void> {
+  const token = guard.claim();
+  set(LOADING);
+  let next: S;
+  try {
+    next = await load();
+  } catch (error) {
+    next = failed(errorMessage(error));
+  }
+  if (guard.isCurrent(token)) set(next);
 }
 
 async function reveal(path: string): Promise<void> {

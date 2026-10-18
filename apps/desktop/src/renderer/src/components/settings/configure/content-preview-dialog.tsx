@@ -35,6 +35,12 @@ export interface PreviewBody {
   truncated: boolean;
 }
 
+/**
+ * A fetched body, plus the one outcome a retry cannot change: the file was
+ * read and is not text. Offering Try again there would loop forever.
+ */
+export type PreviewState = AsyncState<PreviewBody> | { status: "unavailable"; message: string };
+
 export function ContentPreviewDialog({
   open,
   title,
@@ -49,7 +55,7 @@ export function ContentPreviewDialog({
   origin: string;
   /** The file's own summary, when it has one. */
   description?: string;
-  body: AsyncState<PreviewBody>;
+  body: PreviewState;
   onClose: () => void;
 }) {
   return (
@@ -82,7 +88,7 @@ export function ContentPreviewDialog({
   );
 }
 
-function PreviewContent({ body }: { body: AsyncState<PreviewBody> }) {
+function PreviewContent({ body }: { body: PreviewState }) {
   if (body.status === "loading") {
     return (
       <div className="flex flex-col gap-2" aria-busy>
@@ -92,6 +98,9 @@ function PreviewContent({ body }: { body: AsyncState<PreviewBody> }) {
         <Skeleton className="h-4 w-5/6" />
       </div>
     );
+  }
+  if (body.status === "unavailable") {
+    return <p className="text-ui text-muted-foreground">{body.message}</p>;
   }
   if (body.status === "error") {
     return (

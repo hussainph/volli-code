@@ -72,7 +72,14 @@ export function registerIpcHandlers(): void {
           // walking this listing never descends through one — but a DIRECTLY
           // requested path is followed for real, which is why the containment
           // check above resolves symlinks instead of comparing strings.
-          .map((dirent) => ({ name: dirent.name, kind: dirent.isDirectory() ? "dir" : "file" }));
+          .map((dirent) => {
+            const entry: DirEntry = {
+              name: dirent.name,
+              kind: dirent.isDirectory() ? "dir" : "file",
+            };
+            if (dirent.isSymbolicLink()) entry.link = true;
+            return entry;
+          });
         entries.sort(compareDirEntries);
         return { ok: true, entries };
       } catch (error) {

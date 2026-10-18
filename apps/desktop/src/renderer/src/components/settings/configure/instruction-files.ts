@@ -1,21 +1,24 @@
 /**
- * Which repository instruction files a project actually has.
+ * Which repository instruction files a project actually has, read off the repo
+ * root's own listing (VC-305).
  *
- * Read off the repo root's own listing rather than assumed: Configure →
- * Sessions used to draw `AGENTS.md` and `CLAUDE.md` as literal rows, so a repo
- * with neither, one or both looked identical (VC-305).
+ * WHAT READS THEM. A Chat Session's prompt is composed from the Session spec
+ * and nothing on disk (`packages/agent-runtime/src/prompt.ts`): the Agent
+ * Runtime injects neither file, and tells the agent to inspect the
+ * repository's instructions itself. So for Chats no file is "the loaded one" —
+ * whichever exists is read on demand, on equal footing. A terminal harness is
+ * different: the CLI it launches loads its own file natively (Claude Code reads
+ * `CLAUDE.md`; Codex, Cursor and OpenCode read `AGENTS.md` — the adapter notes
+ * in `packages/shared/src/harness/*.ts`). Volli does not choose between them.
  *
- * THERE IS NO "EFFECTIVE" FILE TO PICK, and that is the runtime's rule, not an
- * omission here. The Agent Runtime composes every prompt from the Session spec
- * and discovers nothing on disk (`packages/agent-runtime/src/prompt.ts`): it
- * injects neither file. A Chat Session is told to inspect the repository's
- * instructions itself, so whichever of these exists is there to be read on
- * demand, equally. Marking one as loaded would be a claim the runtime does not
- * make.
+ * THREE STATES, by what Volli can do with the entry:
  *
- * Exact names only. A `DirEntry` reads a symlink as a file (lstat semantics),
- * so the common `CLAUDE.md → AGENTS.md` link counts as present; a directory
- * that happens to carry one of these names does not.
+ *   file      a regular file. It can be previewed and revealed.
+ *   link      a symlink — to the other file, elsewhere, a directory, or
+ *             nothing. File reads refuse every symlink (`Path is a symlink`,
+ *             host-core's `assertWithinRoot`), so it is revealed, never
+ *             previewed, and is not claimed to resolve.
+ *   missing   nothing by that exact name, or a real directory wearing it.
  */
 import type { DirEntry } from "@volli/shared";
 
@@ -27,13 +30,14 @@ export type InstructionFileName = (typeof INSTRUCTION_FILE_NAMES)[number];
 export interface InstructionFile {
   /** The file's name, which is also its path relative to the repo root. */
   name: InstructionFileName;
-  present: boolean;
+  state: "file" | "link" | "missing";
 }
 
-/** Each conventional instruction file, present or missing, from the repo root's listing. */
+/** Each conventional instruction file's state, from the repo root's listing. */
 export function instructionFiles(entries: readonly DirEntry[]): readonly InstructionFile[] {
-  const files = new Set(
-    entries.filter((entry) => entry.kind === "file").map((entry) => entry.name),
-  );
-  return INSTRUCTION_FILE_NAMES.map((name) => ({ name, present: files.has(name) }));
+  return INSTRUCTION_FILE_NAMES.map((name) => {
+    const entry = entries.find((candidate) => candidate.name === name);
+    if (entry?.link) return { name, state: "link" };
+    return { name, state: entry?.kind === "file" ? "file" : "missing" };
+  });
 }
