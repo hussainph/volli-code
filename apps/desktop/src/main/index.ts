@@ -310,6 +310,7 @@ import {
   browserTracesRoot,
   BrowserTraceStore,
 } from "@volli/host-core/browser";
+import { createBrowserShortcutRelay } from "./browser/app-shortcut-relay";
 import { BrowserTabHost } from "./browser/tab-host";
 import { registerOrphanProcessIpcHandlers } from "./process/ipc";
 import { registerBackgroundShellIpcHandlers } from "./shell/ipc";
@@ -1281,6 +1282,13 @@ const appStartup = app.whenReady().then(async () => {
     now: Date.now,
     persist: browserPictureDisk(browserPicturesRoot(app.getPath("userData"))),
   });
+  // App shortcuts out of a focused Browser page (VC-301): the host delivers,
+  // the handler map's `browserShortcuts.*` entries subscribe and hand focus back.
+  const browserShortcutRelay = createBrowserShortcutRelay((error) =>
+    hostLogger("browser").warn("browser shortcut listener threw", {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
   const browserTabs = new BrowserTabHost({
     createId: randomUUID,
     createView: (options) => new WebContentsView(options),
@@ -1306,14 +1314,9 @@ const appStartup = app.whenReady().then(async () => {
       }),
     publishState: (tab) => publishBrowserTabEvent({ tab }),
     publishClosed: (closedTabId) => publishBrowserTabEvent({ closedTabId }),
-    // An app chord pressed in a shown page (VC-301). Focus comes back to the
-    // app first: the palette's field, the address bar and the pane a chord
-    // moves to are all renderer DOM, unreachable while the page holds focus.
-    deliverAppShortcut: (window, event) => {
-      if (window.isDestroyed()) return;
-      window.webContents.focus();
-      window.webContents.send("volli:browser-app-shortcut" satisfies VolliIpcEvent, event);
-    },
+    // An app chord pressed in a shown page (VC-301), to the windows following
+    // the desktop-only `browserShortcuts.subscribe` entry.
+    deliverAppShortcut: (window, event) => browserShortcutRelay.deliver(window, event),
     pictures: browserPictures,
     // A Session's steps in its own tabs, kept for the person to replay after
     // the live set has moved on (VC-453) — its own directory, never a Blob.
@@ -1568,6 +1571,11 @@ const appStartup = app.whenReady().then(async () => {
             error: error instanceof Error ? error.message : String(error),
           }),
       }),
+      // App shortcuts out of a focused Browser page (VC-301).
+      browserShortcuts: {
+        subscribe: browserShortcutRelay.subscribe,
+        focusPage: (tabId) => browserTabs.focusPage(tabId),
+      },
     });
   };
   /** Built once, at the first door that needs it; every later door gets the same object. */

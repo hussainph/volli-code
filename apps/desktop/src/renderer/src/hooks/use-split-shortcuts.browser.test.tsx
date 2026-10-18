@@ -10,7 +10,7 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { SPLIT_VIEW_ROOT_PANE_ID, splitViewPanes } from "@volli/shared";
 
 import {
@@ -71,6 +71,7 @@ function pressRightInMiddlePage(): boolean {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   useProjectsStore.setState({ selectedProjectId: PROJECT });
   useWorkspaceStore.setState({
     byProject: { [PROJECT]: { ...DEFAULT_WORKSPACE_UI, nav: "home", homeActiveTab: LEFT } },
@@ -102,6 +103,7 @@ afterEach(() => {
   container.remove();
   useWorkspaceStore.setState({ byProject: {} } as never);
   useProjectsStore.setState({ selectedProjectId: null });
+  vi.unstubAllGlobals();
 });
 
 describe("⌃⌘ + an arrow from inside a Browser page", () => {

@@ -79,7 +79,6 @@ import type {
   BrowserTabSetBoundsInput,
   BrowserTabSetPresentationInput,
   BrowserTabStateEvent,
-  BrowserAppShortcutEvent,
   BackgroundShellIdInput,
   BackgroundShellListResult,
   BackgroundShellStateEvent,
@@ -502,9 +501,6 @@ const api = {
     hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
     toggleDevTools: (input: BrowserTabIdInput): Promise<Result> =>
       invoke("volli:browser-toggle-devtools", input),
-    /** Gives keyboard focus back to a shown page whose app shortcut did nothing (VC-301). */
-    focusPage: (input: BrowserTabIdInput): Promise<Result> =>
-      invoke("volli:browser-focus-page", input),
     setPresentation: (input: BrowserTabSetPresentationInput): Promise<BrowserTabResult> =>
       invoke("volli:browser-set-presentation", input),
     picture: (input: BrowserPictureInput): Promise<BrowserPictureResult> =>
@@ -524,14 +520,6 @@ const api = {
       ipcRenderer.on("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
       return () =>
         ipcRenderer.removeListener("volli:browser-tab-state" satisfies VolliIpcEvent, listener);
-    },
-    /** Subscribes to app shortcuts a focused page handed back (VC-301); returns the unsubscribe. */
-    onAppShortcut: (callback: (event: BrowserAppShortcutEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: BrowserAppShortcutEvent) =>
-        callback(payload);
-      ipcRenderer.on("volli:browser-app-shortcut" satisfies VolliIpcEvent, listener);
-      return () =>
-        ipcRenderer.removeListener("volli:browser-app-shortcut" satisfies VolliIpcEvent, listener);
     },
   },
   /** Background shells a Session started (VC-270): the island's shell feed and its two verbs. */

@@ -837,11 +837,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     reason:
       "DevTools of the local native view. A remote tab has no local DevTools; VC-571, as the screencast owner, decides availability there.",
   },
-  "volli:browser-focus-page": {
-    placement: "client-local",
-    owner: "VC-571",
-    reason: "Keyboard focus of the local native view.",
-  },
   "volli:browser-set-presentation": {
     placement: "workspace",
     owner: "VC-571",
@@ -1328,11 +1323,6 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "client-local",
     owner: "stays",
     reason: "Native View menu zoom.",
-  },
-  "volli:browser-app-shortcut": {
-    placement: "client-local",
-    owner: "stays",
-    reason: "App chords routed out of a focused native Browser page.",
   },
   "volli:file-changed": {
     placement: "workspace",

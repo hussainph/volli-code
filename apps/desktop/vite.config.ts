@@ -699,6 +699,7 @@ export default defineConfig(({ mode }) => ({
         // Which keys leave a Browser page for the app (VC-301). Every branch
         // is a chord taken from, or left to, a page the person is typing in.
         "**/src/main/browser/app-shortcuts.ts",
+        "**/src/main/browser/app-shortcut-relay.ts",
         // The notification delivery boundary (VC-295). Enrolled for the same
         // reason the IPC handlers are: a missed branch here is an alert that
         // escapes a preference, a click that opens nothing, or a suppression

@@ -1,4 +1,4 @@
-import type { BrowserAppShortcutEvent } from "../../../../ipc/contract";
+import type { BrowserAppShortcutEvent } from "@volli/shared";
 
 /**
  * The renderer half of the app shortcuts a focused Browser page hands back
@@ -69,4 +69,71 @@ export function runBrowserAppShortcut(event: BrowserAppShortcutEvent): boolean {
   if (shortcut.kind === "close-tab") return pane.close();
   pane.focusAddress();
   return true;
+}
+
+/** What the Session RPC client offers {@link followBrowserAppShortcuts}: `browserShortcuts.*`. */
+export interface BrowserShortcutsRpc {
+  readonly browserShortcuts: {
+    readonly subscribe: {
+      subscribe(
+        input: undefined,
+        handlers: {
+          onData(event: BrowserAppShortcutEvent): void;
+          onError(error: unknown): void;
+        },
+      ): { unsubscribe(): void };
+    };
+    readonly focusPage: { mutate(input: { tabId: string }): Promise<unknown> };
+  };
+}
+
+/** How long a stream that ended in error waits before following again. */
+export const BROWSER_SHORTCUTS_RESUBSCRIBE_MS = 1_000;
+
+function defaultTimer(run: () => void, ms: number): () => void {
+  const handle = setTimeout(run, ms);
+  return () => clearTimeout(handle);
+}
+
+/**
+ * Follows the desktop-only `browserShortcuts.subscribe` stream for the life of
+ * the window, acting on each shortcut and handing focus back to the page for
+ * one the app had nothing to do with (`browserShortcuts.focusPage`). Returns
+ * the stop.
+ *
+ * Nothing is toasted if the hand-back fails: nobody asked for it, and the
+ * person is left in the app, one click from the page (AGENTS.md's exception
+ * for work no one requested). A stream that ended in error (it fell behind,
+ * or its source failed) is followed again after a beat: a shortcut is a press,
+ * not state, so there is nothing to catch up on.
+ */
+export function followBrowserAppShortcuts(
+  rpc: BrowserShortcutsRpc,
+  setTimer: (run: () => void, ms: number) => () => void = defaultTimer,
+): () => void {
+  let stopped = false;
+  let current: { unsubscribe(): void } | null = null;
+  let cancelTimer: (() => void) | null = null;
+  const open = (): void => {
+    current = rpc.browserShortcuts.subscribe.subscribe(undefined, {
+      onData: (event) => {
+        if (runBrowserAppShortcut(event)) return;
+        void rpc.browserShortcuts.focusPage.mutate({ tabId: event.tabId }).catch(() => undefined);
+      },
+      onError: () => {
+        current = null;
+        if (stopped) return;
+        cancelTimer = setTimer(() => {
+          cancelTimer = null;
+          open();
+        }, BROWSER_SHORTCUTS_RESUBSCRIBE_MS);
+      },
+    });
+  };
+  open();
+  return () => {
+    stopped = true;
+    cancelTimer?.();
+    current?.unsubscribe();
+  };
 }
