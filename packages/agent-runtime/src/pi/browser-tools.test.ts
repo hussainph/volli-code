@@ -772,7 +772,7 @@ describe("browser tools: empty pages, failed reads and what an action did (VC-27
     const clicked = resultText(await createBrowserTool("browser_act", port).execute("e-3", click));
 
     for (const answer of [read, opened, clicked]) {
-      expect(answer).toContain("the tree exposes nothing yet");
+      expect(answer).toContain("The tree exposes nothing yet");
       expect(answer).toContain("generation 4");
       expect(answer).toContain("There are no refs to act on");
       // Blank markers would read like a read that failed; there are none.
@@ -845,7 +845,8 @@ describe("browser tools: empty pages, failed reads and what an action did (VC-27
         .map((line) => line.split(" ").at(-2)),
     );
     expect(ids.size).toBe(1);
-    expect(lastLine(text)).toContain("untrusted");
+    // Volli's last word covers both regions, not only the snapshot.
+    expect(lastLine(text)).toContain("untrusted browser act target or browser snapshot");
   });
 
   it("says when nothing was seen to change, so a no-op never reads like a click that worked", async () => {
@@ -866,6 +867,21 @@ describe("browser tools: empty pages, failed reads and what an action did (VC-27
     expect(waited).toContain("Volli waited.");
     expect(waited).toContain("Afterwards Volli saw no change");
     expect(waited).not.toContain("before repeating it");
+
+    // Hover, scroll and a key press routinely move only focus or scrolling:
+    // their quiet answer is softened rather than told to doubt itself.
+    for (const gesture of [
+      { kind: "hover", ref: "e2" },
+      { kind: "scroll", direction: "down" },
+      { kind: "press", key: "Tab" },
+    ] as const) {
+      const answer = resultText(
+        await tool.execute(`e-9-${gesture.kind}`, { tabId: "tab-1", generation: 4, ...gesture }),
+      );
+      expect(answer).toContain("Afterwards Volli saw no change");
+      expect(answer).toContain(`That is common for a ${gesture.kind}`);
+      expect(answer).not.toContain("before repeating it");
+    }
 
     // A page-level action names no element; a navigation names what moved.
     port.act = async () =>

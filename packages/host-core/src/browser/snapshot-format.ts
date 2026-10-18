@@ -88,6 +88,11 @@ export interface BrowserSnapshotFormat {
    */
   nextRef: number;
   truncated: boolean;
+  /**
+   * Whether the tree exposed nothing at all — which is not the same as a cut
+   * that left no room to print, or (for a find) as matching nothing.
+   */
+  empty: boolean;
 }
 
 /** One bounded search: the matching subtrees, and the counts Volli states beside them. */
@@ -96,8 +101,6 @@ export interface BrowserFindFormat extends BrowserSnapshotFormat {
   matches: number;
   /** The matches the text shows. */
   shown: number;
-  /** Whether the tree exposed nothing at all — which is not the same as matching nothing. */
-  empty: boolean;
 }
 
 /**
@@ -323,7 +326,7 @@ function render(
   ledger: RefLedger,
   maxChars: number,
   truncatedByWalk: boolean,
-): BrowserSnapshotFormat & { keptLines: number } {
+): Omit<BrowserSnapshotFormat, "empty"> & { keptLines: number } {
   interface Drafted {
     /** The line without its colon, which is decided only once the cut is known. */
     text: string;
@@ -433,7 +436,7 @@ function planAll(entries: readonly Entry[], depth: number, into: PlannedLine[]):
 export function formatAXSnapshot(
   nodes: readonly AXNodeLike[],
   limits: { maxChars?: number; ledger?: RefLedger } = {},
-): BrowserSnapshotFormat & { empty: boolean } {
+): BrowserSnapshotFormat {
   const collected = collect(nodes, SNAPSHOT_MAX_NODES);
   const plan: PlannedLine[] = [];
   planAll(collected.roots, 0, plan);
@@ -444,8 +447,10 @@ export function formatAXSnapshot(
     collected.truncated,
   );
   // Empty is the page's fact, judged before the bound: a tree the cut left
-  // no room to print is truncated, not empty.
-  return { ...printed, empty: collected.roots.length === 0 };
+  // no room to print is truncated, not empty — and so is one whose walk hit
+  // its node or depth bound before reaching anything worth a line (a hidden
+  // sprite sheet ahead of the content can spend the whole node budget).
+  return { ...printed, empty: collected.roots.length === 0 && !collected.truncated };
 }
 
 /**
@@ -456,15 +461,24 @@ export function formatAXSnapshot(
 const DIGEST_STATES = new Set(["checked", "expanded", "selected", "pressed", "disabled"]);
 
 /**
+ * How many nodes the digest walks. It runs on every read in the host's main
+ * process, so it shares the find's walk bound rather than growing with the
+ * page: about 7ms for 20,000 nodes on an M-series Mac, against ~30ms for an
+ * unbounded 100,000. A change past the bound goes unseen — well past anything
+ * a snapshot prints.
+ */
+const DIGEST_MAX_NODES = FIND_MAX_NODES;
+
+/**
  * A fingerprint of everything the tree exposes that an action could visibly
  * change (VC-277): each unignored node's role, name, value, child count and
  * the states above, in CDP's document order. Two reads of an unchanged page
  * give the same digest whatever either read printed, so it is independent of
- * the bounds and the ledger; it is compared, never shown.
+ * the print bounds and the ledger; it is compared, never shown.
  */
 export function axTreeDigest(nodes: readonly AXNodeLike[]): string {
   const hash = createHash("sha256");
-  for (const node of nodes) {
+  for (const node of nodes.slice(0, DIGEST_MAX_NODES)) {
     if (node.ignored === true) continue;
     const states = (node.properties ?? [])
       .filter((property) => DIGEST_STATES.has(property.name))
@@ -578,5 +592,10 @@ export function formatAXFind(
   // Counted off the lines the bound kept, so Volli never claims to show a
   // match the cut removed.
   const shown = plan.slice(0, keptLines).filter((line) => line.match).length;
-  return { ...printed, matches: matched.size, shown, empty: order.length === 0 };
+  return {
+    ...printed,
+    matches: matched.size,
+    shown,
+    empty: order.length === 0 && !collected.truncated,
+  };
 }
