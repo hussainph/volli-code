@@ -16,7 +16,7 @@
  * Keep or dismissing takes effect immediately, without waiting for a poll. A
  * background READ failure is silent (a read is not a mutation — no toasts).
  */
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type Database from "better-sqlite3";
 import type { TicketEventActor, TicketStatus } from "@volli/shared";
@@ -274,16 +274,16 @@ function observationChanged(a: RetentionObservation | undefined, b: RetentionObs
  * "not a git repository" (VC-836).
  */
 function hasUsableGit(dir: string): boolean {
-  const dotGit = join(dir, ".git");
+  // One read, no stat first: reading a directory fails with EISDIR, which is
+  // the ordinary-checkout answer, and anything else that fails is unusable.
+  let gitfile: string;
   try {
-    const stat = statSync(dotGit);
-    if (stat.isDirectory()) return true;
-    if (!stat.isFile()) return false;
-    const target = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
-    return target !== undefined && existsSync(resolvePath(dir, target));
-  } catch {
-    return false;
+    gitfile = readFileSync(join(dir, ".git"), "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EISDIR";
   }
+  const target = /^gitdir:\s*(.+?)\s*$/m.exec(gitfile)?.[1];
+  return target !== undefined && existsSync(resolvePath(dir, target));
 }
 
 /**
