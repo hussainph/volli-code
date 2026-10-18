@@ -2979,6 +2979,7 @@ export const ChatTurn = React.memo(function ChatTurn({
           // the names surface where they were actually delivered.
           <div
             className="flex flex-wrap items-center gap-1.5 pt-2 text-ui text-muted-foreground"
+            role="group"
             aria-label="Skills delivered with this message"
           >
             <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
