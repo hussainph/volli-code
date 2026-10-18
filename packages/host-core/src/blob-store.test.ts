@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   closeSync,
   copyFileSync,
   existsSync,
@@ -29,6 +30,10 @@ const state = vi.hoisted(() => ({
     | { operation: "readdir" | "lstat" | "unlink"; path: string }
     | undefined,
   directoryReads: [] as string[],
+  // The order of durability-relevant calls, so a test can prove fsync precedes
+  // publication and the directory is synced after it.
+  journal: [] as string[],
+  fsyncFailure: undefined as ((path: string) => boolean) | undefined,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -59,7 +64,14 @@ vi.mock("node:fs", async (importOriginal) => {
       if (state.failure === "read") throw new Error("injected read failure");
       return fs.readFileSync(...args);
     },
+    fsyncSync: (fd: number) => {
+      const path = state.active.get(fd)!;
+      if (state.fsyncFailure?.(path)) throw new Error("injected fsync failure");
+      state.journal.push(`fsync ${path}`);
+      return fs.fsyncSync(fd);
+    },
     linkSync: (...args: Parameters<typeof fs.linkSync>) => {
+      state.journal.push(`link ${String(args[1])}`);
       if (state.failure === "link") throw new Error("injected link failure");
       state.beforeLink?.(String(args[1]));
       if (state.linkError)
@@ -67,6 +79,7 @@ vi.mock("node:fs", async (importOriginal) => {
       return fs.linkSync(...args);
     },
     renameSync: (...args: Parameters<typeof fs.renameSync>) => {
+      state.journal.push(`rename ${String(args[1])}`);
       if (state.renameError) {
         throw Object.assign(new Error("injected rename error"), { code: state.renameError });
       }
@@ -124,6 +137,8 @@ beforeEach(() => {
   state.renameError = undefined;
   state.sweepFailure = undefined;
   state.directoryReads = [];
+  state.journal = [];
+  state.fsyncFailure = undefined;
 });
 
 afterEach(() => {
@@ -348,10 +363,15 @@ describe("blob atomic publication and descriptor safety", () => {
     },
   );
 
-  it("does not overwrite a racing writer's destination", () => {
-    state.beforeLink = (path) => writeFileSync(path, "winner", { flag: "wx" });
+  it("does not overwrite a racing writer's complete destination", () => {
+    let winner: number | undefined;
+    state.beforeLink = (path) => {
+      writeFileSync(path, bytes, { flag: "wx" });
+      winner = statSync(path).ino;
+    };
     expect(writeBlob(root, bytes)).toBe(hash);
-    expect(readFileSync(destination, "utf8")).toBe("winner");
+    expect(statSync(destination).ino).toBe(winner);
+    expect(readFileSync(destination)).toEqual(bytes);
     expectNoTemporaryFiles();
   });
 
@@ -420,5 +440,138 @@ describe("blob atomic publication and descriptor safety", () => {
     expect(() => writeBlob(root, bytes)).toThrow("winner validation failure");
     expect(readFileSync(destination)).toEqual(bytes);
     expectNoTemporaryFiles();
+  });
+});
+
+describe("blob durability and torn-file repair", () => {
+  function plantTorn(content: string | Buffer): void {
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, content);
+  }
+
+  it("fsyncs the staged file before publishing and the new directories after", () => {
+    writeBlob(root, bytes);
+    const shard = dirname(destination);
+    const staged = state.journal.findIndex((entry) => entry.startsWith(`fsync ${shard}/.blob-`));
+    const link = state.journal.indexOf(`link ${destination}`);
+    expect(staged).toBeGreaterThanOrEqual(0);
+    expect(link).toBeGreaterThan(staged);
+    // The shard was just created, so its entry in the root needs syncing too.
+    expect(state.journal.slice(link + 1)).toEqual([`fsync ${shard}`, `fsync ${root}`]);
+  });
+
+  it("syncs only the shard when it already existed", () => {
+    mkdirSync(dirname(destination), { recursive: true });
+    writeBlob(root, bytes);
+    const link = state.journal.indexOf(`link ${destination}`);
+    expect(state.journal.slice(link + 1)).toEqual([`fsync ${dirname(destination)}`]);
+  });
+
+  it("fsyncs the staged file before the rename fallback too", () => {
+    state.linkError = "ENOTSUP";
+    writeBlob(root, bytes);
+    const rename = state.journal.indexOf(`rename ${destination}`);
+    expect(state.journal[rename - 2]).toMatch(/\/\.blob-/);
+    expect(state.journal.slice(rename + 1)).toEqual([
+      `fsync ${dirname(destination)}`,
+      `fsync ${root}`,
+    ]);
+  });
+
+  it("does not publish bytes whose fsync failed", () => {
+    const shard = dirname(destination);
+    state.fsyncFailure = (path) => path.startsWith(`${shard}/.blob-`);
+    expect(() => writeBlob(root, bytes)).toThrow("injected fsync failure");
+    expect(state.journal.some((entry) => entry.startsWith("link "))).toBe(false);
+    expect(existsSync(destination)).toBe(false);
+    expectNoTemporaryFiles();
+  });
+
+  it("propagates a directory fsync failure", () => {
+    state.fsyncFailure = (path) => path === dirname(destination);
+    expect(() => writeBlob(root, bytes)).toThrow("injected fsync failure");
+    expectNoTemporaryFiles();
+  });
+
+  it.each([
+    ["empty", Buffer.alloc(0)],
+    ["truncated", bytes.subarray(0, 5)],
+    ["zero-filled at full length", Buffer.alloc(bytes.length)],
+  ])("replaces a %s file pre-planted at the hash path", (_label, torn) => {
+    plantTorn(torn);
+    expect(writeBlob(root, bytes)).toBe(hash);
+    expect(readFileSync(destination)).toEqual(bytes);
+    expect(readBlob(root, hash)).toEqual(bytes);
+    const rename = state.journal.indexOf(`rename ${destination}`);
+    expect(state.journal[rename - 1]).toMatch(/^fsync .*\/\.blob-/);
+    expect(state.journal.slice(rename + 1)).toEqual([`fsync ${dirname(destination)}`]);
+    expectNoTemporaryFiles();
+  });
+
+  it("replaces a torn winner found when publication loses the race", () => {
+    state.beforeLink = (path) => writeFileSync(path, "winner", { flag: "wx" });
+    expect(writeBlob(root, bytes)).toBe(hash);
+    expect(readFileSync(destination)).toEqual(bytes);
+    expectNoTemporaryFiles();
+  });
+
+  it("keeps a torn reader's inode intact while repairing the path", () => {
+    plantTorn("torn");
+    const reader = openSync(destination, "r");
+    try {
+      writeBlob(root, bytes);
+      expect(readFileSync(reader, "utf8")).toBe("torn");
+      expect(readFileSync(destination)).toEqual(bytes);
+    } finally {
+      closeSync(reader);
+    }
+  });
+
+  it("refuses a torn file in a read-only shard rather than reporting it stored", () => {
+    plantTorn("torn");
+    chmodSync(dirname(destination), 0o555);
+    try {
+      expect(() => writeBlob(root, bytes)).toThrow();
+      expect(readFileSync(destination, "utf8")).toBe("torn");
+    } finally {
+      chmodSync(dirname(destination), 0o755);
+    }
+  });
+
+  /** Swap the path's inode once, just after the store first looks at it. */
+  function replaceOnceAfterJudging(content: string | Buffer): () => number | undefined {
+    let replaced: number | undefined;
+    state.afterStat = (path) => {
+      if (path !== destination || replaced !== undefined) return;
+      rmSync(destination);
+      writeFileSync(destination, content);
+      replaced = statSync(destination).ino;
+    };
+    return () => replaced;
+  }
+
+  it("never overwrites a path that changed after it was judged torn", () => {
+    plantTorn("torn");
+    replaceOnceAfterJudging("someone else");
+    expect(() => writeBlob(root, bytes)).toThrow("changed while it was being repaired");
+    expect(readFileSync(destination, "utf8")).toBe("someone else");
+    expectNoTemporaryFiles();
+  });
+
+  it("accepts a path another writer repaired first", () => {
+    plantTorn("torn");
+    const repaired = replaceOnceAfterJudging(bytes);
+    expect(writeBlob(root, bytes)).toBe(hash);
+    expect(statSync(destination).ino).toBe(repaired());
+    expect(state.journal.some((entry) => entry.startsWith("rename "))).toBe(false);
+    expectNoTemporaryFiles();
+  });
+
+  it.each([
+    ["truncated", bytes.subarray(0, 5)],
+    ["same length, wrong bytes", Buffer.alloc(bytes.length)],
+  ])("readBlob refuses a %s file whose bytes do not match their hash", (_label, torn) => {
+    plantTorn(torn);
+    expect(() => readBlob(root, hash)).toThrow(`Blob ${hash} is corrupt`);
   });
 });
