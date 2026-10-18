@@ -703,7 +703,7 @@ describe("browser tools", () => {
 
     expect(enveloped(text, "snapshot")).toBe('- button "Save" [ref=e2]');
     expect(text).toContain(
-      "Volli could not save the whole accessibility tree (2.0 KiB) to a file: this Session has no storage for it. Only the part above was read.",
+      "Volli read the whole accessibility tree (2.0 KiB) but could not save it to a file: this Session has no storage for it. This result holds only the part above.",
     );
     expect(text).not.toContain("x".repeat(100));
   });

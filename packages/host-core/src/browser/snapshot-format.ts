@@ -39,6 +39,8 @@
 
 import { createHash } from "node:crypto";
 
+import type { RuntimeWholeText } from "@volli/shared";
+
 /** A CDP AXNode, cut to the fields this printer reads. */
 export interface AXNodeLike {
   nodeId: string;
@@ -315,6 +317,40 @@ function lineText(line: { text: string; colon: boolean }): string {
 
 const NO_LEDGER: RefLedger = { known: new Map(), nextRef: 1, markNew: false };
 
+/** A ref as a line carries it, with Volli's `[new]` when the reader has not seen the element. */
+function refMark(ref: string, isNew: boolean): string {
+  return isNew ? ` [ref=${ref}] [new]` : ` [ref=${ref}]`;
+}
+
+/**
+ * How many leading lines fit `maxChars`, newlines included. The cut falls on
+ * a line boundary, and a first line longer than the whole bound fits none
+ * rather than half of itself: a half line could show a quote with no end, or
+ * a ref whose element the model cannot read.
+ */
+function linesWithin(lines: readonly { text: string; colon: boolean }[], maxChars: number): number {
+  let length = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    length += lineText(lines[index]!).length + 1;
+    if (length > maxChars) return index;
+  }
+  return lines.length;
+}
+
+/**
+ * The first `kept` lines as text. A kept line with a colon has its first
+ * child on the very next line; when that line is the first one cut, nothing
+ * prints beneath it any more, so it loses the colon.
+ */
+function printKept(lines: readonly { text: string; colon: boolean }[], kept: number): string {
+  return lines
+    .slice(0, kept)
+    .map((line, index) =>
+      lineText(index === kept - 1 && kept < lines.length ? { ...line, colon: false } : line),
+    )
+    .join("\n");
+}
+
 /** One entry's line before any ref, mark or colon: its role, quoted name and level. */
 function entryText(entry: Entry, indent: string): string {
   const text =
@@ -369,11 +405,10 @@ function render(
         ref = `e${next}`;
         next += 1;
         minted.set(handle, ref);
-        text += ` [ref=${ref}]`;
-        if (ledger.markNew) text += " [new]";
+        text += refMark(ref, ledger.markNew);
       } else {
         ref = remembered;
-        text += ` [ref=${ref}]`;
+        text += refMark(ref, false);
       }
     }
     if (line.match) text += " [match]";
@@ -387,18 +422,7 @@ function render(
     };
   });
 
-  // Cut on a line boundary. A first line longer than the whole bound prints
-  // nothing rather than half itself: a half line could show a quote with no
-  // end, or a ref whose element the model cannot read.
-  let kept = drafted.length;
-  let length = -1;
-  for (let index = 0; index < drafted.length; index += 1) {
-    length += lineText(drafted[index]!).length + 1;
-    if (length > maxChars) {
-      kept = index;
-      break;
-    }
-  }
+  const kept = linesWithin(drafted, maxChars);
   const shown = drafted.slice(0, kept);
 
   // Refs the cut text no longer shows must not stay actionable: a model acting
@@ -413,12 +437,8 @@ function render(
     refs.set(line.ref, line.backendDOMNodeId);
     if (line.name !== "" && !names.has(line.ref)) names.set(line.ref, line.name);
   }
-  // A kept line with a colon has its first child on the very next line; when
-  // that line is the first one cut, nothing prints beneath it any more.
-  const last = shown.at(-1);
-  if (last !== undefined && kept < drafted.length) shown[kept - 1] = { ...last, colon: false };
   return {
-    text: shown.map(lineText).join("\n"),
+    text: printKept(drafted, kept),
     refs,
     names,
     nextRef: kept === 0 ? ledger.nextRef : shown[kept - 1]!.nextAfter,
@@ -457,14 +477,13 @@ function printWhole(
   collected: Collection,
   shown: { refs: ReadonlyMap<string, number>; keptLines: number },
   ledger: RefLedger,
-): { text: string; bounded: boolean } | undefined {
+): RuntimeWholeText | undefined {
   const walked = collected.truncated ? collect(nodes, FIND_MAX_NODES) : collected;
   const plan: PlannedLine[] = [];
   planAll(walked.roots, 0, plan);
   if (plan.length <= shown.keptLines) return undefined;
   const refOf = new Map([...shown.refs].map(([ref, handle]) => [handle, ref]));
   const lines: { text: string; colon: boolean }[] = [];
-  let bounded = walked.truncated;
   let length = -1;
   for (const line of plan) {
     // `planAll` plans every entry and no `...` line.
@@ -472,21 +491,17 @@ function printWhole(
     let text = entryText(entry, "  ".repeat(line.depth));
     const handle = entry.backendDOMNodeId;
     const ref = handle === null ? undefined : refOf.get(handle);
-    if (ref !== undefined) {
-      text += ` [ref=${ref}]`;
-      if (ledger.markNew && !ledger.known.has(handle!)) text += " [new]";
-    }
-    length += lineText({ text, colon: line.colon }).length + 1;
-    if (length > SNAPSHOT_WHOLE_MAX_CHARS) {
-      bounded = true;
-      // Nothing prints beneath the last line any more, as at any cut.
-      const last = lines.at(-1);
-      if (last !== undefined) last.colon = false;
-      break;
-    }
-    lines.push({ text, colon: line.colon });
+    // New exactly when the cut print marked it so: shown, and not in the ledger.
+    if (ref !== undefined) text += refMark(ref, ledger.markNew && !ledger.known.has(handle!));
+    const drafted = { text, colon: line.colon };
+    lines.push(drafted);
+    // Drafting stops at the first line past the bound, so memory stays near
+    // it; `linesWithin` then cuts there, exactly as for the cut print.
+    length += lineText(drafted).length + 1;
+    if (length > SNAPSHOT_WHOLE_MAX_CHARS) break;
   }
-  return { text: lines.map(lineText).join("\n"), bounded };
+  const kept = linesWithin(lines, SNAPSHOT_WHOLE_MAX_CHARS);
+  return { text: printKept(lines, kept), bounded: walked.truncated || kept < lines.length };
 }
 
 /**
@@ -497,7 +512,7 @@ function printWhole(
 export function formatAXSnapshot(
   nodes: readonly AXNodeLike[],
   limits: { maxChars?: number; ledger?: RefLedger } = {},
-): BrowserSnapshotFormat & { whole?: { text: string; bounded: boolean } } {
+): BrowserSnapshotFormat & { whole?: RuntimeWholeText } {
   const collected = collect(nodes, SNAPSHOT_MAX_NODES);
   const plan: PlannedLine[] = [];
   planAll(collected.roots, 0, plan);

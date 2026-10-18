@@ -534,7 +534,7 @@ describe("saveBoundedRead (VC-237)", () => {
     const notice = await saveBoundedRead(output, read);
 
     expect(notice).toMatch(
-      /^Volli saved the first 2\.0 KiB of the \d+\.\d KiB page text; the rest is past the limit on one saved result to \S+, read at /u,
+      /^Volli saved the first 2\.0 KiB of the \d+\.\d KiB page text to \S+\.txt, read at \S+Z\. The rest is past the limit on one saved result\. To see more of it, /u,
     );
   });
 
@@ -553,10 +553,10 @@ describe("saveBoundedRead (VC-237)", () => {
     });
 
     expect(refused).toBe(
-      `Volli could not save the whole page text (${(Buffer.byteLength(dense) / 1_024).toFixed(1)} KiB) to a file: this Session's saved tool output has reached its 64 B limit. Only the part above was read.`,
+      `Volli read the whole page text (${(Buffer.byteLength(dense) / 1_024).toFixed(1)} KiB) but could not save it to a file: this Session's saved tool output has reached its 64 B limit. This result holds only the part above.`,
     );
     expect(unstored).toBe(
-      "Volli could not save the whole page text (3 B) to a file: this Session has no storage for it. Only the part above was read.",
+      "Volli read the whole page text (3 B) but could not save it to a file: this Session has no storage for it. This result holds only the part above.",
     );
     expect(existsSync(directory) ? readdirSync(directory) : []).toEqual([]);
   });

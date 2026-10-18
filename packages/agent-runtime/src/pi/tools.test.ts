@@ -873,7 +873,7 @@ describe("web_fetch tool", () => {
         expect(lastLine(text)).toContain("minted for this read alone");
       }
       expect(refused).toContain(
-        "Volli could not save the whole page text (3.0 KiB) to a file: this Session's saved tool output has reached its 16 B limit. Only the part above was read.",
+        "Volli read the whole page text (3.0 KiB) but could not save it to a file: this Session's saved tool output has reached its 16 B limit. This result holds only the part above.",
       );
       expect(unstored).toContain("to a file: this Session has no storage for it.");
     } finally {

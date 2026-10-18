@@ -402,13 +402,13 @@ function holdText(outcome: RuntimeBrowserHoldOutcome): string {
  * Volli's line naming the file (VC-237) — or nothing, when nothing was cut.
  */
 async function savedSnapshot(
-  output: ToolOutputStore | undefined,
+  store: ToolOutputStore | undefined,
   callId: string,
   tool: BrowserToolId,
   snap: RuntimeBrowserSnapshot,
 ): Promise<string | undefined> {
   if (snap.whole === undefined) return undefined;
-  return await saveBoundedRead(output, {
+  return await saveBoundedRead(store, {
     callId,
     tool,
     source: `Browser Tab ${snap.tabId} at ${snap.url}, accessibility tree at generation ${snap.generation}`,
@@ -424,17 +424,17 @@ async function savedSnapshot(
 async function savedConsole(
   store: ToolOutputStore | undefined,
   callId: string,
-  output: RuntimeBrowserConsole,
+  read: RuntimeBrowserConsole,
 ): Promise<string | undefined> {
-  if (output.kept === undefined) return undefined;
+  if (read.kept === undefined) return undefined;
   return await saveBoundedRead(store, {
     callId,
     tool: "browser_console",
-    source: `Browser Tab ${output.tabId} at ${output.url}`,
+    source: `Browser Tab ${read.tabId} at ${read.url}`,
     what: "console output",
     whole: {
-      text: consoleLines(output.kept.messages).join("\n"),
-      bounded: output.kept.bounded,
+      text: consoleLines(read.kept.messages).join("\n"),
+      bounded: read.kept.bounded,
     },
     boundedNote: "Even the saved console starts after earlier messages Volli no longer keeps.",
     at: new Date(),
@@ -772,7 +772,7 @@ export function createBrowserTool(
   name: BrowserReadWriteToolId,
   port: RuntimeBrowserPort,
   signal?: AbortSignal,
-  output?: ToolOutputStore,
+  store?: ToolOutputStore,
 ): AgentTool {
   const common = { name, label: LABELS[name], description: DESCRIPTIONS[name] };
   switch (name) {
@@ -825,7 +825,7 @@ export function createBrowserTool(
                 navigation,
                 signal: withdrawn,
               });
-              const saved = await savedSnapshot(output, id, name, snap);
+              const saved = await savedSnapshot(store, id, name, snap);
               return text(
                 snapshotEnvelope(snap, saved),
                 details(action, snap, { picture: snap.picture }),
@@ -846,7 +846,7 @@ export function createBrowserTool(
             [signal, callSignal],
             async (withdrawn) => {
               const snap = await port.snapshot({ tabId: params.tabId, signal: withdrawn });
-              const saved = await savedSnapshot(output, id, name, snap);
+              const saved = await savedSnapshot(store, id, name, snap);
               return text(snapshotEnvelope(snap, saved), details("read", snap));
             },
             asked("read", params),
@@ -879,7 +879,7 @@ export function createBrowserTool(
                 snap.target === null
                   ? (params.key ?? params.direction ?? null)
                   : (snap.target.name ?? snap.target.ref);
-              const saved = await savedSnapshot(output, id, name, snap);
+              const saved = await savedSnapshot(store, id, name, snap);
               return text(
                 actEnvelope(snap, { kind: params.kind, generation: params.generation }, saved),
                 details(params.kind, snap, { target, picture: snap.picture }),
@@ -942,7 +942,7 @@ export function createBrowserTool(
             async (withdrawn) => {
               const read = await port.console({ tabId: params.tabId, signal: withdrawn });
               const errorCount = read.messages.filter((one) => one.level === "error").length;
-              const saved = await savedConsole(output, id, read);
+              const saved = await savedConsole(store, id, read);
               return text(consoleEnvelope(read, saved), details("console", read, { errorCount }));
             },
             asked("console", params),
