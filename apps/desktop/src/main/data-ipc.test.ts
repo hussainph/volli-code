@@ -234,6 +234,7 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
 
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc.test-support";
+import type { ProjectLiveWork } from "@volli/host-core/handlers";
 import { watchSessionActivity } from "@volli/host-core/sessions";
 import {
   createTestSessionEngine,
@@ -450,19 +451,72 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
+// VC-796: the channel projects the host's `project.remove`. The cascade takes
+// every Session of the project, so the live work they hold stops first, while
+// the row is still there, and every window (a second one included) is told.
 describe("project removal", () => {
-  it("tells the host after the project is gone, so it releases the board feed it held", () => {
-    const removed = vi.fn<(projectId: string) => void>();
+  function liveWork(projectId: string, stillOpen: readonly string[] = []) {
+    const stopped: string[] = [];
+    const stop = (step: string) => {
+      // Each stop runs while the project, and so its Sessions, still exist.
+      expect(getProjectById(ctx.db, projectId)).toBeDefined();
+      stopped.push(step);
+    };
+    const live: ProjectLiveWork = {
+      releaseBindings: async () => {
+        stop("bindings");
+        return { stillOpen };
+      },
+      disposeShells: () => stop("shells"),
+      killTerminals: () => stop("terminals"),
+      closeBrowserTabs: () => stop("tabs"),
+      mcp: null,
+    };
+    return { live, stopped };
+  }
+
+  it("stops the project's live work before deleting it, then tells every window", async () => {
+    const projectId = createProject();
+    const { live, stopped } = liveWork(projectId);
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { sessionEngine: fixtureSessionEngine, onProjectRemoved: removed },
+      { sessionEngine: fixtureSessionEngine, projectLiveWork: live },
     );
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", projectId),
+    ).resolves.toEqual({ ok: true });
+
+    expect(stopped).toEqual(["bindings", "shells", "terminals", "tabs"]);
+    expect(getProjectById(ctx.db, projectId)).toBeUndefined();
+    // Untargeted, so a window that still holds the project re-reads the list
+    // without it; the fan-out reaches every window, a second one included.
+    await expectDataChanged({ entity: "tickets" });
+  });
+
+  it("keeps the project, and says why, when one of its Sessions will not stop", async () => {
     const projectId = createProject();
-    removed.mockImplementation(() => {
-      expect(getProjectById(ctx.db, projectId)).toBeUndefined();
+    const { live, stopped } = liveWork(projectId, ["session-1"]);
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, projectLiveWork: live },
+    );
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", projectId),
+    ).resolves.toEqual({
+      ok: false,
+      error:
+        "A Session in this project is still running, so nothing was removed. Stop it and try again.",
     });
-    expect(invoke<ProjectMutationResult>("volli:project-remove", projectId)).toEqual({ ok: true });
-    expect(removed).toHaveBeenCalledExactlyOnceWith(projectId);
+
+    expect(stopped).toEqual(["bindings"]);
+    expect(getProjectById(ctx.db, projectId)).toBeDefined();
+    expectNoDataChange();
   });
 });
 

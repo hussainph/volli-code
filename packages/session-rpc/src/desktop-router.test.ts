@@ -272,6 +272,7 @@ function recordingHandlers(fixture: Host): DesktopRouterHandlers {
   return {
     "shells.moveToBackground": record("shells.moveToBackground", { shellId: "shell-1" }),
     "project.reorder": record("project.reorder", null),
+    "project.remove": record("project.remove", null),
     "worktree.trimSettings": record("worktree.trimSettings", TRIM),
     "hosts.snapshot": record("hosts.snapshot", SNAPSHOT),
     "hosts.subscribe": stream("hosts.subscribe", SNAPSHOT),
@@ -1384,6 +1385,7 @@ describe("the desktop router's grammar", () => {
       [
         "shells.moveToBackground",
         "project.reorder",
+        "project.remove",
         "worktree.trimSettings",
         "hosts.snapshot",
         "hosts.subscribe",

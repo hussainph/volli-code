@@ -1634,6 +1634,20 @@ export class PtyManager {
     }
   }
 
+  /**
+   * Kills the live sessions among `sessionIds`, whichever window holds them,
+   * and names the ones it killed: a removed project's terminals (VC-796),
+   * which the host ends before the delete takes their Sessions' rows. An id
+   * with no live session is skipped.
+   */
+  killSessions(sessionIds: ReadonlySet<string>): string[] {
+    const killed = Array.from(this.sessions.keys()).filter((sessionId) =>
+      sessionIds.has(sessionId),
+    );
+    for (const sessionId of killed) this.killSession(sessionId);
+    return killed;
+  }
+
   /** Kills every live session. Wired to `before-quit`. */
   killAll(): void {
     // Snapshot the ids first: killSession() mutates the map as it forgets sessions.

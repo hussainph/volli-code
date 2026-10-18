@@ -30,6 +30,8 @@ import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { listProjects } from "../db/projects-repo";
 import { getTicketRow } from "../db/tickets-repo";
 import { BrowserPictureStore } from "../browser/picture-store";
+import { createBoardChangeFeed } from "../board/change-feed";
+import type { ProjectLiveWork } from "../project-remove";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
 import { runGitCapturing, runGitCapturingAsync } from "../worktree/git";
@@ -768,6 +770,45 @@ describe("desktop-only commands", () => {
       null,
     );
     expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["second", PROJECT]);
+  });
+
+  // VC-796: the order itself is `../project-remove`'s; here, that the map
+  // runs it against this host's feed and bus, and refuses without live work.
+  it("removes a project after its live work stops, ends its feed and tells every window", async () => {
+    insertProject(ctx.db, testProject({ id: "second", ticketPrefix: "SE" }));
+    const boardFeed = createBoardChangeFeed();
+    boardFeed.cursor(PROJECT);
+    const stopped: string[] = [];
+    const projectLiveWork: ProjectLiveWork = {
+      releaseBindings: async () => {
+        stopped.push("bindings");
+        return { stillOpen: [] };
+      },
+      disposeShells: () => stopped.push("shells"),
+      killTerminals: () => stopped.push("terminals"),
+      closeBrowserTabs: () => stopped.push("tabs"),
+      mcp: null,
+    };
+
+    expect(
+      await handlers({ boardFeed, projectLiveWork })["project.remove"](
+        { projectId: PROJECT },
+        WINDOW,
+      ),
+    ).toBeNull();
+
+    expect(stopped).toEqual(["bindings", "shells", "terminals", "tabs"]);
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["second"]);
+    expect(boardFeed.size).toBe(0);
+    expect(publish.mock.calls).toEqual([["data-changed", {}]]);
+  });
+
+  it("refuses to remove a project on a host that cannot stop its live work", async () => {
+    expect(
+      await unavailable(() => handlers()["project.remove"]({ projectId: PROJECT }, WINDOW)),
+    ).toBe("Removing a project is unavailable on this host");
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual([PROJECT]);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("reads the host's trim settings, defaults included", async () => {

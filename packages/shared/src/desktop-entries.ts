@@ -389,6 +389,15 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Give keyboard focus back to a shown Browser page whose shortcut did nothing.",
   },
+  // VC-796: the host's removal, which `volli:project-remove` projects. It
+  // stops the project's live work before the delete its cascade makes.
+  {
+    key: "project.remove",
+    compatibility: "host-command",
+    placement: "workspace",
+    idempotency: "natural",
+    summary: "Remove a project from Volli: stop its Sessions' live work, then delete it.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];
