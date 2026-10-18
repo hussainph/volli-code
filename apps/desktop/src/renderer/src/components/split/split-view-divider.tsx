@@ -4,16 +4,12 @@ import { cn } from "@renderer/lib/utils";
 import { SPLIT_VIEW_MAX_RATIO, SPLIT_VIEW_MIN_RATIO, type SplitViewDirection } from "@volli/shared";
 
 /**
- * The grip between two panes — of a surface split (VC-202) AND of the terminal
- * split inside a terminal pane (`sessions/session-split-layout.tsx`).
- *
- * ONE component for both since VC-215. It began as a deliberate lift of the
- * terminal layout's own `SplitDivider`, kept separate so the first surface
- * split would not put every live PTY in the app behind a refactor; two copies
- * of mechanics this subtle are how they drift, and they had already drifted —
- * only this copy told AT where it stood. The app has one splitting grammar
+ * The grip between two panes — of a surface split (`split-view-grid.tsx`,
+ * `split-view-tab-bar.tsx`) and of the terminal split inside a terminal pane
+ * (`sessions/session-split-layout.tsx`). The app has one splitting grammar
  * (right/down splits, an active-pane ring, a hairline grip that colours on
- * hover), and now one grip. The mechanics:
+ * hover), and one grip draws every seam of it. The mechanics every caller
+ * relies on:
  *
  *  • ONE RATIO PER FRAME. Every write re-renders the pane tree, and inside these
  *    panes sit editors, chat transcripts and terminals that reflow — a terminal
@@ -27,18 +23,20 @@ import { SPLIT_VIEW_MAX_RATIO, SPLIT_VIEW_MIN_RATIO, type SplitViewDirection } f
  *    can resize it mid-drag.
  *  • The frame a released drag was waiting on is landed by hand, or the panes
  *    settle one sample short of the cursor.
- *  • The keyboard holds the SAME px floor the pointer does. A 3% step is a
- *    share, and a share of a wide box is many pixels: without the floor a few
- *    presses walked a pane below the size no drag could reach.
+ *  • The keyboard holds the SAME px floor the pointer does, and the model's own
+ *    range besides. A 3% step is a share, and a share of a wide box is many
+ *    pixels: unclamped, a few presses would walk a pane below the size no drag
+ *    can reach.
  *
- * What differs between the two callers is the floor and the model's clamp. A
- * surface pane holds a strip, an editor or a board, so it may not be squeezed
- * below {@link SURFACE_MIN_PANE_PX} — the width at which a folder tab plus its
- * close is still legible; a terminal pane passes its own 96px.
+ * What a caller supplies is its floor, its model's clamp and its name. A
+ * surface pane holds a strip, an editor or a board, so by default it may not be
+ * squeezed below {@link SURFACE_MIN_PANE_PX} — the width at which a folder tab
+ * plus its close is still legible — and AT is told the surface model's range.
+ * The terminal split passes its own 96px floor and the sessions store's range.
  */
 
 /** No pane of a surface split is squeezed below this. */
-export const SURFACE_MIN_PANE_PX = 240;
+const SURFACE_MIN_PANE_PX = 240;
 
 /** The surface split model's own clamp — what AT is told by default. */
 const SURFACE_VALUE_RANGE = [SPLIT_VIEW_MIN_RATIO, SPLIT_VIEW_MAX_RATIO] as const;
@@ -193,9 +191,10 @@ export function SplitViewDivider({
         event.preventDefault();
         const parent = event.currentTarget.parentElement;
         const next = ratio + (increment ? KEYBOARD_STEP : -KEYBOARD_STEP);
-        const clamped = parent === null ? next : clampToFloor(next, measure(parent).total);
+        const floored = parent === null ? next : clampToFloor(next, measure(parent).total);
+        const clamped = Math.min(valueRange[1], Math.max(valueRange[0], floored));
         // A press never moves the divider against its own arrow, and one that
-        // cannot move it writes nothing — at the floor a held key would
+        // cannot move it writes nothing — at either limit a held key would
         // otherwise refit every pane (and resize every PTY) per repeat for a
         // ratio that never changes.
         if (increment ? clamped <= ratio : clamped >= ratio) return;

@@ -86,7 +86,7 @@ export type SessionLayout = SessionPane | SessionSplit;
 
 /**
  * The share either side of a terminal split is clamped to. Exported so the
- * divider can tell AT the same range this store enforces (VC-215).
+ * divider can tell AT, and step within, the same range this store enforces.
  */
 export const TERMINAL_SPLIT_RATIO_RANGE = [0.1, 0.9] as const;
 

@@ -321,9 +321,9 @@ function SplitNode(props: SplitNodeProps) {
       >
         <SplitNode {...props} layout={layout.first} />
       </div>
-      {/* The surface split's grip (VC-215), with the terminal's floor: a
-          terminal pane stays usable far narrower than a surface pane, and the
-          clamp it reports is the sessions store's, not the surface model's. */}
+      {/* The shared split grip, with the terminal's floor: a terminal pane
+          stays usable far narrower than a surface pane, and the range it
+          reports and steps within is the sessions store's own clamp. */}
       <SplitViewDivider
         direction={vertical ? "row" : "column"}
         ratio={layout.ratio}

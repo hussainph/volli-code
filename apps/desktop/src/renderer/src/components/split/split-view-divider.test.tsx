@@ -279,4 +279,18 @@ describe("SplitViewDivider", () => {
     press(keyedGrip, "ArrowUp");
     expect(keyed).toHaveBeenLastCalledWith(0.24);
   });
+
+  it("steps within the model's range too, where the px floor is looser", () => {
+    // 96px of a 1000px width is 0.096 — looser than the store's 0.1. A press
+    // from 0.12 lands on the range, and one at the range writes nothing.
+    const onChange = vi.fn();
+    const grip = render(onChange, "row", 0.12, { minPanePx: 96, valueRange: [0.1, 0.9] });
+    press(grip, "ArrowLeft");
+    expect(onChange).toHaveBeenLastCalledWith(0.1);
+
+    const atLimit = vi.fn();
+    const limitGrip = render(atLimit, "row", 0.9, { minPanePx: 96, valueRange: [0.1, 0.9] });
+    press(limitGrip, "ArrowRight");
+    expect(atLimit).not.toHaveBeenCalled();
+  });
 });

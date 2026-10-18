@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The terminal split draws the SHARED grip (VC-215) — with the terminal's own
+ * The terminal split draws the SHARED grip — with the terminal's own
  * floor, the sessions store's range, and a name that says "terminal".
  *
  * The grip's mechanics are proven in `split/split-view-divider.test.tsx`; what
