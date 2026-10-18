@@ -48,6 +48,14 @@
  * grounds to refuse). Inside the tree, a symlink pointing out of it and a
  * directory sitting on another filesystem are kept rather than followed: an
  * `rm -rf` across a mount point is not a trim.
+ *
+ * A NESTED git repository is kept whole too (VC-832): any directory below the
+ * root holding a `.git` entry, whether a clone's `.git/` directory or a linked
+ * worktree's `.git` file. `--directory` collapses an ignored `vendor/` or
+ * `.claude/worktrees/` into one entry, so without this rule a clone's unpushed
+ * commits and a linked worktree's uncommitted work went with it. `git clean -fdX`
+ * keeps a nested repository unless `-f` is given twice; a trim never gives it
+ * twice, and never descends into one to apply that repository's own ignores.
  */
 import { existsSync } from "node:fs";
 import { lstat, readdir, realpath, rm } from "node:fs/promises";
@@ -219,6 +227,11 @@ async function planNode(context: PlanContext, relative: string): Promise<NodePla
     entries = await readdir(absolute, { withFileTypes: true });
   } catch {
     return { kind: "keep", reason: "Volli couldn't read it" };
+  }
+  // A `.git` entry of any type — a clone's directory, a linked worktree's
+  // gitfile — makes this a repository of its own, kept whole and not descended.
+  if (entries.some((entry) => entry.name === ".git")) {
+    return { kind: "keep", reason: "it is a nested git repository" };
   }
 
   // Directory inodes are not counted: the number in the report is the bytes of
