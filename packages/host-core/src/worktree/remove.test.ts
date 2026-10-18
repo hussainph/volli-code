@@ -15,6 +15,7 @@ import {
   resetDeletionLeasesForTest,
   UNDER_DELETION_REFUSAL,
 } from "./deletion-lease";
+import { GitError } from "./git";
 import { getPhase, resetPhasesForTest, setPhase } from "./phase";
 import { remove } from "./remove";
 import { resetRepositoryTurnsForTest, withRepositoryWorktreeTurn } from "./repository-turn";
@@ -283,6 +284,39 @@ describe("remove", () => {
     const removeCall = calls.find((c) => c.args[1] === "remove");
     expect(removeCall?.args).toEqual(["worktree", "remove", "--force", wt]);
     expect(getTicketRow(ctx.db, "ticket-1")!.worktree_path).toBeNull();
+  });
+
+  it("reports a timed-out `worktree remove` as a timeout and keeps the ticket's checkout pointer", async () => {
+    const wt = tempDir("wt");
+    const gitDir = tempDir("gitdir");
+    seed(wt);
+    const { git, gitAsync } = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--git-dir") return gitDir;
+      if (args[0] === "worktree" && args[1] === "list") {
+        return `worktree ${wt}\nHEAD abc\nbranch refs/heads/volli/VC-1-x\n`;
+      }
+      if (args[0] === "worktree" && args[1] === "remove") {
+        // Partial output a killed remove leaves on stderr must not stand in
+        // for the reason it stopped.
+        throw new GitError(
+          "Git command timed out after 120000ms.",
+          "warning: some partial output\n",
+          args,
+          true,
+        );
+      }
+      return "";
+    });
+
+    const result = await remove({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "ticket-1", {
+      force: true,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "Couldn't remove the worktree: Git command timed out after 120000ms.",
+    });
+    expect(getTicketRow(ctx.db, "ticket-1")!.worktree_path).toBe(wt);
   });
 
   // A binding outlives the tab that opened it, so nothing else ends one. Without
