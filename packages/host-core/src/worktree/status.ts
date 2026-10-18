@@ -3,9 +3,10 @@
  * answers the coarse removal-safety question ("would deleting this lose work?"),
  * the Details rail needs a FINER read so it never tells a fully-committed branch
  * to "commit remaining changes": is the tree uncommitted? is a sequencer op
- * mid-flight (which would block the one-click commit)? and how far has the branch
- * moved relative to its base (ahead/behind)? Each field is independent — a git
- * failure on the ahead/behind count nulls only those two, never the whole report.
+ * mid-flight, or does the index hold unmerged paths (either blocks the one-click
+ * commit)? and how far has the branch moved relative to its base (ahead/behind)?
+ * Each field is independent — a git failure on the ahead/behind count nulls only
+ * those two, never the whole report.
  *
  * The one non-silent rule (Done-flow, §16 no-destruction spirit): a FAILING
  * `git status` read is reported as `uncommitted: true`, not clean — mirroring
@@ -42,6 +43,14 @@ export interface WorktreeStatusReport {
   uncommitted: boolean;
   /** A merge/rebase/cherry-pick/revert/bisect is mid-flight (blocks one-click commit). */
   sequencerActive: boolean;
+  /**
+   * Index entries still unmerged (`UU`, `AA`, …) — blocks one-click commit too.
+   * Counted apart from {@link sequencerActive} because a conflicted `stash pop`,
+   * `merge --squash` or `checkout -m` leaves these with NO sequencer marker
+   * (VC-838). `0` when the status read failed: `uncommitted` already errs dirty
+   * there, and the commit path re-reads status and refuses on its own.
+   */
+  unmergedPaths: number;
   /** Commits on the branch not on the base; `null` when the base is unknown or git failed. */
   aheadOfBase: number | null;
   /** Commits on the base not on the branch; `null` when the base is unknown or git failed. */
@@ -55,12 +64,38 @@ export interface WorktreeStatusReport {
   unpushed: number | null;
 }
 
-/** `git status --porcelain` non-empty; a READ FAILURE counts as uncommitted, never clean. */
-async function readUncommitted(git: RunGitAsync, cwd: string): Promise<boolean> {
+/**
+ * The porcelain v1 XY pairs git documents as "unmerged" — both sides touched
+ * the path and the index still holds its conflict stages.
+ */
+const UNMERGED_XY = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
+/**
+ * How many `git status --porcelain` (v1) entries are unmerged. Shared with the
+ * one-click commit (`commit.ts`), which must refuse exactly what the rail
+ * disables: `git add -A` would stage such a file, markers and all, and mark it
+ * resolved — clearing the very refusal `git commit` would otherwise give.
+ */
+export function countUnmergedEntries(porcelain: string): number {
+  return porcelain.split("\n").filter((line) => UNMERGED_XY.has(line.slice(0, 2))).length;
+}
+
+/**
+ * One `git status --porcelain` read answers both the uncommitted and the
+ * unmerged question. A READ FAILURE counts as uncommitted, never clean.
+ */
+async function readWorkingTree(
+  git: RunGitAsync,
+  cwd: string,
+): Promise<{ uncommitted: boolean; unmergedPaths: number }> {
   try {
-    return (await git(["status", "--porcelain"], cwd)).trim().length > 0;
+    const porcelain = await git(["status", "--porcelain"], cwd);
+    return {
+      uncommitted: porcelain.trim().length > 0,
+      unmergedPaths: countUnmergedEntries(porcelain),
+    };
   } catch {
-    return true;
+    return { uncommitted: true, unmergedPaths: 0 };
   }
 }
 
@@ -128,9 +163,11 @@ export async function getWorktreeStatus(
   input: WorktreeStatusInput,
 ): Promise<WorktreeStatusReport> {
   const git = readOnlyGitAsync(runGit);
+  const { uncommitted, unmergedPaths } = await readWorkingTree(git, input.worktreePath);
   return {
-    uncommitted: await readUncommitted(git, input.worktreePath),
+    uncommitted,
     sequencerActive: (await detectSequencerStateAsync(git, input.worktreePath)) === "active",
+    unmergedPaths,
     ...(await readAheadBehind(git, input)),
     unpushed: await readUnpushed(git, input),
   };
