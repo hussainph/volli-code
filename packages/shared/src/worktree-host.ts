@@ -59,6 +59,12 @@ export interface WorktreeBranchListing {
  */
 export interface DirtyWorktreeOrphanTicket {
   id: string;
+  /**
+   * The ticket's own project — what Open ticket opens it in. Usually the
+   * project whose container holds the folder, but a claim is a claim whichever
+   * project makes it, and main's delete guard refuses on any of them.
+   */
+  projectId: string;
   /** `VC-82` form — the prefix and number a person reads on the board. */
   displayId: string;
   title: string;
@@ -74,14 +80,17 @@ export interface DirtyWorktreeOrphan {
   projectName?: string;
   reason: string;
   /**
-   * The ticket that still points at this folder (VC-292). Absent when no ticket
-   * claims it — and from a host that predates the field, which reads the same.
+   * The ticket that still claims this folder (VC-292) — its `worktreePath` is
+   * the folder, inside it, or holds it, the same test main's delete guard
+   * applies. Absent when no ticket claims it, and from a host that predates
+   * the field.
    */
   ticket?: DirtyWorktreeOrphanTicket;
   /**
    * `false` when the scan could not open the folder itself (VC-292), so the row
-   * can say so instead of offering a Reveal that will fail. Absent means it
-   * could, or that the host predates the field.
+   * can say so. Reveal is still offered: it selects the folder in its parent,
+   * which does not need the folder to be readable. Absent means it could, or
+   * that the host predates the field.
    */
   pathReadable?: boolean;
 }

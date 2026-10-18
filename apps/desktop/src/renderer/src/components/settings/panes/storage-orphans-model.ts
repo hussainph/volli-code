@@ -197,11 +197,10 @@ export function describeUnreadableProject(entry: UnreadableWorktreeProject): str
 /**
  * What one dirty-orphan row leads with and offers (VC-292).
  *
- * The row used to lead with a middle-clipped path and offer only Reveal and
- * Delete, while its reason told the user to "use Remove worktree on that
- * ticket" — a ticket the row could not name or open. So the ticket comes
- * first, the path is secondary (whole on hover and copy), and every state the
- * row cannot act on says so outright instead of leaving a button to fail.
+ * The ticket that claims the folder comes first, so a reason that says "use
+ * Remove worktree on that ticket" sits beside a way to open it; the path is
+ * secondary (whole on hover and copy). Every state the row cannot act on is a
+ * named fallback rather than a button left to fail.
  */
 export interface DirtyOrphanRow {
   /** The ticket's display id, or `null` when no ticket claims the folder. */
@@ -213,8 +212,8 @@ export interface DirtyOrphanRow {
    * a folder the scan could not open. Empty when the row can act on itself.
    */
   notices: string[];
-  /** The ticket to open, when it is on the board to be opened. */
-  openTicketId: string | null;
+  /** The ticket to open, in its own project, when it is on the board to be opened. */
+  openTicket: { projectId: string; ticketId: string } | null;
   /**
    * Whether this list's own Delete applies. A folder a ticket still claims is
    * that ticket's to clear — main refuses the delete — so the row offers the
@@ -239,7 +238,10 @@ export function dirtyOrphanRow(orphan: DirtyWorktreeOrphan): DirtyOrphanRow {
     displayId: ticket?.displayId ?? null,
     title: ticket?.title ?? folderName(orphan.path),
     notices,
-    openTicketId: ticket === undefined || ticket.archived ? null : ticket.id,
+    openTicket:
+      ticket === undefined || ticket.archived
+        ? null
+        : { projectId: ticket.projectId, ticketId: ticket.id },
     deletable: ticket === undefined,
     meta: orphan.projectName ? `${orphan.projectName} — ${reason}` : reason,
   };

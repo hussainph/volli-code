@@ -775,13 +775,19 @@ describe("dirtyOrphanRow", () => {
     expect(
       dirtyOrphanRow({
         ...claimed,
-        ticket: { id: "t82", displayId: "VC-82", title: "Strand it", archived: false },
+        ticket: {
+          id: "t82",
+          projectId: "p1",
+          displayId: "VC-82",
+          title: "Strand it",
+          archived: false,
+        },
       }),
     ).toEqual({
       displayId: "VC-82",
       title: "Strand it",
       notices: [],
-      openTicketId: "t82",
+      openTicket: { projectId: "p1", ticketId: "t82" },
       deletable: false,
       meta: "Volli Code — A ticket still points here, but git no longer tracks it.",
     });
@@ -790,10 +796,16 @@ describe("dirtyOrphanRow", () => {
   it("names an archived ticket, says how to reach it, and opens nothing", () => {
     const row = dirtyOrphanRow({
       ...claimed,
-      ticket: { id: "t82", displayId: "VC-82", title: "Strand it", archived: true },
+      ticket: {
+        id: "t82",
+        projectId: "p1",
+        displayId: "VC-82",
+        title: "Strand it",
+        archived: true,
+      },
     });
     expect(row.notices).toEqual(["Archived ticket"]);
-    expect(row.openTicketId).toBeNull();
+    expect(row.openTicket).toBeNull();
     expect(row.deletable).toBe(false);
     expect(row.meta).toContain("Restore VC-82 from the Archive to open it.");
   });
@@ -807,7 +819,7 @@ describe("dirtyOrphanRow", () => {
       displayId: null,
       title: "leftover",
       notices: ["No ticket"],
-      openTicketId: null,
+      openTicket: null,
       deletable: true,
       meta: "Not registered with git, so it isn't safe to remove automatically.",
     });

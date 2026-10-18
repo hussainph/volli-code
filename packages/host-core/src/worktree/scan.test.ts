@@ -754,6 +754,7 @@ describe("scanOrphans report", () => {
         reason: expect.stringMatching(/ticket still points here/i),
         ticket: {
           id: "ticket-82",
+          projectId: "proj-1",
           displayId: "VC-82",
           title: "Strand the checkout",
           archived: false,
@@ -805,6 +806,7 @@ describe("scanOrphans report", () => {
 
     expect(byPath.get(strandedWt)?.ticket).toEqual({
       id: "ticket-83",
+      projectId: "proj-1",
       displayId: "VC-83",
       title: "Old work",
       archived: true,
@@ -814,6 +816,66 @@ describe("scanOrphans report", () => {
     // Both folders are readable, so neither carries the negative stamp.
     expect(byPath.get(strandedWt)).not.toHaveProperty("pathReadable");
     expect(byPath.get(unclaimedWt)).not.toHaveProperty("pathReadable");
+  });
+
+  // VC-292: the reason, the ticket and the Delete are decided from ONE claim,
+  // asked the way main's delete guard asks it. A ticket in ANOTHER project
+  // that points at a folder in this container — or at a path inside it — is
+  // still a claim: the row names it, and says a ticket points here.
+  it("names a claiming ticket from another project, and a nested claim, the way the delete guard sees them", async () => {
+    const projectPath = tempDir("proj");
+    const otherPath = tempDir("other");
+    const home = tempDir("home");
+    const container = join(
+      home,
+      ".volli",
+      "worktrees",
+      projectContainerName(projectPath, "proj-1"),
+    );
+    const crossWt = join(container, "VC-7-cross");
+    const nestingWt = join(container, "nesting");
+    mkdirSync(crossWt, { recursive: true });
+    mkdirSync(join(nestingWt, "inner"), { recursive: true });
+
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+    insertProject(ctx.db, testProject({ id: "proj-2", path: otherPath, ticketPrefix: "OT" }));
+    insertTicket(
+      ctx.db,
+      testTicket("proj-2", { id: "ticket-7", ticketNumber: 7, title: "Elsewhere", status: "done" }),
+    );
+    updateTicketFields(ctx.db, "ticket-7", { worktreePath: crossWt }, 1);
+    insertTicket(
+      ctx.db,
+      testTicket("proj-1", { id: "ticket-8", ticketNumber: 8, title: "Inner", status: "done" }),
+    );
+    updateTicketFields(ctx.db, "ticket-8", { worktreePath: join(nestingWt, "inner") }, 1);
+
+    const { git, gitAsync } = scriptedGit((rawArgs, cwd) => {
+      const args = verb(rawArgs);
+      if (args[0] === "worktree" && args[1] === "list") {
+        return `worktree ${cwd}\nHEAD a\nbranch refs/heads/main\n`;
+      }
+      return "";
+    });
+
+    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const byPath = new Map(report.dirty.map((orphan) => [orphan.path, orphan] as const));
+
+    expect(byPath.get(crossWt)).toMatchObject({
+      projectId: "proj-1",
+      reason: expect.stringMatching(/ticket still points here/i),
+      ticket: {
+        id: "ticket-7",
+        projectId: "proj-2",
+        displayId: "OT-7",
+        title: "Elsewhere",
+        archived: false,
+      },
+    });
+    expect(byPath.get(nestingWt)).toMatchObject({
+      reason: expect.stringMatching(/ticket still points here/i),
+      ticket: { id: "ticket-8", projectId: "proj-1" },
+    });
   });
 
   // VC-292: a folder the scan cannot open is said to be unreadable, so the row

@@ -92,7 +92,7 @@ import type {
   UnreadableWorktreeProject,
 } from "@volli/shared";
 import { listProjects } from "../db/projects-repo";
-import { listWorktreePaths, listWorktreeTickets } from "../db/tickets-repo";
+import { listWorktreePaths, listWorktreeRefs } from "../db/tickets-repo";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { isOwnedWorktreeLeaf, ownedContainers, type OwnedContainer } from "./containers";
 import { isWorktreeDirtyAsync } from "./dirty";
@@ -296,6 +296,10 @@ export async function scanOrphans(
   };
 
   const knownPaths = new Set(listWorktreePaths(deps.db).map((p) => canonicalize(p)));
+  // Every ticket checkout with its ticket (VC-292): the ONE lookup a dirty row's
+  // reason, its ticket and its Delete are all decided from, so they cannot
+  // disagree with each other or with main's delete guard.
+  const claims = listWorktreeRefs(deps.db);
   // The containers THIS database owns. Tiers 2-3 may name ONLY what is inside
   // them — a user's own `git worktree add ../review` is git-registered but not
   // ours, and neither is another Volli install's container under the same root.
@@ -404,11 +408,13 @@ export async function scanOrphans(
         worktreeEntries: entries,
       });
       if (dirty.dirty) {
+        const ticket = claimingTicket(claims, entry.path);
         report.dirty.push({
           path: entry.path,
           projectId: project.id,
           projectName: project.name,
           reason: dirty.reason ?? "dirty",
+          ...(ticket === undefined ? {} : { ticket }),
         });
         continue;
       }
@@ -488,15 +494,13 @@ export async function scanOrphans(
   // Disk-vs-git pass, over OUR OWN containers only: a dir git no longer
   // registers may still hold real work — git can't vouch for it, and any
   // ambiguity reads dirty. Report it for the Storage list; never propose it.
-  // The ticket each still-claimed folder belongs to (VC-292), so the row can
-  // name it and open it rather than tell the user to go and find "that ticket"
-  // from a clipped path.
-  const claimingTickets = worktreeTicketsByPath(deps.db);
   for (const container of containers) {
     for (const leafPath of containerLeaves(container)) {
-      const leafCanonical = canonicalize(leafPath);
-      if (registeredPaths.has(leafCanonical)) continue;
-      const ticket = claimingTickets.get(`${container.projectId}\0${leafCanonical}`);
+      if (registeredPaths.has(canonicalize(leafPath))) continue;
+      // The claim is asked the way main's delete guard asks it — any ticket, in
+      // any project, whose path is this folder, inside it, or holds it — so a
+      // row that says a ticket points here is a row whose Delete main refuses.
+      const ticket = claimingTicket(claims, leafPath);
       report.dirty.push({
         path: leafPath,
         projectId: container.projectId,
@@ -506,18 +510,19 @@ export async function scanOrphans(
         // at is cleared from that ticket (its "Remove worktree…" now handles a
         // directory git has forgotten — VC-113), while an unclaimed leftover is
         // this list's own to delete.
-        reason: knownPaths.has(leafCanonical)
-          ? "A ticket still points here, but git no longer tracks it. Use Remove worktree on that ticket, then recreate it."
-          : "Not registered with git, so it isn't safe to remove automatically.",
+        reason:
+          ticket !== undefined
+            ? "A ticket still points here, but git no longer tracks it. Use Remove worktree on that ticket, then recreate it."
+            : "Not registered with git, so it isn't safe to remove automatically.",
         ...(ticket === undefined ? {} : { ticket }),
       });
     }
   }
 
-  // Whether each reported folder can be opened at all (VC-292): a row that
-  // offers Reveal on a directory nobody can read is a dead end the row should
-  // name before the click, not after. Only the negative is stamped, so a
-  // readable row reads exactly as it did from a host that never asked.
+  // Whether each reported folder can be opened at all (VC-292), so the row can
+  // say it can't be read rather than leave the user to find out in Finder.
+  // Only the negative is stamped, so a readable row reads exactly as it did
+  // from a host that never asked.
   for (const orphan of report.dirty) {
     if (!isReadableDirectory(orphan.path)) orphan.pathReadable = false;
   }
@@ -526,22 +531,28 @@ export async function scanOrphans(
 }
 
 /**
- * Every ticket-claimed checkout, keyed by its project and canonical path —
- * live and archived alike. Keyed by project too because the row opens the
- * ticket inside the project whose container holds the folder; a ticket from
- * another project claiming the same path is not this row's to name.
+ * The ticket that claims `path`, if any: one whose checkout IS it, is inside
+ * it, or holds it — {@link touchesKnownWorktree}'s test, which is the one
+ * main's orphan delete refuses on. An exact match wins over a nested one, so
+ * the row names the ticket that points at this very folder when there is one.
  */
-function worktreeTicketsByPath(db: WorktreePorts["db"]): Map<string, DirtyWorktreeOrphanTicket> {
-  const byPath = new Map<string, DirtyWorktreeOrphanTicket>();
-  for (const row of listWorktreeTickets(db)) {
-    byPath.set(`${row.projectId}\0${canonicalize(row.path)}`, {
-      id: row.ticketId,
-      displayId: row.displayId,
-      title: row.title,
-      archived: row.archived,
-    });
-  }
-  return byPath;
+function claimingTicket(
+  claims: ReturnType<typeof listWorktreeRefs>,
+  path: string,
+): DirtyWorktreeOrphanTicket | undefined {
+  const canonical = canonicalize(path);
+  const claim =
+    claims.find((ref) => canonicalize(ref.path) === canonical) ??
+    claims.find((ref) => touchesKnownWorktree([ref.path], path));
+  return claim === undefined
+    ? undefined
+    : {
+        id: claim.ticketId,
+        projectId: claim.projectId,
+        displayId: claim.ticketDisplayId,
+        title: claim.ticketTitle,
+        archived: claim.archived,
+      };
 }
 
 /** Whether `path` is a directory this process may list. A read, never a write. */

@@ -48,18 +48,25 @@ vi.mock("@renderer/stores/workspace", () => ({
   },
 }));
 
+const CLAIMING_TICKET = {
+  id: "t82",
+  projectId: "p1",
+  displayId: "VC-82",
+  title: "Strand the checkout",
+  archived: false,
+};
 const CLAIMED: DirtyWorktreeOrphan = {
   path: "/Users/someone/.volli/worktrees/volli-code-f3732f45/VC-82-a-very-long-ticket-slug-that-clips",
   projectId: "p1",
   projectName: "Volli Code",
   reason:
     "A ticket still points here, but git no longer tracks it. Use Remove worktree on that ticket, then recreate it.",
-  ticket: { id: "t82", displayId: "VC-82", title: "Strand the checkout", archived: false },
+  ticket: CLAIMING_TICKET,
 };
 const ARCHIVED: DirtyWorktreeOrphan = {
   ...CLAIMED,
   path: "/wt/VC-83-archived",
-  ticket: { id: "t83", displayId: "VC-83", title: "Old work", archived: true },
+  ticket: { id: "t83", projectId: "p1", displayId: "VC-83", title: "Old work", archived: true },
 };
 const UNCLAIMED: DirtyWorktreeOrphan = {
   path: "/wt/leftover",
@@ -245,15 +252,37 @@ describe("Storage → dirty orphan rows (VC-292)", () => {
     expect(unreadable?.textContent).toContain("Can't read folder");
   });
 
-  it("copies the full path and flashes a check", async () => {
+  it("copies the full path and says so until the flash ends", async () => {
     vi.useFakeTimers();
     await mountPane();
+    const copy = button(`Copy ${CLAIMED.path}`);
 
-    await click(button(`Copy ${CLAIMED.path}`));
+    await click(copy);
+    // The tooltip is the copy's only feedback; keyboard focus opens it.
+    await act(async () => copy.focus());
 
     expect(writeText).toHaveBeenCalledWith(CLAIMED.path);
     expect(rows("orphan-failure")).toEqual([]);
+    expect(document.body.textContent).toContain("Path copied");
+
     await act(async () => vi.advanceTimersByTime(900));
+    expect(document.body.textContent).not.toContain("Path copied");
+    expect(document.body.textContent).toContain("Copy path");
+  });
+
+  // A ticket in ANOTHER project can claim a folder in this one's container;
+  // Open ticket opens it where it lives.
+  it("opens a claiming ticket in its own project", async () => {
+    navigation.projects = [{ id: "p1" }, { id: "p2" }];
+    orphans.mockResolvedValue(
+      scan([{ ...CLAIMED, ticket: { ...CLAIMING_TICKET, id: "t9", projectId: "p2" } }]),
+    );
+    await mountPane();
+
+    await click(button("Open ticket"));
+
+    expect(navigation.select).toHaveBeenCalledWith("p2");
+    expect(navigation.openTicketWorkspace).toHaveBeenCalledWith("p2", "t9", { tabId: "doc" });
   });
 
   it("keeps a failed copy on the row, and a successful retry clears it", async () => {

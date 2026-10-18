@@ -373,58 +373,26 @@ export function listWorktreePaths(db: Database.Database): string[] {
 
 /**
  * Every ticket checkout with the Ticket it belongs to — what the orphan process
- * sweep attributes a working directory by (VC-341).
+ * sweep attributes a working directory by (VC-341), and what the orphan scan
+ * names a still-claimed folder by (VC-292).
  *
  * The display id rides along because that is the only name a person reading a
  * list of runaway processes can act on: "something under
  * `~/.volli/worktrees/volli-code-f373/VC-341-.../` is holding 2.9 GB" is a path,
- * while "VC-341 is holding 2.9 GB" is a Ticket they can open. Archived tickets
- * are included for the same reason {@link listWorktreePaths} includes them: a
+ * while "VC-341 is holding 2.9 GB" is a Ticket they can open. The title and the
+ * archived flag are for the Storage row, which leads with the ticket and has to
+ * say when it is off the board and cannot be opened. Archived tickets are
+ * included for the same reason {@link listWorktreePaths} includes them: a
  * retained worktree is still a directory a process can be standing in, and its
  * processes are the ones most likely to have been forgotten.
  */
-export function listWorktreeRefs(
-  db: Database.Database,
-): Array<{ path: string; ticketId: string; ticketDisplayId: string; projectId: string }> {
-  const rows = prepared<
-    [],
-    {
-      worktree_path: string;
-      ticketId: string;
-      projectId: string;
-      ticketPrefix: string;
-      ticketNumber: number;
-    }
-  >(
-    db,
-    `SELECT t.worktree_path AS worktree_path, t.id AS ticketId, t.project_id AS projectId,
-            p.ticket_prefix AS ticketPrefix, t.ticket_number AS ticketNumber
-       FROM tickets t JOIN projects p ON p.id = t.project_id
-      WHERE t.worktree_path IS NOT NULL`,
-  ).all();
-  return rows.map((row) => ({
-    path: row.worktree_path,
-    ticketId: row.ticketId,
-    ticketDisplayId: displayTicketId(row.ticketPrefix, row.ticketNumber),
-    projectId: row.projectId,
-  }));
-}
-
-/**
- * Every ticket checkout with the name a person knows its ticket by — what the
- * orphan scan attaches to a folder a ticket still points at (VC-292), so
- * Storage can lead that row with "VC-82 · title" and open the ticket whose
- * "Remove worktree…" is the repair. Live AND archived, for
- * {@link listWorktreePaths}'s reason; `archived` rides along because an
- * archived ticket cannot be opened from the board, and its row has to say so.
- */
-export function listWorktreeTickets(db: Database.Database): Array<{
+export function listWorktreeRefs(db: Database.Database): Array<{
   path: string;
   ticketId: string;
-  projectId: string;
-  displayId: string;
-  title: string;
+  ticketDisplayId: string;
+  ticketTitle: string;
   archived: boolean;
+  projectId: string;
 }> {
   const rows = prepared<
     [],
@@ -448,10 +416,10 @@ export function listWorktreeTickets(db: Database.Database): Array<{
   return rows.map((row) => ({
     path: row.worktree_path,
     ticketId: row.ticketId,
-    projectId: row.projectId,
-    displayId: displayTicketId(row.ticketPrefix, row.ticketNumber),
-    title: row.title,
+    ticketDisplayId: displayTicketId(row.ticketPrefix, row.ticketNumber),
+    ticketTitle: row.title,
     archived: row.archivedAt !== null,
+    projectId: row.projectId,
   }));
 }
 

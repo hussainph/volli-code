@@ -1394,11 +1394,11 @@ function DirtyOrphanItem({
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<number | undefined>(undefined);
   React.useEffect(() => () => window.clearTimeout(timer.current), []);
-  const projectId = orphan.projectId;
-  const ticketId = row.openTicketId;
+  const target = row.openTicket;
 
   function openTicket(): void {
-    if (ticketId === null || projectId === undefined) return;
+    if (target === null) return;
+    const { projectId, ticketId } = target;
     if (!useProjectsStore.getState().projects.some((project) => project.id === projectId)) {
       onFailure({ action: "open", message: "Its project isn't open in Volli." });
       return;
@@ -1455,7 +1455,7 @@ function DirtyOrphanItem({
         meta={row.meta}
         testId="orphan-row"
       >
-        {ticketId === null || projectId === undefined ? null : (
+        {target === null ? null : (
           <Button size="xs" variant="outline" onClick={openTicket}>
             <TicketIcon />
             Open ticket
