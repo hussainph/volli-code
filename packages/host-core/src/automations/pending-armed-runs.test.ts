@@ -8,7 +8,10 @@ import type {
 import { ARMED_RUN_DELAY_MS } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { createPendingArmedRunCoordinator } from "./pending-armed-runs";
+import {
+  createPendingArmedRunCoordinator,
+  type PendingArmedRunSettlement,
+} from "./pending-armed-runs";
 import type { RunAutomationOutcome } from "./run";
 
 const AUTOMATION: Automation = {
@@ -68,6 +71,7 @@ function harness(
   const rows = options.rows ?? new Map<string, PendingArmedRun>();
   const attempts = options.attempts ?? new Map<string, PendingArmedRunAttempt>();
   const timers: ManualTimer[] = [];
+  const settlements: PendingArmedRunSettlement[] = [];
   const windows = Array.from({ length: options.windowCount ?? 0 }, () => [] as PendingArmedRun[][]);
   const run = vi.fn(
     async (_input: { commandId: string; automationId: string; ticketId: string }) => RUN_OK,
@@ -123,6 +127,7 @@ function harness(
     onPendingChanged: (pending) => {
       for (const window of windows) window.push([...pending]);
     },
+    onSettled: (settlement) => settlements.push(settlement),
   });
 
   async function elapse(delay = ARMED_RUN_DELAY_MS): Promise<void> {
@@ -139,6 +144,7 @@ function harness(
     rows,
     attempts,
     timers,
+    settlements,
     windows,
     run,
     elapse,
@@ -164,6 +170,27 @@ function noteArrival(h: ReturnType<typeof harness>): void {
     from: "todo",
     to: "doing",
   });
+}
+
+/** Opens one countdown, then stops the coordinator as a quit would; returns its `startAt`. */
+function closeOnCountdown(rows: Map<string, PendingArmedRun>): number {
+  const first = harness({ rows });
+  first.coordinator.start();
+  noteArrival(first);
+  first.coordinator.stop();
+  return rows.get("t1")!.startAt;
+}
+
+/** Starts a fresh coordinator over the durable rows and lets every due timer fire. */
+async function relaunch(h: ReturnType<typeof harness>): Promise<void> {
+  h.coordinator.start();
+  await h.coordinator.settled();
+  for (const timer of h.timers) {
+    if (timer.cleared) continue;
+    timer.cleared = true;
+    timer.fire();
+  }
+  await h.coordinator.settled();
 }
 
 describe("main-owned pending armed Runs", () => {
@@ -255,6 +282,75 @@ describe("main-owned pending armed Runs", () => {
     await recovered.elapse(0);
     expect(recovered.run).toHaveBeenCalledOnce();
     expect(rows.size).toBe(0);
+  });
+
+  it("still starts a countdown recovered within the tolerance of its deadline", async () => {
+    const rows = new Map<string, PendingArmedRun>();
+    const startAt = closeOnCountdown(rows);
+
+    const recovered = harness({ rows });
+    recovered.setNow(startAt + 2_000);
+    await relaunch(recovered);
+
+    expect(recovered.run).toHaveBeenCalledOnce();
+    expect(recovered.coordinator.failures()).toEqual([]);
+  });
+
+  it("holds a countdown that elapsed while the app was closed for a person's Retry", async () => {
+    const rows = new Map<string, PendingArmedRun>();
+    const attempts = new Map<string, PendingArmedRunAttempt>();
+    const startAt = closeOnCountdown(rows);
+
+    // Dropped on Friday, relaunched three days later: nobody ever saw Cancel.
+    const recovered = harness({ rows, attempts, windowCount: 1 });
+    recovered.setNow(startAt + 3 * 24 * 60 * 60 * 1000);
+    await relaunch(recovered);
+
+    expect(recovered.run).not.toHaveBeenCalled();
+    expect(rows.size).toBe(0);
+    expect(recovered.windows[0]?.at(-1)).toEqual([]);
+    expect(recovered.coordinator.failures()).toEqual([
+      {
+        pending: expect.objectContaining({ id: "arrival-1" }),
+        error: "The app closed before the countdown finished.",
+      },
+    ]);
+    expect(recovered.settlements).toEqual([
+      {
+        kind: "failed",
+        pending: expect.objectContaining({ id: "arrival-1" }),
+        error: "The app closed before the countdown finished.",
+      },
+    ]);
+    const commandId = attempts.get("arrival-1")?.commandId;
+    expect(commandId).toEqual(expect.any(String));
+
+    // A double press is still one Run under the one retained command.
+    expect(recovered.coordinator.retry("arrival-1")).toBe(true);
+    expect(recovered.coordinator.retry("arrival-1")).toBe(true);
+    await recovered.coordinator.settled();
+
+    expect(recovered.run).toHaveBeenCalledOnce();
+    expect(recovered.run).toHaveBeenCalledWith({ commandId, automationId: "a1", ticketId: "t1" });
+    expect(attempts.size).toBe(0);
+    expect(recovered.coordinator.failures()).toEqual([]);
+  });
+
+  it("still abandons a stale countdown whose ticket left its column", async () => {
+    const rows = new Map<string, PendingArmedRun>();
+    const startAt = closeOnCountdown(rows);
+
+    const recovered = harness({ rows });
+    recovered.setStatus("todo");
+    recovered.setNow(startAt + 60_000);
+    await relaunch(recovered);
+
+    expect(recovered.run).not.toHaveBeenCalled();
+    expect(rows.size).toBe(0);
+    expect(recovered.coordinator.failures()).toEqual([]);
+    expect(recovered.settlements).toEqual([
+      expect.objectContaining({ kind: "abandoned", reason: "left-column" }),
+    ]);
   });
 
   it("replaces a Ticket's earlier arrival and rejects its stale Cancel", () => {

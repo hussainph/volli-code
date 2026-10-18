@@ -980,7 +980,9 @@ ticket is a pure status change. Arming is a property of the column, not of the
 Automation, so one Automation may be armed in one column and merely offered in
 another. It is local to the machine that set it and never travels with the
 project. Arming a column is not retroactive: it governs tickets that arrive
-afterward, never those already sitting there. The column-header bolt is always
+afterward, never those already sitting there. A countdown whose window elapsed
+while the app was closed starts nothing at the next launch; it waits for a
+person's Retry, because nobody was shown its Cancel. The column-header bolt is always
 visible: outline when unarmed, filled when armed. A filled, muted bolt with
 “automatic triggers off” keeps the arming distinct from permission to fire.
 _Avoid_: default automation (collides with project defaults and the default base branch)
