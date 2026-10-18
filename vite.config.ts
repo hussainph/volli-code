@@ -79,7 +79,8 @@ export default defineConfig({
 
       // React Compiler rules remain individually disabled pending adoption
       // (VC-216, VC-211). oxlint 1.79 split the inactive compiler rule into
-      // these ten rules (oxc #25500, #25830, #25840). Keep the React plugin and
+      // ten rules (oxc #25500, #25830, #25840); `globals`, `purity` and
+      // `use-memo` are adopted, the seven below are not yet. Keep the React plugin and
       // error categories enabled so other rules and newly added rules still
       // enforce. Remove each override only with its corresponding behavior
       // fixes and tests; `vp lint` reports the current findings.
@@ -94,10 +95,20 @@ export default defineConfig({
       "react/immutability": "off",
       "react/memo-dependencies": "off",
       "react/preserve-manual-memoization": "off",
-      "react/globals": "off",
-      "react/purity": "off",
-      "react/use-memo": "off",
     },
+    overrides: [
+      {
+        // A test's probe component exists to hand render-time values to the
+        // assertions around it: `function Probe() { handle = useThing(); }`
+        // captures a hook's result, and `renders += 1` counts renders because
+        // the render count IS what the test measures. Writing an outer
+        // variable during render is the point of those probes, not a hazard,
+        // and no test is compiled by React Compiler. Product code keeps the
+        // rule at error.
+        files: ["**/*.test.ts", "**/*.test.tsx"],
+        rules: { "react/globals": "off" },
+      },
+    ],
   },
   staged: {
     // `vp fmt` (Oxfmt) aborts with "Expected at least one target file" when

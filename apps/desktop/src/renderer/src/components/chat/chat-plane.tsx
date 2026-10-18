@@ -1056,6 +1056,11 @@ export function ChatPlane({
         .map((message) => message.id),
     );
     for (const [id, label] of deliveryLabels) if (label === "Pending") ids.add(id);
+    // Each id is stamped with the time it was first seen pending and keeps
+    // that stamp on every later pass, so re-running this memo cannot move a
+    // clock; only a new id reads the time. This read moves with the ref-held
+    // ledger when `react/refs` is adopted.
+    // oxlint-disable-next-line react/purity -- first-seen stamp, idempotent per id
     const now = Date.now();
     const next = new Map([...ids].map((id) => [id, waitTimes.current.get(id) ?? now]));
     waitTimes.current = next;
@@ -3007,7 +3012,11 @@ export const ChatTurn = React.memo(function ChatTurn({
  * Refusals remain immediate; ordinary round trips never show waiting copy. */
 function MessageDelivery({ label, since }: { label: string; since: number | undefined }) {
   const failed = label === "Not delivered" || label === "Delivery unconfirmed";
-  const remaining = since === undefined ? 600 : Math.max(0, 600 - (Date.now() - since));
+  // The clock is read once, at mount, so the wait does not restart per render;
+  // a stamp newer than the mount still waits the full 600ms from `since`.
+  const [mountedAt] = React.useState(() => Date.now());
+  const remaining =
+    since === undefined ? 600 : Math.min(600, Math.max(0, 600 - (mountedAt - since)));
   const waited = useDelayedPresence(!failed, remaining, remaining === 0);
   if (!failed && !waited) return null;
   const Icon = failed ? WarningIcon : ClockIcon;

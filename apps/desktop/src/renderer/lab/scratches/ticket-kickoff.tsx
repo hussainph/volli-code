@@ -253,7 +253,7 @@ function labModelAccess(): ModelAccessClient {
 export default function TicketKickoffScratch({
   initialTickets = tickets,
 }: { initialTickets?: typeof tickets } = {}) {
-  const client = React.useMemo(labModelAccess, []);
+  const client = React.useMemo(() => labModelAccess(), []);
   const [empty, setEmpty] = React.useState(false);
 
   // The board's own store, emptied and refilled in place: `BoardEmpty` keys off
