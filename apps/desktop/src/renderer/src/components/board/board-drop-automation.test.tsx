@@ -778,6 +778,8 @@ describe("a released card whose landing column runs an automation", () => {
       });
       expect(document.querySelector("[data-board-drag]")).not.toBeNull();
       expect(grown("doing")).toBe(true);
+      // Doing is not where the card came from, so its rows are live targets.
+      expect(columnNamed("doing").querySelector("[data-offered-inert]")).toBeNull();
       await act(async () => {
         window.dispatchEvent(new KeyboardEvent("keyup", { key: "Alt", bubbles: true }));
       });
@@ -809,6 +811,36 @@ describe("a released card whose landing column runs an automation", () => {
       expect(loopErrors()).toEqual([]);
     },
   );
+
+  it("draws the card's own column inert under ⌥, since a release there is no arrival", async () => {
+    await mountBoard();
+    const card = columnNamed("doing").querySelector("article")!;
+    const from = centre(card);
+    await act(async () => {
+      card.parentElement!.dispatchEvent(pointerEvent("pointerdown", from, true));
+    });
+    await move({ x: from.x, y: from.y + 6 }, true);
+    await move({ x: from.x, y: 500 }, true);
+    expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe("t3");
+    expect(grown("doing")).toBe(true);
+
+    const panel = columnNamed("doing").querySelector("[data-offered-panel]")!;
+    expect(panel.getAttribute("data-offered-inert")).toBe("true");
+    // The armed row is drawn but is no target; the lit row is Move only.
+    expect(panel.querySelector('[data-offered-row-inert="true"]')?.textContent).toContain(
+      AUTOMATION.name,
+    );
+    expect(panel.querySelector('[data-offered-row="0"]')).toBeNull();
+    expect(panel.querySelector('[aria-current="true"]')?.textContent).toContain("Move only");
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+      );
+    });
+    expect(document.querySelector("[data-board-drag]")).toBeNull();
+    expect(loopErrors()).toEqual([]);
+  });
 
   it(
     "lands in the destination column, triggers the automation once, and logs no render loop",
