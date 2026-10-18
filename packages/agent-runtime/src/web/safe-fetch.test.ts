@@ -990,24 +990,31 @@ describe("safe web fetch", () => {
     expect(page.whole?.text).toContain("Paragraph 399 explains");
   });
 
-  it("marks the whole bounded when the page was past extraction's element bound", async () => {
-    const items = Array.from({ length: 8_100 }, (_, index) => `<p>Item ${index}.</p>`).join("");
+  it("marks the whole bounded when the page was past extraction's depth bound", async () => {
+    // Prose first, then nesting past the depth bound: extraction reads the
+    // document up to where it stopped being one, and cheaply, before parsing.
+    const prose = Array.from(
+      { length: 40 },
+      (_, index) => `<p>Paragraph ${index} explains one more part of the guide in plain words.</p>`,
+    ).join("");
+    const buried = `${"<div>".repeat(200)}<p>the buried paragraph</p>${"</div>".repeat(200)}`;
     const { fetcher } = await fetcherFor(
       (_request, response) => {
         response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        response.end(`<html><body>${items}</body></html>`);
+        response.end(`<html><body><article>${prose}${buried}</article></body></html>`);
       },
-      { textChars: 1_000 },
+      { textChars: 200 },
     );
 
     const page = await fetcher.fetch({
-      url: "http://docs.example.com/many",
+      url: "http://docs.example.com/deep",
       signal: new AbortController().signal,
     });
 
+    expect(page.truncated).toBe(true);
     expect(page.whole?.bounded).toBe(true);
-    expect(page.whole?.text).toContain("Item 4000.");
-    expect(page.whole?.text).not.toContain("Item 8099.");
+    expect(page.whole?.text).toContain("Paragraph 39 explains");
+    expect(page.whole?.text).not.toContain("the buried paragraph");
   });
 
   it("hands on nothing more when the text fits the bound", async () => {
