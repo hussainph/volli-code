@@ -1685,10 +1685,21 @@ class DefaultSessionRuntime implements SessionRuntime {
     // The directory has to be real before it is bound: an adapter handed one
     // that is not there fails per prompt, deep inside the harness, wearing
     // whatever name that harness gives a missing path.
+    //
+    // A Session's FIRST attach, from any door but the queue's own, waits for
+    // that preparation however long it takes (VC-799). It is where the
+    // worktree is made, and under load it outlasts the admission bound — but
+    // timing out never stopped it, so the bound only turned a slow start into
+    // a failed one while the preparation went on to finish. Its own failure is
+    // still a failure, named by `prepare`. Every later attach, and every attach
+    // a queue drain makes, keeps the bound.
+    const firstAttach =
+      !request.commandId.startsWith("follow-up:") &&
+      projection.attachments.every(({ openedAt }) => openedAt === null);
     let site: SessionLocation;
     try {
       site = await this.#queueAdmissionWait(
-        `follow-up:${request.commandId}`,
+        firstAttach ? request.commandId : `follow-up:${request.commandId}`,
         this.ports.locations.prepare(projection.session),
         "workspace preparation",
       );

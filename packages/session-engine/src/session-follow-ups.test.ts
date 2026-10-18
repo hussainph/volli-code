@@ -2417,6 +2417,56 @@ describe("host follow-ups never strand a row", () => {
     }
   });
 
+  it("waits out a first attach's slow workspace preparation instead of failing it unrecoverable (VC-799)", async () => {
+    // A Session's first attach is where its worktree is made, and under load
+    // that preparation outlasts the admission bound. Timing out did not stop
+    // it — it went on and finished moments later — so the bound only turned a
+    // slow start into an `adapter_unrecoverable` Session whose kickoff was lost.
+    const gate = Promise.withResolvers<void>();
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [], prepare: () => gate.promise });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const attaching = runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    gate.resolve();
+    expect((await attaching).receipt).toMatchObject({ status: "accepted" });
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(f.adapter.attaches).toBe(1);
+    await runtime.close();
+  });
+
+  it("still bounds the workspace preparation of a Session that has attached before (VC-799)", async () => {
+    const stalled = Promise.withResolvers<void>();
+    let preparing: Promise<void> | undefined;
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [], prepare: () => preparing });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    const attachmentId = (await runtime.projection({ sessionId })).projection.liveExecutor!.id;
+    await runtime.command({
+      commandId: "release",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    preparing = stalled.promise;
+    const reattached = await runtime.command({
+      commandId: "reattach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    expect(reattached.receipt).toMatchObject({
+      status: "rejected",
+      code: "location_unavailable",
+      detail: expect.stringContaining("queue_admission_timeout: workspace preparation"),
+    });
+    stalled.resolve();
+    await runtime.close();
+  });
+
   it("bounds cold binding recovery and prevents a late handle activating after close", async () => {
     const adapter = new GatedAdapter();
     const f = fixture({ adapter, admissionTimeoutMs: 10, retryDelays: [] });

@@ -185,11 +185,21 @@ function harness(
     answers?: Map<string, string>;
     /** The parent's projection lags its ledger: the attach-vs-park race (VC-457). */
     staleParent?: boolean;
+    /** How the child's first attach settles; ready unless a test says otherwise. */
+    attach?: "ready" | "needs-recovery";
   } = {},
 ) {
   let children = 0;
   const starts: SessionStartInput[] = [];
-  const kickoffs: { sessionId: string; text: string; commandId: string; messageId: string }[] = [];
+  const kickoffs: {
+    sessionId: string;
+    text: string;
+    commandId: string;
+    messageId: string;
+    delivery?: "queue";
+  }[] = [];
+  /** What holding a task in the child's queue answers with; null accepts it. */
+  let holdRefusal: Error | null = null;
   /** Each kickoff's turn, held open until the test ends it. */
   const kickoffTurns: ReturnType<typeof deferred>[] = [];
   const commands: SessionRuntimeCommandRequest[] = [];
@@ -223,15 +233,21 @@ function harness(
             }),
           );
           ledgers.set(sessionId, [
-            event(sessionId, 3, {
-              kind: "attachment.opened",
-              attachment: OPEN_ATTACHMENT(sessionId),
-            }),
+            options.attach === "needs-recovery"
+              ? event(sessionId, 3, {
+                  kind: "attachment.failed",
+                  attachment: OPEN_ATTACHMENT(sessionId),
+                  failure: { code: "attach_failed", detail: "refused", diagnostic: null },
+                })
+              : event(sessionId, 3, {
+                  kind: "attachment.opened",
+                  attachment: OPEN_ATTACHMENT(sessionId),
+                }),
           ]);
         }
         return {
           sessionId,
-          state: "ready",
+          state: options.attach ?? "ready",
           receipt: null,
           throughSequence: 3,
           model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "low" },
@@ -240,6 +256,9 @@ function harness(
     },
     submitSessionMessage: (input) => {
       kickoffs.push(input);
+      // A queued hold answers once the queue has it, never when a turn ends.
+      if (input.delivery === "queue")
+        return holdRefusal === null ? Promise.resolve() : Promise.reject(holdRefusal);
       const turn = deferred();
       kickoffTurns.push(turn);
       return turn.promise;
@@ -411,6 +430,9 @@ function harness(
     setParent,
     setReceipt: (status: "accepted" | "rejected") => {
       receiptStatus = status;
+    },
+    refuseHolds: (error: Error) => {
+      holdRefusal = error;
     },
     starts,
     kickoffs,
@@ -1407,6 +1429,75 @@ describe("rearm — a child a person resumes reports again (VC-457)", () => {
     expect(h.parentCommands()).toEqual([]);
     await completeChildTurn(h, CHILD, { from: 5 });
     expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
+  });
+});
+
+describe("a child whose first attach failed keeps its task (VC-799)", () => {
+  const operationId = `${PARENT}:tc-1`;
+
+  it("holds the task in the child's queue under the kickoff ids, and arms no watch on it", async () => {
+    const h = harness({ attach: "needs-recovery" });
+
+    const result = await h.delegate();
+
+    expect(result).toMatchObject({ childSessionId: CHILD, state: "needs-recovery", taskHeld: true });
+    // The same message, marker and ids a ready delegation would have sent:
+    // only the delivery differs, held for the child's next ready attach.
+    expect(h.kickoffs).toEqual([
+      {
+        sessionId: CHILD,
+        text: expect.stringContaining("Find where the auth token is refreshed"),
+        commandId: `${operationId}:kickoff`,
+        messageId: `${operationId}:kickoff-message`,
+        origin: { kind: "session", sessionId: PARENT },
+        delivery: "queue",
+      },
+    ]);
+    expect(h.kickoffs[0]?.text).toContain("Delegated task from your parent Session");
+    // A held child is not pending work: a watch here would hold the parent's
+    // own watchers' turn-end notices for a child that may never be retried.
+    expect(h.subscriptions).toEqual([]);
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.parentCommands()).toEqual([]);
+  });
+
+  it("reports exactly one notice under the delegation's own ids once the held task has run", async () => {
+    const h = harness({ attach: "needs-recovery" });
+    await h.delegate();
+
+    // A person's Retry attaches the child and its queue releases the task;
+    // the turn that opens is the wake `rearm` is armed on (agents.ts), and
+    // the delegation is still unanswered.
+    await h.delegations.rearm(
+      {
+        operationId,
+        parentSessionId: PARENT,
+        childSessionId: CHILD,
+        projectId: "project-1",
+        title: "Find where the auth token is refreshed",
+        answered: false,
+      },
+      { turnId: "t1", afterSequence: 3 },
+    );
+    await completeChildTurn(h);
+
+    expect(noticeText(h.commands, operationId)).toMatch(/completed its task/);
+    expect(
+      h.parentCommands().filter((c) => c.commandId === `${operationId}${DELEGATION_ID_SUFFIXES.notice}`),
+    ).toHaveLength(1);
+    expect(h.parentCommands()).toHaveLength(1);
+  });
+
+  it("says the task was not held when the queue refused it, and reports why", async () => {
+    const h = harness({ attach: "needs-recovery" });
+    h.refuseHolds(new Error("The kickoff was refused (session_archived)"));
+
+    const result = await h.delegate();
+
+    expect(result).toMatchObject({ state: "needs-recovery", taskHeld: false });
+    expect(h.reports).toEqual([
+      expect.stringContaining("could not be held for its retry: The kickoff was refused"),
+    ]);
   });
 });
 

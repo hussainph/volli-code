@@ -507,7 +507,11 @@ async function startSessionTool(
           ? `It is attached and its kickoff turn has been submitted; it runs on its own from here. ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
           : // The attach's own diagnosis, never a bare "needs recovery" (VC-659):
             // the caller is usually the one placed to fix what refused it.
-            `It was created but its attachment failed, so no kickoff was submitted: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app.`,
+            started.kickoff === "held"
+            ? // Held for the Retry (VC-799), so the run it starts reports back
+              // the same way a ready start's does: the watch is armed now.
+              `It was created but its attachment failed, so its kickoff is held as its first message: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app, and the retry sends the kickoff. ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
+            : `It was created but its attachment failed, so no kickoff was submitted: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app.`,
       ].join("\n"),
     };
   } catch (error) {
@@ -893,7 +897,9 @@ async function delegateSessionTool(
         `Model: ${outcome.model.providerId}/${outcome.model.modelId} at reasoning ${outcome.model.reasoningLevel}.`,
         outcome.state === "running"
           ? `It is attached and working on the task in this Session's working directory, with no time limit. Keep working, or end your turn: when it finishes, a notice from Volli arrives in this Session carrying its final message, read mid-turn or opening a new turn. Do not poll for it; \`volli session peek ${outcome.handle}\` can look in on it meanwhile.`
-          : "It was created but its attachment needs recovery, so the task was not sent. A person can retry it from the app; its notice arrives when it has run.",
+          : outcome.taskHeld
+            ? "It was created but its attachment needs recovery, so the task is held as its first message: it is sent when a person retries the Session from the app, and its notice arrives in this Session when it has run."
+            : "It was created but its attachment needs recovery, and the task could not be held for it: nothing was sent, and no notice will arrive.",
       ].join("\n"),
     };
   } catch (error) {
