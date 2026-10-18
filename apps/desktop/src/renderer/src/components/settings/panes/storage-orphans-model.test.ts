@@ -23,6 +23,7 @@ import {
   describeRemovable,
   describeRunFailures,
   describeUnreadableProject,
+  dirtyOrphanRow,
   hasCleanupWork,
   historyRows,
   isScanStale,
@@ -757,5 +758,68 @@ describe("an outcome recorded by a later launch", () => {
     expect(describeCompleted(run(), item({ branch: null, reconciledAt }))).toContain(
       "confirmed it at",
     );
+  });
+});
+
+// VC-292: the row leads with the ticket, and every state it cannot act on is a
+// named fallback rather than a button that fails.
+describe("dirtyOrphanRow", () => {
+  const claimed = {
+    path: "/wt/volli-code/VC-82-strand",
+    projectId: "p1",
+    projectName: "Volli Code",
+    reason: "A ticket still points here, but git no longer tracks it.",
+  };
+
+  it("leads with a live ticket and offers it instead of Delete", () => {
+    expect(
+      dirtyOrphanRow({
+        ...claimed,
+        ticket: { id: "t82", displayId: "VC-82", title: "Strand it", archived: false },
+      }),
+    ).toEqual({
+      displayId: "VC-82",
+      title: "Strand it",
+      notices: [],
+      openTicketId: "t82",
+      deletable: false,
+      meta: "Volli Code — A ticket still points here, but git no longer tracks it.",
+    });
+  });
+
+  it("names an archived ticket, says how to reach it, and opens nothing", () => {
+    const row = dirtyOrphanRow({
+      ...claimed,
+      ticket: { id: "t82", displayId: "VC-82", title: "Strand it", archived: true },
+    });
+    expect(row.notices).toEqual(["Archived ticket"]);
+    expect(row.openTicketId).toBeNull();
+    expect(row.deletable).toBe(false);
+    expect(row.meta).toContain("Restore VC-82 from the Archive to open it.");
+  });
+
+  it("falls back to the folder name when no ticket claims it, and keeps Delete", () => {
+    const row = dirtyOrphanRow({
+      path: "/wt/volli-code/leftover/",
+      reason: "Not registered with git, so it isn't safe to remove automatically.",
+    });
+    expect(row).toEqual({
+      displayId: null,
+      title: "leftover",
+      notices: ["No ticket"],
+      openTicketId: null,
+      deletable: true,
+      meta: "Not registered with git, so it isn't safe to remove automatically.",
+    });
+  });
+
+  it("says a folder could not be read, and survives a path with no segments", () => {
+    const row = dirtyOrphanRow({
+      path: "/",
+      reason: "could not read git status",
+      pathReadable: false,
+    });
+    expect(row.title).toBe("/");
+    expect(row.notices).toEqual(["No ticket", "Can't read folder"]);
   });
 });
