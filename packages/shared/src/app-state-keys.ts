@@ -158,6 +158,12 @@ const EXACT = {
     reason:
       "The desktop updater's channel (main/auto-update.ts); host-protocol.md's Update row. hostd's version follows the desktop (Decided 1).",
   },
+  "volli:update-last-check": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "When the desktop updater last checked and what it found (main/auto-update.ts), shown in Settings → Updates (VC-294). The desktop's own install, like the channel above.",
+  },
   "volli:notification-preferences": {
     placement: "client-local",
     owner: "VC-578",

@@ -431,6 +431,10 @@ export default defineConfig(({ mode }) => ({
         // and which are only killable one at a time. A missed branch there is
         // a button that signals something the person never singled out.
         "src/components/settings/panes/processes-model.ts",
+        // What Updates says the last check found (VC-294). The defect was a
+        // page that looked identical whatever a check answered, and a failure
+        // that lived only as long as its toast — every phase is a branch here.
+        "src/components/settings/panes/updates-pane-model.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
