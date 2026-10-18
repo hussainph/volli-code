@@ -36,14 +36,14 @@
  *    `git add -A` and `git commit`, which ride the same seam because the Done
  *    flow drives them together. All of them are bounded at 120 s, and one push
  *    holding a slot here would starve every 8 s local read queued behind it.
- *  - {@link runGitCapturing} and its callers — `harness-workspace.ts` most
- *    concretely, whose per-file `ls-files` and `rev-parse --git-common-dir`
- *    run on a Session start. So a Session start can hold one synchronous child
- *    BESIDE this bound's five, and the honest ceiling is five admitted async
- *    children plus whatever the synchronous runner is doing. That runner
- *    bounds itself by blocking the main thread — which is the whole reason the
- *    async runner exists, and why the ordering of worktree CHANGES is a
- *    separate concern handled in `repository-turn.ts` rather than here.
+ *  - {@link runGitCapturing}, whose one production caller is the confirmed
+ *    orphan cleanup's final gate (`cleanup.ts`) — reads only, since VC-786
+ *    moved that cleanup's `worktree remove` and `prune` onto this bound. So the
+ *    honest ceiling is five admitted async children plus at most one gate read.
+ *    That runner bounds itself by blocking the main thread — which is the
+ *    whole reason the async runner exists, and why the ordering of worktree
+ *    CHANGES is a separate concern handled in `repository-turn.ts` rather than
+ *    here.
  *  - git children this process did not start: the user's own terminal, a
  *    second Volli install, and the agents Volli runs. Nothing in one process
  *    can bound those, and this bound does not pretend to.
@@ -118,8 +118,7 @@ export const GIT_MUTATION_KILL_GRACE_MS = 5_000;
 /**
  * How many git children this module may have in flight at once — the async
  * ones it admits, not every git child in the process. The module comment above
- * names what sits outside it, and `harness-workspace.ts`'s synchronous reads
- * are the one that runs on the same Session start.
+ * names what sits outside it.
  *
  * The bound exists because the old synchronous runner was quietly doing a
  * second job. Because it blocked the main thread, only one git command could
@@ -545,16 +544,19 @@ function localGitArgs(args: readonly string[]): string[] {
 }
 
 /**
- * Default synchronous worktree git runner. Since VC-383 it has ONE deliberate
- * consumer on a user path: the confirmed orphan cleanup's gate (`cleanup.ts`),
- * which may not yield between its last look and the delete. Everything else a
+ * The synchronous worktree git runner. It has ONE deliberate consumer: the
+ * confirmed orphan cleanup's final gate (`cleanup.ts`), whose READS may not
+ * yield between its last look and the mutation it admits. It reaches that gate
+ * on its own port (`OrphanCleanupWorktreePorts.gateGit`) and rides no shared
+ * deps bundle, so no other path can pick it up by accident (VC-786). The
+ * cleanup's `worktree remove` and `prune` themselves, and everything else a
  * person or a timer reaches — the scan, remove, trim, commit, the harness
- * workspace, every rail read — runs on {@link runGitCapturingAsync}, because a
+ * workspace, every rail read — run on {@link runGitCapturingAsync}, because a
  * sync child on Electron main is the beachball. Reaching for this one for a new
  * read is the wrong default. Every child here has the READ deadline
- * ({@link GIT_COMMAND_TIMEOUT_MS}), mutations included, so a malformed local
- * hook cannot freeze Electron indefinitely; the async runner's longer, polite
- * mutation backstop is deliberately not offered on a thread that blocks.
+ * ({@link GIT_COMMAND_TIMEOUT_MS}) and its SIGKILL, which is why no mutation may
+ * run on it: the async runner's longer, polite mutation backstop is
+ * deliberately not offered on a thread that blocks.
  */
 export const runGitCapturing: RunGit = (args, cwd) => {
   try {

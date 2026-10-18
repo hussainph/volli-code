@@ -33,10 +33,12 @@
  *
  * Two shapes of the callback matter to callers:
  *
- *  - A SYNCHRONOUS change runs as one uninterrupted unit. `cleanup.ts` relies
- *    on this: its final safety gate and the irreversible mutation that follows
- *    are passed in together precisely because nothing may `await` between the
- *    gate's answer and the removal.
+ *  - The SYNCHRONOUS part of a change runs as one uninterrupted unit, and the
+ *    turn is held until the promise it returns settles. `cleanup.ts` relies on
+ *    both: its final safety gate and the START of the irreversible mutation
+ *    that follows are passed in together precisely because nothing may `await`
+ *    between the gate's answer and the removal, and the removal is then
+ *    awaited inside the turn on the async runner (VC-786).
  *  - An IDLE repository runs the change in the CALLER'S OWN TURN, before this
  *    function returns. So taking the turn costs a Session start nothing when it
  *    is the only one changing that repository, and it does not insert a

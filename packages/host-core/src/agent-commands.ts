@@ -37,7 +37,7 @@ import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import type { DoorActor } from "./agent-dispatch/resolution";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
-import { runGitCapturing, runGitCapturingAsync } from "./worktree";
+import { runGitCapturingAsync } from "./worktree";
 
 export {
   composeProjectBrief,
@@ -77,10 +77,8 @@ export function createAgentCommandService(
   // detached); the global `crypto.randomUUID` would lose its Crypto `this` when
   // called via this alias and throw "Value of 'this' must be of type Crypto".
   const newId = options.newId ?? randomUUID;
-  const git = options.git ?? runGitCapturing;
-  // Keep the default physically asynchronous. A custom synchronous test seam
-  // may still serve status/diff reads, but sync and radar must never fall back
-  // to it for a hook-bearing or whole-worktree operation.
+  // Keep the default physically asynchronous: every worktree verb this door
+  // serves runs on it, and there is no synchronous runner to fall back to.
   const gitAsync = options.gitAsync ?? runGitCapturingAsync;
   const worktreeExists = options.worktreeExists ?? existsSync;
   const sessionEngine = options.sessionEngine;
@@ -238,7 +236,6 @@ export function createAgentCommandService(
         options,
         now,
         newId,
-        git,
         gitAsync,
         worktreeExists,
         sessionEngine,
