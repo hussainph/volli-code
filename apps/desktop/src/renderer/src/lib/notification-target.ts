@@ -18,13 +18,14 @@
  *  - Automations, Configure and Settings show neither, whatever the ticket
  *    record still remembers.
  *
- * The ticket is on screen only behind Home's BOARD tab. `openTicketId` survives
- * leaving it — across Home's own Session/file/browser tabs (VC-54), across the
- * other nav pages, under Settings — so reading it alone named a Session nobody
- * could see. That is the expensive direction: main suppressed its alerts and
- * wrote its read receipt while the person was looking at something else.
- * {@link visibleNotificationSurface} is the one resolution both this decision
- * and its hook read, the same gates `terminalFocusTargetForChrome` applies.
+ * A ticket is on screen only while Home's BOARD tab is in front with that
+ * ticket open. Any other Home tab is on screen as itself, a project-scoped
+ * tab, whether or not a ticket is still remembered behind it. Settings, and
+ * every nav page but Home, put nothing on screen. A Session reported here has
+ * its alerts suppressed and is marked read, so when a surface is in doubt the
+ * report names less, never more. {@link visibleNotificationSurface} applies
+ * these gates, the same ones `terminalFocusTargetForChrome` applies, and its
+ * one answer feeds both this decision and the hook's store reads.
  *
  * Whether the WINDOW is focused is deliberately not asked here: this process
  * cannot answer it honestly (a document can have focus in an unfocused window,
@@ -60,7 +61,7 @@ export interface TerminalSessionPlacement {
 }
 
 /** The store reads this decision is a function of. */
-export interface ActiveTargetReading {
+interface ActiveTargetReading {
   projectId: string | null;
   nav: "home" | "automations" | "configure";
   /** App-wide Settings is chrome layered OVER the workspace, hiding Home. */
@@ -87,7 +88,7 @@ export interface ActiveTargetReading {
 }
 
 /** The surface in front: the ticket it belongs to, if any, and its active tab. */
-export interface VisibleNotificationSurface {
+interface VisibleNotificationSurface {
   projectId: string;
   /** The ticket on screen — null on a Home work tab, even with one remembered. */
   ticketId: string | null;
@@ -122,9 +123,17 @@ export function visibleNotificationSurface(
   return { projectId, ticketId: null, activeTabId: reading.homeActiveTab, ownerId: projectId };
 }
 
-/** What this window is showing, in the vocabulary main suppresses against. */
-export function activeNotificationTarget(reading: ActiveTargetReading): NotificationTarget | null {
-  const surface = visibleNotificationSurface(reading);
+/**
+ * What this window is showing, in the vocabulary main suppresses against.
+ *
+ * Takes the surface `visibleNotificationSurface` resolved rather than resolving
+ * it again, so the facts read about that surface's tab (`reading`) and the
+ * surface this reports are one answer, not two.
+ */
+export function activeNotificationTarget(
+  surface: VisibleNotificationSurface | null,
+  reading: Pick<ActiveTargetReading, "terminalSessionId" | "chatItem">,
+): NotificationTarget | null {
   if (surface === null) return null;
   const { projectId, ticketId, activeTabId } = surface;
   const chatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);

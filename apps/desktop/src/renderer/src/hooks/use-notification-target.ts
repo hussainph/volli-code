@@ -78,14 +78,20 @@ export function useNotificationTargetReport(): void {
       : (state.byProject[projectId]?.homeActiveTab ?? DEFAULT_WORKSPACE_UI.homeActiveTab),
   );
   const settingsOpen = useUiStore((state) => state.settingsOpen);
-  const surface = visibleNotificationSurface({
-    projectId,
-    nav,
-    settingsOpen,
-    openTicketId,
-    activeTicketTabId,
-    homeActiveTab,
-  });
+  // Memoized so the report below re-sends when the surface changes, not on
+  // every render that builds an equal object.
+  const surface = React.useMemo(
+    () =>
+      visibleNotificationSurface({
+        projectId,
+        nav,
+        settingsOpen,
+        openTicketId,
+        activeTicketTabId,
+        homeActiveTab,
+      }),
+    [activeTicketTabId, homeActiveTab, nav, openTicketId, projectId, settingsOpen],
+  );
   const activeTabId = surface?.activeTabId ?? null;
   const chatSessionId = activeTabId === null ? null : parseChatTabId(activeTabId);
 
@@ -124,25 +130,7 @@ export function useNotificationTargetReport(): void {
 
   React.useEffect(() => {
     window.api.notifications.setActiveTarget(
-      activeNotificationTarget({
-        projectId,
-        nav,
-        settingsOpen,
-        openTicketId,
-        activeTicketTabId,
-        homeActiveTab,
-        terminalSessionId,
-        chatItem,
-      }),
+      activeNotificationTarget(surface, { terminalSessionId, chatItem }),
     );
-  }, [
-    activeTicketTabId,
-    chatItem,
-    homeActiveTab,
-    nav,
-    openTicketId,
-    projectId,
-    settingsOpen,
-    terminalSessionId,
-  ]);
+  }, [chatItem, surface, terminalSessionId]);
 }
