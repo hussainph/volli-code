@@ -28,12 +28,14 @@ import {
 import {
   ACTIVE_QUIET_WINDOW_MS,
   buildActiveSessionListing,
+  capPreviousEntries,
   isProjectSessionRowSelected,
   groupPreviousByTicket,
   DONE_LINGER_MS,
   isCleanupExempt,
   isConcludedBusiness,
   listingOutputStamps,
+  PREVIOUS_BAND_LIMIT,
   PREVIOUS_MAX_AGE_MS,
   sessionRowRoute,
   sessionRowScope,
@@ -2893,6 +2895,78 @@ describe("groupPreviousByTicket", () => {
     expect(groupPreviousByTicket([row])).toEqual([
       { kind: "ticket", id: "t1", ticket: t1, rows: [row], newestAt: 2_000 },
     ]);
+  });
+});
+
+const sliceIds = (slice: { entries: readonly { id: string }[] }) =>
+  slice.entries.map((entry) => entry.id);
+const nothingPinned = () => false;
+
+/**
+ * VC-116: the Previous band draws its first {@link PREVIOUS_BAND_LIMIT}
+ * entries, and never hides the one holding the tab in front of you.
+ */
+describe("capPreviousEntries", () => {
+  const t1 = ticket({ id: "t1", status: "doing", ticketNumber: 1 });
+  /** `count` ticketless entries, newest first, ids `s0`…`s{count-1}`. */
+  const entriesOf = (count: number) =>
+    groupPreviousByTicket(
+      Array.from({ length: count }, (_, index) =>
+        previousRow({ id: `s${index}`, endedOrQuietAt: 100_000 - index }),
+      ),
+    );
+
+  it("is a named cap of about twenty entries", () => {
+    expect(PREVIOUS_BAND_LIMIT).toBe(20);
+  });
+
+  it("shows a band that fits whole, with nothing held back", () => {
+    const entries = entriesOf(PREVIOUS_BAND_LIMIT);
+
+    const slice = capPreviousEntries(entries, PREVIOUS_BAND_LIMIT, nothingPinned);
+
+    expect(slice.entries).toEqual(entries);
+    expect(slice.entries).not.toBe(entries);
+    expect(slice.hiddenCount).toBe(0);
+  });
+
+  it("draws only the first `limit` entries of a longer band, and counts the rest", () => {
+    const entries = entriesOf(PREVIOUS_BAND_LIMIT + 5);
+
+    const slice = capPreviousEntries(entries, PREVIOUS_BAND_LIMIT, nothingPinned);
+
+    expect(sliceIds(slice)).toEqual(entries.slice(0, PREVIOUS_BAND_LIMIT).map((entry) => entry.id));
+    expect(slice.hiddenCount).toBe(5);
+  });
+
+  it("widens to whatever limit it is given, down to the whole band", () => {
+    const entries = entriesOf(45);
+
+    expect(capPreviousEntries(entries, 40, nothingPinned).hiddenCount).toBe(5);
+    expect(capPreviousEntries(entries, 60, nothingPinned)).toEqual({ entries, hiddenCount: 0 });
+  });
+
+  it("keeps the selected entry past the cap, at its own place in the order", () => {
+    const entries = entriesOf(30);
+
+    const slice = capPreviousEntries(entries, 3, (entry) => entry.id === "s17");
+
+    expect(sliceIds(slice)).toEqual(["s0", "s1", "s2", "s17"]);
+    expect(slice.hiddenCount).toBe(26);
+  });
+
+  it("counts a ticket folder as one entry however many Sessions it holds", () => {
+    const rows = [
+      previousRow({ id: "a", ticket: t1, endedOrQuietAt: 9_000 }),
+      previousRow({ id: "b", ticket: t1, endedOrQuietAt: 8_000 }),
+      previousRow({ id: "c", ticket: t1, endedOrQuietAt: 7_000 }),
+      previousRow({ id: "orphan", endedOrQuietAt: 6_000 }),
+    ];
+
+    const slice = capPreviousEntries(groupPreviousByTicket(rows), 1, nothingPinned);
+
+    expect(sliceIds(slice)).toEqual(["t1"]);
+    expect(slice.hiddenCount).toBe(1);
   });
 });
 

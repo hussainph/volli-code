@@ -1,4 +1,6 @@
 import * as React from "react";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
 import {
   applyHeldOrder,
   errorMessage,
@@ -17,6 +19,7 @@ import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import {
   SidebarGroup,
   SidebarMenu,
+  SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
@@ -24,9 +27,11 @@ import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import {
   buildActiveSessionListing,
+  capPreviousEntries,
   groupPreviousByTicket,
   isProjectSessionRowSelected,
   listingSessionIds,
+  PREVIOUS_BAND_LIMIT,
   sessionRowRoute,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -459,6 +464,16 @@ export function ActiveSessions({
   // through is a question about this glance, not a preference. It resets with
   // the window, like every other view-local narrowing in the app.
   const [filter, setFilter] = React.useState<SessionBandFilter>(DEFAULT_SESSION_BAND_FILTER);
+  // How deep into Previous this glance reaches (VC-116). Ephemeral for the
+  // filter's reason, and tied to the project it was widened for: switching
+  // projects reuses this component, and another project's history starts at
+  // the cap again.
+  const [previousReach, setPreviousReach] = React.useState({
+    projectId: project.id,
+    limit: PREVIOUS_BAND_LIMIT,
+  });
+  const previousLimit =
+    previousReach.projectId === project.id ? previousReach.limit : PREVIOUS_BAND_LIMIT;
   // Bumped to force a re-read on the coarse timer below, without pretending
   // anything about the inputs changed.
   const [refreshTick, setRefreshTick] = React.useState(0);
@@ -896,6 +911,42 @@ export function ActiveSessions({
   }, [selectedGroupId, project.id, setSessionGroupExpanded]);
 
   /**
+   * The entry the cap must never hide: the ticket group above, or a ticketless
+   * Session that is itself the tab in front of you. Settled to an id so the
+   * slice below re-derives only when the selection or the band moves.
+   */
+  let selectedEntryId = selectedGroupId;
+  if (selectedEntryId === null) {
+    for (const entry of previousEntries) {
+      if (entry.kind !== "session" || !isSelected(entry.row)) continue;
+      selectedEntryId = entry.id;
+      break;
+    }
+  }
+
+  /**
+   * The Previous entries actually MOUNTED (VC-116): the first `previousLimit`,
+   * plus the selected entry wherever it ranks. Everything downstream that walks
+   * drawn rows — the keyboard order, the folders a card lists — reads this, so
+   * an arrow key can never land on a row that is not on screen.
+   */
+  const previousSlice = React.useMemo(
+    () =>
+      capPreviousEntries(previousEntries, previousLimit, (entry) => entry.id === selectedEntryId),
+    [previousEntries, previousLimit, selectedEntryId],
+  );
+  const showMorePrevious = React.useCallback(() => {
+    setPreviousReach((reach) => ({
+      projectId: project.id,
+      limit:
+        (reach.projectId === project.id ? reach.limit : PREVIOUS_BAND_LIMIT) + PREVIOUS_BAND_LIMIT,
+    }));
+  }, [project.id]);
+  const showLessPrevious = React.useCallback(() => {
+    setPreviousReach({ projectId: project.id, limit: PREVIOUS_BAND_LIMIT });
+  }, [project.id]);
+
+  /**
    * Opens or closes one ticket's group. Stable, and handed to every entry AS IS
    * for the same reason `activate` is: `TicketGroupRow` is memoised, and a
    * fresh `() => toggle(id)` per entry per render is exactly the prop that
@@ -1119,14 +1170,14 @@ export function ActiveSessions({
     () =>
       sessionBandModel({
         active: activeRows.map((row) => row.id),
-        previous: previousEntries.map((entry): SessionBandEntry =>
+        previous: previousSlice.entries.map((entry): SessionBandEntry =>
           entry.kind === "session"
             ? { kind: "session", rowId: entry.id }
             : { kind: "folder", ticketId: entry.id, rowIds: entry.rows.map((row) => row.id) },
         ),
         expanded: expandedGroups,
       }),
-    [activeRows, expandedGroups, previousEntries],
+    [activeRows, expandedGroups, previousSlice],
   );
 
   /**
@@ -1300,7 +1351,7 @@ export function ActiveSessions({
         <p className={EMPTY_INLINE}>Nothing yet</p>
       ) : (
         <SidebarMenu>
-          {previousEntries.map((entry) =>
+          {previousSlice.entries.map((entry) =>
             entry.kind === "session" ? (
               <PreviousBandRow
                 key={entry.id}
@@ -1350,6 +1401,14 @@ export function ActiveSessions({
               </SidebarMenuItem>
             ),
           )}
+          <PreviousBandReach
+            canShowMore={previousSlice.hiddenCount > 0}
+            canShowLess={
+              previousLimit > PREVIOUS_BAND_LIMIT && previousEntries.length > PREVIOUS_BAND_LIMIT
+            }
+            onShowMore={showMorePrevious}
+            onShowLess={showLessPrevious}
+          />
         </SidebarMenu>
       )}
     </SidebarGroup>
@@ -1392,6 +1451,73 @@ export function ActiveSessions({
           real plane. It reads the Session; the port above marks it. */}
       <PeekConversation sessionId={viewedSessionId} onClose={() => setViewedSessionId(null)} />
     </>
+  );
+}
+
+/**
+ * The Previous band's last row (VC-116): "Show more" while entries sit past the
+ * cap, "Show less" once the band has been widened. Plain buttons in the tab
+ * order, so Tab reaches them and Enter or Space presses them; they are not
+ * Session rows, so the band's arrow-key walk does not stop on them.
+ *
+ * Pressing one can unmount it — the last "Show more" leaves nothing to show,
+ * "Show less" leaves nothing to collapse — and focus would then fall to the
+ * document, dropping a keyboard reader out of the sidebar. So when the button
+ * that held focus is gone, its sibling takes it.
+ */
+function PreviousBandReach({
+  canShowMore,
+  canShowLess,
+  onShowMore,
+  onShowLess,
+}: {
+  canShowMore: boolean;
+  canShowLess: boolean;
+  onShowMore(): void;
+  onShowLess(): void;
+}) {
+  const moreRef = React.useRef<HTMLButtonElement>(null);
+  const lessRef = React.useRef<HTMLButtonElement>(null);
+  const pressed = React.useRef(false);
+  // Every commit, not keyed on the two flags: a press that changes neither must
+  // still be consumed here, or a later, unrelated commit would act on it.
+  React.useLayoutEffect(() => {
+    if (!pressed.current) return;
+    pressed.current = false;
+    const focused = document.activeElement;
+    if (focused !== null && focused !== document.body) return;
+    (moreRef.current ?? lessRef.current)?.focus();
+  });
+  if (!canShowMore && !canShowLess) return null;
+  const press = (action: () => void) => () => {
+    pressed.current = true;
+    action();
+  };
+  return (
+    <SidebarMenuItem className="flex gap-1">
+      {canShowMore ? (
+        <SidebarMenuButton
+          ref={moreRef}
+          size="sm"
+          onClick={press(onShowMore)}
+          className="h-6 w-auto gap-1.5 text-ui text-muted-foreground"
+        >
+          <CaretDownIcon weight="bold" aria-hidden className="size-3 shrink-0" />
+          <span>Show more</span>
+        </SidebarMenuButton>
+      ) : null}
+      {canShowLess ? (
+        <SidebarMenuButton
+          ref={lessRef}
+          size="sm"
+          onClick={press(onShowLess)}
+          className="h-6 w-auto gap-1.5 text-ui text-muted-foreground"
+        >
+          <CaretUpIcon weight="bold" aria-hidden className="size-3 shrink-0" />
+          <span>Show less</span>
+        </SidebarMenuButton>
+      ) : null}
+    </SidebarMenuItem>
   );
 }
 
