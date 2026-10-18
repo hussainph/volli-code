@@ -17,6 +17,7 @@ function support(overrides: Partial<SupportInfo> = {}): SupportInfo {
     arch: "arm64",
     schemaVersion: 34,
     migrationHistory: "consistent",
+    lastUpdateCheck: "none recorded",
     ...overrides,
   };
 }
@@ -83,7 +84,7 @@ describe("buildAboutReport — support metadata", () => {
   it("starts with when it was taken and what took it", () => {
     const lines = report().split("\n");
 
-    expect(lines.slice(0, 7)).toEqual([
+    expect(lines.slice(0, 8)).toEqual([
       "Volli report",
       `Generated at: ${GENERATED_AT}`,
       "App version: 0.2.0-canary.4",
@@ -91,6 +92,7 @@ describe("buildAboutReport — support metadata", () => {
       "OS: darwin arm64",
       "Database schema: 34",
       "Migration history: consistent",
+      "Last update check: none recorded",
     ]);
   });
 
@@ -138,6 +140,7 @@ describe("buildAboutReport — support metadata", () => {
       "appVersion",
       "arch",
       "channel",
+      "lastUpdateCheck",
       "migrationHistory",
       "platform",
       "schemaVersion",

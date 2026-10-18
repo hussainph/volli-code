@@ -17,6 +17,7 @@ import {
 import {
   deleteMcpServer,
   getMcpServer,
+  getMcpServerEnabled,
   listMcpServers,
   markMcpServerRefreshFailure,
   putMcpServer,
@@ -33,6 +34,7 @@ import {
 } from "./credentials";
 import { discoverMcpServer, type OpenMcpProtocolClient } from "./discovery";
 import { McpOAuthBroker, mcpOAuthServer, type McpSignInOutcome } from "./oauth";
+import { disconnectMcpServer } from "./session-host";
 
 /**
  * A failure that a person can unblock carries `blocked`, so a caller can route
@@ -147,6 +149,10 @@ export class McpSettingsService {
   readonly #environment: () => Readonly<Record<string, string | undefined>>;
   readonly #oauth: McpOAuthBroker;
   readonly #surfaceRevisions = new Map<string, number>();
+  readonly #configured = new Map<
+    string,
+    { revision: number; value: { readonly enabled: boolean } | undefined }
+  >();
 
   constructor(options: McpSettingsOptions) {
     this.#db = options.db;
@@ -213,6 +219,23 @@ export class McpSettingsService {
 
   list(projectId: string): readonly McpServerRecord[] {
     return listMcpServers(this.#db, projectId);
+  }
+
+  /**
+   * Whether one server is configured in a project now, and enabled: what a
+   * running attachment checks before every call to it (VC-771). Remembered
+   * until the project's MCP settings next change, which every write here
+   * marks, so a call reads SQLite only after a person changed something.
+   */
+  configured(projectId: string, serverId: string): { readonly enabled: boolean } | undefined {
+    const key = `${projectId}\u0000${serverId}`;
+    const revision = this.surfaceRevision(projectId);
+    const known = this.#configured.get(key);
+    if (known !== undefined && known.revision === revision) return known.value;
+    const enabled = getMcpServerEnabled(this.#db, projectId, serverId);
+    const value = enabled === undefined ? undefined : { enabled };
+    this.#configured.set(key, { revision, value });
+    return value;
   }
 
   selectedTools(projectId: string): readonly McpToolDefinition[] {
@@ -372,6 +395,7 @@ export class McpSettingsService {
         updatedAt: now,
       });
       this.#surfaceChanged(input.projectId);
+      if (!saved.enabled) disconnectMcpServer(saved.id);
       this.#keepSecrets(saved, pending);
       return { ok: true, server: saved };
     } catch (error) {
@@ -533,6 +557,9 @@ export class McpSettingsService {
       updatedAt: this.#now(),
     });
     this.#surfaceChanged(input.projectId);
+    // Sessions that hold its tools keep them, but a server a person turned off
+    // stops running for them too (VC-771).
+    if (!input.enabled) disconnectMcpServer(input.serverId);
     return { ok: true, server };
   }
 
@@ -577,6 +604,7 @@ export class McpSettingsService {
     }
     this.#surfaceChanged(input.projectId);
     this.#store.delete(input.serverId);
+    disconnectMcpServer(input.serverId);
     return { ok: true };
   }
 

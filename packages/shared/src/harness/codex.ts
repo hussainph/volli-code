@@ -89,7 +89,8 @@ export const codexAdapter: HarnessAdapter = {
     instructionsFile: null,
   },
   injection: { kind: "codex-config-override", flag: "-c" },
-  // The id is discovered from the rollout file, not accepted at launch.
+  // Not accepted at launch: the id arrives on hook payloads (`volli hook` reads
+  // `session_id` / `thread-id`) or through `volli session link`.
   sessionId: { kind: "none" },
   resume: {
     byId: ["resume", "{id}"],

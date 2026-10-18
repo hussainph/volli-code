@@ -5,7 +5,7 @@ import type { BrowserTabHolder, BrowserTabState } from "@volli/shared";
 import { createAgentBrowserPort, type AgentBrowserBackend } from "./agent-port";
 import { BrowserAgentCoordinator } from "./agent-coordinator";
 import { BrowserSessionTabLimitError, type BrowserSessionHolder } from "./backend";
-import type { CdpTransport, TabCursorDriver } from "./cdp-controller";
+import { CDP_COMMAND_TIMEOUT_MS, type CdpTransport, type TabCursorDriver } from "./cdp-controller";
 import type { BrowserTraceStepInput } from "./trace-store";
 
 /** The one-button page every scripted transport answers with. */
@@ -861,6 +861,161 @@ describe("createAgentBrowserPort find (VC-364)", () => {
     expect(refused).toBeInstanceOf(BrowserRefusal);
     // A refusal raised in the controller still names the page it was aimed at.
     expect(refused).toMatchObject({ rule: "browser.find-query", page: { tabId: "user-1" } });
+  });
+});
+
+describe("createAgentBrowserPort empty pages, timeouts and act evidence (VC-277)", () => {
+  /** A blank document: Chromium's root and nothing under it. */
+  const EMPTY_TREE = {
+    nodes: [{ nodeId: "1", ignored: false, role: { value: "RootWebArea" }, childIds: [] }],
+  };
+
+  /** The fixture page once a click has opened a dialog over it. */
+  const DIALOG_TREE = {
+    nodes: [
+      { ...BUTTON_TREE.nodes[0]!, childIds: ["2", "3"] },
+      BUTTON_TREE.nodes[1]!,
+      { nodeId: "3", ignored: false, role: { value: "dialog" }, name: { value: "Composer" } },
+    ],
+  };
+
+  /**
+   * A port over one tab whose page answers as `page` says. `onClick` runs when
+   * a click's mouse-up reaches the page — the moment a real page reacts.
+   */
+  function over(
+    page: { tree: () => object; hang?: string },
+    onClick: (tabs: Map<string, BrowserTabState>) => void = () => undefined,
+  ) {
+    const fake = fakeHost([state({ tabId: "mine", createdBy: "session" })]);
+    const browser = createAgentBrowserPort({
+      host: fake.host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      transportFor: () => ({
+        send: async (method, params) => {
+          if (method === page.hang) return await new Promise<never>(() => undefined);
+          if (method === "Accessibility.getFullAXTree") return page.tree();
+          if (method === "DOM.getBoxModel") return BUTTON_BOX;
+          if ((params as { type?: string } | undefined)?.type === "mouseReleased") {
+            onClick(fake.tabs);
+          }
+          return {};
+        },
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+    return { port: browser, tabs: fake.tabs };
+  }
+
+  it("says a page with no accessible structure is empty, on a read and on a navigation", async () => {
+    const { port: blank } = over({ tree: () => EMPTY_TREE });
+
+    const read = await blank.snapshot({ tabId: "mine", signal });
+    expect(read).toMatchObject({ snapshotText: "", empty: true, truncated: false });
+    const opened = await blank.navigate({
+      tabId: "mine",
+      navigation: { kind: "url", url: "http://localhost:5181/" },
+      signal,
+    });
+    expect(opened).toMatchObject({ snapshotText: "", empty: true });
+
+    const { port: full } = over({ tree: () => BUTTON_TREE });
+    await expect(full.snapshot({ tabId: "mine", signal })).resolves.toMatchObject({
+      empty: false,
+    });
+  });
+
+  it("fails a read or a screenshot the engine never answered as a timeout, not as an empty page", async () => {
+    vi.useFakeTimers();
+    try {
+      const { port: stuck } = over({
+        tree: () => BUTTON_TREE,
+        hang: "Accessibility.getFullAXTree",
+      });
+      const reading = stuck.snapshot({ tabId: "mine", signal });
+      const read = expect(reading).rejects.toThrow(
+        `did not finish taking a snapshot within ${CDP_COMMAND_TIMEOUT_MS}ms`,
+      );
+      await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
+      await read;
+
+      const { port: blind } = over({ tree: () => BUTTON_TREE, hang: "Page.captureScreenshot" });
+      const capturing = blind.screenshot({ tabId: "mine", signal });
+      const shot = expect(capturing).rejects.toThrow(
+        `did not finish taking a screenshot within ${CDP_COMMAND_TIMEOUT_MS}ms`,
+      );
+      await vi.advanceTimersByTimeAsync(CDP_COMMAND_TIMEOUT_MS);
+      await shot;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails a read whose answer carried no tree, rather than calling the page empty", async () => {
+    const { port: broken } = over({ tree: () => ({}) });
+
+    await expect(broken.snapshot({ tabId: "mine", signal })).rejects.toThrow(
+      "answered without an accessibility tree",
+    );
+  });
+
+  it("reports a click the page ignored as hitting its target and changing nothing", async () => {
+    const { port: inert } = over({ tree: () => BUTTON_TREE });
+    const read = await inert.snapshot({ tabId: "mine", signal });
+
+    const acted = await inert.act({
+      tabId: "mine",
+      generation: read.generation,
+      kind: "click",
+      ref: refIn(read.snapshotText),
+      signal,
+    });
+
+    expect(acted.target).toEqual({ ref: "e1", name: "Save" });
+    expect(acted.changed).toEqual({ url: false, generation: false, tree: false });
+  });
+
+  it("sees a dialog the click opened in the tree, though no navigation moved the generation", async () => {
+    let open = false;
+    const { port: page } = over({ tree: () => (open ? DIALOG_TREE : BUTTON_TREE) }, () => {
+      open = true;
+    });
+    const read = await page.snapshot({ tabId: "mine", signal });
+
+    const acted = await page.act({
+      tabId: "mine",
+      generation: read.generation,
+      kind: "click",
+      ref: refIn(read.snapshotText),
+      signal,
+    });
+
+    expect(acted.changed).toEqual({ url: false, generation: false, tree: true });
+    expect(acted.generation).toBe(read.generation);
+    expect(acted.snapshotText).toContain('dialog "Composer"');
+  });
+
+  it("sees a navigation the click started in the URL and the generation", async () => {
+    const { port: page } = over({ tree: () => BUTTON_TREE }, (tabs) => {
+      const tab = tabs.get("mine")!;
+      tabs.set("mine", { ...tab, url: "https://example.com/next", generation: tab.generation + 1 });
+    });
+    const read = await page.snapshot({ tabId: "mine", signal });
+
+    const acted = await page.act({
+      tabId: "mine",
+      generation: read.generation,
+      kind: "click",
+      ref: refIn(read.snapshotText),
+      signal,
+    });
+
+    // The next page happens to read like the last one, so only the URL and
+    // the generation say it moved — the tree alone would have missed it.
+    expect(acted.changed).toEqual({ url: true, generation: true, tree: false });
+    expect(acted).toMatchObject({ url: "https://example.com/next", generation: 2 });
   });
 });
 
@@ -1906,5 +2061,84 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
     const { port: traced, steps } = tracing([], { declineCapture: true });
     await traced.navigate({ navigation: { kind: "url", url: "https://example.com/" }, signal });
     expect(steps[0]?.pictureId).toBeNull();
+  });
+});
+
+describe("createAgentBrowserPort whole reads (VC-237)", () => {
+  /** A dense page: far more buttons than one snapshot prints. */
+  const DENSE_TREE = {
+    nodes: [
+      {
+        nodeId: "root",
+        ignored: false,
+        role: { value: "RootWebArea" },
+        childIds: Array.from({ length: 1_500 }, (_, index) => `b${index}`),
+      },
+      ...Array.from({ length: 1_500 }, (_, index) => ({
+        nodeId: `b${index}`,
+        ignored: false,
+        role: { value: "button" },
+        name: { value: `Action number ${index} on this dense page` },
+        backendDOMNodeId: 10_000 + index,
+        childIds: [],
+      })),
+    ],
+  };
+
+  function dense() {
+    const fake = fakeHost([state({ tabId: "mine", createdBy: "session" })]);
+    const kept = Array.from({ length: 150 }, (_, index) => ({
+      level: "log" as const,
+      text: `log ${index}`,
+    }));
+    fake.host.consoleOf = () => ({
+      messages: kept.slice(-100),
+      truncated: true,
+      kept: { messages: kept, bounded: false },
+    });
+    const browser = createAgentBrowserPort({
+      host: fake.host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      transportFor: () => ({
+        send: async (method) => {
+          if (method === "Accessibility.getFullAXTree") return DENSE_TREE;
+          if (method === "DOM.getBoxModel") return BUTTON_BOX;
+          return {};
+        },
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+    return { browser, kept };
+  }
+
+  it("hands the tree the bound cut beside a snapshot and an act's fresh read", async () => {
+    const { browser } = dense();
+
+    const read = await browser.snapshot({ tabId: "mine", signal });
+    expect(read.truncated).toBe(true);
+    expect(read.snapshotText).not.toContain("Action number 1499");
+    expect(read.whole?.bounded).toBe(false);
+    expect(read.whole?.text).toContain('- button "Action number 1499 on this dense page"');
+    expect(read.whole?.text.split("\n")).toHaveLength(1_500);
+
+    const acted = await browser.act({
+      tabId: "mine",
+      generation: read.generation,
+      kind: "click",
+      ref: "e1",
+      signal,
+    });
+    expect(acted.whole?.text).toContain("Action number 1499");
+  });
+
+  it("hands the console the host keeps beside a console read", async () => {
+    const { browser, kept } = dense();
+
+    const record = await browser.console({ tabId: "mine", signal });
+
+    expect(record.messages).toHaveLength(100);
+    expect(record.kept).toEqual({ messages: kept, bounded: false });
   });
 });

@@ -38,6 +38,7 @@
 import * as React from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/dist/csr/ArrowSquareOut";
 import { BookOpenIcon } from "@phosphor-icons/react/dist/csr/BookOpen";
+import { EyeIcon } from "@phosphor-icons/react/dist/csr/Eye";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
 import { WarningIcon } from "@phosphor-icons/react/dist/csr/Warning";
 import {
@@ -63,6 +64,7 @@ import {
   SectionAction,
 } from "@renderer/components/settings/kit";
 import { useAgentIndex } from "@renderer/components/settings/use-agent-index";
+import { ContentPreviewDialog } from "./content-preview-dialog";
 import { skillBodyTokens, skillsIndexTokens } from "./skills-budget";
 import {
   Select,
@@ -109,6 +111,9 @@ function skillScope(skill: SkillReference): "project" | "personal" {
 export function SkillsPane({ project }: { project: Project }) {
   const { state, reload } = useAgentIndex(project.id);
   const [filter, setFilter] = React.useState("all");
+  // Inspection is its own state, apart from the Mode column: opening a skill
+  // to read it never touches its rule, and ruling it never opens anything.
+  const [previewing, setPreviewing] = React.useState<SkillReference | null>(null);
 
   /**
    * The standing charge, in the `(i)` — the popover that answers "what is
@@ -121,29 +126,50 @@ export function SkillsPane({ project }: { project: Project }) {
       : null;
 
   return (
-    <AsyncSection
-      title="Skills"
-      icon={BookOpenIcon}
-      hint={
-        indexTokens === null ? (
-          <>
-            Auto costs prompt budget every turn. Manual keeps <code>/name</code> working.
-          </>
-        ) : (
-          <>Auto entries add ~{formatTokens(indexTokens)} tokens to every turn.</>
-        )
-      }
-      action={<SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />}
-      fill
-      state={state}
-      isEmpty={(data) => data.skills.length === 0}
-      empty="No skills yet. Add one to .agents/skills."
-    >
-      {(data) => (
-        <SkillsTable project={project} skills={data.skills} filter={filter} onFilter={setFilter} />
-      )}
-    </AsyncSection>
+    <>
+      <AsyncSection
+        title="Skills"
+        icon={BookOpenIcon}
+        hint={
+          indexTokens === null ? (
+            <>
+              Auto costs prompt budget every turn. Manual keeps <code>/name</code> working.
+            </>
+          ) : (
+            <>Auto entries add ~{formatTokens(indexTokens)} tokens to every turn.</>
+          )
+        }
+        action={<SectionAction label="Reload" icon={FolderOpenIcon} onAct={reload} />}
+        fill
+        state={state}
+        isEmpty={(data) => data.skills.length === 0}
+        empty="No skills yet. Add one to .agents/skills."
+      >
+        {(data) => (
+          <SkillsTable
+            project={project}
+            skills={data.skills}
+            filter={filter}
+            onFilter={setFilter}
+            onPreview={setPreviewing}
+          />
+        )}
+      </AsyncSection>
+      <ContentPreviewDialog
+        open={previewing !== null}
+        title={previewing?.name ?? ""}
+        origin={previewing === null ? "" : skillOrigin(previewing)}
+        description={previewing?.description || undefined}
+        body={{ status: "ready", data: { text: previewing?.body ?? "", truncated: false } }}
+        onClose={() => setPreviewing(null)}
+      />
+    </>
   );
+}
+
+/** Where a skill lives, as its preview's origin line: its tier, then its root. */
+function skillOrigin(skill: SkillReference): string {
+  return `${skillScope(skill) === "project" ? "This project" : "Personal"} · ${skill.root}`;
 }
 
 /**
@@ -182,11 +208,13 @@ function SkillsTable({
   skills,
   filter,
   onFilter,
+  onPreview,
 }: {
   project: Project;
   skills: readonly SkillReference[];
   filter: string;
   onFilter: (next: string) => void;
+  onPreview: (skill: SkillReference) => void;
 }) {
   const adoptProject = useProjectsStore((store) => store.adoptProject);
   // Optimistic: the control IS the state, and a Select that waits a round trip
@@ -247,7 +275,7 @@ function SkillsTable({
           header: "Skill",
           width: "20%",
           cell: (skill) => (
-            <Cell strong>
+            <Cell strong title={skill.name}>
               <span className="inline-flex items-center gap-1">
                 {skill.name}
                 {/*
@@ -296,16 +324,24 @@ function SkillsTable({
         {
           key: "open",
           header: "Open",
-          width: "2.5rem",
+          width: "4.5rem",
           align: "end",
           headerHidden: true,
           cell: (skill) => (
-            <RowAction
-              label={`Reveal ${skill.name} in Finder`}
-              hint="Reveal in Finder"
-              icon={ArrowSquareOutIcon}
-              onAct={() => void revealSkill(project, skill)}
-            />
+            <>
+              <RowAction
+                label={`Preview ${skill.name}`}
+                hint="Preview"
+                icon={EyeIcon}
+                onAct={() => onPreview(skill)}
+              />
+              <RowAction
+                label={`Reveal ${skill.name} in Finder`}
+                hint="Reveal in Finder"
+                icon={ArrowSquareOutIcon}
+                onAct={() => void revealSkill(project, skill)}
+              />
+            </>
           ),
         },
         {

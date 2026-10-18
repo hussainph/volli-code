@@ -370,6 +370,25 @@ export const DESKTOP_ENTRIES = [
     idempotency: "natural",
     summary: "Move a running foreground command into its Session's background shells.",
   },
+  // App shortcuts out of a focused Browser page (VC-301). Host-placed like
+  // `hosts.*`: the Browser Tab host and its native views are desktop main's,
+  // across every Workspace, and only the person's own window follows them.
+  // Desktop main serves them through the map's `BrowserShortcutsPort`
+  // (`@volli/host-core/handlers`); hostd has none, so both answer unavailable.
+  {
+    key: "browserShortcuts.subscribe",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Every app shortcut a focused Browser page hands back to the window.",
+  },
+  {
+    key: "browserShortcuts.focusPage",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Give keyboard focus back to a shown Browser page whose shortcut did nothing.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

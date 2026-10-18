@@ -198,7 +198,7 @@ afterEach(async () => {
   container = null;
   // Tests that observe the save payload replace this action; never let a
   // neighbour inherit the stub instead of the store's real command door.
-  useAutomationsStore.setState({ editor: null, update: originalUpdate });
+  useAutomationsStore.setState({ editor: null, update: originalUpdate, enabledIds: [] });
   // The draft cache is module-level and shared across tests; a leftover slot
   // would seed the next mount's fields and turn these tests order-dependent.
   clearEditorDraft("p1");
@@ -438,6 +438,60 @@ describe("schedule wording", () => {
     ) as HTMLInputElement;
     expect(minute.value).toBe("00");
     expect(minute.parentElement?.textContent).toContain("Minutes past the hour");
+  });
+});
+
+const KUWAIT_NINE_THIRTY = automation({
+  trigger: {
+    kind: "schedule",
+    schedule: { preset: "daily", hour: 9, minute: 30, timeZone: "Asia/Kuwait" },
+  },
+});
+
+function nextLine(): HTMLElement | undefined {
+  return [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Next: "));
+}
+
+describe("the next-run line (VC-298)", () => {
+  it("names the next occurrence while this machine fires it, and clears it when switched off", async () => {
+    useAutomationsStore.setState({ enabledIds: ["automation-1"] });
+    await mountEditor(KUWAIT_NINE_THIRTY);
+
+    expect(nextLine()).toBeDefined();
+    expect(document.body.textContent).toContain(
+      "Runs up to 2 min late; skipped if Volli is closed or the Mac is asleep",
+    );
+
+    await act(async () => {
+      useAutomationsStore.setState({ enabledIds: [] });
+    });
+    expect(nextLine()).toBeUndefined();
+    // The policy is the schedule's, whether or not it fires here right now.
+    expect(document.body.textContent).toContain("Runs up to 2 min late");
+  });
+
+  it("follows the time being edited before it is saved", async () => {
+    useAutomationsStore.setState({ enabledIds: ["automation-1"] });
+    await mountEditor(KUWAIT_NINE_THIRTY);
+    const before = nextLine()?.textContent;
+
+    await act(async () => {
+      buttonContaining("09:30").click();
+    });
+    const hour = document.querySelector('[aria-label="Hour"]') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      setter?.call(hour, "17");
+      hour.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    // 17:30 is a different time of day from 09:30 whatever the clock says now.
+    expect(nextLine()?.textContent).not.toBe(before);
+  });
+
+  it("says nothing about a next run for a record never switched on here", async () => {
+    await mountEditor(KUWAIT_NINE_THIRTY);
+    expect(nextLine()).toBeUndefined();
   });
 });
 

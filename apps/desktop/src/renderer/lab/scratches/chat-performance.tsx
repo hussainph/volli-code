@@ -1279,6 +1279,7 @@ function useStableList<T>(
  * 3000 of them cost more than 3000 memo compares.
  */
 const CountedTurn = React.memo(function CountedTurn(props: React.ComponentProps<typeof ChatTurn>) {
+  // oxlint-disable-next-line react/globals -- counting renders is this probe's measurement
   turnRenders += 1;
   return <ChatTurn {...props} />;
 });

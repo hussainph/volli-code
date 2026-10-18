@@ -927,7 +927,7 @@ A tracked codebase folder: name, path, ticket prefix, rail position. Removing on
 _Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), space
 
 **Ticket worktree**:
-The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another `volli/<DISPLAY-ID>-…` branch of the same ticket (an agent cut a narrower one): the next Session start adopts it as an automation `worktree_changed`. Another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from.
+The isolated git checkout a ticket works in: branch `volli/<DISPLAY-ID>-<slug>`, directory `~/.volli/worktrees/<project-dirname>-<short-id>/<DISPLAY-ID>-<slug>/`. App-owned (outside both the repo and Electron's `userData`), named once at creation — neither branch nor directory is renamed when the ticket title changes. The recorded branch follows the checkout only when the ticket's own directory is found on another branch of the same ticket — `volli/<DISPLAY-ID>` or `volli/<DISPLAY-ID>-…` (an agent cut a narrower one, or a stacked-PR slice `volli/VC-627-b-…`), or the same with a one-lowercase-letter slice suffix (`volli/VC-627c` or `volli/VC-627c-…`): the next Session start adopts it as an automation `worktree_changed`. Anything else after the number (`volli/VC-6270`, `volli/VC-627.bak`), another ticket's branch, a non-`volli/` branch or a detached HEAD there is refused, never switched away from, and the refusal names the branch checked out, whether it has uncommitted changes and the branch the ticket expects.
 _Avoid_: Workspace (the portable host-owned unit), Ticket workspace (the ticket surface), checkout (ambiguous with the main checkout)
 
 **Artifact**:
@@ -992,18 +992,22 @@ each Automation's Trigger; the order is the column's own **rank**, arranged by
 dragging the lanes on the Automations page and stored per column, like the
 arming and on the same machine. A column's Armed automation is pinned to digit
 `1` while it is switched on here, so `1` reproduces a plain drop. Digits run
-`1`–`9` and `0` is `Move only`; a row ranked past the ninth keeps its place and
-simply has no digit. Offering is not arming: a column offers many and fires at
-most one on its own.
+`1`–`9` and `0` is `Move only`; a row ranked past the ninth keeps its place in
+the lanes, drawn without a digit and still draggable, and is not a landing
+target mid-drag. Offering is not arming: a column offers many and fires at most
+one on its own.
 _Avoid_: column automations, automation menu
 
 **Option-drag picker**:
 What holding ⌥ during a drag does: the hovered column grows its Offered list
-into large landing targets — every offered row plus `Move only` — and the picker,
-not the pointer, is what a release obeys, so every release under ⌥ lands on a
-named target. Landing on a named Automation opens the same delay window a plain
-drop into an armed column opens, with the same single Cancel; `Move only` moves
-the ticket and starts nothing. ⌥ is a state rather than an edge: the column is
+into large landing targets — every row with a digit plus `Move only` — and the
+picker, not the pointer, is what a release obeys, so every release under ⌥ lands
+on a named target. Landing on a named Automation opens the same delay window a
+plain drop into an armed column opens, with the same single Cancel; `Move only`
+moves the ticket and starts nothing. Over the column every lifted card already
+stands in, the Offered list is drawn inert at both sizes — the compact list
+and the ⌥ picker — with `Move only` lit: a release there is not an arrival, so
+it starts nothing whichever row is named. ⌥ is a state rather than an edge: the column is
 expanded whenever ⌥ is held over it, however the two became true. Escape ends
 the drag; ⌥-up only closes the picker.
 _Avoid_: palette, radial menu, drag menu

@@ -82,6 +82,7 @@ function updaterState(overrides: Partial<UpdateUiState> = {}): UpdateUiState {
     targetVersion: null,
     percent: null,
     error: null,
+    lastCheck: null,
     ...overrides,
   };
 }

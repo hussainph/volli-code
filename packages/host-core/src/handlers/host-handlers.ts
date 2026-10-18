@@ -55,6 +55,7 @@ import {
   type AddHostStartInput,
   type AddHostStepId,
   type AgentResponse,
+  type BrowserAppShortcutEvent,
   type CodeModePolicy,
   type CompactionPolicy,
   type ExperimentId,
@@ -101,6 +102,7 @@ import {
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
 import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
 import { withLogContext } from "../log/context";
@@ -376,6 +378,13 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
     HostLinkRelaySubscribeCall,
     HostLinkRelayEvent
   >;
+  /**
+   * App shortcuts out of a focused Browser page (VC-301): desktop main's
+   * Browser Tab host, {@link HostHandlerOptions.browserShortcuts}'s, or
+   * unavailable.
+   */
+  readonly "browserShortcuts.subscribe": HostSubscriptionHandler<void, BrowserAppShortcutEvent>;
+  readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -507,6 +516,11 @@ export interface HostHandlerOptions {
   readonly hostLinkRelay?: HostLinkRelayPort | null;
   /** Desktop main's HOST links; absent or null on hostd: `hostScope.*` unavailable. */
   readonly hostScopeRelay?: HostScopeRelayPort | null;
+  /**
+   * App shortcuts out of desktop main's Browser pages (VC-301); absent or null
+   * on hostd: `browserShortcuts.*` answer unavailable.
+   */
+  readonly browserShortcuts?: BrowserShortcutsPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -524,6 +538,7 @@ const LOGS_UNAVAILABLE = "This host keeps no log to read";
 const SESSION_LISTING_UNAVAILABLE = "The Session listing is unavailable on this host";
 const HOST_SCOPE_RELAY_UNAVAILABLE = "Remote host operations are unavailable on this host";
 const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
+const BROWSER_SHORTCUTS_UNAVAILABLE = "Browser Tab shortcuts are unavailable on this host";
 
 /**
  * Runs a handler with the ids its input names joined to the operation's log
@@ -603,6 +618,8 @@ function hostHandlerEntries(
   const hostScopeRelay = () =>
     present(options.hostScopeRelay ?? null, HOST_SCOPE_RELAY_UNAVAILABLE);
   const hostLinkRelay = () => present(options.hostLinkRelay ?? null, HOST_LINK_RELAY_UNAVAILABLE);
+  const browserShortcuts = () =>
+    present(options.browserShortcuts ?? null, BROWSER_SHORTCUTS_UNAVAILABLE);
 
   const worktree = (database: Database.Database) =>
     options.worktree ?? worktreeDeps(database, ports, { dataDir: options.dataDir });
@@ -908,5 +925,9 @@ function hostHandlerEntries(
         (event) => sink.emit(event),
         lastEventId === undefined ? {} : { lastEventId },
       ),
+    // Browser page shortcuts (VC-301): desktop main's Browser Tab host, through its port.
+    "browserShortcuts.subscribe": async (_input, _call, sink) =>
+      browserShortcuts().subscribe((event) => void sink.emit(event)),
+    "browserShortcuts.focusPage": ({ tabId }) => done(() => browserShortcuts().focusPage(tabId)),
   };
 }

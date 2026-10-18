@@ -113,6 +113,8 @@ export function BrowserPreview({
           visible={visible}
           api={api}
           onTabState={useBrowserTabsStore.getState().receive}
+          // ⌘W from inside the page: the same close as the × above (VC-301).
+          onClose={() => void request(api.close({ tabId: tab.tabId }), "close Browser Tab")}
         />
       </div>
     </div>
