@@ -27,8 +27,13 @@ new executable tools and the last-cold provider declaration epoch separately:
   including refreshed additions, never the project's later selection. Running
   delegates refresh by the same rules, bounded by their parent.
 - Disabling or deselecting tools does not remove an existing name or definition.
-  A removed server's tools remain named and return an unavailable error; restoring
-  its original ID restores calling. Older app builds may require that configuration
+  A disabled server's tools remain named, and a call returns `MCP tool <name> is
+  unavailable: its server is disabled in Settings. Ask the person to enable it.`
+  without starting or contacting the server; disabling also closes the
+  connections Sessions already held to it. Enabling it again makes the same calls
+  work, with no reattach. A removed server's tools likewise remain named and
+  return `MCP tool <name> is unavailable: its server was removed.`; restoring its
+  original ID restores calling. Older app builds may require that configuration
   to reattach. See [Recovering](#recovering-from-a-failed-or-regretted-change).
 
 Older builds skip refresh facts and use the immutable birth surface. Existing
@@ -588,7 +593,8 @@ also need that configuration restored before they can reattach.
 To avoid this entirely, prefer **`server_disable`**. It keeps the configuration, so
 existing Sessions still reattach, while new root Sessions are not offered the
 tools. A helper delegated from a Session that already holds them still inherits
-them. That is what most callers actually mean.
+them. Their calls answer that the server is disabled until it is enabled again,
+when they work with no reattach. That is what most callers actually mean.
 
 ## Where installs are recorded
 

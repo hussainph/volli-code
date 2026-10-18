@@ -750,6 +750,67 @@ describe("runtime attachment assembly", () => {
     }
   });
 
+  it("answers a disabled server's retained tool by name without opening it, and calls it again once enabled (VC-771)", async () => {
+    const options = await fixture();
+    const configured = {
+      id: "paper",
+      name: "Paper",
+      enabled: false,
+      transport: { type: "stdio" as const, command: "paper", args: [] },
+    };
+    const open = vi.fn(async () => ({
+      listTools: async () => [],
+      callTool: async () => ({ content: [{ type: "text", text: "lookup ok" }], isError: false }),
+      close: async () => undefined,
+    }));
+    const assembled = createRuntimeAssembly({
+      ...options,
+      mcpSettings: {
+        list: () => [configured],
+        opener: () => open,
+        credentials: { revision: () => 0, accessRevision: () => 0 },
+      } as unknown as RuntimeAssemblyOptions["mcpSettings"],
+    });
+    const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+    const port = native.resolveMcpPort!({
+      projectId: "project",
+      sessionId: "session",
+      attachmentId: "attachment",
+      workspacePath: root,
+      mcpTools: [
+        {
+          serverId: "paper",
+          toolName: "lookup",
+          providerName: "mcp__paper__lookup",
+          description: "Lookup",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+    const call = { serverId: "paper", toolName: "lookup", arguments: {}, toolCallId: "call" };
+    try {
+      expect(await port.call(call, new AbortController().signal)).toEqual({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "MCP tool lookup is unavailable: its server is disabled in Settings. Ask the person to enable it.",
+          },
+        ],
+      });
+      expect(open).not.toHaveBeenCalled();
+      configured.enabled = true;
+      expect(await port.call(call, new AbortController().signal)).toEqual({
+        isError: false,
+        content: [{ type: "text", text: "lookup ok" }],
+      });
+      expect(open).toHaveBeenCalledOnce();
+    } finally {
+      await port.dispose();
+      await assembled.sessionRuntime?.close();
+    }
+  });
+
   it("keeps an unavailable database inert instead of constructing an executor", async () => {
     const options = await fixture();
     const assembled = createRuntimeAssembly({

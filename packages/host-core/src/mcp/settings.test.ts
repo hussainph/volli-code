@@ -4,6 +4,7 @@ import type { McpProtocolClient } from "./discovery";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
+import { McpSessionHost, serversForFrozenMcpTools } from "./session-host";
 
 let ctx: TestDb;
 let listedTools: readonly { name: string; description?: string; inputSchema: unknown }[];
@@ -182,6 +183,42 @@ describe("McpSettingsService", () => {
     expect(settings.surfaceRevision("other-project")).toBe(0);
     expect(settings.remove({ projectId: "p1", serverId: "missing" }).ok).toBe(false);
     expect(settings.surfaceRevision("p1")).toBe(5);
+  });
+
+  it("stops a server for Sessions that hold its tools when a person disables or removes it (VC-771)", async () => {
+    const settings = service();
+    await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    const sessionClose = vi.fn(async () => undefined);
+    const open = vi.fn(async (): Promise<McpProtocolClient> => ({
+      listTools: async () => [],
+      callTool: async () => ({ content: [{ type: "text", text: "echo ok" }] }),
+      close: sessionClose,
+    }));
+    const host = new McpSessionHost({
+      workspacePath: "/repo/project",
+      servers: serversForFrozenMcpTools(settings.list("p1"), settings.selectedTools("p1")),
+      open,
+      configured: (serverId) => settings.list("p1").find((server) => server.id === serverId),
+    });
+    const call = { serverId: "server-1", toolName: "echo", arguments: {}, toolCallId: "c1" };
+    const signal = new AbortController().signal;
+    try {
+      await host.port.call(call, signal);
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: false });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledOnce());
+      expect((await host.port.call(call, signal)).isError).toBe(true);
+
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+      expect(await host.port.call(call, signal)).toEqual({
+        content: [{ type: "text", text: "echo ok" }],
+        isError: false,
+      });
+      expect(open).toHaveBeenCalledTimes(2);
+      settings.remove({ projectId: "p1", serverId: "server-1" });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledTimes(2));
+    } finally {
+      await host.close();
+    }
   });
 });
 

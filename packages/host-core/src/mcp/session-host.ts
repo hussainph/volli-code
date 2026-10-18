@@ -21,7 +21,25 @@ import {
 } from "./discovery";
 import type { McpSignInOutcome } from "./oauth";
 
-const SAFE_UNAVAILABLE = "MCP server is unavailable for this Session";
+/**
+ * Why a call to a server whose tools this Session holds will not run, said by
+ * name (VC-771). Removed and disabled read alike: the tool keeps its name, the
+ * call returns this, and nothing is started or contacted.
+ */
+export function mcpServerUnavailableResult(
+  toolName: string,
+  configured: { readonly enabled: boolean } | undefined,
+): RuntimeMcpCallResult | undefined {
+  if (configured === undefined) {
+    return errorResult(`MCP tool ${toolName} is unavailable: its server was removed.`);
+  }
+  if (!configured.enabled) {
+    return errorResult(
+      `MCP tool ${toolName} is unavailable: its server is disabled in Settings. Ask the person to enable it.`,
+    );
+  }
+  return undefined;
+}
 
 /**
  * The attachment's parked-question machinery, lent to one call (VC-470).
@@ -82,6 +100,13 @@ export interface McpSessionHostOptions {
   accessRevision?: (serverId: string) => number;
   /** Run a person's sign-in for one server, once they have allowed it. */
   signIn?: (server: McpServerDraft, signal: AbortSignal) => Promise<McpSignInOutcome>;
+  /**
+   * The server as it is configured now, read at every call (VC-771): absent
+   * once removed, `enabled: false` once disabled. Either one answers the call
+   * with {@link mcpServerUnavailableResult} and contacts nothing; re-enabling
+   * makes the next call work again. Defaults to the bound copy.
+   */
+  configured?: (serverId: string) => { readonly enabled: boolean } | undefined;
 }
 
 function errorResult(text: string): RuntimeMcpCallResult {
@@ -146,11 +171,24 @@ export async function closeAllMcpSessionHosts(): Promise<void> {
 }
 
 /**
+ * Drain and close every attachment's connection to one server (VC-771).
+ *
+ * Called when a person disables or removes it, so a server they turned off
+ * stops running for Sessions that already hold its tools. Calls already on the
+ * connection finish; later calls are answered by the host's live check.
+ */
+export function disconnectMcpServer(serverId: string): void {
+  for (const host of LIVE_HOSTS) host.disconnect(serverId);
+}
+
+/**
  * Bind an existing Session only to configuration for the servers in its frozen
  * definitions. Current enablement selects tools for new Sessions; it cannot
- * revoke an existing Session's durable surface. Removed servers are omitted
- * from transport configuration, not from the tool surface: calls return the
- * named unavailable result instead of orphaning the whole attachment.
+ * revoke an existing Session's durable surface, so the bound copy is enabled
+ * and the host reads enablement live per call instead (VC-771). Removed
+ * servers are omitted from transport configuration, not from the tool
+ * surface: calls return the named unavailable result instead of orphaning the
+ * whole attachment.
  */
 export function serversForFrozenMcpTools(
   configured: readonly McpServerDraft[],
@@ -372,6 +410,7 @@ export class McpSessionHost {
    */
   readonly #declined = new Map<string, number>();
   readonly #accessRevision: (serverId: string) => number;
+  readonly #configured: (serverId: string) => { readonly enabled: boolean } | undefined;
   /** Retired clients still draining or closing; owned here so `close()` can reach them. */
   readonly #retired = new Set<ClientEntry>();
   readonly #lifetime = new AbortController();
@@ -384,6 +423,7 @@ export class McpSessionHost {
     this.#revision = options.credentialsRevision ?? (() => 0);
     this.#signIn = options.signIn;
     this.#accessRevision = options.accessRevision ?? (() => 0);
+    this.#configured = options.configured ?? ((serverId) => this.#servers.get(serverId));
     this.rawPort = { call: (request, signal) => this.#call(request, signal) };
     this.port = this.routed(this.rawPort.call);
     LIVE_HOSTS.add(this);
@@ -395,12 +435,7 @@ export class McpSessionHost {
     if (existing !== undefined && existing.revision === revision) return existing;
     // Opened with credentials a person has since replaced: drained and closed
     // like any retired client, never cut off under a sibling still using it.
-    if (existing !== undefined) {
-      this.#retire(server.id, existing);
-      if (existing.inFlight === 0) {
-        void this.#closeEntry(existing).then(() => this.#retired.delete(existing));
-      }
-    }
+    this.disconnect(server.id);
     const entry: ClientEntry = {
       opening: this.#open(server, this.#workspacePath, this.#lifetime.signal),
       revision,
@@ -415,6 +450,34 @@ export class McpSessionHost {
       if (this.#clients.get(server.id) === entry) this.#clients.delete(server.id);
     });
     return entry;
+  }
+
+  /**
+   * Retire this attachment's connection to one server, if it holds one: no
+   * new call is handed it, and it closes once the calls on it settle. The
+   * next call opens a fresh one.
+   */
+  disconnect(serverId: string): void {
+    const entry = this.#clients.get(serverId);
+    if (entry === undefined) return;
+    this.#retire(serverId, entry);
+    if (entry.inFlight === 0) {
+      void this.#closeEntry(entry).then(() => this.#retired.delete(entry));
+    }
+  }
+
+  /**
+   * The named result for a call to a server that is removed or disabled now,
+   * or that this attachment never bound (VC-771). A refused server's idle
+   * connection is closed, in case nobody else told this host.
+   */
+  #refused(request: RuntimeMcpCall): RuntimeMcpCallResult | undefined {
+    const configured = this.#servers.has(request.serverId)
+      ? this.#configured(request.serverId)
+      : undefined;
+    const refused = mcpServerUnavailableResult(request.toolName, configured);
+    if (refused !== undefined) this.disconnect(request.serverId);
+    return refused;
   }
 
   #retire(serverId: string, entry: ClientEntry): void {
@@ -434,8 +497,11 @@ export class McpSessionHost {
 
   async #call(request: RuntimeMcpCall, signal: AbortSignal): Promise<RuntimeMcpCallResult> {
     if (this.#closed) throw new Error("MCP attachment is closed");
-    const server = this.#servers.get(request.serverId);
-    if (server === undefined || !server.enabled) throw new Error(SAFE_UNAVAILABLE);
+    // Checked again here, behind the per-server budget: a call that queued
+    // before the person disabled the server must not open it after.
+    const refused = this.#refused(request);
+    if (refused !== undefined) return refused;
+    const server = this.#servers.get(request.serverId)!;
     signal.throwIfAborted();
     const combined = combineSignals(this.#lifetime.signal, signal);
     const entry = this.#entry(server);
@@ -506,6 +572,10 @@ export class McpSessionHost {
   routed(call: RuntimeMcpPort["call"]): McpHostPort {
     return {
       call: async (request, signal, ask) => {
+        // Answered before the budget, so a call to a disabled or removed
+        // server never queues behind calls still running on it.
+        const refused = this.#refused(request);
+        if (refused !== undefined) return refused;
         let blocked: McpConnectionBlock;
         try {
           return await call(request, signal);
@@ -513,9 +583,8 @@ export class McpSessionHost {
           if (!(error instanceof McpCallBlocked)) throw error;
           blocked = error.block;
         }
-        const server = this.#servers.get(request.serverId);
-        // Unreachable: a blocked call named a server this host bound.
-        if (server === undefined) throw new Error(SAFE_UNAVAILABLE);
+        // A blocked call named a server this host bound.
+        const server = this.#servers.get(request.serverId)!;
         const decision = await this.#decide(server, blocked, request, signal, ask);
         if (decision.kind !== "retry")
           return errorResult(decisionText(decision, server, blocked, request));

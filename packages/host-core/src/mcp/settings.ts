@@ -33,6 +33,7 @@ import {
 } from "./credentials";
 import { discoverMcpServer, type OpenMcpProtocolClient } from "./discovery";
 import { McpOAuthBroker, mcpOAuthServer, type McpSignInOutcome } from "./oauth";
+import { disconnectMcpServer } from "./session-host";
 
 /**
  * A failure that a person can unblock carries `blocked`, so a caller can route
@@ -533,6 +534,9 @@ export class McpSettingsService {
       updatedAt: this.#now(),
     });
     this.#surfaceChanged(input.projectId);
+    // Sessions that hold its tools keep them, but a server a person turned off
+    // stops running for them too (VC-771).
+    if (!input.enabled) disconnectMcpServer(input.serverId);
     return { ok: true, server };
   }
 
@@ -577,6 +581,7 @@ export class McpSettingsService {
     }
     this.#surfaceChanged(input.projectId);
     this.#store.delete(input.serverId);
+    disconnectMcpServer(input.serverId);
     return { ok: true };
   }
 
