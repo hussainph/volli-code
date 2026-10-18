@@ -24,7 +24,6 @@ import {
   showScopeSuggestions,
   slicePaletteSection,
   ticketRowMatch,
-  type PaletteSectionSlice,
 } from "./command-palette-search";
 
 describe("scopeForToken", () => {
@@ -399,8 +398,10 @@ describe("browsableNavigationRows", () => {
 });
 
 /**
- * VC-303's acceptance, end to end over the real match text and the same slice
- * the palette mounts: each kind of query has a predictable top row.
+ * VC-303's acceptance, end to end over the real match text and the same
+ * slices the palette mounts: each kind of query has a predictable top row.
+ * Session recency is the model's to decide and is proven there
+ * (`command-palette-model.test.ts`); these rows arrive already in its order.
  */
 describe("the palette's top results", () => {
   const tickets = [
@@ -415,10 +416,8 @@ describe("the palette's top results", () => {
       updatedAt: 5,
     }),
   ];
-  // Already in the model's order: current project, then most recent.
   const sessions = [
-    sessionItem({ sessionId: "recent", title: "Fix auth", lastActivityAt: 900 }),
-    sessionItem({ sessionId: "older", title: "Fix auth flow", lastActivityAt: 100 }),
+    sessionItem({ sessionId: "alpha", title: "Fix auth", lastActivityAt: 900 }),
     sessionItem({
       sessionId: "beta",
       projectId: "p2",
@@ -432,48 +431,28 @@ describe("the palette's top results", () => {
     { key: "skills", label: "Skills" },
   ]);
 
-  /** Each section's top row, sections in the order cmdk sorts groups: by their best score. */
+  /**
+   * Each non-empty section's top row, in the order the palette MOUNTS the
+   * sections — which is the order the list shows them, because cmdk keeps
+   * groups in DOM order: Tickets, Sessions, then Go to, unless
+   * `navigationLeads` moves Go to first.
+   */
   function top(search: string): string[] {
-    const first = <T>(slice: PaletteSectionSlice<T>, label: (row: T) => string) => {
-      const best = slice.visible[0];
-      return best === undefined
-        ? []
-        : [
-            {
-              label: label(best.row),
-              score: commandPaletteFilter(best.match.value, search, best.match.keywords),
-            },
-          ];
-    };
-    return [
-      ...first(slicePaletteSection(tickets, ticketRowMatch, search, false), (row) => row.displayId),
-      ...first(
-        slicePaletteSection(sessions, sessionRowMatch, search, false),
-        (row) => row.sessionId,
-      ),
-      ...first(
-        slicePaletteSection(
-          browsableNavigationRows(navigation, search),
-          navigationRowMatch,
-          search,
-          false,
-        ),
-        (row) => row.title,
-      ),
-    ]
-      .toSorted((a, b) => b.score - a.score)
-      .map((entry) => entry.label);
-  }
-
-  it("leads with the most recent Session while browsing", () => {
-    expect(slicePaletteSection(sessions, sessionRowMatch, "", false).visible[0]?.row).toBe(
-      sessions[0],
+    const ticketTop = slicePaletteSection(tickets, ticketRowMatch, search, false).visible[0];
+    const sessionTop = slicePaletteSection(sessions, sessionRowMatch, search, false).visible[0];
+    const navigationSlice = slicePaletteSection(
+      browsableNavigationRows(navigation, search),
+      navigationRowMatch,
+      search,
+      false,
     );
-  });
-
-  it("puts the newer of two similarly named Sessions first", () => {
-    expect(top("fix auth")).toEqual(["ALP-1", "recent"]);
-  });
+    const navigationTop = navigationSlice.visible[0]?.row.title;
+    const sections = [ticketTop?.row.displayId, sessionTop?.row.sessionId];
+    const ordered = navigationLeads(navigationSlice, search)
+      ? [navigationTop, ...sections]
+      : [...sections, navigationTop];
+    return ordered.filter((label): label is string => label !== undefined);
+  }
 
   it("puts an exact display id first", () => {
     expect(top("ALP-1")[0]).toBe("ALP-1");
@@ -482,10 +461,12 @@ describe("the palette's top results", () => {
 
   it("puts the qualifying project's rows first in their sections", () => {
     expect(top("beta fix auth")).toEqual(["BET-1", "beta"]);
+    expect(top("alpha fix auth")).toEqual(["ALP-1", "alpha"]);
   });
 
-  it('puts the Settings command first for "Settings"', () => {
+  it('puts the Settings command first for "Settings", and Tickets first for half of it', () => {
     expect(top("Settings")[0]).toBe("Settings");
     expect(top("configure skills")[0]).toBe("Configure → Skills");
+    expect(top("sett")[0]).toBe("ALP-10");
   });
 });

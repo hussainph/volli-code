@@ -17,6 +17,7 @@ import {
   buildNavigationCommandItems,
   paletteRunContext,
 } from "./command-palette-model";
+import { sessionRowMatch, slicePaletteSection } from "./command-palette-search";
 import { projectScope, ticketScope, type SessionContainer } from "@renderer/stores/sessions";
 
 function project(id: string, name: string, ticketPrefix: string): Project {
@@ -241,7 +242,20 @@ describe("buildCommandPaletteItems", () => {
     ]);
   });
 
-  it("reads an open tab's recency off its durable record, and 0 without one", () => {
+  it("ranks the more recent of two similarly named Sessions first under a query", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const { sessions } = buildCommandPaletteItems([alpha], {}, {}, alpha.id, [
+      chat({ sessionId: "older", title: "Fix auth", ticketId: null, lastActivityAt: 100 }),
+      chat({ sessionId: "recent", title: "Fix auth flow", ticketId: null, lastActivityAt: 900 }),
+    ]);
+
+    // cmdk scores both titles the same for "fix auth", so the slice keeps the
+    // model's order — which, by title, would put the older "Fix auth" first.
+    const slice = slicePaletteSection(sessions, sessionRowMatch, "fix auth", false);
+    expect(slice.visible.map((entry) => entry.row.sessionId)).toEqual(["recent", "older"]);
+  });
+
+  it("reads an open tab's recency off its durable record, and as now without one", () => {
     const alpha = project("p1", "Alpha", "ALP");
     const tab = (sessionId: string, title: string) => ({
       sessionId,
@@ -259,15 +273,22 @@ describe("buildCommandPaletteItems", () => {
       [],
       {},
       {},
-      // The open tab's own record: live (no end), so it is not a row of its own.
-      [terminal({ id: "live", endedAt: null, lastActivityAt: 4_000 })],
+      [
+        // The open tab's own record: live (no end), so it is not a row of its own.
+        terminal({ id: "live", endedAt: null, lastActivityAt: 4_000 }),
+        terminal({ id: "closed", title: "Closed earlier", lastActivityAt: 8_000 }),
+      ],
+      9_000,
     );
 
+    // A tab opened a moment ago, before its record landed, leads rather than
+    // sinking below every closed record.
     expect(
       result.sessions.map((item) => [item.sessionId, item.lastActivityAt, item.destination]),
     ).toEqual([
+      ["unrecorded", 9_000, "tab"],
+      ["closed", 8_000, "detail"],
       ["live", 4_000, "tab"],
-      ["unrecorded", 0, "tab"],
     ]);
   });
 

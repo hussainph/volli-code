@@ -50,8 +50,8 @@ interface CommandPaletteSessionBase {
    * Epoch ms of the Session's newest durable fact, the record's own
    * `lastActivityAt` (VC-303). The palette's recency order within a project:
    * the Session you were just in is the one you are most likely looking for.
-   * An open terminal tab reads its durable record's value; a tab with no
-   * record yet reads 0 and sorts after every Session that has one.
+   * An open terminal tab reads its durable record's value; a tab whose record
+   * has not landed yet was opened moments ago, so it reads as now.
    */
   lastActivityAt: number;
   /**
@@ -127,6 +127,8 @@ export function buildCommandPaletteItems(
    * kinds is left out.
    */
   terminalSessions: readonly SessionRecord[] = [],
+  /** The recency of an open tab that has no durable record yet — see `lastActivityAt`. */
+  now: number = Date.now(),
 ): CommandPaletteItems {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const ticketById = new Map<string, { ticket: Ticket; project: Project }>();
@@ -181,7 +183,7 @@ export function buildCommandPaletteItems(
             ? null
             : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
         ticketTitle: linked?.ticket.title ?? null,
-        lastActivityAt: terminalActivityAt.get(tab.sessionId) ?? 0,
+        lastActivityAt: terminalActivityAt.get(tab.sessionId) ?? now,
         provenance: sessionProvenanceOf(provenance, tab.sessionId),
         destination: "tab",
       });
@@ -351,8 +353,7 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
 
 /**
  * The palette's page rows (VC-303): Home, its Board and List views, Configure
- * and each of its panes, and Settings. Before these, ⌘K could find a Ticket
- * but not the page it lives on, and typing "Settings" found nothing.
+ * and each of its panes, and Settings — each reachable by typing its name.
  */
 export type CommandPaletteNavigationItem =
   | {
@@ -373,7 +374,7 @@ export type CommandPaletteNavigationItem =
     };
 
 /** A Configure pane as the palette names it — the rail's own key, label and search terms. */
-export interface PaletteConfigurePane {
+interface PaletteConfigurePane {
   readonly key: string;
   readonly label: string;
   readonly keywords?: readonly string[];

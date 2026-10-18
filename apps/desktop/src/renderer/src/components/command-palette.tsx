@@ -124,6 +124,27 @@ const NAVIGATION_ICONS: Record<
   settings: GearSixIcon,
 };
 
+/**
+ * One Go to row's page of `projectId`: Home, the Board tab in a view, or
+ * Configure (on a named pane). Settings is app-wide and opened by the row
+ * itself; with no project selected the model offers no other row.
+ */
+function goToProjectPage(item: CommandPaletteNavigationItem, projectId: string | null): void {
+  if (projectId === null) return;
+  const workspace = useWorkspaceStore.getState();
+  if (item.id === "home") {
+    workspace.openHome(projectId);
+  } else if (item.id === "board" || item.id === "list") {
+    // The Board tab's own act, then the view: what the header's segmented
+    // toggle would leave on screen.
+    workspace.openHomeBoard(projectId);
+    workspace.setBoardView(projectId, item.id);
+  } else if (item.id === "configure" || item.id === "configure-pane") {
+    if (item.id === "configure-pane") useUiStore.getState().requestConfigureCategory(item.paneKey);
+    workspace.setNav(projectId, "configure");
+  }
+}
+
 interface ShowAllRowProps {
   sectionId: PaletteSectionId;
   /** The section's full match count — what expanding reveals. */
@@ -414,15 +435,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     scope === null && navigationSlice.visible.length > 0 ? (
       <Command.Group heading="Go to" className={MENU_LABEL_CMDK}>
         {navigationSlice.visible.map(({ row: item, match }) => {
-          const RowIcon =
+          // A Configure pane is keyed by, and wears the rail icon of, its pane.
+          const { key, RowIcon } =
             item.id === "configure-pane"
-              ? (configureCategories.find((category) => category.key === item.paneKey)?.icon ??
-                SlidersHorizontalIcon)
-              : NAVIGATION_ICONS[item.id];
-          const key =
-            item.id === "configure-pane"
-              ? `navigation:pane:${item.paneKey}`
-              : `navigation:${item.id}`;
+              ? {
+                  key: `navigation:pane:${item.paneKey}`,
+                  RowIcon:
+                    configureCategories.find((category) => category.key === item.paneKey)?.icon ??
+                    SlidersHorizontalIcon,
+                }
+              : { key: `navigation:${item.id}`, RowIcon: NAVIGATION_ICONS[item.id] };
           return (
             <Command.Item
               key={key}
@@ -430,27 +452,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               keywords={match.keywords}
               onSelect={() => {
                 if (item.id === "settings") {
+                  // Not `finishNavigation`, which closes Settings.
                   useUiStore.getState().setSettingsOpen(true);
                   onOpenChange(false);
                   return;
                 }
-                // Every other row is a page of the selected project; the
-                // model offers none without one.
-                if (selectedProjectId === null) return;
-                const workspace = useWorkspaceStore.getState();
-                if (item.id === "home") {
-                  workspace.openHome(selectedProjectId);
-                } else if (item.id === "board" || item.id === "list") {
-                  // The Board tab's own act, then the view: what the
-                  // header's segmented toggle would leave on screen.
-                  workspace.openHomeBoard(selectedProjectId);
-                  workspace.setBoardView(selectedProjectId, item.id);
-                } else {
-                  if (item.id === "configure-pane") {
-                    useUiStore.getState().requestConfigureCategory(item.paneKey);
-                  }
-                  workspace.setNav(selectedProjectId, "configure");
-                }
+                goToProjectPage(item, selectedProjectId);
                 finishNavigation();
               }}
               className={PALETTE_ROW}
