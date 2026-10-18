@@ -1,6 +1,7 @@
 /**
  * Host maintenance (VC-618; owned as one module in VC-627): the spawn ledger,
- * the orphan process sweep, the retention merge-watch and the automatic reap.
+ * the orphan process sweep, the retention merge-watch, the automatic reap and
+ * the one-shot release of terminals a previous launch left parked (VC-833).
  *
  * {@link createHostMaintenance} is built only over a database that opened, so
  * nothing on it is nullable. Its readers and reclaim seams are read at CALL
@@ -28,6 +29,10 @@ import {
   type AutoReapWatchOptions,
 } from "./process/auto-reap-watch";
 import { OrphanProcessService, type OrphanProcessPorts } from "./process/orphan-processes";
+import {
+  resumeParkedTerminals,
+  type ParkedTerminalRecoveryPorts,
+} from "./process/parked-terminals";
 import { SpawnLedger } from "./process/spawn-ledger";
 import { listWorktreeRefs, listWorktreeHoldersForSessions } from "./db/tickets-repo";
 
@@ -68,6 +73,8 @@ export interface HostMaintenanceOptions {
   readonly reclaim?: RetentionReclaimSeams;
   /** Timing and log overrides for the automatic reap; tests only. */
   readonly autoReap?: AutoReapWatchOptions;
+  /** Process-table and signal seams for the parked-terminal release; tests only. */
+  readonly parkedTerminals?: Pick<ParkedTerminalRecoveryPorts, "processes" | "signal">;
 }
 
 export interface HostMaintenance {
@@ -80,15 +87,18 @@ export interface HostMaintenance {
    * read it where the host built it before to keep that order.
    */
   readonly retention: RetentionWatcher;
-  /** Starts the retention poll and the automatic reap. Idempotent; a no-op after stop. */
+  /**
+   * Starts the retention poll and the automatic reap, and SIGCONTs once every
+   * terminal tree a previous launch left parked. Idempotent; a no-op after stop.
+   */
   start(): void;
   /** Polls retention now (desktop's focus trigger). A no-op after stop. */
   triggerRetention(): void;
   /** Stops both loops for good. Idempotent. */
   stop(): void;
   /**
-   * Resolves once neither loop has a poll or reap in flight. Never rejects and
-   * adds no delay. Call after {@link stop}, so nothing new can start; a
+   * Resolves once neither loop has a poll or reap in flight, and the parked
+   * terminal release has finished. Never rejects and adds no delay. Call after {@link stop}, so nothing new can start; a
    * retention watch nobody built has nothing to wait for and stays unbuilt.
    */
   settled(): Promise<void>;
@@ -96,6 +106,9 @@ export interface HostMaintenance {
 
 export function createHostMaintenance(options: HostMaintenanceOptions): HostMaintenance {
   const { db, ports, worktrees, processReaders } = options;
+  // Before any terminal of this launch can exist: a park mark older than this
+  // was left by a launch that is gone.
+  const launchedAt = Date.now();
   const spawnLedger = new SpawnLedger(db);
   const orphanProcesses = createOrphanProcessService(db, ports, {
     ledger: spawnLedger,
@@ -108,6 +121,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
     (retention ??= getRetentionWatcher(db, ports, () => worktrees.deps(db), options.reclaim));
   let started = false;
   let stopped = false;
+  let parkedRelease: Promise<unknown> = Promise.resolve();
   return {
     spawnLedger,
     orphanProcesses,
@@ -119,6 +133,11 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
       started = true;
       retentionWatch().start();
       autoReap.start();
+      parkedRelease = resumeParkedTerminals({
+        ledger: spawnLedger,
+        launchedAt,
+        ...options.parkedTerminals,
+      });
     },
     triggerRetention() {
       if (!stopped) retentionWatch().triggerNow();
@@ -131,7 +150,7 @@ export function createHostMaintenance(options: HostMaintenanceOptions): HostMain
       autoReap.stop();
     },
     async settled() {
-      await Promise.all([retention?.settled(), autoReap.settled()]);
+      await Promise.all([retention?.settled(), autoReap.settled(), parkedRelease]);
     },
   };
 }
