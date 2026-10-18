@@ -198,7 +198,7 @@ afterEach(async () => {
   container = null;
   // Tests that observe the save payload replace this action; never let a
   // neighbour inherit the stub instead of the store's real command door.
-  useAutomationsStore.setState({ editor: null, update: originalUpdate });
+  useAutomationsStore.setState({ editor: null, update: originalUpdate, enabledIds: [] });
   // The draft cache is module-level and shared across tests; a leftover slot
   // would seed the next mount's fields and turn these tests order-dependent.
   clearEditorDraft("p1");
@@ -441,22 +441,18 @@ describe("schedule wording", () => {
   });
 });
 
+const KUWAIT_NINE_THIRTY = automation({
+  trigger: {
+    kind: "schedule",
+    schedule: { preset: "daily", hour: 9, minute: 30, timeZone: "Asia/Kuwait" },
+  },
+});
+
+function nextLine(): HTMLElement | undefined {
+  return [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Next: "));
+}
+
 describe("the next-run line (VC-298)", () => {
-  const KUWAIT_NINE_THIRTY = automation({
-    trigger: {
-      kind: "schedule",
-      schedule: { preset: "daily", hour: 9, minute: 30, timeZone: "Asia/Kuwait" },
-    },
-  });
-
-  function nextLine(): HTMLElement | undefined {
-    return [...document.querySelectorAll("p")].find((p) => p.textContent?.startsWith("Next: "));
-  }
-
-  afterEach(() => {
-    useAutomationsStore.setState({ enabledIds: [] });
-  });
-
   it("names the next occurrence while this machine fires it, and clears it when switched off", async () => {
     useAutomationsStore.setState({ enabledIds: ["automation-1"] });
     await mountEditor(KUWAIT_NINE_THIRTY);

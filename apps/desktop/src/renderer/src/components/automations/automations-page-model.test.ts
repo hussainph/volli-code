@@ -423,32 +423,32 @@ describe("skipCountLabel", () => {
   });
 });
 
-describe("nextScheduledRun (VC-298)", () => {
-  const NEW_YORK = "America/New_York";
-  const KUWAIT = "Asia/Kuwait";
-  /** An independent reading of an instant, so a label is checked against a hand-written UTC time. */
-  function reading(at: number, timeZone: string): string {
-    return `Next: ${new Date(at).toLocaleString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      timeZone,
-      timeZoneName: "short",
-    })}`;
-  }
-  function next(schedule: AutomationSchedule, now: number, timeZone = NEW_YORK) {
-    return nextScheduledRun({ schedule, automationId: "automation-1", now, timeZone });
-  }
-  // Off the hour throughout, so no stagger moves these instants.
-  const daily = (hour: number, timeZone: string): AutomationSchedule => ({
-    preset: "daily",
-    hour,
-    minute: 30,
+const NEW_YORK = "America/New_York";
+const KUWAIT = "Asia/Kuwait";
+/** An independent reading of an instant, so a label is checked against a hand-written UTC time. */
+function reading(at: number, timeZone: string): string {
+  return `Next: ${new Date(at).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZone,
-  });
+    timeZoneName: "short",
+  })}`;
+}
+function next(schedule: AutomationSchedule, now: number, timeZone = NEW_YORK) {
+  return nextScheduledRun({ schedule, automationId: "automation-1", now, timeZone });
+}
+// Off the hour throughout, so no stagger moves these instants.
+const daily = (hour: number, timeZone: string): AutomationSchedule => ({
+  preset: "daily",
+  hour,
+  minute: 30,
+  timeZone,
+});
 
+describe("nextScheduledRun (VC-298)", () => {
   it("keeps the wall time across a spring-forward change", () => {
     // Saturday 7 March 2026, 10:00 EST — past today's 09:30. Sunday is on EDT.
     const result = next(daily(9, NEW_YORK), Date.UTC(2026, 2, 7, 15));
@@ -458,9 +458,7 @@ describe("nextScheduledRun (VC-298)", () => {
 
   it("runs a wall time the spring-forward gap skips just after it, never early", () => {
     // 02:30 does not exist on 8 March in New York; 03:30 EDT is when it would have been.
-    expect(next(daily(2, NEW_YORK), Date.UTC(2026, 2, 7, 12)).at).toBe(
-      Date.UTC(2026, 2, 8, 7, 30),
-    );
+    expect(next(daily(2, NEW_YORK), Date.UTC(2026, 2, 7, 12)).at).toBe(Date.UTC(2026, 2, 8, 7, 30));
   });
 
   it("answers the later reading of a wall time a fall-back change repeats", () => {
