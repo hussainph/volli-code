@@ -3443,6 +3443,7 @@ describe("SessionRuntime native adapter contract", () => {
     const first = composition();
     const sessionId = await createAndAttach(first.runtime);
     await first.runtime.close();
+    const latestTurnId = (await first.engine.getSession({ sessionId }))?.latestTurnId;
     const attachStarted = new Gate();
     const releaseAttach = new Gate();
     first.adapter.attachStarted = () => attachStarted.resolve();
@@ -3475,7 +3476,7 @@ describe("SessionRuntime native adapter contract", () => {
     expect(first.adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
     const projection = await first.engine.getSession({ sessionId });
     expect(projection?.turnActive).toBe(false);
-    expect(projection?.latestTurnId).not.toBe("turn-after-close");
+    expect(projection?.latestTurnId).toBe(latestTurnId);
   });
 
   it("validates subscriptions, stops delivery after unsubscribe, and makes close idempotent", async () => {

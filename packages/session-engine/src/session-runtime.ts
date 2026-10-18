@@ -1833,6 +1833,9 @@ class DefaultSessionRuntime implements SessionRuntime {
         );
         await this.#reconcileBinding(binding);
       } catch (error) {
+        // Shutdown is not a recovery failure: leave the replay unreceipted for
+        // the next launch, as the retry path does.
+        if (this.#closed) throw error;
         const receipt = await this.#recordDelivery(
           request.sessionId,
           outcome.payload.attachment.id,
@@ -4511,8 +4514,9 @@ class DefaultSessionRuntime implements SessionRuntime {
     // The attach can outlive `close()`: shutdown's release has already run and
     // will not come back for this handle. Hand it to that same release at once,
     // before its sink activates, and refuse like every other closed path. The
-    // registration is synchronous with the release, so no caller observes it.
-    await this.#assertBindingOperationOpen();
+    // registration is synchronous with the release, so no caller observes it;
+    // the open path stays synchronous from registration to activation.
+    if (this.#closed) await this.#assertBindingOperationOpen();
     await sink.activate();
     return record;
   }
