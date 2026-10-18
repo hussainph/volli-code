@@ -25,7 +25,7 @@ import {
   getAutomation,
   getAutomationRun,
   listAutomationsForProject,
-  listProjectRunsForAutomation,
+  listPossiblyLiveProjectRunsForAutomation,
   listRunsForTicket,
   recordAutomationRun,
 } from "../db/automations-repo";
@@ -128,7 +128,8 @@ function harness(overrides: Partial<AutomationRunnerPorts> = {}): Harness {
     },
     findProject: (candidate) => candidate === project.id,
     listRunsForTicket: (ticketId) => listRunsForTicket(ctx.db, ticketId),
-    listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(ctx.db, input),
+    listPossiblyLiveProjectRunsForAutomation: (input) =>
+      listPossiblyLiveProjectRunsForAutomation(ctx.db, input),
     sessions: {
       create: async (input) => {
         creates.push(input);
@@ -138,7 +139,7 @@ function harness(overrides: Partial<AutomationRunnerPorts> = {}): Harness {
           sessionsByOperation.set(input.operationId, sessionId);
           // The fake facade mints the Session ROW as well as the id, because a
           // Run that names no Ticket is scoped to its project through exactly
-          // this row (`listProjectRunsForAutomation`) — a fake that skipped it
+          // this row (`listPossiblyLiveProjectRunsForAutomation`) — a fake that skipped it
           // would leave the schedule's own single-flight guard untestable.
           insertSession(ctx.db, testSession(input.projectId, input.ticketId, { id: sessionId }));
           ctx.db
@@ -1352,6 +1353,122 @@ describe("createAutomationRunner", () => {
     await h.runner.settled();
     expect(outcome.ok).toBe(true);
     expect(h.creates).toHaveLength(2);
+  });
+
+  /**
+   * Seeds `count` earlier Runs of `automationId` whose Sessions are quiet by
+   * their durable facts: each structured attachment opened and closed, and no
+   * turn, question or user-blocking Attention left open. This is what months
+   * of a finished hourly schedule leave behind.
+   */
+  function seedQuietRuns(h: Harness, automationId: string, count: number): string[] {
+    const sessionIds: string[] = [];
+    const insertSessionRow = ctx.db.prepare(
+      `INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at)
+       VALUES (?, ?, NULL, 'project', 'Finished Run', ?)`,
+    );
+    const insertClosedAttachment = ctx.db.prepare(
+      `INSERT INTO session_attachments
+         (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
+          native_detail, observed_kind, failure, created_sequence, closed_sequence)
+       VALUES (?, ?, 'pi', 'local', 'local', 'fresh', NULL, NULL, 'opened', NULL, 1, 2)`,
+    );
+    ctx.db.transaction(() => {
+      for (let index = 0; index < count; index += 1) {
+        const sessionId = `quiet-session-${index}`;
+        insertSessionRow.run(sessionId, h.projectId, index);
+        insertClosedAttachment.run(`quiet-attachment-${index}`, sessionId);
+        recordAutomationRun(
+          ctx.db,
+          {
+            automationId,
+            automationName: "Two-opinion review",
+            ticketId: null,
+            sessionId,
+            model: RESOLVED,
+          },
+          index,
+        );
+        sessionIds.push(sessionId);
+      }
+    })();
+    return sessionIds;
+  }
+
+  it("reads only the Runs that could still be live, however long the schedule has run (VC-816)", async () => {
+    // 5,000 quiet Runs: about seven months of an hourly schedule. Before
+    // VC-816 the guard read every one of their projections, one after another,
+    // before this Run could start.
+    const reads: string[] = [];
+    let live: "working" | "idle" = "working";
+    let liveSessionId: string | null = null;
+    const h = harness({
+      readSessionActivity: async (sessionId) => {
+        reads.push(sessionId);
+        return sessionId === liveSessionId ? live : "idle";
+      },
+    });
+    const automation = await savedAutomation(h);
+    seedQuietRuns(h, automation.id, 5_000);
+    // One earlier Run is still attached: the harness's Session row holds an
+    // open attachment, which is what a live Run's Session has.
+    const first = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+    if (!first.ok) throw new Error(`refused: ${first.error}`);
+    liveSessionId = first.run.sessionId;
+    reads.length = 0;
+
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: h.projectId,
+        attendance: "attended",
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
+    expect(reads).toEqual([liveSessionId]);
+
+    // The same single read admits the next Run once the live one goes quiet.
+    live = "idle";
+    reads.length = 0;
+    const next = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+    expect(next.ok).toBe(true);
+    expect(reads).toEqual([liveSessionId]);
+  });
+
+  it("does not let one unreadable finished Session refuse every later Run (VC-816)", async () => {
+    const reads: string[] = [];
+    const h = harness({
+      readSessionActivity: async (sessionId) => {
+        reads.push(sessionId);
+        throw new Error("checkpoint written by a newer build");
+      },
+    });
+    const automation = await savedAutomation(h);
+    seedQuietRuns(h, automation.id, 1);
+
+    const outcome = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    expect(reads).toEqual([]);
+    expect(h.creates).toHaveLength(1);
   });
 });
 

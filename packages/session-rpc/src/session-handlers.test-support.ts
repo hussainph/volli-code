@@ -266,6 +266,8 @@ export function sessionHandlersFrom(
     "hostScope.query": remote("hostScope.query"),
     "hostScope.mutate": remote("hostScope.mutate"),
     "hostScope.subscribe": remote("hostScope.subscribe"),
+    "browserShortcuts.subscribe": remote("browserShortcuts.subscribe"),
+    "browserShortcuts.focusPage": remote("browserShortcuts.focusPage"),
   };
   return {
     ...handlers,

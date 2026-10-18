@@ -296,6 +296,9 @@ function CommentBlock({
             aria-keyshortcuts="Meta+Enter Control+Enter Escape"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
+              // Never mid-word: an IME's Escape closes its candidate window,
+              // not the edit.
+              if (event.nativeEvent.isComposing) return;
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
                 void saveEdit();

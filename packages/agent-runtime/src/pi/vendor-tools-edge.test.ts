@@ -11,15 +11,13 @@ import { createReadTool } from "./vendor/pi-harness/tools/read";
 import { createWriteTool } from "./vendor/pi-harness/tools/write";
 import { detectSupportedImageMimeType, encodeBase64 } from "./vendor/pi-harness/tools/image";
 import {
-  applyEditsToNormalizedContent,
+  applyEditsToContent,
   applyReplacementsPreservingUnchangedLines,
-  detectLineEnding,
   fuzzyFindText,
   generateDiffString,
   generateUnifiedPatch,
   normalizeForFuzzyMatch,
   normalizeToLF,
-  restoreLineEndings,
   stripBom,
 } from "./vendor/pi-harness/tools/edit-diff";
 import {
@@ -122,7 +120,7 @@ describe("retained image format validation", () => {
 describe("retained fuzzy editing and display diffs", () => {
   it("normalizes only touched lines and preserves duplicate normalized context blocks", () => {
     const original = "keep ‘quotes’  \nchange “this”  \nkeep ‘quotes’  \n";
-    const result = applyEditsToNormalizedContent(
+    const result = applyEditsToContent(
       original,
       [{ oldText: 'change "this"', newText: "changed" }],
       "file",
@@ -131,7 +129,7 @@ describe("retained fuzzy editing and display diffs", () => {
       baseContent: original,
       newContent: "keep ‘quotes’  \nchanged\nkeep ‘quotes’  \n",
     });
-    const sameLine = applyEditsToNormalizedContent(
+    const sameLine = applyEditsToContent(
       "‘left’ + ‘right’\n",
       [
         { oldText: "'left'", newText: "left" },
@@ -147,11 +145,7 @@ describe("retained fuzzy editing and display diffs", () => {
       matchLength: 0,
     });
     expect(stripBom("\uFEFFtext")).toEqual({ bom: "\uFEFF", text: "text" });
-    expect(detectLineEnding("a\r\nb")).toBe("\r\n");
-    expect(detectLineEnding("a\nb\r\n")).toBe("\n");
-    expect(detectLineEnding("a\nb")).toBe("\n");
     expect(normalizeToLF("a\rb\r\n")).toBe("a\nb\n");
-    expect(restoreLineEndings("a\nb", "\r\n")).toBe("a\r\nb");
   });
 
   it("rejects missing, duplicate, empty, overlapping and no-op edits atomically", () => {
@@ -161,7 +155,7 @@ describe("retained fuzzy editing and display diffs", () => {
       [{ oldText: "a", newText: "x" }],
       [{ oldText: "b", newText: "b" }],
     ])
-      expect(() => applyEditsToNormalizedContent("aba", edits, "file")).toThrow();
+      expect(() => applyEditsToContent("aba", edits, "file")).toThrow();
     for (const edits of [
       [
         { oldText: "b", newText: "b" },
@@ -180,9 +174,9 @@ describe("retained fuzzy editing and display diffs", () => {
         { oldText: "aba", newText: "aba" },
       ],
     ])
-      expect(() => applyEditsToNormalizedContent("aba", edits, "file")).toThrow();
+      expect(() => applyEditsToContent("aba", edits, "file")).toThrow();
     expect(() =>
-      applyEditsToNormalizedContent(
+      applyEditsToContent(
         "abc",
         [
           { oldText: "a", newText: "a" },
@@ -384,7 +378,7 @@ describe("retained read and edit tools", () => {
     await rm(join(directory, "file"), { recursive: true });
     await writeFile(join(directory, "file"), "a");
     const readSpy = vi
-      .spyOn(env, "readTextFile")
+      .spyOn(env, "readBinaryFile")
       .mockResolvedValueOnce(err(new FileError("permission_denied", "denied", "file")));
     await expect(edit()).rejects.toThrow("Error code: permission_denied");
     readSpy.mockRestore();
@@ -394,9 +388,9 @@ describe("retained read and edit tools", () => {
     await expect(edit()).rejects.toThrow("Error code: permission_denied");
     writeSpy.mockRestore();
     const controller = new AbortController();
-    vi.spyOn(env, "readTextFile").mockImplementationOnce(async () => {
+    vi.spyOn(env, "readBinaryFile").mockImplementationOnce(async () => {
       controller.abort();
-      return ok("a");
+      return ok(new TextEncoder().encode("a"));
     });
     await expect(edit(withAbortSignal(controller.signal, context))).rejects.toThrow(
       "Operation aborted",

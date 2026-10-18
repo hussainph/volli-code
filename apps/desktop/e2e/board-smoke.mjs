@@ -608,10 +608,10 @@ async function main() {
 
     // === 5. Universal command palette: ticket lookup opens its destination ===
     await attempt(5, "⌘K searches all tickets and opens the selected destination", async () => {
-      const trigger = page.getByRole("button", { name: "Search tickets and sessions" });
+      const trigger = page.getByRole("button", { name: "Search tickets, sessions, and commands" });
       const signifier = (await trigger.textContent())?.includes("⌘K") ?? false;
       await page.keyboard.press("Meta+K");
-      const search = page.getByPlaceholder("Search tickets and sessions…");
+      const search = page.getByPlaceholder("Search tickets, sessions, and commands…");
       await search.waitFor();
       await search.fill("ghostty");
       const result = page
@@ -1408,7 +1408,7 @@ async function main() {
       'Guard: "c" typed into the command palette does not open the New-ticket composer',
       async () => {
         await page.keyboard.press("Meta+K");
-        const search = page.getByPlaceholder("Search tickets and sessions…");
+        const search = page.getByPlaceholder("Search tickets, sessions, and commands…");
         await search.waitFor();
         await search.pressSequentially("c");
         await sleep(300);

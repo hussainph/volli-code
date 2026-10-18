@@ -40,6 +40,7 @@ import {
   type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
+  type BrowserAppShortcutEvent,
   type CreateRemoteProjectInput,
   type CreateRemoteProjectResult,
   type DesktopCatalogEntry,
@@ -204,6 +205,9 @@ export interface DesktopRouterHandlers {
     HostLinkRelaySubscribeCall,
     HostLinkRelayEvent
   >;
+  /** App shortcuts out of a focused Browser page (VC-301): desktop main's Browser Tab host. */
+  readonly "browserShortcuts.subscribe": DesktopSubscriptionHandler<void, BrowserAppShortcutEvent>;
+  readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -334,6 +338,27 @@ async function relayAnswer(run: () => unknown): Promise<unknown> {
     throw new TRPCError({ code: hostError.code, message: hostError.message, cause: error });
   }
 }
+
+/** One Browser page shortcut, as main hands it to the window (VC-301). */
+const browserAppShortcutEventSchema = z.object({
+  tabId: z.string().min(1),
+  shortcut: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("replay"),
+      chord: z.object({
+        key: z.string(),
+        code: z.string(),
+        metaKey: z.boolean(),
+        ctrlKey: z.boolean(),
+        altKey: z.boolean(),
+        shiftKey: z.boolean(),
+        repeat: z.boolean(),
+      }),
+    }),
+    z.object({ kind: z.literal("close-tab") }),
+    z.object({ kind: z.literal("focus-address") }),
+  ]),
+});
 
 const trimSettingsSchema = z.object({
   keepPatterns: z.array(z.string()),
@@ -694,6 +719,31 @@ export function createDesktopRouter() {
           );
         }),
     },
+    /**
+     * App shortcuts out of a focused Browser page (VC-301). No channel
+     * preceded them on the bridge's terms: host-placed like `hosts.*`, the
+     * person's own window only; desktop main's Browser Tab host answers
+     * through the map, and every other host answers unavailable.
+     */
+    browserShortcuts: {
+      /** Every app chord a focused page hands back, from now on; nothing is replayed to a late window. */
+      subscribe: hostProcedure("browserShortcuts.subscribe").subscription(async function* ({
+        ctx,
+        signal,
+      }) {
+        yield* desktopStream<BrowserAppShortcutEvent>(
+          ctx,
+          "browserShortcuts.subscribe",
+          signal,
+          (sink) => ctx.handlers["browserShortcuts.subscribe"](undefined, ctx.call, sink),
+        );
+      }),
+      /** Keyboard focus back to the page whose shortcut the window had nothing to do with. */
+      focusPage: hostProcedure("browserShortcuts.focusPage")
+        .input(z.strictObject({ tabId: z.string().min(1).max(256) }))
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["browserShortcuts.focusPage"](input, ctx.call)),
+    },
   });
 }
 
@@ -717,5 +767,6 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "hostSignIns.run": hostSignInRunEventSchema,
     "hostLink.subscribe": hostLinkRelayEventSchema,
     "hostScope.subscribe": hostLinkRelayEventSchema,
+    "browserShortcuts.subscribe": browserAppShortcutEventSchema,
   });
 }

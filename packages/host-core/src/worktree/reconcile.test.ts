@@ -105,7 +105,9 @@ describe("reconcile matrix", () => {
     const result = await reconcile(git, forTarget(target));
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toMatch(/on branch other, not volli\/VC-1-x/);
+      expect(result.error).toMatch(
+        /on branch other with no uncommitted changes; this ticket's branch is volli\/VC-1-x\./,
+      );
       expect(result.error).toMatch(/Check out volli\/VC-1-x there/);
     }
   });
@@ -118,7 +120,9 @@ describe("reconcile matrix", () => {
     const result = await reconcile(git, forTarget(target));
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toMatch(/on branch volli\/VC-10-someone-elses-work, not volli\/VC-1-x/);
+      expect(result.error).toMatch(
+        /on branch volli\/VC-10-someone-elses-work with no uncommitted changes; this ticket's branch is volli\/VC-1-x/,
+      );
     }
   });
 
@@ -132,8 +136,77 @@ describe("reconcile matrix", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toMatch(/detached HEAD/);
-      expect(result.error).toMatch(/not volli\/VC-1-x/);
+      expect(result.error).toMatch(/this ticket's branch is volli\/VC-1-x/);
     }
+  });
+
+  it("names uncommitted changes on a foreign branch, and asks for them to be committed first (VC-659)", async () => {
+    const target = tempDir("wt");
+    const { gitAsync: git, calls } = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        return MAIN_ENTRY + onBranch(target, "volli/VC-2-someone-elses-work");
+      }
+      if (args[0] === "status") return " M src/index.ts\n?? notes.md\n";
+      return "";
+    });
+    const result = await reconcile(git, forTarget(target));
+    expect(result).toEqual({
+      ok: false,
+      error:
+        `A worktree already exists at ${target} on branch volli/VC-2-someone-elses-work ` +
+        `with uncommitted changes; this ticket's branch is volli/VC-1-x. ` +
+        `Commit or stash those changes, check out volli/VC-1-x there (or remove the worktree), then retry.`,
+    });
+    // Status is read inside the worktree itself, and nothing moves the checkout.
+    expect(calls.find((call) => call.args[0] === "status")?.cwd).toBe(target);
+    expect(calls.some((call) => call.args[0] === "checkout" || call.args[0] === "switch")).toBe(
+      false,
+    );
+  });
+
+  it("names uncommitted changes in a detached HEAD too", async () => {
+    const target = tempDir("wt");
+    const { gitAsync: git } = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list") {
+        return `${MAIN_ENTRY}worktree ${target}\nHEAD def\ndetached\n`;
+      }
+      return args[0] === "status" ? "?? scratch.txt\n" : "";
+    });
+    const result = await reconcile(git, forTarget(target));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/in detached HEAD state with uncommitted changes;/);
+      // Committing on a detached HEAD and then checking out would strand the commit.
+      expect(result.error).toMatch(
+        /Stash those changes \(or commit them to a branch\), check out volli\/VC-1-x there/,
+      );
+    }
+  });
+
+  it("still refuses a foreign branch, without the dirtiness clause, when status can't be read", async () => {
+    const target = tempDir("wt");
+    const { gitAsync: git } = scriptedGit((args) => {
+      if (args[0] === "worktree" && args[1] === "list")
+        return MAIN_ENTRY + onBranch(target, "other");
+      if (args[0] === "status") throw new GitError("fatal", "index locked", ["status"]);
+      return "";
+    });
+    const result = await reconcile(git, forTarget(target));
+    expect(result).toEqual({
+      ok: false,
+      error:
+        `A worktree already exists at ${target} on branch other; this ticket's branch is volli/VC-1-x. ` +
+        `Check out volli/VC-1-x there (or remove the worktree), then retry.`,
+    });
+  });
+
+  it("refuses a foreign registration whose directory is gone without reading its status", async () => {
+    const target = join(tempDir("home"), "wt-gone");
+    const { gitAsync: git, calls } = listGit(onBranch(target, "other"));
+    const result = await reconcile(git, forTarget(target));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/on branch other; this ticket's branch is/);
+    expect(calls.some((call) => call.args[0] === "status")).toBe(false);
   });
 
   it("surfaces an error when the worktree list can't be read", async () => {
@@ -168,6 +241,18 @@ describe("reconcile — a same-ticket branch at the ticket's path is adopted", (
       ok: true,
       value: { kind: "create", prune: true, branch: SAME_TICKET_BRANCH },
     });
+  });
+
+  it("adopts a stacked PR branch cut from the same ticket (VC-659)", async () => {
+    // A worktree on the stacked slice `volli/VC-1c-…` opens there; nothing moves it.
+    const target = tempDir("wt");
+    const { gitAsync: git, calls } = listGit(onBranch(target, "volli/VC-1c-stable-venue"));
+    const result = await reconcile(git, forTarget(target));
+    expect(result).toEqual({
+      ok: true,
+      value: { kind: "already-present", branch: "volli/VC-1c-stable-venue" },
+    });
+    expect(calls.map((call) => call.args.slice(0, 2))).toEqual([["worktree", "list"]]);
   });
 
   it("adopts the old-slug branch when a retitle drifted the name the ticket would compute", async () => {

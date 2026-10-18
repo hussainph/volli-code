@@ -288,6 +288,43 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   const yieldToHost = ports.yieldToHost ?? defaultYieldToHost;
   /** Insertion-ordered, so the first key is the least recently listed Session. */
   const listingFolds = new Map<string, ListingFold>();
+  /**
+   * Each project's whole roster as its latest `all` listing counted it
+   * (VC-800): the working set {@link evictListingFolds} sizes the cache to.
+   */
+  const rosterSizes = new Map<string, number>();
+
+  /**
+   * Trims the cache to {@link SESSION_LISTING_CACHE_LIMIT} or the rosters it
+   * serves, whichever is larger (VC-800).
+   *
+   * Runs once a listing has folded its last row, never while it is folding.
+   * An LRU cache that evicts during a scan bigger than itself evicts the rows
+   * the next scan needs first. Each listing then re-folds every row and the
+   * cache does nothing. Trimming afterwards means a listing over the limit
+   * re-folds only its overflow on the next visit, not the whole roster.
+   *
+   * The limit is the sum of every project's latest `all` count, so it is
+   * never below the roster that listings walk, and nothing live is evicted
+   * once every project has been listed whole. The cache stays resident
+   * between listings with one frozen row per listed Session, so its memory
+   * grows with the roster and not with how often the roster is listed.
+   *
+   * Sessions are never deleted one by one. They go only with their project,
+   * and nothing lists a deleted project again, so that project's count and
+   * rows stay until the host restarts. The cache therefore holds at most one
+   * row for each Session that belonged to a listed project at some point
+   * since the host started, or the floor, whichever is larger.
+   */
+  const evictListingFolds = (): void => {
+    let rosters = 0;
+    for (const size of rosterSizes.values()) rosters += size;
+    const limit = Math.max(SESSION_LISTING_CACHE_LIMIT, rosters);
+    for (const oldest of listingFolds.keys()) {
+      if (listingFolds.size <= limit) break;
+      listingFolds.delete(oldest);
+    }
+  };
 
   /**
    * One listing row, from the cache when the Session has not moved.
@@ -326,10 +363,6 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     );
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
-    for (const oldest of listingFolds.keys()) {
-      if (listingFolds.size <= SESSION_LISTING_CACHE_LIMIT) break;
-      listingFolds.delete(oldest);
-    }
     return projection;
   };
   return {
@@ -946,6 +979,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       // Membership is decided once, in its own transaction, and the rows it
       // returns are carried to the folds below rather than re-read there.
       const rows = await ports.ledger.transaction((transaction) => transaction.listSessions(query));
+      // Only the whole roster sizes the cache. A Ticket's scope is a subset of
+      // its project's, so counting it as well would count Sessions twice.
+      if (query.scope === "all") rosterSizes.set(query.projectId, rows.length);
       const projections: SessionProjection[] = [];
       for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
         // Between chunks, never after the last one: a turn nobody needs is
@@ -958,6 +994,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           )),
         );
       }
+      evictListingFolds();
       return projections;
     },
 
@@ -991,6 +1028,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           )),
         );
       }
+      evictListingFolds();
       return projections;
     },
 
@@ -1093,22 +1131,22 @@ const defaultYieldToHost = (): Promise<void> =>
   });
 
 /**
- * How many Sessions keep a folded listing row in memory (VC-388).
+ * The fewest Sessions that keep a folded listing row in memory (VC-388): a
+ * floor, not the bound (VC-800).
  *
  * The cache's whole job is to let a repeat listing skip the Sessions that did
  * not move, so a limit below a project's roster would be worse than no cache
  * at all: each listing would evict its own earliest entries before reaching
  * its last row, and every visit would pay a full fold AND the bookkeeping.
- * The number is therefore sized to clear plausible ROSTERS rather than to a
- * memory budget — and it has to clear several at once, because the listing
- * callers are not all one project's UI (`pty/manager.ts` lists every project's
- * Sessions to compute a concurrency budget).
+ * No constant clears every roster, so this number is not the bound. The
+ * limit is never below the rosters being listed (see `evictListingFolds`),
+ * and trimming happens only after a listing completes. This floor keeps the
+ * cache useful for hosts that never list a whole project, such as
+ * Ticket-scoped listings and the attached-Session budget.
  *
  * A held row measured 5.6 KB for an ordinary Session and 79.8 KB for a
  * deliberately extreme one — 450 events carrying 150 commands and their
- * receipts — so this ceiling is about 1.4 MB in the shape a real roster has
- * and about 20 MB in a shape that would need 256 such Sessions to reach
- * (VC-388).
+ * receipts (VC-388).
  */
 export const SESSION_LISTING_CACHE_LIMIT = 256;
 

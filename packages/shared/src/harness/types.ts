@@ -147,8 +147,9 @@ export type HarnessConfigInjection =
 /**
  * Where a harness's own session id comes from. `argv` means Volli mints it at
  * spawn, so `sessions.harness_session_id` is known before the agent produces a
- * byte; `reported` means it arrives on the events; `none` leaves `volli
- * session link` as the only way to learn it.
+ * byte; `reported` means it arrives on the events; `none` declares no source,
+ * so the id is learned from a hook payload that happens to carry one (`volli
+ * hook` reads the common key spellings) or from `volli session link`.
  */
 export type HarnessSessionIdSource =
   | { kind: "argv"; flag: string; format: "uuid" }

@@ -4244,6 +4244,9 @@ describe("the in-memory ledger's usage port", () => {
   });
 });
 
+/** A listing that sees the whole stored roster. */
+const everyRow = (rows: readonly Session[]): readonly Session[] => rows;
+
 /**
  * A project's whole roster, folded on the process that also serves every other
  * Session operation (VC-388).
@@ -4254,10 +4257,6 @@ describe("the in-memory ledger's usage port", () => {
  * behind it, and one that never returns to the event loop blocks the host for
  * the same span whether or not a skeleton is drawn over it.
  */
-/** The first {@link SESSION_LISTING_CACHE_LIMIT} rows of a roster: exactly a full cache. */
-const rosterAtCacheLimit = (rows: readonly Session[]): readonly Session[] =>
-  rows.slice(0, SESSION_LISTING_CACHE_LIMIT);
-
 describe("listSessions over a project roster (VC-388)", () => {
   async function roster(count: number) {
     const { plane } = composition();
@@ -4464,52 +4463,144 @@ describe("listSessions over a project roster (VC-388)", () => {
   });
 
   /**
-   * The cache's bound, which is the half of a cache that has to be proved
-   * rather than observed: a memo that never evicts also answers every
-   * assertion about hits and misses, and only grows.
+   * A project roster one Session larger than the cache's floor survives a
+   * repeat listing whole (VC-800): the limit is never below the roster.
    *
-   * The roster is grown by ONE past {@link SESSION_LISTING_CACHE_LIMIT} rather
-   * than by many, because the interesting boundary is exactly there: a roster
-   * at the limit must survive a repeat listing whole, and the first row over
-   * it must cost exactly one entry — the least recently listed one — and not
-   * the whole cache.
+   * A bound at the floor would fail this. The first listing would evict its
+   * own first row to store its last one. The repeat listing would then miss
+   * that first row and evict the second to store it, and so on to the end, so
+   * every visit would fold every Session.
    *
-   * Budgeted like the other roster-sized tests: it creates one Session more
-   * than the cache holds and folds that roster four times, which is under a
-   * second here and several under coverage instrumentation on a shared CI
-   * runner. The default five seconds timed out on main.
+   * Budgeted like the other roster-sized tests: hundreds of Sessions are well
+   * under a second here and several under coverage on a shared CI runner.
    */
   it(
-    "evicts the least recently listed Session once the cache is full",
+    "keeps a project roster larger than the floor whole across repeat listings",
     { timeout: 30_000 },
     async () => {
-      // One roster, listed through a moving window: at the cache's size, then
-      // one over it, then one row at a time to ask which entry survived.
-      let visible: (rows: readonly Session[]) => readonly Session[] = rosterAtCacheLimit;
-      const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
+      const { plane, folded } = foldWatchingComposition();
       for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
-        await plane.createSession(createRequest(`command-evict-${index}`));
+        await plane.createSession(createRequest(`command-roster-over-floor-${index}`));
       }
       const query = { projectId: "project-1", scope: "all" } as const;
 
       folded.length = 0;
-      const full = await plane.listSessions(query);
-      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+      await expect(plane.listSessions(query)).resolves.toHaveLength(
+        SESSION_LISTING_CACHE_LIMIT + 1,
+      );
+      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
 
-      // A roster that exactly fills the cache is served entirely from it: the
-      // limit holds this many, not this many minus one.
       folded.length = 0;
-      await expect(plane.listSessions(query)).resolves.toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+      await expect(plane.listSessions(query)).resolves.toHaveLength(
+        SESSION_LISTING_CACHE_LIMIT + 1,
+      );
       expect(folded).toEqual([]);
+    },
+  );
 
-      // One Session more than the cache can hold. Only the newcomer is folded,
-      // and storing it pushes out the head of the insertion order — which is
-      // the first row of the listing, since a hit re-inserts in listing order.
-      visible = (rows) => rows;
+  /**
+   * The `volli session list` shape: every project listed at once, each roster
+   * under the floor and their sum over it. The bound is the SUM of the
+   * rosters. A per-listing bound would still let the two projects evict each
+   * other's rows, and the next round would fold them all again.
+   */
+  it(
+    "keeps several project rosters at once when together they exceed the floor",
+    { timeout: 30_000 },
+    async () => {
+      const { plane, folded } = foldWatchingComposition();
+      const half = (SESSION_LISTING_CACHE_LIMIT >> 1) + 1;
+      for (let index = 0; index < half; index += 1) {
+        await plane.createSession(createRequest(`command-first-project-${index}`));
+        await plane.createSession({
+          ...createRequest(`command-second-project-${index}`),
+          projectId: "project-2",
+        });
+      }
+      const everyProject = () =>
+        Promise.all(
+          ["project-1", "project-2"].map((projectId) =>
+            plane.listSessions({ projectId, scope: "all" }),
+          ),
+        );
+
       folded.length = 0;
-      const overflowing = await plane.listSessions(query);
-      expect(overflowing).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
-      expect(folded).toEqual([overflowing.at(-1)?.session.id]);
+      await everyProject();
+      expect(folded).toHaveLength(half * 2);
+
+      // Concurrently, and then one project after the other: neither order
+      // re-folds a Session that did not move.
+      folded.length = 0;
+      await everyProject();
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      await plane.listSessions({ projectId: "project-2", scope: "all" });
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(folded).toEqual([]);
+    },
+  );
+
+  /**
+   * Where nothing has counted a whole roster, the floor is the bound, and a
+   * listing larger than it must cost its overflow rather than its length.
+   * A Ticket-scoped listing counts no roster, so it reaches this case with the
+   * smallest setup.
+   *
+   * Trimming happens once the listing has folded its last row. Trimming while
+   * folding would evict the rows the next listing reads first, and that
+   * listing would then fold every row.
+   */
+  it(
+    "re-folds only the overflow of a listing larger than the floor",
+    { timeout: 30_000 },
+    async () => {
+      const { plane, folded } = foldWatchingComposition();
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        await plane.createSession(createRequest(`command-overflow-${index}`));
+      }
+      const query = { projectId: "project-1", scope: "ticket", ticketId: "ticket-1" } as const;
+
+      folded.length = 0;
+      const first = await plane.listSessions(query);
+      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
+
+      // The trim takes the least recently listed row, which is the first one,
+      // and the next listing re-folds exactly that row. A hit moves its row to
+      // the newest end, so the same row is the one trimmed again.
+      for (let visit = 0; visit < 2; visit += 1) {
+        folded.length = 0;
+        await expect(plane.listSessions(query)).resolves.toHaveLength(
+          SESSION_LISTING_CACHE_LIMIT + 1,
+        );
+        expect(folded).toEqual([first[0].session.id]);
+      }
+    },
+  );
+
+  /**
+   * The bound, which is the half of a cache that has to be proved rather than
+   * observed: a memo that never evicts also answers every assertion about hits
+   * and misses, and only grows. When a listed roster shrinks, the next listing
+   * trims the cache back to the floor, least recently listed first. Rosters
+   * do not shrink in the app, because Sessions go only with their project and
+   * a deleted project is not listed again. What this guards is that the bound
+   * still evicts at all.
+   */
+  it(
+    "trims the cache back to the floor when the roster it served shrinks",
+    { timeout: 30_000 },
+    async () => {
+      let visible: (rows: readonly Session[]) => readonly Session[] = everyRow;
+      const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        await plane.createSession(createRequest(`command-shrink-${index}`));
+      }
+      const query = { projectId: "project-1", scope: "all" } as const;
+      const full = await plane.listSessions(query);
+      expect(full).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
+
+      // The project now counts no Sessions, so the cache keeps only the floor.
+      visible = () => [];
+      await expect(plane.listSessions(query)).resolves.toEqual([]);
 
       // Which entry went, asked one row at a time so a miss cannot cascade into
       // the next row and blur the answer. The middle of the roster is still

@@ -54,7 +54,7 @@ import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
 import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
-import type { RunGit, RunGitAsync } from "../worktree";
+import type { RunGitAsync } from "../worktree";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
@@ -67,16 +67,11 @@ export interface AgentCommandServiceOptions {
   now?: () => number;
   newId?: () => string;
   /**
-   * The git runner the read-only worktree commands execute through. All git
-   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
-   * tests substitute a scripted runner. Defaults to {@link runGitCapturing}.
-   */
-  git?: RunGit;
-  /**
-   * The non-blocking git runner for verbs that can execute user-configured
-   * hooks or scan complete Change Sets. Defaults to {@link runGitCapturingAsync}
-   * and is separate from {@link git} so a caller cannot accidentally put a
-   * long-running child back onto Electron main.
+   * The git runner every worktree verb executes through — the non-blocking
+   * one. All git calls stay inside the worktree module (CONCEPT #42); this seam
+   * only lets tests substitute a scripted runner. Defaults to
+   * {@link runGitCapturingAsync}. There is no synchronous runner here, so a
+   * verb cannot put a git child back onto Electron main's thread (VC-786).
    */
   gitAsync?: RunGitAsync;
   /**
@@ -84,7 +79,7 @@ export interface AgentCommandServiceOptions {
    * threaded into the worktree read verbs' disk-existence seam so a stamped-
    * but-deleted directory refuses with INVALID_REQUEST rather than letting
    * status.ts's errs-dirty fallback report `uncommitted: true` for a tree that's
-   * gone. Same seam shape as {@link git} — defaults to {@link existsSync}; tests
+   * gone. The same kind of seam as {@link gitAsync} — defaults to {@link existsSync}; tests
    * substitute a scripted predicate.
    */
   worktreeExists?: (path: string) => boolean;
@@ -357,8 +352,6 @@ export interface AgentCommandContext {
   readonly now: () => number;
   /** {@link AgentCommandServiceOptions.newId}, defaulted to `randomUUID`. */
   readonly newId: () => string;
-  /** {@link AgentCommandServiceOptions.git}, defaulted to `runGitCapturing`. */
-  readonly git: RunGit;
   /** {@link AgentCommandServiceOptions.gitAsync}, defaulted to `runGitCapturingAsync`. */
   readonly gitAsync: RunGitAsync;
   /** {@link AgentCommandServiceOptions.worktreeExists}, defaulted to `existsSync`. */

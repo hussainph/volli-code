@@ -13,8 +13,8 @@
  * | no worktree      | dir exists, NOT a worktree               | friendly error, never blind rm -rf  |
  * | —                | branch checked out elsewhere             | hard fail, no --force               |
  * | —                | path on ANOTHER branch of the SAME ticket | adopt that branch (rows 1–2 apply) |
- * | —                | path on another ticket's/non-volli branch | hard fail, one recovery action     |
- * | —                | path in detached HEAD                    | hard fail, one recovery action      |
+ * | —                | path on another ticket's/non-volli branch | hard fail, names branch + dirtiness |
+ * | —                | path in detached HEAD                    | hard fail, names dirtiness          |
  *
  * "Branch checked out elsewhere" is detected up front (T3's proactive check)
  * from `git worktree list --porcelain`, which includes the main checkout, so
@@ -58,6 +58,19 @@ export type ReconcileDecision =
  */
 function looksLikeWorktree(dir: string): boolean {
   return existsSync(join(dir, ".git"));
+}
+
+/**
+ * Whether the worktree at `path` holds uncommitted changes (untracked files
+ * included), or `null` when git cannot say. Read only to word a refusal, so a
+ * failed read degrades the message rather than the decision.
+ */
+async function uncommittedChanges(git: RunGitAsync, path: string): Promise<boolean | null> {
+  try {
+    return (await git(["status", "--porcelain"], path)).trim() !== "";
+  } catch {
+    return null;
+  }
 }
 
 export async function reconcile(
@@ -117,12 +130,32 @@ export async function reconcile(
     // branch carries cannot be known from here, and a detached HEAD has no
     // branch to record and would strand a Session's commits off any branch —
     // so both take the hard-fail path (never an auto-checkout).
+    //
+    // The refusal names everything a person (or the Session that asked for the
+    // start) needs to resolve it by hand: what is checked out, whether it holds
+    // uncommitted work, and which branch the ticket expects (VC-659).
     if (checkout?.kind === "foreign" || checkout?.kind === "detached") {
       const state =
         checkout.kind === "detached" ? "in detached HEAD state" : `on branch ${checkout.branch}`;
+      const changes = diskExists ? await uncommittedChanges(git, input.worktreePath) : null;
+      const tree =
+        changes === null
+          ? ""
+          : changes
+            ? " with uncommitted changes"
+            : " with no uncommitted changes";
+      // A commit made on a detached HEAD is stranded by the checkout that
+      // follows it, so there the changes are stashed or committed to a branch.
+      const keep =
+        checkout.kind === "detached"
+          ? "Stash those changes (or commit them to a branch), check out"
+          : "Commit or stash those changes, check out";
+      const remedy = changes
+        ? `${keep} ${input.branch} there (or remove the worktree), then retry.`
+        : `Check out ${input.branch} there (or remove the worktree), then retry.`;
       return err(
-        `A worktree already exists at ${input.worktreePath} ${state}, not ${input.branch}. ` +
-          `Check out ${input.branch} there (or remove the worktree), then retry.`,
+        `A worktree already exists at ${input.worktreePath} ${state}${tree}; ` +
+          `this ticket's branch is ${input.branch}. ${remedy}`,
       );
     }
     if (diskExists) return ok({ kind: "already-present", branch });
