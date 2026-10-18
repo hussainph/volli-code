@@ -703,6 +703,28 @@ describe("formatAXSnapshot whole print (VC-237)", () => {
     expect(printed.whole!.text.endsWith(":")).toBe(false);
   });
 
+  it("saves what a hidden run of nodes kept the cut print from reaching, on a tree that is not empty", () => {
+    // Ignored nodes spend the snapshot's node budget before any content;
+    // the whole print walks further and finds the page behind them.
+    const hidden = Array.from({ length: 2_500 }, (_, index) =>
+      node({ nodeId: `h${index}`, ignored: true, role: { value: "generic" } }),
+    );
+    const nodes = [
+      node({
+        nodeId: "root",
+        role: { value: "RootWebArea" },
+        childIds: [...hidden.map((one) => one.nodeId), "b"],
+      }),
+      ...hidden,
+      button("b", "Save", 100),
+    ];
+
+    const printed = formatAXSnapshot(nodes);
+
+    expect(printed).toMatchObject({ text: "", truncated: true, empty: false });
+    expect(printed.whole).toEqual({ text: '- button "Save"', bounded: false });
+  });
+
   it("prints nothing more when the cut print already showed the whole tree", () => {
     expect(formatAXSnapshot(page([button("a", "Save", 100)])).whole).toBeUndefined();
     // A cycle stops the walk, but walking further finds nothing more to print.
