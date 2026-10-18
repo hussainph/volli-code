@@ -2063,3 +2063,82 @@ describe("createAgentBrowserPort traces (VC-453)", () => {
     expect(steps[0]?.pictureId).toBeNull();
   });
 });
+
+describe("createAgentBrowserPort whole reads (VC-237)", () => {
+  /** A dense page: far more buttons than one snapshot prints. */
+  const DENSE_TREE = {
+    nodes: [
+      {
+        nodeId: "root",
+        ignored: false,
+        role: { value: "RootWebArea" },
+        childIds: Array.from({ length: 1_500 }, (_, index) => `b${index}`),
+      },
+      ...Array.from({ length: 1_500 }, (_, index) => ({
+        nodeId: `b${index}`,
+        ignored: false,
+        role: { value: "button" },
+        name: { value: `Action number ${index} on this dense page` },
+        backendDOMNodeId: 10_000 + index,
+        childIds: [],
+      })),
+    ],
+  };
+
+  function dense() {
+    const fake = fakeHost([state({ tabId: "mine", createdBy: "session" })]);
+    const kept = Array.from({ length: 150 }, (_, index) => ({
+      level: "log" as const,
+      text: `log ${index}`,
+    }));
+    fake.host.consoleOf = () => ({
+      messages: kept.slice(-100),
+      truncated: true,
+      kept: { messages: kept, bounded: false },
+    });
+    const browser = createAgentBrowserPort({
+      host: fake.host,
+      scope: { projectId: "p1", ticketId: "t1" },
+      session: ME,
+      transportFor: () => ({
+        send: async (method) => {
+          if (method === "Accessibility.getFullAXTree") return DENSE_TREE;
+          if (method === "DOM.getBoxModel") return BUTTON_BOX;
+          return {};
+        },
+      }),
+      waitForLoad: async () => undefined,
+      holdAwake: () => () => undefined,
+    });
+    return { browser, kept };
+  }
+
+  it("hands the tree the bound cut beside a snapshot and an act's fresh read", async () => {
+    const { browser } = dense();
+
+    const read = await browser.snapshot({ tabId: "mine", signal });
+    expect(read.truncated).toBe(true);
+    expect(read.snapshotText).not.toContain("Action number 1499");
+    expect(read.whole?.bounded).toBe(false);
+    expect(read.whole?.text).toContain('- button "Action number 1499 on this dense page"');
+    expect(read.whole?.text.split("\n")).toHaveLength(1_500);
+
+    const acted = await browser.act({
+      tabId: "mine",
+      generation: read.generation,
+      kind: "click",
+      ref: "e1",
+      signal,
+    });
+    expect(acted.whole?.text).toContain("Action number 1499");
+  });
+
+  it("hands the console the host keeps beside a console read", async () => {
+    const { browser, kept } = dense();
+
+    const record = await browser.console({ tabId: "mine", signal });
+
+    expect(record.messages).toHaveLength(100);
+    expect(record.kept).toEqual({ messages: kept, bounded: false });
+  });
+});

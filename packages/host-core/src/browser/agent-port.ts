@@ -120,7 +120,7 @@ export interface AgentBrowserBackend {
   back(tabId: string): BrowserTabState;
   forward(tabId: string): BrowserTabState;
   reload(tabId: string): BrowserTabState;
-  consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated">;
+  consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated" | "kept">;
   /** A live picture of the tab for the transcript card, or null when the host declined to look. */
   capturePicture(tabId: string, signal?: AbortSignal): Promise<string | null>;
   /** Keeps a model-requested screenshot for the person; answers the picture's id. */
@@ -452,6 +452,9 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
       snapshotText: printed.text,
       generation: printed.generation,
       truncated: printed.truncated,
+      // What the bound cut rides beside the cut text for the runtime to save
+      // (VC-237); the model is never sent it.
+      ...(printed.whole === undefined ? {} : { whole: printed.whole }),
       empty: printed.empty,
       picture,
     };
@@ -686,6 +689,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         ...pageOf(tab),
         messages: record.messages,
         truncated: record.truncated,
+        ...(record.kept === undefined ? {} : { kept: record.kept }),
       };
     },
     acquire: async (input) => {

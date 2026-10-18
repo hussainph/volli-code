@@ -22,6 +22,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   MCP_RESULT_INLINE_MAX_BYTES,
+  type RuntimeWebDocument,
   mcpProviderToolName,
   type McpToolDefinition,
   type RuntimeMcpCallResult,
@@ -365,5 +366,73 @@ describe("MCP results on Pi 0.99 (VC-469)", () => {
       expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
       expect(JSON.stringify(read?.content)).toContain("entry 1997 ");
     }
+  });
+});
+
+describe("web reads Volli bounded (VC-237)", () => {
+  it("saves a dense page whole beside the sidecar, sends the model only the bounded copy, and marks a later read", async () => {
+    const whole = Array.from(
+      { length: 8_000 },
+      (_, index) => `paragraph ${String(index).padStart(4, "0")} ${"·".repeat(24)}`,
+    ).join("\n");
+    const page: RuntimeWebDocument = {
+      requestedUrl: "https://docs.example/dense",
+      finalUrl: "https://docs.example/dense",
+      origin: "https://docs.example",
+      contentType: "text",
+      text: whole.slice(0, 25_000),
+      truncated: true,
+      whole: { text: whole, bounded: false },
+    };
+    const { spec, sessionDataDir } = attachment(() => {
+      throw new Error("no MCP call in this test");
+    });
+    const sent: (readonly Message[])[] = [];
+    let savedPath = "";
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: scriptedModels([
+        callTool("web_fetch", { url: "https://docs.example/dense" }, "tc-web"),
+        (reply, messages) => {
+          sent.push(messages);
+          const shown = (toolResultsIn(messages)[0]!.content[0] as { text: string }).text;
+          savedPath = /Volli saved the whole page text \(.+?\) to (\S+), read at /u.exec(
+            shown,
+          )![1]!;
+          callTool(
+            "read",
+            { path: savedPath, offset: 7_000, limit: 2 },
+            "tc-read",
+          )(reply, messages);
+        },
+        (reply, messages) => {
+          sent.push(messages);
+          say("Read the rest.")(reply, messages);
+        },
+      ]),
+    });
+    const handle = await runtime.startSession({
+      ...spec,
+      tools: { tools: ["read"] },
+      webFetch: async () => page,
+    });
+    await handle.submitUserMessage("Read the dense page.");
+
+    // What the provider was sent: the bounded copy and the file's name, never the rest.
+    expect(JSON.stringify(sent[0])).not.toContain("paragraph 7999");
+    expect(JSON.stringify(sent[0])).toContain("paragraph 0000");
+    // The whole sits in this attachment's own directory, exactly as read.
+    const sidecar = handle.recovery!.sessionFilePath;
+    expect(dirname(savedPath)).toBe(toolOutputDirectoryFor(sidecar));
+    const file = readFileSync(savedPath, "utf8");
+    expect(file.slice(file.indexOf("\n\n") + 2)).toBe(whole);
+    expect(file.split("\n")[0]).toContain("Tool: web_fetch. Source: https://docs.example/dense.");
+    // The sidecar keeps the bounded result, not the page.
+    expect(readFileSync(sidecar, "utf8")).not.toContain("paragraph 7999");
+    // A read of the rest arrives marked untrusted.
+    const read = toolResultsIn(sent[1]!).find((message) => message.toolCallId === "tc-read");
+    expect(read?.content[0]).toEqual({ type: "text", text: SAVED_TOOL_OUTPUT_WARNING });
+    expect(JSON.stringify(read?.content)).toContain("paragraph 6998");
+    await handle.close();
   });
 });

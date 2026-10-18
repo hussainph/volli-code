@@ -312,6 +312,15 @@ function lineText(line: { text: string; colon: boolean }): string {
 
 const NO_LEDGER: RefLedger = { known: new Map(), nextRef: 1, markNew: false };
 
+/** One entry's line before any ref, mark or colon: its role, quoted name and level. */
+function entryText(entry: Entry, indent: string): string {
+  const text =
+    entry.role === null
+      ? `${indent}- text: ${JSON.stringify(entry.name)}`
+      : `${indent}- ${entry.role}${entry.name === "" ? "" : ` ${JSON.stringify(entry.name)}`}`;
+  return entry.level === null ? text : `${text} [level=${entry.level}]`;
+}
+
 /**
  * Turn planned lines into text under the bound, and decide which refs the
  * text shows. Refs come from the ledger when the generation knows the element
@@ -348,11 +357,7 @@ function render(
         nextAfter: next,
       };
     }
-    let text =
-      entry.role === null
-        ? `${indent}- text: ${JSON.stringify(entry.name)}`
-        : `${indent}- ${entry.role}${entry.name === "" ? "" : ` ${JSON.stringify(entry.name)}`}`;
-    if (entry.level !== null) text += ` [level=${entry.level}]`;
+    let text = entryText(entry, indent);
     let ref: string | null = null;
     if (entry.backendDOMNodeId !== null) {
       const handle = entry.backendDOMNodeId;
@@ -427,25 +432,89 @@ function planAll(entries: readonly Entry[], depth: number, into: PlannedLine[]):
 }
 
 /**
+ * The most characters a whole print writes (VC-237). A bound on what one read
+ * may hold in memory rather than on what a reader is shown: the runtime saves
+ * the print, and one saved file holds no more than this anyway.
+ */
+const SNAPSHOT_WHOLE_MAX_CHARS = 8 * 1_024 * 1_024;
+
+/**
+ * The tree past the bound that cut a snapshot, for the runtime to save
+ * (VC-237), or undefined when the cut print already showed all of it.
+ *
+ * It walks as far as a find does, since reaching past the snapshot's bound is
+ * the point, and prints in the same dialect with one difference: only an
+ * element the cut print SHOWED carries its ref (and its `[new]`), exactly as
+ * that print carried it. An element past the cut was never shown, so it gets
+ * no ref — a number minted for it here would be one the ledger never
+ * remembered, and could name a different element on the next read.
+ */
+function printWhole(
+  nodes: readonly AXNodeLike[],
+  collected: Collection,
+  shown: { refs: ReadonlyMap<string, number>; keptLines: number },
+  ledger: RefLedger,
+): { text: string; bounded: boolean } | undefined {
+  const walked = collected.truncated ? collect(nodes, FIND_MAX_NODES) : collected;
+  const plan: PlannedLine[] = [];
+  planAll(walked.roots, 0, plan);
+  if (plan.length <= shown.keptLines) return undefined;
+  const refOf = new Map([...shown.refs].map(([ref, handle]) => [handle, ref]));
+  const lines: { text: string; colon: boolean }[] = [];
+  let bounded = walked.truncated;
+  let length = -1;
+  for (const line of plan) {
+    // `planAll` plans every entry and no `...` line.
+    const entry = line.entry!;
+    let text = entryText(entry, "  ".repeat(line.depth));
+    const handle = entry.backendDOMNodeId;
+    const ref = handle === null ? undefined : refOf.get(handle);
+    if (ref !== undefined) {
+      text += ` [ref=${ref}]`;
+      if (ledger.markNew && !ledger.known.has(handle!)) text += " [new]";
+    }
+    length += lineText({ text, colon: line.colon }).length + 1;
+    if (length > SNAPSHOT_WHOLE_MAX_CHARS) {
+      bounded = true;
+      // Nothing prints beneath the last line any more, as at any cut.
+      const last = lines.at(-1);
+      if (last !== undefined) last.colon = false;
+      break;
+    }
+    lines.push({ text, colon: line.colon });
+  }
+  return { text: lines.map(lineText).join("\n"), bounded };
+}
+
+/**
  * Print a full CDP accessibility tree in the snapshot dialect, bounded, with
- * refs drawn from the generation's ledger.
+ * refs drawn from the generation's ledger — and, when the bound cut it, the
+ * tree printed whole beside it ({@link printWhole}).
  */
 export function formatAXSnapshot(
   nodes: readonly AXNodeLike[],
   limits: { maxChars?: number; ledger?: RefLedger } = {},
-): BrowserSnapshotFormat & { empty: boolean } {
+): BrowserSnapshotFormat & { empty: boolean; whole?: { text: string; bounded: boolean } } {
   const collected = collect(nodes, SNAPSHOT_MAX_NODES);
   const plan: PlannedLine[] = [];
   planAll(collected.roots, 0, plan);
-  const { keptLines: _keptLines, ...printed } = render(
+  const ledger = limits.ledger ?? NO_LEDGER;
+  const { keptLines, ...printed } = render(
     plan,
-    limits.ledger ?? NO_LEDGER,
+    ledger,
     limits.maxChars ?? SNAPSHOT_MAX_CHARS,
     collected.truncated,
   );
+  const whole = printed.truncated
+    ? printWhole(nodes, collected, { refs: printed.refs, keptLines }, ledger)
+    : undefined;
   // Empty is the page's fact, judged before the bound: a tree the cut left
   // no room to print is truncated, not empty.
-  return { ...printed, empty: collected.roots.length === 0 };
+  return {
+    ...printed,
+    empty: collected.roots.length === 0,
+    ...(whole === undefined ? {} : { whole }),
+  };
 }
 
 /**

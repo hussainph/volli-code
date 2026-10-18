@@ -1024,13 +1024,16 @@ describe("BrowserTabController empty trees, failed reads and tree digests (VC-27
     expect(await controller.snapshot()).toMatchObject({ empty: false });
 
     // A bound too small for even one line prints nothing, but the page is
-    // not empty, and the answer says it was cut instead.
+    // not empty, and the answer says it was cut instead — with the tree the
+    // cut lost beside it, for the runtime to save (VC-237). Its button was
+    // never shown, so it carries no ref there.
     const narrow = new BrowserTabController(wire(answers).transport, { maxSnapshotChars: 5 });
     expect(await narrow.snapshot()).toEqual({
       text: "",
       generation: 0,
       truncated: true,
       empty: false,
+      whole: { text: '- button "Save"', bounded: false },
     });
   });
 

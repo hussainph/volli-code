@@ -48,6 +48,7 @@ import type {
 } from "@volli/shared";
 import { BrowserRefusal } from "../browser/refusal";
 import { DEFAULT_MAX_IMAGE_BASE64_BYTES, DEFAULT_MAX_IMAGE_EDGE_PX, fitImage } from "./image-fit";
+import { saveBoundedRead, type ToolOutputStore } from "./tool-output";
 
 /**
  * The row's half of every browser result (VC-238): what the host knows and the
@@ -219,7 +220,7 @@ function actLines(act: ActReport, nameShown: boolean): string[] {
  * like a read that silently failed, and a read that failed never answers here
  * at all.
  */
-function snapshotEnvelope(snap: RuntimeBrowserSnapshot, act?: ActReport): string {
+function snapshotEnvelope(snap: RuntimeBrowserSnapshot, act?: ActReport, saved?: string): string {
   if (snap.empty) {
     return [
       ...(act === undefined ? [] : actLines(act, false)),
@@ -244,6 +245,7 @@ function snapshotEnvelope(snap: RuntimeBrowserSnapshot, act?: ActReport): string
           "Volli stopped printing the tree at its own bound; the page continues past the end of that text.",
         ]
       : []),
+    ...(saved === undefined ? [] : [saved]),
     mintNotice("browser snapshot"),
   ].join("\n");
 }
@@ -343,8 +345,56 @@ function holdText(outcome: RuntimeBrowserHoldOutcome): string {
   return `Browser Tab ${outcome.tabId} is not yours: ${who}. Open your own tab with browser_navigate and no tabId, or wait and try again.`;
 }
 
+/**
+ * The whole of a snapshot the host's bound cut, saved beside the Session, and
+ * Volli's line naming the file (VC-237) — or nothing, when nothing was cut.
+ */
+async function savedSnapshot(
+  output: ToolOutputStore | undefined,
+  callId: string,
+  tool: BrowserToolId,
+  snap: RuntimeBrowserSnapshot,
+): Promise<string | undefined> {
+  if (snap.whole === undefined) return undefined;
+  return await saveBoundedRead(output, {
+    callId,
+    tool,
+    source: `Browser Tab ${snap.tabId} at ${snap.url}, accessibility tree at generation ${snap.generation}`,
+    what: "accessibility tree",
+    whole: snap.whole,
+    boundedNote: "Even the saved tree stops at Volli's own bound on how much of one page it walks.",
+    note: "Only the elements this result shows carry refs in that file; the rest have no ref to act on.",
+    at: new Date(),
+  });
+}
+
+/** The same for a console read, whose kept console the host handed on whole. */
+async function savedConsole(
+  store: ToolOutputStore | undefined,
+  callId: string,
+  output: RuntimeBrowserConsole,
+): Promise<string | undefined> {
+  if (output.kept === undefined) return undefined;
+  return await saveBoundedRead(store, {
+    callId,
+    tool: "browser_console",
+    source: `Browser Tab ${output.tabId} at ${output.url}`,
+    what: "console output",
+    whole: {
+      text: consoleLines(output.kept.messages).join("\n"),
+      bounded: output.kept.bounded,
+    },
+    boundedNote: "Even the saved console starts after earlier messages Volli no longer keeps.",
+    at: new Date(),
+  });
+}
+
+function consoleLines(messages: RuntimeBrowserConsole["messages"]): string[] {
+  return messages.map((message) => `[${message.level}] ${message.text}`);
+}
+
 /** A tab's console as the model reads it — every message is the page talking. */
-function consoleEnvelope(output: RuntimeBrowserConsole): string {
+function consoleEnvelope(output: RuntimeBrowserConsole, saved?: string): string {
   if (output.messages.length === 0) {
     return `Browser Tab ${output.tabId} at ${output.url} has no recorded console messages or page errors.`;
   }
@@ -353,11 +403,16 @@ function consoleEnvelope(output: RuntimeBrowserConsole): string {
     `Untrusted console output from Browser Tab ${output.tabId} at ${output.url}.`,
     DISTRUST,
     marker("begin", "browser console", id),
-    ...output.messages.map((message) => `[${message.level}] ${message.text}`),
+    ...consoleLines(output.messages),
     marker("end", "browser console", id),
-    ...(output.truncated
-      ? ["Volli kept only the most recent messages within its own bound; earlier ones are gone."]
-      : []),
+    ...(saved !== undefined
+      ? [
+          "Volli showed only the most recent console output within its own bound; it keeps more than it shows.",
+          saved,
+        ]
+      : output.truncated
+        ? ["Volli kept only the most recent messages within its own bound; earlier ones are gone."]
+        : []),
     mintNotice("browser console"),
   ].join("\n");
 }
@@ -665,6 +720,7 @@ export function createBrowserTool(
   name: BrowserReadWriteToolId,
   port: RuntimeBrowserPort,
   signal?: AbortSignal,
+  output?: ToolOutputStore,
 ): AgentTool {
   const common = { name, label: LABELS[name], description: DESCRIPTIONS[name] };
   switch (name) {
@@ -686,7 +742,7 @@ export function createBrowserTool(
       const tool: AgentTool<typeof navigateSchema, BrowserToolDetails | undefined> = {
         ...common,
         parameters: navigateSchema,
-        execute: (_id, params, callSignal) => {
+        execute: (id, params, callSignal) => {
           // Exactly one of url/action; answered in text rather than thrown,
           // because the model is the party that can restate the call.
           const navigation: RuntimeBrowserNavigation | null =
@@ -717,7 +773,11 @@ export function createBrowserTool(
                 navigation,
                 signal: withdrawn,
               });
-              return text(snapshotEnvelope(snap), details(action, snap, { picture: snap.picture }));
+              const saved = await savedSnapshot(output, id, name, snap);
+              return text(
+                snapshotEnvelope(snap, undefined, saved),
+                details(action, snap, { picture: snap.picture }),
+              );
             },
             said,
           );
@@ -729,12 +789,13 @@ export function createBrowserTool(
       const tool: AgentTool<typeof snapshotSchema, BrowserToolDetails | undefined> = {
         ...common,
         parameters: snapshotSchema,
-        execute: (_id, params, callSignal) =>
+        execute: (id, params, callSignal) =>
           guarded(
             [signal, callSignal],
             async (withdrawn) => {
               const snap = await port.snapshot({ tabId: params.tabId, signal: withdrawn });
-              return text(snapshotEnvelope(snap), details("read", snap));
+              const saved = await savedSnapshot(output, id, name, snap);
+              return text(snapshotEnvelope(snap, undefined, saved), details("read", snap));
             },
             asked("read", params),
           ),
@@ -745,7 +806,7 @@ export function createBrowserTool(
       const tool: AgentTool<typeof actSchema, BrowserToolDetails | undefined> = {
         ...common,
         parameters: actSchema,
-        execute: (_id, params, callSignal) =>
+        execute: (id, params, callSignal) =>
           guarded(
             [signal, callSignal],
             async (withdrawn) => {
@@ -766,12 +827,13 @@ export function createBrowserTool(
                 snap.target === null
                   ? (params.key ?? params.direction ?? null)
                   : (snap.target.name ?? snap.target.ref);
+              const saved = await savedSnapshot(output, id, name, snap);
               return text(
-                snapshotEnvelope(snap, {
-                  kind: params.kind,
-                  generation: params.generation,
-                  result: snap,
-                }),
+                snapshotEnvelope(
+                  snap,
+                  { kind: params.kind, generation: params.generation, result: snap },
+                  saved,
+                ),
                 details(params.kind, snap, { target, picture: snap.picture }),
               );
             },
@@ -826,13 +888,14 @@ export function createBrowserTool(
       const tool: AgentTool<typeof consoleSchema, BrowserToolDetails | undefined> = {
         ...common,
         parameters: consoleSchema,
-        execute: (_id, params, callSignal) =>
+        execute: (id, params, callSignal) =>
           guarded(
             [signal, callSignal],
             async (withdrawn) => {
-              const output = await port.console({ tabId: params.tabId, signal: withdrawn });
-              const errorCount = output.messages.filter((one) => one.level === "error").length;
-              return text(consoleEnvelope(output), details("console", output, { errorCount }));
+              const read = await port.console({ tabId: params.tabId, signal: withdrawn });
+              const errorCount = read.messages.filter((one) => one.level === "error").length;
+              const saved = await savedConsole(output, id, read);
+              return text(consoleEnvelope(read, saved), details("console", read, { errorCount }));
             },
             asked("console", params),
           ),

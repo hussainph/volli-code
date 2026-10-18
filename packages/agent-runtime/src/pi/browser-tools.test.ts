@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   NON_CODING_TOOL_IDS,
   type RuntimeBrowserActResult,
@@ -16,6 +19,7 @@ import {
   createBrowserTool,
   BROWSER_TOOL_NAMES,
 } from "./browser-tools";
+import { SAVED_TOOL_OUTPUT_WARNING, ToolOutputStore } from "./tool-output";
 import { createSessionTools } from "./tools";
 
 /** The method every fresh fixture port answers with: a loud failure. */
@@ -609,6 +613,147 @@ describe("browser tools", () => {
     expect(cut).toContain("stopped printing the tree");
     expect(enveloped(cut)).not.toContain("stopped printing");
     expect(read.details).toMatchObject({ action: "read", tabId: "tab-1", picture: null });
+  });
+
+  it("saves the whole of a dense tree the bound cut, and names the file outside the markers (VC-237)", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "volli-browser-whole-")));
+    const output = new ToolOutputStore({
+      directory: join(root, "sidecar.tool-output"),
+      workspacePath: root,
+    });
+    // A dense page: thousands of rows, of which the bound showed the first.
+    const rows = Array.from({ length: 3_000 }, (_, index) => `  - row "Order ${index} — café"`);
+    const shown = [
+      '- table "Orders":',
+      '  - button "Export" [ref=e1] [new]',
+      ...rows.slice(0, 40),
+    ].join("\n");
+    const whole = ['- table "Orders":', '  - button "Export" [ref=e1] [new]', ...rows].join("\n");
+    const port = unusedPort();
+    port.snapshot = async () =>
+      snapshot({ snapshotText: shown, truncated: true, whole: { text: whole, bounded: false } });
+    port.navigate = async () =>
+      port.snapshot({ tabId: "tab-1", signal: new AbortController().signal });
+    port.act = async () => ({
+      ...acted(),
+      snapshotText: shown,
+      truncated: true,
+      whole: { text: whole, bounded: true },
+    });
+
+    const reads = [
+      resultText(
+        await createBrowserTool("browser_snapshot", port, undefined, output).execute("tc-snap", {
+          tabId: "tab-1",
+        }),
+      ),
+      resultText(
+        await createBrowserTool("browser_navigate", port, undefined, output).execute("tc-nav", {
+          tabId: "tab-1",
+          action: "reload",
+        }),
+      ),
+      resultText(
+        await createBrowserTool("browser_act", port, undefined, output).execute("tc-act", {
+          tabId: "tab-1",
+          generation: 4,
+          kind: "scroll",
+          direction: "down",
+        }),
+      ),
+    ];
+
+    for (const text of reads) {
+      // The model reads the bounded tree, never the rest.
+      expect(enveloped(text, "snapshot")).toBe(shown);
+      expect(text).not.toContain("Order 2999");
+      const after = text.slice(text.indexOf("--- end untrusted browser snapshot"));
+      const path =
+        /Volli saved the whole accessibility tree \(.+?\) to (\S+), read at \S+Z\./u.exec(
+          after,
+        )![1]!;
+      expect(after).toContain("the accessibility tree is on lines 3 to 3004.");
+      expect(after).toContain(
+        "Only the elements this result shows carry refs in that file; the rest have no ref to act on.",
+      );
+      expect(lastLine(text)).toContain("minted for this read alone");
+      const file = readFileSync(path);
+      const headerEnd = file.indexOf("\n\n");
+      expect(file.subarray(headerEnd + 2).equals(Buffer.from(whole, "utf8"))).toBe(true);
+      expect(file.subarray(0, headerEnd).toString("utf8")).toContain(
+        `${SAVED_TOOL_OUTPUT_WARNING} Tool: browser_`,
+      );
+      expect(file.subarray(0, headerEnd).toString("utf8")).toContain(
+        "Source: Browser Tab tab-1 at http://localhost:5173/, accessibility tree at generation 4. Read at ",
+      );
+    }
+    // Only the act's whole stopped at Volli's own walk.
+    expect(reads[2]).toContain("Even the saved tree stops at Volli's own bound");
+    expect(reads[0]).not.toContain("Even the saved tree");
+  });
+
+  it("keeps the bounded tree and says why when the whole could not be saved", async () => {
+    const port = unusedPort();
+    port.snapshot = async () =>
+      snapshot({ truncated: true, whole: { text: "x".repeat(2_048), bounded: false } });
+
+    const text = resultText(
+      await createBrowserTool("browser_snapshot", port).execute("tc-unsaved", { tabId: "tab-1" }),
+    );
+
+    expect(enveloped(text, "snapshot")).toBe('- button "Save" [ref=e2]');
+    expect(text).toContain(
+      "Volli could not save the whole accessibility tree (2.0 KiB) to a file: this Session has no storage for it. Only the part above was read.",
+    );
+    expect(text).not.toContain("x".repeat(100));
+  });
+
+  it("saves the console a tab keeps when a read showed only its most recent part", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "volli-console-whole-")));
+    const output = new ToolOutputStore({
+      directory: join(root, "sidecar.tool-output"),
+      workspacePath: root,
+    });
+    const kept = Array.from({ length: 500 }, (_, index) => ({
+      level: index % 7 === 0 ? ("error" as const) : ("log" as const),
+      text: `message ${index}`,
+    }));
+    const port = unusedPort();
+    port.console = async () => ({
+      tabId: "tab-1",
+      url: "http://localhost:5173/",
+      title: "Fixture App",
+      ownerSessionId: "s1",
+      error: null,
+      messages: kept.slice(-100),
+      truncated: true,
+      kept: { messages: kept, bounded: true },
+    });
+
+    const read = await createBrowserTool("browser_console", port, undefined, output).execute(
+      "tc-console",
+      { tabId: "tab-1" },
+    );
+    const text = resultText(read);
+
+    expect(enveloped(text, "console").split("\n")).toHaveLength(100);
+    expect(text).not.toContain("message 399\n");
+    expect(text).not.toContain("earlier ones are gone");
+    expect(text).toContain("it keeps more than it shows.");
+    expect(text).toContain(
+      "Even the saved console starts after earlier messages Volli no longer keeps.",
+    );
+    // The row still counts only the errors the model was shown.
+    expect(read.details).toMatchObject({ errorCount: 14 });
+    const path = /Volli saved the whole console output \(.+?\) to (\S+), read at /u.exec(text)![1]!;
+    const file = readFileSync(path, "utf8");
+    expect(file.slice(file.indexOf("\n\n") + 2)).toBe(
+      kept.map((message) => `[${message.level}] ${message.text}`).join("\n"),
+    );
+    expect(file.split("\n")[0]).toContain(
+      "Tool: browser_console. Source: Browser Tab tab-1 at http://localhost:5173/. Read at ",
+    );
+    expect(lastLine(text)).toContain("minted for this read alone");
   });
 
   it("passes every optional action field through whole, and nothing invented", async () => {

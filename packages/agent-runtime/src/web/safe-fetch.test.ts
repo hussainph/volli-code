@@ -943,6 +943,87 @@ describe("safe web fetch", () => {
     ).resolves.toMatchObject({ text: "longlonglonglonglong", truncated: true });
   });
 
+  it("hands on the whole text the character bound cut, exactly as decoded (VC-237)", async () => {
+    // A dense page: thousands of lines, multi-byte text, far past the bound.
+    const dense = Array.from(
+      { length: 4_000 },
+      (_, index) => `${index}: naïve 日本語 ${"=".repeat(16)}`,
+    ).join("\n");
+    const { fetcher } = await fetcherFor((_request, response) => {
+      response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+      response.end(dense);
+    });
+
+    const page = await fetcher.fetch({
+      url: "http://docs.example.com/dense",
+      signal: new AbortController().signal,
+    });
+
+    expect(page.text).toBe(dense.slice(0, WEB_FETCH_LIMITS.textChars));
+    expect(page.truncated).toBe(true);
+    expect(page.whole).toEqual({ text: dense, bounded: false });
+  });
+
+  it("hands on extracted markdown past the bound, saying when extraction's own bounds bit", async () => {
+    const paragraphs = Array.from(
+      { length: 400 },
+      (_, index) => `<p>Paragraph ${index} explains one more part of the guide in plain words.</p>`,
+    ).join("");
+    const html = `<html><head><title>Guide</title></head><body><article>${paragraphs}</article></body></html>`;
+    const { fetcher } = await fetcherFor(
+      (_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(html);
+      },
+      { textChars: 2_000 },
+    );
+
+    const page = await fetcher.fetch({
+      url: "http://docs.example.com/guide",
+      signal: new AbortController().signal,
+    });
+
+    expect(page.truncated).toBe(true);
+    expect(page.text).toHaveLength(2_000);
+    expect(page.whole?.bounded).toBe(false);
+    expect(page.whole?.text.startsWith(page.text)).toBe(true);
+    expect(page.whole?.text).toContain("Paragraph 399 explains");
+  });
+
+  it("marks the whole bounded when the page was past extraction's element bound", async () => {
+    const items = Array.from({ length: 8_100 }, (_, index) => `<p>Item ${index}.</p>`).join("");
+    const { fetcher } = await fetcherFor(
+      (_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(`<html><body>${items}</body></html>`);
+      },
+      { textChars: 1_000 },
+    );
+
+    const page = await fetcher.fetch({
+      url: "http://docs.example.com/many",
+      signal: new AbortController().signal,
+    });
+
+    expect(page.whole?.bounded).toBe(true);
+    expect(page.whole?.text).toContain("Item 4000.");
+    expect(page.whole?.text).not.toContain("Item 8099.");
+  });
+
+  it("hands on nothing more when the text fits the bound", async () => {
+    const { fetcher } = await fetcherFor((_request, response) => {
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("short");
+    });
+
+    const page = await fetcher.fetch({
+      url: "http://docs.example.com/short",
+      signal: new AbortController().signal,
+    });
+
+    expect(page).not.toHaveProperty("whole");
+  });
+
   it("refuses when the connection drops mid-answer, naming Node's own code", async () => {
     const { fetcher } = await fetcherFor((request) => {
       request.socket.destroy();
@@ -1422,6 +1503,8 @@ describe("a GitHub URL", () => {
 
     expect(first.truncated).toBe(true);
     expect(first.text.length).toBeLessThanOrEqual(WEB_FETCH_LIMITS.textChars);
+    // The listing pages itself, so there is no more of it to hand on (VC-237).
+    expect(first).not.toHaveProperty("whole");
     expect(first.text).toContain("1000 entries:");
     const next = /Continue with (\S+)$/.exec(first.text)?.[1] ?? "";
     expect(next).toMatch(
