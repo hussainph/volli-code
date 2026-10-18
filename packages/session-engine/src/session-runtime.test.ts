@@ -4874,6 +4874,91 @@ async function settleMicrotasks(): Promise<void> {
   for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
 }
 
+/**
+ * A runtime whose ledger reads are recorded per Session, for the cache bounds:
+ * `seeds` are folds built from nothing (`getBaseSession`), `reads` every ledger
+ * read at all. The fake adapter keeps only its newest sink, so `open` captures
+ * each Session's as it attaches.
+ */
+function countingComposition() {
+  const base = composition();
+  const seeds: string[] = [];
+  const reads: string[] = [];
+  const engine: SessionEngine = {
+    ...base.engine,
+    getBaseSession: async (query) => {
+      seeds.push(query.sessionId);
+      reads.push(query.sessionId);
+      return base.engine.getBaseSession(query);
+    },
+    listEvents: async (query) => {
+      reads.push(query.sessionId);
+      return base.engine.listEvents(query);
+    },
+  };
+  const { runtime, adapter } = composition({ engine, adapter: base.adapter });
+  let created = 0;
+  const create = async (): Promise<string> => {
+    created += 1;
+    const result = await runtime.command({
+      commandId: `counted-create-${created}`,
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+      },
+    });
+    return result.sessionId;
+  };
+  return {
+    runtime,
+    adapter,
+    seeds,
+    reads,
+    /** A Session on its own attachment, and the message id its turn-1 deltas address. */
+    async open(): Promise<{
+      sessionId: string;
+      attachmentId: string;
+      sink: ObservationSink;
+      messageId: string;
+    }> {
+      const sessionId = await create();
+      await runtime.command({
+        commandId: `counted-attach-${sessionId}`,
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+      return {
+        sessionId,
+        attachmentId,
+        sink: adapter.sink!,
+        messageId: `fake:${attachmentId}:turn-1:0`,
+      };
+    },
+    /** Folds Sessions nobody watches or streams, enough to evict every unexempt fold twice. */
+    async crowd(): Promise<void> {
+      for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+        await runtime.projection({ sessionId: await create() });
+      }
+    },
+    /** What a chat opened now is handed for the Session's messages in flight. */
+    async baselines(sessionId: string): Promise<TranscriptDelta[]> {
+      const emissions: SessionStreamEmission[] = [];
+      const afterSequence = (await runtime.snapshot({ sessionId })).throughSequence;
+      (
+        await runtime.subscribe({ sessionId, afterSequence }, (emission) => {
+          emissions.push(emission);
+        })
+      )();
+      return overlaysIn(emissions).map(({ delta }) => delta);
+    },
+  };
+}
+
 describe("SessionRuntime transient transcript overlay", () => {
   it("publishes compaction progress without writing it to history", async () => {
     const { runtime, adapter } = composition();
@@ -5279,6 +5364,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const sessions: string[] = [];
     // One past the limit, so the first Session's in-flight message is the one
     // evicted — and an evicted overlay is a message the next reset rebuilds.
+    // None of them has a turn open: a turn holds its overlay (below).
     for (let index = 0; index <= 8; index += 1) {
       const created = await runtime.command({
         commandId: `overlay-create-${index}`,
@@ -5316,6 +5402,135 @@ describe("SessionRuntime transient transcript overlay", () => {
 
     expect(seen.get(sessions[0]!)).toEqual([]);
     expect(seen.get(sessions[8]!)).toMatchObject([{ delta: { op: "reset" } }]);
+  });
+
+  /**
+   * The bounds are on Sessions with no turn running (VC-466). A streaming
+   * Session reads its overlay on every delta and its fold at every step, and
+   * the overlay holds the only baseline its message in flight has, so neither
+   * is evicted while the turn runs, however many other Sessions stream between
+   * its deltas.
+   */
+  it("keeps every streaming Session's overlay and fold, however many stream at once", async () => {
+    const { runtime, seeds, reads, open, crowd, baselines } = countingComposition();
+    // Both bounds are eight: twice that stream at once, and nobody watches.
+    const streams: Awaited<ReturnType<typeof open>>[] = [];
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) streams.push(await open());
+    for (const { sink } of streams) await sink.emit(startedTurn("turn-1"));
+    // A Session's first delta seeds its overlay: the one read its turn owes.
+    for (const [index, { sink }] of streams.entries()) {
+      await sink.emit(textDelta(`Session ${index}`));
+    }
+
+    reads.length = 0;
+    // Round-robin, so each Session's next delta lands after fifteen others'.
+    for (let round = 0; round < 3; round += 1) {
+      for (const { sink } of streams) await sink.emit(textDelta(` ${round}`));
+    }
+    expect(reads).toEqual([]);
+
+    // Nor do background reads of other Sessions evict a turn's fold.
+    await crowd();
+    seeds.length = 0;
+    for (const { sessionId } of streams) await runtime.projection({ sessionId });
+    expect(seeds).toEqual([]);
+
+    // A chat opened mid-stream on the least recently streamed Session is handed
+    // the whole message in flight.
+    const first = streams[0]!;
+    expect(await baselines(first.sessionId)).toEqual([
+      foldedMessage("Session 0 0 1 2", first.messageId),
+    ]);
+
+    await runtime.close();
+  });
+
+  it.each(["completed", "interrupted"] as const)(
+    "returns a Session's overlay and fold to the bounds once its turn is %s",
+    async (state) => {
+      const { runtime, seeds, open, crowd, baselines } = countingComposition();
+      const settling = await open();
+      await settling.sink.emit(startedTurn("turn-1"));
+      await settling.sink.emit(textDelta("Hel"));
+      // Its message never settled, so the overlay still holds it: from here only
+      // the bound can drop it.
+      await settling.sink.emit({ kind: "turn", state, turnId: "turn-1", occurredAt: 600 });
+
+      // Eight more overlays with no turn open take it past the overlay bound,
+      // and the crowd takes its fold past the other.
+      for (let index = 0; index < 8; index += 1) {
+        await (await open()).sink.emit(textDelta(`Other ${index}`));
+      }
+      await crowd();
+
+      seeds.length = 0;
+      await runtime.projection({ sessionId: settling.sessionId });
+      expect(seeds).toEqual([settling.sessionId]);
+      expect(await baselines(settling.sessionId)).toEqual([]);
+
+      await runtime.close();
+    },
+  );
+
+  /**
+   * A turn whose binding goes away never reports its own end, so the exemption
+   * has to go with the binding: otherwise the fold of a Session nothing is
+   * running would stay exempt from the bound for the rest of the process.
+   */
+  it.each(["released", "closed", "failed"] as const)(
+    "returns a Session's fold to the bound once its binding is %s mid-turn",
+    async (end) => {
+      const { runtime, seeds, open, crowd } = countingComposition();
+      const ending = await open();
+      await ending.sink.emit(startedTurn("turn-1"));
+      await ending.sink.emit(textDelta("Hel"));
+      if (end === "released") {
+        await runtime.command({
+          commandId: "mid-turn-release",
+          sessionId: ending.sessionId,
+          command: { kind: "adapter.release", attachmentId: ending.attachmentId },
+        });
+      } else {
+        await ending.sink.emit({ kind: "attachment", state: end });
+      }
+
+      await crowd();
+      seeds.length = 0;
+      await runtime.projection({ sessionId: ending.sessionId });
+      expect(seeds).toEqual([ending.sessionId]);
+
+      await runtime.close();
+    },
+  );
+
+  it("keeps the fold of a Session whose accepted message has not opened its turn yet", async () => {
+    const { runtime, adapter, seeds, open, crowd } = countingComposition();
+    const { sessionId } = await open();
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+    const sending = runtime.command({
+      commandId: "accepted-start",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("accepted-start") },
+    });
+    await dispatchStarted.promise;
+
+    await crowd();
+    seeds.length = 0;
+    await runtime.projection({ sessionId });
+    expect(seeds).toEqual([]);
+
+    // A command that settles without opening a turn takes the exemption with it.
+    releaseDispatch.resolve();
+    await sending;
+    await crowd();
+    seeds.length = 0;
+    await runtime.projection({ sessionId });
+    expect(seeds).toEqual([sessionId]);
+
+    await runtime.close();
   });
 
   it("re-seeds the overlay after a failed read rather than reporting sequence zero", async () => {
