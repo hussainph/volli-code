@@ -61,6 +61,7 @@ const SNAPSHOT_KEYS = {
   snapshotText: true,
   generation: true,
   truncated: true,
+  empty: true,
   picture: true,
 } satisfies Record<keyof RuntimeBrowserSnapshot, true>;
 export const RESULT_KEYS = {
@@ -73,7 +74,10 @@ export const RESULT_KEYS = {
     heldBy: true,
   } satisfies Record<keyof RuntimeBrowserTab, true>,
   snapshot: SNAPSHOT_KEYS,
-  act: { ...SNAPSHOT_KEYS, target: true } satisfies Record<keyof RuntimeBrowserActResult, true>,
+  act: { ...SNAPSHOT_KEYS, target: true, changed: true } satisfies Record<
+    keyof RuntimeBrowserActResult,
+    true
+  >,
   find: {
     ...PAGE_KEYS,
     query: true,

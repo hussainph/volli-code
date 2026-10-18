@@ -674,6 +674,13 @@ export interface RuntimeBrowserSnapshot extends RuntimeBrowserPage {
   /** Whether the host cut the tree at its own bound before the page ended. */
   truncated: boolean;
   /**
+   * Whether the tree exposed nothing at all (VC-277): the page has rendered no
+   * accessible structure yet, or draws without any. A read that failed or
+   * timed out never answers with this — it fails the call — so an empty
+   * {@link snapshotText} with this false is Volli's bound, never the page.
+   */
+  empty: boolean;
+  /**
    * An opaque id for the picture the host took of the page after this call
    * changed it, for the person's transcript card — never the bytes, which
    * stay with the host (VC-238). Null when nothing changed (a plain read) or
@@ -690,6 +697,16 @@ export interface RuntimeBrowserActResult extends RuntimeBrowserSnapshot {
    * was empty. Null altogether for page-level actions (press, scroll, wait).
    */
   target: { ref: string; name: string | null } | null;
+  /**
+   * What Volli saw move between the tab as the action found it and the fresh
+   * read after it (VC-277), so a click the page ignored reads differently
+   * from one that worked: the tab's URL, its navigation generation, and the
+   * accessibility tree's content — roles, names, values and states such as
+   * checked or expanded, but not focus, which every click moves. The tree is
+   * compared with the latest read before the action, so a page that changes
+   * by itself can read as changed.
+   */
+  changed: { url: boolean; generation: boolean; tree: boolean };
 }
 
 /**

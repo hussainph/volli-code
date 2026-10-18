@@ -37,12 +37,16 @@
  * of the printed text, where a page's name could have planted a lookalike.
  */
 
+import { createHash } from "node:crypto";
+
 /** A CDP AXNode, cut to the fields this printer reads. */
 export interface AXNodeLike {
   nodeId: string;
   ignored?: boolean;
   role?: { value?: unknown };
   name?: { value?: unknown };
+  /** The element's current value — a field's text, a slider's position. Read only by the digest. */
+  value?: { value?: unknown };
   properties?: { name: string; value?: { value?: unknown } }[];
   childIds?: string[];
   backendDOMNodeId?: number;
@@ -429,7 +433,7 @@ function planAll(entries: readonly Entry[], depth: number, into: PlannedLine[]):
 export function formatAXSnapshot(
   nodes: readonly AXNodeLike[],
   limits: { maxChars?: number; ledger?: RefLedger } = {},
-): BrowserSnapshotFormat {
+): BrowserSnapshotFormat & { empty: boolean } {
   const collected = collect(nodes, SNAPSHOT_MAX_NODES);
   const plan: PlannedLine[] = [];
   planAll(collected.roots, 0, plan);
@@ -439,7 +443,44 @@ export function formatAXSnapshot(
     limits.maxChars ?? SNAPSHOT_MAX_CHARS,
     collected.truncated,
   );
-  return printed;
+  // Empty is the page's fact, judged before the bound: a tree the cut left
+  // no room to print is truncated, not empty.
+  return { ...printed, empty: collected.roots.length === 0 };
+}
+
+/**
+ * The AX states the digest compares: what an action visibly flips. Focus is
+ * deliberately absent — every click moves it, and a digest that saw it would
+ * report every action as a change.
+ */
+const DIGEST_STATES = new Set(["checked", "expanded", "selected", "pressed", "disabled"]);
+
+/**
+ * A fingerprint of everything the tree exposes that an action could visibly
+ * change (VC-277): each unignored node's role, name, value, child count and
+ * the states above, in CDP's document order. Two reads of an unchanged page
+ * give the same digest whatever either read printed, so it is independent of
+ * the bounds and the ledger; it is compared, never shown.
+ */
+export function axTreeDigest(nodes: readonly AXNodeLike[]): string {
+  const hash = createHash("sha256");
+  for (const node of nodes) {
+    if (node.ignored === true) continue;
+    const states = (node.properties ?? [])
+      .filter((property) => DIGEST_STATES.has(property.name))
+      .map((property) => [property.name, property.value?.value ?? null]);
+    hash.update(
+      JSON.stringify([
+        node.role?.value ?? null,
+        node.name?.value ?? null,
+        node.value?.value ?? null,
+        node.childIds?.length ?? 0,
+        states,
+      ]),
+    );
+    hash.update("\n");
+  }
+  return hash.digest("hex");
 }
 
 /**

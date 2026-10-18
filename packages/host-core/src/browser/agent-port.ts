@@ -452,6 +452,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
       snapshotText: printed.text,
       generation: printed.generation,
       truncated: printed.truncated,
+      empty: printed.empty,
       picture,
     };
   };
@@ -617,6 +618,11 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
           const tab = takeHold(resolve(input.tabId));
           keepAwake(tab.tabId);
           const ready = await syncedController(tab, controller, input.signal);
+          // The page as the action finds it (VC-277): compared with the fresh
+          // read below, it is what tells a click the page ignored from one
+          // that worked. The tree is the latest read's — the one the ref came
+          // from — rather than an extra read on every action.
+          const before = { url: tab.url, generation: ready.generation, tree: ready.treeDigest };
           const acted = await ready.act(
             {
               generation: input.generation,
@@ -636,7 +642,15 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
             "possible-navigation",
             true,
           );
-          return { ...snap, target: acted.target };
+          return {
+            ...snap,
+            target: acted.target,
+            changed: {
+              url: snap.url !== before.url,
+              generation: snap.generation !== before.generation,
+              tree: ready.treeDigest !== before.tree,
+            },
+          };
         }),
       );
     },
