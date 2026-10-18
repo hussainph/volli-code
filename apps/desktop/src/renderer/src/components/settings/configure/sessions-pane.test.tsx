@@ -10,6 +10,7 @@ import {
   type Project,
 } from "@volli/shared";
 
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 
 import { SessionsPane } from "./sessions-pane";
@@ -86,9 +87,11 @@ async function renderPane(
   root = createRoot(container);
   await act(async () => {
     root?.render(
-      <ModelAccessProvider client={client(inspect)}>
-        <SessionsPane project={project} />
-      </ModelAccessProvider>,
+      <TooltipProvider>
+        <ModelAccessProvider client={client(inspect)}>
+          <SessionsPane project={project} />
+        </ModelAccessProvider>
+      </TooltipProvider>,
     );
   });
 }
@@ -208,5 +211,118 @@ describe("SessionsPane's model catalog", () => {
     await act(async () => retry?.click());
 
     expect(inspect.mock.calls).toEqual([[{ refresh: false }], [{ refresh: true }]]);
+  });
+});
+
+function stubRepo(rootFiles: readonly string[]) {
+  const api = {
+    fs: {
+      listDirectory: vi.fn(async () => ({
+        ok: true as const,
+        entries: [
+          { name: "src", kind: "dir" as const },
+          ...rootFiles.map((name) => ({ name, kind: "file" as const })),
+        ],
+      })),
+      revealInFinder: vi.fn(async () => ({ ok: true as const })),
+    },
+    files: {
+      read: vi.fn(async ({ relPath }: { relPath: string }) => ({
+        ok: true as const,
+        source: "main" as const,
+        kind: "markdown" as const,
+        size: 10,
+        mtime: 1,
+        content: { type: "text" as const, text: `# ${relPath} rules`, truncated: false },
+      })),
+    },
+  };
+  vi.stubGlobal("api", api);
+  return api;
+}
+
+function row(name: string): HTMLElement {
+  const found = document.querySelector<HTMLElement>(`[data-testid="instruction-file-${name}"]`);
+  if (found === null) throw new Error(`no row for ${name}`);
+  return found;
+}
+
+function action(label: string): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+}
+
+describe("SessionsPane's instruction files", () => {
+  it("shows both files as not in a repo that has neither, with nothing to open", async () => {
+    const api = stubRepo([]);
+    await renderPane(vi.fn().mockResolvedValue(CATALOG));
+
+    expect(api.fs.listDirectory).toHaveBeenCalledWith(PROJECT.path);
+    expect(row("AGENTS.md").textContent).toContain("not in this repo");
+    expect(row("CLAUDE.md").textContent).toContain("not in this repo");
+    expect(action("Preview AGENTS.md")).toBeNull();
+    expect(action("Reveal AGENTS.md in Finder")).toBeNull();
+    expect(action("Reveal CLAUDE.md in Finder")).toBeNull();
+  });
+
+  it("marks only the file a repo has, and Reveal targets that file", async () => {
+    const api = stubRepo(["CLAUDE.md"]);
+    await renderPane(vi.fn().mockResolvedValue(CATALOG));
+
+    expect(row("AGENTS.md").textContent).toContain("not in this repo");
+    expect(row("CLAUDE.md").textContent).toContain("repo root");
+    expect(action("Reveal AGENTS.md in Finder")).toBeNull();
+
+    await act(async () => action("Reveal CLAUDE.md in Finder")?.click());
+    expect(api.fs.revealInFinder).toHaveBeenCalledExactlyOnceWith(`${PROJECT.path}/CLAUDE.md`);
+  });
+
+  it("offers both files in a repo with both, and previews the one asked for", async () => {
+    const api = stubRepo(["AGENTS.md", "CLAUDE.md"]);
+    await renderPane(vi.fn().mockResolvedValue(CATALOG));
+
+    expect(row("AGENTS.md").textContent).toContain("repo root");
+    expect(row("CLAUDE.md").textContent).toContain("repo root");
+
+    await act(async () => action("Preview AGENTS.md")?.click());
+
+    expect(api.files.read).toHaveBeenCalledExactlyOnceWith({
+      projectId: PROJECT.id,
+      relPath: "AGENTS.md",
+    });
+    const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
+    expect(dialog?.querySelector("h2")?.textContent).toBe("AGENTS.md");
+    expect(dialog?.querySelector(".typeset h1")?.textContent).toBe("AGENTS.md rules");
+    // Read-only: the preview offers no control beyond closing it.
+    expect([...(dialog?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual([
+      "Close",
+    ]);
+  });
+
+  it("says when the repo root could not be read, and checks again on request", async () => {
+    const api = stubRepo(["AGENTS.md"]);
+    api.fs.listDirectory.mockResolvedValueOnce({
+      ok: false,
+      error: "Permission was denied",
+    } as never);
+    await renderPane(vi.fn().mockResolvedValue(CATALOG));
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Permission was denied",
+    );
+    await act(async () => action("Check the repo again")?.click());
+
+    expect(api.fs.listDirectory).toHaveBeenCalledTimes(2);
+    expect(row("AGENTS.md").textContent).toContain("repo root");
+  });
+
+  it("says when a previewed file cannot be read, rather than showing it empty", async () => {
+    const api = stubRepo(["AGENTS.md"]);
+    api.files.read.mockResolvedValueOnce({ ok: false, error: "File was not found" } as never);
+    await renderPane(vi.fn().mockResolvedValue(CATALOG));
+
+    await act(async () => action("Preview AGENTS.md")?.click());
+
+    const dialog = document.querySelector('[data-testid="content-preview-dialog"]');
+    expect(dialog?.querySelector('[role="alert"]')?.textContent).toContain("File was not found");
   });
 });
