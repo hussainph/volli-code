@@ -713,8 +713,10 @@ async function measureSidebar(page, app) {
 }
 
 async function selectTicketFromPalette(page, targetTitle, targetDisplayId) {
-  await page.getByRole("button", { name: "Search tickets and sessions", exact: true }).click();
-  const input = page.getByPlaceholder("Search tickets and sessions…");
+  await page
+    .getByRole("button", { name: "Search tickets, sessions, and commands", exact: true })
+    .click();
+  const input = page.getByPlaceholder("Search tickets, sessions, and commands…");
   await input.waitFor({ state: "visible", timeout: 10_000 });
   await input.fill(targetDisplayId);
   // Scoped to the palette's own list, not the page. A page-wide text match also
