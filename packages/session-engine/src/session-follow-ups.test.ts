@@ -140,6 +140,7 @@ function fixture(
     diagnostics?: () => void;
     retryDelays?: readonly number[];
     admissionTimeoutMs?: number;
+    firstAttachPreparationTimeoutMs?: number;
     prepare?: () => void | Promise<void>;
     reaffirm?: () => void | Promise<void>;
   } = {},
@@ -183,6 +184,9 @@ function fixture(
       ...(options.admissionTimeoutMs === undefined
         ? {}
         : { followUpAdmissionTimeoutMs: options.admissionTimeoutMs }),
+      ...(options.firstAttachPreparationTimeoutMs === undefined
+        ? {}
+        : { firstAttachPreparationTimeoutMs: options.firstAttachPreparationTimeoutMs }),
     });
   return { engine, artifacts, followUps, adapter, errors, runtime };
 }
@@ -2419,11 +2423,17 @@ describe("host follow-ups never strand a row", () => {
 
   it("waits out a first attach's slow workspace preparation instead of failing it unrecoverable (VC-799)", async () => {
     // A Session's first attach is where its worktree is made, and under load
-    // that preparation outlasts the admission bound. Timing out did not stop
-    // it — it went on and finished moments later — so the bound only turned a
-    // slow start into an `adapter_unrecoverable` Session whose kickoff was lost.
+    // that preparation outlasts the admission bound, which never stopped it.
     const gate = Promise.withResolvers<void>();
-    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [], prepare: () => gate.promise });
+    const reached = Promise.withResolvers<void>();
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      retryDelays: [],
+      prepare: () => {
+        reached.resolve();
+        return gate.promise;
+      },
+    });
     const runtime = f.runtime();
     const sessionId = await create(runtime);
     const attaching = runtime.command({
@@ -2431,11 +2441,40 @@ describe("host follow-ups never strand a row", () => {
       sessionId,
       command: { kind: "adapter.attach", continuity: "fresh" },
     });
+    // Past the bound from the moment the preparation is waited on.
+    await reached.promise;
     await new Promise((resolve) => setTimeout(resolve, 50));
     gate.resolve();
     expect((await attaching).receipt).toMatchObject({ status: "accepted" });
     expect(await attentionDetails(runtime, sessionId)).toEqual([]);
     expect(f.adapter.attaches).toBe(1);
+    await runtime.close();
+  });
+
+  it("fails a first attach whose preparation outlasts its own ceiling as configuration_invalid (VC-799)", async () => {
+    const stalled = Promise.withResolvers<void>();
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      firstAttachPreparationTimeoutMs: 20,
+      retryDelays: [],
+      prepare: () => stalled.promise,
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const attached = await runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect(attached.receipt).toMatchObject({
+      status: "rejected",
+      code: "location_unavailable",
+      detail: "Workspace preparation did not finish within 0.02 s.",
+    });
+    const { projection } = await runtime.projection({ sessionId });
+    expect(projection.attention.active.map(({ kind }) => kind)).toEqual(["configuration_invalid"]);
+    expect(f.adapter.attaches).toBe(0);
+    stalled.resolve();
     await runtime.close();
   });
 

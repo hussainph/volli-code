@@ -36,6 +36,7 @@ import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { StructuredSessionsError, type SessionStartInput } from "./sessions";
 import {
+  KickoffRefusedError,
   kickoffSubmitter,
   startSessionModelOverride,
   startSessionOperation,
@@ -377,8 +378,7 @@ describe("startSessionOperation", () => {
       kickoff: "held",
     });
     // Queued in the Session's own durable follow-up queue, which releases it at
-    // the next ready attach (the app's Retry), rather than dropped: before
-    // VC-799 nothing persisted it, and a Retry attached an empty Session.
+    // the next ready attach (the app's Retry), so the Retry runs it.
     expect(fixture.kickoffs).toEqual([
       {
         sessionId: STARTED_SESSION,
@@ -513,9 +513,9 @@ function kickoffRuntime(receipt: Record<string, unknown> | null) {
 }
 
 /**
- * The kickoff port every start door is handed. It used to discard the receipt
- * the runtime answered with, so a refused kickoff on a READY attach was silent:
- * the door said "kickoff submitted" and no turn ever came (VC-799).
+ * The kickoff port every start door is handed. It reads the receipt the
+ * runtime answers with, so a kickoff refused on a READY attach is reported
+ * rather than silent (VC-799).
  */
 describe("kickoffSubmitter", () => {
   const runtime = kickoffRuntime;
@@ -565,6 +565,10 @@ describe("kickoffSubmitter", () => {
     await expect(
       runtime({ status: "rejected", code: "session_archived", detail: null }).submit(input),
     ).rejects.toThrow("The kickoff was refused (session_archived)");
+    // A distinct error, so a caller can tell a durable refusal from a lost send.
+    await expect(
+      runtime({ status: "rejected", code: "session_archived", detail: null }).submit(input),
+    ).rejects.toBeInstanceOf(KickoffRefusedError);
   });
 });
 

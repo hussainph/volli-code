@@ -488,6 +488,12 @@ async function startSessionTool(
       override.choice !== undefined && "tier" in override.choice
         ? ` (${override.choice.tier} tier)`
         : "";
+    // A ready start's kickoff and a held one (VC-799) each open a turn the
+    // caller hears about, so both arm the watch; an unsent kickoff opens none.
+    const watched =
+      started.state === "ready" || started.kickoff === "held"
+        ? ` ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
+        : "";
     return {
       // The same facts as the prose, as data (VC-471), in the shape the
       // registry's `resultDetails` declares: a Code Mode program reads the
@@ -504,13 +510,11 @@ async function startSessionTool(
         `Started Session ${handle} on ${started.ticketDisplayId}, titled ${JSON.stringify(started.title)}.`,
         `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}${tier}.`,
         started.state === "ready"
-          ? `It is attached and its kickoff turn has been submitted; it runs on its own from here. ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
+          ? `It is attached and its kickoff turn has been submitted; it runs on its own from here.${watched}`
           : // The attach's own diagnosis, never a bare "needs recovery" (VC-659):
             // the caller is usually the one placed to fix what refused it.
             started.kickoff === "held"
-            ? // Held for the Retry (VC-799), so the run it starts reports back
-              // the same way a ready start's does: the watch is armed now.
-              `It was created but its attachment failed, so its kickoff is held as its first message: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app, and the retry sends the kickoff. ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
+            ? `It was created but its attachment failed, so its kickoff is held as its first message: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app, and the retry sends the kickoff.${watched}`
             : `It was created but its attachment failed, so no kickoff was submitted: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app.`,
       ].join("\n"),
     };

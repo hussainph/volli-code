@@ -1,11 +1,11 @@
 /**
  * A start's kickoff survives its first attach failing (VC-799).
  *
- * `session_start` and `session_delegate` sent their first message only after
- * a READY attach and persisted it nowhere else, so a Session whose first
- * attach failed — a worktree preparation that outlasted the 30 s admission
- * bound under load, an executor that refused to start — existed with no task,
- * and the app's Retry attached an EMPTY Session: no turn ran, no notice came.
+ * A Session whose first attach fails — a worktree that cannot be made, an
+ * executor that refuses to start — holds its `session_start` kickoff or its
+ * `session_delegate` task in its own durable queue, and the app's Retry runs
+ * it as the first turn, exactly once. A worktree preparation that merely
+ * outlasts the admission bound does not fail the attach at all.
  *
  * Everything below is the production path except the executor: the real
  * Sessions facade (`start` and the Retry's `attach`), the real Session runtime
@@ -147,9 +147,15 @@ function fixture() {
   const engine = wake.engine;
   const executor = new Executor();
   const venue = { id: "local", kind: "local" as const };
-  const control: { preparation: Promise<void> | null; prepareFailures: number } = {
+  const control: {
+    preparation: Promise<void> | null;
+    prepareFailures: number;
+    /** Resolved once a preparation is being waited on. */
+    reached: PromiseWithResolvers<void>;
+  } = {
     preparation: null,
     prepareFailures: 0,
+    reached: Promise.withResolvers<void>(),
   };
   const runtime = createSessionRuntime({
     engine,
@@ -162,6 +168,7 @@ function fixture() {
       resolve: async () => ({ directory: project.path, venue }),
       // A worktree preparation that keeps running however long it is waited on.
       prepare: async () => {
+        control.reached.resolve();
         await control.preparation;
         if (control.prepareFailures > 0) {
           control.prepareFailures -= 1;
@@ -256,6 +263,7 @@ function fixture() {
     executor,
     control,
     delegations,
+    store,
     reports,
     startTicketSession,
     queueOf,
@@ -269,7 +277,9 @@ describe("session_start keeps its kickoff through a failed first attach (VC-799)
     f.control.preparation = preparation.promise;
 
     const starting = f.startTicketSession("orchestrator:call-1", "Fix the flaky login test");
-    // Well past the bound, the preparation the attach started is still going.
+    // Well past the bound from the moment the attach waits on the preparation,
+    // that preparation is still going.
+    await f.control.reached.promise;
     await new Promise((resolve) => setTimeout(resolve, BOUND_MS * 4));
     preparation.resolve();
     const started = await starting;
@@ -331,8 +341,8 @@ describe("session_start keeps its kickoff through a failed first attach (VC-799)
   });
 
   it("holds the kickoff of a start whose worktree could not be made, and the Retry delivers it", async () => {
-    // The b3a8d42a shape: the preparation itself fails, so no executor was
-    // ever asked to attach and the Session has no attachment at all.
+    // The preparation itself fails, so no executor is ever asked to attach
+    // and the Session has no attachment at all.
     const f = fixture();
     f.control.prepareFailures = 1;
 
@@ -387,6 +397,10 @@ describe("session_delegate keeps its task through a failed first attach (VC-799)
         task: "Find where the auth token is refreshed",
         actor: { kind: "session", sessionId: parent.sessionId, ticketId: null },
       });
+    const notices = () =>
+      f.executor
+        .to(parent.sessionId)
+        .filter(({ commandId }) => commandId.endsWith(DELEGATION_ID_SUFFIXES.notice));
     f.executor.refuseAttaches = 1;
 
     const outcome = await delegate();
@@ -397,6 +411,18 @@ describe("session_delegate keeps its task through a failed first attach (VC-799)
     // A replayed delegation is one child and one held task.
     expect(await delegate()).toMatchObject({ childSessionId: child, taskHeld: true });
     expect(await f.queueOf(child)).toEqual([`${operationId}:kickoff-message:queued`]);
+
+    // A relaunch before the Retry: boot recovery finds the delegation
+    // unanswered, and leaves the child holding its task alone — its failed
+    // attach is not an outcome, and a notice now would be a second one later.
+    const unanswered = f.store.listUnansweredSubagents();
+    expect(unanswered.map(({ childSessionId }) => childSessionId)).toEqual([child]);
+    expect(await f.delegations.recover(unanswered)).toEqual({
+      answered: 0,
+      reported: 0,
+      skipped: 1,
+    });
+    expect(notices()).toEqual([]);
 
     // A person retries the child: its queue releases the task.
     expect((await f.sessions.attach({ operationId: "retry-child", sessionId: child })).state).toBe(
@@ -410,13 +436,11 @@ describe("session_delegate keeps its task through a failed first attach (VC-799)
 
     await f.executor.complete(child, task.commandId);
 
-    const notices = () =>
-      f.executor
-        .to(parent.sessionId)
-        .filter(({ commandId }) => commandId.endsWith(DELEGATION_ID_SUFFIXES.notice));
     await expect.poll(notices).toHaveLength(1);
     expect(notices()[0]).toMatchObject({ commandId: `${operationId}:answer` });
     expect(notices()[0]?.text).toContain("completed its task");
+    // Answered now, so a later relaunch has nothing to recover.
+    expect(f.store.listUnansweredSubagents()).toEqual([]);
     await f.runtime.recoverFollowUps();
     expect(notices()).toHaveLength(1);
     expect(f.reports).toEqual([]);

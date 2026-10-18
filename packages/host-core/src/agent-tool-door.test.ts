@@ -1821,8 +1821,12 @@ describe("verb result details match the registry (VC-471)", () => {
   it("promises no notice for a recovering start or delegation whose first message could not be held", async () => {
     const watches = recordingWatches();
     const call = fanOutDoor("needs-recovery", { holds: false, watches });
+    // The start logs why its kickoff could not be held; that line is expected.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const started = await call("session.start", { ticket: "VC-1" });
+    const started = await call("session.start", { ticket: "VC-1" }).finally(() =>
+      errors.mockRestore(),
+    );
     expect(started.text).toContain("so no kickoff was submitted");
     expect(watches.sessions).toEqual([]);
 
