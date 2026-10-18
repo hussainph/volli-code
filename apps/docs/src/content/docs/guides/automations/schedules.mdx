@@ -25,8 +25,14 @@ targets its project and opens a project-level Board Session.
 7. Select **Create automation**.
 8. Turn on **Automatic triggers** in the Automation's header on this Mac.
 
+While **Automatic triggers** is on, the schedule shows **Next:** with the next
+due time in this Mac's local time and time zone. It follows the time you are
+editing, so select **Save changes** for a new time to take effect. Turning
+**Automatic triggers** off removes the line.
+
 Schedules use these presets; they do not accept cron expressions. For a due Run
-to start on time, the app must be running and the Mac awake.
+to start on time, the app must be running and the Mac awake. A Run may start up
+to 2 minutes after its due time; later than that, the occurrence is skipped.
 
 ## Handle a missed occurrence
 

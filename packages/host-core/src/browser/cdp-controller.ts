@@ -37,8 +37,10 @@
  */
 
 import { BrowserRefusal } from "@volli/agent-runtime";
+import type { RuntimeWholeText } from "@volli/shared";
 
 import {
+  axTreeDigest,
   FIND_MAX_CHARS,
   FIND_MAX_QUERY_CHARS,
   formatAXFind,
@@ -94,6 +96,10 @@ export interface TabSnapshot {
   text: string;
   generation: number;
   truncated: boolean;
+  /** The tree exposed nothing at all — which is not the same as a cut or a failed read. */
+  empty: boolean;
+  /** The tree printed past the bound, when the bound cut {@link text} (VC-237). */
+  whole?: RuntimeWholeText;
 }
 
 /**
@@ -105,8 +111,6 @@ export interface TabFind extends TabSnapshot {
   matches: number;
   /** The matches the text shows. */
   shown: number;
-  /** The tree exposed nothing at all — which is not the same as no match. */
-  empty: boolean;
 }
 
 /**
@@ -300,6 +304,8 @@ export class BrowserTabController {
   #present: ReadonlySet<number> = new Set();
   #snapshotGeneration = -1;
   #nextRef = 1;
+  /** The latest tree read's {@link axTreeDigest}, or null before one at this generation. */
+  #treeDigest: string | null = null;
 
   constructor(transport: CdpTransport, limits: ControllerLimits = {}, cursor?: TabCursorDriver) {
     this.#send = transport.send;
@@ -462,10 +468,21 @@ export class BrowserTabController {
     this.#snapshotGeneration = -1;
     this.#renderedGeneration = -1;
     this.#nextRef = 1;
+    this.#treeDigest = null;
   }
 
   get generation(): number {
     return this.#generation;
+  }
+
+  /**
+   * A fingerprint of the tree the latest read saw (VC-277), snapshot or find,
+   * so the host can tell whether an action changed the page: read it before
+   * acting and again after the fresh read. Null before any read at this
+   * generation.
+   */
+  get treeDigest(): string | null {
+    return this.#treeDigest;
   }
 
   dispose(): void {
@@ -496,7 +513,16 @@ export class BrowserTabController {
       nodes?: AXNodeLike[];
     };
     signal?.throwIfAborted();
-    return answer.nodes ?? [];
+    // An answer without a tree is a read that failed, not a page with nothing
+    // on it: Chromium always answers with at least the document's root. Read
+    // as empty, it would tell the model the page is blank (VC-277).
+    if (!Array.isArray(answer.nodes)) {
+      throw new Error(
+        "The Browser Tab answered without an accessibility tree, so nothing was read. Try the read again, or take a screenshot.",
+      );
+    }
+    this.#treeDigest = axTreeDigest(answer.nodes);
+    return answer.nodes;
   }
 
   /** What the next print may draw on: this generation's ledger, if it has one. */
@@ -536,7 +562,13 @@ export class BrowserTabController {
       ledger: this.#ledger(),
     });
     this.#adopt(printed, nodes);
-    return { text: printed.text, generation: this.#generation, truncated: printed.truncated };
+    return {
+      text: printed.text,
+      generation: this.#generation,
+      truncated: printed.truncated,
+      empty: printed.empty,
+      ...(printed.whole === undefined ? {} : { whole: printed.whole }),
+    };
   }
 
   /**

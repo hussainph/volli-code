@@ -515,10 +515,7 @@ function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
         <ItemRow key={`kept:${entry.path}`} name={entry.path} meta={`Kept — ${entry.reason}`} />
       ))}
       {keptCount > kept.length ? (
-        <ItemRow
-          name={`… and ${keptCount - kept.length} more kept`}
-          meta="Ignored, but preserved as configuration."
-        />
+        <ItemRow name={`… and ${keptCount - kept.length} more kept`} meta="Ignored, but kept." />
       ) : null}
       {report.skipped.map((skipped) => (
         <ItemRow

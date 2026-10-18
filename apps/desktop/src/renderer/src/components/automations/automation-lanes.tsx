@@ -1,6 +1,8 @@
 /**
  * The lane view (VC-112, VC-132): one lane per board column, holding that
- * column's **Offered list in digit order**, arranged by dragging.
+ * column's **Offered list in digit order**, arranged by dragging. Every offered
+ * row is drawn: past the ninth a row has no digit, but it keeps its place and
+ * drags like any other, so a tenth-ranked Automation can be promoted here.
  *
  * This is the surface VC-127 deliberately did not build — "building a lane view
  * before columns can be a Trigger would be drawing lanes with nothing to put in
@@ -12,7 +14,8 @@
  * Three rules the drawing has to keep saying:
  *
  *  - **The digit printed here is the digit that works mid-drag.** Both come out
- *    of one composition (`offeredAutomationsInDigitOrder` over the same four
+ *    of one composition (`offeredAutomationsInPinnedOrder`, whose first nine
+ *    rows are `offeredAutomationsInDigitOrder`, over the same four
  *    machine-local reads), which is the whole reason per-column rank is
  *    machine-local like the arming that pins it.
  *  - **One Automation can hold a different rank in two columns.** A row is a
@@ -52,6 +55,7 @@ import { DotsSixVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsSixVerti
 import { LightningIcon } from "@phosphor-icons/react/dist/csr/Lightning";
 import {
   armedAutomationFor,
+  MAX_OFFERED_DIGITS,
   TICKET_STATUS_LABELS,
   TICKET_STATUSES,
   type Automation,
@@ -66,7 +70,7 @@ import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 import {
   effectiveArmedIn,
-  offeredInDigitOrder,
+  offeredInPinnedOrder,
   offeredInRankOrder,
   selectArmings,
   selectAutomations,
@@ -80,8 +84,11 @@ const LANE_SORT_TRANSITION = { duration: 180, easing: "var(--ease-out)" };
 /** One lane's whole content, composed once for both the drawing and the drop. */
 interface Lane {
   status: TicketStatus;
-  /** The digit order, effective arming pinned to `1` and capped at nine. */
-  digits: readonly Automation[];
+  /**
+   * The digit order UNCAPPED: effective arming pinned to `1`, and every row past
+   * the ninth still drawn — without a digit — so it can be seen and dragged.
+   */
+  rows: readonly Automation[];
   /** The authored rank, uncapped: the list a drop rewrites. */
   authored: readonly Automation[];
   /** The valid arming row, whether switched on here or not. */
@@ -108,7 +115,7 @@ export function AutomationLanes({ projectId }: { projectId: string }) {
     const slices = { automations, armings, orders, enabledAutomationIds: enabledIds };
     return TICKET_STATUSES.map((status) => ({
       status,
-      digits: offeredInDigitOrder(slices, status),
+      rows: offeredInPinnedOrder(slices, status),
       authored: offeredInRankOrder(slices, status),
       armedId: armedAutomationFor(automations, armings, status)?.id ?? null,
       pinnedId: effectiveArmedIn(slices, status)?.id ?? null,
@@ -138,7 +145,7 @@ export function AutomationLanes({ projectId }: { projectId: string }) {
 
   function handleDragEnd({ active, over }: DragEndEvent) {
     const lane = lanes.find((candidate) =>
-      candidate.digits.some(
+      candidate.rows.some(
         (automation) => laneRowId(candidate.status, automation.id) === String(active.id),
       ),
     );
@@ -184,7 +191,7 @@ export function AutomationLanes({ projectId }: { projectId: string }) {
 
 /** The rows a lane lets a hand move: everything but the pinned armed row. */
 function draggableRows(lane: Lane): readonly Automation[] {
-  return lane.digits.filter((automation) => automation.id !== lane.pinnedId);
+  return lane.rows.filter((automation) => automation.id !== lane.pinnedId);
 }
 
 function LaneColumn({
@@ -207,24 +214,24 @@ function LaneColumn({
           {TICKET_STATUS_LABELS[lane.status]}
         </span>
         <span className="text-label text-muted-foreground tabular-nums">
-          {lane.digits.length === 0 ? "" : lane.digits.length}
+          {lane.rows.length === 0 ? "" : lane.rows.length}
         </span>
         <div className="flex-1" />
         <ColumnArmingButton projectId={projectId} status={lane.status} />
       </div>
-      {lane.digits.length === 0 ? (
+      {lane.rows.length === 0 ? (
         <p className="px-1 py-1 text-ui text-muted-foreground">Nothing offered here</p>
       ) : null}
       <SortableContext
         items={movable.map((automation) => laneRowId(lane.status, automation.id))}
         strategy={verticalListSortingStrategy}
       >
-        {lane.digits.map((automation, index) => (
+        {lane.rows.map((automation, index) => (
           <LaneRow
             key={automation.id}
             status={lane.status}
             automation={automation}
-            digit={index + 1}
+            digit={index < MAX_OFFERED_DIGITS ? index + 1 : null}
             pinned={automation.id === lane.pinnedId}
             switchedOff={automation.id === lane.armedId && automation.id !== lane.pinnedId}
             reducedMotion={reducedMotion}
@@ -245,7 +252,8 @@ function LaneRow({
 }: {
   status: TicketStatus;
   automation: Automation;
-  digit: number;
+  /** `null` past the ninth row: no key picks it mid-drag, so none is printed. */
+  digit: number | null;
   pinned: boolean;
   switchedOff: boolean;
   reducedMotion: boolean;
@@ -264,7 +272,7 @@ function LaneRow({
     <div
       ref={setNodeRef}
       data-lane-row={laneRowId(status, automation.id)}
-      data-lane-digit={digit}
+      data-lane-digit={digit ?? undefined}
       data-lane-arming={pinned ? "ready" : switchedOff ? "switched-off" : undefined}
       // Whether dnd-kit has actually picked this row up — for the page smoke,
       // which cannot aim a drop before the drag it is aiming has begun
@@ -288,8 +296,16 @@ function LaneRow({
       ) : (
         <DotsSixVerticalIcon className="size-3 shrink-0 text-muted-foreground" />
       )}
-      <kbd className="shrink-0 rounded-sm border border-border px-1 font-mono text-label text-muted-foreground">
-        {digit}
+      {/* Past the ninth the key cap keeps its width but not its ink, so the
+          name stays in the column of names above it while no digit is claimed. */}
+      <kbd
+        aria-hidden={digit === null ? true : undefined}
+        className={cn(
+          "shrink-0 rounded-sm border border-border px-1 font-mono text-label text-muted-foreground",
+          digit === null && "invisible",
+        )}
+      >
+        {digit ?? "\u00a0"}
       </kbd>
       <span className="min-w-0 flex-1 truncate text-ui text-foreground">{automation.name}</span>
       {switchedOff ? (

@@ -104,6 +104,10 @@ async function addWorktree(
   try {
     await runAdd();
   } catch (first) {
+    // A deadline is not a stale registration: retrying would run the whole
+    // checkout again inside the repository's turn, and git has already
+    // cleaned up after the stopped one.
+    if (first instanceof GitError && first.timedOut) throw first;
     // A stale registration can defeat the first add; prune and retry once.
     try {
       await git(["worktree", "prune"], projectPath);
@@ -191,10 +195,14 @@ async function runEnsure(
         addWorktree(git, project.path, addArgs, prune),
       );
     } catch (caught) {
+      // A timeout is reported as one: the stderr of a stopped add is git's own
+      // "Preparing worktree" line and progress, which names no cause.
       const message =
-        caught instanceof GitError && caught.stderr.trim()
-          ? caught.stderr.trim()
-          : "git worktree add failed";
+        caught instanceof GitError && caught.timedOut
+          ? caught.message
+          : caught instanceof GitError && caught.stderr.trim()
+            ? caught.stderr.trim()
+            : "git worktree add failed";
       return fail(deps, ticketId, "create", message, stderrOf(caught));
     }
   }

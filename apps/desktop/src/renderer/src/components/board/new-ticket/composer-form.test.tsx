@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from "react";
+import { act, useImperativeHandle, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import type { Automation, BlobLinkView, Project, ModelSelection } from "@volli/shared";
@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
     setSelection: () => {},
   },
   branches: { status: "loading" },
+  editorFocus: vi.fn(),
 }));
 vi.mock("@renderer/hooks/use-file-index", () => ({ useFileIndex: () => mocks.files }));
 vi.mock("@renderer/hooks/use-attachments", () => ({ useAttachments: () => mocks.attachments }));
@@ -54,17 +55,26 @@ vi.mock("./submit", () => ({
   runCreateWithAutomation: vi.fn(async () => ({ created: false })),
 }));
 vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
-  MonacoDocumentEditor: ({
+  MonacoDocumentEditor: function MonacoDouble({
     value,
     onChange,
     ariaLabel,
-  }: ComponentProps<typeof MonacoDocumentEditor>) => (
-    <textarea
-      aria-label={ariaLabel}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-    />
-  ),
+    ref,
+  }: ComponentProps<typeof MonacoDocumentEditor>) {
+    // The title's Enter hands focus to the body through this handle.
+    useImperativeHandle(ref, () => ({
+      focus: mocks.editorFocus,
+      insertAtCursor: () => false,
+      markSaved: () => {},
+    }));
+    return (
+      <textarea
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  },
 }));
 vi.mock("./composer-chips", () => ({
   ComposerChips: ({ createMore, onCreateMoreChange }: ComponentProps<typeof ComposerChips>) => (
@@ -190,6 +200,27 @@ async function chord(shiftKey = false, ctrlKey = false) {
     ),
   );
 }
+
+/**
+ * VC-806: Chromium on macOS delivers the Enter that accepts an IME candidate
+ * as a `keydown` with `isComposing` set. That keystroke is the IME's, so the
+ * title keeps the caret; a plain Enter still moves on to the body.
+ */
+it.each([
+  ["composing", true, false],
+  ["plain", false, true],
+] as const)("a %s Enter in the title (isComposing=%s)", async (_, isComposing, moves) => {
+  const event = new KeyboardEvent("keydown", {
+    key: "Enter",
+    isComposing,
+    keyCode: isComposing ? 229 : 13,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => host.querySelector("input")!.dispatchEvent(event));
+  expect(mocks.editorFocus).toHaveBeenCalledTimes(moves ? 1 : 0);
+  expect(event.defaultPrevented).toBe(moves);
+});
 
 it("sends the default primary action through kickoff, by click and by ⇧⌘Enter", async () => {
   await click("Submit");

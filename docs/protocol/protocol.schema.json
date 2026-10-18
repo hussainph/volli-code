@@ -142,6 +142,138 @@
   "protocolVersion": 1,
   "tiers": {
     "desktop": {
+      "browserShortcuts.focusPage": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "tabId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tabId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
+      "browserShortcuts.subscribe": {
+        "compatibility": "client-local",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "kind": "subscription",
+        "noInput": true,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "shortcut": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "chord": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "altKey": {
+                          "type": "boolean"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "ctrlKey": {
+                          "type": "boolean"
+                        },
+                        "key": {
+                          "type": "string"
+                        },
+                        "metaKey": {
+                          "type": "boolean"
+                        },
+                        "repeat": {
+                          "type": "boolean"
+                        },
+                        "shiftKey": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "code",
+                        "metaKey",
+                        "ctrlKey",
+                        "altKey",
+                        "shiftKey",
+                        "repeat"
+                      ],
+                      "type": "object"
+                    },
+                    "kind": {
+                      "const": "replay",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "chord"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "close-tab",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "focus-address",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "tabId": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "tabId",
+            "shortcut"
+          ],
+          "type": "object"
+        },
+        "outputValidation": "documented-yield",
+        "voidOutput": false
+      },
       "hostAdd.active": {
         "compatibility": "client-local",
         "input": {

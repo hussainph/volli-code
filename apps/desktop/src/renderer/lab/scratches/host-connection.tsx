@@ -176,6 +176,8 @@ export default function HostConnectionScratch() {
   const retryRef = React.useRef(retrySucceeds);
   retryRef.current = retrySucceeds;
   const timers = React.useRef<number[]>([]);
+  // The seeded hosts went offline relative to when the scratch opened.
+  const [openedAt] = React.useState(() => Date.now());
 
   const source = React.useMemo<FakeHostSource>(() => {
     const later = (ms: number, act: () => void) => {
@@ -225,17 +227,17 @@ export default function HostConnectionScratch() {
     return createFakeHostSource(
       hostSnapshot(
         [
-          remoteHost(HETZNER, "hetzner-1", hetzner("offline", Date.now())),
+          remoteHost(HETZNER, "hetzner-1", hetzner("offline", openedAt)),
           remoteHost(MINI, "mac-mini", {
             os: "macos",
-            link: { status: "offline", since: Date.now() - 2 * 3_600_000, retryAt: null },
+            link: { status: "offline", since: openedAt - 2 * 3_600_000, retryAt: null },
           }),
         ],
         { "prj-voltaic": HETZNER, "prj-harbor": MINI },
       ),
       onCall,
     );
-  }, []);
+  }, [openedAt]);
 
   React.useEffect(() => {
     const local = createFakeHostSource(

@@ -31,6 +31,7 @@ import {
   listAllAutomations,
   listAutomationsForProject,
   listColumnArmings,
+  listPossiblyLiveProjectRunsForAutomation,
   listProjectRunsForAutomation,
   listRunsForProject,
   listRunsForTicket,
@@ -76,6 +77,7 @@ function fixture(over: Partial<HostAutomationsInput> = {}) {
   const engine = {
     enabledAutomationIds: vi.fn(async () => ["a1"]),
     recordSkip: vi.fn(async (_input: unknown): Promise<unknown> => ({ ok: true })),
+    replayRun: vi.fn(async (_commandId: string): Promise<unknown> => null),
   };
   const service = { kind: "service" };
   const runner = {
@@ -363,8 +365,8 @@ describe("runner wiring", () => {
     deps.listRunsForTicket("t1");
     expect(listRunsForTicket).toHaveBeenCalledWith(db, "t1");
     const query = { automationId: "a1", projectId: "p1" };
-    deps.listProjectRunsForAutomation(query);
-    expect(listProjectRunsForAutomation).toHaveBeenCalledWith(db, query);
+    deps.listPossiblyLiveProjectRunsForAutomation(query);
+    expect(listPossiblyLiveProjectRunsForAutomation).toHaveBeenCalledWith(db, query);
 
     deps.onRunStarted!({ projectId: "p1", run: { ticketId: null } as never });
     expect(f.publish).toHaveBeenLastCalledWith("data-changed", { projectId: "p1" });
@@ -518,6 +520,19 @@ describe("scheduler wiring", () => {
     f.engine.recordSkip.mockResolvedValueOnce({ ok: false, error: "ledger refused" });
     await expect(recordSkip(input)).rejects.toThrow("ledger refused");
     expect(f.publish).toHaveBeenCalledOnce();
+  });
+
+  it("answers a Run as accepted only when its command was accepted or completed", async () => {
+    const f = fixture();
+    f.automations.start(() => f.sessionPorts);
+    const { runAccepted } = f.schedulerPorts();
+    await expect(runAccepted("c1")).resolves.toBe(false);
+    expect(f.engine.replayRun).toHaveBeenCalledWith("c1");
+    f.engine.replayRun.mockResolvedValueOnce({ ok: true, value: { run: null } });
+    await expect(runAccepted("c1")).resolves.toBe(true);
+    // A rejected Run still owes its occurrence a skip.
+    f.engine.replayRun.mockResolvedValueOnce({ ok: false, code: "RUN_FAILED", error: "No" });
+    await expect(runAccepted("c1")).resolves.toBe(false);
   });
 
   it("starts a schedule's Run unattended and narrows its outcome", async () => {
