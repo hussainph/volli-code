@@ -101,13 +101,6 @@ function tempDir(prefix: string): string {
 
 const BRANCH = "volli/VC-12-mcp-server";
 
-// The sync runner is `execFileSync` in production: one call from the ensure
-// pipeline freezes every window (VC-16's rainbow wheel). Poisoning it is the
-// seam-level statement that ensure never touches it.
-const poisonedSyncGit = (): string => {
-  throw new Error("ensure must not use the blocking sync git runner");
-};
-
 /** Seeds a doing ticket in a real temp project dir with `base_branch = main`. */
 function seed(projectPath: string) {
   const project = testProject({ id: "proj-abcdef12", path: projectPath, baseBranch: "main" });
@@ -151,7 +144,6 @@ describe("ensure — per-repository ordering", () => {
     const git = parkingGit();
     const deps = {
       db: ctx.db,
-      git: poisonedSyncGit,
       gitAsync: git.gitAsync,
       home,
       blobsRoot: "unused",
@@ -199,7 +191,6 @@ describe("ensure — per-repository ordering", () => {
     const git = parkingGit();
     const deps = {
       db: ctx.db,
-      git: poisonedSyncGit,
       gitAsync: git.gitAsync,
       home,
       blobsRoot: "unused",
@@ -241,7 +232,6 @@ describe("ensure — per-repository ordering", () => {
     const git = parkingGit();
     const deps = {
       db: ctx.db,
-      git: poisonedSyncGit,
       gitAsync: git.gitAsync,
       home,
       blobsRoot: "unused",
@@ -266,10 +256,7 @@ describe("ensure — success", () => {
     const home = tempDir("home");
     const { gitAsync, countMatching } = happyGit(projectPath);
 
-    const result = await ensure(
-      { db: ctx.db, git: poisonedSyncGit, gitAsync, home, blobsRoot: "unused" },
-      "ticket-1",
-    );
+    const result = await ensure({ db: ctx.db, gitAsync, home, blobsRoot: "unused" }, "ticket-1");
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -283,13 +270,12 @@ describe("ensure — success", () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
-    const { git, gitAsync, countMatching } = happyGit(projectPath);
+    const { gitAsync, countMatching } = happyGit(projectPath);
     const phases: WorktreePhase[] = [];
 
     const result = await ensure(
       {
         db: ctx.db,
-        git,
         gitAsync,
         home,
         onPhase: (_, phase) => phases.push(phase),
@@ -331,7 +317,7 @@ describe("ensure — success", () => {
     // First ensure materializes the identity (git faked — create the dir it stamped).
     const first = happyGit(projectPath);
     const created = await ensure(
-      { db: ctx.db, git: first.git, gitAsync: first.gitAsync, home, blobsRoot: "unused" },
+      { db: ctx.db, gitAsync: first.gitAsync, home, blobsRoot: "unused" },
       "ticket-1",
     );
     expect(created.ok).toBe(true);
@@ -356,7 +342,7 @@ describe("ensure — success", () => {
       return "";
     });
     const result = await ensure(
-      { db: ctx.db, git: reuse.git, gitAsync: reuse.gitAsync, home, blobsRoot: "unused" },
+      { db: ctx.db, gitAsync: reuse.gitAsync, home, blobsRoot: "unused" },
       "ticket-1",
     );
 
@@ -396,7 +382,7 @@ describe("ensure — failure", () => {
     const home = tempDir("home");
     const phases: WorktreePhase[] = [];
     // The ticket branch is checked out elsewhere → hard fail at the create stage.
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "worktree" && args[1] === "list") {
         return `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\nworktree /elsewhere\nHEAD def\nbranch refs/heads/${BRANCH}\n`;
       }
@@ -406,7 +392,6 @@ describe("ensure — failure", () => {
     const result = await ensure(
       {
         db: ctx.db,
-        git,
         gitAsync,
         home,
         onPhase: (_, phase) => phases.push(phase),
@@ -432,12 +417,9 @@ describe("ensure — failure", () => {
     // step's walk of the main checkout throws ENOENT → copy-stage failure.
     seed("/volli-nonexistent-project-dir");
     const home = tempDir("home");
-    const { git, gitAsync } = happyGit("/volli-nonexistent-project-dir");
+    const { gitAsync } = happyGit("/volli-nonexistent-project-dir");
 
-    const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" },
-      "ticket-1",
-    );
+    const result = await ensure({ db: ctx.db, gitAsync, home, blobsRoot: "unused" }, "ticket-1");
 
     expect(result.ok).toBe(false);
     const failed = listTicketEvents(ctx.db, "ticket-1").find(
@@ -457,7 +439,7 @@ describe("ensure — failure", () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
-    const { git, gitAsync, countMatching } = scriptedGit((args) => {
+    const { gitAsync, countMatching } = scriptedGit((args) => {
       if (args[0] === "worktree" && args[1] === "list") {
         return `worktree ${projectPath}\nHEAD abc\nbranch refs/heads/main\n`;
       }
@@ -476,10 +458,7 @@ describe("ensure — failure", () => {
       return "";
     });
 
-    const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" },
-      "ticket-1",
-    );
+    const result = await ensure({ db: ctx.db, gitAsync, home, blobsRoot: "unused" }, "ticket-1");
 
     expect(result).toEqual({ ok: false, error: "Git command timed out after 120000ms." });
     // A deadline is not a stale registration: prune-and-retry would only run
@@ -494,8 +473,8 @@ describe("ensure — failure", () => {
   });
 
   it("errors on an unknown ticket without touching phases", async () => {
-    const { git, gitAsync } = scriptedGit(() => "");
-    const result = await ensure({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "nope");
+    const { gitAsync } = scriptedGit(() => "");
+    const result = await ensure({ db: ctx.db, gitAsync, blobsRoot: "unused" }, "nope");
     expect(result).toEqual({ ok: false, error: "Unknown ticket" });
   });
 });
@@ -505,7 +484,7 @@ describe("ensure — attachments stage", () => {
     const projectPath = tempDir("proj");
     const { ticket } = seed(projectPath);
     const home = tempDir("home");
-    const { git, gitAsync } = happyGit(projectPath);
+    const { gitAsync } = happyGit(projectPath);
     const blobsRootDir = blobsRoot(tempDir("userdata"));
 
     importBlob(
@@ -520,7 +499,7 @@ describe("ensure — attachments stage", () => {
     );
 
     const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, blobsRoot: blobsRootDir },
+      { db: ctx.db, gitAsync, home, blobsRoot: blobsRootDir },
       "ticket-1",
     );
 
@@ -535,7 +514,7 @@ describe("ensure — attachments stage", () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
-    const { git, gitAsync } = happyGit(projectPath);
+    const { gitAsync } = happyGit(projectPath);
     const blobsRootDir = blobsRoot(tempDir("userdata"));
 
     const link = importBlob(
@@ -548,7 +527,7 @@ describe("ensure — attachments stage", () => {
     removeBlob(blobsRootDir, link.blobHash);
 
     const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, blobsRoot: blobsRootDir },
+      { db: ctx.db, gitAsync, home, blobsRoot: blobsRootDir },
       "ticket-1",
     );
 
@@ -569,11 +548,11 @@ describe("ensure — attachments stage", () => {
     const projectPath = tempDir("proj");
     seed(projectPath);
     const home = tempDir("home");
-    const { git, gitAsync } = happyGit(projectPath);
+    const { gitAsync } = happyGit(projectPath);
     const blobsRootDir = blobsRoot(tempDir("userdata"));
 
     const result = await ensure(
-      { db: ctx.db, git, gitAsync, home, blobsRoot: blobsRootDir },
+      { db: ctx.db, gitAsync, home, blobsRoot: blobsRootDir },
       "ticket-1",
     );
 
@@ -682,7 +661,6 @@ describe("ensure — a `worktree add` slower than the read deadline (VC-785)", (
     const outcome = await ensure(
       {
         db: ctx.db,
-        git: poisonedSyncGit,
         gitAsync: runGitCapturingAsync,
         home: tempDir("slow-hook-home"),
         blobsRoot: blobsRoot(tempDir("slow-hook-userdata")),
@@ -723,7 +701,6 @@ async function materializedTicket() {
   );
   const deps = {
     db: ctx.db,
-    git: poisonedSyncGit,
     gitAsync: runGitCapturingAsync,
     home: tempDir("drift-home"),
     blobsRoot: blobsRoot(tempDir("drift-userdata")),

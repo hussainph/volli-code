@@ -47,11 +47,11 @@ afterEach(() => {
 
 /** A git that reports the worktree clean, so `remove` proceeds to delete it. */
 /**
- * A git that reads the worktree as clean, on BOTH required seams: the reclaim's
- * remove runs its probes on the async runner (VC-383), so this fixture must
- * supply that seam rather than accidentally exercising the host repository.
+ * A git that reads the worktree as clean, on the required async seam: the
+ * reclaim's remove runs its probes there (VC-383), so this fixture must supply
+ * it rather than accidentally exercising the host repository.
  */
-function cleanGit(wt: string): Pick<WorktreePorts, "git" | "gitAsync"> {
+function cleanGit(wt: string): Pick<WorktreePorts, "gitAsync"> {
   const git = (args: readonly string[]): string => {
     if (args[0] === "worktree" && args[1] === "list") {
       return `worktree ${wt}\nHEAD abc\nbranch refs/heads/volli/VC-1-x\n`;
@@ -59,7 +59,7 @@ function cleanGit(wt: string): Pick<WorktreePorts, "git" | "gitAsync"> {
     if (args[0] === "rev-parse" && args[1] === "--git-dir") return wt;
     return "";
   };
-  return { git, gitAsync: async (args) => git(args) };
+  return { gitAsync: async (args) => git(args) };
 }
 
 const DAY = 24 * 60 * 60 * 1000;

@@ -216,6 +216,7 @@ import {
   isOwnedWorktreePath,
   ownedContainers,
   orphanCleanupEngine,
+  runGitCapturing,
   worktreeHomeDir,
 } from "@volli/host-core/worktree";
 import { worktreeDeps } from "./worktree-host";
@@ -1277,7 +1278,11 @@ export function registerDataIpcHandlers(
       try {
         outcome = await cleanupOrphans(
           {
-            worktree: worktreeDeps(db),
+            // The gate's reads are the one place the blocking runner is still
+            // wanted: it may not yield between its last look and the removal it
+            // admits. The removal and prune themselves run on `gitAsync`, so a
+            // large delete never stalls Electron main (VC-786).
+            worktree: { ...worktreeDeps(db), gateGit: runGitCapturing },
             engine,
             busyWorktreeSites: options.busyWorktreeSites,
             releaseAgentSites: options.releaseAgentSites,

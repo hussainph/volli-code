@@ -32,7 +32,7 @@ import { getTicketRow } from "../db/tickets-repo";
 import { BrowserPictureStore } from "../browser/picture-store";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import { createTicketCommand } from "../ticket-commands";
-import { runGitCapturing, runGitCapturingAsync } from "../worktree/git";
+import { runGitCapturingAsync } from "../worktree/git";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "./handler-map";
 import {
   createHostHandlers,
@@ -112,7 +112,7 @@ function sealedMap(options: Partial<HostHandlerOptions> = {}) {
       automations: automations(),
       busyWorktreeSites: async () => [],
       now: () => 50,
-      worktree: { db: ctx.db, git: runGitCapturing, gitAsync: runGitCapturingAsync, blobsRoot: "" },
+      worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "" },
       ...options,
     },
   );

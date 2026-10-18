@@ -195,7 +195,6 @@ function createAgentCommandService(
         detachedWork,
         notify: options.notify,
         onMutation: options.onMutation,
-        git: options.git,
         gitAsync: options.gitAsync,
         now: options.now,
       }),
@@ -4911,7 +4910,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "status") return " M src/a.ts\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
@@ -4923,7 +4922,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       // The seeded worktreePath ("/wt/VC-1") is fictional; stub the disk-existence
       // seam (C3) so this scenario isn't about that check.
@@ -4976,13 +4974,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
     });
     // A real on-disk worktree stamped through a SYMLINKED prefix, queried from
@@ -5021,13 +5018,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5055,13 +5051,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
     });
     // A ticket that never entered Doing has no worktree.
@@ -5111,7 +5106,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
       if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
@@ -5123,7 +5118,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5183,7 +5177,7 @@ describe("agent command service", () => {
     );
     const numstat =
       Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
       return "";
@@ -5193,7 +5187,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5224,13 +5217,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5271,7 +5263,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     // No worktreeExists stub here — this exercises the REAL default (existsSync)
     // against a directory that genuinely never existed by the time it's checked.
     const service = createAgentCommandService({
@@ -5279,7 +5271,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
     });
     const scratchBase = mkdtempSync(join(tmpdir(), "volli-missing-"));
@@ -5313,13 +5304,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5368,7 +5358,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync, calls } = scriptedGit((args, cwd) => {
+    const { gitAsync, calls } = scriptedGit((args, cwd) => {
       if (args[0] === "branch" && args[1] === "--show-current") return `${checkedOutBranch}\n`;
       return handler(args, cwd);
     });
@@ -5377,7 +5367,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5447,7 +5436,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync, calls } = scriptedGit((args) => {
+    const { gitAsync, calls } = scriptedGit((args) => {
       if (args[0] === "status") return "";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t0\n";
@@ -5459,7 +5448,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5780,7 +5768,7 @@ describe("agent command service", () => {
       );
       void paths;
     }
-    const { git, gitAsync } = scriptedGit((args, cwd) => {
+    const { gitAsync } = scriptedGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5794,7 +5782,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5860,7 +5847,7 @@ describe("agent command service", () => {
         }),
       );
     }
-    const { git, gitAsync } = scriptedGit((args, cwd) => {
+    const { gitAsync } = scriptedGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5885,7 +5872,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5948,7 +5934,7 @@ describe("agent command service", () => {
         baseBranch: "main",
       }),
     );
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) return rawModified(["package.json"]);
@@ -5960,7 +5946,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -6018,7 +6003,7 @@ describe("agent command service", () => {
         baseBranch: "main",
       }),
     );
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "diff") throw new Error("fatal: bad revision");
       throw new Error("no origin ref");
     });
@@ -6026,7 +6011,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -7306,8 +7290,8 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       ctx.db,
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: true }),
     );
-    const { git } = scriptedGit(() => "");
-    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", git });
+    const { gitAsync } = scriptedGit(() => "");
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", gitAsync });
 
     const res = await service.execute({
       v: 1,
@@ -7334,8 +7318,8 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       ctx.db,
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: false }),
     );
-    const { git } = scriptedGit(() => "");
-    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", git });
+    const { gitAsync } = scriptedGit(() => "");
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", gitAsync });
 
     const res = await service.execute({
       v: 1,
