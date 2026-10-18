@@ -217,14 +217,20 @@ export type DelegateSessionOutcome = {
   title: string;
   model: ModelSelection;
 } & (
-  /** After a ready attach: the task was sent and its watch armed. */
-  | { state: "running" }
-  /**
-   * The attach failed, so no task was sent. `taskHeld` says whether the task
-   * waits in the child's queue for its next ready attach (VC-799); its notice
-   * then arrives under the delegation's own ids once the task has run.
-   */
-  | { state: "needs-recovery"; taskHeld: boolean }
+  | {
+      /** After a ready attach: the task was sent and its watch armed. */
+      state: "running";
+    }
+  | {
+      /** The attach failed, so no task was sent. */
+      state: "needs-recovery";
+      /**
+       * Whether the task waits in the child's queue for its next ready attach
+       * (VC-799); its notice then arrives under the delegation's own ids once
+       * the task has run.
+       */
+      taskHeld: boolean;
+    }
 );
 
 /**

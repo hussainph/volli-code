@@ -147,7 +147,10 @@ function fixture() {
   const engine = wake.engine;
   const executor = new Executor();
   const venue = { id: "local", kind: "local" as const };
-  const control: { preparation: Promise<void> | null } = { preparation: null };
+  const control: { preparation: Promise<void> | null; prepareFailures: number } = {
+    preparation: null,
+    prepareFailures: 0,
+  };
   const runtime = createSessionRuntime({
     engine,
     executor,
@@ -160,6 +163,10 @@ function fixture() {
       // A worktree preparation that keeps running however long it is waited on.
       prepare: async () => {
         await control.preparation;
+        if (control.prepareFailures > 0) {
+          control.prepareFailures -= 1;
+          throw new Error("git worktree add was killed (SIGKILL)");
+        }
         return { directory: project.path, venue };
       },
       reaffirm: async () => undefined,
@@ -172,6 +179,20 @@ function fixture() {
     runtime,
     readDefaultModel: async () => MODEL,
     readModelAnchor: async () => ({ selection: MODEL, tier: null }),
+    // A subagent runs on its parent's anchor, which Model Access validates.
+    inspectModelAccess: async () => ({
+      observedAt: 0,
+      providers: [],
+      models: [
+        {
+          ...MODEL,
+          label: "Scripted",
+          state: "available",
+          reasoningLevels: ["off"],
+          acceptsImageInput: false,
+        },
+      ],
+    }),
     ticketBelongsToProject: () => true,
     skills: { resolve: async () => [], index: async () => null, record: async () => undefined },
     toolSurface: {
@@ -307,6 +328,35 @@ describe("session_start keeps its kickoff through a failed first attach (VC-799)
     expect(f.executor.to(started.sessionId)).toHaveLength(1);
     const { projection } = await f.runtime.projection({ sessionId: started.sessionId });
     expect(projection.attention.active).toEqual([]);
+  });
+
+  it("holds the kickoff of a start whose worktree could not be made, and the Retry delivers it", async () => {
+    // The b3a8d42a shape: the preparation itself fails, so no executor was
+    // ever asked to attach and the Session has no attachment at all.
+    const f = fixture();
+    f.control.prepareFailures = 1;
+
+    const started = await f.startTicketSession("orchestrator:call-2", "Rebase the stacked branch");
+
+    expect(started).toMatchObject({
+      state: "needs-recovery",
+      kickoff: "held",
+      attachFailure: expect.stringContaining("git worktree add was killed"),
+    });
+    expect(f.executor.to(started.sessionId)).toEqual([]);
+    expect(await f.queueOf(started.sessionId)).toEqual([
+      "orchestrator:call-2:kickoff-message:queued",
+    ]);
+
+    const retried = await f.sessions.attach({
+      operationId: "retry-2",
+      sessionId: started.sessionId,
+    });
+    expect(retried.state).toBe("ready");
+    await expect
+      .poll(() => f.executor.to(started.sessionId).map(({ messageId, text }) => [messageId, text]))
+      .toEqual([["orchestrator:call-2:kickoff-message", "Rebase the stacked branch"]]);
+    await expect.poll(() => f.queueOf(started.sessionId)).toEqual([]);
   });
 });
 

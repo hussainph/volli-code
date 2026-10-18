@@ -35,7 +35,11 @@ import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { StructuredSessionsError, type SessionStartInput } from "./sessions";
-import { kickoffSubmitter, startSessionModelOverride, startSessionOperation } from "./start-session";
+import {
+  kickoffSubmitter,
+  startSessionModelOverride,
+  startSessionOperation,
+} from "./start-session";
 
 let ctx: TestDb | undefined;
 
@@ -62,7 +66,9 @@ function harness(
   ticket: Ticket;
   ports: Parameters<typeof startSessionOperation>[0];
   startInputs: SessionStartInput[];
-  kickoffs: Parameters<NonNullable<Parameters<typeof startSessionOperation>[0]["submitSessionMessage"]>>[0][];
+  kickoffs: Parameters<
+    NonNullable<Parameters<typeof startSessionOperation>[0]["submitSessionMessage"]>
+  >[0][];
   refinements: { sessionId: string; firstMessage: string; heuristicTitle: string }[];
   mutations: unknown[];
   notices: SessionStartedNotice[];
@@ -492,24 +498,27 @@ describe("startSessionOperation", () => {
   });
 });
 
+/** A runtime that answers every command with `receipt`, recording what it was sent. */
+function kickoffRuntime(receipt: Record<string, unknown> | null) {
+  const commands: unknown[] = [];
+  return {
+    commands,
+    submit: kickoffSubmitter({
+      command: async (request) => {
+        commands.push(request);
+        return { receipt } as never;
+      },
+    }),
+  };
+}
+
 /**
  * The kickoff port every start door is handed. It used to discard the receipt
  * the runtime answered with, so a refused kickoff on a READY attach was silent:
  * the door said "kickoff submitted" and no turn ever came (VC-799).
  */
 describe("kickoffSubmitter", () => {
-  function runtime(receipt: Record<string, unknown> | null) {
-    const commands: unknown[] = [];
-    return {
-      commands,
-      submit: kickoffSubmitter({
-        command: async (request) => {
-          commands.push(request);
-          return { receipt } as never;
-        },
-      }),
-    };
-  }
+  const runtime = kickoffRuntime;
   const input = {
     sessionId: STARTED_SESSION,
     text: "work",
@@ -529,7 +538,11 @@ describe("kickoffSubmitter", () => {
         sessionId: STARTED_SESSION,
         command: {
           kind: "message.submit",
-          message: { id: "op:kickoff-message", role: "user", parts: [{ type: "text", text: "work" }] },
+          message: {
+            id: "op:kickoff-message",
+            role: "user",
+            parts: [{ type: "text", text: "work" }],
+          },
         },
       },
     ]);

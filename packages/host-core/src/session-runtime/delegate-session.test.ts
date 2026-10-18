@@ -1440,7 +1440,11 @@ describe("a child whose first attach failed keeps its task (VC-799)", () => {
 
     const result = await h.delegate();
 
-    expect(result).toMatchObject({ childSessionId: CHILD, state: "needs-recovery", taskHeld: true });
+    expect(result).toMatchObject({
+      childSessionId: CHILD,
+      state: "needs-recovery",
+      taskHeld: true,
+    });
     // The same message, marker and ids a ready delegation would have sent:
     // only the delivery differs, held for the child's next ready attach.
     expect(h.kickoffs).toEqual([
@@ -1483,7 +1487,9 @@ describe("a child whose first attach failed keeps its task (VC-799)", () => {
 
     expect(noticeText(h.commands, operationId)).toMatch(/completed its task/);
     expect(
-      h.parentCommands().filter((c) => c.commandId === `${operationId}${DELEGATION_ID_SUFFIXES.notice}`),
+      h
+        .parentCommands()
+        .filter((c) => c.commandId === `${operationId}${DELEGATION_ID_SUFFIXES.notice}`),
     ).toHaveLength(1);
     expect(h.parentCommands()).toHaveLength(1);
   });

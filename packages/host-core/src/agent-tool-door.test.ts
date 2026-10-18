@@ -312,13 +312,15 @@ describe("session_start through the Agent Tool Surface", () => {
 
     expect(result.details).toMatchObject({ handle: "abcdef12", state: "needs-recovery" });
     expect(result.text).toContain(
-      `It was created but its attachment failed, so no kickoff was submitted: ${detail}`,
+      `It was created but its attachment failed, so its kickoff is held as its first message: ${detail}`,
     );
     expect(result.text).not.toContain("needs recovery");
-    // Nothing was submitted to a Session that never attached, and nothing is
-    // watched for a turn that cannot happen.
-    expect(h.kickoffs).toEqual([]);
-    expect(watches.sessions).toEqual([]);
+    // Nothing was submitted to a Session that never attached: the kickoff is
+    // held for its Retry (VC-799), and the turn that Retry runs is watched.
+    expect(h.kickoffs).toEqual([expect.objectContaining({ delivery: "queue" })]);
+    expect(watches.sessions).toEqual([
+      expect.objectContaining({ targetSessionId: STARTED_SESSION, armTurn: true }),
+    ]);
   });
 
   it("binds the caller instead of believing one", async () => {
@@ -1795,7 +1797,7 @@ describe("verb result details match the registry (VC-471)", () => {
     const recovering = await fanOutDoor("needs-recovery")("session.start", { ticket: "VC-1" });
     expect(recovering.details).toMatchObject({ handle: "abcdef12", state: "needs-recovery" });
     expect(recovering.text).toContain(
-      "its attachment failed, so no kickoff was submitted: the attach reported no receipt",
+      "its attachment failed, so its kickoff is held as its first message: the attach reported no receipt",
     );
   });
 

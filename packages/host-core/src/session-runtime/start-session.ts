@@ -136,8 +136,11 @@ export type StartSessionResult = {
   /** The title the Session was given, whether explicit or heuristic. */
   title: string;
 } & (
-  /** The kickoff went to the ready attach, detached. */
-  | { state: "ready"; kickoff: "submitted" }
+  | {
+      state: "ready";
+      /** The kickoff went to the ready attach, detached. */
+      kickoff: "submitted";
+    }
   | {
       state: "needs-recovery";
       /**
