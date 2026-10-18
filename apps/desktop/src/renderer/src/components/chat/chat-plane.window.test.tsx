@@ -2211,6 +2211,7 @@ describe("VC-769 one progress indicator through the live ChatPlane projection", 
         id: "failure",
         attachmentId: null,
         kind: "adapter_unrecoverable" as const,
+        resetsAt: null,
         detail: "Model request failed",
         diagnostic: null,
       };
