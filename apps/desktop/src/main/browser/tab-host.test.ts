@@ -32,6 +32,7 @@ import {
   BROWSER_INTERACTION_QUIET_MS,
   BROWSER_PREVIEW_MAX_PENDING_CAPTURES,
   BROWSER_PREVIEW_TIMEOUT_MS,
+  BROWSER_PAGE_BACKGROUND,
   BrowserStageUnavailableError,
   BrowserTabHost,
   browserRemoteWebPreferences,
@@ -152,6 +153,7 @@ class FakeWebContents {
 class FakeView {
   readonly webContents = new FakeWebContents();
   setBounds = vi.fn();
+  setBackgroundColor = vi.fn();
 }
 
 const fakeWindow = {
@@ -1011,6 +1013,165 @@ describe("BrowserTabHost native surface", () => {
     views[0]?.webContents.emit("destroyed");
 
     expect(() => host.hide(tab.tabId)).not.toThrow();
+  });
+});
+
+/** One user tab and its page view, for the plane-background tests (VC-302). */
+function openPlaneTab(url: string): { tabId: string; view: FakeView } {
+  const tab = host.open({ url, projectId: "project-1", ticketId: null, createdBy: "user" });
+  const view = views.at(-1);
+  if (view === undefined) throw new Error("expected page view");
+  return { tabId: tab.tabId, view };
+}
+
+/** A committed main-frame document, as Electron reports one. */
+function commitDocument(view: FakeView, url: string): void {
+  view.webContents.url = url;
+  view.webContents.emit("did-navigate", {}, url, 200, "OK");
+}
+
+describe("BrowserTabHost plane background (VC-302)", () => {
+  const DARK = "#141414";
+  const LIGHT = "#FAFAF7";
+
+  it("themes a new tab's plane before its first load, whatever it is headed to", () => {
+    host.setThemeBackground(DARK);
+    const blank = openPlaneTab(BROWSER_START_URL);
+    const site = openPlaneTab("https://example.com");
+
+    for (const { view } of [blank, site]) {
+      expect(view.setBackgroundColor).toHaveBeenCalledOnce();
+      expect(view.setBackgroundColor).toHaveBeenCalledWith(DARK);
+      // Painted before the load, so the plane is never black while it waits.
+      expect(view.setBackgroundColor.mock.invocationCallOrder[0]).toBeLessThan(
+        view.webContents.loadURL.mock.invocationCallOrder[0]!,
+      );
+    }
+  });
+
+  it("stays themed while loading, hands a committed site Chromium's white, and themes the start page again", () => {
+    host.setThemeBackground(DARK);
+    const { view } = openPlaneTab("https://example.com");
+
+    view.webContents.emit("did-start-navigation", navigationDetails("https://example.com"));
+    view.webContents.emit("did-start-loading");
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(DARK);
+
+    commitDocument(view, "https://example.com");
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(BROWSER_PAGE_BACKGROUND);
+
+    // A second site is still a site: nothing to repaint.
+    commitDocument(view, "https://example.com/next");
+    expect(view.setBackgroundColor).toHaveBeenCalledTimes(2);
+
+    commitDocument(view, BROWSER_START_URL);
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(DARK);
+  });
+
+  it("repaints every app-owned plane on a theme change and leaves websites their own", () => {
+    host.setThemeBackground(DARK);
+    const blank = openPlaneTab(BROWSER_START_URL);
+    const site = openPlaneTab("https://example.com");
+    commitDocument(blank.view, BROWSER_START_URL);
+    commitDocument(site.view, "https://example.com");
+    blank.view.setBackgroundColor.mockClear();
+    site.view.setBackgroundColor.mockClear();
+
+    host.setThemeBackground(LIGHT);
+    host.setThemeBackground(LIGHT);
+
+    expect(blank.view.setBackgroundColor).toHaveBeenCalledOnce();
+    expect(blank.view.setBackgroundColor).toHaveBeenCalledWith(LIGHT);
+    expect(site.view.setBackgroundColor).not.toHaveBeenCalled();
+  });
+
+  it("paints a tab opened before the theme is known as soon as it is", () => {
+    const { view } = openPlaneTab(BROWSER_START_URL);
+    expect(view.setBackgroundColor).not.toHaveBeenCalled();
+
+    host.setThemeBackground(LIGHT);
+
+    expect(view.setBackgroundColor).toHaveBeenCalledWith(LIGHT);
+  });
+
+  it("returns a failed load's error document to the theme, and the error stays named", () => {
+    host.setThemeBackground(DARK);
+    const { view } = openPlaneTab("https://example.com");
+    commitDocument(view, "https://example.com");
+    view.setBackgroundColor.mockClear();
+
+    // A subframe failing, or Chromium cancelling a load for a newer one, leaves
+    // the site's own document on screen.
+    view.webContents.emit("did-fail-provisional-load", {}, -105, "X", "https://ad.example", false);
+    view.webContents.emit(
+      "did-fail-provisional-load",
+      {},
+      -3,
+      "ABORTED",
+      "https://a.example",
+      true,
+    );
+    expect(view.setBackgroundColor).not.toHaveBeenCalled();
+
+    view.webContents.emit(
+      "did-fail-provisional-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://missing.example",
+      true,
+    );
+    view.webContents.emit(
+      "did-fail-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://missing.example",
+      true,
+    );
+    expect(view.setBackgroundColor).toHaveBeenCalledOnce();
+    expect(view.setBackgroundColor).toHaveBeenCalledWith(DARK);
+    // What the chrome's alert reads: the themed plane is never a silent one.
+    expect(published.at(-1)).toMatchObject({
+      error: "Could not load page: ERR_NAME_NOT_RESOLVED",
+      loading: false,
+    });
+
+    host.setThemeBackground(LIGHT);
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(LIGHT);
+  });
+
+  it("returns a dead renderer's plane to the theme", () => {
+    host.setThemeBackground(DARK);
+    const { view } = openPlaneTab("https://example.com");
+    commitDocument(view, "https://example.com");
+
+    view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(DARK);
+    expect(published.at(-1)).toMatchObject({ loading: false });
+    expect((published.at(-1) as { error: string }).error).toContain("crashed");
+  });
+
+  it("forgets a closed tab: a later theme change paints nothing for it", () => {
+    host.setThemeBackground(DARK);
+    const { tabId, view } = openPlaneTab(BROWSER_START_URL);
+    host.close(tabId);
+    view.setBackgroundColor.mockClear();
+
+    host.setThemeBackground(LIGHT);
+
+    expect(view.setBackgroundColor).not.toHaveBeenCalled();
+  });
+
+  it("never themes the DevTools view, which is Chromium's to paint", () => {
+    host.setThemeBackground(DARK);
+    const { tabId } = openPlaneTab("https://example.com");
+    host.show(tabId);
+    host.toggleDevTools(tabId);
+    host.setThemeBackground(LIGHT);
+
+    expect(views[1]?.setBackgroundColor).not.toHaveBeenCalled();
   });
 });
 

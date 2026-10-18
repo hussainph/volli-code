@@ -1893,9 +1893,15 @@ const appStartup = app.whenReady().then(async () => {
         for (const window of BrowserWindow.getAllWindows()) {
           window.setBackgroundColor(paint.background);
         }
+        // Browser Tab planes composite above the renderer, so its theme cannot
+        // show through them; their blank and loading states repaint too (VC-302).
+        browserTabs.setThemeBackground(paint.background);
       },
     },
   );
+  // The stored theme until the renderer reports its first paint, so a tab
+  // opened at boot is not left on the native default.
+  browserTabs.setThemeBackground(currentFirstPaint().background);
   // Keep the host's former boot point. Nothing schedules before runtime recovery.
   runtimeAutomations.start(recoveredSessionAutomationPorts(readyRuntimeServices));
   const automationExecution =
