@@ -3439,6 +3439,45 @@ describe("SessionRuntime native adapter contract", () => {
     expect(first.adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
   });
 
+  it("releases a delivery's re-bind that finishes attaching after close instead of binding it", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    await first.runtime.close();
+    const attachStarted = new Gate();
+    const releaseAttach = new Gate();
+    first.adapter.attachStarted = () => attachStarted.resolve();
+    first.adapter.attachGate = releaseAttach.promise;
+    // Buffered during the attach: only an activated sink would record it.
+    first.adapter.attachObservation = {
+      kind: "turn",
+      state: "started",
+      turnId: "turn-after-close",
+      occurredAt: 150,
+    };
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "closed-delivery-",
+    });
+
+    const sending = recovered.runtime.command({
+      commandId: "closed-delivery",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("late-bind") },
+    });
+    await attachStarted.promise;
+    await recovered.runtime.close();
+    releaseAttach.resolve();
+
+    await expect(sending).rejects.toThrow("Session runtime is closed");
+    expect(first.adapter.attaches).toBe(2);
+    expect(first.adapter.dispatches).toBe(0);
+    expect(first.adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
+    const projection = await first.engine.getSession({ sessionId });
+    expect(projection?.turnActive).toBe(false);
+    expect(projection?.latestTurnId).not.toBe("turn-after-close");
+  });
+
   it("validates subscriptions, stops delivery after unsubscribe, and makes close idempotent", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
@@ -4050,9 +4089,12 @@ describe("SessionRuntime native adapter contract", () => {
     await readStarted;
     await runtime.close();
     releaseRead();
-    await pending;
+    // Close emptied the binding map, so the send re-binds after close: that
+    // late handle is released rather than dispatched to (VC-467).
+    await expect(pending).rejects.toThrow("Session runtime is closed");
     stop();
-    expect(adapter.releaseReasons).toContain("shutdown");
+    expect(adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
+    expect(adapter.dispatches).toBe(0);
 
     const emptyEvents: SessionEngine = {
       ...engine,

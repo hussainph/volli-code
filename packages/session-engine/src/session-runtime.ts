@@ -4505,6 +4505,11 @@ class DefaultSessionRuntime implements SessionRuntime {
       sink,
     };
     this.#bindings.set(attachmentId, record);
+    // The attach can outlive `close()`: shutdown's release has already run and
+    // will not come back for this handle. Hand it to that same release at once,
+    // before its sink activates, and refuse like every other closed path. The
+    // registration is synchronous with the release, so no caller observes it.
+    await this.#assertBindingOperationOpen();
     await sink.activate();
     return record;
   }
