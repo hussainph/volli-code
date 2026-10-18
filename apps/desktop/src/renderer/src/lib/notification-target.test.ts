@@ -25,6 +25,7 @@ const NO_ITEM = { interactionId: null, attentionId: null } as const;
 const QUIET = {
   projectId: "p1" as string | null,
   nav: "home" as "home" | "automations" | "configure",
+  settingsOpen: false,
   openTicketId: null as string | null,
   activeTicketTabId: null as string | null,
   homeActiveTab: "board",
@@ -134,6 +135,80 @@ describe("activeNotificationTarget", () => {
       interactionId: "i9",
       attentionId: null,
     });
+  });
+
+  // `openTicketId` survives leaving the ticket for one of Home's own Session
+  // tabs (VC-54), so it is not evidence the ticket is on screen. Reporting the
+  // remembered ticket's chat here suppressed its alerts and wrote its read
+  // receipt while the person was reading a different Session entirely.
+  it("names the Home Session tab in front, not the ticket remembered behind it", () => {
+    const target = activeNotificationTarget({
+      ...QUIET,
+      openTicketId: "t1",
+      activeTicketTabId: "chat:s1",
+      homeActiveTab: "chat:s9",
+      chatItem: { interactionId: "i9", attentionId: null },
+    });
+    expect(target).toEqual({
+      kind: "session",
+      projectId: "p1",
+      ticketId: null,
+      sessionId: "s9",
+      interactionId: "i9",
+      attentionId: null,
+    });
+    expect(target).not.toMatchObject({ sessionId: "s1" });
+  });
+
+  it("names the Home terminal tab in front, not the ticket remembered behind it", () => {
+    expect(
+      activeNotificationTarget({
+        ...QUIET,
+        openTicketId: "t1",
+        activeTicketTabId: "chat:s1",
+        homeActiveTab: "term-root",
+        terminalSessionId: "term-pane",
+      }),
+    ).toEqual({
+      kind: "session",
+      projectId: "p1",
+      ticketId: null,
+      sessionId: "term-pane",
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("does not name the remembered ticket when a Home file or browser tab is in front", () => {
+    expect(
+      activeNotificationTarget({
+        ...QUIET,
+        openTicketId: "t1",
+        activeTicketTabId: "diff:src/app.ts",
+        homeActiveTab: "file:src/app.ts",
+      }),
+    ).toBeNull();
+  });
+
+  it("shows nothing while Settings covers the workspace", () => {
+    // Settings hides Home (main-content.tsx); whatever is behind it is not
+    // being read, so nothing may be suppressed or marked read on its account.
+    const behind = [
+      { openTicketId: "t1", activeTicketTabId: "chat:s1" },
+      { openTicketId: "t1", activeTicketTabId: "diff:src/app.ts" },
+      { homeActiveTab: "chat:s9" },
+      { homeActiveTab: "term-root", terminalSessionId: "term-root" },
+    ];
+    for (const surface of behind) {
+      expect(
+        activeNotificationTarget({
+          ...QUIET,
+          ...surface,
+          settingsOpen: true,
+          chatItem: { interactionId: "i1", attentionId: null },
+        }),
+      ).toBeNull();
+    }
   });
 
   it("shows nothing suppressible on the board itself", () => {
