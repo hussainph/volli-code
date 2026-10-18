@@ -94,9 +94,9 @@ export function redactCredentialText(text: string, port: RedactionPort): string 
 /**
  * JSON-shaped tool results, including details and structuredContent, are scrubbed
  * before Pi publishes updates/results or records them in its sidecar. Exact text
- * only: not an encoding detector or an exfiltration boundary. Images are withheld
- * while this launch holds credential values: replacing bytes in base64 corrupts
- * images and text redaction cannot find a credential rendered as pixels.
+ * only: not an encoding detector or an exfiltration boundary. Image blocks pass
+ * through unchanged: replacing bytes in base64 corrupts images, and a credential
+ * rendered as pixels is outside exact-text redaction.
  */
 function scrub(value: unknown, port: RedactionPort): unknown {
   if (typeof value === "string") return redactCredentialText(value, port);
@@ -109,17 +109,7 @@ function scrub(value: unknown, port: RedactionPort): unknown {
   }
   if (Array.isArray(value)) return value.map((entry) => scrub(entry, port));
   if (value !== null && typeof value === "object") {
-    if ("type" in value && value.type === "image") {
-      let sensitive = true;
-      try {
-        sensitive = port.hasValues?.() ?? true;
-      } catch {
-        /* Fail closed. */
-      }
-      return sensitive
-        ? { type: "text", text: "[Image withheld while secure credentials are enabled.]" }
-        : value;
-    }
+    if ("type" in value && value.type === "image") return value;
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => [
         redactCredentialText(key, port),

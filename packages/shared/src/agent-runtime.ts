@@ -1265,7 +1265,7 @@ export interface SessionRuntimeSpec {
       signal: AbortSignal,
     ): Promise<"signed in" | "declined" | "still missing">;
     redact(text: string): string;
-    /** Whether images may carry a credential; absent means fail closed. */
+    /** Whether credential values are held; absent means shell spills are disabled. */
     hasValues?(): boolean;
   };
   /**

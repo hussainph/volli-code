@@ -266,10 +266,7 @@ describe("tool result credential boundary", () => {
     expect(updates).toEqual([final]);
     expect(JSON.stringify(final)).not.toContain(SECRET);
     expect(final.structuredContent).toEqual({ token: "[redacted]" });
-    expect(final.content[1]).toEqual({
-      type: "text",
-      text: "[Image withheld while secure credentials are enabled.]",
-    });
+    expect(final.content[1]).toBe(result.content[1]);
     expect(JSON.stringify(result)).toContain(SECRET); // Never mutate a tool's object.
   });
 
@@ -623,22 +620,35 @@ describe("dynamic credential environment", () => {
 });
 
 describe("credential output privacy before disk spill", () => {
-  it.each([false, true, "failed"] as const)(
-    "only withholds images once values exist (%s)",
+  it.each([false, true, "failed", "missing"] as const)(
+    "passes images through unchanged without redacting base64 data (%s)",
     async (active) => {
       const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+      const redact = vi.fn((text: string) => text.replaceAll(image.data, "[redacted]"));
       const port = {
         ...secretPort(),
-        hasValues: () => {
-          if (active === "failed") throw new Error("unavailable");
-          return active;
-        },
+        redact,
+        ...(active === "missing"
+          ? {}
+          : {
+              hasValues: () => {
+                if (active === "failed") throw new Error("unavailable");
+                return active;
+              },
+            }),
       };
+      const updates: AgentToolResult<unknown>[] = [];
       const result = await redactToolResults(
-        fixtureTool(async () => ({ content: [image], details: undefined })),
+        fixtureTool(async (_id, _params, _signal, update) => {
+          const rawResult = { content: [image], details: undefined };
+          update?.(rawResult);
+          return rawResult;
+        }),
         port,
-      ).execute("c", {}, signal);
-      expect(result.content[0]?.type).toBe(active === false ? "image" : "text");
+      ).execute("c", {}, signal, (update) => updates.push(update));
+      expect(result.content[0]).toBe(image);
+      expect(updates[0]?.content[0]).toBe(image);
+      expect(redact).not.toHaveBeenCalledWith(image.data);
     },
   );
   it("passes through ordinary environments and disables spill dynamically, failing closed", async () => {

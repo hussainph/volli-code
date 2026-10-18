@@ -481,8 +481,8 @@ read-back text, background-shell output (including the person's shell tail),
 and saved MCP/Code Mode output. Matching numeric and boolean primitive
 representations are scrubbed too, including structured data and details. Scrubbing precedes Pi activity, transcript and
 sidecar persistence. Shell output spilling to a plaintext temp log is disabled
-while the launch holds credential values. Images are withheld once values exist:
-text substitution cannot scrub a credential rendered as pixels.
+while the launch holds credential values. Images are not scrubbed: a credential
+rendered as pixels is outside exact-text redaction.
 
 **Redaction is best effort, not an exfiltration sandbox.** Encoding a value,
 splitting it across separate results, rendering it elsewhere, writing it to a
