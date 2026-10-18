@@ -2874,19 +2874,23 @@ describe("THEME_IPC descriptor table", () => {
 
     it("refuses an unresolved first-paint appearance, and a background that is not a color", () => {
       const { guard, invalidError } = THEME_IPC["volli:theme-first-paint-set"];
-      const card = { cardBackground: "#1c1310" };
+      const plane = { planeBackground: "#1c1310" };
 
-      expect(guard([{ appearance: "dark", background: "#141210", ...card }])).toBe(true);
-      expect(guard([{ appearance: "light", background: "#f4efe9", ...card }])).toBe(true);
+      expect(guard([{ appearance: "dark", background: "#141210", ...plane }])).toBe(true);
+      expect(guard([{ appearance: "light", background: "#f4efe9", ...plane }])).toBe(true);
       // `auto` is the one value main cannot act on at window construction.
-      expect(guard([{ appearance: "auto", background: "#141210", ...card }])).toBe(false);
-      expect(guard([{ appearance: "dark", background: "rebeccapurple", ...card }])).toBe(false);
-      expect(guard([{ appearance: "dark", ...card }])).toBe(false);
-      // The card color Browser Tab planes paint (VC-302) is required and a color.
-      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(false);
+      expect(guard([{ appearance: "auto", background: "#141210", ...plane }])).toBe(false);
+      expect(guard([{ appearance: "dark", background: "rebeccapurple", ...plane }])).toBe(false);
+      expect(guard([{ appearance: "dark", ...plane }])).toBe(false);
+      // The live plane color (VC-302) is the handler's to vet: absent, or a
+      // string that is not a color, still lets the hint through.
+      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(true);
       expect(
-        guard([{ appearance: "dark", background: "#141210", cardBackground: "transparent" }]),
-      ).toBe(false);
+        guard([{ appearance: "dark", background: "#141210", planeBackground: "transparent" }]),
+      ).toBe(true);
+      expect(guard([{ appearance: "dark", background: "#141210", planeBackground: 7 }])).toBe(
+        false,
+      );
       expect(guard([])).toBe(false);
       expect(invalidError).toBe("Invalid first-paint hint");
     });

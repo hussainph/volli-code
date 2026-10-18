@@ -116,7 +116,8 @@ export interface ThemeGateway {
    * Records what was actually painted so the NEXT launch can build its window
    * with the right edge color and the right mode class before anything runs. A
    * cache, never an authority — `{canvas, appearance}` stays the pair. The
-   * card color is the live half: Browser Tab planes paint it (VC-302).
+   * plane color (`--background`) is the live half: Browser Tab planes paint
+   * it (VC-302).
    */
   setFirstPaint(hint: FirstPaintReport): Promise<Result>;
 }
@@ -451,9 +452,9 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
       const hint: FirstPaintReport = {
         appearance: resolved,
         background: windowBackground(canvas, resolved),
-        // The card rung, not the window edge: what a Browser Tab's plane sits
-        // in and has to match while the app owns it (VC-302).
-        cardBackground: deriveCanvasTokens(canvas, resolved)["--background"],
+        // The `--background` plane rung, not the window edge: what a Browser
+        // Tab's plane is drawn in and has to match while the app owns it (VC-302).
+        planeBackground: deriveCanvasTokens(canvas, resolved)["--background"],
       };
       // Started inside a promise so a SYNCHRONOUS throw lands in the same
       // `.catch` as a rejection. `window.api` is not guaranteed to exist in

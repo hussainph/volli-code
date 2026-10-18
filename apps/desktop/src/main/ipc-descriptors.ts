@@ -1566,9 +1566,10 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       const [input] = args;
       if (!isRecord(input)) return false;
       if (input["appearance"] !== "light" && input["appearance"] !== "dark") return false;
-      if (typeof input["cardBackground"] !== "string" || !isHexColor(input["cardBackground"])) {
-        return false;
-      }
+      // The live plane color is the handler's to check, never this guard's: a
+      // bad one is dropped there, and must not refuse the hint it rides with.
+      const plane = input["planeBackground"];
+      if (plane !== undefined && typeof plane !== "string") return false;
       return typeof input["background"] === "string" && isHexColor(input["background"]);
     },
     invalidError: "Invalid first-paint hint",

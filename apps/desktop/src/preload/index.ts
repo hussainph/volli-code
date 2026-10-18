@@ -1644,8 +1644,8 @@ const api = {
      * Records the mode and background this paint resolved to, so the NEXT
      * launch constructs its window with both already known. A hint, not an
      * authority: `{canvas, appearance}` stays the pair everything is derived
-     * from, and this row is overwritten on every paint. The card color rides
-     * along for Browser Tab planes and is not stored.
+     * from, and this row is overwritten on every paint. The plane color
+     * (`--background`) rides along for Browser Tab planes and is not stored.
      */
     setFirstPaint: (hint: FirstPaintReport): Promise<Result> =>
       invoke("volli:theme-first-paint-set", hint),

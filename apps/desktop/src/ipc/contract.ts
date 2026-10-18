@@ -1523,13 +1523,14 @@ export type { FirstPaintHint };
  * main stores for the next launch, plus the one color main needs live and
  * cannot derive itself.
  *
- * `cardBackground` is the painted `--background`, the card rung that panels such
- * as a Browser Tab's plane sit on (VC-302). It differs from the hint's
- * `background`, which is the canvas's base fill at the window edge. Main hands
- * it to Browser Tab views and never stores it.
+ * `planeBackground` is the painted `--background` token (not `--card`): the rung
+ * the workbench inset and a Browser pane's plane are drawn in (VC-302). It
+ * differs from the hint's `background`, which is the canvas's base fill at the
+ * window edge. Main hands it to Browser Tab views live and never stores it, so
+ * it is checked on its own and a bad value never costs the stored hint.
  */
 export interface FirstPaintReport extends FirstPaintHint {
-  cardBackground: string;
+  planeBackground?: string;
 }
 
 export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;

@@ -676,7 +676,7 @@ export const CHANNEL_PLACEMENT: { readonly [C in PlacedChannel]: ChannelPlacemen
     placement: "client-local",
     owner: "stays",
     reason:
-      "The first-paint hint main reads synchronously before the window exists; meaningless off this device.",
+      "The first-paint hint main reads synchronously before the window exists, plus the live plane color this device's Browser Tab views paint; meaningless off this device.",
   },
   "volli:theme-terminal-overlay-write": {
     placement: "client-local",

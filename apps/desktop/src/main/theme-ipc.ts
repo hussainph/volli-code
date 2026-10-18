@@ -27,6 +27,7 @@
  */
 
 import type Database from "better-sqlite3";
+import { isHexColor } from "@volli/shared";
 import { THEME_CHANNELS, THEME_IPC } from "./ipc-descriptors";
 import type { GhosttyAppearancePayload, ResolvedAppearance } from "@volli/shared";
 import type {
@@ -34,6 +35,7 @@ import type {
   AppearanceSetProjectInput,
   CanvasSetGlobalInput,
   CanvasSetProjectInput,
+  FirstPaintHint,
   FirstPaintReport,
   ProjectCanvasWriteResult,
   Result,
@@ -102,9 +104,39 @@ export interface ThemeIpcHooks {
    * resizes and before first paint, so a stale one flashes the previous palette
    * at exactly the moments the user notices. Taking the color the renderer
    * actually painted beats re-deriving one in main and hoping the two agree.
-   * The same report carries the card color Browser Tab planes match (VC-302).
    */
-  onFirstPaintChanged?(report: FirstPaintReport): void;
+  onFirstPaintChanged?(hint: FirstPaintHint): void;
+  /**
+   * The renderer painted its `--background` plane rung, which Browser Tab views
+   * paint while the app owns them (VC-302). Live only: called before, and
+   * regardless of, the hint's persistent write.
+   */
+  onPlaneBackgroundChanged?(color: string): void;
+}
+
+/** The desktop surfaces {@link desktopThemeHooks} repaints, as ports. */
+export interface DesktopThemeSurfaces {
+  /** Every app window open right now. */
+  windows: () => Iterable<{ setBackgroundColor(color: string): void }>;
+  /** The Browser Tab host, whose app-owned planes follow the theme (VC-302). */
+  browserTabs: { setThemeBackground(color: string): void };
+}
+
+/**
+ * The desktop's {@link ThemeIpcHooks}: each window's edge takes the hint's
+ * `background` (the canvas base fill), and every Browser Tab plane takes the
+ * `--background` plane rung. The two are different colors, and a plane painted
+ * the edge color shows as a slab of base fill inside the pane, so this pairing
+ * is the one thing worth pinning here (VC-302). No try/catch: there is nothing
+ * here to fail.
+ */
+export function desktopThemeHooks(surfaces: DesktopThemeSurfaces): ThemeIpcHooks {
+  return {
+    onFirstPaintChanged: (hint) => {
+      for (const window of surfaces.windows()) window.setBackgroundColor(hint.background);
+    },
+    onPlaneBackgroundChanged: (color) => surfaces.browserTabs.setThemeBackground(color),
+  };
 }
 
 /** A project's ticket prefix (the per-project overlay's file name), or a typed error. */
@@ -208,10 +240,15 @@ export function registerThemeIpcHandlers(
     },
 
     "volli:theme-first-paint-set": (input: FirstPaintReport): Result => {
-      setFirstPaintHint(db, input, deps.now());
+      // First and on its own: the plane color is what is on screen now, so a
+      // failed write must not leave open Browser Tabs on the old one.
+      const plane = input.planeBackground;
+      if (plane !== undefined && isHexColor(plane)) hooks.onPlaneBackgroundChanged?.(plane);
+      const hint: FirstPaintHint = { appearance: input.appearance, background: input.background };
+      setFirstPaintHint(db, hint, deps.now());
       // After the write, so a window never repaints to a background that failed
       // to persist.
-      hooks.onFirstPaintChanged?.(input);
+      hooks.onFirstPaintChanged?.(hint);
       return { ok: true };
     },
 

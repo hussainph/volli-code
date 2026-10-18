@@ -988,22 +988,22 @@ describe("the first-paint hint", () => {
     expect(gateway.setFirstPaint).toHaveBeenCalledWith({
       appearance: "light",
       background: windowBackground(TEAL, "light"),
-      cardBackground: deriveCanvasTokens(TEAL, "light")["--background"],
+      planeBackground: deriveCanvasTokens(TEAL, "light")["--background"],
     });
   });
 
-  // Browser Tab planes sit in the card, and the card is a different rung from
-  // the window edge: painting the edge color there leaves a slab of base fill
-  // inside the pane (VC-302).
-  it("reports the card color apart from the window edge", async () => {
+  // Browser Tab planes are drawn in the `--background` rung, a different color
+  // from the window edge: painting the edge color there leaves a slab of base
+  // fill inside the pane (VC-302).
+  it("reports the plane color apart from the window edge", async () => {
     const { store, gateway } = freshStore();
 
     store.getState().hydrateGlobal(appState(TEAL, "dark"));
     await settle();
 
     const [report] = vi.mocked(gateway.setFirstPaint).mock.calls.at(-1)!;
-    expect(report.cardBackground).toBe(deriveCanvasTokens(TEAL, "dark")["--background"]);
-    expect(report.cardBackground).not.toBe(report.background);
+    expect(report.planeBackground).toBe(deriveCanvasTokens(TEAL, "dark")["--background"]);
+    expect(report.planeBackground).not.toBe(report.background);
   });
 
   it("surfaces a failed hint write rather than letting it stop silently", async () => {
