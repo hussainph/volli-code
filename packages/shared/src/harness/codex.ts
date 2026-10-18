@@ -122,4 +122,27 @@ export const codexAdapter: HarnessAdapter = {
   // Empty until a marker is observed on a real codex session — a guessed name is
   // a variable deleted from the user's environment for no reason.
   sessionMarkers: [],
+  // Read off `codex --help`. Its version flag is `-V`; `-v` is not a codex flag.
+  // `exec`, `review`, `resume`, `fork` and the servers run sessions, so they are
+  // launches and stay off this list.
+  nonSessionArgv: {
+    flags: ["--version", "-V", "--help", "-h"],
+    subcommands: [
+      "login",
+      "logout",
+      "mcp",
+      "plugin",
+      "completion",
+      "update",
+      "doctor",
+      "sandbox",
+      "debug",
+      "apply",
+      "archive",
+      "delete",
+      "unarchive",
+      "features",
+      "help",
+    ],
+  },
 };

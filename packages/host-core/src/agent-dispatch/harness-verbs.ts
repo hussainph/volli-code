@@ -46,7 +46,7 @@ import {
   terminalSessionRecord,
 } from "../session-control";
 import { failure } from "./context";
-import type { AgentCommandContext } from "./context";
+import type { AgentCommandContext, PendingHarnessLaunch } from "./context";
 import { dryRunResponse } from "./preview";
 
 /**
@@ -221,6 +221,24 @@ function rememberFiredAt(
   }
 }
 
+/**
+ * Holds `launch` as the one this session is waiting on, evicting the stalest
+ * once the map is full — the same bound, and the same reason, as
+ * {@link rememberFiredAt}.
+ */
+function rememberPendingLaunch(
+  pending: Map<string, PendingHarnessLaunch>,
+  sessionId: string,
+  launch: PendingHarnessLaunch,
+): void {
+  pending.delete(sessionId);
+  pending.set(sessionId, launch);
+  if (pending.size > HARNESS_WATERMARK_LIMIT) {
+    const stalest = pending.keys().next();
+    if (!stalest.done) pending.delete(stalest.value);
+  }
+}
+
 /** `volli session link` — the harness's own resume id for this Volli session. */
 export async function sessionLinkVerb(
   context: AgentCommandContext,
@@ -276,7 +294,7 @@ export async function sessionHarnessVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, sessionEngine, terminalUpdateLocks, now } = context;
+  const { options, sessionEngine, terminalUpdateLocks, pendingLaunches, now } = context;
   // The second involuntary channel: a harness's own PATH-shim wrapper,
   // one step before it execs, saying what is about to run and — when that
   // harness takes its session id on argv — asking for one. Addressed by
@@ -299,10 +317,12 @@ export async function sessionHarnessVerb(
   // id is only worth anything once it is written down — `harness_session_id`
   // is what every future resume of this session reads — so a shell that
   // minted its own would still have to call in to report it. One call
-  // does both. It is minted per LAUNCH, not per session: `VOLLI_SESSION`
-  // is stamped once per PTY, and a harness that treats its session id as
-  // single-use per workspace (cursor mkdirs a directory named after it)
-  // fails outright on the second launch in one terminal.
+  // does both — and the host holds the id as pending until the launch's own
+  // hook names it, which is when it is written. It is minted per LAUNCH,
+  // not per session: `VOLLI_SESSION` is stamped once per PTY, and a harness
+  // that treats its session id as single-use per workspace (cursor mkdirs a
+  // directory named after it) fails outright on the second launch in one
+  // terminal.
   const sessionId = request.ctx.env.session;
   if (!sessionId) {
     return failure("CONTEXT_REQUIRED", "session harness requires VOLLI_SESSION context.");
@@ -353,13 +373,39 @@ export async function sessionHarnessVerb(
   // `delivered` channel, and could never be judged silent. `changed`
   // stays ON the notice — the renderer still needs it to decide whether
   // to repoint the durable record's labels — but it stops being the gate.
+  //
+  // Only when the caller asked for an id is one minted. The wrapper asks
+  // exactly when the adapter it was rendered from takes an id on argv, and
+  // that is the only place the answer is known — a registered manifest's
+  // adapter never reaches main's own table, so main cannot re-derive it
+  // here. For a `reported` or `none` harness a minted id would overwrite the
+  // resume seed the harness's own events are about to write with one it
+  // never heard of.
+  const mintRequested = request.args["mint"] === true;
+  // Whatever this launch is, it supersedes one still waiting to prove
+  // itself: a straggling hook from that one may not promote it now.
+  pendingLaunches.delete(session.id);
   let changed = false;
   const nativeUpdate = await updateTerminalNative(
     terminalUpdateLocks,
     sessionEngine,
     session,
     (detail) => {
+      // A MINTED launch moves nothing yet (VC-807). The wrapper mints for
+      // every invocation it cannot tell apart from a launch, and one that
+      // never starts a session (`claude --version` before the wrapper knew
+      // better, a subcommand its adapter does not list) used to overwrite
+      // the seed of the conversation the user really had, and repoint the
+      // running harness at it. The id is held as pending below and lands,
+      // harness and seed together, when the launch's own hook names it.
+      if (mintRequested) return detail;
       changed = harnessId !== (detail.activeHarnessId ?? detail.harnessId);
+      // A DIFFERENT harness with no minted id of its own (codex, opencode, a
+      // claude driving its own resume) takes over the record, and the seed
+      // it inherits is the previous harness's: `codex resume <a claude
+      // uuid>` is the wrong binary handed the wrong id. Cleared, so resume
+      // falls back to the new harness's own `latest` until it reports one.
+      if (changed) return { ...detail, activeHarnessId: harnessId, harnessSessionId: null };
       return detail.activeHarnessId === harnessId
         ? detail
         : { ...detail, activeHarnessId: harnessId };
@@ -368,6 +414,14 @@ export async function sessionHarnessVerb(
   );
   if (nativeUpdate === null)
     return failure("SESSION_ENDED", `Session ${shortSessionId(session.id)} has ended.`);
+  // `randomUUID` directly, not the injectable `newId` seam: the FORMAT is
+  // the contract, not an implementation detail a test may vary. Cursor
+  // validates strict v4 (`4` in the third group, `[89ab]` in the fourth)
+  // and refuses a v7. Minted per launch, still, and never reused.
+  const minted = mintRequested ? randomUUID() : null;
+  if (minted !== null) {
+    rememberPendingLaunch(pendingLaunches, session.id, { harnessId, harnessSessionId: minted });
+  }
   options.onSessionHarness?.({
     sessionId: session.id,
     projectId: session.projectId,
@@ -376,32 +430,6 @@ export async function sessionHarnessVerb(
     changed,
     at: now(),
   });
-  // Only when the caller asked. The wrapper asks exactly when the adapter
-  // it was rendered from takes an id on argv, and that is the only place
-  // the answer is known — a registered manifest's adapter never reaches
-  // main's own table, so main cannot re-derive it here. For a `reported`
-  // or `none` harness a minted id would overwrite the resume seed the
-  // harness's own events are about to write with one it never heard of.
-  //
-  // `randomUUID` directly, not the injectable `newId` seam: the FORMAT is
-  // the contract, not an implementation detail a test may vary. Cursor
-  // validates strict v4 (`4` in the third group, `[89ab]` in the fourth)
-  // and refuses a v7.
-  const minted = request.args["mint"] === true ? randomUUID() : null;
-  if (minted !== null) {
-    // Overwrites, always. The seed belongs to the launch that is starting
-    // now; the previous one describes an agent this terminal has quit.
-    const mintedUpdate = await updateTerminalNative(
-      terminalUpdateLocks,
-      sessionEngine,
-      nativeUpdate,
-      (detail) => ({ ...detail, harnessSessionId: minted }),
-      now(),
-    );
-    if (mintedUpdate === null) {
-      return failure("SESSION_ENDED", `Session ${shortSessionId(session.id)} has ended.`);
-    }
-  }
   return {
     v: 1,
     ok: true,
@@ -419,7 +447,15 @@ export async function hookVerb(
   context: AgentCommandContext,
   request: AgentRequest,
 ): Promise<AgentResponse> {
-  const { options, projects, sessionEngine, terminalUpdateLocks, watermarks, now } = context;
+  const {
+    options,
+    projects,
+    sessionEngine,
+    terminalUpdateLocks,
+    watermarks,
+    pendingLaunches,
+    now,
+  } = context;
   // The involuntary channel (harness-events): a hook the wrapper
   // configured, not something the agent chose to run. `VOLLI_SESSION` is
   // both the addressing and the harness's own session id, so an event
@@ -481,12 +517,57 @@ export async function hookVerb(
   const firedAt = harnessEventOrder(request.args["firedAt"]);
   const superseded = supersededHarnessEvent(watermarks.get(session.id) ?? null, firedAt);
   if (firedAt !== null && !superseded) rememberFiredAt(watermarks, session.id, firedAt);
-  // A reported id is what replaces `session link` on the critical path.
-  // Idempotent overwrite, exactly as `session.link` is — a harness that
-  // rotates its id mid-session leaves the newest resume seed behind. Which
-  // is precisely why a superseded one may not be written: newest by
-  // arrival is not newest, and this row seeds every future resume.
-  if (harnessSessionId !== null && !superseded) {
+  // THE PROOF A MINTED LAUNCH WAS WAITING FOR (VC-807). The wrapper's mint
+  // is held pending in `sessionHarnessVerb`; the launch is real once the
+  // harness it was minted for fires its startup event, or a hook naming the
+  // id it was handed. Then, and only then, the record moves — the running
+  // harness and its seed together, so neither is ever paired with the
+  // other's. The id the event reports wins over the one minted for it: it is
+  // what the harness says it is running under.
+  const pending = pendingLaunches.get(session.id);
+  const proved =
+    pending !== undefined &&
+    !superseded &&
+    firing.harnessId === pending.harnessId &&
+    (harnessSessionId === pending.harnessSessionId || event === "session.started");
+  let current = session;
+  if (proved) {
+    const launch = pending;
+    pendingLaunches.delete(session.id);
+    let moved = false;
+    const promoted = await updateTerminalNative(
+      terminalUpdateLocks,
+      sessionEngine,
+      session,
+      (detail) => {
+        moved = launch.harnessId !== (detail.activeHarnessId ?? detail.harnessId);
+        return {
+          ...detail,
+          activeHarnessId: launch.harnessId,
+          harnessSessionId: harnessSessionId ?? launch.harnessSessionId,
+        };
+      },
+      now(),
+    );
+    if (promoted !== null) current = promoted;
+    // The mint's own notice said `changed: false`, because nothing durable
+    // had moved. Now it has, and the renderer's caches repoint on this.
+    if (promoted !== null && moved) {
+      options.onSessionHarness?.({
+        sessionId: session.id,
+        projectId: session.projectId,
+        ticketId: session.ticketId,
+        harnessId: launch.harnessId,
+        changed: true,
+        at: now(),
+      });
+    }
+  } else if (harnessSessionId !== null && !superseded) {
+    // A reported id is what replaces `session link` on the critical path.
+    // Idempotent overwrite, exactly as `session.link` is — a harness that
+    // rotates its id mid-session leaves the newest resume seed behind. Which
+    // is precisely why a superseded one may not be written: newest by
+    // arrival is not newest, and this row seeds every future resume.
     await updateTerminalNative(
       terminalUpdateLocks,
       sessionEngine,
@@ -546,7 +627,7 @@ export async function hookVerb(
     event === "input.needed" &&
     status === "verified" &&
     declaresInputNeeded(firing.harnessId) &&
-    firing.harnessId === effectiveHarnessId(session) &&
+    firing.harnessId === effectiveHarnessId(current) &&
     !superseded
   ) {
     const ticket = session.ticketId ? getTicket(options.db, session.ticketId) : undefined;
@@ -562,7 +643,7 @@ export async function hookVerb(
     options.notify?.({
       producer: "harness-input-needed",
       title: `${subject} needs you`,
-      body: `${harnessLabel(effectiveHarnessId(session))} is waiting on a human`,
+      body: `${harnessLabel(effectiveHarnessId(current))} is waiting on a human`,
       target: {
         kind: "session",
         projectId: session.projectId,

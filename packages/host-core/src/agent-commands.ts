@@ -31,7 +31,11 @@ import type {
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
 import { isHostHandlerMap } from "./handlers/handler-map";
-import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
+import type {
+  AgentCommandContext,
+  EnvSessionIdentity,
+  PendingHarnessLaunch,
+} from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import type { DoorActor } from "./agent-dispatch/resolution";
@@ -85,6 +89,14 @@ export function createAgentCommandService(
   const worktreeExists = options.worktreeExists ?? existsSync;
   const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
+  /**
+   * The launch each Session's wrapper minted an id for that has not yet proved
+   * itself (VC-807). In memory, like the watermarks: a pending launch is worth
+   * something for the second or so between a wrapper's mint and the harness's
+   * own startup hook, and a restart in between costs that one launch its
+   * promotion — its hooks still write the seed they report.
+   */
+  const pendingLaunches = new Map<string, PendingHarnessLaunch>();
   /**
    * How this door decides whether `VOLLI_SESSION` is a claim or an
    * authentication (VC-163).
@@ -244,6 +256,7 @@ export function createAgentCommandService(
         sessionEngine,
         watermarks,
         terminalUpdateLocks,
+        pendingLaunches,
         projects,
         loadProjections,
         loadSessions,

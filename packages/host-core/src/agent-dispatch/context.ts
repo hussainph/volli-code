@@ -29,6 +29,7 @@ import type {
   AgentResponse,
   AuthorityPolicy,
   DoctorFacts,
+  HarnessId,
   ModelAccessSnapshot,
   Project,
   PromptResource,
@@ -331,6 +332,16 @@ export interface EnvSessionIdentity {
 }
 
 /**
+ * A launch a wrapper minted a harness session id for, held until the harness
+ * proves the launch happened (VC-807). Until then it is a promise, not a fact:
+ * `claude --version` mints too, and never starts a session.
+ */
+export interface PendingHarnessLaunch {
+  readonly harnessId: HarnessId;
+  readonly harnessSessionId: string;
+}
+
+/**
  * The service state and request-scoped snapshot one verb handler runs against.
  *
  * `options` is the composition root verbatim, because most of what a handler
@@ -370,6 +381,12 @@ export interface AgentCommandContext {
    * Session are exactly what it exists to serialize.
    */
   readonly terminalUpdateLocks: Map<string, Promise<void>>;
+  /**
+   * The launch each Session's wrapper last minted an id for and that has not
+   * yet proved itself — see `sessionHarnessVerb`. Service-lived: the mint and
+   * the startup hook that confirms it arrive on separate requests.
+   */
+  readonly pendingLaunches: Map<string, PendingHarnessLaunch>;
   /** Every registered project, listed once per request. */
   readonly projects: readonly Project[];
   /**
