@@ -195,7 +195,6 @@ function createAgentCommandService(
         detachedWork,
         notify: options.notify,
         onMutation: options.onMutation,
-        git: options.git,
         gitAsync: options.gitAsync,
         now: options.now,
       }),
@@ -4911,7 +4910,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedReadOnlyGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "status") return " M src/a.ts\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
@@ -4923,7 +4922,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       // The seeded worktreePath ("/wt/VC-1") is fictional; stub the disk-existence
       // seam (C3) so this scenario isn't about that check.
@@ -4977,13 +4975,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
     });
     // A real on-disk worktree stamped through a SYMLINKED prefix, queried from
@@ -5022,13 +5019,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5056,13 +5052,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
     });
     // A ticket that never entered Doing has no worktree.
@@ -5112,7 +5107,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedReadOnlyGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
       if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
@@ -5124,7 +5119,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5184,7 +5178,7 @@ describe("agent command service", () => {
     );
     const numstat =
       Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
-    const { git, gitAsync } = scriptedReadOnlyGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
       return "";
@@ -5194,7 +5188,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5225,13 +5218,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5272,7 +5264,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     // No worktreeExists stub here — this exercises the REAL default (existsSync)
     // against a directory that genuinely never existed by the time it's checked.
     const service = createAgentCommandService({
@@ -5280,7 +5272,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
     });
     const scratchBase = mkdtempSync(join(tmpdir(), "volli-missing-"));
@@ -5314,13 +5305,12 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync } = scriptedGit(() => "");
+    const { gitAsync } = scriptedGit(() => "");
     const service = createAgentCommandService({
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5369,7 +5359,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync, calls } = scriptedGit((args, cwd) => {
+    const { gitAsync, calls } = scriptedGit((args, cwd) => {
       if (args[0] === "branch" && args[1] === "--show-current") return `${checkedOutBranch}\n`;
       return handler(args, cwd);
     });
@@ -5378,7 +5368,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5449,7 +5438,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { git, gitAsync, calls } = scriptedGit((args) => {
+    const { gitAsync, calls } = scriptedGit((args) => {
       if (args[0] === "status") return "";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t0\n";
@@ -5461,7 +5450,6 @@ describe("agent command service", () => {
       appVersion: "1.0.0",
       now: () => 100,
       newId: () => "ticket-one",
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5782,7 +5770,7 @@ describe("agent command service", () => {
       );
       void paths;
     }
-    const { git, gitAsync } = scriptedReadOnlyGit((args, cwd) => {
+    const { gitAsync } = scriptedReadOnlyGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5796,7 +5784,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5862,7 +5849,7 @@ describe("agent command service", () => {
         }),
       );
     }
-    const { git, gitAsync } = scriptedReadOnlyGit((args, cwd) => {
+    const { gitAsync } = scriptedReadOnlyGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5887,7 +5874,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -5950,7 +5936,7 @@ describe("agent command service", () => {
         baseBranch: "main",
       }),
     );
-    const { git, gitAsync } = scriptedReadOnlyGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) return rawModified(["package.json"]);
@@ -5962,7 +5948,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -6020,7 +6005,7 @@ describe("agent command service", () => {
         baseBranch: "main",
       }),
     );
-    const { git, gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedGit((args) => {
       if (args[0] === "diff") throw new Error("fatal: bad revision");
       throw new Error("no origin ref");
     });
@@ -6028,7 +6013,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git,
       gitAsync,
       worktreeExists: () => true,
     });
@@ -6047,6 +6031,172 @@ describe("agent command service", () => {
     // whose diff broke is named, because a radar that silently drops a worktree
     // reports "no collisions" for a collision it never looked at.
     expect(data.skipped.map((entry) => entry.ticket)).toEqual(["VC-2"]);
+  });
+
+  /**
+   * A project with `done` Done tickets and `active` not-Done tickets, every one
+   * of them holding a retained worktree whose working tree is dirty on the same
+   * file. Ticket numbers 1..done are Done; the rest are active.
+   */
+  const doneAndActiveScenario = (done: number, active: number) => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    const statuses = ["backlog", "todo", "doing", "needs_review"] as const;
+    for (let number = 1; number <= done + active; number += 1) {
+      insertTicket(
+        ctx.db,
+        testTicket("project-one", {
+          id: `ticket-${number}`,
+          ticketNumber: number,
+          status: number <= done ? "done" : statuses[number % statuses.length]!,
+          order: number,
+          worktreePath: `/wt/VC-${number}`,
+          branch: `volli/VC-${number}-work`,
+          baseBranch: "main",
+        }),
+      );
+    }
+    return scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+      if (args[0] === "merge-base") return "base-sha\n";
+      // Every worktree, Done or not, has the same uncommitted edit (the diff
+      // against the base includes the working tree) and the same new file.
+      if (args[0] === "diff") return rawModified(["src/shared.ts"]);
+      if (args[0] === "status") return "? src/new.ts\u0000";
+      return "";
+    });
+  };
+
+  it("scans only the worktrees of tickets that are not Done (VC-802)", async () => {
+    const scripted = doneAndActiveScenario(200, 30);
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      git: scripted.git,
+      gitAsync: scripted.gitAsync,
+      worktreeExists: () => true,
+    });
+
+    const res = await service.execute({
+      v: 1,
+      cmd: "conflicts",
+      args: {},
+      ctx: { cwd: "/repo/volli", env: {} },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const data = res.data as {
+      scanned: number;
+      worktrees: { ticket: string }[];
+      overlaps: { path: string; tickets: string[] }[];
+      skipped: { ticket: string }[];
+    };
+    const activeIds = Array.from({ length: 30 }, (_, index) => `VC-${201 + index}`);
+    // Done is out of scope, not skipped: it is in neither list.
+    expect(data.scanned).toBe(30);
+    expect(data.skipped).toEqual([]);
+    expect(data.worktrees.map(({ ticket }) => ticket).toSorted()).toEqual(activeIds.toSorted());
+    // A Done ticket's dirty worktree never reaches the matrix.
+    expect(data.overlaps.map(({ path }) => path)).toEqual(["src/new.ts", "src/shared.ts"]);
+    for (const overlap of data.overlaps) {
+      expect(overlap.tickets.toSorted()).toEqual(activeIds.toSorted());
+    }
+    // Git ran only in the 30 active worktrees, four reads each.
+    const touchedWorktrees = new Set(scripted.calls.map(({ cwd }) => cwd));
+    expect(touchedWorktrees.size).toBe(30);
+    for (let number = 1; number <= 200; number += 1) {
+      expect(touchedWorktrees.has(`/wt/VC-${number}`)).toBe(false);
+    }
+    expect(scripted.calls).toHaveLength(30 * 4);
+  });
+
+  it("answers within the CLI bound and names worktrees the deadline cut off (VC-802)", async () => {
+    ctx = openTestDb();
+    insertProject(
+      ctx.db,
+      testProject({
+        id: "project-one",
+        name: "Volli Code",
+        path: "/repo/volli",
+        ticketPrefix: "VC",
+      }),
+    );
+    for (let number = 1; number <= 12; number += 1) {
+      insertTicket(
+        ctx.db,
+        testTicket("project-one", {
+          id: `ticket-${number}`,
+          ticketNumber: number,
+          status: "doing",
+          order: number,
+          worktreePath: `/wt/VC-${number}`,
+          branch: `volli/VC-${number}-work`,
+          baseBranch: "main",
+        }),
+      );
+    }
+    // VC-1 and VC-2 answer at once; every other worktree's git never returns,
+    // the way a read wedged on a contended index lock does.
+    const scripted = scriptedGit((args) => {
+      if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
+      if (args[0] === "merge-base") return "base-sha\n";
+      return "";
+    });
+    const gitAsync: typeof scripted.gitAsync = (args, cwd) =>
+      cwd === "/wt/VC-1" || cwd === "/wt/VC-2"
+        ? scripted.gitAsync(args, cwd)
+        : new Promise<string>(() => {});
+    const service = createAgentCommandService({
+      db: ctx.db,
+      appVersion: "1.0.0",
+      now: () => 100,
+      git: scripted.git,
+      gitAsync,
+      worktreeExists: () => true,
+    });
+
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const pending = service
+        .execute({ v: 1, cmd: "conflicts", args: {}, ctx: { cwd: "/repo/volli", env: {} } })
+        .finally(() => {
+          settled = true;
+        });
+      // Strictly inside the CLI's default 10 s wait for an answer.
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(settled).toBe(true);
+      const res = await pending;
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      const data = res.data as {
+        scanned: number;
+        worktrees: { ticket: string }[];
+        skipped: { ticket: string; reason: string }[];
+      };
+      expect(data.worktrees.map(({ ticket }) => ticket)).toEqual(["VC-1", "VC-2"]);
+      expect(data.scanned).toBe(2);
+      // Nothing is dropped: every worktree the deadline cut off — in flight or
+      // never started — is named, in board order.
+      expect(data.skipped.map(({ ticket }) => ticket)).toEqual(
+        Array.from({ length: 10 }, (_, index) => `VC-${index + 3}`),
+      );
+      for (const { reason } of data.skipped) {
+        expect(reason).toMatch(/not scanned before the deadline/i);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("exposes worktree identity through ticket.show fields and ticket.brief prose", async () => {
@@ -7308,8 +7458,8 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       ctx.db,
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: true }),
     );
-    const { git } = scriptedGit(() => "");
-    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", git });
+    const { gitAsync } = scriptedGit(() => "");
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", gitAsync });
 
     const res = await service.execute({
       v: 1,
@@ -7336,8 +7486,8 @@ describe("worktree scope, told honestly to the agent (VC-98)", () => {
       ctx.db,
       testTicket("project-one", { id: "ticket-one", ticketNumber: 1, usesWorktree: false }),
     );
-    const { git } = scriptedGit(() => "");
-    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", git });
+    const { gitAsync } = scriptedGit(() => "");
+    const service = createAgentCommandService({ db: ctx.db, appVersion: "1.0.0", gitAsync });
 
     const res = await service.execute({
       v: 1,

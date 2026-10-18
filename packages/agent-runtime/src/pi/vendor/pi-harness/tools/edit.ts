@@ -1,13 +1,11 @@
 import { type Static, Type } from "typebox";
 import type { AgentHarnessTool, FileError } from "../types";
 import {
-  applyEditsToNormalizedContent,
-  detectLineEnding,
+  applyEditsToContent,
   type Edit,
   generateDiffString,
   generateUnifiedPatch,
   normalizeToLF,
-  restoreLineEndings,
   stripBom,
 } from "./edit-diff";
 import { withFileMutationQueue } from "./file-mutation-queue";
@@ -88,6 +86,21 @@ function editAccessError(path: string, error: FileError): Error {
   return new Error(`Could not edit file: ${path}. Error code: ${error.code}.`, { cause: error });
 }
 
+/**
+ * Strict UTF-8: a file that does not decode is refused rather than having its
+ * invalid bytes rewritten as U+FFFD. The BOM stays in the text for `stripBom`.
+ */
+function decodeUtf8(path: string, bytes: Uint8Array): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(
+      `Could not edit file: ${path}. The file is not valid UTF-8, so it was left unchanged.`,
+      { cause: error },
+    );
+  }
+}
+
 export function createEditTool<
   TContext extends ExecutionToolContext = ExecutionToolContext,
 >(): AgentHarnessTool<TContext, typeof editSchema, EditToolDetails | undefined> {
@@ -112,33 +125,32 @@ export function createEditTool<
             throw new Error(`Could not edit file: ${path}. Path is not a file.`);
           }
 
-          const readResult = await env.readTextFile(absolutePath, context);
+          const readResult = await env.readBinaryFile(absolutePath, context);
           if (!readResult.ok) throw editAccessError(path, readResult.error);
           if (context.abortSignal?.aborted) throw new Error("Operation aborted");
 
-          const { bom, text: content } = stripBom(readResult.value);
-          const originalEnding = detectLineEnding(content);
-          const normalizedContent = normalizeToLF(content);
-          const { baseContent, newContent } = applyEditsToNormalizedContent(
-            normalizedContent,
-            edits,
-            path,
-          );
+          const originalText = decodeUtf8(path, readResult.value);
+          const { bom, text: content } = stripBom(originalText);
+          // Matching runs on an LF view; every byte outside the edited lines is
+          // written back exactly as it was read.
+          const { newContent } = applyEditsToContent(content, edits, path);
           // No asynchronous boundary occurs between the cancellation check after
-          // readTextFile and this write; the next check follows the write await.
-          const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+          // readBinaryFile and this write; the next check follows the write await.
+          const finalContent = bom + newContent;
           const writeResult = await env.writeFile(absolutePath, finalContent, context);
           if (!writeResult.ok) throw editAccessError(path, writeResult.error);
           if (context.abortSignal?.aborted) throw new Error("Operation aborted");
 
-          const diffResult = generateDiffString(baseContent, newContent);
+          // The display diff reads in lines; the patch is byte-faithful, so it
+          // applies to the original text and reproduces what is on disk.
+          const diffResult = generateDiffString(normalizeToLF(content), normalizeToLF(newContent));
           return {
             content: [
               { type: "text", text: `Successfully replaced ${edits.length} block(s) in ${path}.` },
             ],
             details: {
               diff: diffResult.diff,
-              patch: generateUnifiedPatch(path, baseContent, newContent),
+              patch: generateUnifiedPatch(path, originalText, finalContent),
               firstChangedLine: diffResult.firstChangedLine,
             },
           };

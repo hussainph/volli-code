@@ -39,7 +39,7 @@ import type { RuntimeAutomations } from "../session-runtime/automations";
 import { archiveTicketCommand, createTicketCommand } from "../ticket-commands";
 import { subscribeTicketWake, type TicketWake } from "../ticket-wake";
 import * as worktreeModule from "../worktree";
-import { runGitCapturing, runGitCapturingAsync } from "../worktree/git";
+import { runGitCapturingAsync } from "../worktree/git";
 import { resetRepositoryTurnsForTest } from "../worktree/repository-turn";
 import { resetWorktreeSnapshotsForTest } from "../worktree/snapshot";
 import type { EnsureOutcome } from "../worktree";
@@ -114,7 +114,6 @@ function handlers(options: Partial<HostHandlerOptions> = {}): HostHandlers {
         now: () => 50,
         worktree: {
           db: ctx.db,
-          git: runGitCapturing,
           gitAsync: runGitCapturingAsync,
           blobsRoot: "",
         },
@@ -1308,7 +1307,6 @@ describe("worktree scope", () => {
     const map = handlers({
       worktree: {
         db: ctx.db,
-        git: runGitCapturing,
         gitAsync: runGitCapturingAsync,
         home: tempDir("home"),
         blobsRoot: tempDir("blobs"),

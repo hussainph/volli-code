@@ -16,7 +16,7 @@ import { createDetachedWorkTracker } from "./detached-work";
 import { executeTicketMove, type TicketMovePorts } from "./ticket-move";
 import { subscribeTicketWake, type TicketWake } from "./ticket-wake";
 import * as worktree from "./worktree";
-import { runGitCapturing, runGitCapturingAsync } from "./worktree/git";
+import { runGitCapturingAsync } from "./worktree/git";
 import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import type { TrimFinishOutcome } from "./worktree/retention";
 import type { WorktreeStatusRead } from "./worktree/read";
@@ -37,7 +37,6 @@ beforeEach(() => {
   ports = {
     worktree: {
       db: ctx.db,
-      git: runGitCapturing,
       gitAsync: runGitCapturingAsync,
       blobsRoot: "unused",
     },

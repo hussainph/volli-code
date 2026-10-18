@@ -21,8 +21,14 @@
  *     forbids, and only something with a timer can guarantee the next look.
  *  2. **Performing the steps.** Recording a skip through the durable command
  *     ledger, asking the Run door, moving the cursor. Each step carries the
- *     cursor position it earns, so a crash between two steps repeats at most
- *     one of them — and the command ids below make that repeat idempotent.
+ *     cursor position it earns, so a crash between a step and its cursor
+ *     advance meets that occurrence again on the next pass. A repeated skip
+ *     names the same command id below, so the ledger collapses it. A Run
+ *     does not repeat as a Run: after a relaunch the policy returns its
+ *     occurrence as a skip, under a different command id. So before a skip
+ *     is recorded, this module asks the ledger whether the Run for the
+ *     skip's first occurrence was already accepted, and if it was, moves the
+ *     cursor past that occurrence and records nothing for it.
  *  3. **A refusal that is not a silence.** Only the caller of the Run door
  *     learns it said no, so recording that refusal as a Skipped occurrence is
  *     the host's job rather than the policy's.
@@ -38,6 +44,7 @@ import {
   AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   automationTriggerSchedule,
   evaluateSchedulePass,
+  nextScheduleOccurrence,
   type Automation,
   type AutomationSchedule,
   type SchedulePassStep,
@@ -95,6 +102,12 @@ export interface AutomationSchedulerPorts {
   advanceCursor(input: { automationId: string; through: number }): Promise<void>;
   /** Records a Skipped occurrence through the durable command ledger. */
   recordSkip(input: { commandId: string; skip: AutomationSkipIntent }): Promise<void>;
+  /**
+   * Whether the Run door already ACCEPTED this command: a Run that started, or
+   * one that relaunch recovery will finish. A command it refused answers
+   * false, because that occurrence is still owed a skip.
+   */
+  runAccepted(commandId: string): Promise<boolean>;
   /** Starts one Run against the Project — the same door a person's Run uses. */
   startRun(input: {
     commandId: string;
@@ -280,17 +293,41 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
     cursors: ScheduleCursors,
     now: number,
   ): Promise<number> {
-    const owed = evaluateSchedulePass({
-      schedule: automation.schedule,
-      staggerKey: automation.id,
-      cursor: cursors[automation.id] ?? null,
-      now,
-      watchingSince,
-      graceMs: AUTOMATION_SCHEDULE_LATE_GRACE_MS,
-      missedLimit: AUTOMATION_SCHEDULE_MISSED_LIMIT,
-    });
-    for (const step of owed.steps) await perform(automation, step);
-    return owed.nextDueAt;
+    let cursor = cursors[automation.id] ?? null;
+    for (;;) {
+      const owed = evaluateSchedulePass({
+        schedule: automation.schedule,
+        staggerKey: automation.id,
+        cursor,
+        now,
+        watchingSince,
+        graceMs: AUTOMATION_SCHEDULE_LATE_GRACE_MS,
+        missedLimit: AUTOMATION_SCHEDULE_MISSED_LIMIT,
+      });
+      const [first] = owed.steps;
+      if (first?.kind === "skip" && cursor !== null) {
+        // A skip's walk starts at the first occurrence after the cursor. If
+        // that occurrence's Run was already accepted, the process died after
+        // starting it and before moving the cursor. Recording it as missed
+        // would put a false "Volli wasn't running" row beside the Run that
+        // started, with a "Run now" that invites a duplicate. So the cursor
+        // moves past it, nothing is recorded, and the rest of the gap is
+        // evaluated from there. Each round moves the cursor forward, so the
+        // loop ends.
+        const firstMissed = nextScheduleOccurrence({
+          schedule: automation.schedule,
+          staggerKey: automation.id,
+          after: cursor,
+        });
+        if (await ports.runAccepted(scheduleRunCommandId(automation.id, firstMissed))) {
+          await ports.advanceCursor({ automationId: automation.id, through: firstMissed });
+          cursor = firstMissed;
+          continue;
+        }
+      }
+      for (const step of owed.steps) await perform(automation, step);
+      return owed.nextDueAt;
+    }
   }
 
   async function sweep(): Promise<void> {

@@ -7,8 +7,6 @@
 import type Database from "better-sqlite3";
 import type { WorktreePhase } from "@volli/shared";
 
-import type { RunGit } from "../project-base-branch";
-
 export type { RunGit } from "../project-base-branch";
 
 /**
@@ -41,9 +39,13 @@ export type { WorktreePhase } from "@volli/shared";
  */
 export interface WorktreePorts {
   db: Database.Database;
-  git: RunGit;
   /**
-   * The non-blocking runner every async worktree path uses. It is REQUIRED:
+   * The git runner every worktree path uses — the non-blocking one. There is
+   * deliberately no blocking runner on this bundle (VC-786): the one consumer
+   * that still needs `execFileSync`, the confirmed orphan cleanup's final gate,
+   * receives it on its own port (`cleanup.ts`, `OrphanCleanupWorktreePorts`),
+   * so a new read cannot put the beachball back on Electron main by reaching
+   * for the bundle's sync runner. It is REQUIRED:
    * defaulting a missing test or production bundle to a real runner would let a
    * caller silently stop exercising its injected seam, which is exactly how a
    * later edit could put VC-383's reads back on Electron main.
