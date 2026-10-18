@@ -80,9 +80,9 @@ export default defineConfig({
       // React Compiler rules remain individually disabled pending adoption
       // (VC-216, VC-211). oxlint 1.79 split the inactive compiler rule into
       // ten rules (oxc #25500, #25830, #25840); `globals`, `purity` and
-      // `use-memo` are adopted, the seven below are not yet. Keep the React plugin and
-      // error categories enabled so other rules and newly added rules still
-      // enforce. Remove each override only with its corresponding behavior
+      // `use-memo` are adopted, the seven below are not yet (VC-784). Keep the
+      // React plugin and error categories enabled so other rules and newly
+      // added rules still enforce. Remove each override only with its corresponding behavior
       // fixes and tests; `vp lint` reports the current findings.
       // Keep the override set scoped to compiler adoption (VC-216); preserve
       // existing error categories for unrelated rules (VC-211). Each enabled
