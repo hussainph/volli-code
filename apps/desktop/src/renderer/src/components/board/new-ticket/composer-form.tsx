@@ -459,7 +459,9 @@ export function ComposerForm({
           onChange={(event) => setTitle(event.target.value)}
           onKeyDown={(event) => {
             // Enter in the title never submits — it moves focus to the body
-            // (⌘/Ctrl+Enter is handled by the capture handler above).
+            // (⌘/Ctrl+Enter is handled by the capture handler above). An
+            // IME's Enter accepts a candidate, so a composing one stays here.
+            if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
               event.preventDefault();
               editorRef.current?.focus();
