@@ -46,6 +46,7 @@ import type Database from "better-sqlite3";
 import { displayTicketId, sessionOriginFromActor } from "@volli/shared";
 import type {
   AgentModelTier,
+  CommandReceipt,
   ModelSelection,
   Project,
   ReasoningLevel,
@@ -121,13 +122,31 @@ export interface StartSessionInput {
   origin?: SessionOrigin;
 }
 
-export interface StartSessionResult {
+export type StartSessionResult = {
   sessionId: string;
   ticketDisplayId: string;
-  state: "ready" | "needs-recovery";
   model: ModelSelection;
   /** The title the Session was given, whether explicit or heuristic. */
   title: string;
+} & (
+  | { state: "ready" }
+  | {
+      state: "needs-recovery";
+      /**
+       * Why the attach was not ready, in words (VC-659). A rejected attach
+       * carries the diagnosis a person needs — a worktree that cannot be
+       * prepared names its path, its branch and the branch the ticket expects —
+       * so a door hands that on rather than a bare "needs recovery".
+       */
+      attachFailure: string;
+    }
+);
+
+/** Why a start's attach was not ready, from the receipt it answered with. */
+function attachFailure(receipt: CommandReceipt | null): string {
+  if (receipt === null) return "the attach reported no receipt";
+  if (receipt.status === "rejected") return receipt.detail ?? receipt.code;
+  return `the attach is ${receipt.status}`;
 }
 
 /**
@@ -218,7 +237,9 @@ export async function startSessionOperation(
   return {
     sessionId: started.sessionId,
     ticketDisplayId: displayId,
-    state: started.state,
+    ...(started.state === "ready"
+      ? { state: "ready" as const }
+      : { state: "needs-recovery" as const, attachFailure: attachFailure(started.receipt) }),
     model: started.model,
     title,
   };

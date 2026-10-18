@@ -48,12 +48,18 @@ export function ticketBranchName(ticketId: string, title: string): string {
 }
 
 /**
- * `volli/<DISPLAY-ID>` then either the end or `-<slug>`. The display id is a
- * ticket prefix (`isValidPrefix`: a letter then up to four letters or digits,
- * never a hyphen) and a ticket number, so the first `-<digits>` closes it and
- * no slug can be mistaken for part of the id: `volli/VC-2-3-things` is VC-2's.
+ * `volli/<DISPLAY-ID>` then anything that is not another digit. The display id
+ * is a ticket prefix (`isValidPrefix`: a letter then up to four letters or
+ * digits, never a hyphen) and a ticket number, so the first `-<digits>` closes
+ * it and no slug can be mistaken for part of the id: `volli/VC-2-3-things` is
+ * VC-2's. What follows the number is the branch's own business — `-<slug>`,
+ * or a stacked-PR suffix cut from the same ticket (`volli/VC-627c-venue`,
+ * VC-659) — so only a further digit refuses it: `volli/VC-6270` is VC-6270's,
+ * never VC-627's. The lookahead keeps the match linear (CodeQL
+ * js/polynomial-redos, #429): it is anchored, and `\d+` can only give back
+ * digits the lookahead then rejects.
  */
-const TICKET_BRANCH = /^volli\/([A-Z][A-Z0-9]{0,4}-\d+)(?:-|$)/;
+const TICKET_BRANCH = /^volli\/([A-Z][A-Z0-9]{0,4}-\d+)(?!\d)/;
 
 /**
  * The display id a ticket branch names (`"VC-12"` for `volli/VC-12-mcp-server`
@@ -73,7 +79,8 @@ export function ticketBranchDisplayId(branch: string): string | null {
  * - `expected` — the branch the ticket records (or would name).
  * - `adopt` — a different branch of the SAME ticket (its display id parses out
  *   of it). This is the ticket's work, moved: an agent in the worktree cut a
- *   narrower branch, or the slug drifted with a retitle. The checkout is what
+ *   narrower branch or a stacked-PR slice (`volli/VC-627c-…`, VC-659), or the
+ *   slug drifted with a retitle. The checkout is what
  *   is true, so the ticket takes it on rather than refusing to open.
  * - `foreign` — a branch that is not this ticket's: another ticket's, or one
  *   outside the `volli/` convention. Whose work it is cannot be known from
