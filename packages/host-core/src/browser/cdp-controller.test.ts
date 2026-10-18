@@ -1037,6 +1037,39 @@ describe("BrowserTabController empty trees, failed reads and tree digests (VC-27
     });
   });
 
+  it("calls a tree whose walk hit its node bound before any content cut, never empty", async () => {
+    // A hidden sprite sheet ahead of the content can spend the whole node
+    // budget on ignored nodes: nothing printed, but the page is not blank.
+    const hidden = Array.from({ length: 20_001 }, (_, index) => ({
+      nodeId: `h${index}`,
+      ignored: true,
+      role: { value: "generic" },
+      childIds: [],
+    }));
+    const sprite = {
+      nodes: [
+        { ...BUTTON_TREE.nodes[0]!, childIds: [...hidden.map((node) => node.nodeId), "2"] },
+        ...hidden,
+        BUTTON_TREE.nodes[1]!,
+      ],
+    };
+    const controller = new BrowserTabController(
+      wire({ "Accessibility.getFullAXTree": sprite }).transport,
+    );
+
+    expect(await controller.snapshot()).toEqual({
+      text: "",
+      generation: 0,
+      truncated: true,
+      empty: false,
+    });
+    expect(await controller.find("save")).toMatchObject({
+      matches: 0,
+      truncated: true,
+      empty: false,
+    });
+  });
+
   it("fails a read whose answer carried no tree, rather than calling the page empty", async () => {
     const controller = new BrowserTabController(
       wire({ "Accessibility.getFullAXTree": {} }).transport,
@@ -1101,6 +1134,23 @@ describe("BrowserTabController empty trees, failed reads and tree digests (VC-27
       expect(seen.has(controller.treeDigest)).toBe(false);
       seen.add(controller.treeDigest);
     }
+
+    // The digest's walk is bounded like a find's: a change past 20,000 nodes
+    // costs nothing to read and goes unseen.
+    const long = (last: string) =>
+      tree(
+        Array.from({ length: 20_001 }, (_, index): [string, string, number] => [
+          "button",
+          index === 20_000 ? last : `B${index}`,
+          index,
+        ]),
+      );
+    answers["Accessibility.getFullAXTree"] = long("first");
+    await controller.snapshot();
+    const bounded = controller.treeDigest;
+    answers["Accessibility.getFullAXTree"] = long("second");
+    await controller.snapshot();
+    expect(controller.treeDigest).toBe(bounded);
 
     // A new generation forgets the old page's digest with its refs.
     controller.syncGeneration(1);
