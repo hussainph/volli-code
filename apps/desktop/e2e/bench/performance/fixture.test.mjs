@@ -6,15 +6,55 @@ import { describe, expect, it } from "vitest";
 
 import {
   allocateLongTail,
+  assertFixtureBandsCurrent,
   forceTargetRefusal,
   generateFixture,
+  parseClock,
+  readFixtureSidebarInput,
   seededRandom,
+  sessionRecencySchedule,
+  SIDEBAR_WINDOWS,
   verifyFixture,
 } from "./fixture.mjs";
 import { DEFAULT_SEED, PRESETS } from "./presets.mjs";
 import { MIGRATIONS } from "@volli/host-core/db";
+import {
+  ACTIVE_QUIET_WINDOW_MS,
+  buildActiveSessionListing,
+  PREVIOUS_MAX_AGE_MS,
+} from "../../../src/renderer/src/components/sidebar/active-session-listing.ts";
 
 const CURRENT_DB_SCHEMA_VERSION = MIGRATIONS.at(-1).version;
+/** A recorded generation clock, so the byte-for-byte determinism check has one. */
+const FIXTURE_CLOCK = Date.UTC(2026, 8, 13, 12, 0, 0);
+const HOUR = 60 * 60_000;
+
+/**
+ * The sidebar's two bands for this fixture at `now`, built by the renderer's
+ * own `buildActiveSessionListing` from the rows main serves. The row split is
+ * the one `project-sessions.ts` makes on refresh: terminal records, chat
+ * records, and the unread receipts riding on the rows.
+ */
+function sidebarBands(input, now) {
+  const listing = buildActiveSessionListing({
+    tickets: input.tickets,
+    containers: {},
+    signalsByTicket: {},
+    records: input.rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])),
+    chatSessions: input.rows.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
+    lastOutputAt: {},
+    parkState: {},
+    harness: {},
+    statusEnteredAt: new Map(input.statusEntries.map((entry) => [entry.ticketId, entry.enteredAt])),
+    unreadSessionIds: new Set(
+      input.rows
+        .filter((row) => row.read?.unreadSince != null)
+        .map((row) => (row.kind === "terminal" ? row.record.id : row.record.sessionId)),
+    ),
+    now,
+  });
+  return { active: listing.active.length, previous: listing.previous.length };
+}
 
 describe("performance fixture allocation", () => {
   it("is deterministic, exact, bounded, and long-tailed", () => {
@@ -46,6 +86,78 @@ describe("performance fixture allocation", () => {
   });
 });
 
+describe("performance fixture recency", () => {
+  it("mirrors the sidebar's own band windows", () => {
+    expect(SIDEBAR_WINDOWS).toEqual({
+      activeQuietWindowMs: ACTIVE_QUIET_WINDOW_MS,
+      previousMaxAgeMs: PREVIOUS_MAX_AGE_MS,
+    });
+  });
+
+  it("puts the real preset's Sessions in both bands, clear of every boundary", () => {
+    const eventCounts = allocateLongTail({
+      count: PRESETS.real.sessions,
+      total: PRESETS.real.sessionEvents,
+      minimum: 5,
+      maximum: PRESETS.real.maxSessionEvents,
+      seed: DEFAULT_SEED,
+    });
+    const input = {
+      sessions: PRESETS.real.sessions,
+      seed: DEFAULT_SEED,
+      clock: FIXTURE_CLOCK,
+      eventCounts,
+    };
+    const schedule = sessionRecencySchedule(input);
+    expect(sessionRecencySchedule(input)).toEqual(schedule);
+    expect(schedule.summary.sessions).toEqual({ active: 14, previous: 141, agedOut: 1043 });
+    expect(schedule.summary.unreadSessions).toBe(14);
+    // The long chat is opened by the benchmark, so it must not be an Active
+    // (unread) row whose presence depends on interaction order.
+    expect(schedule.entries[0].band).toBe("previous");
+
+    const ages = (band) =>
+      schedule.entries
+        .filter((entry) => entry.band === band)
+        .map((entry) => FIXTURE_CLOCK - entry.lastActivityAt);
+    expect(Math.max(...ages("active"))).toBeLessThan(ACTIVE_QUIET_WINDOW_MS);
+    expect(Math.min(...ages("active"))).toBeGreaterThanOrEqual(0);
+    expect(Math.min(...ages("previous"))).toBeGreaterThan(ACTIVE_QUIET_WINDOW_MS);
+    expect(Math.max(...ages("previous"))).toBeLessThan(PREVIOUS_MAX_AGE_MS);
+    expect(Math.min(...ages("aged"))).toBeGreaterThan(PREVIOUS_MAX_AGE_MS);
+    for (const [index, entry] of schedule.entries.entries()) {
+      expect(entry.lastActivityAt - entry.createdAt).toBe(eventCounts[index]);
+    }
+    // A run several hours long must not cross a band boundary.
+    expect(Date.parse(schedule.summary.stableUntil) - FIXTURE_CLOCK).toBeGreaterThan(12 * HOUR);
+
+    // The clock moves every stamp and nothing else.
+    const later = sessionRecencySchedule({ ...input, clock: FIXTURE_CLOCK + HOUR });
+    expect(later.entries.map((entry) => entry.lastActivityAt - HOUR)).toEqual(
+      schedule.entries.map((entry) => entry.lastActivityAt),
+    );
+    expect(later.summary.sessions).toEqual(schedule.summary.sessions);
+  });
+
+  it("reads a recorded clock back and refuses a fixture whose bands have drifted", () => {
+    expect(parseClock("2026-09-13T12:00:00.000Z")).toBe(FIXTURE_CLOCK);
+    expect(parseClock(String(FIXTURE_CLOCK))).toBe(FIXTURE_CLOCK);
+    expect(() => parseClock("yesterday")).toThrow("--clock must be");
+
+    const manifest = {
+      generatedAt: new Date(FIXTURE_CLOCK).toISOString(),
+      recency: { stableUntil: new Date(FIXTURE_CLOCK + 24 * HOUR).toISOString() },
+    };
+    expect(() => assertFixtureBandsCurrent(manifest, FIXTURE_CLOCK + HOUR)).not.toThrow();
+    expect(() => assertFixtureBandsCurrent(manifest, FIXTURE_CLOCK + 24 * HOUR)).toThrow(
+      "regenerate it",
+    );
+    expect(() => assertFixtureBandsCurrent({ generatedAt: "2025-01-15" }, FIXTURE_CLOCK)).toThrow(
+      "predates its generation clock",
+    );
+  });
+});
+
 describe("performance fixture file", () => {
   it("migrates a file database and is readable through production codecs and artifacts", async () => {
     const root = await mkdtemp(join(tmpdir(), "volli-performance-fixture-test-"));
@@ -62,6 +174,7 @@ describe("performance fixture file", () => {
         seed: DEFAULT_SEED,
         outputDirectory: root,
         force: true,
+        clock: FIXTURE_CLOCK,
       });
       expect(process.env.NODE_ENV).toBe(nodeEnvBefore);
       const firstDatabaseDigest = createHash("sha256")
@@ -114,7 +227,31 @@ describe("performance fixture file", () => {
         preset: "small",
         seed: DEFAULT_SEED,
         databaseSchemaVersion: CURRENT_DB_SCHEMA_VERSION,
+        // The clock is recorded, so the manifest alone says how to rebuild it.
+        generatedAt: new Date(FIXTURE_CLOCK).toISOString(),
+        recency: {
+          activeQuietWindowMs: ACTIVE_QUIET_WINDOW_MS,
+          previousMaxAgeMs: PREVIOUS_MAX_AGE_MS,
+          sessions: { active: 1, previous: 14, agedOut: 105 },
+          unreadSessions: 1,
+        },
       });
+      // Verification re-derives the split from the production fold.
+      expect(verified.recency.sessions).toEqual({ active: 1, previous: 14, agedOut: 105 });
+
+      // VC-415's acceptance, through the renderer's own band builder over the
+      // rows main serves: both bands hold Sessions, and they hold the SAME
+      // Sessions for as long as a run could take, because Active is held by
+      // unread receipts rather than by a thirty-minute window.
+      const sidebarInput = await readFixtureSidebarInput(root);
+      expect(sidebarInput.clock).toBe(FIXTURE_CLOCK);
+      const atGeneration = sidebarBands(sidebarInput, FIXTURE_CLOCK);
+      expect(atGeneration.active).toBe(1);
+      expect(atGeneration.previous).toBeGreaterThan(0);
+      const stableUntil = Date.parse(sidebarInput.recency.stableUntil);
+      expect(sidebarBands(sidebarInput, FIXTURE_CLOCK + 2 * HOUR)).toEqual(atGeneration);
+      expect(sidebarBands(sidebarInput, stableUntil - 1)).toEqual(atGeneration);
+      expect(sidebarBands(sidebarInput, stableUntil).previous).toBeLessThan(atGeneration.previous);
 
       // Replacing the same output with the same seed reproduces both durable
       // database bytes and its path-bearing manifest exactly.
@@ -123,6 +260,7 @@ describe("performance fixture file", () => {
         seed: DEFAULT_SEED,
         outputDirectory: root,
         force: true,
+        clock: FIXTURE_CLOCK,
       });
       expect(
         createHash("sha256")
@@ -139,6 +277,7 @@ describe("performance fixture file", () => {
           seed: DEFAULT_SEED,
           outputDirectory: secondRoot,
           force: true,
+          clock: FIXTURE_CLOCK,
           localize: false,
         });
         const portableSecond = await generateFixture({
@@ -146,6 +285,7 @@ describe("performance fixture file", () => {
           seed: DEFAULT_SEED,
           outputDirectory: thirdRoot,
           force: true,
+          clock: FIXTURE_CLOCK,
           localize: false,
         });
         expect(

@@ -84,6 +84,28 @@ ledger row passes the production codec during verification. Verification also
 checks schema, exact counts/distribution, foreign keys, overlaps, long-Session
 folding, a content-addressed artifact and bounded `app_state` values.
 
+### Generation clock and sidebar bands
+
+Every timestamp is relative to a generation clock: `--clock` (ISO or epoch ms),
+defaulting to now, recorded as the manifest's `generatedAt`. The seed and the
+clock together are the recipe; the same pair rebuilds the same bytes. A frozen
+base date used to put every Session past the sidebar's seven-day Previous bound,
+so both bands measured empty (VC-415).
+
+Sessions are scheduled into the sidebar's bands explicitly, at the owner
+profile's ratios (14 Active, 141 Previous of 1,198 in `real`): the newest went
+quiet inside the 30-minute Active window and carry unread receipts, which keeps
+them in Active for the whole run rather than for thirty minutes; the long chat
+and the next Sessions sit between that window and the age bound; the rest are
+aged-out history. Previous rows on Done tickets are cleaned away by the
+product's own rule, so `real` lists 14 Active and 114 Previous rows. The
+manifest's `recency` block records the split and `stableUntil`, the first
+instant any band would change on its own (about a day after generation).
+Verification re-derives the split from the production fold, and the runner
+refuses a reused fixture past `stableUntil`. `fixture.test.mjs` pins the
+fixture's windows to the renderer's `ACTIVE_QUIET_WINDOW_MS` /
+`PREVIOUS_MAX_AGE_MS` and builds both bands with `buildActiveSessionListing`.
+
 Generation uses a fixed sentinel root for portable byte-identical database
 bytes. `localizeFixture` rewrites only schema-confirmed project/worktree columns
 to the actual profile. `fixture.test.mjs` compares same-seed digests from distinct
@@ -116,8 +138,8 @@ profile. The built-renderer assertion rejects dev-server runs.
 4. **New chat:** `+ Chat` until the visible composer enables and accepts focus.
 5. **New terminal:** until real terminal canvas answers `stty size` via its PTY.
 6. **Sidebar:** close/open separately, retaining rAF deltas through transitions.
-   Inspect active/previous row counts first: a frozen fixture timestamp can
-   empty an age-bounded Previous band, measuring chrome rather than listing.
+   Inspect active/previous row counts first: an empty band measures chrome
+   rather than listing. Both are populated from the generation clock (above).
 7. **Ticket switch:** pre-open both workspaces, then time switching existing tabs
    until heading/editor are visible and accept focus, not a first open.
 8. **Board render:** until published held-ticket count equals the fixture and

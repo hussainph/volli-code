@@ -20,7 +20,7 @@ import {
   TICKET_TAB_STRIP,
 } from "../../lib/smoke-kit.mjs";
 import { busyLoadName, startBusyLoad } from "./background-load.mjs";
-import { generateFixture, verifyFixture } from "./fixture.mjs";
+import { assertFixtureBandsCurrent, generateFixture, verifyFixture } from "./fixture.mjs";
 import { DEFAULT_SEED, PRESET_NAMES, REAL_BUSY_CORE_DEFAULT, presetNamed } from "./presets.mjs";
 import { sessionProjectionRequest, sessionRpcRoundTrip } from "./session-rpc-round-trip.mjs";
 import { ticketSwitchBreakdown, TICKET_SWITCH_MARKS } from "./ticket-switch-breakdown.mjs";
@@ -1810,6 +1810,8 @@ async function main() {
     generated = { manifest, userDataDir: fixtureDirectory };
   }
   const verification = await verifyFixture(fixtureDirectory, { preset: args.preset });
+  // A reused fixture's bands are relative to when it was generated, not now.
+  assertFixtureBandsCurrent(generated.manifest, Date.now());
   const runOwnerRoot = ownerRoot ?? (await fs.mkdtemp(join(os.tmpdir(), "volli-perf-runs-")));
   const runRoot = join(runOwnerRoot, "runs");
   const host = await hostMetadata();
