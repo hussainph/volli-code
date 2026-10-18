@@ -10,16 +10,25 @@ import type { BrowserAppShortcutEvent } from "../../../../ipc/contract";
  *    keydown it was, so the listener that already owns it decides — with every
  *    guard it already has, the terminal guard on ⌘K included. Nothing here
  *    knows what those chords mean, so nothing here can disagree with them.
+ *    The pane drawing the page is focused first: a click into a native page
+ *    never reaches the renderer, so the split view's focused pane is whichever
+ *    one was last clicked in the app, and ⌃⌘ + arrow has to move from the pane
+ *    the person is actually in.
  *  • ⌘W and ⌘L act on the tab the key came FROM, named by main. They go to the
  *    pane that draws that tab, which registered its own close and address bar
  *    below — never to whichever pane the split view calls focused, which can be
  *    a different one. A tab no mounted pane draws does nothing.
  */
 export interface BrowserPaneCommands {
-  /** Closes this tab through the same path its surface's close control takes. */
-  close(): void;
+  /**
+   * Closes this tab through the same path its surface's close control takes.
+   * False when the surface gave the pane no close to run.
+   */
+  close(): boolean;
   /** Puts focus on this tab's address bar. */
   focusAddress(): void;
+  /** Makes the split-view pane drawing this tab the focused one. */
+  focusPane(): void;
 }
 
 const panes = new Map<string, BrowserPaneCommands>();
@@ -40,20 +49,24 @@ export function registerBrowserPaneCommands(
   };
 }
 
-/** Acts on one shortcut main handed back. `target` is `window` outside tests. */
-export function runBrowserAppShortcut(
-  event: BrowserAppShortcutEvent,
-  target: EventTarget = window,
-): void {
+/**
+ * Acts on one shortcut main handed back, and says whether the app did
+ * anything with it. Main took the key and focus before the renderer could
+ * decide, so a `false` is the caller's cue to hand focus back to the page: a
+ * replayed chord no listener claimed (`preventDefault` is how every one of
+ * them says it acted), or a tab no pane here draws.
+ */
+export function runBrowserAppShortcut(event: BrowserAppShortcutEvent): boolean {
   const { shortcut } = event;
+  const pane = panes.get(event.tabId);
   if (shortcut.kind === "replay") {
-    target.dispatchEvent(
+    pane?.focusPane();
+    return !window.dispatchEvent(
       new KeyboardEvent("keydown", { ...shortcut.chord, bubbles: true, cancelable: true }),
     );
-    return;
   }
-  const pane = panes.get(event.tabId);
-  if (pane === undefined) return;
-  if (shortcut.kind === "close-tab") pane.close();
-  else pane.focusAddress();
+  if (pane === undefined) return false;
+  if (shortcut.kind === "close-tab") return pane.close();
+  pane.focusAddress();
+  return true;
 }

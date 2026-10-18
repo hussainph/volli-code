@@ -176,6 +176,7 @@ export function BrowserPane({
   api,
   onTabState,
   onClose,
+  onFocusPane,
 }: {
   tab: BrowserTabState;
   visible: boolean;
@@ -186,6 +187,12 @@ export function BrowserPane({
    * inside the page runs (VC-301). Absent, ⌘W in the page does nothing.
    */
   onClose?: () => void;
+  /**
+   * Makes the split-view pane drawing this tab the focused one — run before a
+   * chord from inside the page is replayed, because a click into the native
+   * page never told the split view which pane the person is in (VC-301).
+   */
+  onFocusPane?: () => void;
 }) {
   const anchorRef = React.useRef<HTMLDivElement>(null);
   const addressRef = React.useRef<HTMLInputElement>(null);
@@ -209,21 +216,27 @@ export function BrowserPane({
     setAddress((current) => (current === previousUrl ? next : current));
   }, [tab.url]);
 
-  // ⌘W and ⌘L pressed inside THIS page come back from main named by tab
+  // Chords pressed inside THIS page come back from main named by tab
   // (VC-301), so the pane drawing the tab is the one that answers — never the
   // split view's focused pane. Only while shown: a hidden plane holds no focus
-  // to press them from. The close is read through a ref so a surface's fresh
-  // callback each render does not re-register.
-  const onCloseRef = React.useRef(onClose);
-  onCloseRef.current = onClose;
+  // to press them from. The surface's callbacks are read through a ref so a
+  // fresh callback each render does not re-register.
+  const surfaceRef = React.useRef({ onClose, onFocusPane });
+  surfaceRef.current = { onClose, onFocusPane };
   React.useEffect(() => {
     if (!visible) return;
     return registerBrowserPaneCommands(tab.tabId, {
-      close: () => onCloseRef.current?.(),
+      close: () => {
+        const close = surfaceRef.current.onClose;
+        if (close === undefined) return false;
+        close();
+        return true;
+      },
       focusAddress: () => {
         addressRef.current?.focus();
         addressRef.current?.select();
       },
+      focusPane: () => surfaceRef.current.onFocusPane?.(),
     });
   }, [tab.tabId, visible]);
 

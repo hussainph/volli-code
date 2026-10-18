@@ -1954,6 +1954,12 @@ export interface VolliBrowserIpcContract {
   "volli:browser-show": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-hide": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-toggle-devtools": { args: [input: BrowserTabIdInput]; result: Result };
+  /**
+   * Hands keyboard focus back to a shown page whose app shortcut the renderer
+   * then had nothing to do with (VC-301): main took the key and focus before
+   * the renderer could decide.
+   */
+  "volli:browser-focus-page": { args: [input: BrowserTabIdInput]; result: Result };
   "volli:browser-set-presentation": {
     args: [input: BrowserTabSetPresentationInput];
     result: BrowserTabResult;

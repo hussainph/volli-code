@@ -106,6 +106,9 @@ class FakeWebContents {
     return false;
   }
   focused = false;
+  focus = vi.fn(() => {
+    this.focused = true;
+  });
   isFocused(): boolean {
     return this.focused;
   }
@@ -3137,6 +3140,23 @@ describe("BrowserTabHost app shortcuts (VC-301)", () => {
 
     expect(prevented).not.toHaveBeenCalled();
     expect(delivered).toEqual([]);
+  });
+
+  it("hands focus back to a shown page whose shortcut the app had nothing to do with", () => {
+    const tab = shownUserTab();
+
+    host.focusPage(tab.tabId);
+
+    expect(views[0]!.webContents.focus).toHaveBeenCalledOnce();
+  });
+
+  it("returns no focus to a page that is off screen or gone", () => {
+    const tab = shownUserTab();
+    host.hide(tab.tabId);
+    host.focusPage(tab.tabId);
+    host.focusPage("opaque-missing");
+
+    expect(views[0]!.webContents.focus).not.toHaveBeenCalled();
   });
 
   it("leaves every key to the page when the host has no renderer to route to", () => {

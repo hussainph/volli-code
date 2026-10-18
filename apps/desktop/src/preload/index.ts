@@ -502,6 +502,9 @@ const api = {
     hide: (input: BrowserTabIdInput): Promise<Result> => invoke("volli:browser-hide", input),
     toggleDevTools: (input: BrowserTabIdInput): Promise<Result> =>
       invoke("volli:browser-toggle-devtools", input),
+    /** Gives keyboard focus back to a shown page whose app shortcut did nothing (VC-301). */
+    focusPage: (input: BrowserTabIdInput): Promise<Result> =>
+      invoke("volli:browser-focus-page", input),
     setPresentation: (input: BrowserTabSetPresentationInput): Promise<BrowserTabResult> =>
       invoke("volli:browser-set-presentation", input),
     picture: (input: BrowserPictureInput): Promise<BrowserPictureResult> =>

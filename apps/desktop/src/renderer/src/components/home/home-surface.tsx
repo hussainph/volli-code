@@ -913,6 +913,7 @@ export function HomeSurface({ visible }: { visible: boolean }) {
             api={browserApi}
             onTabState={useBrowserTabsStore.getState().receive}
             onClose={() => closeBrowser(paneBrowserTab.tabId)}
+            onFocusPane={() => focusHomePane(selectedId, pane.id)}
           />
         ) : null}
         {relPath === null &&
