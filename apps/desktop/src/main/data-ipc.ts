@@ -1,4 +1,4 @@
-import { clientEventSink } from "./client-event-sink";
+import { pageClientEventSink } from "./client-event-sink";
 import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
 import {
@@ -1537,7 +1537,7 @@ export function registerDataIpcHandlers(
           return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
           return changeWatchManager.watch(
-            clientEventSink(sender),
+            pageClientEventSink(sender),
             input.ticketId,
             resolved.target.worktreePath,
           );
@@ -1545,13 +1545,13 @@ export function registerDataIpcHandlers(
     },
 
     "volli:worktree-change-watch-pause": (input: TicketIdInput, sender): Result =>
-      changeWatchManager.pause(clientEventSink(sender), input.ticketId),
+      changeWatchManager.pause(pageClientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-watch-resume": async (input: TicketIdInput, sender): Promise<Result> =>
-      changeWatchManager.resume(clientEventSink(sender), input.ticketId),
+      changeWatchManager.resume(pageClientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
-      changeWatchManager.unwatch(clientEventSink(sender), input.ticketId);
+      changeWatchManager.unwatch(pageClientEventSink(sender), input.ticketId);
       return { ok: true };
     },
 

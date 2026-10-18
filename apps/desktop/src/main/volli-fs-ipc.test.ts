@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import {
   existsSync,
   mkdirSync,
@@ -119,24 +120,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** A WebContents double keyed by `id` (the FileWatchManager subscription key). */
+/**
+ * A WebContents double keyed by `id` (the FileWatchManager subscription key).
+ * A real emitter, so a test can fire any page-lifetime event on it — a reload's
+ * `did-navigate`, a crash's `render-process-gone`, a closed window's `destroyed`.
+ */
 function makeWebContents(id = 1) {
-  const eventListeners = new Map<string, () => void>();
-  return {
+  const events = new EventEmitter();
+  return Object.assign(events, {
     id,
     send: vi.fn(),
     destroyed: false,
     isDestroyed(): boolean {
       return this.destroyed;
     },
-    once: vi.fn(function (this: unknown, event: string, cb: () => void) {
-      eventListeners.set(event, cb);
-    }),
-    removeListener: vi.fn(),
     fireDestroyed() {
-      eventListeners.get("destroyed")?.();
+      events.emit("destroyed");
     },
-  };
+  });
 }
 
 // ---- IPC handler integration (real db + real temp project dirs) --------------
@@ -452,6 +453,44 @@ describe("directory watch channels", () => {
 
     subscriber.fireDestroyed();
     expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  // A reload keeps the WebContents (VC-831): the old page's hold must go with
+  // the old page, or the new page's own watch/unwatch pair leaves it at one and
+  // the fs.watch handle stays open while the window lives.
+  it.each(["did-navigate", "render-process-gone"])(
+    "releases the old page's hold on %s, so the reloaded page's unwatch closes the watcher",
+    async (pageGone) => {
+      const setup = setupDbAndHandlers();
+      ctx = setup.ctx;
+      const webContents = makeWebContents();
+      const input = { projectId: setup.projectId, relPath: "src" };
+      mkdirSync(join(setup.projectPath, "src"));
+      await invoke("volli:dir-watch", webContents, input);
+
+      webContents.emit(pageGone);
+      expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
+
+      await invoke("volli:dir-watch", webContents, input);
+      expect(watchCalls).toHaveLength(2);
+      invoke("volli:dir-unwatch", webContents, input);
+      expect(watchCalls[1]?.watcher.close).toHaveBeenCalledTimes(1);
+      expect(webContents.listenerCount("did-navigate")).toBe(0);
+      expect(webContents.listenerCount("destroyed")).toBe(0);
+    },
+  );
+
+  it("keeps the watch through a navigation that stays in the page", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    const webContents = makeWebContents();
+    await invoke("volli:dir-watch", webContents, { projectId: setup.projectId, relPath: "" });
+
+    // A hash change is `did-navigate-in-page`; a refused navigation still
+    // starts one. Neither is the page going away.
+    webContents.emit("did-navigate-in-page");
+    webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(watchCalls[0]?.watcher.close).not.toHaveBeenCalled();
   });
 
   it("re-arms on a watcher fault and nudges the tree to re-list", async () => {
@@ -1024,6 +1063,36 @@ describe("registerFileIpcHandlers", () => {
       relPath: ".volli/artifacts/w.md",
     });
     expect(unwatched).toEqual({ ok: true });
+  });
+
+  it("closes a file watch the reloaded page re-opened and released (VC-831)", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "x" });
+    const webContents = makeWebContents();
+    const input = { projectId: setup.projectId, relPath: ".volli/artifacts/x.md" };
+
+    await invoke("volli:file-watch", webContents, input);
+    webContents.emit("did-navigate");
+    await invoke("volli:file-watch", webContents, input);
+    invoke("volli:file-unwatch", webContents, input);
+
+    expect(watchCalls).toHaveLength(2);
+    for (const call of watchCalls) expect(call.watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a file watch through an in-page navigation", async () => {
+    const setup = setupDbAndHandlers();
+    ctx = setup.ctx;
+    await invoke("volli:artifact-create", {}, { projectId: setup.projectId, name: "y" });
+    const webContents = makeWebContents();
+    const input = { projectId: setup.projectId, relPath: ".volli/artifacts/y.md" };
+
+    await invoke("volli:file-watch", webContents, input);
+    webContents.emit("did-navigate-in-page");
+    expect(watchCalls[0]?.watcher.close).not.toHaveBeenCalled();
+    invoke("volli:file-unwatch", webContents, input);
+    expect(watchCalls[0]?.watcher.close).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the main checkout for a ticket with no live worktree", async () => {
