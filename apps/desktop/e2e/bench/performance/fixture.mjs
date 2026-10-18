@@ -930,6 +930,17 @@ export async function generateFixture(input) {
     if (db.pragma("user_version", { simple: true }) !== modules.currentDbSchemaVersion) {
       throw new Error("fresh fixture did not migrate to the current database schema");
     }
+    // The migrations stamp two facts of their own that are not the seed's or
+    // the clock's: the wall time each migration applied at (VC-633) and a
+    // random credential-mirror lineage id (VC-643). Both are per-database
+    // bookkeeping no benchmark reads, and leaving them live made two same-seed
+    // fixtures differ byte-for-byte. Pin them to the recipe instead, then
+    // VACUUM the still-empty database so no page keeps the overwritten bytes.
+    db.prepare("UPDATE migration_history SET applied_at = ?").run(clock);
+    db.prepare("UPDATE web_credential_source SET source_id = ? WHERE id = 1").run(
+      createHash("sha256").update(`${input.seed}:web-credential-source`).digest("hex").slice(0, 32),
+    );
+    db.exec("VACUUM");
     db.pragma("synchronous = OFF");
     db.pragma("temp_store = MEMORY");
     db.prepare(

@@ -107,7 +107,9 @@ fixture's windows to the renderer's `ACTIVE_QUIET_WINDOW_MS` /
 `PREVIOUS_MAX_AGE_MS` and builds both bands with `buildActiveSessionListing`.
 
 Generation uses a fixed sentinel root for portable byte-identical database
-bytes. `localizeFixture` rewrites only schema-confirmed project/worktree columns
+bytes. Migration bookkeeping that is not part of the recipe (each migration's
+applied-at wall time, the credential-mirror lineage id) is pinned to the clock
+and seed. `localizeFixture` rewrites only schema-confirmed project/worktree columns
 to the actual profile. `fixture.test.mjs` compares same-seed digests from distinct
 output paths.
 
