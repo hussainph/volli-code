@@ -35,6 +35,67 @@ const race = vi.hoisted(() => ({
   },
 }));
 
+/**
+ * VC-465: what a crash would keep, recorded from the store's own syncs and
+ * links. A name survives a crash at some instant if a directory sync that
+ * STARTED after its link had FINISHED by then, and its bytes are intact if
+ * the file was synced before the link. The gates let a test hold or fail a
+ * sync, so a crash can be judged in the middle of a batch.
+ */
+const disk = vi.hoisted(() => ({
+  clock: 0,
+  /** Temporary files whose sync finished, with the instant it did. */
+  fileSynced: new Map<string, number>(),
+  links: [] as Array<{ source: string; name: string; at: number }>,
+  directorySyncs: [] as Array<{ startedAt: number; endedAt?: number; ok?: boolean }>,
+  /** Paths the store opened for reading, in order. */
+  reads: [] as string[],
+  /** Runs before directory sync `index` touches the disk; a rejection is that sync's failure. */
+  directoryGate: undefined as ((index: number) => Promise<void>) | undefined,
+  /** An error here fails that temporary file's sync instead of performing it. */
+  fileSyncFault: undefined as ((path: string) => Error | undefined) | undefined,
+  reset(): void {
+    disk.clock = 0;
+    disk.fileSynced.clear();
+    disk.links.length = 0;
+    disk.directorySyncs.length = 0;
+    disk.reads.length = 0;
+    disk.directoryGate = undefined;
+    disk.fileSyncFault = undefined;
+  },
+  /** The store opens its directory `"r"` to sync it and a temporary file `"wx"`. */
+  watch(handle: { sync(): Promise<void> }, path: string, flags: unknown): void {
+    const sync = handle.sync.bind(handle);
+    if (flags === "r") {
+      handle.sync = async () => {
+        const record: { startedAt: number; endedAt?: number; ok?: boolean } = {
+          startedAt: ++disk.clock,
+        };
+        const index = disk.directorySyncs.push(record) - 1;
+        try {
+          await disk.directoryGate?.(index);
+          await sync();
+          record.ok = true;
+        } catch (error) {
+          record.ok = false;
+          throw error;
+        } finally {
+          record.endedAt = ++disk.clock;
+        }
+      };
+    } else if (flags === "wx") {
+      handle.sync = async () => {
+        const fault = disk.fileSyncFault?.(path);
+        if (fault) throw fault;
+        await sync();
+        disk.fileSynced.set(path, ++disk.clock);
+      };
+    } else {
+      disk.reads.push(path);
+    }
+  },
+}));
+
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -47,7 +108,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args);
       race.touched(args[0]);
+      disk.watch(handle, String(args[0]), args[1]);
       return handle;
+    },
+    link: async (...args: Parameters<typeof actual.link>) => {
+      await actual.link(...args);
+      disk.links.push({ source: String(args[0]), name: String(args[1]), at: ++disk.clock });
     },
   };
 });
@@ -75,6 +141,7 @@ let directory: string | undefined;
 afterEach(async () => {
   race.target = undefined;
   race.swap = undefined;
+  disk.reset();
   if (directory) await rm(directory, { recursive: true, force: true });
   directory = undefined;
 });
@@ -111,6 +178,233 @@ function referenceFor(value: SessionTranscriptArtifact) {
     },
   } as const;
 }
+
+/** The compressed name an artifact is published under. */
+function compressedName(reference: { id: string }): string {
+  return join(directory!, `${reference.id.slice("sha256:".length)}.json.gz`);
+}
+
+/** Whether a crash at `instant` would keep `name`, with its bytes intact. */
+function survivesCrash(name: string, instant: number): boolean {
+  return disk.links.some(
+    (link) =>
+      link.name === name &&
+      (disk.fileSynced.get(link.source) ?? Infinity) < link.at &&
+      disk.directorySyncs.some(
+        (sync) => sync.ok === true && sync.startedAt > link.at && sync.endedAt! <= instant,
+      ),
+  );
+}
+
+/** A name an earlier process linked, its bytes synced and its directory sync not known to have run. */
+function leftByEarlierProcess(name: string): void {
+  disk.fileSynced.set(name, ++disk.clock);
+  disk.links.push({ source: name, name, at: ++disk.clock });
+}
+
+/**
+ * A stand-in for the ledger: it commits a reference the moment the store
+ * returns it, which is what the Session runtime does with a transcript
+ * artifact, and remembers the instant so a crash can be judged then.
+ */
+function ledger() {
+  const commits: Array<{ name: string; at: number }> = [];
+  return {
+    commits,
+    commit<Reference extends { id: string }>(write: Promise<Reference>): Promise<Reference> {
+      return write.then((reference) => {
+        commits.push({ name: compressedName(reference), at: ++disk.clock });
+        return reference;
+      });
+    },
+    /** Every committed reference names an artifact a crash right after the commit keeps. */
+    expectEveryCommitSurvivesACrash() {
+      for (const { name, at } of commits) expect(survivesCrash(name, at), name).toBe(true);
+    },
+  };
+}
+
+/** Hold directory syncs by index until a test releases them, resolving or failing each. */
+function holdDirectorySyncs() {
+  const held = new Map<number, PromiseWithResolvers<void>>();
+  const gate = (index: number) => {
+    const waiter = held.get(index) ?? Promise.withResolvers<void>();
+    held.set(index, waiter);
+    return waiter.promise;
+  };
+  disk.directoryGate = gate;
+  return {
+    release(index: number, error?: Error) {
+      const waiter = held.get(index) ?? Promise.withResolvers<void>();
+      held.set(index, waiter);
+      if (error) waiter.reject(error);
+      else waiter.resolve();
+    },
+  };
+}
+
+function settled<T>(promise: Promise<T>) {
+  const state = { done: false };
+  promise.then(
+    () => (state.done = true),
+    () => (state.done = true),
+  );
+  return state;
+}
+
+const SLOW_DISK = { timeout: 15_000 };
+
+describe("FileTranscriptArtifactStore group-committed directory syncs (VC-465)", () => {
+  it("publishes concurrent artifacts behind one shared directory sync, and none before it", async () => {
+    const artifacts = await store();
+    const syncs = holdDirectorySyncs();
+    const book = ledger();
+    const first = book.commit(artifacts.write(artifact("first")));
+    await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(1), SLOW_DISK);
+
+    // While the first sync runs, seven more publications link and queue.
+    const batch = Array.from({ length: 7 }, (_, index) =>
+      book.commit(artifacts.write(artifact(`batch ${index}`))),
+    );
+    const batchSettled = batch.map(settled);
+    await vi.waitFor(() => expect(disk.links).toHaveLength(8), SLOW_DISK);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(disk.directorySyncs).toHaveLength(1);
+    expect(book.commits).toEqual([]);
+
+    syncs.release(0);
+    await first;
+    await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(2), SLOW_DISK);
+
+    // A crash in the middle of the batch: its one sync has started, not finished.
+    expect(batchSettled.some((state) => state.done)).toBe(false);
+    expect(book.commits).toHaveLength(1);
+    book.expectEveryCommitSurvivesACrash();
+    const batchNames = disk.links.slice(1).map((link) => link.name);
+    for (const name of batchNames) expect(survivesCrash(name, disk.clock)).toBe(false);
+
+    syncs.release(1);
+    await Promise.all(batch);
+    // Two directory syncs for eight artifacts, where each used to pay its own.
+    expect(disk.directorySyncs).toHaveLength(2);
+    expect(disk.fileSynced.size).toBe(8);
+    expect(book.commits).toHaveLength(8);
+    book.expectEveryCommitSurvivesACrash();
+  });
+
+  it("rejects every publication in a batch whose directory sync fails, and commits none of them", async () => {
+    const artifacts = await store();
+    const syncs = holdDirectorySyncs();
+    const book = ledger();
+    const first = book.commit(artifacts.write(artifact("first")));
+    await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(1), SLOW_DISK);
+    const values = Array.from({ length: 5 }, (_, index) => artifact(`doomed ${index}`));
+    const batch = values.map((value) => book.commit(artifacts.write(value)));
+    const outcomes = Promise.allSettled(batch);
+    await vi.waitFor(() => expect(disk.links).toHaveLength(6), SLOW_DISK);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    syncs.release(0);
+    await first;
+    await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(2), SLOW_DISK);
+    const fault = Object.assign(new Error("injected directory sync failure"), { code: "EIO" });
+    syncs.release(1, fault);
+
+    const results = await outcomes;
+    expect(results.map((result) => result.status)).toEqual(Array(5).fill("rejected"));
+    for (const result of results) expect((result as PromiseRejectedResult).reason).toBe(fault);
+    expect(book.commits).toHaveLength(1);
+    book.expectEveryCommitSurvivesACrash();
+
+    // Their names are visible but no sync covers them, so a crash may take
+    // them back. A retry must sync the directory again before reporting one.
+    const doomedNames = values.map((value) => compressedName(referenceFor(value).reference));
+    for (const name of doomedNames) {
+      expect((await lstat(name)).isFile()).toBe(true);
+      expect(survivesCrash(name, disk.clock)).toBe(false);
+    }
+    syncs.release(2);
+    const retried = await book.commit(artifacts.write(values[0]!));
+    expect(compressedName(retried)).toBe(doomedNames[0]);
+    expect(disk.directorySyncs).toHaveLength(3);
+    book.expectEveryCommitSurvivesACrash();
+  });
+
+  it("does not report the bytes another write linked until a directory sync covers them", async () => {
+    const artifacts = await store();
+    const syncs = holdDirectorySyncs();
+    const book = ledger();
+    const value = artifact("written twice");
+    const name = compressedName(referenceFor(value).reference);
+    const publisher = book.commit(artifacts.write(value));
+    await vi.waitFor(() => expect(disk.directorySyncs).toHaveLength(1), SLOW_DISK);
+
+    // The second write finds the name already there, before its sync finished.
+    const observer = book.commit(artifacts.write(value));
+    const observed = settled(observer);
+    await vi.waitFor(() => expect(disk.reads).toContain(name), SLOW_DISK);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(observed.done).toBe(false);
+    expect(book.commits).toEqual([]);
+
+    syncs.release(0);
+    syncs.release(1);
+    await Promise.all([publisher, observer]);
+    expect(book.commits).toHaveLength(2);
+    book.expectEveryCommitSurvivesACrash();
+
+    // Once a sync covered the name, a repeat write costs none.
+    const syncsBefore = disk.directorySyncs.length;
+    await book.commit(artifacts.write(value));
+    expect(disk.directorySyncs).toHaveLength(syncsBefore);
+    book.expectEveryCommitSurvivesACrash();
+  });
+
+  it("syncs a name an earlier process left once before reporting it, then remembers it", async () => {
+    const artifacts = await store();
+    const book = ledger();
+    const value = artifact("left behind");
+    const { bytes, reference } = referenceFor(value);
+    const name = compressedName(reference);
+    await writeFile(name, await gzipAsync(bytes));
+    leftByEarlierProcess(name);
+
+    await book.commit(artifacts.write(value));
+    expect(disk.directorySyncs).toHaveLength(1);
+    expect(disk.links).toHaveLength(1);
+    await book.commit(artifacts.write(value));
+    expect(disk.directorySyncs).toHaveLength(1);
+    book.expectEveryCommitSurvivesACrash();
+
+    // A legacy plain name is reported the same way, without a compressed copy.
+    const legacyValue = artifact("legacy left behind");
+    const legacy = referenceFor(legacyValue);
+    const legacyName = join(directory!, `${legacy.reference.id.slice("sha256:".length)}.json`);
+    await writeFile(legacyName, legacy.bytes);
+    await expect(artifacts.write(legacyValue)).resolves.toEqual(legacy.reference);
+    expect(disk.directorySyncs).toHaveLength(2);
+    await expect(lstat(compressedName(legacy.reference))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("rejects a write whose file sync fails before any name points at its bytes", async () => {
+    const artifacts = await store();
+    const book = ledger();
+    const value = artifact("never half-written");
+    const fault = Object.assign(new Error("injected file sync failure"), { code: "EIO" });
+    disk.fileSyncFault = () => fault;
+
+    await expect(book.commit(artifacts.write(value))).rejects.toBe(fault);
+    expect(disk.links).toEqual([]);
+    expect(await readdir(directory!)).toEqual([]);
+
+    disk.fileSyncFault = undefined;
+    await book.commit(artifacts.write(value));
+    expect(book.commits).toHaveLength(1);
+    book.expectEveryCommitSurvivesACrash();
+  });
+});
 
 describe("FileTranscriptArtifactStore", () => {
   it("writes gzip bytes at the canonical digest and reads them back verified", async () => {
@@ -216,13 +510,18 @@ describe("FileTranscriptArtifactStore", () => {
 
   it("deduplicates concurrent identical writes", async () => {
     const artifacts = await store();
+    const book = ledger();
     const value = artifact();
-    const references = await Promise.all(Array.from({ length: 8 }, () => artifacts.write(value)));
+    const references = await Promise.all(
+      Array.from({ length: 8 }, () => book.commit(artifacts.write(value))),
+    );
 
     expect(new Set(references.map((reference) => reference.id))).toEqual(
       new Set([references[0]!.id]),
     );
     await expect(artifacts.read(references[0]!)).resolves.toEqual(value);
+    // A writer that lost the link race reports the winner's name only once it is durable.
+    book.expectEveryCommitSurvivesACrash();
   });
 
   it("retries directory initialization after a transient creation failure", async () => {
