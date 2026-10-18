@@ -1,16 +1,20 @@
 import { PERSON_STARTED } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
-import type {
-  CommandPaletteAutomationRunItem,
-  CommandPaletteSessionItem,
-  CommandPaletteTicketItem,
+import {
+  buildNavigationCommandItems,
+  type CommandPaletteAutomationRunItem,
+  type CommandPaletteSessionItem,
+  type CommandPaletteTicketItem,
 } from "./command-palette-model";
 import {
   PALETTE_SCOPES,
   PALETTE_SECTION_LIMIT,
   automationRowMatch,
+  browsableNavigationRows,
   commandPaletteFilter,
+  navigationLeads,
+  navigationRowMatch,
   paletteEmptyCopy,
   paletteScopeById,
   parsePaletteScopeQuery,
@@ -20,6 +24,7 @@ import {
   showScopeSuggestions,
   slicePaletteSection,
   ticketRowMatch,
+  type PaletteSectionSlice,
 } from "./command-palette-search";
 
 describe("scopeForToken", () => {
@@ -69,6 +74,46 @@ describe("parsePaletteScopeQuery", () => {
   });
 });
 
+/** One Ticket row's score, by display id. */
+function idTicketScore(displayId: string, search: string): number {
+  return commandPaletteFilter(`ticket ${displayId} Fix auth Alpha`, search, [
+    displayId,
+    "Fix auth",
+    "Alpha",
+  ]);
+}
+
+/** One Ticket row's score, by project and title. */
+function projectTicketScore(project: string, title: string, search: string): number {
+  return commandPaletteFilter(`ticket X-1 ${title} ${project}`, search, ["X-1", title, project]);
+}
+
+/** One Board Session row's score, by project and title. */
+function projectSessionScore(project: string, title: string, search: string): number {
+  return commandPaletteFilter(`session ${title} ${project} · Board Session ${project}`, search, [
+    title,
+    `${project} · Board Session`,
+    project,
+  ]);
+}
+
+function settingsCommandScore(search: string): number {
+  return commandPaletteFilter("navigate Settings App-wide", search, ["Settings", "preferences"]);
+}
+
+/** A Ticket that mentions settings, the Settings row's natural rival. */
+function settingsTicketScore(search: string): number {
+  return commandPaletteFilter("ticket VC-9 Settings search Alpha", search, [
+    "VC-9",
+    "Settings search",
+    "Alpha",
+  ]);
+}
+
+function skillsPaneScore(search: string): number {
+  return commandPaletteFilter("navigate Configure → Skills Alpha", search, ["Configure → Skills"]);
+}
+
 describe("commandPaletteFilter", () => {
   it("keeps cmdk matching while ignoring leading query whitespace", () => {
     expect(commandPaletteFilter("@tickets", "  @ti", ["Tickets"])).toBeGreaterThan(0);
@@ -88,6 +133,63 @@ describe("commandPaletteFilter", () => {
     );
     expect(ticketScore).toBeGreaterThan(sessionScore);
     expect(commandPaletteFilter("ticket VC-1 Auth Alpha", "session", [])).toBe(0);
+  });
+
+  it("puts an exact display id above every id it is a prefix of (VC-303)", () => {
+    // Natively these tie: "ALP-1" is a prefix of both values.
+    expect(idTicketScore("ALP-1", "ALP-1")).toBeGreaterThan(idTicketScore("ALP-10", "ALP-1"));
+    // Case and surrounding whitespace are not part of an id.
+    expect(idTicketScore("ALP-1", "  alp-1 ")).toBeGreaterThan(idTicketScore("ALP-10", "  alp-1 "));
+  });
+
+  it("lifts the named project's rows within their section, and only there", () => {
+    const ticket = projectTicketScore;
+    const session = projectSessionScore;
+    // "beta auth": Beta's Session beats Alpha's identical one…
+    expect(session("Beta", "Fix auth", "beta auth")).toBeGreaterThan(
+      session("Alpha", "Fix auth", "beta auth"),
+    );
+    // …multi-word project names qualify too…
+    expect(session("Volli Code", "Fix auth", "volli code auth")).toBeGreaterThan(
+      session("Alpha", "Fix auth", "volli code auth"),
+    );
+    // …the bare name lifts every row of that project…
+    expect(session("Beta", "Anything", "beta")).toBeGreaterThan(
+      session("Alpha", "Beta notes", "beta"),
+    );
+    // …yet a qualified Session never climbs over a matching Ticket.
+    expect(ticket("Alpha", "Beta auth", "beta auth")).toBeGreaterThan(
+      session("Beta", "Fix auth", "beta auth"),
+    );
+    // A project row whose remainder does not match falls back to plain scoring.
+    expect(session("Beta", "Deploy", "beta zzz")).toBe(
+      commandPaletteFilter("session Deploy Beta · Board Session Beta", "beta zzz", [
+        "Deploy",
+        "Beta · Board Session",
+        "Beta",
+      ]),
+    );
+    // A row with no project keyword is scored natively.
+    expect(commandPaletteFilter("session Deploy", "deploy", [])).toBeGreaterThan(0);
+    expect(commandPaletteFilter("session Deploy", "deploy", ["Deploy", ""])).toBeGreaterThan(0);
+  });
+
+  it("puts a command above every Ticket once its name is typed, not before", () => {
+    const settings = settingsCommandScore;
+    const ticket = settingsTicketScore;
+    expect(settings("Settings")).toBeGreaterThan(ticket("Settings"));
+    expect(settings(" settings ")).toBeGreaterThan(ticket(" settings "));
+    // Half a word is still a search: the Ticket section keeps its lead.
+    expect(settings("sett")).toBeGreaterThan(0);
+    expect(settings("sett")).toBeLessThan(ticket("sett"));
+
+    const pane = skillsPaneScore;
+    // A whole leading word names it; part of the next word does not.
+    expect(pane("configure")).toBeGreaterThan(ticket("configure") + 1);
+    expect(pane("configure → sk")).toBeLessThanOrEqual(1);
+    expect(pane("configure → skills")).toBeGreaterThan(100);
+    // A command row with no name keyword is scored natively.
+    expect(commandPaletteFilter("navigate Home", "home", [])).toBeLessThanOrEqual(1);
   });
 });
 
@@ -110,7 +212,7 @@ describe("paletteScopeById / paletteEmptyCopy", () => {
   });
 
   it("names the narrowed section in the empty copy", () => {
-    expect(paletteEmptyCopy(null)).toBe("No matching tickets or sessions.");
+    expect(paletteEmptyCopy(null)).toBe("No matching tickets, sessions, or commands.");
     expect(paletteEmptyCopy("sessions")).toBe("No matching sessions.");
   });
 });
@@ -141,6 +243,7 @@ function sessionItem(
     scope: { kind: "project", projectId: "p1" },
     ticketDisplayId: null,
     ticketTitle: null,
+    lastActivityAt: 0,
     provenance: PERSON_STARTED,
     destination: "tab",
     ...overrides,
@@ -169,6 +272,14 @@ describe("row match text", () => {
     expect(sessionRowMatch(sessionItem())).toEqual({
       value: "session Plan the migration Alpha · Board Session Alpha",
       keywords: ["Plan the migration", "Alpha · Board Session", "Alpha"],
+    });
+  });
+
+  it("builds a navigation row's value and keywords, title first", () => {
+    const [home] = buildNavigationCommandItems({ name: "Alpha" });
+    expect(navigationRowMatch(home!)).toEqual({
+      value: "navigate Home Alpha",
+      keywords: ["Home", "home", "tabs"],
     });
   });
 
@@ -244,5 +355,137 @@ describe("slicePaletteSection", () => {
     );
     expect(searched.visible).toHaveLength(PALETTE_SECTION_LIMIT);
     expect(searched.hiddenCount).toBe(3);
+  });
+});
+
+describe("navigationLeads", () => {
+  const pages = buildNavigationCommandItems({ name: "Alpha" }, [
+    { key: "skills", label: "Skills" },
+  ]);
+  const leads = (search: string) =>
+    navigationLeads(
+      slicePaletteSection(
+        browsableNavigationRows(pages, search),
+        navigationRowMatch,
+        search,
+        false,
+      ),
+      search,
+    );
+
+  it("puts Go to first once the query names one of its commands", () => {
+    expect(leads("Settings")).toBe(true);
+    expect(leads("board")).toBe(true);
+    expect(leads("configure skills")).toBe(true);
+  });
+
+  it("leaves it last while browsing, half-typed, or matching nothing", () => {
+    expect(leads("")).toBe(false);
+    expect(leads("sett")).toBe(false);
+    expect(leads("zzzz")).toBe(false);
+  });
+});
+
+describe("browsableNavigationRows", () => {
+  it("leaves Configure's panes out while browsing and in once searching", () => {
+    const pages = buildNavigationCommandItems({ name: "Alpha" }, [
+      { key: "skills", label: "Skills" },
+    ]);
+    expect(browsableNavigationRows(pages, "").map((row) => row.title)).not.toContain(
+      "Configure → Skills",
+    );
+    expect(browsableNavigationRows(pages, "skills")).toBe(pages);
+  });
+});
+
+/**
+ * VC-303's acceptance, end to end over the real match text and the same slice
+ * the palette mounts: each kind of query has a predictable top row.
+ */
+describe("the palette's top results", () => {
+  const tickets = [
+    ticketItem({ ticketId: "t10", displayId: "ALP-10", title: "Settings search", updatedAt: 9 }),
+    ticketItem({ ticketId: "t1", displayId: "ALP-1", title: "Fix auth", updatedAt: 1 }),
+    ticketItem({
+      ticketId: "b1",
+      projectId: "p2",
+      projectName: "Beta",
+      displayId: "BET-1",
+      title: "Fix auth",
+      updatedAt: 5,
+    }),
+  ];
+  // Already in the model's order: current project, then most recent.
+  const sessions = [
+    sessionItem({ sessionId: "recent", title: "Fix auth", lastActivityAt: 900 }),
+    sessionItem({ sessionId: "older", title: "Fix auth flow", lastActivityAt: 100 }),
+    sessionItem({
+      sessionId: "beta",
+      projectId: "p2",
+      projectName: "Beta",
+      title: "Fix auth",
+      scope: { kind: "project", projectId: "p2" },
+      lastActivityAt: 950,
+    }),
+  ];
+  const navigation = buildNavigationCommandItems({ name: "Alpha" }, [
+    { key: "skills", label: "Skills" },
+  ]);
+
+  /** Each section's top row, sections in the order cmdk sorts groups: by their best score. */
+  function top(search: string): string[] {
+    const first = <T>(slice: PaletteSectionSlice<T>, label: (row: T) => string) => {
+      const best = slice.visible[0];
+      return best === undefined
+        ? []
+        : [
+            {
+              label: label(best.row),
+              score: commandPaletteFilter(best.match.value, search, best.match.keywords),
+            },
+          ];
+    };
+    return [
+      ...first(slicePaletteSection(tickets, ticketRowMatch, search, false), (row) => row.displayId),
+      ...first(
+        slicePaletteSection(sessions, sessionRowMatch, search, false),
+        (row) => row.sessionId,
+      ),
+      ...first(
+        slicePaletteSection(
+          browsableNavigationRows(navigation, search),
+          navigationRowMatch,
+          search,
+          false,
+        ),
+        (row) => row.title,
+      ),
+    ]
+      .toSorted((a, b) => b.score - a.score)
+      .map((entry) => entry.label);
+  }
+
+  it("leads with the most recent Session while browsing", () => {
+    expect(slicePaletteSection(sessions, sessionRowMatch, "", false).visible[0]?.row).toBe(
+      sessions[0],
+    );
+  });
+
+  it("puts the newer of two similarly named Sessions first", () => {
+    expect(top("fix auth")).toEqual(["ALP-1", "recent"]);
+  });
+
+  it("puts an exact display id first", () => {
+    expect(top("ALP-1")[0]).toBe("ALP-1");
+    expect(top("alp-10")[0]).toBe("ALP-10");
+  });
+
+  it("puts the qualifying project's rows first in their sections", () => {
+    expect(top("beta fix auth")).toEqual(["BET-1", "beta"]);
+  });
+
+  it('puts the Settings command first for "Settings"', () => {
+    expect(top("Settings")[0]).toBe("Settings");
+    expect(top("configure skills")[0]).toBe("Configure → Skills");
   });
 });

@@ -47,6 +47,14 @@ interface CommandPaletteSessionBase {
   ticketDisplayId: string | null;
   ticketTitle: string | null;
   /**
+   * Epoch ms of the Session's newest durable fact, the record's own
+   * `lastActivityAt` (VC-303). The palette's recency order within a project:
+   * the Session you were just in is the one you are most likely looking for.
+   * An open terminal tab reads its durable record's value; a tab with no
+   * record yet reads 0 and sorts after every Session that has one.
+   */
+  lastActivityAt: number;
+  /**
    * Who started this Session (VC-131). The palette is the app's one GLOBAL
    * Session listing — every project's, in one list — so it is the surface where
    * a Run's Session is most easily mistaken for one a person opened, and
@@ -148,6 +156,9 @@ export function buildCommandPaletteItems(
       a.displayId.localeCompare(b.displayId),
   );
 
+  const terminalActivityAt = new Map(
+    terminalSessions.map((record) => [record.id, record.lastActivityAt]),
+  );
   const sessions: CommandPaletteSessionItem[] = [];
   for (const container of Object.values(sessionsByOwner)) {
     if (container === undefined) continue;
@@ -170,6 +181,7 @@ export function buildCommandPaletteItems(
             ? null
             : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
         ticketTitle: linked?.ticket.title ?? null,
+        lastActivityAt: terminalActivityAt.get(tab.sessionId) ?? 0,
         provenance: sessionProvenanceOf(provenance, tab.sessionId),
         destination: "tab",
       });
@@ -211,6 +223,7 @@ export function buildCommandPaletteItems(
           ? null
           : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
       ticketTitle: linked?.ticket.title ?? null,
+      lastActivityAt: record.lastActivityAt,
       provenance: sessionProvenanceOf(provenance, record.id),
       destination: "detail",
     });
@@ -239,14 +252,20 @@ export function buildCommandPaletteItems(
           ? null
           : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
       ticketTitle: linked?.ticket.title ?? null,
+      lastActivityAt: record.lastActivityAt,
       provenance: sessionProvenanceOf(provenance, record.sessionId),
       destination: "tab",
     });
   }
 
+  // Current project first, then most recently active (VC-303) — the order
+  // tickets already take by `updatedAt`. Title only breaks a tie, so two
+  // Sessions of one name list the newer one first instead of whichever the
+  // alphabet happened to pick.
   sessions.sort(
     (a, b) =>
       currentProjectFirst(a.projectId) - currentProjectFirst(b.projectId) ||
+      b.lastActivityAt - a.lastActivityAt ||
       a.title.localeCompare(b.title),
   );
 
@@ -325,6 +344,85 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
       title: "Go to Line…",
       hint: "In the editor you were last in",
     },
+  ];
+}
+
+/* ------------------------------------------------------------ navigation */
+
+/**
+ * The palette's page rows (VC-303): Home, its Board and List views, Configure
+ * and each of its panes, and Settings. Before these, ⌘K could find a Ticket
+ * but not the page it lives on, and typing "Settings" found nothing.
+ */
+export type CommandPaletteNavigationItem =
+  | {
+      kind: "navigation";
+      id: "home" | "board" | "list" | "configure" | "settings";
+      title: string;
+      hint: string;
+      keywords: string[];
+    }
+  | {
+      kind: "navigation";
+      id: "configure-pane";
+      /** The Configure category key the row opens. */
+      paneKey: string;
+      title: string;
+      hint: string;
+      keywords: string[];
+    };
+
+/** A Configure pane as the palette names it — the rail's own key, label and search terms. */
+export interface PaletteConfigurePane {
+  readonly key: string;
+  readonly label: string;
+  readonly keywords?: readonly string[];
+}
+
+/**
+ * The navigation rows. Every page but Settings belongs to the selected
+ * project, so with none selected Settings is the only row rather than rows
+ * that would navigate a project nobody chose.
+ */
+export function buildNavigationCommandItems(
+  selectedProject: Pick<Project, "name"> | null,
+  configurePanes: readonly PaletteConfigurePane[] = [],
+): CommandPaletteNavigationItem[] {
+  const settings: CommandPaletteNavigationItem = {
+    kind: "navigation",
+    id: "settings",
+    title: "Settings",
+    hint: "App-wide",
+    keywords: ["settings", "preferences", "models", "appearance", "notifications"],
+  };
+  if (selectedProject === null) return [settings];
+  const hint = selectedProject.name;
+  return [
+    { kind: "navigation", id: "home", title: "Home", hint, keywords: ["home", "tabs"] },
+    {
+      kind: "navigation",
+      id: "board",
+      title: "Board view",
+      hint,
+      keywords: ["board", "kanban", "columns"],
+    },
+    { kind: "navigation", id: "list", title: "List view", hint, keywords: ["list", "table"] },
+    {
+      kind: "navigation",
+      id: "configure",
+      title: "Configure",
+      hint,
+      keywords: ["configure", "project settings"],
+    },
+    ...configurePanes.map((pane): CommandPaletteNavigationItem => ({
+      kind: "navigation",
+      id: "configure-pane",
+      paneKey: pane.key,
+      title: `Configure → ${pane.label}`,
+      hint,
+      keywords: [pane.label, ...(pane.keywords ?? [])],
+    })),
+    settings,
   ];
 }
 
