@@ -94,9 +94,10 @@ export function redactCredentialText(text: string, port: RedactionPort): string 
 /**
  * JSON-shaped tool results, including details and structuredContent, are scrubbed
  * before Pi publishes updates/results or records them in its sidecar. Exact text
- * only: not an encoding detector or an exfiltration boundary. Image blocks pass
- * through unchanged: replacing bytes in base64 corrupts images, and a credential
- * rendered as pixels is outside exact-text redaction.
+ * only: not an encoding detector or an exfiltration boundary. This recursion has
+ * no image exception. At the tool-result boundary, only the data of validated
+ * top-level content image blocks bypasses scrubbing: replacing base64 corrupts
+ * images, and a credential rendered as pixels is outside exact-text redaction.
  */
 function scrub(value: unknown, port: RedactionPort): unknown {
   if (typeof value === "string") return redactCredentialText(value, port);
@@ -109,7 +110,6 @@ function scrub(value: unknown, port: RedactionPort): unknown {
   }
   if (Array.isArray(value)) return value.map((entry) => scrub(entry, port));
   if (value !== null && typeof value === "object") {
-    if ("type" in value && value.type === "image") return value;
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => [
         redactCredentialText(key, port),
@@ -162,7 +162,33 @@ export function privateSecretExecution(
 export function redactToolResults(tool: AgentTool, port: RedactionPort | undefined): AgentTool {
   if (port === undefined) return tool;
   const safeResult = (result: AgentToolResult<unknown>): AgentToolResult<unknown> =>
-    scrub(result, port) as AgentToolResult<unknown>;
+    Object.fromEntries(
+      Object.entries(result).map(([key, value]) => [
+        redactCredentialText(key, port),
+        key === "content" && Array.isArray(value)
+          ? value.map((block: unknown) => {
+              if (
+                block !== null &&
+                typeof block === "object" &&
+                "type" in block &&
+                block.type === "image" &&
+                "data" in block &&
+                typeof block.data === "string" &&
+                "mimeType" in block &&
+                typeof block.mimeType === "string"
+              ) {
+                return Object.fromEntries(
+                  Object.entries(block).map(([field, entry]) => [
+                    redactCredentialText(field, port),
+                    field === "data" ? entry : scrub(entry, port),
+                  ]),
+                );
+              }
+              return scrub(block, port);
+            })
+          : scrub(value, port),
+      ]),
+    ) as unknown as AgentToolResult<unknown>;
   return {
     ...tool,
     async execute(toolCallId, params, signal, onUpdate) {

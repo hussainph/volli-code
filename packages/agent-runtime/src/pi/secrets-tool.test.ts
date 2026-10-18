@@ -266,8 +266,89 @@ describe("tool result credential boundary", () => {
     expect(updates).toEqual([final]);
     expect(JSON.stringify(final)).not.toContain(SECRET);
     expect(final.structuredContent).toEqual({ token: "[redacted]" });
-    expect(final.content[1]).toBe(result.content[1]);
+    expect(final.content[1]).toEqual(result.content[1]);
     expect(JSON.stringify(result)).toContain(SECRET); // Never mutate a tool's object.
+  });
+
+  it("scrubs image-shaped structured data and content image metadata in results and updates", async () => {
+    const image = {
+      type: "image" as const,
+      data: SECRET,
+      mimeType: `image/${SECRET}`,
+      token: SECRET,
+      [SECRET]: { type: "image", data: SECRET, mimeType: SECRET },
+    };
+    const result = {
+      content: [image],
+      details: { type: "image", token: SECRET },
+      structuredContent: { type: "image", data: SECRET, mimeType: SECRET, token: SECRET },
+    };
+    const updates: AgentToolResult<unknown>[] = [];
+    const final = await redactToolResults(
+      fixtureTool(async (_id, _params, _signal, update) => {
+        update?.(result);
+        return result;
+      }),
+      secretPort(),
+    ).execute("image-metadata", {}, signal, (update) => updates.push(update));
+    const expected = {
+      content: [
+        {
+          type: "image",
+          data: SECRET,
+          mimeType: "image/[redacted]",
+          token: "[redacted]",
+          "[redacted]": { type: "image", data: "[redacted]", mimeType: "[redacted]" },
+        },
+      ],
+      details: { type: "image", token: "[redacted]" },
+      structuredContent: {
+        type: "image",
+        data: "[redacted]",
+        mimeType: "[redacted]",
+        token: "[redacted]",
+      },
+    };
+    expect(final).toEqual(expected);
+    expect(updates).toEqual([expected]);
+    expect(image.token).toBe(SECRET);
+  });
+
+  it.each([
+    null,
+    SECRET,
+    { token: SECRET },
+    { type: "text", text: SECRET },
+    { type: "image", token: SECRET },
+    { type: "image", data: { token: SECRET }, mimeType: "image/png" },
+    { type: "image", data: SECRET },
+    { type: "image", data: SECRET, mimeType: 123 },
+  ])("scrubs malformed content image entries normally (%j)", async (block) => {
+    const result = { content: [block], details: undefined } as unknown as AgentToolResult<unknown>;
+    const updates: AgentToolResult<unknown>[] = [];
+    const final = await redactToolResults(
+      fixtureTool(async (_id, _params, _signal, update) => {
+        update?.(result);
+        return result;
+      }),
+      secretPort(),
+    ).execute("malformed-image", {}, signal, (update) => updates.push(update));
+    expect(JSON.stringify(final)).not.toContain(SECRET);
+    expect(final.content[0]).toEqual(
+      JSON.parse(JSON.stringify(block).replaceAll(SECRET, "[redacted]")),
+    );
+    expect(updates).toEqual([final]);
+  });
+
+  it("scrubs malformed non-array content normally", async () => {
+    const result = {
+      content: { type: "image", data: SECRET },
+    } as unknown as AgentToolResult<unknown>;
+    const final = await redactToolResults(
+      fixtureTool(async () => result),
+      secretPort(),
+    ).execute("malformed-content", {}, signal);
+    expect(final.content).toEqual({ type: "image", data: "[redacted]" });
   });
 
   it.each([new Error(`failure ${SECRET}`, { cause: new Error(SECRET) }), SECRET])(
@@ -621,7 +702,7 @@ describe("dynamic credential environment", () => {
 
 describe("credential output privacy before disk spill", () => {
   it.each([false, true, "failed", "missing"] as const)(
-    "passes images through unchanged without redacting base64 data (%s)",
+    "passes content images through without redacting base64 data (%s)",
     async (active) => {
       const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
       const redact = vi.fn((text: string) => text.replaceAll(image.data, "[redacted]"));
@@ -646,8 +727,8 @@ describe("credential output privacy before disk spill", () => {
         }),
         port,
       ).execute("c", {}, signal, (update) => updates.push(update));
-      expect(result.content[0]).toBe(image);
-      expect(updates[0]?.content[0]).toBe(image);
+      expect(result.content[0]).toEqual(image);
+      expect(updates[0]?.content[0]).toEqual(image);
       expect(redact).not.toHaveBeenCalledWith(image.data);
     },
   );
