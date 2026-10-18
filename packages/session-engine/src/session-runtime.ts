@@ -748,9 +748,9 @@ interface BindingRecord {
   /**
    * True from this binding's `turn.started` until that turn completes or is
    * interrupted; absent before its first turn. While it holds, the Session's
-   * overlay and fold are exempt from their caches' bounds (see
-   * `DefaultSessionRuntime.streamingSessions`), and it lives on the record so
-   * that a binding which goes away mid-turn takes the exemption with it.
+   * overlay and fold are exempt from their caches' bounds (the runtime's
+   * `#streamingSessions`), and it lives on the record so that a binding which
+   * goes away mid-turn takes the exemption with it.
    */
   turnOpen?: boolean;
   reconcileInFlight: Promise<void> | null;
@@ -972,11 +972,11 @@ export const PROJECTION_CACHE_LIMIT = 8;
  *
  * A Session whose turn is running is exempt (VC-466), so this bounds only
  * overlays with nothing left to stream into them, and the exempt ones are
- * bounded by the turns running at once. Under recency alone a ninth streaming
- * Session evicted the others between their deltas: each miss re-read the ledger
- * to seed an empty record, and that record then ignored every delta for the
- * message in flight — the fold only acts on a message it holds a baseline for —
- * so a chat opened before the message settled never saw any of it.
+ * bounded by the turns running at once. A streaming Session's overlay is read
+ * on every delta and holds the only baseline its message in flight has: the
+ * fold acts on no delta for a message it holds no entry for, so dropping the
+ * overlay mid-message would cost a ledger read to re-seed it and, for a chat
+ * opened before the message settles, the rest of that message.
  */
 const OVERLAY_CACHE_LIMIT = 8;
 
@@ -984,13 +984,18 @@ const OVERLAY_CACHE_LIMIT = 8;
  * Evicts the least recently kept unexempt entries of an insertion-ordered cache
  * until at most `limit` of them remain. An exempt entry keeps its place and
  * counts against nothing.
+ *
+ * `exemption` is asked for its predicate only when the cache is over its limit:
+ * a cache under it evicts nothing, and the overlay cache is kept on every
+ * delta.
  */
 function trimCache(
   cache: Map<string, unknown>,
   limit: number,
-  exempt: (key: string) => boolean,
+  exemption: () => (key: string) => boolean,
 ): void {
   if (cache.size <= limit) return;
+  const exempt = exemption();
   let evictable = 0;
   for (const key of cache.keys()) {
     if (!exempt(key)) evictable += 1;
@@ -4425,8 +4430,10 @@ class DefaultSessionRuntime implements SessionRuntime {
   #keepOverlay(sessionId: string, overlay: SessionOverlayState): SessionOverlayState {
     this.#overlays.delete(sessionId);
     this.#overlays.set(sessionId, overlay);
-    const streaming = this.#streamingSessions();
-    trimCache(this.#overlays, OVERLAY_CACHE_LIMIT, (key) => streaming.has(key));
+    trimCache(this.#overlays, OVERLAY_CACHE_LIMIT, () => {
+      const streaming = this.#streamingSessions();
+      return (key) => streaming.has(key);
+    });
     return overlay;
   }
 
@@ -5337,19 +5344,17 @@ class DefaultSessionRuntime implements SessionRuntime {
    * renderer.
    *
    * A Session with a turn running or about to is exempt on the same terms
-   * (VC-466; {@link streamingSessions}): a background turn has nobody watching
+   * (VC-466; {@link #streamingSessions}): a background turn has nobody watching
    * it, but it reads its own fold at every step, and the exemption ends when
    * the turn settles.
    */
   #keepHistory(sessionId: string, history: ProjectedHistory): ProjectedHistory {
     this.#histories.delete(sessionId);
     this.#histories.set(sessionId, history);
-    const streaming = this.#streamingSessions();
-    trimCache(
-      this.#histories,
-      PROJECTION_CACHE_LIMIT,
-      (key) => this.#subscribers.has(key) || streaming.has(key),
-    );
+    trimCache(this.#histories, PROJECTION_CACHE_LIMIT, () => {
+      const streaming = this.#streamingSessions();
+      return (key) => this.#subscribers.has(key) || streaming.has(key);
+    });
     return history;
   }
 
