@@ -6212,7 +6212,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git: scripted.git,
       gitAsync: scripted.gitAsync,
       worktreeExists: () => true,
     });
@@ -6291,7 +6290,6 @@ describe("agent command service", () => {
       db: ctx.db,
       appVersion: "1.0.0",
       now: () => 100,
-      git: scripted.git,
       gitAsync,
       worktreeExists: () => true,
     });

@@ -15,7 +15,7 @@ import {
   updateTicketFields,
 } from "../db/tickets-repo";
 import type { NotificationRequest } from "@volli/shared";
-import { runGitCapturing, runGitCapturingAsync } from "./git";
+import { runGitCapturingAsync } from "./git";
 import type { RunNet } from "./net";
 import type { WorktreePorts } from "./types";
 import { setRetentionTtlDays } from "./retention";
@@ -847,7 +847,6 @@ describe("pollRetention — trim-on-finish backfill (VC-340)", () => {
     return {
       worktree: {
         db: ctx.db,
-        git: runGitCapturing,
         gitAsync: runGitCapturingAsync,
         blobsRoot: "unused",
       },
@@ -1216,7 +1215,6 @@ describe("pollRetention — terminal PRs are not re-polled (VC-836)", () => {
         trim: {
           worktree: {
             db: ctx.db,
-            git: runGitCapturing,
             gitAsync: runGitCapturingAsync,
             blobsRoot: "unused",
           },
