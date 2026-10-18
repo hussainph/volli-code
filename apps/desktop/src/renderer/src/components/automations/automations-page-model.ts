@@ -467,12 +467,14 @@ export function nextScheduledRun(input: {
 }
 
 /**
- * The missed-run policy, said once at the schedule control (VC-298).
+ * When a due time becomes a Skipped occurrence, said once at the schedule
+ * control (VC-298).
  *
  * The grace is the host timer's own constant rather than a number typed here,
- * so the sentence cannot promise a window the scheduler does not keep. What
- * lies outside it is a Skipped occurrence in Run history, never a replay.
+ * so the sentence cannot promise a window the scheduler does not keep. A due
+ * time outside it is recorded as a Skipped occurrence in Run history, never
+ * replayed.
  */
-export const SCHEDULE_MISSED_RUN_POLICY = `Runs up to ${
+export const SCHEDULE_SKIPPED_OCCURRENCE_POLICY = `Runs up to ${
   AUTOMATION_SCHEDULE_LATE_GRACE_MS / 60_000
 } min late; skipped if Volli is closed or the Mac is asleep`;

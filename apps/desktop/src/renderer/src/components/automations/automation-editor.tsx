@@ -79,7 +79,7 @@ import {
   INSTRUCTIONS_PLACEHOLDER,
   MANUAL_TRIGGER_LABEL,
   nextScheduledRun,
-  SCHEDULE_MISSED_RUN_POLICY,
+  SCHEDULE_SKIPPED_OCCURRENCE_POLICY,
 } from "./automations-page-model";
 import {
   clearEditorDraft,
@@ -200,9 +200,10 @@ function TimeField({
 /**
  * "Next: …" at the schedule control (VC-298), for a schedule this machine will
  * actually fire. Its own component so the clock it keeps re-renders this line
- * rather than the editor: once the shown occurrence passes it reads the next
- * one, and it looks again at least once a minute so a slept laptop or a moved
- * clock corrects itself, like the host timer it mirrors.
+ * rather than the editor, and its answer is memoized so the editor's renders
+ * do not recompute it. Once the shown occurrence passes it reads the next one,
+ * and it looks again at least once a minute so a slept laptop or a moved clock
+ * corrects itself, like the host timer it mirrors.
  */
 function NextScheduledRun({
   schedule,
@@ -212,7 +213,12 @@ function NextScheduledRun({
   automationId: string;
 }) {
   const [now, setNow] = React.useState(() => Date.now());
-  const next = nextScheduledRun({ schedule, automationId, now, timeZone: hostTimeZone() });
+  // Memoized on its real inputs: the editor re-renders this line on every
+  // keystroke elsewhere in the form, and none of those change the answer.
+  const next = React.useMemo(
+    () => nextScheduledRun({ schedule, automationId, now, timeZone: hostTimeZone() }),
+    [schedule, automationId, now],
+  );
   React.useEffect(() => {
     const timer = window.setTimeout(
       () => setNow(Date.now()),
@@ -949,7 +955,9 @@ export function AutomationEditorPanel({
                 {firesHere && automationId !== null && scheduleProblem === null ? (
                   <NextScheduledRun schedule={schedule} automationId={automationId} />
                 ) : null}
-                <p className="text-ui text-muted-foreground">{SCHEDULE_MISSED_RUN_POLICY}</p>
+                <p className="text-ui text-muted-foreground">
+                  {SCHEDULE_SKIPPED_OCCURRENCE_POLICY}
+                </p>
               </div>
             ) : null}
             {scheduleProblem === null ? null : (
