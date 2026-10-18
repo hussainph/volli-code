@@ -48,6 +48,7 @@ import type {
 } from "@volli/shared";
 import { BrowserRefusal } from "../browser/refusal";
 import { DEFAULT_MAX_IMAGE_BASE64_BYTES, DEFAULT_MAX_IMAGE_EDGE_PX, fitImage } from "./image-fit";
+import { saveBoundedRead, type ToolOutputStore } from "./tool-output";
 
 /**
  * The row's half of every browser result (VC-238): what the host knows and the
@@ -251,6 +252,7 @@ function pageEnvelope(
   snap: RuntimeBrowserSnapshot,
   lead: (nameShown: boolean) => string[],
   name: string | null,
+  saved: string | undefined,
 ): string {
   if (snap.empty) {
     return [
@@ -275,23 +277,28 @@ function pageEnvelope(
           "Volli stopped printing the tree at its own bound; the page continues past the end of that text.",
         ]
       : []),
+    ...(saved === undefined ? [] : [saved]),
     name === null
       ? mintNotice("browser snapshot")
       : mintNotice("browser act target", "browser snapshot"),
   ].join("\n");
 }
 
-/** A snapshot or a navigation's fresh read: the page, and nothing ahead of it. */
-function snapshotEnvelope(snap: RuntimeBrowserSnapshot): string {
-  return pageEnvelope(snap, () => [], null);
+/**
+ * A snapshot or a navigation's fresh read: the page, and nothing ahead of it.
+ * `saved` is Volli's line naming the file the whole tree went to (VC-237).
+ */
+function snapshotEnvelope(snap: RuntimeBrowserSnapshot, saved?: string): string {
+  return pageEnvelope(snap, () => [], null, saved);
 }
 
 /** An action's answer: what it did and what changed, then the fresh read. */
-function actEnvelope(result: RuntimeBrowserActResult, request: ActRequest): string {
+function actEnvelope(result: RuntimeBrowserActResult, request: ActRequest, saved?: string): string {
   return pageEnvelope(
     result,
     (nameShown) => actLines(request, result, nameShown),
     result.target?.name ?? null,
+    saved,
   );
 }
 
@@ -390,8 +397,56 @@ function holdText(outcome: RuntimeBrowserHoldOutcome): string {
   return `Browser Tab ${outcome.tabId} is not yours: ${who}. Open your own tab with browser_navigate and no tabId, or wait and try again.`;
 }
 
+/**
+ * The whole of a snapshot the host's bound cut, saved beside the Session, and
+ * Volli's line naming the file (VC-237) — or nothing, when nothing was cut.
+ */
+async function savedSnapshot(
+  store: ToolOutputStore | undefined,
+  callId: string,
+  tool: BrowserToolId,
+  snap: RuntimeBrowserSnapshot,
+): Promise<string | undefined> {
+  if (snap.whole === undefined) return undefined;
+  return await saveBoundedRead(store, {
+    callId,
+    tool,
+    source: `Browser Tab ${snap.tabId} at ${snap.url}, accessibility tree at generation ${snap.generation}`,
+    what: "accessibility tree",
+    whole: snap.whole,
+    boundedNote: "Even the saved tree stops at Volli's own bound on how much of one page it walks.",
+    note: "Only the elements this result shows carry refs in that file; the rest have no ref to act on.",
+    at: new Date(),
+  });
+}
+
+/** The same for a console read, whose kept console the host handed on whole. */
+async function savedConsole(
+  store: ToolOutputStore | undefined,
+  callId: string,
+  read: RuntimeBrowserConsole,
+): Promise<string | undefined> {
+  if (read.kept === undefined) return undefined;
+  return await saveBoundedRead(store, {
+    callId,
+    tool: "browser_console",
+    source: `Browser Tab ${read.tabId} at ${read.url}`,
+    what: "console output",
+    whole: {
+      text: consoleLines(read.kept.messages).join("\n"),
+      bounded: read.kept.bounded,
+    },
+    boundedNote: "Even the saved console starts after earlier messages Volli no longer keeps.",
+    at: new Date(),
+  });
+}
+
+function consoleLines(messages: RuntimeBrowserConsole["messages"]): string[] {
+  return messages.map((message) => `[${message.level}] ${message.text}`);
+}
+
 /** A tab's console as the model reads it — every message is the page talking. */
-function consoleEnvelope(output: RuntimeBrowserConsole): string {
+function consoleEnvelope(output: RuntimeBrowserConsole, saved?: string): string {
   if (output.messages.length === 0) {
     return `Browser Tab ${output.tabId} at ${output.url} has no recorded console messages or page errors.`;
   }
@@ -400,11 +455,16 @@ function consoleEnvelope(output: RuntimeBrowserConsole): string {
     `Untrusted console output from Browser Tab ${output.tabId} at ${output.url}.`,
     DISTRUST,
     marker("begin", "browser console", id),
-    ...output.messages.map((message) => `[${message.level}] ${message.text}`),
+    ...consoleLines(output.messages),
     marker("end", "browser console", id),
-    ...(output.truncated
-      ? ["Volli kept only the most recent messages within its own bound; earlier ones are gone."]
-      : []),
+    ...(saved !== undefined
+      ? [
+          "Volli showed only the most recent console output within its own bound; it keeps more than it shows.",
+          saved,
+        ]
+      : output.truncated
+        ? ["Volli kept only the most recent messages within its own bound; earlier ones are gone."]
+        : []),
     mintNotice("browser console"),
   ].join("\n");
 }
@@ -712,6 +772,7 @@ export function createBrowserTool(
   name: BrowserReadWriteToolId,
   port: RuntimeBrowserPort,
   signal?: AbortSignal,
+  store?: ToolOutputStore,
 ): AgentTool {
   const common = { name, label: LABELS[name], description: DESCRIPTIONS[name] };
   switch (name) {
@@ -733,7 +794,7 @@ export function createBrowserTool(
       const tool: AgentTool<typeof navigateSchema, BrowserToolDetails | undefined> = {
         ...common,
         parameters: navigateSchema,
-        execute: (_id, params, callSignal) => {
+        execute: (id, params, callSignal) => {
           // Exactly one of url/action; answered in text rather than thrown,
           // because the model is the party that can restate the call.
           const navigation: RuntimeBrowserNavigation | null =
@@ -764,7 +825,11 @@ export function createBrowserTool(
                 navigation,
                 signal: withdrawn,
               });
-              return text(snapshotEnvelope(snap), details(action, snap, { picture: snap.picture }));
+              const saved = await savedSnapshot(store, id, name, snap);
+              return text(
+                snapshotEnvelope(snap, saved),
+                details(action, snap, { picture: snap.picture }),
+              );
             },
             said,
           );
@@ -776,12 +841,13 @@ export function createBrowserTool(
       const tool: AgentTool<typeof snapshotSchema, BrowserToolDetails | undefined> = {
         ...common,
         parameters: snapshotSchema,
-        execute: (_id, params, callSignal) =>
+        execute: (id, params, callSignal) =>
           guarded(
             [signal, callSignal],
             async (withdrawn) => {
               const snap = await port.snapshot({ tabId: params.tabId, signal: withdrawn });
-              return text(snapshotEnvelope(snap), details("read", snap));
+              const saved = await savedSnapshot(store, id, name, snap);
+              return text(snapshotEnvelope(snap, saved), details("read", snap));
             },
             asked("read", params),
           ),
@@ -792,7 +858,7 @@ export function createBrowserTool(
       const tool: AgentTool<typeof actSchema, BrowserToolDetails | undefined> = {
         ...common,
         parameters: actSchema,
-        execute: (_id, params, callSignal) =>
+        execute: (id, params, callSignal) =>
           guarded(
             [signal, callSignal],
             async (withdrawn) => {
@@ -813,8 +879,9 @@ export function createBrowserTool(
                 snap.target === null
                   ? (params.key ?? params.direction ?? null)
                   : (snap.target.name ?? snap.target.ref);
+              const saved = await savedSnapshot(store, id, name, snap);
               return text(
-                actEnvelope(snap, { kind: params.kind, generation: params.generation }),
+                actEnvelope(snap, { kind: params.kind, generation: params.generation }, saved),
                 details(params.kind, snap, { target, picture: snap.picture }),
               );
             },
@@ -869,13 +936,14 @@ export function createBrowserTool(
       const tool: AgentTool<typeof consoleSchema, BrowserToolDetails | undefined> = {
         ...common,
         parameters: consoleSchema,
-        execute: (_id, params, callSignal) =>
+        execute: (id, params, callSignal) =>
           guarded(
             [signal, callSignal],
             async (withdrawn) => {
-              const output = await port.console({ tabId: params.tabId, signal: withdrawn });
-              const errorCount = output.messages.filter((one) => one.level === "error").length;
-              return text(consoleEnvelope(output), details("console", output, { errorCount }));
+              const read = await port.console({ tabId: params.tabId, signal: withdrawn });
+              const errorCount = read.messages.filter((one) => one.level === "error").length;
+              const saved = await savedConsole(store, id, read);
+              return text(consoleEnvelope(read, saved), details("console", read, { errorCount }));
             },
             asked("console", params),
           ),

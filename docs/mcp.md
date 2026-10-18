@@ -861,8 +861,9 @@ trust notice.
   sidecars, because a tool result can contain anything the server could see.
   Volli does not mark them for other backup tools such as Time Machine.
 - **Reading them back.** When `read` opens a saved file, its result starts with
-  a notice that the file is untrusted data, so the warning is not lost when the
-  model reads the rest of a result later. A Session whose authority is set to
+  a notice that the file is untrusted data, and the file's text sits between
+  markers minted for that read, so the warning is not lost when the model reads
+  the rest of a result later and the text cannot write its own end to them. A Session whose authority is set to
   `enforce` may read, but never write, the saved output its own history names:
   its own, and that of every earlier attachment whose conversation it carries,
   after a relaunch as well as on the first attach. It may not read another
@@ -883,11 +884,29 @@ trust notice.
     remote, can be up to 8 MiB plus 64 KiB (`MCP_STDIO_BUFFER_MAX_BYTES`),
     enough for an 8 MiB result and its framing.
 
-These rules apply to MCP results only. `web_fetch` already returns at most
-25,000 characters of an extracted article, and saving the rest of a web page
-would put untrusted page text in a file that `read` would later return without
-the per-read markers `web_fetch` wraps it in. `execute` keeps Pi's own handling:
-the last 2,000 lines or 50 KB, with the full output in a Pi temp file.
+Web reads are cut by bounds of their own, and save what those bounds cut to
+the same directory, under the same limits and lifetime (VC-237):
+
+- `web_fetch` returns at most 25,000 characters of a page. The rest of the
+  text Volli read is saved. A page past extraction's own bounds was never
+  read whole, so a saved page can still stop short of the page's end, and the
+  result says so.
+- `browser_snapshot`, `browser_navigate` and `browser_act` print at most
+  30,000 characters of the accessibility tree. The tree is saved whole, walked
+  as far as `browser_find` walks (20,000 nodes) and to at most 8 MiB. Only the
+  elements the result showed carry refs in the file; nothing past them can be
+  acted on from it.
+- `browser_console` shows the most recent 100 messages within 30,000
+  characters. A tab keeps up to 1,000 messages and 256,000 characters, and
+  the read saves all of that when it showed less.
+
+The result names the file, its size and the lines the text is on, and when it
+was read. The file's one-line header names the tool, where the text came from
+(the URL without its query string for `web_fetch`; the tab, its URL and the
+tree's generation for the browser) and the time. A search (`web_search`,
+`browser_find`) returns references and matches, not a read, and saves nothing.
+`execute` keeps Pi's own handling: the last 2,000 lines or 50 KB, with the full
+output in a Pi temp file.
 
 ## What is out of scope
 

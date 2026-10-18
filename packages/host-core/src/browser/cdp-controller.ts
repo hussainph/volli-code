@@ -37,6 +37,7 @@
  */
 
 import { BrowserRefusal } from "@volli/agent-runtime";
+import type { RuntimeWholeText } from "@volli/shared";
 
 import {
   axTreeDigest,
@@ -97,6 +98,8 @@ export interface TabSnapshot {
   truncated: boolean;
   /** The tree exposed nothing at all — which is not the same as a cut or a failed read. */
   empty: boolean;
+  /** The tree printed past the bound, when the bound cut {@link text} (VC-237). */
+  whole?: RuntimeWholeText;
 }
 
 /**
@@ -564,6 +567,7 @@ export class BrowserTabController {
       generation: this.#generation,
       truncated: printed.truncated,
       empty: printed.empty,
+      ...(printed.whole === undefined ? {} : { whole: printed.whole }),
     };
   }
 

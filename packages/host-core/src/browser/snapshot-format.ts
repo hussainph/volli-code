@@ -39,6 +39,8 @@
 
 import { createHash } from "node:crypto";
 
+import type { RuntimeWholeText } from "@volli/shared";
+
 /** A CDP AXNode, cut to the fields this printer reads. */
 export interface AXNodeLike {
   nodeId: string;
@@ -315,6 +317,49 @@ function lineText(line: { text: string; colon: boolean }): string {
 
 const NO_LEDGER: RefLedger = { known: new Map(), nextRef: 1, markNew: false };
 
+/** A ref as a line carries it, with Volli's `[new]` when the reader has not seen the element. */
+function refMark(ref: string, isNew: boolean): string {
+  return isNew ? ` [ref=${ref}] [new]` : ` [ref=${ref}]`;
+}
+
+/**
+ * How many leading lines fit `maxChars`, newlines included. The cut falls on
+ * a line boundary, and a first line longer than the whole bound fits none
+ * rather than half of itself: a half line could show a quote with no end, or
+ * a ref whose element the model cannot read.
+ */
+function linesWithin(lines: readonly { text: string; colon: boolean }[], maxChars: number): number {
+  let length = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    length += lineText(lines[index]!).length + 1;
+    if (length > maxChars) return index;
+  }
+  return lines.length;
+}
+
+/**
+ * The first `kept` lines as text. A kept line with a colon has its first
+ * child on the very next line; when that line is the first one cut, nothing
+ * prints beneath it any more, so it loses the colon.
+ */
+function printKept(lines: readonly { text: string; colon: boolean }[], kept: number): string {
+  return lines
+    .slice(0, kept)
+    .map((line, index) =>
+      lineText(index === kept - 1 && kept < lines.length ? { ...line, colon: false } : line),
+    )
+    .join("\n");
+}
+
+/** One entry's line before any ref, mark or colon: its role, quoted name and level. */
+function entryText(entry: Entry, indent: string): string {
+  const text =
+    entry.role === null
+      ? `${indent}- text: ${JSON.stringify(entry.name)}`
+      : `${indent}- ${entry.role}${entry.name === "" ? "" : ` ${JSON.stringify(entry.name)}`}`;
+  return entry.level === null ? text : `${text} [level=${entry.level}]`;
+}
+
 /**
  * Turn planned lines into text under the bound, and decide which refs the
  * text shows. Refs come from the ledger when the generation knows the element
@@ -351,11 +396,7 @@ function render(
         nextAfter: next,
       };
     }
-    let text =
-      entry.role === null
-        ? `${indent}- text: ${JSON.stringify(entry.name)}`
-        : `${indent}- ${entry.role}${entry.name === "" ? "" : ` ${JSON.stringify(entry.name)}`}`;
-    if (entry.level !== null) text += ` [level=${entry.level}]`;
+    let text = entryText(entry, indent);
     let ref: string | null = null;
     if (entry.backendDOMNodeId !== null) {
       const handle = entry.backendDOMNodeId;
@@ -364,11 +405,10 @@ function render(
         ref = `e${next}`;
         next += 1;
         minted.set(handle, ref);
-        text += ` [ref=${ref}]`;
-        if (ledger.markNew) text += " [new]";
+        text += refMark(ref, ledger.markNew);
       } else {
         ref = remembered;
-        text += ` [ref=${ref}]`;
+        text += refMark(ref, false);
       }
     }
     if (line.match) text += " [match]";
@@ -382,18 +422,7 @@ function render(
     };
   });
 
-  // Cut on a line boundary. A first line longer than the whole bound prints
-  // nothing rather than half itself: a half line could show a quote with no
-  // end, or a ref whose element the model cannot read.
-  let kept = drafted.length;
-  let length = -1;
-  for (let index = 0; index < drafted.length; index += 1) {
-    length += lineText(drafted[index]!).length + 1;
-    if (length > maxChars) {
-      kept = index;
-      break;
-    }
-  }
+  const kept = linesWithin(drafted, maxChars);
   const shown = drafted.slice(0, kept);
 
   // Refs the cut text no longer shows must not stay actionable: a model acting
@@ -408,12 +437,8 @@ function render(
     refs.set(line.ref, line.backendDOMNodeId);
     if (line.name !== "" && !names.has(line.ref)) names.set(line.ref, line.name);
   }
-  // A kept line with a colon has its first child on the very next line; when
-  // that line is the first one cut, nothing prints beneath it any more.
-  const last = shown.at(-1);
-  if (last !== undefined && kept < drafted.length) shown[kept - 1] = { ...last, colon: false };
   return {
-    text: shown.map(lineText).join("\n"),
+    text: printKept(drafted, kept),
     refs,
     names,
     nextRef: kept === 0 ? ledger.nextRef : shown[kept - 1]!.nextAfter,
@@ -430,27 +455,86 @@ function planAll(entries: readonly Entry[], depth: number, into: PlannedLine[]):
 }
 
 /**
+ * The most characters a whole print writes (VC-237). A bound on what one read
+ * may hold in memory rather than on what a reader is shown: the runtime saves
+ * the print, and one saved file holds no more than this anyway.
+ */
+const SNAPSHOT_WHOLE_MAX_CHARS = 8 * 1_024 * 1_024;
+
+/**
+ * The tree past the bound that cut a snapshot, for the runtime to save
+ * (VC-237), or undefined when the cut print already showed all of it.
+ *
+ * It walks as far as a find does, since reaching past the snapshot's bound is
+ * the point, and prints in the same dialect with one difference: only an
+ * element the cut print SHOWED carries its ref (and its `[new]`), exactly as
+ * that print carried it. An element past the cut was never shown, so it gets
+ * no ref — a number minted for it here would be one the ledger never
+ * remembered, and could name a different element on the next read.
+ */
+function printWhole(
+  nodes: readonly AXNodeLike[],
+  collected: Collection,
+  shown: { refs: ReadonlyMap<string, number>; keptLines: number },
+  ledger: RefLedger,
+): RuntimeWholeText | undefined {
+  const walked = collected.truncated ? collect(nodes, FIND_MAX_NODES) : collected;
+  const plan: PlannedLine[] = [];
+  planAll(walked.roots, 0, plan);
+  if (plan.length <= shown.keptLines) return undefined;
+  const refOf = new Map([...shown.refs].map(([ref, handle]) => [handle, ref]));
+  const lines: { text: string; colon: boolean }[] = [];
+  let length = -1;
+  for (const line of plan) {
+    // `planAll` plans every entry and no `...` line.
+    const entry = line.entry!;
+    let text = entryText(entry, "  ".repeat(line.depth));
+    const handle = entry.backendDOMNodeId;
+    const ref = handle === null ? undefined : refOf.get(handle);
+    // New exactly when the cut print marked it so: shown, and not in the ledger.
+    if (ref !== undefined) text += refMark(ref, ledger.markNew && !ledger.known.has(handle!));
+    const drafted = { text, colon: line.colon };
+    lines.push(drafted);
+    // Drafting stops at the first line past the bound, so memory stays near
+    // it; `linesWithin` then cuts there, exactly as for the cut print.
+    length += lineText(drafted).length + 1;
+    if (length > SNAPSHOT_WHOLE_MAX_CHARS) break;
+  }
+  const kept = linesWithin(lines, SNAPSHOT_WHOLE_MAX_CHARS);
+  return { text: printKept(lines, kept), bounded: walked.truncated || kept < lines.length };
+}
+
+/**
  * Print a full CDP accessibility tree in the snapshot dialect, bounded, with
- * refs drawn from the generation's ledger.
+ * refs drawn from the generation's ledger — and, when the bound cut it, the
+ * tree printed whole beside it ({@link printWhole}).
  */
 export function formatAXSnapshot(
   nodes: readonly AXNodeLike[],
   limits: { maxChars?: number; ledger?: RefLedger } = {},
-): BrowserSnapshotFormat {
+): BrowserSnapshotFormat & { whole?: RuntimeWholeText } {
   const collected = collect(nodes, SNAPSHOT_MAX_NODES);
   const plan: PlannedLine[] = [];
   planAll(collected.roots, 0, plan);
-  const { keptLines: _keptLines, ...printed } = render(
+  const ledger = limits.ledger ?? NO_LEDGER;
+  const { keptLines, ...printed } = render(
     plan,
-    limits.ledger ?? NO_LEDGER,
+    ledger,
     limits.maxChars ?? SNAPSHOT_MAX_CHARS,
     collected.truncated,
   );
+  const whole = printed.truncated
+    ? printWhole(nodes, collected, { refs: printed.refs, keptLines }, ledger)
+    : undefined;
   // Empty is the page's fact, judged before the bound: a tree the cut left
   // no room to print is truncated, not empty — and so is one whose walk hit
   // its node or depth bound before reaching anything worth a line (a hidden
   // sprite sheet ahead of the content can spend the whole node budget).
-  return { ...printed, empty: collected.roots.length === 0 && !collected.truncated };
+  return {
+    ...printed,
+    empty: collected.roots.length === 0 && !collected.truncated,
+    ...(whole === undefined ? {} : { whole }),
+  };
 }
 
 /**
