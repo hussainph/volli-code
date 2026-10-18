@@ -73,23 +73,15 @@ import {
   type SessionPane,
   type SessionTab,
 } from "../../stores/sessions";
+import {
+  ACTIVE_QUIET_WINDOW_MS,
+  DONE_LINGER_MS,
+  PREVIOUS_MAX_AGE_MS,
+} from "./session-band-windows";
 
-/**
- * How long a Session that has gone quiet stays in Active. Long enough that
- * stepping away from a running agent does not reshuffle the list under you,
- * short enough that Active still means "recent".
- */
-export const ACTIVE_QUIET_WINDOW_MS = 30 * 60_000;
-
-/**
- * How long a ticket's Sessions linger in Previous after it lands in Done. The
- * ticket is finished; its Sessions are the trace of finishing it, and stay
- * reachable for one hour of "wait, what did it actually do".
- */
-export const DONE_LINGER_MS = 60 * 60_000;
-
-/** How old a Previous row gets before it counts as concluded business. */
-export const PREVIOUS_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+// The windows live in a dependency-free leaf so the performance fixture can
+// read the same values (VC-415); this module stays their door for the app.
+export { ACTIVE_QUIET_WINDOW_MS, DONE_LINGER_MS, PREVIOUS_MAX_AGE_MS };
 
 /**
  * Where a row's click lands — and, because a row is selected exactly when its

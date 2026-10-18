@@ -24,18 +24,6 @@ const APP_DIR = resolve(HERE, "..", "..", "..");
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 /**
- * The sidebar's two age windows, as `active-session-listing.ts` defines them:
- * `ACTIVE_QUIET_WINDOW_MS` and `PREVIOUS_MAX_AGE_MS`. They are restated here
- * rather than imported because this script reads production modules through a
- * Vite SSR server that cannot evaluate the renderer's import graph (xterm is
- * CommonJS); `fixture.test.mjs` imports the renderer's own constants and fails
- * the moment the two disagree, so this is a pinned mirror, not a guess.
- */
-export const SIDEBAR_WINDOWS = Object.freeze({
-  activeQuietWindowMs: 30 * MINUTE,
-  previousMaxAgeMs: 7 * DAY,
-});
-/**
  * How the captured owner profile's Sessions split across the sidebar bands, as
  * recorded in the sidebar-nesting lab scratch: 14 Active rows at the busiest
  * moment and 141 Previous rows, out of the 1,198 Sessions `real` reproduces.
@@ -58,6 +46,14 @@ const PROVENANCE = Object.freeze({
   venue: { id: "local:perf", kind: "local" },
 });
 const STATUSES = ["backlog", "todo", "doing", "needs_review", "done"];
+/** The column ticket `index` is generated into; `createTickets` deals them round-robin. */
+function ticketStatus(index) {
+  return STATUSES[index % STATUSES.length];
+}
+/** The ticket Session `index` belongs to; Sessions cycle across every ticket. */
+function sessionTicketIndex(sessionIndex, tickets) {
+  return sessionIndex % tickets;
+}
 const PRIORITIES = ["low", "medium", "high"];
 const FIXTURE_FILE = "performance-fixture.json";
 const PORTABLE_ROOT = "/__volli_performance_fixture__";
@@ -126,43 +122,58 @@ function recencySeed(seed) {
  *
  * A frozen base date put all 1,198 Sessions past `PREVIOUS_MAX_AGE_MS` the day
  * it was a week old, so both bands measured empty (VC-415). The schedule is now
- * explicit: the newest `active` Sessions went quiet inside the quiet window,
- * the next `previous` Sessions (plus the long chat, which is not one of the
- * Active ones) sit between the quiet window and the age bound, skewed toward
- * recent the way a real corpus is, and the rest are aged-out history.
+ * explicit, against the sidebar's own `windows` (`session-band-windows.ts`):
  *
- * The Active Sessions are also UNREAD, and that is what makes the band stable:
- * a run measures for an hour or more, and the quiet window is thirty minutes,
- * so a band held by recency alone would shrink between repetitions. An unread
- * Session never ages out of Active (`activeGroup`), which is also true of the
- * owner's profile — work finished while nobody was looking stays up.
+ * - `active`: the newest Sessions, quiet inside the quiet window and UNREAD.
+ *   Unread is what makes the band stable: a run measures for an hour or more
+ *   and the window is thirty minutes, so a band held by recency alone would
+ *   shrink between repetitions. An unread Session never ages out of Active
+ *   (`activeGroup`) — true of the owner's profile too: work finished while
+ *   nobody was looking stays up.
+ * - `previous`: the Sessions the Previous band RENDERS — between the quiet
+ *   window and the age bound, skewed toward recent the way a real corpus is,
+ *   and never on a Done ticket, because the sidebar cleans a Done ticket's
+ *   Sessions away an hour after it lands there (`DONE_LINGER_MS`). The long
+ *   chat is one of them: the benchmark opens it, which reads it, so an unread
+ *   Active long chat would make the Active count depend on interaction order.
+ * - `aged`: everything else, past the age bound — history the band never shows.
  *
  * `stableUntil` is the first instant any band would change on the clock alone:
  * the oldest Previous row reaching the age bound.
  */
-export function sessionRecencySchedule({ sessions, seed, clock, eventCounts }) {
+export function sessionRecencySchedule({ sessions, tickets, seed, clock, eventCounts, windows }) {
   if (eventCounts.length !== sessions) throw new Error("one event count per Session");
+  const activeQuietWindowMs = windows.ACTIVE_QUIET_WINDOW_MS;
+  const previousMaxAgeMs = windows.PREVIOUS_MAX_AGE_MS;
+  if (!Number.isSafeInteger(activeQuietWindowMs) || !Number.isSafeInteger(previousMaxAgeMs)) {
+    throw new Error("sidebar band windows are missing");
+  }
   const scale = sessions / OWNER_BAND_SHARES.sessions;
   const active = Math.min(sessions - 1, Math.max(1, Math.round(OWNER_BAND_SHARES.active * scale)));
   const previous = Math.min(
     sessions - active,
     Math.max(1, Math.round(OWNER_BAND_SHARES.previous * scale)),
   );
-  const agedOut = sessions - active - previous;
-  const { activeQuietWindowMs, previousMaxAgeMs } = SIDEBAR_WINDOWS;
+  const onDoneTicket = (index) => ticketStatus(sessionTicketIndex(index, tickets)) === "done";
+  const bands = Array(sessions).fill("aged");
+  for (let index = sessions - active; index < sessions; index += 1) bands[index] = "active";
+  // Newest first below the Active ones, skipping Done tickets, until the band
+  // holds the owner's count.
+  bands[0] = "previous";
+  let placed = 1;
+  for (let index = sessions - active - 1; index > 0 && placed < previous; index -= 1) {
+    if (onDoneTicket(index)) continue;
+    bands[index] = "previous";
+    placed += 1;
+  }
+  if (placed < previous) throw new Error(`only ${placed} Sessions can render in Previous`);
+  if (onDoneTicket(0)) throw new Error("the long chat's ticket must not be Done");
+  const aged = bands.flatMap((band, index) => (band === "aged" ? [index] : []));
+  const agedRank = new Map(aged.map((index, rank) => [index, rank]));
   const random = seededRandom(recencySeed(seed));
   const previousNewest = activeQuietWindowMs + BAND_MARGIN_MS.previous;
   const previousOldest = previousMaxAgeMs - BAND_MARGIN_MS.aged;
-  const bandOf = (index) => {
-    if (index >= sessions - active) return "active";
-    // Index 0 is the long chat. It belongs to Previous: the benchmark opens it,
-    // which reads it, so an unread Active long chat would make the Active count
-    // depend on which interactions ran first.
-    if (index === 0 || index > agedOut) return "previous";
-    return "aged";
-  };
-  const entries = Array.from({ length: sessions }, (_value, index) => {
-    const band = bandOf(index);
+  const entries = bands.map((band, index) => {
     let ageMs;
     if (band === "active") {
       ageMs = Math.round(random() * (activeQuietWindowMs - BAND_MARGIN_MS.active));
@@ -176,7 +187,7 @@ export function sessionRecencySchedule({ sessions, seed, clock, eventCounts }) {
       ageMs = Math.round(
         previousMaxAgeMs +
           BAND_MARGIN_MS.aged +
-          ((agedOut - index) / agedOut) * AGED_HISTORY_SPAN_MS,
+          ((aged.length - agedRank.get(index)) / aged.length) * AGED_HISTORY_SPAN_MS,
       );
     }
     const lastActivityAt = clock - ageMs;
@@ -193,7 +204,9 @@ export function sessionRecencySchedule({ sessions, seed, clock, eventCounts }) {
     summary: {
       activeQuietWindowMs,
       previousMaxAgeMs,
-      sessions: { active, previous, agedOut },
+      // Rows each band renders at `generatedAt` (the Previous ones are all off
+      // Done tickets), and the history past the age bound that neither shows.
+      sessions: { active, previous, agedOut: aged.length },
       unreadSessions: active,
       stableUntil: new Date(oldestPrevious + previousMaxAgeMs).toISOString(),
     },
@@ -379,14 +392,18 @@ async function loadProductionModules() {
   restoreNodeEnv();
   try {
     const load = (path) => vite.ssrLoadModule(resolve(APP_DIR, path));
-    const [db, sessionControl, sessionEngine, artifacts, shared, migrations] = await Promise.all([
-      load("../../packages/host-core/src/db/index.ts"),
-      load("../../packages/host-core/src/session-control/index.ts"),
-      vite.ssrLoadModule("@volli/session-engine"),
-      load("../../packages/host-core/src/session-runtime/transcript-artifacts.ts"),
-      vite.ssrLoadModule("@volli/shared"),
-      load("../../packages/host-core/src/db/migrations.ts"),
-    ]);
+    const [db, sessionControl, sessionEngine, artifacts, shared, migrations, bandWindows] =
+      await Promise.all([
+        load("../../packages/host-core/src/db/index.ts"),
+        load("../../packages/host-core/src/session-control/index.ts"),
+        vite.ssrLoadModule("@volli/session-engine"),
+        load("../../packages/host-core/src/session-runtime/transcript-artifacts.ts"),
+        vite.ssrLoadModule("@volli/shared"),
+        load("../../packages/host-core/src/db/migrations.ts"),
+        // The sidebar's own band windows, from the leaf the band builder
+        // re-exports — never a copy (VC-415).
+        load("src/renderer/src/components/sidebar/session-band-windows.ts"),
+      ]);
     return {
       vite,
       ...db,
@@ -394,6 +411,7 @@ async function loadProductionModules() {
       ...sessionEngine,
       ...artifacts,
       shared,
+      bandWindows,
       // One source of truth; adding a migration cannot stale the fixture harness.
       currentDbSchemaVersion: migrations.MIGRATIONS.at(-1).version,
     };
@@ -492,7 +510,7 @@ function createTickets(db, preset, paths, timeline) {
   );
   const positions = new Map(STATUSES.map((status) => [status, 0]));
   for (let index = 0; index < preset.tickets; index += 1) {
-    const status = STATUSES[index % STATUSES.length];
+    const status = ticketStatus(index);
     const hasWorktree = index < preset.liveWorktrees;
     // The first N paths are shared by two tickets; the rest are unique. The
     // overlap count therefore describes paths with >1 live ticket exactly.
@@ -565,7 +583,7 @@ function createSessionRows(db, preset, timeline) {
       projectId: PROJECT_ID,
       // Session 1 is the long-chat target on ticket 1. Sessions cycle across
       // every ticket so listing and workspace reads see the full cardinality.
-      ticketId: ticketId(index % preset.tickets),
+      ticketId: ticketId(sessionTicketIndex(index, preset.tickets)),
       title: index === 0 ? "VC-353 long chat benchmark" : `Fixture Session ${digits(4, index + 1)}`,
       createdAt: timeline.entries[index].createdAt,
     });
@@ -673,7 +691,7 @@ async function createEvents(
     for (let sessionIndex = 0; sessionIndex < allocation.length; sessionIndex += 1) {
       const id = sessionId(sessionIndex);
       const attachmentId = `perf-attachment-${digits(4, sessionIndex + 1)}`;
-      const ticket = ticketId(sessionIndex % preset.tickets);
+      const ticket = ticketId(sessionTicketIndex(sessionIndex, preset.tickets));
       const title =
         sessionIndex === 0
           ? "VC-353 long chat benchmark"
@@ -898,13 +916,6 @@ export async function generateFixture(input) {
   // windows now, and passing the recorded clock back rebuilds it exactly.
   const clock = input.clock === undefined ? Date.now() : parseClock(input.clock);
   const eventAllocation = sessionEventAllocation(preset, input.seed);
-  const recency = sessionRecencySchedule({
-    sessions: preset.sessions,
-    seed: input.seed,
-    clock,
-    eventCounts: eventAllocation,
-  });
-  const timeline = { clock, ...recency };
   if (input.force) {
     await assertSafeForceTarget(paths.userDataDir);
     await rm(paths.userDataDir, { recursive: true, force: true });
@@ -924,6 +935,15 @@ export async function generateFixture(input) {
   let db;
   let result;
   try {
+    const recency = sessionRecencySchedule({
+      sessions: preset.sessions,
+      tickets: preset.tickets,
+      seed: input.seed,
+      clock,
+      eventCounts: eventAllocation,
+      windows: modules.bandWindows,
+    });
+    const timeline = { clock, ...recency };
     // This is the production file-backed open/migration path by requirement —
     // never :memory:, never a copied schema.
     db = modules.openVolliDb(paths.dbPath);
@@ -1012,15 +1032,9 @@ export async function generateFixture(input) {
     // never renders. Ask the production projection what it will display and
     // publish that, so the runner never hard-codes a guess about the fold.
     const projectedLongChatTitle = (
-      await modules
-        .createSessionEngine({
-          ledger: modules.createSqliteSessionLedger(db),
-          clock: { now: () => clock },
-          ids: { next: () => "manifest-id-not-used" },
-          onProjectionCheckpointFailure: modules.createCheckpointFailureReporter(),
-          yieldToHost: () => new Promise((done) => setImmediate(done)),
-        })
-        .getSession({ sessionId: sessionId(0) })
+      await fixtureEngine(modules, modules.createSqliteSessionLedger(db), clock).getSession({
+        sessionId: sessionId(0),
+      })
     )?.session?.title;
     if (typeof projectedLongChatTitle !== "string" || projectedLongChatTitle.length === 0) {
       throw new Error("long Session projection produced no title for the manifest");
@@ -1114,11 +1128,17 @@ export async function localizeFixture(profileDirectory) {
   return paths;
 }
 
+/**
+ * A read-only Session engine over the fixture, dated at its generation clock.
+ * Every reader here (the manifest's title projection, verification, the
+ * sidebar input) only folds; the id source exists because the engine needs
+ * one, and a read that ever minted an id would be a bug worth seeing.
+ */
 function fixtureEngine(modules, ledger, clock) {
   return modules.createSessionEngine({
     ledger,
     clock: { now: () => clock },
-    ids: { next: () => "verification-id-not-used" },
+    ids: { next: () => "fixture-read-id-not-used" },
     onProjectionCheckpointFailure: modules.createCheckpointFailureReporter(),
     yieldToHost: () => new Promise((done) => setImmediate(done)),
   });
@@ -1168,19 +1188,21 @@ async function verifyRecency(db, engine, manifest, clock) {
 }
 
 /**
- * Refuses a fixture whose sidebar bands no longer hold. Bands are relative to
- * the generation clock, so a reused profile drifts: past `stableUntil` its
- * oldest Previous rows have aged out, and a run against it would measure a
- * shorter band than its manifest describes.
+ * Refuses a fixture whose sidebar bands will not hold for a whole run. Bands
+ * are relative to the generation clock, so a reused profile drifts: past
+ * `stableUntil` its oldest Previous rows have aged out, and a run against it
+ * would measure a shorter band than its manifest describes. `runMarginMs` is
+ * how long the caller expects to be measuring.
  */
-export function assertFixtureBandsCurrent(manifest, now) {
+export function assertFixtureBandsCurrent(manifest, now, runMarginMs = 0) {
   const stableUntil = Date.parse(manifest.recency?.stableUntil ?? "");
   if (!Number.isFinite(stableUntil)) {
     throw new Error("fixture predates its generation clock (VC-415); regenerate it");
   }
-  if (now >= stableUntil) {
+  // The bands must hold until the run ENDS, not only when it starts.
+  if (now + runMarginMs >= stableUntil) {
     throw new Error(
-      `fixture generated at ${manifest.generatedAt} holds its sidebar bands only until ${manifest.recency.stableUntil}; regenerate it`,
+      `fixture generated at ${manifest.generatedAt} holds its sidebar bands only until ${manifest.recency.stableUntil}, inside this run's ${Math.round(runMarginMs / 60_000)} min margin; regenerate it`,
     );
   }
 }

@@ -13,44 +13,51 @@ import {
   readFixtureSidebarInput,
   seededRandom,
   sessionRecencySchedule,
-  SIDEBAR_WINDOWS,
   verifyFixture,
 } from "./fixture.mjs";
 import { DEFAULT_SEED, PRESETS } from "./presets.mjs";
 import { MIGRATIONS } from "@volli/host-core/db";
-import {
-  ACTIVE_QUIET_WINDOW_MS,
-  buildActiveSessionListing,
-  PREVIOUS_MAX_AGE_MS,
-} from "../../../src/renderer/src/components/sidebar/active-session-listing.ts";
+import { buildActiveSessionListing } from "../../../src/renderer/src/components/sidebar/active-session-listing.ts";
+import * as bandWindows from "../../../src/renderer/src/components/sidebar/session-band-windows.ts";
+import { unreadSessionIds } from "../../../src/renderer/src/stores/project-sessions.ts";
+
+const { ACTIVE_QUIET_WINDOW_MS, PREVIOUS_MAX_AGE_MS } = bandWindows;
 
 const CURRENT_DB_SCHEMA_VERSION = MIGRATIONS.at(-1).version;
 /** A recorded generation clock, so the byte-for-byte determinism check has one. */
 const FIXTURE_CLOCK = Date.UTC(2026, 8, 13, 12, 0, 0);
 const HOUR = 60 * 60_000;
 
+/** The Session id a listing row answers to, whichever shape it arrived in. */
+const idOf = (row) => (row.kind === "terminal" ? row.record.id : row.record.sessionId);
+
 /**
  * The sidebar's two bands for this fixture at `now`, built by the renderer's
- * own `buildActiveSessionListing` from the rows main serves. The row split is
- * the one `project-sessions.ts` makes on refresh: terminal records, chat
- * records, and the unread receipts riding on the rows.
+ * own `buildActiveSessionListing` from the rows main serves. The rows are
+ * split the way `project-sessions.ts` stores them on refresh (terminal
+ * records, chat records, the sparse read map), and unread is read back through
+ * the store's own `unreadSessionIds`.
  */
 function sidebarBands(input, now) {
+  const rows = {
+    terminal: input.rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])),
+    chat: input.rows.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
+    provenance: {},
+    read: Object.fromEntries(
+      input.rows.flatMap((row) => (row.read === undefined ? [] : [[idOf(row), row.read]])),
+    ),
+  };
   const listing = buildActiveSessionListing({
     tickets: input.tickets,
     containers: {},
     signalsByTicket: {},
-    records: input.rows.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])),
-    chatSessions: input.rows.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
+    records: rows.terminal,
+    chatSessions: rows.chat,
     lastOutputAt: {},
     parkState: {},
     harness: {},
     statusEnteredAt: new Map(input.statusEntries.map((entry) => [entry.ticketId, entry.enteredAt])),
-    unreadSessionIds: new Set(
-      input.rows
-        .filter((row) => row.read?.unreadSince != null)
-        .map((row) => (row.kind === "terminal" ? row.record.id : row.record.sessionId)),
-    ),
+    unreadSessionIds: unreadSessionIds(rows),
     now,
   });
   return { active: listing.active.length, previous: listing.previous.length };
@@ -87,13 +94,6 @@ describe("performance fixture allocation", () => {
 });
 
 describe("performance fixture recency", () => {
-  it("mirrors the sidebar's own band windows", () => {
-    expect(SIDEBAR_WINDOWS).toEqual({
-      activeQuietWindowMs: ACTIVE_QUIET_WINDOW_MS,
-      previousMaxAgeMs: PREVIOUS_MAX_AGE_MS,
-    });
-  });
-
   it("puts the real preset's Sessions in both bands, clear of every boundary", () => {
     const eventCounts = allocateLongTail({
       count: PRESETS.real.sessions,
@@ -104,9 +104,11 @@ describe("performance fixture recency", () => {
     });
     const input = {
       sessions: PRESETS.real.sessions,
+      tickets: PRESETS.real.tickets,
       seed: DEFAULT_SEED,
       clock: FIXTURE_CLOCK,
       eventCounts,
+      windows: bandWindows,
     };
     const schedule = sessionRecencySchedule(input);
     expect(sessionRecencySchedule(input)).toEqual(schedule);
@@ -115,6 +117,15 @@ describe("performance fixture recency", () => {
     // The long chat is opened by the benchmark, so it must not be an Active
     // (unread) row whose presence depends on interaction order.
     expect(schedule.entries[0].band).toBe("previous");
+    // Every Previous Session renders: none sits on a Done ticket, which the
+    // sidebar would clean away an hour after it landed in Done. Tickets are
+    // dealt round-robin over five columns, Done last.
+    const previousIndexes = schedule.entries.flatMap((entry, index) =>
+      entry.band === "previous" ? [index] : [],
+    );
+    expect(previousIndexes).toHaveLength(141);
+    expect(previousIndexes.filter((index) => (index % PRESETS.real.tickets) % 5 === 4)).toEqual([]);
+    expect(() => sessionRecencySchedule({ ...input, windows: {} })).toThrow("windows are missing");
 
     const ages = (band) =>
       schedule.entries
@@ -152,6 +163,10 @@ describe("performance fixture recency", () => {
     expect(() => assertFixtureBandsCurrent(manifest, FIXTURE_CLOCK + 24 * HOUR)).toThrow(
       "regenerate it",
     );
+    // Current at the start is not enough: the bands must last the whole run.
+    expect(() => assertFixtureBandsCurrent(manifest, FIXTURE_CLOCK + 20 * HOUR, 5 * HOUR)).toThrow(
+      "300 min margin",
+    );
     expect(() => assertFixtureBandsCurrent({ generatedAt: "2025-01-15" }, FIXTURE_CLOCK)).toThrow(
       "predates its generation clock",
     );
@@ -169,12 +184,13 @@ describe("performance fixture file", () => {
     // to that before it was found, so the restoration is pinned here.
     const nodeEnvBefore = process.env.NODE_ENV;
     try {
+      // The default clock is "now"; the manifest records it, and the rebuild
+      // below proves that record is the whole recipe.
       const generated = await generateFixture({
         preset: "small",
         seed: DEFAULT_SEED,
         outputDirectory: root,
         force: true,
-        clock: FIXTURE_CLOCK,
       });
       expect(process.env.NODE_ENV).toBe(nodeEnvBefore);
       const firstDatabaseDigest = createHash("sha256")
@@ -227,8 +243,6 @@ describe("performance fixture file", () => {
         preset: "small",
         seed: DEFAULT_SEED,
         databaseSchemaVersion: CURRENT_DB_SCHEMA_VERSION,
-        // The clock is recorded, so the manifest alone says how to rebuild it.
-        generatedAt: new Date(FIXTURE_CLOCK).toISOString(),
         recency: {
           activeQuietWindowMs: ACTIVE_QUIET_WINDOW_MS,
           previousMaxAgeMs: PREVIOUS_MAX_AGE_MS,
@@ -244,23 +258,25 @@ describe("performance fixture file", () => {
       // Sessions for as long as a run could take, because Active is held by
       // unread receipts rather than by a thirty-minute window.
       const sidebarInput = await readFixtureSidebarInput(root);
-      expect(sidebarInput.clock).toBe(FIXTURE_CLOCK);
-      const atGeneration = sidebarBands(sidebarInput, FIXTURE_CLOCK);
-      expect(atGeneration.active).toBe(1);
-      expect(atGeneration.previous).toBeGreaterThan(0);
+      const clock = Date.parse(generated.manifest.generatedAt);
+      expect(sidebarInput.clock).toBe(clock);
+      const atGeneration = sidebarBands(sidebarInput, clock);
+      // Exactly the manifest's counts: every scheduled Previous Session renders.
+      expect(atGeneration).toEqual({ active: 1, previous: 14 });
       const stableUntil = Date.parse(sidebarInput.recency.stableUntil);
-      expect(sidebarBands(sidebarInput, FIXTURE_CLOCK + 2 * HOUR)).toEqual(atGeneration);
+      expect(sidebarBands(sidebarInput, clock + 2 * HOUR)).toEqual(atGeneration);
       expect(sidebarBands(sidebarInput, stableUntil - 1)).toEqual(atGeneration);
       expect(sidebarBands(sidebarInput, stableUntil).previous).toBeLessThan(atGeneration.previous);
 
-      // Replacing the same output with the same seed reproduces both durable
-      // database bytes and its path-bearing manifest exactly.
+      // Replacing the same output with the same seed and the manifest's
+      // recorded clock reproduces both durable database bytes and its
+      // path-bearing manifest exactly.
       const regenerated = await generateFixture({
         preset: "small",
         seed: DEFAULT_SEED,
         outputDirectory: root,
         force: true,
-        clock: FIXTURE_CLOCK,
+        clock: generated.manifest.generatedAt,
       });
       expect(
         createHash("sha256")

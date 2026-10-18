@@ -1781,6 +1781,16 @@ export async function writeReports(report, output) {
   return { jsonPath, summaryPath, markdownPath };
 }
 
+/**
+ * How long a run may keep measuring against its fixture: the loaded arm is
+ * bounded by its exposure, the idle arm takes about as long again, and an hour
+ * of slack covers builds and warm-up. Deliberately generous — a fresh fixture
+ * holds its bands for about a day.
+ */
+export function runBandMarginMs(args) {
+  return 2 * args.loadDurationSeconds * 1_000 + 60 * 60_000;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -1809,9 +1819,11 @@ async function main() {
     );
     generated = { manifest, userDataDir: fixtureDirectory };
   }
+  // A reused fixture's bands are relative to when it was generated, not now,
+  // and must still hold when the last arm finishes. Checked before the
+  // minutes-long verification so a stale profile fails at once.
+  assertFixtureBandsCurrent(generated.manifest, Date.now(), runBandMarginMs(args));
   const verification = await verifyFixture(fixtureDirectory, { preset: args.preset });
-  // A reused fixture's bands are relative to when it was generated, not now.
-  assertFixtureBandsCurrent(generated.manifest, Date.now());
   const runOwnerRoot = ownerRoot ?? (await fs.mkdtemp(join(os.tmpdir(), "volli-perf-runs-")));
   const runRoot = join(runOwnerRoot, "runs");
   const host = await hostMetadata();
