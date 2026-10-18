@@ -35,6 +35,7 @@
 import { createHash } from "node:crypto";
 
 import {
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   automationTriggerSchedule,
   evaluateSchedulePass,
   type Automation,
@@ -59,26 +60,6 @@ const schedulerLog = hostLogger("automation-scheduler");
  * machine has been doing something else.
  */
 export const AUTOMATION_SCHEDULE_TICK_MS = 60_000;
-
-/**
- * How late a Run may still start, in milliseconds.
- *
- * Two minutes. VC-112's contract is that a Run may start late but never early,
- * and this is where "late" stops meaning late and starts meaning missed. A
- * timer that fires a few seconds behind, a machine briefly busy at 09:00, a
- * process that took a moment to boot — all inside, and exactly this late still
- * runs. A closed app, a slept laptop, a machine off for the weekend — all
- * outside, and all recorded as Skipped occurrences instead, because starting
- * unattended work hours after anyone expected it is how a person learns to
- * switch the feature off.
- *
- * The window says only WHETHER an occurrence still runs. What the resulting
- * skip then claims about the world is a separate question the policy answers
- * from `watchingSince`: an occurrence older than this process says the app was
- * closed, and one this running process simply failed to reach says that
- * instead.
- */
-export const AUTOMATION_SCHEDULE_LATE_GRACE_MS = 2 * 60_000;
 
 /**
  * How many missed occurrences one pass will count.

@@ -75,7 +75,12 @@ import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
-import { INSTRUCTIONS_PLACEHOLDER, MANUAL_TRIGGER_LABEL } from "./automations-page-model";
+import {
+  INSTRUCTIONS_PLACEHOLDER,
+  MANUAL_TRIGGER_LABEL,
+  nextScheduledRun,
+  SCHEDULE_MISSED_RUN_POLICY,
+} from "./automations-page-model";
 import {
   clearEditorDraft,
   loadEditorDraft,
@@ -190,6 +195,32 @@ function TimeField({
       </PopoverContent>
     </Popover>
   );
+}
+
+/**
+ * "Next: …" at the schedule control (VC-298), for a schedule this machine will
+ * actually fire. Its own component so the clock it keeps re-renders this line
+ * rather than the editor: once the shown occurrence passes it reads the next
+ * one, and it looks again at least once a minute so a slept laptop or a moved
+ * clock corrects itself, like the host timer it mirrors.
+ */
+function NextScheduledRun({
+  schedule,
+  automationId,
+}: {
+  schedule: AutomationSchedule;
+  automationId: string;
+}) {
+  const [now, setNow] = React.useState(() => Date.now());
+  const next = nextScheduledRun({ schedule, automationId, now, timeZone: hostTimeZone() });
+  React.useEffect(() => {
+    const timer = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.max(0, Math.min(next.at - Date.now(), 60_000)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [next.at, now]);
+  return <p className="text-ui text-foreground tabular-nums">{next.label}</p>;
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -507,6 +538,11 @@ export function AutomationEditorPanel({
   const update = useAutomationsStore((state) => state.update);
   const commandId = React.useRef(crypto.randomUUID());
   const automationId = automation?.id ?? null;
+  // Switched on HERE, read live: turning automatic triggers off clears the
+  // next-run line in the same render the switch moves (VC-298).
+  const firesHere = useAutomationsStore(
+    (state) => automationId !== null && state.enabledIds.includes(automationId),
+  );
   // Edits and new drafts both survive navigation. A refreshed saved record
   // never replaces unsaved words; its updatedAt key remounts from this cache.
   const [restored] = React.useState<AutomationEditorDraft | null>(() =>
@@ -910,6 +946,10 @@ export function AutomationEditorPanel({
                   onChange={setTimeZone}
                   className="w-full max-w-none"
                 />
+                {firesHere && automationId !== null && scheduleProblem === null ? (
+                  <NextScheduledRun schedule={schedule} automationId={automationId} />
+                ) : null}
+                <p className="text-ui text-muted-foreground">{SCHEDULE_MISSED_RUN_POLICY}</p>
               </div>
             ) : null}
             {scheduleProblem === null ? null : (

@@ -15,11 +15,15 @@
 import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vite-plus/test";
-import { nextScheduleOccurrence, type Automation, type AutomationSchedule } from "@volli/shared";
+import {
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
+  nextScheduleOccurrence,
+  type Automation,
+  type AutomationSchedule,
+} from "@volli/shared";
 
 import type { AutomationSkipIntent } from "./engine";
 import {
-  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   AUTOMATION_SCHEDULE_TICK_MS,
   createAutomationScheduler,
   schedulableAutomations,
