@@ -6064,7 +6064,7 @@ describe("agent command service", () => {
         }),
       );
     }
-    return scriptedGit((args) => {
+    return scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       // Every worktree, Done or not, has the same uncommitted edit (the diff
@@ -6146,7 +6146,7 @@ describe("agent command service", () => {
     }
     // VC-1 and VC-2 answer at once; every other worktree's git never returns,
     // the way a read wedged on a contended index lock does.
-    const scripted = scriptedGit((args) => {
+    const scripted = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       return "";
