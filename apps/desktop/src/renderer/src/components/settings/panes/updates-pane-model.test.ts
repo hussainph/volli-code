@@ -90,6 +90,24 @@ describe("updateStatus", () => {
     });
   });
 
+  it("shows a failure as one short sentence, never the raw updater dump", () => {
+    const raw =
+      'Cannot find latest-mac.yml (https://github.com/acme/volli/releases/latest-mac.yml): HttpError: 404 \nHeaders: { "set-cookie": "x" }';
+    const failed = checked({ result: "error", error: raw });
+    for (const state of [
+      snapshot({ phase: "error", error: raw, lastCheck: failed }),
+      snapshot({ lastCheck: failed }),
+    ]) {
+      const { detail } = updateStatus(state, NOW);
+      expect(detail).toBe("Cannot find latest-mac.yml: HttpError: 404");
+    }
+    // A record with no message (a tolerant read of an older row) says none.
+    expect(
+      updateStatus(snapshot({ lastCheck: checked({ result: "error", error: null }) }), NOW).detail,
+    ).toBeNull();
+    expect(updateStatus(snapshot({ phase: "error" }), NOW).detail).toBeNull();
+  });
+
   it("shows the phase while something is happening", () => {
     expect(updateStatus(snapshot({ phase: "checking" }), NOW)).toMatchObject({
       state: "working",

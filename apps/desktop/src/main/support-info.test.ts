@@ -22,6 +22,7 @@ import { openTestDb, type TestDb } from "@volli/host-core/testing";
 import { writeSecret } from "@volli/host-core/db";
 import {
   collectSupportInfo,
+  describeLastUpdateCheck,
   registerSupportIpcHandlers,
   type SupportInfoDeps,
 } from "./support-info";
@@ -31,6 +32,7 @@ const ALLOWLIST = [
   "appVersion",
   "arch",
   "channel",
+  "lastUpdateCheck",
   "migrationHistory",
   "platform",
   "schemaVersion",
@@ -55,6 +57,7 @@ function deps(overrides: Partial<SupportInfoDeps> = {}): SupportInfoDeps {
     database: () => null,
     platform: "darwin",
     arch: "arm64",
+    lastUpdateCheck: () => null,
     ...overrides,
   };
 }
@@ -103,6 +106,55 @@ describe("collectSupportInfo", () => {
     expect(collectSupportInfo(deps({ database: () => db })).migrationHistory).toMatch(
       /^diverged: this database ran a different migration than this build at 1\./,
     );
+  });
+
+  it("reports the last update check, a failure only as its redacted summary (VC-294)", () => {
+    const raw = [
+      "Cannot find latest-mac.yml (https://github.com/acme/volli/releases/latest-mac.yml): HttpError: 404 ",
+      'Headers: { "x-github-request-id": "C0FF:EE", "set-cookie": "_gh_sess=abc" }',
+    ].join("\n");
+    const info = collectSupportInfo(
+      deps({
+        database: () => testDb(),
+        lastUpdateCheck: () => ({
+          at: Date.UTC(2026, 9, 18, 3),
+          result: "error",
+          version: null,
+          error: raw,
+        }),
+      }),
+    );
+
+    expect(info.lastUpdateCheck).toBe(
+      "2026-10-18T03:00:00.000Z, check failed: Cannot find latest-mac.yml: HttpError: 404",
+    );
+    for (const leak of ["https", "github.com", "C0FF", "_gh_sess", "Headers"]) {
+      expect(JSON.stringify(info), leak).not.toContain(leak);
+    }
+  });
+
+  it("words every last-check result on one line", () => {
+    const at = Date.UTC(2026, 9, 18, 3);
+    const iso = "2026-10-18T03:00:00.000Z";
+    expect(describeLastUpdateCheck(null)).toBe("none recorded");
+    expect(describeLastUpdateCheck({ at, result: "up-to-date", version: null, error: null })).toBe(
+      `${iso}, up to date`,
+    );
+    expect(
+      describeLastUpdateCheck({ at, result: "available", version: "0.3.0", error: null }),
+    ).toBe(`${iso}, found 0.3.0`);
+    expect(describeLastUpdateCheck({ at, result: "available", version: null, error: null })).toBe(
+      `${iso}, found an update`,
+    );
+    expect(describeLastUpdateCheck({ at, result: "error", version: null, error: null })).toBe(
+      `${iso}, check failed: Unknown error`,
+    );
+    expect(
+      describeLastUpdateCheck({ at, result: "download-error", version: "0.3.0", error: "ENOSPC" }),
+    ).toBe(`${iso}, download of 0.3.0 failed: ENOSPC`);
+    expect(
+      describeLastUpdateCheck({ at, result: "download-error", version: null, error: null }),
+    ).toBe(`${iso}, download failed: Unknown error`);
   });
 
   it("defaults a profile that never chose a line to stable", () => {

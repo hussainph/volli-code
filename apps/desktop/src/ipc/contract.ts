@@ -1401,7 +1401,7 @@ export type CliIpcChannel = keyof VolliCliIpcContract;
 // ---- support metadata -------------------------------------------------------
 
 /**
- * The six facts a support report needs and the renderer cannot know (VC-293, VC-633).
+ * The facts a support report needs and the renderer cannot know (VC-293, VC-633, VC-294).
  *
  * An ALLOWLIST, and written as a closed shape for that reason: every field is
  * named here, main assembles exactly these, and the report prints them. The
@@ -1430,6 +1430,14 @@ export interface SupportInfo {
    * Version numbers and words only; never a row of data.
    */
   migrationHistory: string;
+  /**
+   * The updater's last answered check (VC-294) as one line: its ISO time and
+   * result, a failure only as `summarizeUpdateFailure`'s redacted sentence —
+   * never the raw updater text, which can carry feed URLs and response
+   * headers. "none recorded" when there is none. Not required: a report is
+   * complete without it.
+   */
+  lastUpdateCheck: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;

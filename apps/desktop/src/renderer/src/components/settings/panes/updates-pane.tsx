@@ -173,10 +173,7 @@ export function UpdatesPane() {
             <div className="flex min-w-0 flex-col items-end">
               <Health state={status.state}>{status.label}</Health>
               {status.detail === null ? null : (
-                <span
-                  title={status.detail}
-                  className={`${CONTROL_W.lg} truncate text-right text-ui text-muted-foreground`}
-                >
+                <span className={`${CONTROL_W.lg} text-right text-ui text-muted-foreground`}>
                   {status.detail}
                 </span>
               )}

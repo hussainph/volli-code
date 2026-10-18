@@ -2914,6 +2914,8 @@ const appStartup = app.whenReady().then(async () => {
     database: () => (dbHandle.ok ? dbHandle.db : null),
     platform: process.platform,
     arch: process.arch,
+    // Redacted to one sentence inside the collector (VC-294).
+    lastUpdateCheck: () => autoUpdate.state().lastCheck,
   });
 
   try {

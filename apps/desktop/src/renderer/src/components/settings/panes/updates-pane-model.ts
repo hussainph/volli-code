@@ -8,7 +8,7 @@
  * current phase while something is happening, and otherwise what the last
  * check that answered said and when, persisted by main across relaunches.
  */
-import { compareVersions } from "@volli/shared";
+import { compareVersions, summarizeUpdateFailure } from "@volli/shared";
 
 import type { UpdateUiState } from "../../../../../ipc/contract";
 import type { StatusDotState } from "@renderer/components/ui/status-dot";
@@ -18,11 +18,17 @@ export interface UpdateStatus {
   readonly state: StatusDotState;
   /** The Health word, with the check's age when there is one: "Up to date · 3h ago". */
   readonly label: string;
-  /** The failure's message, when the line is one. */
+  /**
+   * The failure in one short sentence, when the line is one — never the raw
+   * updater text, whose URLs and header dumps stay in the main-process log.
+   */
   readonly detail: string | null;
   /** The row's button. "Retry" after a failure — the same check, named for what it does. */
   readonly action: "Check now" | "Retry";
 }
+
+const summary = (raw: string | null): string | null =>
+  raw === null ? null : summarizeUpdateFailure(raw);
 
 /** The Updates pane's status line for one updater snapshot, as of `now`. */
 export function updateStatus(state: UpdateUiState, now: number): UpdateStatus {
@@ -63,7 +69,7 @@ export function updateStatus(state: UpdateUiState, now: number): UpdateStatus {
         action: "Check now",
       };
     case "error":
-      return { state: "error", label: aged(failed), detail: state.error, action: "Retry" };
+      return { state: "error", label: aged(failed), detail: summary(state.error), action: "Retry" };
     case "idle":
       break;
   }
@@ -75,7 +81,7 @@ export function updateStatus(state: UpdateUiState, now: number): UpdateStatus {
   switch (last.result) {
     case "error":
     case "download-error":
-      return { state: "error", label: aged(failed), detail: last.error, action: "Retry" };
+      return { state: "error", label: aged(failed), detail: summary(last.error), action: "Retry" };
     case "available":
       // Found by an earlier run whose download never finished — unless the
       // running build is already that version or newer (installed since, or

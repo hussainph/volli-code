@@ -95,6 +95,7 @@ const SUPPORT: SupportInfoResult = {
     arch: "arm64",
     schemaVersion: 34,
     migrationHistory: "consistent",
+    lastUpdateCheck: "none recorded",
   },
 };
 
