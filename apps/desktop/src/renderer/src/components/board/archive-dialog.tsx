@@ -207,20 +207,18 @@ export function ArchiveInspect({
     <>
       <DialogHeader className="pr-6">
         <div className="flex min-w-0 items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                ref={back}
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Archive"
-                onClick={onBack}
-              >
-                <CaretLeftIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">Archive</TooltipContent>
-          </Tooltip>
+          {/* Labelled rather than an icon behind a tooltip: it takes focus as
+              the view opens, and a focused tooltip trigger opens its tooltip. */}
+          <Button
+            ref={back}
+            variant="ghost"
+            size="xs"
+            className="-ml-2 text-muted-foreground"
+            onClick={onBack}
+          >
+            <CaretLeftIcon />
+            Archive
+          </Button>
           <span className="font-mono text-ui text-muted-foreground">
             {displayTicketId(project.ticketPrefix, ticket.ticketNumber)}
           </span>
