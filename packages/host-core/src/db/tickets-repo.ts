@@ -411,6 +411,51 @@ export function listWorktreeRefs(
 }
 
 /**
+ * Every ticket checkout with the name a person knows its ticket by — what the
+ * orphan scan attaches to a folder a ticket still points at (VC-292), so
+ * Storage can lead that row with "VC-82 · title" and open the ticket whose
+ * "Remove worktree…" is the repair. Live AND archived, for
+ * {@link listWorktreePaths}'s reason; `archived` rides along because an
+ * archived ticket cannot be opened from the board, and its row has to say so.
+ */
+export function listWorktreeTickets(db: Database.Database): Array<{
+  path: string;
+  ticketId: string;
+  projectId: string;
+  displayId: string;
+  title: string;
+  archived: boolean;
+}> {
+  const rows = prepared<
+    [],
+    {
+      worktree_path: string;
+      ticketId: string;
+      projectId: string;
+      ticketPrefix: string;
+      ticketNumber: number;
+      title: string;
+      archivedAt: number | null;
+    }
+  >(
+    db,
+    `SELECT t.worktree_path AS worktree_path, t.id AS ticketId, t.project_id AS projectId,
+            p.ticket_prefix AS ticketPrefix, t.ticket_number AS ticketNumber,
+            t.title AS title, t.archived_at AS archivedAt
+       FROM tickets t JOIN projects p ON p.id = t.project_id
+      WHERE t.worktree_path IS NOT NULL`,
+  ).all();
+  return rows.map((row) => ({
+    path: row.worktree_path,
+    ticketId: row.ticketId,
+    projectId: row.projectId,
+    displayId: displayTicketId(row.ticketPrefix, row.ticketNumber),
+    title: row.title,
+    archived: row.archivedAt !== null,
+  }));
+}
+
+/**
  * The checkouts the named Sessions are attached to, and which Session holds
  * each — the orphan sweep's liveness test (VC-341).
  *

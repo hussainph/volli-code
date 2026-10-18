@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
-import { insertTicket, updateTicketFields } from "../db/tickets-repo";
+import { archiveTicket, insertTicket, updateTicketFields } from "../db/tickets-repo";
 import { projectContainerName } from "./containers";
 import { canonicalize } from "./paths";
 import { scanOrphans } from "./scan";
@@ -723,7 +724,15 @@ describe("scanOrphans report", () => {
     mkdirSync(strandedWt, { recursive: true });
 
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-    insertTicket(ctx.db, testTicket("proj-1", { id: "ticket-82", status: "done" }));
+    insertTicket(
+      ctx.db,
+      testTicket("proj-1", {
+        id: "ticket-82",
+        ticketNumber: 82,
+        title: "Strand the checkout",
+        status: "done",
+      }),
+    );
     updateTicketFields(ctx.db, "ticket-82", { worktreePath: strandedWt, branch: "volli/VC-82" }, 1);
 
     const { git, gitAsync } = scriptedGit((rawArgs) => {
@@ -736,16 +745,121 @@ describe("scanOrphans report", () => {
 
     const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
 
+    // The row names the ticket it can open (VC-292), not just the path.
     expect(report.dirty).toEqual([
       {
         path: strandedWt,
         projectId: "proj-1",
         projectName: expect.any(String),
         reason: expect.stringMatching(/ticket still points here/i),
+        ticket: {
+          id: "ticket-82",
+          displayId: "VC-82",
+          title: "Strand the checkout",
+          archived: false,
+        },
       },
     ]);
     expect(report.removable).toEqual([]);
   });
+
+  // VC-292: an archived ticket still holds its checkout, so the row names it —
+  // and says it is archived, because the board cannot open it.
+  it("names an ARCHIVED ticket that still points at a forgotten directory", async () => {
+    const projectPath = tempDir("proj");
+    const home = tempDir("home");
+    const container = join(
+      home,
+      ".volli",
+      "worktrees",
+      projectContainerName(projectPath, "proj-1"),
+    );
+    const strandedWt = join(container, "VC-83-archived");
+    const unclaimedWt = join(container, "leftover");
+    mkdirSync(strandedWt, { recursive: true });
+    mkdirSync(unclaimedWt, { recursive: true });
+
+    insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+    insertTicket(
+      ctx.db,
+      testTicket("proj-1", {
+        id: "ticket-83",
+        ticketNumber: 83,
+        title: "Old work",
+        status: "done",
+      }),
+    );
+    updateTicketFields(ctx.db, "ticket-83", { worktreePath: strandedWt }, 1);
+    archiveTicket(ctx.db, "ticket-83", 5);
+
+    const { git, gitAsync } = scriptedGit((rawArgs) => {
+      const args = verb(rawArgs);
+      if (args[0] === "worktree" && args[1] === "list") {
+        return `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`;
+      }
+      return "";
+    });
+
+    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const byPath = new Map(report.dirty.map((orphan) => [orphan.path, orphan] as const));
+
+    expect(byPath.get(strandedWt)?.ticket).toEqual({
+      id: "ticket-83",
+      displayId: "VC-83",
+      title: "Old work",
+      archived: true,
+    });
+    // An unclaimed leftover carries no ticket at all — the row's fallback.
+    expect(byPath.get(unclaimedWt)).not.toHaveProperty("ticket");
+    // Both folders are readable, so neither carries the negative stamp.
+    expect(byPath.get(strandedWt)).not.toHaveProperty("pathReadable");
+    expect(byPath.get(unclaimedWt)).not.toHaveProperty("pathReadable");
+  });
+
+  // VC-292: a folder the scan cannot open is said to be unreadable, so the row
+  // can name that before offering a Reveal that would fail. Root reads
+  // anything, so the fixture means nothing there.
+  it.skipIf(process.getuid?.() === 0)(
+    "marks a reported folder it cannot open as unreadable",
+    async () => {
+      const projectPath = tempDir("proj");
+      const home = tempDir("home");
+      const container = join(
+        home,
+        ".volli",
+        "worktrees",
+        projectContainerName(projectPath, "proj-1"),
+      );
+      const lockedWt = join(container, "locked");
+      mkdirSync(lockedWt, { recursive: true });
+      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+
+      const { git, gitAsync } = scriptedGit((rawArgs) => {
+        const args = verb(rawArgs);
+        if (args[0] === "worktree" && args[1] === "list") {
+          return `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`;
+        }
+        return "";
+      });
+
+      chmodSync(lockedWt, 0o000);
+      try {
+        const report = await scanOrphans({
+          db: ctx.db,
+          git,
+          gitAsync,
+          home,
+          now,
+          blobsRoot: "unused",
+        });
+        expect(report.dirty).toEqual([
+          expect.objectContaining({ path: lockedWt, pathReadable: false }),
+        ]);
+      } finally {
+        chmodSync(lockedWt, 0o755);
+      }
+    },
+  );
 
   // A project whose listing fails used to be skipped in silence,
   // which made every checkout in its container read as "not registered with

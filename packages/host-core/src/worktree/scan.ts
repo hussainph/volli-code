@@ -73,7 +73,7 @@
  * yield between its last look and the delete.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import type {
@@ -84,6 +84,7 @@ import type {
 
 import type {
   DirtyWorktreeOrphan,
+  DirtyWorktreeOrphanTicket,
   KeptWorktreeMetadata,
   KeptWorktreeOrphan,
   PrunableWorktreeMetadata,
@@ -91,7 +92,7 @@ import type {
   UnreadableWorktreeProject,
 } from "@volli/shared";
 import { listProjects } from "../db/projects-repo";
-import { listWorktreePaths } from "../db/tickets-repo";
+import { listWorktreePaths, listWorktreeTickets } from "../db/tickets-repo";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { isOwnedWorktreeLeaf, ownedContainers, type OwnedContainer } from "./containers";
 import { isWorktreeDirtyAsync } from "./dirty";
@@ -487,9 +488,15 @@ export async function scanOrphans(
   // Disk-vs-git pass, over OUR OWN containers only: a dir git no longer
   // registers may still hold real work — git can't vouch for it, and any
   // ambiguity reads dirty. Report it for the Storage list; never propose it.
+  // The ticket each still-claimed folder belongs to (VC-292), so the row can
+  // name it and open it rather than tell the user to go and find "that ticket"
+  // from a clipped path.
+  const claimingTickets = worktreeTicketsByPath(deps.db);
   for (const container of containers) {
     for (const leafPath of containerLeaves(container)) {
-      if (registeredPaths.has(canonicalize(leafPath))) continue;
+      const leafCanonical = canonicalize(leafPath);
+      if (registeredPaths.has(leafCanonical)) continue;
+      const ticket = claimingTickets.get(`${container.projectId}\0${leafCanonical}`);
       report.dirty.push({
         path: leafPath,
         projectId: container.projectId,
@@ -499,14 +506,52 @@ export async function scanOrphans(
         // at is cleared from that ticket (its "Remove worktree…" now handles a
         // directory git has forgotten — VC-113), while an unclaimed leftover is
         // this list's own to delete.
-        reason: knownPaths.has(canonicalize(leafPath))
+        reason: knownPaths.has(leafCanonical)
           ? "A ticket still points here, but git no longer tracks it. Use Remove worktree on that ticket, then recreate it."
           : "Not registered with git, so it isn't safe to remove automatically.",
+        ...(ticket === undefined ? {} : { ticket }),
       });
     }
   }
 
+  // Whether each reported folder can be opened at all (VC-292): a row that
+  // offers Reveal on a directory nobody can read is a dead end the row should
+  // name before the click, not after. Only the negative is stamped, so a
+  // readable row reads exactly as it did from a host that never asked.
+  for (const orphan of report.dirty) {
+    if (!isReadableDirectory(orphan.path)) orphan.pathReadable = false;
+  }
+
   return report;
+}
+
+/**
+ * Every ticket-claimed checkout, keyed by its project and canonical path —
+ * live and archived alike. Keyed by project too because the row opens the
+ * ticket inside the project whose container holds the folder; a ticket from
+ * another project claiming the same path is not this row's to name.
+ */
+function worktreeTicketsByPath(db: WorktreePorts["db"]): Map<string, DirtyWorktreeOrphanTicket> {
+  const byPath = new Map<string, DirtyWorktreeOrphanTicket>();
+  for (const row of listWorktreeTickets(db)) {
+    byPath.set(`${row.projectId}\0${canonicalize(row.path)}`, {
+      id: row.ticketId,
+      displayId: row.displayId,
+      title: row.title,
+      archived: row.archived,
+    });
+  }
+  return byPath;
+}
+
+/** Whether `path` is a directory this process may list. A read, never a write. */
+function isReadableDirectory(path: string): boolean {
+  try {
+    accessSync(path, constants.R_OK | constants.X_OK);
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Every directory sitting directly inside one owned container. */

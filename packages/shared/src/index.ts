@@ -149,6 +149,7 @@ export type {
   WorktreeWatchErrorEvent,
   WorktreeBranchListing,
   DirtyWorktreeOrphan,
+  DirtyWorktreeOrphanTicket,
   RemovableWorktreeOrphan,
   KeptWorktreeOrphan,
   PrunableWorktreeMetadata,
