@@ -32,6 +32,7 @@ export type {
 } from "../handlers/remote-hosts-port";
 export type { RemoteSignInsPort } from "../handlers/remote-sign-ins-port";
 export type { HostLinkRelayPort, HostScopeRelayPort } from "../handlers/host-link-relay-port";
+export type { BrowserShortcutsPort } from "../handlers/browser-shortcuts-port";
 export {
   ADMITTED,
   admittedHandlers,

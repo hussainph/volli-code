@@ -5,7 +5,7 @@ import type {
   WebContentsView,
   WebContentsViewConstructorOptions,
 } from "electron";
-import type { BrowserTabState } from "@volli/shared";
+import type { BrowserAppShortcutEvent, BrowserTabState } from "@volli/shared";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -104,6 +104,9 @@ class FakeWebContents {
     return false;
   }
   focused = false;
+  focus = vi.fn(() => {
+    this.focused = true;
+  });
   isFocused(): boolean {
     return this.focused;
   }
@@ -257,6 +260,8 @@ let views: FakeView[];
 let viewOptions: WebContentsViewConstructorOptions[];
 let sessions: Map<string, FakeSession>;
 let published: unknown[];
+/** Every app shortcut the host handed back, with the window it named (VC-301). */
+let delivered: { window: unknown; event: BrowserAppShortcutEvent }[];
 let host: BrowserTabHost;
 let pictures: BrowserPictureStore;
 let persisted: Map<string, { bytes: Uint8Array; record: BrowserPictureRecord }>;
@@ -269,6 +274,7 @@ beforeEach(() => {
   viewOptions = [];
   sessions = new Map();
   published = [];
+  delivered = [];
   persisted = new Map();
   stages = [];
   stageBuilds = "ok";
@@ -313,6 +319,7 @@ beforeEach(() => {
     createStageWindow: newStage,
     publishState: (event) => published.push(event),
     publishClosed: (tabId) => published.push({ closedTabId: tabId }),
+    deliverAppShortcut: (window, event) => delivered.push({ window, event }),
   });
 });
 
@@ -2840,5 +2847,185 @@ describe("BrowserTabHost as the desktop's Browser backend (VC-561)", () => {
     await wait;
     expect(settled).toBe(true);
     expect(contents.listeners.get("did-stop-loading")).toHaveLength(1);
+  });
+});
+
+function appKey(overrides: Partial<Electron.Input> = {}): Electron.Input {
+  return {
+    type: "keyDown",
+    key: "k",
+    code: "KeyK",
+    isAutoRepeat: false,
+    isComposing: false,
+    shift: false,
+    control: false,
+    alt: false,
+    meta: true,
+    location: 0,
+    modifiers: ["meta"],
+    ...overrides,
+  };
+}
+
+/** Presses one key into a page the way Chromium does; returns the event's preventDefault. */
+function press(contents: FakeWebContents, input: Electron.Input) {
+  const event = { preventDefault: vi.fn() };
+  contents.emit("before-input-event", event, input);
+  return event.preventDefault;
+}
+
+describe("BrowserTabHost app shortcuts (VC-301)", () => {
+  function shownUserTab() {
+    const tab = host.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    host.show(tab.tabId);
+    return tab;
+  }
+
+  it("takes an app chord from the focused page and hands it to the window the page is on", () => {
+    const tab = shownUserTab();
+    const contents = views[0]!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey());
+
+    expect(prevented).toHaveBeenCalledOnce();
+    expect(delivered).toEqual([
+      {
+        window: fakeWindow,
+        event: {
+          tabId: tab.tabId,
+          shortcut: {
+            kind: "replay",
+            chord: {
+              key: "k",
+              code: "KeyK",
+              metaKey: true,
+              ctrlKey: false,
+              altKey: false,
+              shiftKey: false,
+              repeat: false,
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("names the page's own tab for close, whichever other tab is also on screen", () => {
+    shownUserTab();
+    const second = shownUserTab();
+    const contents = views[1]!.webContents;
+    contents.focused = true;
+
+    press(contents, appKey({ key: "w", code: "KeyW" }));
+
+    expect(delivered.map(({ event }) => event)).toEqual([
+      { tabId: second.tabId, shortcut: { kind: "close-tab" } },
+    ]);
+  });
+
+  it("leaves every key that is not the app's to the page", () => {
+    shownUserTab();
+    const contents = views[0]!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey({ key: "b", code: "KeyB" }));
+
+    expect(prevented).not.toHaveBeenCalled();
+    expect(delivered).toEqual([]);
+  });
+
+  it("swallows a held close's repeats without closing again", () => {
+    shownUserTab();
+    const contents = views[0]!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey({ key: "w", code: "KeyW", isAutoRepeat: true }));
+
+    // Kept from the page, and so from the menu's Close Window, but not delivered.
+    expect(prevented).toHaveBeenCalledOnce();
+    expect(delivered).toEqual([]);
+  });
+
+  it("leaves keys alone in a page without native focus, which is how CDP input arrives", () => {
+    shownUserTab();
+    const contents = views[0]!.webContents;
+    contents.focused = false;
+
+    const prevented = press(contents, appKey({ key: "w", code: "KeyW" }));
+
+    expect(prevented).not.toHaveBeenCalled();
+    expect(delivered).toEqual([]);
+  });
+
+  it("leaves keys alone in a tab that is not on screen", () => {
+    host.open({
+      url: "https://agent.example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "session",
+      ownerSessionId: "session-a",
+    });
+    const contents = views[0]!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey());
+
+    expect(prevented).not.toHaveBeenCalled();
+    expect(delivered).toEqual([]);
+  });
+
+  it("hands focus back to a shown page whose shortcut the app had nothing to do with", () => {
+    const tab = shownUserTab();
+
+    host.focusPage(tab.tabId);
+
+    expect(views[0]!.webContents.focus).toHaveBeenCalledOnce();
+  });
+
+  it("returns no focus to a page that is off screen or gone", () => {
+    const tab = shownUserTab();
+    host.hide(tab.tabId);
+    host.focusPage(tab.tabId);
+    host.focusPage("opaque-missing");
+
+    expect(views[0]!.webContents.focus).not.toHaveBeenCalled();
+  });
+
+  it("leaves every key to the page when the host has no renderer to route to", () => {
+    const quiet = new BrowserTabHost({
+      pictures,
+      now: () => clock,
+      createId: () => "quiet-1",
+      createView: () => {
+        const view = new FakeView();
+        views.push(view);
+        return view as unknown as WebContentsView;
+      },
+      fromPartition: () => new FakeSession() as unknown as Session,
+      getWindow: () => appWindow as unknown as BrowserWindow,
+      createStageWindow: newStage,
+      publishState: () => undefined,
+      publishClosed: () => undefined,
+    });
+    const tab = quiet.open({
+      url: "https://example.com",
+      projectId: "project-1",
+      ticketId: null,
+      createdBy: "user",
+    });
+    quiet.show(tab.tabId);
+    const contents = views.at(-1)!.webContents;
+    contents.focused = true;
+
+    const prevented = press(contents, appKey());
+
+    expect(prevented).not.toHaveBeenCalled();
+    expect(delivered).toEqual([]);
   });
 });
