@@ -113,6 +113,15 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
 5. The copied core patch is deleted; ownership now lives here. Codemode is not
    vendored: its output/call-size patch is retained on 1.0.0 because upstream
    still lacks those limits.
+6. **Edit byte preservation:** `edit` reads bytes and decodes strict UTF-8,
+   refusing a file that does not decode instead of writing U+FFFD back. Matching
+   (exact, then fuzzy) still runs on the LF-normalized view, but the result is
+   overlaid onto the original text: untouched lines keep their own CRLF, LF or
+   lone-CR endings and edited lines take their region's ending, where upstream
+   rewrote the whole file with its first line ending. `applyEditsToContent`
+   (upstream `applyEditsToNormalizedContent`) takes the original text, and the
+   reported `patch` is built from the original and written text so it applies
+   to the file's bytes. `detectLineEnding` and `restoreLineEndings` are removed.
 
 ## Compatibility evidence
 
