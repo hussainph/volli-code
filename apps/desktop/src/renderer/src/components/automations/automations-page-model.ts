@@ -20,6 +20,7 @@
  *    where a person can see that and re-pin.
  */
 import {
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   automationOwnership,
   automationTriggerColumns,
   automationTriggerSchedule,
@@ -28,6 +29,7 @@ import {
   isAutomationRuntimeTier,
   isTicketStatus,
   modelTierRow,
+  nextScheduleOccurrence,
   scheduleSentence,
   TICKET_STATUS_LABELS,
   UNBOUND_RUN_LABEL,
@@ -36,6 +38,7 @@ import type {
   Automation,
   AutomationRun,
   AutomationRuntime,
+  AutomationSchedule,
   AutomationSkippedOccurrence,
   AutomationTrigger,
   TicketStatus,
@@ -426,3 +429,52 @@ export function skipReasonLabel(skip: Pick<AutomationSkippedOccurrence, "reason"
 export function skipCountLabel(skip: Pick<AutomationSkippedOccurrence, "missedCount">): string {
   return skip.missedCount > 1 ? `${skip.missedCount} occurrences` : "";
 }
+
+/**
+ * When a schedule next fires, read on this Mac's clock (VC-298).
+ *
+ * The instant is the shared `nextScheduleOccurrence` — the same function, the
+ * same stagger key (the Automation's id) and therefore the same answer the
+ * host timer arms for — never a second calendar walk here. Only the READING
+ * is local: the schedule keeps its stored zone, and the label prints that
+ * instant in `timeZone` with the zone's name, so 09:00 Asia/Kuwait set from a
+ * New York laptop says when that is in New York.
+ *
+ * The stagger is included, so an on-the-hour schedule may read a few minutes
+ * past: that is the minute it actually starts.
+ */
+export function nextScheduledRun(input: {
+  schedule: AutomationSchedule;
+  automationId: string;
+  now: number;
+  timeZone: string;
+}): { at: number; label: string } {
+  const at = nextScheduleOccurrence({
+    schedule: input.schedule,
+    staggerKey: input.automationId,
+    after: input.now,
+  });
+  const reading = new Date(at).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: input.timeZone,
+    timeZoneName: "short",
+  });
+  return { at, label: `Next: ${reading}` };
+}
+
+/**
+ * When a due time becomes a Skipped occurrence, said once at the schedule
+ * control (VC-298).
+ *
+ * The grace is the host timer's own constant rather than a number typed here,
+ * so the sentence cannot promise a window the scheduler does not keep. A due
+ * time outside it is recorded as a Skipped occurrence in Run history, never
+ * replayed.
+ */
+export const SCHEDULE_SKIPPED_OCCURRENCE_POLICY = `Runs up to ${
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS / 60_000
+} min late; skipped if Volli is closed or the Mac is asleep`;

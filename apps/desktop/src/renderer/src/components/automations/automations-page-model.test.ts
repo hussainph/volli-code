@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vite-plus/test";
 import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun, AutomationSkippedOccurrence } from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationSchedule,
+  AutomationSkippedOccurrence,
+} from "@volli/shared";
 
 import {
   INSTRUCTIONS_PLACEHOLDER,
   MANUAL_TRIGGER_LABEL,
+  SCHEDULE_SKIPPED_OCCURRENCE_POLICY,
   automationHistory,
   duplicateName,
   groupByOwnership,
   laneDropRank,
   laneRowId,
   listingRunTarget,
+  nextScheduledRun,
   parseLaneRowId,
   ownershipLabel,
   historyEmptyCopy,
@@ -413,5 +420,64 @@ describe("skipCountLabel", () => {
   it("stays quiet for the ordinary single miss and states a real gap", () => {
     expect(skipCountLabel({ missedCount: 1 })).toBe("");
     expect(skipCountLabel({ missedCount: 50 })).toBe("50 occurrences");
+  });
+});
+
+const NEW_YORK = "America/New_York";
+const KUWAIT = "Asia/Kuwait";
+function next(schedule: AutomationSchedule, now: number, timeZone = NEW_YORK) {
+  return nextScheduledRun({ schedule, automationId: "automation-1", now, timeZone });
+}
+// Off the hour throughout, so no stagger moves these instants.
+const daily = (hour: number, timeZone: string): AutomationSchedule => ({
+  preset: "daily",
+  hour,
+  minute: 30,
+  timeZone,
+});
+
+describe("nextScheduledRun (VC-298)", () => {
+  it("keeps the wall time across a spring-forward change", () => {
+    // Saturday 7 March 2026, 10:00 EST — past today's 09:30. Sunday is on EDT.
+    const result = next(daily(9, NEW_YORK), Date.UTC(2026, 2, 7, 15));
+    expect(result.at).toBe(Date.UTC(2026, 2, 8, 13, 30));
+  });
+
+  it("runs a wall time the spring-forward gap skips just after it, never early", () => {
+    // 02:30 does not exist on 8 March in New York; 03:30 EDT is when it would have been.
+    expect(next(daily(2, NEW_YORK), Date.UTC(2026, 2, 7, 12)).at).toBe(Date.UTC(2026, 2, 8, 7, 30));
+  });
+
+  it("answers the later reading of a wall time a fall-back change repeats", () => {
+    // 01:30 happens twice on 1 November in New York; the EST one wins.
+    expect(next(daily(1, NEW_YORK), Date.UTC(2026, 9, 31, 12)).at).toBe(
+      Date.UTC(2026, 10, 1, 6, 30),
+    );
+  });
+
+  it("computes in the schedule's stored zone and reads it on this Mac's clock", () => {
+    // 09:30 in Kuwait (UTC+3) on Sunday 8 March is 01:30 EST on this New York Mac.
+    const now = Date.UTC(2026, 2, 7, 12);
+    const result = next(daily(9, KUWAIT), now);
+    expect(result.at).toBe(Date.UTC(2026, 2, 8, 6, 30));
+    expect(result.label).toMatch(/^Next: /);
+    expect(result.label).toContain("1:30");
+    // The same instant, read on a Mac in Kuwait instead: a different clock face.
+    const inKuwait = next(daily(9, KUWAIT), now, KUWAIT).label;
+    expect(inKuwait).toContain("9:30");
+    expect(inKuwait).not.toBe(result.label);
+  });
+
+  it("staggers an on-the-hour schedule inside the stagger window", () => {
+    const schedule: AutomationSchedule = { preset: "daily", hour: 9, minute: 0, timeZone: KUWAIT };
+    const at = next(schedule, Date.UTC(2026, 2, 7, 12)).at;
+    expect(at).toBeGreaterThanOrEqual(Date.UTC(2026, 2, 8, 6));
+    expect(at).toBeLessThan(Date.UTC(2026, 2, 8, 6, 5));
+  });
+
+  it("states the scheduler's grace and what happens outside it", () => {
+    expect(SCHEDULE_SKIPPED_OCCURRENCE_POLICY).toBe(
+      "Runs up to 2 min late; skipped if Volli is closed or the Mac is asleep",
+    );
   });
 });
