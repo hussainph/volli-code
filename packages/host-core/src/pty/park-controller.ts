@@ -11,8 +11,9 @@
 // ParkableSession} — the SAME mutable objects the manager holds, which is what
 // keeps wake-before-write/kill coherent across the two modules — plus two
 // injected side-effect hooks (flush buffered output, push park state to the
-// window) and the spawn ledger's parked mark (VC-833). That directness is what lets it be unit-tested with a fake inspector
-// and hand-built sessions, no PtyManager required.
+// window) and the spawn ledger's parked mark (VC-833). That directness is what
+// lets it be unit-tested with a fake inspector and hand-built sessions, no
+// PtyManager required.
 
 import { breatheShouldWake, isParkCandidate, treeIsCpuQuiet } from "@volli/shared";
 import type { TerminalIoResult } from "@volli/shared";

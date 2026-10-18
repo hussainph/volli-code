@@ -52,7 +52,10 @@ export interface ParkedTerminalRecovery {
   resumed: string[];
   /** Rows whose process is gone, or whose pid now belongs to something else: nothing was sent. */
   stale: string[];
-  /** Rows the signal could not reach for any reason but "gone"; their mark stays for the next launch. */
+  /**
+   * Rows the signal could not reach for any reason but "gone"; their mark
+   * stays for the next launch.
+   */
   refused: string[];
 }
 

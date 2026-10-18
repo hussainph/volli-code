@@ -98,8 +98,9 @@ export interface HostMaintenance {
   stop(): void;
   /**
    * Resolves once neither loop has a poll or reap in flight, and the parked
-   * terminal release has finished. Never rejects and adds no delay. Call after {@link stop}, so nothing new can start; a
-   * retention watch nobody built has nothing to wait for and stays unbuilt.
+   * terminal release has finished. Never rejects and adds no delay. Call after
+   * {@link stop}, so nothing new can start; a retention watch nobody built has
+   * nothing to wait for and stays unbuilt.
    */
   settled(): Promise<void>;
 }
