@@ -5,6 +5,7 @@ import { deleteProject, insertProject } from "../db/projects-repo";
 import { MemoryMcpCredentialStore } from "./credential-store";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
+import { McpSessionHost, serversForFrozenMcpTools } from "./session-host";
 
 let ctx: TestDb;
 let listedTools: readonly { name: string; description?: string; inputSchema: unknown }[];
@@ -183,6 +184,74 @@ describe("McpSettingsService", () => {
     expect(settings.surfaceRevision("other-project")).toBe(0);
     expect(settings.remove({ projectId: "p1", serverId: "missing" }).ok).toBe(false);
     expect(settings.surfaceRevision("p1")).toBe(5);
+  });
+
+  it("answers whether a server is configured and enabled, re-reading only after a change (VC-771)", async () => {
+    const settings = service();
+    expect(settings.configured("p1", "server-1")).toBeUndefined();
+    await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+    // Another project's id is not this project's server.
+    expect(settings.configured("other-project", "server-1")).toBeUndefined();
+
+    // A write behind the service's back (nothing in the app does this) goes
+    // unseen: the answer is remembered, not re-read per call.
+    ctx.db.prepare("UPDATE mcp_servers SET enabled = 0 WHERE id = 'server-1'").run();
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+
+    // A change through the service is seen at once.
+    settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+    settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: false });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: false });
+    settings.remove({ projectId: "p1", serverId: "server-1" });
+    expect(settings.configured("p1", "server-1")).toBeUndefined();
+  });
+
+  it("stops a server for Sessions that hold its tools when a person disables or removes it (VC-771)", async () => {
+    const settings = service();
+    await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    const sessionClose = vi.fn(async () => undefined);
+    const open = vi.fn(async (): Promise<McpProtocolClient> => ({
+      listTools: async () => [],
+      callTool: async () => ({ content: [{ type: "text", text: "echo ok" }] }),
+      close: sessionClose,
+    }));
+    const host = new McpSessionHost({
+      workspacePath: "/repo/project",
+      servers: serversForFrozenMcpTools(settings.list("p1"), settings.selectedTools("p1")),
+      open,
+      configured: (serverId) => settings.configured("p1", serverId),
+    });
+    const call = { serverId: "server-1", toolName: "echo", arguments: {}, toolCallId: "c1" };
+    const signal = new AbortController().signal;
+    try {
+      await host.port.call(call, signal);
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: false });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledOnce());
+      expect((await host.port.call(call, signal)).isError).toBe(true);
+
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+      expect(await host.port.call(call, signal)).toEqual({
+        content: [{ type: "text", text: "echo ok" }],
+        isError: false,
+      });
+      expect(open).toHaveBeenCalledTimes(2);
+      // Saved again, switched off in the same edit.
+      await settings.save({
+        projectId: "p1",
+        server: { ...draft, enabled: false },
+        enabledTools: ["echo"],
+      });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledTimes(2));
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+      await host.port.call(call, signal);
+      expect(open).toHaveBeenCalledTimes(3);
+      settings.remove({ projectId: "p1", serverId: "server-1" });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledTimes(3));
+    } finally {
+      await host.close();
+    }
   });
 });
 

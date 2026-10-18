@@ -404,6 +404,8 @@ export function settingsGroups(
             "stable",
             "check now",
             "current version",
+            "status",
+            "retry",
           ],
           content: <UpdatesPane />,
         },

@@ -73,7 +73,7 @@
  * yield between its last look and the delete.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import type {
@@ -84,6 +84,7 @@ import type {
 
 import type {
   DirtyWorktreeOrphan,
+  DirtyWorktreeOrphanTicket,
   KeptWorktreeMetadata,
   KeptWorktreeOrphan,
   PrunableWorktreeMetadata,
@@ -91,7 +92,7 @@ import type {
   UnreadableWorktreeProject,
 } from "@volli/shared";
 import { listProjects } from "../db/projects-repo";
-import { listWorktreePaths } from "../db/tickets-repo";
+import { listWorktreePaths, listWorktreeRefs } from "../db/tickets-repo";
 import { busyRefusal, busySiteWithin, type BusyWorktreeSites } from "./activity";
 import { isOwnedWorktreeLeaf, ownedContainers, type OwnedContainer } from "./containers";
 import { isWorktreeDirtyAsync } from "./dirty";
@@ -295,6 +296,10 @@ export async function scanOrphans(
   };
 
   const knownPaths = new Set(listWorktreePaths(deps.db).map((p) => canonicalize(p)));
+  // Every ticket checkout with its ticket (VC-292): the ONE lookup a dirty row's
+  // reason, its ticket and its Delete are all decided from, so they cannot
+  // disagree with each other or with main's delete guard.
+  const claims = listWorktreeRefs(deps.db);
   // The containers THIS database owns. Tiers 2-3 may name ONLY what is inside
   // them — a user's own `git worktree add ../review` is git-registered but not
   // ours, and neither is another Volli install's container under the same root.
@@ -403,11 +408,13 @@ export async function scanOrphans(
         worktreeEntries: entries,
       });
       if (dirty.dirty) {
+        const ticket = claimingTicket(claims, entry.path);
         report.dirty.push({
           path: entry.path,
           projectId: project.id,
           projectName: project.name,
           reason: dirty.reason ?? "dirty",
+          ...(ticket === undefined ? {} : { ticket }),
         });
         continue;
       }
@@ -490,6 +497,10 @@ export async function scanOrphans(
   for (const container of containers) {
     for (const leafPath of containerLeaves(container)) {
       if (registeredPaths.has(canonicalize(leafPath))) continue;
+      // The claim is asked the way main's delete guard asks it — any ticket, in
+      // any project, whose path is this folder, inside it, or holds it — so a
+      // row that says a ticket points here is a row whose Delete main refuses.
+      const ticket = claimingTicket(claims, leafPath);
       report.dirty.push({
         path: leafPath,
         projectId: container.projectId,
@@ -499,14 +510,59 @@ export async function scanOrphans(
         // at is cleared from that ticket (its "Remove worktree…" now handles a
         // directory git has forgotten — VC-113), while an unclaimed leftover is
         // this list's own to delete.
-        reason: knownPaths.has(canonicalize(leafPath))
-          ? "A ticket still points here, but git no longer tracks it. Use Remove worktree on that ticket, then recreate it."
-          : "Not registered with git, so it isn't safe to remove automatically.",
+        reason:
+          ticket !== undefined
+            ? "A ticket still points here, but git no longer tracks it. Use Remove worktree on that ticket, then recreate it."
+            : "Not registered with git, so it isn't safe to remove automatically.",
+        ...(ticket === undefined ? {} : { ticket }),
       });
     }
   }
 
+  // Whether each reported folder can be opened at all (VC-292), so the row can
+  // say it can't be read rather than leave the user to find out in Finder.
+  // Only the negative is stamped, so a readable row reads exactly as it did
+  // from a host that never asked.
+  for (const orphan of report.dirty) {
+    if (!isReadableDirectory(orphan.path)) orphan.pathReadable = false;
+  }
+
   return report;
+}
+
+/**
+ * The ticket that claims `path`, if any: one whose checkout IS it, is inside
+ * it, or holds it — {@link touchesKnownWorktree}'s test, which is the one
+ * main's orphan delete refuses on. An exact match wins over a nested one, so
+ * the row names the ticket that points at this very folder when there is one.
+ */
+function claimingTicket(
+  claims: ReturnType<typeof listWorktreeRefs>,
+  path: string,
+): DirtyWorktreeOrphanTicket | undefined {
+  const canonical = canonicalize(path);
+  const claim =
+    claims.find((ref) => canonicalize(ref.path) === canonical) ??
+    claims.find((ref) => touchesKnownWorktree([ref.path], path));
+  return claim === undefined
+    ? undefined
+    : {
+        id: claim.ticketId,
+        projectId: claim.projectId,
+        displayId: claim.ticketDisplayId,
+        title: claim.ticketTitle,
+        archived: claim.archived,
+      };
+}
+
+/** Whether `path` is a directory this process may list. A read, never a write. */
+function isReadableDirectory(path: string): boolean {
+  try {
+    accessSync(path, constants.R_OK | constants.X_OK);
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Every directory sitting directly inside one owned container. */

@@ -30,6 +30,8 @@ import {
 } from "@volli/shared";
 
 import { ActiveSessions } from "./active-sessions";
+import { PREVIOUS_BAND_LIMIT } from "./active-session-listing";
+import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
@@ -37,7 +39,7 @@ import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
 import { useRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
 import { projectScope, useSessionsStore, type SessionLaunch } from "@renderer/stores/sessions";
 import { useSessionOrderStore } from "@renderer/stores/session-order";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
@@ -627,5 +629,144 @@ describe("the peek on the left bands (VC-30)", () => {
 
     await press("chat:c1", " ");
     expect(document.activeElement).toBe(card());
+  });
+});
+
+/**
+ * VC-116 — the Previous band draws its first {@link PREVIOUS_BAND_LIMIT}
+ * entries behind a "Show more" row, and never hides the tab in front of you.
+ */
+describe("the Previous band's cap (VC-116)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** `count` ticketless chats, all past the quiet window, newest first: `c0`… */
+  const seedPastChats = (count: number): void =>
+    seedSessions(
+      Array.from({ length: count }, (_, index) =>
+        listingRow(
+          chatRecord({
+            sessionId: `c${index}`,
+            title: `Past ${index}`,
+            ticketId: null,
+            role: "project",
+            bornTicketless: true,
+            lastActivityAt: NOW - 90 * 60_000 - index * 1_000,
+          }),
+        ),
+      ),
+    );
+
+  const previousRowIds = (): string[] =>
+    [
+      ...(container?.querySelectorAll<HTMLElement>(
+        '[data-session-band="previous"] [data-peek-row]',
+      ) ?? []),
+    ].map((row) => row.dataset.peekRow ?? "");
+
+  const reachButton = (label: "Show more" | "Show less"): HTMLButtonElement | null =>
+    [
+      ...(container?.querySelectorAll<HTMLButtonElement>('[data-session-band="previous"] button') ??
+        []),
+    ].find((button) => button.textContent === label) ?? null;
+
+  async function pressReach(label: "Show more" | "Show less"): Promise<void> {
+    const button = reachButton(label);
+    if (button === null) throw new Error(`no ${label} button`);
+    await act(async () => {
+      button.focus();
+      button.click();
+    });
+  }
+
+  it("draws no reach control for a band that fits", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT);
+    await mount();
+
+    expect(previousRowIds()).toHaveLength(PREVIOUS_BAND_LIMIT);
+    expect(reachButton("Show more")).toBeNull();
+    expect(reachButton("Show less")).toBeNull();
+  });
+
+  it("draws the first twenty entries and holds the rest behind Show more", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT * 2 + 5);
+    await mount();
+
+    expect(previousRowIds()).toEqual(
+      Array.from({ length: PREVIOUS_BAND_LIMIT }, (_, index) => `chat:c${index}`),
+    );
+    // The header still counts every Session back there, not the drawn ones.
+    // Its count is the band's first tabular figure; the rows' ages follow it.
+    expect(
+      container?.querySelector('[data-session-band="previous"] .tabular-nums')?.textContent,
+    ).toBe(String(PREVIOUS_BAND_LIMIT * 2 + 5));
+    expect(reachButton("Show more")).not.toBeNull();
+    expect(reachButton("Show less")).toBeNull();
+  });
+
+  it("widens a page at a time, and collapses back to the cap, keeping focus in the band", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT * 2 + 5);
+    await mount();
+
+    await pressReach("Show more");
+    expect(previousRowIds()).toHaveLength(PREVIOUS_BAND_LIMIT * 2);
+    expect(document.activeElement).toBe(reachButton("Show more"));
+    expect(reachButton("Show less")).not.toBeNull();
+
+    // The last page: nothing is left to show, so its button goes and focus
+    // moves to the one beside it rather than falling out of the sidebar.
+    await pressReach("Show more");
+    expect(previousRowIds()).toHaveLength(PREVIOUS_BAND_LIMIT * 2 + 5);
+    expect(reachButton("Show more")).toBeNull();
+    expect(document.activeElement).toBe(reachButton("Show less"));
+
+    await pressReach("Show less");
+    expect(previousRowIds()).toHaveLength(PREVIOUS_BAND_LIMIT);
+    expect(reachButton("Show less")).toBeNull();
+    expect(document.activeElement).toBe(reachButton("Show more"));
+  });
+
+  /** Puts ticketless chat `c{index}` in front of you, as Home's active tab. */
+  const selectHomeChat = (index: number): void => {
+    useWorkspaceStore.setState({
+      byProject: {
+        [PROJECT.id]: {
+          ...DEFAULT_WORKSPACE_UI,
+          nav: "home",
+          homeActiveTab: chatTabId(`c${index}`),
+        },
+      },
+    });
+  };
+
+  it("walks the arrow keys over the drawn rows, straight onto a pinned one past the cap", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT + 10);
+    const pinned = `chat:c${PREVIOUS_BAND_LIMIT + 6}`;
+    selectHomeChat(PREVIOUS_BAND_LIMIT + 6);
+    await mount();
+
+    // The next row in the band's FULL order is c20, which is behind Show more;
+    // the next DRAWN row is the pinned one.
+    await press(`chat:c${PREVIOUS_BAND_LIMIT - 1}`, "ArrowDown");
+    expect(document.activeElement).toBe(rowButton(pinned));
+  });
+
+  it("still draws the Session in front of you when it ranks past the cap", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT + 10);
+    const selected = PREVIOUS_BAND_LIMIT + 6;
+    selectHomeChat(selected);
+    await mount();
+
+    const drawn = previousRowIds();
+    expect(drawn).toHaveLength(PREVIOUS_BAND_LIMIT + 1);
+    expect(drawn.at(-1)).toBe(`chat:c${selected}`);
+    expect(rowButton(`chat:c${selected}`).dataset.active).toBe("true");
+    expect(reachButton("Show more")).not.toBeNull();
   });
 });

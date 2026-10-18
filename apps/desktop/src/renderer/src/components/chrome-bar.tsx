@@ -320,7 +320,7 @@ function CommandCluster({ onCommandPalette }: { onCommandPalette(): void }) {
 }
 
 /**
- * The chrome band's ⌘K trigger opens the app-wide ticket/session destination
+ * The chrome band's ⌘K trigger opens the app-wide ticket/session/page destination
  * picker. It is a button, not a board filter: the palette can move directly to
  * a ticket document or an already-running terminal from anywhere in the app.
  */
@@ -330,8 +330,8 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       type="button"
       onClick={onClick}
       aria-haspopup="dialog"
-      aria-label="Search tickets and sessions"
-      title="Search tickets and sessions (⌘K)"
+      aria-label="Search tickets, sessions, and commands"
+      title="Search tickets, sessions, and commands (⌘K)"
       //
       // The fill is a MATERIAL over the canvas rather than a rung of the ladder,
       // so it is a wash of the ink: `--foreground` runs toward white in dark and
@@ -347,7 +347,7 @@ function CommandPaletteTrigger({ onClick }: { onClick(): void }) {
       className="app-region-no-drag flex h-[22px] w-[380px] max-w-[40vw] items-center gap-1 rounded-md border border-border/50 bg-foreground/10 px-2 text-left text-ui text-muted-foreground transition-colors hover:border-border focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <MagnifyingGlassIcon className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate">Search tickets and sessions</span>
+      <span className="min-w-0 flex-1 truncate">Search tickets, sessions, and commands</span>
       {/* The keycap reads as cut out of the pill, so it goes the other way:
           toward the canvas floor. `--background` is near-black in dark (what
           the literal used to be) and near-white in light, which is what a key

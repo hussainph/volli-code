@@ -1,10 +1,16 @@
 import { realpath } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, resolve } from "node:path";
 import type { ExecutionEnv } from "./harness-env";
 
 /** Credential stores are never a structured file-read capability, even with
  * without per-call approvals. Project .env files join this list (VC-481).
  * This is not a shell sandbox: arbitrary programs can encode or send a value.
+ * Common tool stores join it too (VC-840): netrc, git's plaintext store, gh,
+ * docker, kube, gcloud and Claude Code's credentials file, and Volli's own
+ * database, whose `secrets` table still holds Web Access keys in the clear
+ * (`host-core/src/web/credential.ts`). `.npmrc` and `.pypirc` count only in
+ * the home directory: a project's copy is ordinary registry config.
  */
 export function credentialPath(path: string): boolean {
   const name = basename(path).toLowerCase();
@@ -18,7 +24,17 @@ export function credentialPath(path: string): boolean {
     name === "auth.json" ||
     name === "mcp-auth.json" ||
     /(?:^|\/)\.(?:ssh|aws|gnupg)(?:\/|$)/i.test(path) ||
-    /(?:^|\/)(?:keychains|credentials)(?:\/|$)/i.test(path)
+    /(?:^|\/)(?:keychains|credentials)(?:\/|$)/i.test(path) ||
+    name === ".netrc" ||
+    name === "_netrc" ||
+    name === ".git-credentials" ||
+    name === ".credentials.json" ||
+    name === "application_default_credentials.json" ||
+    name.startsWith("volli.db") ||
+    ((name === ".npmrc" || name === ".pypirc") && dirname(path) === resolve(homedir())) ||
+    /(?:^|\/)gh\/hosts\.yml$/i.test(path) ||
+    /(?:^|\/)\.docker\/config\.json$/i.test(path) ||
+    /(?:^|\/)\.(?:kube|config\/gcloud)(?:\/|$)/i.test(path)
   );
 }
 

@@ -4,20 +4,12 @@
 
 import * as Diff from "diff";
 
-export function detectLineEnding(content: string): "\r\n" | "\n" {
-  const crlfIdx = content.indexOf("\r\n");
-  const lfIdx = content.indexOf("\n");
-  if (lfIdx === -1) return "\n";
-  if (crlfIdx === -1) return "\n";
-  return crlfIdx < lfIdx ? "\r\n" : "\n";
-}
-
+/**
+ * The matching view of a file: CRLF and lone CR both become LF. Only matching
+ * and the display diff use it; bytes written back come from the original.
+ */
 export function normalizeToLF(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string {
-  return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
 }
 
 /**
@@ -50,8 +42,32 @@ export function normalizeForFuzzyMatch(text: string): string {
   );
 }
 
+/**
+ * Split into lines that keep their own terminator. CRLF, LF and lone CR each
+ * end one line, exactly as `normalizeToLF` maps each of them to one LF, so a
+ * file and its normalized view always have the same line count.
+ */
 function splitLinesWithEndings(content: string): string[] {
-  return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
+  return content.match(/[^\r\n]*(?:\r\n|\n|\r)|[^\r\n]+/g) ?? [];
+}
+
+function lineEndingOf(line: string): string {
+  if (line.endsWith("\r\n")) return "\r\n";
+  if (line.endsWith("\n")) return "\n";
+  return line.endsWith("\r") ? "\r" : "";
+}
+
+/**
+ * The line ending an edited region is written with: the first ending among
+ * its own original lines. An unterminated last line takes the ending of the
+ * line before it; a single unterminated line falls back to LF.
+ */
+function regionLineEnding(originalLines: string[], startLine: number, endLine: number): string {
+  for (let i = startLine; i < endLine; i++) {
+    const ending = lineEndingOf(originalLines[i]);
+    if (ending) return ending;
+  }
+  return startLine > 0 ? lineEndingOf(originalLines[startLine - 1]) : "\n";
 }
 
 interface LineSpan {
@@ -121,11 +137,13 @@ function applyReplacements(content: string, replacements: TextReplacement[], off
  * Apply replacements matched against `baseContent` to `originalContent` while
  * preserving unchanged line blocks from the original.
  *
- * This is useful when `baseContent` is a normalized view of the original. Each
+ * `baseContent` is an LF-only normalized view of the original. Each
  * replacement is widened to the lines it actually touches, those touched lines
- * are rewritten from the normalized base, and all other lines are copied back
- * from `originalContent`. The actual replacement ranges drive preservation so
- * duplicate normalized lines cannot be aligned to the wrong occurrence.
+ * are rewritten from the normalized base with the line ending that region used
+ * in the original, and all other lines, terminators included, are copied back
+ * from `originalContent` unchanged. The actual replacement ranges drive
+ * preservation so duplicate normalized lines cannot be aligned to the wrong
+ * occurrence.
  */
 export function applyReplacementsPreservingUnchangedLines(
   originalContent: string,
@@ -161,11 +179,12 @@ export function applyReplacementsPreservingUnchangedLines(
 
     const groupStartOffset = baseLines[group.startLine].start;
     const groupEndOffset = baseLines[group.endLine - 1].end;
+    const ending = regionLineEnding(originalLines, group.startLine, group.endLine);
     result += applyReplacements(
       baseContent.slice(groupStartOffset, groupEndOffset),
       group.replacements,
       groupStartOffset,
-    );
+    ).replaceAll("\n", ending);
     originalLineIndex = group.endLine;
   }
   result += originalLines.slice(originalLineIndex).join("");
@@ -302,19 +321,21 @@ function getNoChangeError(path: string, totalEdits: number): Error {
 }
 
 /**
- * Apply one or more exact-text replacements to LF-normalized content.
+ * Apply one or more exact-text replacements to file content.
  *
- * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. If any edit needs
- * fuzzy matching, the operation runs in fuzzy-normalized content space and then
- * overlays those line-level changes onto the original content so unchanged line
- * blocks keep their original bytes.
+ * All edits are matched against the same LF-normalized view of the content.
+ * If any edit needs fuzzy matching, matching runs in fuzzy-normalized content
+ * space instead. Either way the line-level changes are then overlaid onto the
+ * original content, so unchanged lines keep their original bytes and line
+ * endings (CRLF, LF or lone CR) and edited lines keep their region's ending.
+ * `newContent` is in the original's line-ending space, not the normalized one.
  */
-export function applyEditsToNormalizedContent(
-  normalizedContent: string,
+export function applyEditsToContent(
+  content: string,
   edits: Edit[],
   path: string,
 ): AppliedEditsResult {
+  const normalizedContent = normalizeToLF(content);
   const normalizedEdits = edits.map((edit) => ({
     oldText: normalizeToLF(edit.oldText),
     newText: normalizeToLF(edit.newText),
@@ -366,20 +387,19 @@ export function applyEditsToNormalizedContent(
     }
   }
 
-  const baseContent = normalizedContent;
-  const newContent = usedFuzzyMatch
-    ? applyReplacementsPreservingUnchangedLines(
-        normalizedContent,
-        replacementBaseContent,
-        matchedEdits,
-      )
-    : applyReplacements(replacementBaseContent, matchedEdits);
+  const newContent = applyReplacementsPreservingUnchangedLines(
+    content,
+    replacementBaseContent,
+    matchedEdits,
+  );
 
-  if (baseContent === newContent) {
+  // Judged in the normalized view: an edit whose only effect would be to
+  // rewrite a line ending is no change, not a reason to touch the file.
+  if (normalizeToLF(newContent) === normalizedContent) {
     throw getNoChangeError(path, normalizedEdits.length);
   }
 
-  return { baseContent, newContent };
+  return { baseContent: content, newContent };
 }
 
 /** Generate a standard unified patch. */

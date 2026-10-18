@@ -29,6 +29,12 @@
  * column shape with nothing to choose in a different drawing from every other
  * column, exactly while the modifier is promising large landing targets.
  *
+ * The ORIGIN column — the one every lifted card already stands in — draws its
+ * rows INERT. A release there is not an arrival, so it starts nothing whatever
+ * row the picker names (the arrival rule `armedMoveDecision` keeps); the rows
+ * are dimmed, are not pointer targets, and the lit row is Move only, because
+ * that is what every release in this one column does.
+ *
  * Motion is appearance only: rows fade and the panel's own padding eases, and
  * nothing anywhere on this path dwells, debounces or animates a position the
  * pointer is aiming at. Under reduced motion the transitions drop and every
@@ -49,6 +55,11 @@ export interface ColumnOfferedPanelProps {
   highlighted: number | null;
   /** The effective armed Automation's id, marked as what a plain release runs. */
   armedId: string | null;
+  /**
+   * Every lifted card already stands in this column, so a release here is not
+   * an arrival and no row can start anything.
+   */
+  inert?: boolean;
 }
 
 /** The row a pointer/digit picks, as the hit test reads it back. */
@@ -61,6 +72,7 @@ export function ColumnOfferedPanel({
   expanded,
   highlighted,
   armedId,
+  inert = false,
 }: ColumnOfferedPanelProps) {
   if (rows.length === 0 && !expanded) {
     return (
@@ -74,6 +86,7 @@ export function ColumnOfferedPanel({
   return (
     <div
       data-offered-panel={expanded ? "expanded" : "collapsed"}
+      data-offered-inert={inert ? "true" : undefined}
       className={cn(
         "flex flex-col rounded-lg border border-border bg-popover shadow-overlay",
         "transition-[gap,padding] duration-150 ease-out motion-reduce:transition-none",
@@ -86,13 +99,14 @@ export function ColumnOfferedPanel({
           row={String(index)}
           digit={index + 1}
           label={automation.name}
-          chosen={highlighted === index}
+          chosen={!inert && highlighted === index}
           expanded={expanded}
+          inert={inert}
           // Expanded only: collapsed, the lit row already says what a plain
           // release runs. Expanded it earns its width, because a digit can move
           // the highlight off the default and then the two facts differ.
           trailing={
-            expanded && armedId === automation.id ? (
+            expanded && !inert && armedId === automation.id ? (
               <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
                 <LightningIcon weight="fill" className="size-3" />
                 default
@@ -109,7 +123,7 @@ export function ColumnOfferedPanel({
         // release — while the cheap one spent tokens.
         digit={0}
         label="Move only"
-        chosen={highlighted === null}
+        chosen={inert || highlighted === null}
         expanded={expanded}
         dashed
       />
@@ -127,6 +141,7 @@ function OfferedRow({
   chosen,
   expanded,
   dashed = false,
+  inert = false,
   trailing = null,
 }: {
   row: string;
@@ -135,6 +150,8 @@ function OfferedRow({
   chosen: boolean;
   expanded: boolean;
   dashed?: boolean;
+  /** Dimmed and no pointer target: a release on it would start nothing. */
+  inert?: boolean;
   trailing?: React.ReactNode;
 }) {
   return (
@@ -146,7 +163,9 @@ function OfferedRow({
       // the column grows UNDER a stationary cursor, and an enter fired by the
       // interface moving would steal the preselected choice from a hand that
       // never moved.
-      {...{ [OFFERED_ROW_ATTRIBUTE]: expanded ? row : undefined }}
+      {...{ [OFFERED_ROW_ATTRIBUTE]: expanded && !inert ? row : undefined }}
+      data-offered-row-inert={inert ? "true" : undefined}
+      aria-disabled={inert ? "true" : undefined}
       aria-current={chosen ? "true" : undefined}
       className={cn(
         "flex items-center gap-2 rounded-md border text-left text-ui",
@@ -158,6 +177,7 @@ function OfferedRow({
             ? "border-solid border-ring bg-accent text-foreground"
             : "text-foreground"
           : "text-muted-foreground",
+        inert && "opacity-50",
       )}
     >
       <kbd

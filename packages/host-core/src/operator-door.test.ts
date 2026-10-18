@@ -144,6 +144,23 @@ describe("a valid operator token", () => {
     });
   });
 
+  // VC-789 pins a Session's project to its token; the person has no Session,
+  // so `--project` still says where they act, as it always has.
+  it("writes into the project --project names", async () => {
+    const { run, operator } = scenario();
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-two", path: "/repo/bravo", ticketPrefix: "BB" }),
+    );
+
+    expect(
+      await run("ticket.create", { title: "Over there", project: "BB" }, operator),
+    ).toMatchObject({ ok: true });
+    expect(listTicketsByProject(ctx.db, "project-two").map(({ title }) => title)).toEqual([
+      "Over there",
+    ]);
+  });
+
   it("reports every write to the audit line, refused or not, and no read", async () => {
     const { run, operator, audit } = scenario();
     updateProjectAuthorityPolicy(

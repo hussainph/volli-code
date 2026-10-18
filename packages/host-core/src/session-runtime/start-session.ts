@@ -54,6 +54,7 @@ import type {
 } from "@volli/shared";
 
 import type { SessionStartedNotice } from "@volli/shared";
+import { attachRefusal } from "./attach-refusal";
 import type { AutoTitleRequest } from "./auto-title";
 import type { TicketSessionDelegation } from "./delegation-policy";
 import type { Sessions, SessionModelOverride } from "./sessions";
@@ -121,14 +122,25 @@ export interface StartSessionInput {
   origin?: SessionOrigin;
 }
 
-export interface StartSessionResult {
+export type StartSessionResult = {
   sessionId: string;
   ticketDisplayId: string;
-  state: "ready" | "needs-recovery";
   model: ModelSelection;
   /** The title the Session was given, whether explicit or heuristic. */
   title: string;
-}
+} & (
+  | { state: "ready" }
+  | {
+      state: "needs-recovery";
+      /**
+       * Why the attach was not ready, in words (VC-659). A rejected attach
+       * carries the diagnosis a person needs — a worktree that cannot be
+       * prepared names its path, its branch and the branch the ticket expects —
+       * so a door hands that on rather than a bare "needs recovery".
+       */
+      attachFailure: string;
+    }
+);
 
 /**
  * Start one Ticket Session and return as its attachment settles.
@@ -218,7 +230,9 @@ export async function startSessionOperation(
   return {
     sessionId: started.sessionId,
     ticketDisplayId: displayId,
-    state: started.state,
+    ...(started.state === "ready"
+      ? { state: "ready" as const }
+      : { state: "needs-recovery" as const, attachFailure: attachRefusal(started.receipt) }),
     model: started.model,
     title,
   };

@@ -27,6 +27,7 @@ import type {
   AuthorityPolicy,
   AutomationRun,
   AutomationTrigger,
+  CommandReceipt,
   ModelSelection,
   RuntimeAskRequest,
   RuntimeSessionIdentity,
@@ -46,7 +47,7 @@ import {
   getAutomation,
   getAutomationRun,
   listAutomationsForProject,
-  listProjectRunsForAutomation,
+  listPossiblyLiveProjectRunsForAutomation,
   listRunsForTicket,
 } from "./db/automations-repo";
 import { openTestDb, testProject, testTicket } from "./db/test-helpers";
@@ -165,6 +166,8 @@ function harness(
     delegation?: TicketSessionDelegationClaims;
     authorityPolicy?: () => AuthorityPolicy;
     watches?: Watches;
+    /** An attach that was not ready, and the receipt it answered with. */
+    refusedAttach?: CommandReceipt;
   } = {},
 ) {
   ctx = openTestDb();
@@ -201,8 +204,9 @@ function harness(
         if (overrides.startError !== undefined) throw overrides.startError;
         return {
           sessionId: STARTED_SESSION,
-          state: "ready" as const,
-          receipt: null,
+          ...(overrides.refusedAttach === undefined
+            ? { state: "ready" as const, receipt: null }
+            : { state: "needs-recovery" as const, receipt: overrides.refusedAttach }),
           throughSequence: 2,
           model: {
             providerId: "openai-codex",
@@ -283,6 +287,38 @@ describe("session_start through the Agent Tool Surface", () => {
       ticketId: "ticket-one",
       title: "Fix the flaky auth test",
     });
+  });
+
+  it("hands the caller the attach's own diagnosis, never a bare 'needs recovery' (VC-659)", async () => {
+    const watches = recordingWatches();
+    const detail =
+      "Couldn't prepare the worktree at /w/VC-1 — A worktree already exists at /w/VC-1 on branch " +
+      "volli/VC-2-other with uncommitted changes; this ticket's branch is volli/VC-1-ship-cli. " +
+      "Commit or stash those changes, check out volli/VC-1-ship-cli there (or remove the worktree), then retry.";
+    const h = harness({
+      watches,
+      refusedAttach: {
+        id: "receipt-1",
+        commandId: "start-1",
+        status: "rejected",
+        code: "location_unavailable",
+        detail,
+        recordedAt: 10,
+        sequence: 10,
+      },
+    });
+
+    const result = await h.call({ ticket: "VC-1", message: "Fix the flaky auth test" });
+
+    expect(result.details).toMatchObject({ handle: "abcdef12", state: "needs-recovery" });
+    expect(result.text).toContain(
+      `It was created but its attachment failed, so no kickoff was submitted: ${detail}`,
+    );
+    expect(result.text).not.toContain("needs recovery");
+    // Nothing was submitted to a Session that never attached, and nothing is
+    // watched for a turn that cannot happen.
+    expect(h.kickoffs).toEqual([]);
+    expect(watches.sessions).toEqual([]);
   });
 
   it("binds the caller instead of believing one", async () => {
@@ -770,7 +806,8 @@ function automationHarness(options: { host?: "absent" } = {}) {
     },
     findProject: (projectId) => projectId === "project-one" || projectId === "project-two",
     listRunsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
-    listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(db, input),
+    listPossiblyLiveProjectRunsForAutomation: (input) =>
+      listPossiblyLiveProjectRunsForAutomation(db, input),
     sessions: {
       create: async (input) => {
         creates.push(input);
@@ -1750,7 +1787,9 @@ describe("verb result details match the registry (VC-471)", () => {
   it("names a start that needs recovery in the same word a delegation uses", async () => {
     const recovering = await fanOutDoor("needs-recovery")("session.start", { ticket: "VC-1" });
     expect(recovering.details).toMatchObject({ handle: "abcdef12", state: "needs-recovery" });
-    expect(recovering.text).toContain("its attachment needs recovery");
+    expect(recovering.text).toContain(
+      "its attachment failed, so no kickoff was submitted: the attach reported no receipt",
+    );
   });
 
   it("sends no details with a refusal, so a program can tell the two apart", async () => {

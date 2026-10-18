@@ -21,7 +21,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { autoTitleFromKickoff, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
-import type { Project, SessionOrigin, Ticket, TicketEventActor } from "@volli/shared";
+import type {
+  CommandReceipt,
+  Project,
+  SessionOrigin,
+  Ticket,
+  TicketEventActor,
+} from "@volli/shared";
 
 import type { SessionStartedNotice } from "@volli/shared";
 import { getTicket, insertTicket } from "../db/tickets-repo";
@@ -45,7 +51,13 @@ const COMPOSE = {
   autoTitle: autoTitleFromKickoff,
 };
 
-function harness(overrides: { state?: "ready" | "needs-recovery"; startError?: unknown } = {}): {
+function harness(
+  overrides: {
+    state?: "ready" | "needs-recovery";
+    receipt?: CommandReceipt | null;
+    startError?: unknown;
+  } = {},
+): {
   project: Project;
   ticket: Ticket;
   ports: Parameters<typeof startSessionOperation>[0];
@@ -94,7 +106,7 @@ function harness(overrides: { state?: "ready" | "needs-recovery"; startError?: u
           return {
             sessionId: STARTED_SESSION,
             state: overrides.state ?? ("ready" as const),
-            receipt: null,
+            receipt: overrides.receipt ?? null,
             throughSequence: 2,
             model: {
               providerId: "openai-codex",
@@ -351,11 +363,49 @@ describe("startSessionOperation", () => {
 
     const result = await start(fixture);
 
-    expect(result).toMatchObject({ sessionId: STARTED_SESSION, state: "needs-recovery" });
+    expect(result).toMatchObject({
+      sessionId: STARTED_SESSION,
+      state: "needs-recovery",
+      attachFailure: "the attach reported no receipt",
+    });
     expect(fixture.kickoffs).toEqual([]);
     // The Session exists durably either way, so the surfaces still learn of it.
     expect(fixture.mutations).toHaveLength(1);
     expect(fixture.notices).toHaveLength(1);
+  });
+
+  describe("says why the attach was not ready (VC-659)", () => {
+    const receipt = { id: "receipt-1", commandId: "start-1", recordedAt: 10, sequence: 10 };
+    it.each([
+      [
+        "the rejection's own diagnosis",
+        {
+          ...receipt,
+          status: "rejected" as const,
+          code: "location_unavailable",
+          detail:
+            "Couldn't prepare the worktree at /w/VC-1 — on branch other; this ticket's branch is volli/VC-1-ship-cli.",
+        },
+        "Couldn't prepare the worktree at /w/VC-1 — on branch other; this ticket's branch is volli/VC-1-ship-cli.",
+      ],
+      [
+        "the rejection code when it has no detail",
+        { ...receipt, status: "rejected" as const, code: "attach_failed", detail: null },
+        "attach_failed",
+      ],
+      [
+        "a receipt that never reconciled",
+        { ...receipt, status: "unreconciled" as const, detail: null },
+        "the attach is unreconciled",
+      ],
+    ])("with %s", async (_label, refused, failure) => {
+      const fixture = harness({ state: "needs-recovery", receipt: refused });
+
+      const result = await start(fixture);
+
+      expect(result).toMatchObject({ state: "needs-recovery", attachFailure: failure });
+      expect(fixture.kickoffs).toEqual([]);
+    });
   });
 
   // Refusals are deliberately NOT translated here: the socket had a fixed

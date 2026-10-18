@@ -166,8 +166,9 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * Resident for the reason the client is: a chat view mounts and unmounts
    * freely, and the tabs a person left open are not a fact about whether the
    * ticket detail is on screen. Deliberately NOT persisted — a durable Session
-   * is recovered from its own record, and the workspace store's active tab id
-   * is the only thing that has to survive a restart.
+   * is recovered from its own record, and which tabs come back is the workspace
+   * store's to remember: a ticket's active tab id, and Home's whole strip
+   * (`homeTabOrder`, VC-105).
    */
   openTabs: Readonly<Record<string, readonly string[]>>;
   /**

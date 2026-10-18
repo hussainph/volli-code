@@ -113,7 +113,8 @@ export function UsageLimitsPopover({ now }: { now?: number } = {}) {
   const requestId = React.useRef(0);
   // When a read was last ASKED for, which is what the focus gate below is
   // about: one request per hold, whatever the answer turned out to be.
-  const askedAt = React.useRef(Date.now());
+  const [mountedAt] = React.useState(() => Date.now());
+  const askedAt = React.useRef(mountedAt);
   React.useEffect(
     () => () => {
       requestId.current += 1;

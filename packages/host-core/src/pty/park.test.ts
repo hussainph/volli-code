@@ -7,20 +7,30 @@ import {
   PARK_QUIET_SAMPLES_REQUIRED,
   PARK_SWEEP_INTERVAL_MS,
 } from "@volli/shared";
+import { INVENTORY_TIMEOUT_MS } from "../process/inventory";
 import { createProcessInspector, parkConfigFromEnv } from "./park";
 
 /**
- * One canned command response: stdout on success, a non-zero exit code, or a
- * non-Error rejection value (models a spawn that rejects with a primitive).
+ * One canned command response: stdout on success, a non-zero exit code, a
+ * non-Error rejection value (models a spawn that rejects with a primitive), or
+ * a call that never answers (models `lsof` blocked on a dead network mount).
  */
-type CannedResponse = { stdout: string } | { code: number } | { reject: unknown };
+type CannedResponse =
+  | { stdout: string }
+  | { code: number }
+  | { reject: unknown }
+  | { hang: true }
+  | { stdout: string; afterMs: number };
+
+/** Signals the inspector sent to the children its stub spawned, in order. */
+const childKills: Array<NodeJS.Signals | number | undefined> = [];
 
 /**
  * A callback-style `execFile` stub that routes by the `file` argument. It
- * hands `promisify` an object `{ stdout, stderr }` (matching the real
- * execFile's custom-promisified resolution) or rejects with an `Error`
- * carrying a numeric `code`, so the inspector's exit-1 handling is exercised
- * exactly as against the real binaries.
+ * answers `(error, stdout, stderr)` exactly as the real one does with
+ * `encoding: "utf8"`, rejecting with an `Error` carrying a numeric `code`, so
+ * the inspector's exit-1 handling is exercised exactly as against the real
+ * binaries. The child it returns records the signals it was sent.
  */
 function stubExecFile(
   responder: (file: string, args: readonly string[]) => CannedResponse,
@@ -28,22 +38,41 @@ function stubExecFile(
   const impl = (
     file: string,
     args: string[],
-    cb: (err: Error | null, value?: { stdout: string; stderr: string }) => void,
-  ): void => {
+    _options: unknown,
+    cb: (err: Error | null, stdout?: string, stderr?: string) => void,
+  ): { kill(signal?: NodeJS.Signals | number): boolean } => {
     const res = responder(file, args);
+    const child = {
+      kill: (signal?: NodeJS.Signals | number) => {
+        childKills.push(signal);
+        // A killed child still closes, and execFile then reports it — after
+        // the inspector has already given up on it.
+        if ("hang" in res) cb(Object.assign(new Error(`${file} killed`), { killed: true, signal }));
+        return true;
+      },
+    };
+    if ("hang" in res) return child;
+    if ("afterMs" in res) {
+      // Answers later, as a real child does.
+      setTimeout(() => cb(null, res.stdout, ""), res.afterMs);
+      return child;
+    }
     if ("reject" in res) {
       cb(res.reject as Error);
     } else if ("code" in res) {
       cb(Object.assign(new Error(`${file} exited ${res.code}`), { code: res.code }));
     } else {
-      cb(null, { stdout: res.stdout, stderr: "" });
+      cb(null, res.stdout, "");
     }
+    return child;
   };
   return impl as unknown as typeof execFile;
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
+  childKills.length = 0;
 });
 
 describe("createProcessInspector.descendants", () => {
@@ -130,7 +159,7 @@ describe("createProcessInspector.listeningPids", () => {
     const inspector = createProcessInspector(
       stubExecFile((file, args) => {
         expect(file).toBe("lsof");
-        expect(args).toEqual(["-a", "-nP", "-iTCP", "-sTCP:LISTEN", "-p", "512,513"]);
+        expect(args).toEqual(["-a", "-nP", "-iTCP", "-sTCP:LISTEN", "-w", "-p", "512,513"]);
         return {
           stdout:
             "COMMAND   PID USER   FD   TYPE\n" +
@@ -156,6 +185,46 @@ describe("createProcessInspector.listeningPids", () => {
   it("returns an empty set when lsof finds nothing (exits 1)", async () => {
     const inspector = createProcessInspector(stubExecFile(() => ({ code: 1 })));
     expect((await inspector.listeningPids([1])).size).toBe(0);
+  });
+});
+
+describe("createProcessInspector's bound on each call (VC-833)", () => {
+  it("kills an lsof that never answers and rejects at the inventory's bound", async () => {
+    vi.useFakeTimers();
+    const inspector = createProcessInspector(stubExecFile(() => ({ hang: true })));
+    const pending = inspector.listeningPids([512]);
+    const outcome = pending.then(
+      () => "resolved",
+      (error: unknown) => (error as Error).message,
+    );
+
+    await vi.advanceTimersByTimeAsync(INVENTORY_TIMEOUT_MS - 1);
+    expect(childKills).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBe(`lsof did not finish within ${INVENTORY_TIMEOUT_MS} ms`);
+    expect(childKills).toEqual(["SIGKILL"]);
+  });
+
+  it("bounds pgrep and ps the same way", async () => {
+    vi.useFakeTimers();
+    const inspector = createProcessInspector(stubExecFile(() => ({ hang: true })));
+    const walk = inspector.descendants(1).catch((error: unknown) => (error as Error).message);
+    const sample = inspector.cpuPercents([1]).catch((error: unknown) => (error as Error).message);
+    await vi.advanceTimersByTimeAsync(INVENTORY_TIMEOUT_MS);
+    expect(await walk).toMatch(/^pgrep did not finish/);
+    expect(await sample).toMatch(/^ps did not finish/);
+  });
+
+  it("disarms the bound when the call answers in time", async () => {
+    vi.useFakeTimers();
+    const inspector = createProcessInspector(
+      stubExecFile(() => ({ stdout: "7 0.0\n", afterMs: INVENTORY_TIMEOUT_MS - 1 })),
+    );
+    const sample = inspector.cpuPercents([7]);
+    await vi.advanceTimersByTimeAsync(INVENTORY_TIMEOUT_MS - 1);
+    expect((await sample).get(7)).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(childKills).toEqual([]);
   });
 });
 
