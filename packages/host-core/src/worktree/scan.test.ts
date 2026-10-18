@@ -790,7 +790,7 @@ describe("scanOrphans report", () => {
     updateTicketFields(ctx.db, "ticket-83", { worktreePath: strandedWt }, 1);
     archiveTicket(ctx.db, "ticket-83", 5);
 
-    const { git, gitAsync } = scriptedGit((rawArgs) => {
+    const { gitAsync } = scriptedGit((rawArgs) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`;
@@ -798,7 +798,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
     const byPath = new Map(report.dirty.map((orphan) => [orphan.path, orphan] as const));
 
     expect(byPath.get(strandedWt)?.ticket).toEqual({
@@ -847,7 +847,7 @@ describe("scanOrphans report", () => {
     );
     updateTicketFields(ctx.db, "ticket-8", { worktreePath: join(nestingWt, "inner") }, 1);
 
-    const { git, gitAsync } = scriptedGit((rawArgs, cwd) => {
+    const { gitAsync } = scriptedGit((rawArgs, cwd) => {
       const args = verb(rawArgs);
       if (args[0] === "worktree" && args[1] === "list") {
         return `worktree ${cwd}\nHEAD a\nbranch refs/heads/main\n`;
@@ -855,7 +855,7 @@ describe("scanOrphans report", () => {
       return "";
     });
 
-    const report = await scanOrphans({ db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" });
+    const report = await scanOrphans({ db: ctx.db, gitAsync, home, now, blobsRoot: "unused" });
     const byPath = new Map(report.dirty.map((orphan) => [orphan.path, orphan] as const));
 
     expect(byPath.get(crossWt)).toMatchObject({
@@ -893,7 +893,7 @@ describe("scanOrphans report", () => {
       mkdirSync(lockedWt, { recursive: true });
       insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
 
-      const { git, gitAsync } = scriptedGit((rawArgs) => {
+      const { gitAsync } = scriptedGit((rawArgs) => {
         const args = verb(rawArgs);
         if (args[0] === "worktree" && args[1] === "list") {
           return `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`;
@@ -905,7 +905,6 @@ describe("scanOrphans report", () => {
       try {
         const report = await scanOrphans({
           db: ctx.db,
-          git,
           gitAsync,
           home,
           now,
