@@ -189,7 +189,6 @@ describe("VC-758 message and work status rows", () => {
         context={{
           ...context,
           deliveryLabels: new Map([["steer", "Pending"]]),
-          steeringMessages: new Set(["steer"]),
         }}
         live={false}
       />,
@@ -210,8 +209,8 @@ describe("VC-758 message and work status rows", () => {
       expect(html).not.toContain("Delivered");
     },
   );
-  it("keeps durable non-delivered states visible", () => {
-    for (const label of ["Not delivered", "Delivery unconfirmed"] as const) {
+  it("keeps only definite durable refusal visible", () => {
+    for (const label of ["Not delivered"] as const) {
       const html = renderToStaticMarkup(
         <ChatTurn
           messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
@@ -221,32 +220,6 @@ describe("VC-758 message and work status rows", () => {
       );
       expect(html).toContain(`>${label}</span>`);
     }
-  });
-  it.each(["Delivery unconfirmed", "Not delivered"])(
-    "keeps the explicit %s explanation immediately visible",
-    (label) => {
-      const html = renderToStaticMarkup(
-        <ChatTurn
-          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-          context={context}
-          live={false}
-          deliveryLabel={label}
-        />,
-      );
-      expect(html).toContain(`>${label}</span>`);
-    },
-  );
-  it.each(["Delivered", "Recorded"])("does not draw a successful %s footer", (label) => {
-    const html = renderToStaticMarkup(
-      <ChatTurn
-        messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
-        context={{ ...context, deliveryLabels: new Map([["user", "Delivered"]]) }}
-        live={false}
-        deliveryLabel={label}
-      />,
-    );
-    expect(html).not.toContain("message-delivery");
-    expect(html).not.toContain(label);
   });
   it.each(["send", "steer"] as const)(
     "keeps accepted held %s quiet even before durable proof arrives",

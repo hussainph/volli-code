@@ -15,7 +15,6 @@ import { readCodeModePicture } from "./code-mode-output-model";
 import * as React from "react";
 import { toast } from "sonner";
 import { useStore } from "zustand";
-import { useStickToBottomContext } from "use-stick-to-bottom";
 
 import { toastError } from "@renderer/lib/toast";
 import type { BlobLinkView } from "@volli/shared";
@@ -1021,25 +1020,6 @@ export function ChatPlane({
     (previous, next) => previous[0] === next[0] && previous[1] === next[1],
   );
   const deliveryLabels = React.useMemo(() => new Map(deliveryEntries), [deliveryEntries]);
-  // The wait belongs to the message, not the React child slot that currently
-  // owns it. Preserve its clock across held → durable-pending replacement.
-  const waitTimes = React.useRef<ReadonlyMap<string, number>>(new Map());
-  const pendingSince = React.useMemo(() => {
-    const ids = new Set(
-      held
-        .filter((message) => message.state === "sending" && !message.deliveryAccepted)
-        .map((message) => message.id),
-    );
-    for (const [id, label] of deliveryLabels) if (label === "Pending") ids.add(id);
-    const now = Date.now();
-    const next = new Map([...ids].map((id) => [id, waitTimes.current.get(id) ?? now]));
-    waitTimes.current = next;
-    return next;
-  }, [held, deliveryLabels]);
-  const settledMessageIds = React.useMemo(
-    () => new Set([...durableMessageIds].filter((id) => deliveryLabels.get(id) !== "Pending")),
-    [deliveryLabels, durableMessageIds],
-  );
   // Held to its identity, and that is what keeps the composer out of the
   // stream's frame budget. `durableMessageIds` is a fresh Set on every flush of
   // a live turn, so this memo re-runs once per frame and `heldStrip` mints a
@@ -1226,10 +1206,10 @@ export function ChatPlane({
   // Only positive host ownership evidence retires a recovery copy. An empty or
   // stale projection is not evidence of acceptance after a transport failure.
   React.useEffect(() => {
-    for (const id of settledHeldIds(held, queue, settledMessageIds)) {
+    for (const id of settledHeldIds(held, queue, durableMessageIds)) {
       if (!queuedMutations.current.has(id)) dropHeld(sessionId, id);
     }
-  }, [dropHeld, settledMessageIds, held, queue, sessionId]);
+  }, [dropHeld, durableMessageIds, held, queue, sessionId]);
 
   // Questions, budget asks and confirmations share the existing composer slot.
   // Secret requests retain their dedicated person-only card.
@@ -1476,14 +1456,6 @@ export function ChatPlane({
    * that has not moved in an hour. Only the live turn can animate, so only the
    * live turn is told about it.
    */
-  const steeringMessages = React.useMemo(
-    () =>
-      new Set([
-        ...pendingSteerIds,
-        ...held.filter((message) => message.delivery === "steer").map((message) => message.id),
-      ]),
-    [held, pendingSteerIds],
-  );
   // A retry can retain an unfinished overlay for minutes. Keep its streaming
   // markdown treatment, but do not animate last-known activity as live work.
   const progressPaused =
@@ -1496,19 +1468,9 @@ export function ChatPlane({
       ...(onOpenSession === undefined ? {} : { onOpenSession }),
       interactions: session.openedInteractions,
       deliveryLabels,
-      steeringMessages,
-      pendingSince,
       progressPaused,
     }),
-    [
-      deliveryLabels,
-      onOpenFile,
-      onOpenSession,
-      session.openedInteractions,
-      steeringMessages,
-      pendingSince,
-      progressPaused,
-    ],
+    [deliveryLabels, onOpenFile, onOpenSession, session.openedInteractions, progressPaused],
   );
 
   // Grouping is O(messages), so it is memoized and then held per turn: a turn
@@ -1532,16 +1494,6 @@ export function ChatPlane({
       ),
     [session.compactions, session.reasoningDrops, session.toolRefreshes, turns],
   );
-  // An intent waiting to reach Pi is below Working, never above it. Keep its
-  // durable identity and reuse the ordinary message renderer.
-  const undeliveredRows = rows.filter(
-    (row) =>
-      row.kind === "turn" &&
-      row.messages[0]?.role === "user" &&
-      row.messages.every((message) => deliveryLabels.get(message.id) === "Pending"),
-  );
-  const deliveredRows =
-    undeliveredRows.length === 0 ? rows : rows.filter((row) => !undeliveredRows.includes(row));
   // Identity, not an index. A boundary between the turns means a turn's place in
   // `rows` is no longer its place in `turns` — and the last ROW can be a
   // boundary, which would leave the turn still being written with nothing
@@ -1549,7 +1501,7 @@ export function ChatPlane({
   // lifecycle, keeps a transient error from treating incomplete content as
   // settled and an optimistic submit from reopening the previous Turn.
   const liveTurn = turnActive
-    ? (deliveredRows.findLast((row) => row.kind === "turn")?.messages ?? null)
+    ? (rows.findLast((row) => row.kind === "turn")?.messages ?? null)
     : null;
   const turnHasProgress = React.useMemo(() => liveTurnHasProgress(liveTurn), [liveTurn]);
 
@@ -1617,6 +1569,7 @@ export function ChatPlane({
         .map((provider) => ({ id: provider.id, label: provider.label })),
     [providers],
   );
+  const turnRunning = working || turnActive;
   const candidateBlocker = sessionBlocker(
     {
       sessionError: session.sessionError,
@@ -1634,7 +1587,12 @@ export function ChatPlane({
     blockerActs,
     interactions.length > 0,
   );
-  const blockerPresentation = visibleBlocker(candidateBlocker, dismissedBlockerKey);
+  // Runtime failures need recovery only once work has stopped. A new turn
+  // removes the old failure surface, even before Attention catches up.
+  const blockerPresentation = visibleBlocker(
+    turnRunning && candidateBlocker?.placement === "timeline" ? null : candidateBlocker,
+    dismissedBlockerKey,
+  );
   React.useEffect(() => {
     if (blockerPresentation.dismissedKey !== dismissedBlockerKey) {
       setDismissedBlockerKey(blockerPresentation.dismissedKey);
@@ -1648,8 +1606,6 @@ export function ChatPlane({
       !durableMessageIds.has(message.id) &&
       !queue.some((entry) => entry.id === message.id),
   );
-  const turnRunning = working || turnActive;
-
   const planeStyle = { "--composer-height": `${composerHeight.height}px` } as React.CSSProperties;
 
   // A size query container, not just an inline one: the pending question below
@@ -1701,7 +1657,7 @@ export function ChatPlane({
                     ) : (
                       <ChatTranscript
                         sessionId={sessionId}
-                        rows={deliveredRows}
+                        rows={rows}
                         context={turnContext}
                         liveTurn={liveTurn}
                         historyBefore={session.historyBefore}
@@ -1730,14 +1686,6 @@ export function ChatPlane({
                             }
                           />
                         ) : null}
-                        {undeliveredRows.map((row) => (
-                          <ChatTranscriptRow
-                            key={transcriptRowKey(row)}
-                            row={row}
-                            context={turnContext}
-                            live={false}
-                          />
-                        ))}
                         {pendingMessages
                           .filter(
                             (message) => !message.deliveryAccepted || message.delivery === "queue",
@@ -1766,9 +1714,7 @@ export function ChatPlane({
               scrolled up, so there is always live text behind it. An empty
               transcript never gets one — the empty state is taller than the
               plane, so the scroller is legitimately not at its bottom. */}
-                  {timelineBlocker ? (
-                    <RuntimeAttentionScrollHint message={timelineBlocker.message} />
-                  ) : messages.length > 0 ? (
+                  {messages.length > 0 ? (
                     <ConversationScrollButton className="bottom-[calc(var(--composer-height)+0.75rem)] bg-background/70 shadow-raised backdrop-blur-md dark:hover:bg-muted/70" />
                   ) : null}
                 </Conversation>
@@ -2019,7 +1965,7 @@ export function PendingMessage({
   const label = message.deliveryAccepted
     ? message.delivery === "queue"
       ? "Queued"
-      : "Delivered"
+      : undefined
     : message.delivery === "steer"
       ? "Sends after this step"
       : message.delivery === "queue"
@@ -2172,8 +2118,6 @@ export interface TurnContext {
   /** Every interaction opened this Session, for the receipts they left behind. */
   interactions: ReadonlyMap<string, RendererSessionInteraction>;
   deliveryLabels?: ReadonlyMap<string, MessageDeliveryLabel>;
-  steeringMessages?: ReadonlySet<string>;
-  pendingSince?: ReadonlyMap<string, number>;
   progressPaused?: boolean;
 }
 
@@ -2185,24 +2129,6 @@ export interface TurnContext {
  * measured mid-frame both produce exactly that.
  */
 const PINNED_SLACK_PX = 8;
-
-/** Readers in history still learn why the live tail stopped. The explanation
- * and its single recovery remain in the timeline; this only navigates to it. */
-function RuntimeAttentionScrollHint({ message }: { message: string }) {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
-  if (isAtBottom) return null;
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      className="absolute bottom-[calc(var(--composer-height)+0.75rem)] left-1/2 max-w-[90%] -translate-x-1/2 bg-background/70 shadow-raised backdrop-blur-md"
-      onClick={() => void scrollToBottom()}
-      aria-label={`${message} · Scroll to latest`}
-    >
-      {message} · Scroll to latest
-    </Button>
-  );
-}
 
 /**
  * How far above the top edge the sentinel starts loading the next page.
@@ -2821,18 +2747,11 @@ export const ChatTurn = React.memo(function ChatTurn({
   // Plan-only projections must not leave an empty bubble.
   if (segments && segments.length === 0) return null;
 
-  // Delivery facts remain in the model/peek. The transcript explains waits
-  // and refusals, not every successful send. The accepted held copy and its
-  // durable replacement use the same quiet markup at ownership handoff.
-  const delivery = deliveryLabel ?? context.deliveryLabels?.get(first.id);
+  // Durable conversation stays in transcript order, without delivery plumbing.
+  // Only a definite refusal needs attention; local held copies may show a wait.
   const footer =
-    delivery === "Delivered" || delivery === "Recorded"
-      ? undefined
-      : delivery === "Pending" && context.steeringMessages?.has(first.id)
-        ? "Sends after this step"
-        : delivery === "Pending"
-          ? "Sending…"
-          : delivery;
+    deliveryLabel ??
+    (context.deliveryLabels?.get(first.id) === "Not delivered" ? "Not delivered" : undefined);
 
   return (
     <Message from={role} className="relative max-w-full">
@@ -2873,11 +2792,7 @@ export const ChatTurn = React.memo(function ChatTurn({
         ) : null}
       </MessageContent>
       {role === "user" && footer !== undefined ? (
-        <MessageDelivery
-          key={first.id}
-          label={footer}
-          since={context.pendingSince?.get(first.id)}
-        />
+        <MessageDelivery key={first.id} label={footer} />
       ) : null}
       {copyableText !== null ? <MessageCopyAction text={copyableText} from={role} /> : null}
     </Message>
@@ -2887,10 +2802,9 @@ export const ChatTurn = React.memo(function ChatTurn({
 /** A quiet tab attached to the bubble, inside the existing 24px message gap.
  * It never changes bubble or row geometry when delivery ownership changes.
  * Refusals remain immediate; ordinary round trips never show waiting copy. */
-function MessageDelivery({ label, since }: { label: string; since: number | undefined }) {
-  const failed = label === "Not delivered" || label === "Delivery unconfirmed";
-  const remaining = since === undefined ? 600 : Math.max(0, 600 - (Date.now() - since));
-  const waited = useDelayedPresence(!failed, remaining, remaining === 0);
+function MessageDelivery({ label }: { label: string }) {
+  const failed = label === "Not delivered";
+  const waited = useDelayedPresence(!failed, 600);
   if (!failed && !waited) return null;
   const Icon = failed ? WarningIcon : ClockIcon;
   return (

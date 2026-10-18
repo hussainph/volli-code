@@ -173,24 +173,26 @@ describe("calm message delivery timing", () => {
     expect(container.textContent).not.toContain("Pending");
   });
 
-  it("delays durable pending steering too, not only held messages", async () => {
-    await render(
-      <ChatTurn
-        messages={[user]}
-        context={{
-          ...context,
-          deliveryLabels: new Map([[user.id, "Pending"]]),
-          steeringMessages: new Set([user.id]),
-        }}
-        live={false}
-      />,
-    );
-    expect(footer()).toBeNull();
-    await advance(599);
-    expect(footer()).toBeNull();
-    await advance(1);
-    expect(footer()?.textContent).toBe("Sends after this step");
-  });
+  it.each(["Pending", "Delivered", "Delivery unconfirmed"] as const)(
+    "never shows durable %s plumbing, even after the local wait delay",
+    async (label) => {
+      await render(
+        <ChatTurn
+          messages={[user]}
+          context={{
+            ...context,
+            deliveryLabels: new Map([[user.id, label]]),
+          }}
+          live={false}
+        />,
+      );
+      expect(footer()).toBeNull();
+      await advance(599);
+      expect(footer()).toBeNull();
+      await advance(1);
+      expect(footer()).toBeNull();
+    },
+  );
 
   it("never flashes state for a send accepted before 600ms, including after its old deadline", async () => {
     const message = {
@@ -229,7 +231,7 @@ describe("calm message delivery timing", () => {
     expect(footer()?.textContent).toBe("Queued");
   });
 
-  it.each(["Not delivered", "Delivery unconfirmed"] as const)(
+  it.each(["Not delivered"] as const)(
     "shows %s immediately even if pending has not reached its delay",
     async (label) => {
       await render(
