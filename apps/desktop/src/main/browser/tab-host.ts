@@ -128,7 +128,18 @@ type BrowserTabSurface = "app" | "page";
  * what a WebContentsView paints when nothing sets one. Restored when a site
  * commits, after the app-owned blank or loading plane was themed.
  */
-export const BROWSER_PAGE_BACKGROUND = "#FFFFFF";
+const BROWSER_PAGE_BACKGROUND = "#FFFFFF";
+
+/**
+ * Chromium's net::ERR_ABORTED: an older load cancelled because a newer one won.
+ * Not a failed user operation, and it leaves the previous document in place.
+ */
+const NET_ERR_ABORTED = -3;
+
+/** Whether a load failure is the tab's own page failing, not a frame or a superseded load. */
+function isMainFrameFailure(errorCode: number, isMainFrame: boolean): boolean {
+  return isMainFrame && errorCode !== NET_ERR_ABORTED;
+}
 
 /**
  * The privilege floor every remote page is constructed with. Returned apart
@@ -685,10 +696,8 @@ export class BrowserTabHost extends BrowserTabRegistry<
     view.webContents.on(
       "did-fail-load",
       (_event, errorCode, errorDescription, _validatedUrl, isMainFrame) => {
-        // ERR_ABORTED is Chromium cancelling an older load because a newer one
-        // won. It is not a failed user operation and must not overwrite the
-        // newer page with a stale error.
-        if (!isMainFrame || errorCode === -3) return;
+        // A superseded load must not overwrite the newer page with a stale error.
+        if (!isMainFrameFailure(errorCode, isMainFrame)) return;
         const message = `Could not load page: ${errorDescription}`;
         this.recordConsole(entry, { level: "error", text: message });
         this.publish(entry, {
@@ -697,15 +706,15 @@ export class BrowserTabHost extends BrowserTabRegistry<
         });
       },
     );
-    // A main-frame failure that COMMITTED Chromium's error document — empty in
-    // Electron, so the plane is the app's again and the chrome's alert names
-    // what went wrong (VC-302). Not `did-fail-load`: that also fires when a
-    // site that already committed fails partway, and its own page is still
-    // showing then. ERR_ABORTED leaves the previous document in place.
+    // A main-frame navigation that failed before its site could commit. What
+    // shows then is Chromium's error document, empty in Electron, so the plane
+    // is the app's again and the chrome's alert names what went wrong
+    // (VC-302). Not `did-fail-load`: that also fires when a site that already
+    // committed fails partway, and its own page is still showing then.
     view.webContents.on(
       "did-fail-provisional-load",
       (_event, errorCode, _errorDescription, _validatedUrl, isMainFrame) => {
-        if (!isMainFrame || errorCode === -3) return;
+        if (!isMainFrameFailure(errorCode, isMainFrame)) return;
         this.claimSurface(entry, "app");
       },
     );

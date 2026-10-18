@@ -32,7 +32,6 @@ import {
   BROWSER_INTERACTION_QUIET_MS,
   BROWSER_PREVIEW_MAX_PENDING_CAPTURES,
   BROWSER_PREVIEW_TIMEOUT_MS,
-  BROWSER_PAGE_BACKGROUND,
   BrowserStageUnavailableError,
   BrowserTabHost,
   browserRemoteWebPreferences,
@@ -1061,7 +1060,7 @@ describe("BrowserTabHost plane background (VC-302)", () => {
     expect(view.setBackgroundColor).toHaveBeenLastCalledWith(DARK);
 
     commitDocument(view, "https://example.com");
-    expect(view.setBackgroundColor).toHaveBeenLastCalledWith(BROWSER_PAGE_BACKGROUND);
+    expect(view.setBackgroundColor).toHaveBeenLastCalledWith("#FFFFFF");
 
     // A second site is still a site: nothing to repaint.
     commitDocument(view, "https://example.com/next");
