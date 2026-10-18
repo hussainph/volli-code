@@ -49,13 +49,13 @@
  * directory sitting on another filesystem are kept rather than followed: an
  * `rm -rf` across a mount point is not a trim.
  *
- * A NESTED git repository is kept whole too (VC-832): any directory below the
- * root holding a `.git` entry, whether a clone's `.git/` directory or a linked
- * worktree's `.git` file. `--directory` collapses an ignored `vendor/` or
- * `.claude/worktrees/` into one entry, so without this rule a clone's unpushed
- * commits and a linked worktree's uncommitted work went with it. `git clean -fdX`
- * keeps a nested repository unless `-f` is given twice; a trim never gives it
- * twice, and never descends into one to apply that repository's own ignores.
+ * A directory below the root that holds a `.git` entry — a clone's `.git/`
+ * directory or a linked worktree's `.git` file — is a nested git repository: it
+ * is kept whole and not walked, wherever it sits, including inside a directory
+ * git collapsed into one ignored entry (`vendor/`, `.claude/worktrees/`). Its
+ * commits, stashes and uncommitted work exist nowhere else. This is
+ * `git clean -fdX` with a single `-f`, and the nested repository's own ignore
+ * rules are not applied: keeping it whole is the rule a person can predict.
  */
 import { existsSync } from "node:fs";
 import { lstat, readdir, realpath, rm } from "node:fs/promises";
@@ -176,7 +176,8 @@ function reportPath(relative: string, directory: boolean): string {
  * Plans one node, recursing into directories. A directory whose whole subtree is
  * removable comes back as a single `remove` — one `rm` for the 100k-file
  * `node_modules`, instead of 100k of them — and only a subtree holding something
- * preserved, cross-device, or pointing out of the worktree comes back `split`.
+ * preserved, cross-device, pointing out of the worktree, or a nested git
+ * repository comes back `split`.
  *
  * Sizes are apparent bytes (`lstat`), summed as the plan is built because the
  * walk has to happen anyway. For a pnpm tree they overstate what the filesystem
@@ -228,9 +229,7 @@ async function planNode(context: PlanContext, relative: string): Promise<NodePla
   } catch {
     return { kind: "keep", reason: "Volli couldn't read it" };
   }
-  // A `.git` entry of any type — a clone's directory, a linked worktree's
-  // gitfile — makes this a repository of its own, kept whole and not descended.
-  if (entries.some((entry) => entry.name === ".git")) {
+  if (await holdsGitEntry(absolute, entries)) {
     return { kind: "keep", reason: "it is a nested git repository" };
   }
 
@@ -259,6 +258,34 @@ async function planNode(context: PlanContext, relative: string): Promise<NodePla
   }
   if (whole) return { kind: "remove", bytes, directory: true };
   return { kind: "split", removed, kept };
+}
+
+/**
+ * Whether a directory holds a `.git` entry of any type — a clone's directory, a
+ * linked worktree's gitfile — which makes it a repository of its own. git finds
+ * `.git` by opening that path, so on a case-insensitive disk (macOS's default)
+ * a `.GIT` is one too; a name that differs only in case is confirmed by asking
+ * the filesystem for `.git` itself, which answers the way git's lookup does.
+ * The exact name needs no second read, so the common walk costs nothing extra.
+ */
+async function holdsGitEntry(
+  absolute: string,
+  entries: readonly { name: string }[],
+): Promise<boolean> {
+  for (const entry of entries) {
+    if (entry.name === ".git") return true;
+    if (entry.name.toLowerCase() !== ".git") continue;
+    try {
+      await lstat(join(absolute, ".git"));
+      return true;
+    } catch (caught) {
+      // ENOENT is a case-sensitive disk, where `.GIT` is an ordinary name. Any
+      // other failure is an unanswered question, and an unanswered question
+      // about a repository keeps it.
+      if ((caught as NodeJS.ErrnoException).code !== "ENOENT") return true;
+    }
+  }
+  return false;
 }
 
 // ---- enumeration -----------------------------------------------------------

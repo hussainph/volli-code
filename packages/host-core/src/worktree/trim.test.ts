@@ -71,6 +71,20 @@ function repoWith(options: {
   return root;
 }
 
+/**
+ * A repository of its own at `path`: one local commit nothing has pushed, plus
+ * an uncommitted file. Returns the commit, so a test can prove it survived.
+ */
+function nestedClone(path: string): string {
+  mkdirSync(path, { recursive: true });
+  git(path, ["init", "-q", "-b", "main"]);
+  write(path, "lib.c", "int main;\n");
+  git(path, ["add", "-A"]);
+  git(path, ["commit", "-q", "-m", "unpushed work"]);
+  write(path, "draft.c", "uncommitted\n");
+  return git(path, ["rev-parse", "HEAD"]).trim();
+}
+
 /** Every path still on disk under `root`, relative and sorted (excluding `.git`). */
 function survivors(root: string): string[] {
   const output = execFileSync(
@@ -382,23 +396,17 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
   });
 
   it("keeps a nested clone inside an ignored directory whole, unpushed commit and all", async () => {
-    // VC-832: `git ls-files --directory` collapses `vendor/` into one entry, so
-    // the walk below it is all that stands between a nested repository's `.git/`
-    // and an `rm -rf`. `git clean -fdX` keeps a nested repository unless `-f` is
-    // given twice; a trim keeps it unconditionally.
+    // `git ls-files --directory` collapses `vendor/` into one entry, so the walk
+    // below it is all that stands between a nested repository's `.git/` and an
+    // `rm -rf`. `git clean -fdX` keeps a nested repository unless `-f` is given
+    // twice; a trim keeps it unconditionally.
     const root = repoWith({
       ignores: ["vendor/"],
       tracked: ["package.json"],
       files: ["vendor/junk.txt"],
     });
     const nested = join(root, "vendor/foo");
-    mkdirSync(nested, { recursive: true });
-    git(nested, ["init", "-q", "-b", "main"]);
-    write(nested, "lib.c", "int main;\n");
-    git(nested, ["add", "-A"]);
-    git(nested, ["commit", "-q", "-m", "unpushed work"]);
-    write(nested, "draft.c", "uncommitted\n");
-    const head = git(nested, ["rev-parse", "HEAD"]).trim();
+    const head = nestedClone(nested);
 
     const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
       worktreePath: root,
@@ -415,6 +423,88 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
     expect(existsSync(join(nested, "lib.c"))).toBe(true);
     expect(existsSync(join(nested, "draft.c"))).toBe(true);
     expect(git(nested, ["rev-parse", "HEAD"]).trim()).toBe(head);
+  });
+
+  it("keeps a nested clone two levels below the ignored directory git listed", async () => {
+    const root = repoWith({
+      ignores: ["vendor/"],
+      tracked: ["package.json"],
+      files: ["vendor/a/junk.txt", "vendor/other.txt"],
+    });
+    const nested = join(root, "vendor/a/b");
+    const head = nestedClone(nested);
+
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.kept).toEqual([
+      { path: "vendor/a/b/", reason: "it is a nested git repository" },
+    ]);
+    expect(result.value.removed.map((entry) => entry.path).toSorted()).toEqual([
+      "vendor/a/junk.txt",
+      "vendor/other.txt",
+    ]);
+    expect(existsSync(join(nested, "draft.c"))).toBe(true);
+    expect(git(nested, ["rev-parse", "HEAD"]).trim()).toBe(head);
+  });
+
+  it("keeps a nested clone that git lists as an ignored entry itself", async () => {
+    // Not collapsed inside a parent: the clone IS the candidate git reports, so
+    // it is planned from the top of the loop rather than from inside a walk.
+    const root = repoWith({
+      ignores: ["foo/", "dist/"],
+      tracked: ["package.json"],
+      files: ["dist/app.js"],
+    });
+    const nested = join(root, "foo");
+    const head = nestedClone(nested);
+
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.kept).toEqual([{ path: "foo/", reason: "it is a nested git repository" }]);
+    expect(result.value.removed.map((entry) => entry.path)).toEqual(["dist/"]);
+    expect(existsSync(join(nested, "draft.c"))).toBe(true);
+    expect(git(nested, ["rev-parse", "HEAD"]).trim()).toBe(head);
+  });
+
+  it("treats a differently-cased .GIT as a repository exactly when the disk does", async () => {
+    // git finds `.git` by opening that path, so on a case-insensitive disk
+    // (macOS's default) `.GIT` is a repository; on a case-sensitive one it is
+    // an ordinary ignored directory. The test asks the disk which it is on.
+    const root = repoWith({
+      ignores: ["vendor/"],
+      tracked: ["package.json"],
+      files: ["vendor/foo/.GIT/HEAD", "vendor/junk.txt"],
+    });
+    write(root, "case-probe");
+    const caseInsensitive = existsSync(join(root, "CASE-PROBE"));
+
+    const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
+      worktreePath: root,
+      busySites: async () => [],
+      dryRun: true,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    if (caseInsensitive) {
+      expect(result.value.kept).toEqual([
+        { path: "vendor/foo/", reason: "it is a nested git repository" },
+      ]);
+      expect(result.value.removed.map((entry) => entry.path)).toEqual(["vendor/junk.txt"]);
+    } else {
+      expect(result.value.kept).toEqual([]);
+      expect(result.value.removed.map((entry) => entry.path)).toEqual(["vendor/"]);
+    }
   });
 
   it("keeps a linked worktree inside an ignored directory whole and registered", async () => {
@@ -453,8 +543,7 @@ describe("trimIgnoredArtifacts — one worktree, any language", () => {
       tracked: ["package.json"],
       files: ["vendor/junk.txt"],
     });
-    mkdirSync(join(root, "vendor/foo"), { recursive: true });
-    git(join(root, "vendor/foo"), ["init", "-q", "-b", "main"]);
+    nestedClone(join(root, "vendor/foo"));
     git(root, ["worktree", "add", "-q", "-b", "side", ".claude/worktrees/x"]);
 
     const result = await trimIgnoredArtifacts(runGitCapturingAsync, {
