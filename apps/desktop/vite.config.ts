@@ -497,6 +497,9 @@ export default defineConfig(({ mode }) => ({
         // unavailable tool, or a row that called a broken server Ready, is a
         // tool offered to every new Session that nobody chose.
         "src/components/settings/configure/mcp-tools-model.ts",
+        // Whether a repo has AGENTS.md / CLAUDE.md (VC-305): a wrong answer
+        // offers Reveal on a file that is not there, or hides one that is.
+        "src/components/settings/configure/instruction-files.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
