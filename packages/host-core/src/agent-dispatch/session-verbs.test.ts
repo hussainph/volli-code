@@ -9,10 +9,12 @@ import type {
   SessionAttention,
   SessionAttentionKind,
   SessionInteraction,
+  SessionLedger,
+  SessionLedgerTransaction,
   SessionOrigin,
   SessionRole,
 } from "@volli/shared";
-import type { StoredSessionFollowUp } from "@volli/session-engine";
+import { SESSION_LISTING_CACHE_LIMIT, type StoredSessionFollowUp } from "@volli/session-engine";
 import { createAgentCommandService } from "../agent-commands";
 import { testHostHandlers } from "../testing/host-handlers";
 import { insertProject } from "../db/projects-repo";
@@ -20,6 +22,8 @@ import { insertTicket } from "../db/tickets-repo";
 import { recordSessionResumedOnce, recordTicketEvent } from "../db/events-repo";
 import { openTestDb, testProject, testSession, testTicket, type TestDb } from "../db/test-helpers";
 import { createTestSessionEngine } from "../testing/session-engine";
+import { createHostSessionEngine } from "../sessions/engine";
+import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { insertSession } from "../session-control/test-support";
 import { pendingSessionQuestions } from "./pending-session-questions";
 import {
@@ -1126,6 +1130,108 @@ describe("executeInWorkspace", () => {
       error: { code: "PROJECT_NOT_FOUND" },
     });
   });
+});
+
+// VC-800: `session list`, `peek` and `show` fold every project's roster through
+// the engine's listing cache. When the rosters together outgrew the cache's
+// fixed limit, every read cold-folded every Session. On a 4,051-Session profile
+// that took longer than the CLI's 10 s bound.
+describe("session reads over rosters larger than the fold cache's floor (VC-800)", () => {
+  it(
+    "re-folds only the Sessions whose log moved, on list, peek and show",
+    { timeout: 60_000 },
+    async () => {
+      db = openTestDb();
+      insertProject(db.db, testProject({ id: "p", name: "Volli", path: "/repo/volli" }));
+      insertProject(db.db, testProject({ id: "other", name: "Other", path: "/repo/other" }));
+      const stored = createSqliteSessionLedger(db.db);
+      // `listProjectionEvents` is the fold's own read: a Session named here was
+      // projected from its log, and one that is not was answered from the cache.
+      const folded: string[] = [];
+      const ledger: SessionLedger = {
+        transaction: (work) =>
+          stored.transaction((transaction) =>
+            work(
+              new Proxy(transaction, {
+                get(target, property) {
+                  if (property === "listProjectionEvents") {
+                    return (
+                      query: Parameters<SessionLedgerTransaction["listProjectionEvents"]>[0],
+                    ) => {
+                      folded.push(query.sessionId);
+                      return target.listProjectionEvents(query);
+                    };
+                  }
+                  // Bound to the real transaction: it keeps private state.
+                  const value: unknown = Reflect.get(target, property, target);
+                  return typeof value === "function" ? value.bind(target) : value;
+                },
+              }),
+            ),
+          ),
+      };
+      let nextId = 0;
+      const engine = createHostSessionEngine(ledger, {
+        now: () => DAY,
+        nextId: () => `${(++nextId).toString(16).padStart(8, "0")}-0000-4000-8000-000000000001`,
+      });
+      const service = createAgentCommandService({
+        handlers: testHostHandlers({ db: db.db }),
+        db: db.db,
+        appVersion: "test",
+        sessionEngine: engine,
+        now: () => 2 * DAY,
+      });
+      const read = (cmd: AgentCommand, args: Record<string, unknown> = {}) =>
+        service.execute({ v: 1, cmd, args, ctx: { cwd: "/repo/volli", env: {} } });
+      // Each project's roster is under the floor and their sum is over it,
+      // which is what every `session` read folds: all of them at once.
+      const rosters = { p: SESSION_LISTING_CACHE_LIMIT - 56, other: 100 };
+      const sessionIds: string[] = [];
+      for (const [projectId, count] of Object.entries(rosters)) {
+        for (let index = 0; index < count; index += 1) {
+          const created = await engine.createSession({
+            commandId: `create-${projectId}-${index}`,
+            projectId,
+            ticketId: null,
+            role: "project",
+            parentSessionId: null,
+            title: `${projectId} ${index}`,
+            provenance,
+          });
+          if (projectId === "p") sessionIds.push(created.session.id);
+        }
+      }
+      expect(rosters.p + rosters.other).toBeGreaterThan(SESSION_LISTING_CACHE_LIMIT);
+
+      folded.length = 0;
+      const first = data(await read("session.list", { all: true }));
+      expect(first["sessions"]).toHaveLength(rosters.p);
+      expect(folded).toHaveLength(rosters.p + rosters.other);
+
+      folded.length = 0;
+      expect(data(await read("session.list", { all: true }))).toEqual(first);
+      expect(folded).toEqual([]);
+
+      // One Session moves. Peek and show re-fold that one and nothing else.
+      const named = sessionIds[7];
+      await engine.submit({
+        commandId: "retitle-named",
+        sessionId: named,
+        intent: { kind: "session.retitle", title: "Moved" },
+        provenance,
+      });
+      folded.length = 0;
+      expect(data(await read("session.peek", { id: named.slice(0, 8) }))).toMatchObject({
+        session: named.slice(0, 8),
+      });
+      expect(data(await read("session.show", { id: named.slice(0, 8) }))).toMatchObject({
+        id: named.slice(0, 8),
+        title: "Moved",
+      });
+      expect(folded).toEqual([named]);
+    },
+  );
 });
 
 // VC-758: the runtime fixtures. Attachments and queued messages are written
