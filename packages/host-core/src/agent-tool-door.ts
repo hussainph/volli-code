@@ -505,7 +505,9 @@ async function startSessionTool(
         `Model: ${started.model.providerId}/${started.model.modelId} at reasoning ${started.model.reasoningLevel}${tier}.`,
         started.state === "ready"
           ? `It is attached and its kickoff turn has been submitted; it runs on its own from here. ${await watchOpenedSession(watchPorts(options), session, { sessionId: started.sessionId, title: started.title }, "started")}`
-          : "It was created but its attachment needs recovery, so no kickoff was submitted. A person can retry it from the app.",
+          : // The attach's own diagnosis, never a bare "needs recovery" (VC-659):
+            // the caller is usually the one placed to fix what refused it.
+            `It was created but its attachment failed, so no kickoff was submitted: ${started.attachFailure}\nOnce that is resolved, a person can retry it from the app.`,
       ].join("\n"),
     };
   } catch (error) {

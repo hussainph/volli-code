@@ -705,6 +705,31 @@ describe("ensure — the ticket's worktree on another branch, against a real rep
     expect(worktreeEvents().slice(before)).toHaveLength(1);
   });
 
+  it("adopts a stacked PR branch of the same ticket left checked out (VC-659)", async () => {
+    // A stacked-PR slice of this same ticket is its work, adopted as it stands
+    // (VC-659).
+    const { worktreePath, deps } = await materializedTicket();
+    runRepoGit(worktreePath, ["switch", "-c", "volli/VC-12c-stable-venue"]);
+    const head = commitIn(worktreePath, "venue.txt");
+
+    const outcome = await ensure(deps, "t1");
+
+    expect(outcome).toEqual({
+      ok: true,
+      value: {
+        created: false,
+        restamped: true,
+        identity: { worktreePath, branch: "volli/VC-12c-stable-venue", baseBranch: "main" },
+      },
+    });
+    // Adopted as it stands: nothing was checked out, reset or committed.
+    expect(repoGitOut(worktreePath, ["branch", "--show-current"])).toBe(
+      "volli/VC-12c-stable-venue",
+    );
+    expect(repoGitOut(worktreePath, ["rev-parse", "HEAD"])).toBe(head);
+    expect(getTicketRow(ctx.db, "t1")?.branch).toBe("volli/VC-12c-stable-venue");
+  });
+
   it("adopts the old-slug branch when a retitle drifted the name an unstamped branch computes", async () => {
     const { worktreePath, deps } = await materializedTicket();
     // A path stamped with no branch beside it falls back to the name computed
@@ -774,5 +799,23 @@ describe("ensure — the ticket's worktree on another branch, against a real rep
     expect(getTicketRow(ctx.db, "t1")?.branch).toBe(BRANCH);
     expect(repoGitOut(worktreePath, ["rev-parse", "HEAD"])).toBe(head);
     expect(repoGitOut(worktreePath, ["branch", "--show-current"])).toBe(branchBefore);
+  });
+
+  it("names the uncommitted work on a refused branch, and leaves it exactly where it is (VC-659)", async () => {
+    const { worktreePath, deps } = await materializedTicket();
+    runRepoGit(worktreePath, ["switch", "-c", "volli/VC-120-lookalike"]);
+    writeFileSync(join(worktreePath, "README.md"), "# edited, not committed\n");
+
+    const outcome = await ensure(deps, "t1");
+
+    expect(outcome).toEqual({
+      ok: false,
+      error:
+        `A worktree already exists at ${worktreePath} on branch volli/VC-120-lookalike with ` +
+        `uncommitted changes; this ticket's branch is ${BRANCH}. Commit or stash those changes, ` +
+        `check out ${BRANCH} there (or remove the worktree), then retry.`,
+    });
+    expect(repoGitOut(worktreePath, ["branch", "--show-current"])).toBe("volli/VC-120-lookalike");
+    expect(repoGitOut(worktreePath, ["status", "--porcelain"])).toBe("M README.md");
   });
 });
