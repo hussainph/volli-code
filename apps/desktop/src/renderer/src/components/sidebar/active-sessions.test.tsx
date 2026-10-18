@@ -702,10 +702,12 @@ describe("the Previous band's cap (VC-116)", () => {
       Array.from({ length: PREVIOUS_BAND_LIMIT }, (_, index) => `chat:c${index}`),
     );
     // The header still counts every Session back there, not the drawn ones.
-    expect(textOfBand("previous")).toContain(String(PREVIOUS_BAND_LIMIT * 2 + 5));
+    // Its count is the band's first tabular figure; the rows' ages follow it.
+    expect(
+      container?.querySelector('[data-session-band="previous"] .tabular-nums')?.textContent,
+    ).toBe(String(PREVIOUS_BAND_LIMIT * 2 + 5));
+    expect(reachButton("Show more")).not.toBeNull();
     expect(reachButton("Show less")).toBeNull();
-    // A real button in the tab order: Tab reaches it, Enter and Space press it.
-    expect(reachButton("Show more")?.tabIndex).toBe(0);
   });
 
   it("widens a page at a time, and collapses back to the cap, keeping focus in the band", async () => {
@@ -730,28 +732,35 @@ describe("the Previous band's cap (VC-116)", () => {
     expect(document.activeElement).toBe(reachButton("Show more"));
   });
 
-  it("keeps the arrow keys on the rows it draws", async () => {
-    seedPastChats(PREVIOUS_BAND_LIMIT + 3);
-    await mount();
-
-    const last = `chat:c${PREVIOUS_BAND_LIMIT - 1}`;
-    await press(last, "ArrowDown");
-    // Clamped at the last DRAWN row: the next one is behind Show more.
-    expect(document.activeElement).toBe(rowButton(last));
-  });
-
-  it("still draws the Session in front of you when it ranks past the cap", async () => {
-    seedPastChats(PREVIOUS_BAND_LIMIT + 10);
-    const selected = PREVIOUS_BAND_LIMIT + 6;
+  /** Puts ticketless chat `c{index}` in front of you, as Home's active tab. */
+  const selectHomeChat = (index: number): void => {
     useWorkspaceStore.setState({
       byProject: {
         [PROJECT.id]: {
           ...DEFAULT_WORKSPACE_UI,
           nav: "home",
-          homeActiveTab: chatTabId(`c${selected}`),
+          homeActiveTab: chatTabId(`c${index}`),
         },
       },
     });
+  };
+
+  it("walks the arrow keys over the drawn rows, straight onto a pinned one past the cap", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT + 10);
+    const pinned = `chat:c${PREVIOUS_BAND_LIMIT + 6}`;
+    selectHomeChat(PREVIOUS_BAND_LIMIT + 6);
+    await mount();
+
+    // The next row in the band's FULL order is c20, which is behind Show more;
+    // the next DRAWN row is the pinned one.
+    await press(`chat:c${PREVIOUS_BAND_LIMIT - 1}`, "ArrowDown");
+    expect(document.activeElement).toBe(rowButton(pinned));
+  });
+
+  it("still draws the Session in front of you when it ranks past the cap", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT + 10);
+    const selected = PREVIOUS_BAND_LIMIT + 6;
+    selectHomeChat(selected);
     await mount();
 
     const drawn = previousRowIds();

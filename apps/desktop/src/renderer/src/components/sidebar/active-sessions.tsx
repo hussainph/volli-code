@@ -936,12 +936,8 @@ export function ActiveSessions({
     [previousEntries, previousLimit, selectedEntryId],
   );
   const showMorePrevious = React.useCallback(() => {
-    setPreviousReach((reach) => ({
-      projectId: project.id,
-      limit:
-        (reach.projectId === project.id ? reach.limit : PREVIOUS_BAND_LIMIT) + PREVIOUS_BAND_LIMIT,
-    }));
-  }, [project.id]);
+    setPreviousReach({ projectId: project.id, limit: previousLimit + PREVIOUS_BAND_LIMIT });
+  }, [previousLimit, project.id]);
   const showLessPrevious = React.useCallback(() => {
     setPreviousReach({ projectId: project.id, limit: PREVIOUS_BAND_LIMIT });
   }, [project.id]);

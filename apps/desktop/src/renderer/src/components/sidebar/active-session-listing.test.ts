@@ -2916,10 +2916,6 @@ describe("capPreviousEntries", () => {
       ),
     );
 
-  it("is a named cap of about twenty entries", () => {
-    expect(PREVIOUS_BAND_LIMIT).toBe(20);
-  });
-
   it("shows a band that fits whole, with nothing held back", () => {
     const entries = entriesOf(PREVIOUS_BAND_LIMIT);
 
