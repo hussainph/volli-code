@@ -85,7 +85,16 @@ export interface CreateChatSessionInput {
   autoSelect?: { request: string };
 }
 
+/** Renderer-only receipt shadow; it never owns delivery or crosses the wire. */
+export interface IdleSend extends QueuedMessage {
+  accepted: boolean;
+}
+
 export interface ChatSessionsState extends ChatSessionWrites {
+  /** Sent bubbles survive view remounts and queue-before-transcript delivery. */
+  idleSends: Readonly<Record<string, readonly IdleSend[]>>;
+  rememberIdleSend(sessionId: string, message: QueuedMessage, accepted?: boolean): void;
+  forgetIdleSend(sessionId: string, messageId: string): void;
   /**
    * Mints one durable Session and attaches its first executor, resolving the id.
    *
@@ -415,6 +424,34 @@ export function createChatSessionsStore(
 
     return {
       sessions: {},
+      idleSends: {},
+      rememberIdleSend(sessionId, message, accepted = false) {
+        set((state) => {
+          const rows = state.idleSends[sessionId] ?? [];
+          const previous = rows.find((row) => row.id === message.id);
+          const next = { ...message, accepted: accepted || previous?.accepted === true };
+          return {
+            idleSends: {
+              ...state.idleSends,
+              [sessionId]:
+                previous === undefined
+                  ? [...rows, next]
+                  : rows.map((row) => (row.id === message.id ? next : row)),
+            },
+          };
+        });
+      },
+      forgetIdleSend(sessionId, messageId) {
+        set((state) => {
+          const rows = state.idleSends[sessionId];
+          if (!rows?.some((row) => row.id === messageId)) return state;
+          const remaining = rows.filter((row) => row.id !== messageId);
+          const idleSends = { ...state.idleSends };
+          if (remaining.length === 0) delete idleSends[sessionId];
+          else idleSends[sessionId] = remaining;
+          return { idleSends };
+        });
+      },
       openTabs: {},
       rehomedTicketBySession: {},
       starting: {},
@@ -604,10 +641,13 @@ export function createChatSessionsStore(
         // remote Session is remote (VC-713, B1).
         disposeChatClient(sessionId);
         set((state) => {
-          if (state.sessions[sessionId] === undefined) return state;
+          if (state.sessions[sessionId] === undefined && state.idleSends[sessionId] === undefined)
+            return state;
           const sessions = { ...state.sessions };
+          const idleSends = { ...state.idleSends };
           delete sessions[sessionId];
-          return { sessions };
+          delete idleSends[sessionId];
+          return { sessions, idleSends };
         });
       },
 
@@ -664,6 +704,11 @@ export function createChatSessionsStore(
           return "refused";
         }
         const outcome = await client.submit(message, "queue");
+        const shadow = get().idleSends[sessionId]?.find((row) => row.id === message.id);
+        if (shadow !== undefined) {
+          if (outcome === "refused") get().forgetIdleSend(sessionId, message.id);
+          else get().rememberIdleSend(sessionId, message, true);
+        }
         if (outcome === "refused") drafts.markHeld(sessionId, message.id, "unsent");
         else {
           drafts.amendHeldMessage(sessionId, message.id, (held) => ({
@@ -946,6 +991,7 @@ export function createChatSessionsStore(
           return { rehomedTicketBySession, openTabs, provisionalActive };
         });
         for (const sessionId of abandonedDraftIds) {
+          get().closeChatSession(sessionId);
           useChatDraftsStore.getState().discardProvisional(sessionId);
         }
       },
@@ -969,14 +1015,22 @@ export function createChatSessionsStore(
             delete nextOpenTabs[ownerId];
           }
           const sessions = { ...state.sessions };
+          const idleSends = { ...state.idleSends };
           const rehomedTicketBySession = { ...state.rehomedTicketBySession };
           const provisionalActive = { ...state.provisionalActive };
           for (const ownerId of ownerIds) delete provisionalActive[ownerId];
           for (const sessionId of removedSessionIds) {
             delete sessions[sessionId];
+            delete idleSends[sessionId];
             delete rehomedTicketBySession[sessionId];
           }
-          return { openTabs: nextOpenTabs, sessions, rehomedTicketBySession, provisionalActive };
+          return {
+            openTabs: nextOpenTabs,
+            sessions,
+            idleSends,
+            rehomedTicketBySession,
+            provisionalActive,
+          };
         });
         // This path means the owning project is gone, not merely that a tab was
         // closed or a Ticket left the live board. No surface remains from which

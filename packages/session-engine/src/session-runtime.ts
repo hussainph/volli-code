@@ -2237,15 +2237,16 @@ class DefaultSessionRuntime implements SessionRuntime {
 
   /**
    * An executor start that has not finished, durably pending or still being
-   * admitted in this process. The engine refuses a second start meanwhile, and
-   * the start's own completion wakes the queue (see `#admitCommand`).
+   * admitted in this process. The engine refuses a second start meanwhile.
+   * Only a start still in flight has a completion that wakes the queue.
    */
   #executorStartPending(projection: SessionProjection): boolean {
-    return (
-      projection.pendingExecutorStart !== null ||
-      projection.commands.some(
-        ({ id, intent }) => intent.kind === "executor.start" && this.#inFlight.has(id),
-      )
+    return projection.pendingExecutorStart !== null || this.#executorStartInFlight(projection);
+  }
+
+  #executorStartInFlight(projection: SessionProjection): boolean {
+    return projection.commands.some(
+      ({ id, intent }) => intent.kind === "executor.start" && this.#inFlight.has(id),
     );
   }
 
@@ -2323,6 +2324,8 @@ class DefaultSessionRuntime implements SessionRuntime {
     const startPending = this.#executorStartPending(projection);
     const ownFailureId = this.#followUpFailureAttentionId(sessionId);
     const blockers = projection.attention.active.filter(({ id }) => id !== ownFailureId);
+    // Only an in-flight start is normal progress: its completion wakes the
+    // queue. A durable orphan has no wake and still needs actionable Attention.
     const blockedDetail =
       projection.status !== "open"
         ? "Queued message is waiting: session_archived. Reopen the Session to retry."
@@ -2330,7 +2333,7 @@ class DefaultSessionRuntime implements SessionRuntime {
           ? "Queued message is waiting: session_stopped. Reattach the Session to retry."
           : blockers.length > 0
             ? `Queued message is waiting: ${blockers.map(({ kind, detail }) => `${kind}: ${detail}`).join("; ")}`
-            : startPending
+            : startPending && !this.#executorStartInFlight(projection)
               ? "Queued message is waiting: executor_start_pending. Finish or retry the attachment."
               : undefined;
     // Set inside the claim transaction, so no cancel can interleave.
