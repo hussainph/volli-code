@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { refusingCredentialReads } from "./credential-env";
@@ -13,8 +15,27 @@ import {
   withAbortSignal,
 } from "./harness-env";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
-import type { ExecutionEnv, FileError, Result } from "./vendor/pi-harness/types";
+import {
+  ok,
+  type ExecutionEnv,
+  type FileByteReader,
+  type FileError,
+  type Result,
+} from "./vendor/pi-harness/types";
 import { formatSize, truncateHead } from "./vendor/pi-harness/utils/truncate";
+
+/** The length of every string `read` hands `truncateHead`: what it kept and decoded. */
+const truncated = vi.hoisted(() => ({ inputs: [] as number[] }));
+vi.mock("./vendor/pi-harness/utils/truncate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./vendor/pi-harness/utils/truncate")>();
+  return {
+    ...actual,
+    truncateHead: (...args: Parameters<typeof actual.truncateHead>) => {
+      truncated.inputs.push(args[0].length);
+      return actual.truncateHead(...args);
+    },
+  };
+});
 
 /**
  * VC-801: `read` runs in the host process, so it must never read a file whole
@@ -104,6 +125,11 @@ function pngChunk(type: string, length: number): Buffer {
   return data;
 }
 
+/** A path `stat` that says regular file, for mocks that serve their own handle. */
+async function regularPath() {
+  return { isFile: () => true, isDirectory: () => false };
+}
+
 function failure(result: Result<unknown, FileError>, code: string) {
   expect(result).toMatchObject({ ok: false, error: { name: "FileError", code } });
 }
@@ -115,42 +141,50 @@ function lineStart(bytes: Uint8Array, line: number): number {
   return index;
 }
 
-/** Run `work`, sampling RSS while it yields; resolves with its result and the peak growth. */
-async function peakRssGrowth<T>(work: () => Promise<T>): Promise<{ value: T; growth: number }> {
-  const baseline = process.memoryUsage.rss();
-  let peak = baseline;
-  const sample = setInterval(() => {
-    peak = Math.max(peak, process.memoryUsage.rss());
-  }, 1);
-  try {
-    const value = await work();
-    peak = Math.max(peak, process.memoryUsage.rss());
-    return { value, growth: peak - baseline };
-  } finally {
-    clearInterval(sample);
-  }
+/** The streamed read's buffer, which no single read may exceed. */
+const CHUNK_BYTES = 256 * 1024;
+const VIRTUAL_BYTES = 500 * 1024 * 1024;
+
+/**
+ * A 500 MB file that exists only as a repeating pattern: every read is served
+ * from one small block and recorded, so the test sees exactly what `read` asked
+ * for without anything that size touching disk or memory.
+ */
+function virtualFile(pattern: string, size = VIRTUAL_BYTES) {
+  const unit = Buffer.from(pattern);
+  const block = Buffer.from(pattern.repeat(Math.ceil((CHUNK_BYTES * 2) / unit.length)));
+  const reads: Array<{ position: number; length: number; into?: Uint8Array }> = [];
+  const reader: FileByteReader = {
+    size,
+    async read(position, length, _context, into) {
+      reads.push({ position, length, into });
+      const count = Math.max(0, Math.min(length, size - position));
+      const target = into ?? new Uint8Array(length);
+      const start = position % unit.length;
+      target.set(block.subarray(start, start + count));
+      return ok(target.subarray(0, count));
+    },
+    async close() {},
+  };
+  return { reader, reads };
 }
 
-/** Write `total` bytes of `block` repeated, without holding them. */
-async function writeRepeated(path: string, block: string, total: number): Promise<void> {
-  const bytes = Buffer.from(block);
-  const file = await fs.open(path, "w");
-  try {
-    for (let written = 0; written < total; written += bytes.length) await file.write(bytes);
-  } finally {
-    await file.close();
-  }
+/** A real env whose `openFileReader` hands `read` the virtual file for an existing placeholder. */
+async function servingVirtual(name: string, reader: FileByteReader) {
+  const env = new NodeExecutionEnv({ cwd: scratch });
+  await fs.writeFile(join(scratch, name), "placeholder");
+  vi.spyOn(env, "openFileReader").mockResolvedValue(ok(reader));
+  return env;
 }
 
 describe("read streams text instead of loading the file (VC-801)", () => {
-  it("returns the first 2,000 lines of a large log with its continuation hint and bounded memory", async () => {
-    const env = new NodeExecutionEnv({ cwd: scratch });
+  it("returns the first 2,000 lines of a 500 MB log with its hint, one bounded read at a time", async () => {
     const line = "log entry 123456789\n"; // 20 bytes: 2,000 lines fit under 50 KB
-    const block = line.repeat(50_000); // 1,000,000 bytes
-    const total = 128 * block.length;
-    await writeRepeated(join(scratch, "big.log"), block, total);
-    const { value: result, growth } = await peakRssGrowth(() => read(env, "big.log"));
-    const lines = total / line.length;
+    const lines = VIRTUAL_BYTES / line.length;
+    const { reader, reads } = virtualFile(line);
+    const env = await servingVirtual("big.log", reader);
+    truncated.inputs.length = 0;
+    const result = await read(env, "big.log");
     expect(text(result)).toBe(
       `${line.repeat(DEFAULT_MAX_LINES - 1)}${line.slice(0, -1)}\n\n[Showing lines 1-2000 of ${lines + 1}. Use offset=2001 to continue.]`,
     );
@@ -158,33 +192,40 @@ describe("read streams text instead of loading the file (VC-801)", () => {
       truncated: true,
       truncatedBy: "lines",
       totalLines: lines,
-      totalBytes: total,
+      totalBytes: VIRTUAL_BYTES,
       outputLines: DEFAULT_MAX_LINES,
     });
-    // The whole-file read held the 128 MB buffer, a 128 M-character string and
-    // its line array at once.
-    expect(growth).toBeLessThan(24 * 1024 * 1024);
-    const middle = await read(env, "big.log", 1_000_001, 2);
-    expect(text(middle)).toBe(
-      `${line}${line.slice(0, -1)}\n\n[${lines + 1 - 1_000_002} more lines in file. Use offset=1000003 to continue.]`,
-    );
-  }, 60_000);
+    // Every byte is read (the hint names the line count), but never more than
+    // one chunk at a time, always into the same buffer after the sniffed head.
+    expect(Math.max(...reads.map((call) => call.length))).toBeLessThanOrEqual(CHUNK_BYTES);
+    expect(new Set(reads.slice(1).map((call) => call.into)).size).toBe(1);
+    expect(reads.at(-1)?.position).toBe(VIRTUAL_BYTES);
+    // And only the prefix the cut can show was kept and decoded.
+    expect(truncated.inputs).toHaveLength(1);
+    expect(truncated.inputs[0]).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + 1 + CHUNK_BYTES);
 
-  it("measures a single enormous line without holding it", async () => {
-    const env = new NodeExecutionEnv({ cwd: scratch });
-    const block = "x".repeat(1024 * 1024);
-    await writeRepeated(join(scratch, "minified.json"), block, 64 * block.length);
-    const { value: result, growth } = await peakRssGrowth(() => read(env, "minified.json"));
+    const middle = await read(env, "big.log", 10_000_001, 2);
+    expect(text(middle)).toBe(
+      `${line}${line.slice(0, -1)}\n\n[${lines + 1 - 10_000_002} more lines in file. Use offset=10000003 to continue.]`,
+    );
+  });
+
+  it("measures a single 500 MB line without holding it", async () => {
+    const { reader, reads } = virtualFile("x");
+    const env = await servingVirtual("minified.json", reader);
+    truncated.inputs.length = 0;
+    const result = await read(env, "minified.json");
     expect(text(result)).toBe(
-      `[Line 1 is 64.0MB, exceeds 50.0KB limit. Use bash: sed -n '1p' minified.json | head -c ${DEFAULT_MAX_BYTES}]`,
+      `[Line 1 is 500.0MB, exceeds 50.0KB limit. Use bash: sed -n '1p' minified.json | head -c ${DEFAULT_MAX_BYTES}]`,
     );
     expect(result.details?.truncation).toMatchObject({
       firstLineExceedsLimit: true,
       totalLines: 1,
-      totalBytes: 64 * block.length,
+      totalBytes: VIRTUAL_BYTES,
     });
-    expect(growth).toBeLessThan(24 * 1024 * 1024);
-  }, 60_000);
+    expect(Math.max(...reads.map((call) => call.length))).toBeLessThanOrEqual(CHUNK_BYTES);
+    expect(truncated.inputs[0]).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + 1 + CHUNK_BYTES);
+  });
 
   it.each([
     ["empty", ""],
@@ -310,6 +351,25 @@ describe("read refuses what is not a regular file at once (VC-801)", () => {
     }
   });
 
+  it("refuses a socket behind a symlink before opening it", async () => {
+    const env = new NodeExecutionEnv({ cwd: scratch });
+    // A short directory: a socket path must fit in sun_path.
+    const short = await fs.mkdtemp(join(tmpdir(), "vc801-"));
+    const server = createServer();
+    try {
+      const socket = join(short, "s");
+      await new Promise<void>((listening) => server.listen(socket, listening));
+      await fs.symlink(socket, join(scratch, "socket-link"));
+      await expect(read(env, "socket-link")).rejects.toMatchObject({
+        code: "invalid",
+        message: expect.stringContaining("Not a regular file"),
+      });
+    } finally {
+      await new Promise((closed) => server.close(closed));
+      await fs.rm(short, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a directory", async () => {
     const env = new NodeExecutionEnv({ cwd: scratch });
     await fs.mkdir(join(scratch, "dir"));
@@ -342,6 +402,22 @@ describe("read names a binary file instead of decoding it (VC-801)", () => {
       ],
       details: undefined,
     });
+  });
+
+  it.each([
+    ["UTF-16LE", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("hi\n", "utf16le")]), true],
+    ["UTF-16BE", Buffer.from([0xfe, 0xff, 0x00, 0x68, 0x00, 0x69]), true],
+    ["0xFF then NUL", Buffer.from([0xff, 0x00, 0x41]), false],
+    ["0xFE then NUL", Buffer.from([0xfe, 0x00, 0x41]), false],
+  ])("tells %s text from binary", async (_name, bytes, utf16) => {
+    const env = new NodeExecutionEnv({ cwd: scratch });
+    await fs.writeFile(join(scratch, "f.txt"), bytes);
+    const size = formatSize(bytes.length);
+    expect(text(await read(env, "f.txt"))).toBe(
+      utf16
+        ? `[UTF-16 text (${size}), not shown as text. Use bash: iconv -f UTF-16 -t UTF-8 f.txt | head -c ${DEFAULT_MAX_BYTES}]`
+        : `[Binary file (${size}), not shown as text. Use bash: file f.txt, or xxd f.txt | head -c ${DEFAULT_MAX_BYTES}]`,
+    );
   });
 
   it("still decodes a file whose first NUL is past 8 KB", async () => {
@@ -407,6 +483,7 @@ describe("openFileReader (VC-801)", () => {
     const controller = new AbortController();
     let closed = false;
     const aborting = await mockedEnv({
+      stat: regularPath,
       open: async () => {
         controller.abort();
         return {
@@ -427,6 +504,7 @@ describe("openFileReader (VC-801)", () => {
   it("returns stat, read and close failures instead of rejecting", async () => {
     const io = Object.assign(new Error("fixture EIO"), { code: "EIO" });
     const statFails = await mockedEnv({
+      stat: regularPath,
       open: async () => ({
         stat: async () => {
           throw io;
@@ -441,6 +519,7 @@ describe("openFileReader (VC-801)", () => {
       throw io;
     };
     const reads = await mockedEnv({
+      stat: regularPath,
       open: async () => ({
         stat: async () => ({ isFile: () => true, isDirectory: () => false, size: 4 }),
         read: async () => onRead(),
@@ -458,6 +537,40 @@ describe("openFileReader (VC-801)", () => {
     };
     failure(await opened.value.read(0, 4, withAbortSignal(controller.signal, context)), "aborted");
     await expect(opened.value.close(context)).resolves.toBeUndefined();
+  });
+
+  it("opens without a controlling terminal and judges the open descriptor again", async () => {
+    const flags: number[] = [];
+    let closes = 0;
+    let kind = { isFile: () => false, isDirectory: () => false, size: 0 };
+    const swapped = await mockedEnv({
+      stat: regularPath,
+      open: async (_path: string, flag: number) => {
+        flags.push(flag);
+        return {
+          stat: async () => kind,
+          close: async () => {
+            closes++;
+          },
+        };
+      },
+    });
+    const refused = await swapped.openFileReader("f", context);
+    failure(refused, "invalid");
+    expect(refused).toMatchObject({ error: { message: expect.stringContaining("Not a regular") } });
+    kind = { isFile: () => false, isDirectory: () => true, size: 0 };
+    failure(await swapped.openFileReader("f", context), "is_directory");
+    expect(closes).toBe(2);
+    expect(flags[0]).toBe(constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY);
+
+    const denied = Object.assign(new Error("fixture EACCES"), { code: "EACCES" });
+    const unopenable = await mockedEnv({
+      stat: regularPath,
+      open: async () => {
+        throw denied;
+      },
+    });
+    failure(await unopenable.openFileReader("f", context), "permission_denied");
   });
 
   it("is guarded like readBinaryFile in the scoped environment and refused for credential files", async () => {

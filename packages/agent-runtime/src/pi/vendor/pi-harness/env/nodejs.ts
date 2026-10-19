@@ -13,6 +13,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { homedir, constants as osConstants, tmpdir } from "node:os";
@@ -525,6 +526,18 @@ class NodeFileByteReader implements FileByteReader {
 const NOT_A_REGULAR_FILE =
   "Not a regular file (a FIFO, device or socket); only regular files can be read";
 
+/** Why a file of this kind cannot be read, or nothing when it is a regular file. */
+function notRegularFile(
+  stats: { isFile(): boolean; isDirectory(): boolean },
+  path: string,
+): FileError | undefined {
+  if (stats.isFile()) return undefined;
+  return stats.isDirectory()
+    ? new FileError("is_directory", "Path is a directory", path)
+    : new FileError("invalid", NOT_A_REGULAR_FILE, path);
+}
+
+/** The descriptor judged again: the path's kind is checked before open, this catches a swap in between. */
 async function regularFileReader(
   file: Awaited<ReturnType<typeof openFile>>,
   path: string,
@@ -534,12 +547,8 @@ async function regularFileReader(
   if (aborted) return aborted;
   try {
     const stats = await file.stat();
-    if (stats.isFile()) return ok(new NodeFileByteReader(file, path, stats.size));
-    return err(
-      stats.isDirectory()
-        ? new FileError("is_directory", "Path is a directory", path)
-        : new FileError("invalid", NOT_A_REGULAR_FILE, path),
-    );
+    const refusal = notRegularFile(stats, path);
+    return refusal ? err(refusal) : ok(new NodeFileByteReader(file, path, stats.size));
   } catch (error) {
     return err(toFileError(error, path));
   }
@@ -969,9 +978,12 @@ export class NodeExecutionEnv implements ExecutionEnv {
   }
 
   /**
-   * Opened non-blocking and judged on the open descriptor, so a FIFO with no
-   * writer cannot hold the open and a path swapped after a check cannot slip a
-   * device past it (VC-801). Non-blocking changes nothing for a regular file.
+   * The path's kind is judged before anything is opened, so a device, FIFO or
+   * socket behind a symlink is refused without an open's side effects, and
+   * judged again on the open descriptor, so a path swapped to one in between is
+   * still refused (VC-801). Opened non-blocking, so a FIFO swapped in cannot hold
+   * the open, and without a controlling terminal, so a terminal swapped in
+   * cannot become one. Neither flag changes anything for a regular file.
    */
   async openFileReader(path: string, context: Context): Promise<Result<FileByteReader, FileError>> {
     const resolved = resolvePath(this.cwd, path);
@@ -979,7 +991,12 @@ export class NodeExecutionEnv implements ExecutionEnv {
     if (aborted) return aborted;
     let file: Awaited<ReturnType<typeof openFile>>;
     try {
-      file = await openFile(resolved, constants.O_RDONLY | constants.O_NONBLOCK);
+      const refusal = notRegularFile(await stat(resolved), resolved);
+      if (refusal) return err(refusal);
+      file = await openFile(
+        resolved,
+        constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY,
+      );
     } catch (error) {
       return err(toFileError(error, resolved));
     }

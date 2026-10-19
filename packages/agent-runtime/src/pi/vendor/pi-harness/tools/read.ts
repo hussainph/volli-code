@@ -70,15 +70,12 @@ export function createReadTool<TContext extends ExecutionToolContext = Execution
           if (image) return image;
         }
         if (head.includes(0)) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `[Binary file (${formatSize(reader.size)}), not shown as text. Use bash: file ${path}, or xxd ${path} | head -c ${DEFAULT_MAX_BYTES}]`,
-              },
-            ],
-            details: undefined,
-          };
+          const utf16 =
+            (head[0] === 0xff && head[1] === 0xfe) || (head[0] === 0xfe && head[1] === 0xff);
+          const text = utf16
+            ? `[UTF-16 text (${formatSize(reader.size)}), not shown as text. Use bash: iconv -f UTF-16 -t UTF-8 ${path} | head -c ${DEFAULT_MAX_BYTES}]`
+            : `[Binary file (${formatSize(reader.size)}), not shown as text. Use bash: file ${path}, or xxd ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
+          return { content: [{ type: "text", text }], details: undefined };
         }
         return await readText(reader, head, { path, offset, limit }, context);
       } finally {
@@ -92,6 +89,13 @@ export function createReadTool<TContext extends ExecutionToolContext = Execution
 const SNIFF_BYTES = 8 * 1024;
 /** How much of a text file one streamed read takes (VC-801). */
 const CHUNK_BYTES = 256 * 1024;
+
+/** How many LF bytes `bytes` holds. */
+function countLf(bytes: Uint8Array): number {
+  let count = 0;
+  for (let at = bytes.indexOf(0x0a); at !== -1; at = bytes.indexOf(0x0a, at + 1)) count++;
+  return count;
+}
 
 type ReadToolResult = {
   content: Array<TextContent | ImageContent>;
@@ -218,13 +222,7 @@ async function readText(
       const text = decoder.decode(selected, { stream: true });
       kept.push(text);
       keptBytes += utf8ByteLength(text);
-      for (
-        let newline = selected.indexOf(0x0a);
-        newline !== -1;
-        newline = selected.indexOf(0x0a, newline + 1)
-      ) {
-        keptNewlines++;
-      }
+      keptNewlines += countLf(selected);
       keeping = keptBytes <= DEFAULT_MAX_BYTES + 1 && keptNewlines <= DEFAULT_MAX_LINES;
     }
   };
