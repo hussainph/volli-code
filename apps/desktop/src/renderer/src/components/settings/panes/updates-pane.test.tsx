@@ -84,12 +84,47 @@ afterEach(() => {
   container.remove();
 });
 
+/** Opens the channel select from the keyboard and picks the option reading `text`. */
+async function pickChannel(text: string): Promise<void> {
+  const trigger = container.querySelector<HTMLButtonElement>("#update-channel");
+  if (trigger === null) throw new Error("no channel select");
+  // jsdom has no layout; Radix scrolls the highlighted option into view.
+  HTMLElement.prototype.scrollIntoView = () => {};
+  trigger.focus();
+  await act(async () => {
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  });
+  const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((candidate) =>
+    candidate.textContent?.includes(text),
+  );
+  if (option === undefined) throw new Error(`no option reads ${text}`);
+  await act(async () => option.focus());
+  await act(async () => {
+    option.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+}
+
 describe("UpdatesPane", () => {
   it("shows the channel it read", async () => {
     await render();
     const trigger = container.querySelector<HTMLButtonElement>("#update-channel");
     expect(trigger?.textContent).toContain("Canary");
     expect(trigger?.disabled).toBe(false);
+  });
+
+  // VC-851: leaving canary is honoured at the next launch, and the installed
+  // canary build stays — the row must say both rather than imply "now".
+  it("says when Stable takes effect after leaving Canary", async () => {
+    await render();
+    expect(container.textContent).not.toContain("Stable takes effect");
+
+    await pickChannel("Stable");
+
+    expect(container.querySelector("#update-channel")?.textContent).toContain("Stable");
+    expect(container.textContent).toContain("Stable takes effect the next time Volli opens");
+    expect(container.textContent).toContain(
+      "An installed canary build stays until a newer stable release is out; it never downgrades.",
+    );
   });
 
   it("says a refused channel read is a fault, and retries it", async () => {

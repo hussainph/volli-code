@@ -121,8 +121,8 @@ export function registerUpdateIpcHandlers(deps: UpdateIpcDeps): void {
     /**
      * The write's own doc (`writeUpdateChannel`) carries the effect story:
      * entering canary widens the running updater immediately; leaving canary
-     * applies at the next launch on stable installs, and never forces a
-     * canary install off the prerelease feed. Nothing here re-runs a check —
+     * applies at the next launch, canary builds included (VC-851), and never
+     * downgrades the build already installed. Nothing here re-runs a check —
      * one fired mid-write would race the row it depends on.
      */
     "volli:update-channel-set": (channel: UpdateChannel) =>
