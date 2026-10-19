@@ -81,7 +81,7 @@ export async function projectAddVerb(
                 },
               ],
               humanVisibleEffects: [
-                `${plan.project.path} was the removed project ${plan.project.name}; it comes back with its tickets and Sessions.`,
+                `${plan.project.path} was the removed project ${plan.project.name}; it comes back under that name, with its tickets and Sessions.`,
               ],
             })
           : dryRunResponse(request, { ...target, id: null });

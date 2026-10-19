@@ -23,7 +23,7 @@ import {
   readScheduleCursors,
   rebaseScheduleCursor,
 } from "./automations/schedule-cursor";
-import { getProjectById, isProjectAttached } from "./db/projects-repo";
+import { getProjectById, isProjectAttached, isProjectRemoved } from "./db/projects-repo";
 import { getTicket, getTicketRow } from "./db/tickets-repo";
 import {
   getAutomation,
@@ -366,6 +366,10 @@ describe("runner wiring", () => {
     expect(deps.findProject("p1")).toBe(true);
     expect(deps.findProject("p2")).toBe(false);
     expect(isProjectAttached).toHaveBeenLastCalledWith(db, "p2");
+    // And a removed one is told apart, so its schedule's skip says so.
+    vi.mocked(isProjectRemoved).mockReturnValueOnce(true);
+    expect(deps.projectRemoved!("p2")).toBe(true);
+    expect(isProjectRemoved).toHaveBeenLastCalledWith(db, "p2");
     deps.listRunsForTicket("t1");
     expect(listRunsForTicket).toHaveBeenCalledWith(db, "t1");
     const query = { automationId: "a1", projectId: "p1" };

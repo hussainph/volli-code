@@ -39,7 +39,13 @@ import type {
   ProjectRelinkSubject,
 } from "@volli/shared";
 
-import { getProjectById, listProjects, updateProjectPath } from "./db/projects-repo";
+import {
+  findProjectByPath,
+  getProjectById,
+  isProjectRemoved,
+  listProjects,
+  updateProjectPath,
+} from "./db/projects-repo";
 import { runGitCapturingAsync } from "./worktree/git";
 import { listWorktreeSitesByProject, updateTicketFields } from "./db/tickets-repo";
 import { busySiteWithin } from "./worktree/activity";
@@ -175,6 +181,16 @@ export async function relinkProject(
   });
   if (!validation.ok) {
     return { ok: false, error: validation.error, refusal: validation.refusal };
+  }
+  // A removed project keeps its folder's path for its return (VC-822): the
+  // folder is that project's to be added again, not this one's to take over.
+  const holder = findProjectByPath(deps.db, validation.path);
+  if (holder !== undefined && isProjectRemoved(deps.db, holder.id)) {
+    return {
+      ok: false,
+      refusal: "claimed",
+      error: `This folder belongs to ${holder.name}, which was removed. Add it again instead.`,
+    };
   }
 
   const relinked = updateProjectPath(deps.db, project.id, validation.path, now());

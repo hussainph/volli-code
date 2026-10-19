@@ -9,10 +9,12 @@ import {
   deleteProject,
   detachProject,
   findProjectByPath,
+  findRemovedProjectByPrefix,
   getProjectAuthorityPolicy,
   getProjectById,
   insertProject,
   isProjectAttached,
+  isProjectRemoved,
   listProjects,
   reattachProject,
   updateProjectAuthorityPolicy,
@@ -91,8 +93,8 @@ describe("detachProject / reattachProject", () => {
 
   it("hides a removed project from every listing, but not from an id or path lookup", () => {
     ctx = openTestDb();
-    insertProject(ctx.db, testProject({ id: "a", path: "/a", sortOrder: 0 }));
-    insertProject(ctx.db, testProject({ id: "b", path: "/b", sortOrder: 1 }));
+    insertProject(ctx.db, testProject({ id: "a", path: "/a", sortOrder: 0, ticketPrefix: "AA" }));
+    insertProject(ctx.db, testProject({ id: "b", path: "/b", sortOrder: 1, ticketPrefix: "BB" }));
     insertTicket(ctx.db, testTicket("a", { id: "t1" }));
 
     expect(detachProject(ctx.db, "a", 50)).toBe(true);
@@ -103,6 +105,13 @@ describe("detachProject / reattachProject", () => {
     expect(isProjectAttached(ctx.db, "a")).toBe(false);
     expect(isProjectAttached(ctx.db, "b")).toBe(true);
     expect(isProjectAttached(ctx.db, "missing")).toBe(false);
+    // Removed is its own answer: an unknown id is not a removed project.
+    expect(isProjectRemoved(ctx.db, "a")).toBe(true);
+    expect(isProjectRemoved(ctx.db, "b")).toBe(false);
+    expect(isProjectRemoved(ctx.db, "missing")).toBe(false);
+    // It keeps its prefix for its return; one on the rail is not "removed".
+    expect(findRemovedProjectByPrefix(ctx.db, "AA")).toMatchObject({ id: "a" });
+    expect(findRemovedProjectByPrefix(ctx.db, "BB")).toBeUndefined();
     expect(getProjectById(ctx.db, "a")).toMatchObject({ id: "a" });
     expect(findProjectByPath(ctx.db, "/a")).toMatchObject({ id: "a" });
     expect(rowOf("a")).toEqual({ removed_at: 50, sort_order: 0, row_version: 2, updated_at: 50 });

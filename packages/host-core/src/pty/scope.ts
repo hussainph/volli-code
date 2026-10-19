@@ -19,7 +19,7 @@ import type {
   HarnessWrapperLookup,
 } from "@volli/shared";
 import { materializeBlobs } from "../blob-materialize";
-import { getProjectById } from "../db/projects-repo";
+import { getProjectById, isProjectRemoved } from "../db/projects-repo";
 import { getTicketSessionContext } from "../db/tickets-repo";
 import { terminalSessionRecord } from "../session-control";
 
@@ -83,11 +83,16 @@ export interface SessionScope {
 /** A resolved scope, or the one failure: a ticket request naming a ticket that does not exist. */
 export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; error: string };
 
+/** Why a terminal does not open in a removed project (VC-822). */
+const PROJECT_REMOVED = "This project was removed from Volli. Add its folder again to use it.";
+
 /**
  * Resolves a request to its session scope from the db: a ticket session
  * (VOLLI_TICKET env, MAIN-repo-root cwd, the ticket's harness, `Session N`
  * title) or a Board Session (default harness, `Terminal N`).
- * The only failure is a ticket request naming a ticket that does not exist.
+ * A ticket request naming a ticket that does not exist fails, and so does a
+ * request in a removed project (VC-822): it keeps its Sessions for a re-add,
+ * and nothing runs in it until then.
  *
  * `wrapperFor` and `adapterFor` travel together for the same reason: both
  * answers belong to main's harness runtime, and a launch line built from one
@@ -107,6 +112,7 @@ export async function resolveScope(
   if (request.ticket !== undefined) {
     const ctx = getTicketSessionContext(db, request.ticket.ticketId);
     if (ctx === undefined) return { ok: false, error: "Unknown ticket" };
+    if (isProjectRemoved(db, ctx.projectId)) return { ok: false, error: PROJECT_REMOVED };
     const displayId = displayTicketId(ctx.ticketPrefix, ctx.ticketNumber);
     const kickoff = request.ticket.kickoff;
     const resume = request.ticket.resume;
@@ -261,7 +267,9 @@ export async function resolveScope(
   }
   // Board Session: resolve the project's MAIN path so VOLLI_ARTIFACTS_DIR is
   // injected the same way a ticket session gets it (decision #9). A project
-  // that can't be resolved still spawns (no artifacts env) rather than failing.
+  // that can't be resolved still spawns (no artifacts env) rather than failing;
+  // a removed one does not.
+  if (isProjectRemoved(db, request.workspaceId)) return { ok: false, error: PROJECT_REMOVED };
   const project = getProjectById(db, request.workspaceId);
   const sessionCount = await sessionEngine.countSessions({
     projectId: request.workspaceId,

@@ -10,8 +10,8 @@
  *
  * A folder whose project was removed is re-attached rather than registered
  * again (VC-822): removal only detaches a project, so its tickets, Sessions,
- * ticket counter and Automations come back with it. The prefix it already
- * has must still be its own on the rail.
+ * ticket counter and Automations come back with it. A removed project keeps
+ * its prefix for that return: a new project may not take it.
  *
  * The `stat` and the branch detection are awaited, never blocking: desktop
  * runs this on Electron main, and a folder on an unmounted volume is where a
@@ -27,6 +27,7 @@ import type { Project } from "@volli/shared";
 import {
   countProjects,
   findProjectByPath,
+  findRemovedProjectByPrefix,
   getProjectById,
   insertProject,
   isProjectAttached,
@@ -104,6 +105,15 @@ export async function planProjectCreate(
   const ticketPrefix = derivePrefix(input.name);
   const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
   if (!prefixValidation.ok) return { kind: "refused", error: prefixValidation.error };
+  // A removed project keeps its prefix (VC-822): taking it here would leave
+  // that project's folder impossible to add again.
+  const removedHolder = findRemovedProjectByPrefix(db, ticketPrefix);
+  if (removedHolder !== undefined) {
+    return {
+      kind: "refused",
+      error: `Ticket prefix "${ticketPrefix}" is used by ${removedHolder.name}, which was removed. Add its folder again first.`,
+    };
+  }
   const now = (ports.now ?? Date.now)();
   const project: Project = {
     id: (ports.newId ?? randomUUID)(),
@@ -127,9 +137,10 @@ export async function planProjectCreate(
  * The removed project at the folder, put back on the rail with its own id,
  * base branch and ticket counter. Asked again after the `stat` yielded, with
  * no await from here to the write: a concurrent add may have re-attached it
- * already. Its ticket prefix has to still be its own on the rail: a project
- * added while it was removed may have taken it, and two projects on the rail
- * with one prefix would make every display id ambiguous.
+ * already. Its ticket prefix has to still be its own on the rail. A new
+ * project cannot take a removed one's, but an older build, which does not see
+ * the removal, can; two projects on the rail with one prefix would make every
+ * display id ambiguous.
  */
 function reattach(
   ports: ProjectCreatePorts,

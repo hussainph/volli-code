@@ -227,12 +227,47 @@ export function isProjectAttached(db: Database.Database, id: string): boolean {
 }
 
 /**
+ * Whether `id` names a project that was removed: its row is there, detached.
+ * An unknown id answers false, so a door can keep its own wording for "no such
+ * project" and say "removed" only when that is what happened.
+ */
+export function isProjectRemoved(db: Database.Database, id: string): boolean {
+  return (
+    prepared<[string], { id: string }>(
+      db,
+      "SELECT id FROM projects WHERE id = ? AND removed_at IS NOT NULL",
+    ).get(id) !== undefined
+  );
+}
+
+/**
  * The project tracked at `path`, on the rail or removed: the path stays the
  * row's (`UNIQUE`), so adding the folder again finds the removed project and
  * re-attaches it rather than registering a second one.
+ *
+ * The match is the exact stored string. A spelling of the same folder that
+ * differs (another letter case on a case-insensitive volume, a symlink to it)
+ * is a different path here, and registers a second project, as it always has.
  */
 export function findProjectByPath(db: Database.Database, path: string): Project | undefined {
   const row = prepared<[string], ProjectRow>(db, "SELECT * FROM projects WHERE path = ?").get(path);
+  return row ? mapProject(row) : undefined;
+}
+
+/**
+ * The removed project that holds `ticketPrefix`, if one does. A removed
+ * project keeps its prefix for its return (VC-822): a new project may not take
+ * it, or adding the old folder again would meet a prefix on the rail it can
+ * never get back, since a prefix cannot be changed.
+ */
+export function findRemovedProjectByPrefix(
+  db: Database.Database,
+  ticketPrefix: string,
+): Project | undefined {
+  const row = prepared<[string], ProjectRow>(
+    db,
+    "SELECT * FROM projects WHERE ticket_prefix = ? AND removed_at IS NOT NULL ORDER BY sort_order",
+  ).get(ticketPrefix);
   return row ? mapProject(row) : undefined;
 }
 

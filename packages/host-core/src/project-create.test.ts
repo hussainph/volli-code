@@ -242,11 +242,24 @@ describe("re-adding a removed project's folder", () => {
     expect(onCreated).toHaveBeenCalledOnce();
   });
 
+  // Prefixes cannot be changed, so a new folder taking a removed project's
+  // prefix would leave the old folder impossible to add again.
+  it("refuses a new project the prefix a removed one keeps for its return", async () => {
+    removedProject(dir("old"));
+
+    expect(await createProject({ db: ctx.db }, { path: dir("olive"), name: "Old Lane" })).toEqual({
+      ok: false,
+      error: 'Ticket prefix "OL" is used by Old, which was removed. Add its folder again first.',
+    });
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["other"]);
+  });
+
   it("refuses while a project on the rail holds its ticket prefix, or its folder is gone", async () => {
     const path = dir("old");
     removedProject(path);
-    // Adding another folder while it was removed could take the prefix: two
-    // projects on the rail with one prefix would make every display id ambiguous.
+    // An older build, which does not see the removal, could add a project with
+    // the prefix: two projects on the rail with one would make every display id
+    // ambiguous.
     insertProject(
       ctx.db,
       testProject({ id: "new", name: "New", path: "/new", ticketPrefix: "OL" }),

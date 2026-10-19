@@ -13,7 +13,7 @@ import type Database from "better-sqlite3";
 import { displayTicketId } from "@volli/shared";
 import type { Logger } from "./log/logger";
 import { hostLogger } from "./log/root";
-import { getProjectById, isProjectAttached } from "./db/projects-repo";
+import { getProjectById, isProjectAttached, isProjectRemoved } from "./db/projects-repo";
 import { getTicket, getTicketRow } from "./db/tickets-repo";
 import {
   getAutomation,
@@ -171,6 +171,7 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       findRun: (runId) => getAutomationRun(db, runId),
       findTicket: (ticketId) => getTicket(db, ticketId),
       findProject: (projectId) => isProjectAttached(db, projectId),
+      projectRemoved: (projectId) => isProjectRemoved(db, projectId),
       listRunsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
       listPossiblyLiveProjectRunsForAutomation: (query) =>
         listPossiblyLiveProjectRunsForAutomation(db, query),
