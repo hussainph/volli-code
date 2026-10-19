@@ -55,6 +55,8 @@ function deps(overrides: Partial<SupportInfoDeps> = {}): SupportInfoDeps {
   return {
     appVersion: () => "0.2.0-canary.4",
     database: () => null,
+    // Matches the canary `appVersion` above, as `runningBuildKind` would derive it.
+    buildKind: "canary",
     platform: "darwin",
     arch: "arm64",
     lastUpdateCheck: () => null,
@@ -157,8 +159,21 @@ describe("collectSupportInfo", () => {
     ).toBe(`${iso}, download failed: Unknown error`);
   });
 
-  it("defaults a profile that never chose a line to stable", () => {
-    expect(collectSupportInfo(deps({ database: () => testDb() })).channel).toBe("stable");
+  it("defaults a profile that never chose a line to the line its build follows (VC-851)", () => {
+    const db = testDb();
+    // A fresh canary install takes canaries — the report must not say Stable.
+    expect(collectSupportInfo(deps({ database: () => db })).channel).toBe("canary");
+    expect(
+      collectSupportInfo(
+        deps({ appVersion: () => "0.2.2", buildKind: "stable", database: () => db }),
+      ).channel,
+    ).toBe("stable");
+  });
+
+  it("reports an explicit Stable on a canary build as stable", () => {
+    const db = testDb();
+    writeUpdateChannel(db, "stable", 1_700_000_000_000);
+    expect(collectSupportInfo(deps({ database: () => db })).channel).toBe("stable");
   });
 
   // A launch whose database never opened is exactly when About is most worth
