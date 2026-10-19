@@ -26,6 +26,15 @@
  * What kinds may wake a watcher is project policy — the `awaitable` and
  * `awaitableSessions` lists the await tools read, kept under their durable
  * names because they are configuration a person may have written.
+ *
+ * ## A target that cannot report
+ *
+ * A watch fires only on a fact that lands after it is armed. A Session that
+ * is already stopped, or has no live executor and none being attached, will
+ * produce no such fact until a person reattaches it, so the receipt says that
+ * instead of promising a notice (VC-825). The watch is still armed, so a
+ * reattach reports. An archived Session is refused: nothing more will ever
+ * report from it.
  */
 
 import type Database from "better-sqlite3";
@@ -49,6 +58,8 @@ import {
   type RuntimeVerbResult,
   type Session,
   type SessionAwaitKind,
+  type SessionProjection,
+  type SessionStopActor,
   type TicketAwaitKind,
 } from "@volli/shared";
 
@@ -74,6 +85,10 @@ interface SessionTarget {
   id: string;
   handle: string;
   title: string | null;
+  /** The stop in force when the call resolved it, or null. */
+  stopped: SessionProjection["stopped"];
+  /** Not stopped, with no live executor and none being attached. */
+  detached: boolean;
 }
 
 interface TicketTarget {
@@ -138,10 +153,21 @@ async function resolveSessions(
         text: `Session ${handle} is a terminal session, which records no turns, signals or stops to watch.`,
       };
     }
+    if (target.status === "archived") {
+      return {
+        ok: false,
+        text: `Session ${handle} is archived; nothing more will report from it, so nothing was watched.`,
+      };
+    }
     targets.push({
       id: target.session.id,
       handle,
       title: target.session.title,
+      stopped: target.stopped,
+      detached:
+        target.stopped === null &&
+        target.liveExecutor === null &&
+        target.pendingExecutorStart === null,
     });
   }
   return { ok: true, targets };
@@ -194,6 +220,36 @@ function sessionKindsText(kinds: readonly SessionAwaitKind[], armTurn: boolean):
     ...(kinds.includes("stopped") ? ["if it is stopped"] : []),
   ];
   return parts.length === 0 ? "about nothing this project's policy allows" : parts.join(", ");
+}
+
+/** Who stopped a target, as the caller reads it. */
+function stoppedByText(caller: RuntimeSessionIdentity, by: SessionStopActor): string {
+  if (by.kind === "user") return "by the user";
+  if (by.kind === "watchdog") return "by Volli's watchdog";
+  if (by.sessionId === caller.sessionId) return "by this Session";
+  return `by Session ${shortSessionId(by.sessionId)}`;
+}
+
+/**
+ * The receipt line for a target that cannot report until a person reattaches
+ * it (VC-825), or null for one that can. A stop already in force is named,
+ * never promised: it will not happen again unless the Session is reattached.
+ */
+function notLiveLine(
+  caller: RuntimeSessionIdentity,
+  target: SessionTarget,
+  kinds: readonly SessionAwaitKind[],
+): string | null {
+  if (target.stopped !== null) {
+    const after = kinds.filter((kind) => kind !== "stopped");
+    const then =
+      after.length === 0 ? "" : ` If one does, a notice arrives ${sessionKindsText(after, true)}.`;
+    return `Session ${target.handle} is already stopped ${stoppedByText(caller, target.stopped.by)}; nothing more will report unless a person reattaches it.${then}`;
+  }
+  if (target.detached) {
+    return `Session ${target.handle} has no live executor; a notice arrives only after a person reattaches it: then ${sessionKindsText(kinds, true)}.`;
+  }
+  return null;
 }
 
 const TICKET_KIND_WORD: Record<TicketAwaitKind, string> = {
@@ -320,6 +376,13 @@ export async function watchTool(
     sessions: sessions.targets.map((target) => target.handle),
     tickets: tickets.targets.map((target) => target.display),
   };
+  // Which of them cannot report until a person reattaches them (VC-825).
+  const standing = {
+    stopped: sessions.targets
+      .filter((target) => target.stopped !== null)
+      .map((target) => target.handle),
+    detached: sessions.targets.filter((target) => target.detached).map((target) => target.handle),
+  };
 
   if (action === "unwatch") {
     const removed = watches.unwatch(session.sessionId, {
@@ -327,7 +390,7 @@ export async function watchTool(
       tickets: tickets.targets.map((target) => target.id),
     });
     return {
-      details: { action, ...named, ended: removed },
+      details: { action, ...named, ended: removed, stopped: [], detached: [] },
       text:
         removed === 0
           ? "None of those were being watched by this Session; nothing changed."
@@ -359,7 +422,8 @@ export async function watchTool(
         armTurn: true,
       });
       lines.push(
-        `Watching Session ${target.handle}: a notice arrives ${sessionKindsText(policy.awaitableSessions, true)}.`,
+        notLiveLine(session, target, policy.awaitableSessions) ??
+          `Watching Session ${target.handle}: a notice arrives ${sessionKindsText(policy.awaitableSessions, true)}.`,
       );
     }
   }
@@ -379,7 +443,7 @@ export async function watchTool(
   lines.push(
     "This call did not wait. Keep working, or end your turn: a notice from Volli opens a new turn when something changes. Changes that land together arrive as one notice.",
   );
-  return { details: { action, ...named, ended: 0 }, text: lines.join("\n") };
+  return { details: { action, ...named, ended: 0, ...standing }, text: lines.join("\n") };
 }
 
 /** The line every retired await answers with, before what it armed. */
@@ -421,6 +485,8 @@ export async function retiredSessionAwaitTool(
       `This project's policy does not allow watching for ${String(forRaw)}; it allows: ${allowed.join(", ") || "nothing"}.`,
     );
   }
+  const live: string[] = [];
+  const notLive: string[] = [];
   for (const target of resolved.targets) {
     watches.watchSession({
       watcherSessionId: session.sessionId,
@@ -429,11 +495,17 @@ export async function retiredSessionAwaitTool(
       kinds,
       armTurn: true,
     });
+    const line = notLiveLine(session, target, kinds);
+    if (line === null) live.push(target.handle);
+    else notLive.push(line);
   }
   return {
     text: [
       retiredLine("session_await"),
-      `Watching ${resolved.targets.map((target) => target.handle).join(", ")}: a notice arrives ${sessionKindsText(kinds, true)}.`,
+      ...(live.length === 0
+        ? []
+        : [`Watching ${live.join(", ")}: a notice arrives ${sessionKindsText(kinds, true)}.`]),
+      ...notLive,
     ].join("\n"),
   };
 }

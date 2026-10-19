@@ -3431,8 +3431,20 @@ export const VERB_REGISTRY = [
             description:
               "unwatch: how many of the named targets this Session was watching and now is not. watch: always 0.",
           },
+          stopped: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "watch: the named Sessions already stopped; nothing reports from them unless a person reattaches one. unwatch: always empty.",
+          },
+          detached: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "watch: the named Sessions with no live executor; nothing reports from them until a person reattaches one. unwatch: always empty.",
+          },
         },
-        required: ["action", "sessions", "tickets", "ended"],
+        required: ["action", "sessions", "tickets", "ended", "stopped", "detached"],
         additionalProperties: false,
       },
     },

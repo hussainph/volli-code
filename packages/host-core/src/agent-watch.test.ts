@@ -56,9 +56,22 @@ const SUBAGENT: RuntimeSessionIdentity = {
 
 function projection(
   id: string,
-  overrides: { parentSessionId?: string | null; turnActive?: boolean; terminal?: boolean } = {},
+  overrides: {
+    parentSessionId?: string | null;
+    turnActive?: boolean;
+    terminal?: boolean;
+    stopped?: SessionProjection["stopped"];
+    archived?: boolean;
+    /** No live executor; `pendingStart` says whether one is still being attached. */
+    detached?: boolean;
+    pendingStart?: boolean;
+  } = {},
 ): SessionProjection {
   return {
+    status: overrides.archived ? "archived" : "open",
+    stopped: overrides.stopped ?? null,
+    liveExecutor: overrides.detached ? null : { id: "live", status: "open" },
+    pendingExecutorStart: overrides.pendingStart ? { id: "start" } : null,
     session: {
       id,
       projectId: "project-one",
@@ -141,6 +154,29 @@ function harness(
                 projection("dddddddd-1"),
                 projection("dddddddd-2"),
                 projection(BOARD.sessionId),
+                projection("eeeeeeee-1", {
+                  detached: true,
+                  stopped: { at: 5, reason: null, by: { kind: "user" } },
+                }),
+                projection("ffffffff-1", {
+                  detached: true,
+                  stopped: { at: 5, reason: null, by: { kind: "session", sessionId: BOARD.sessionId } },
+                }),
+                projection("abababab-1", {
+                  detached: true,
+                  stopped: { at: 5, reason: null, by: { kind: "watchdog" } },
+                }),
+                projection("acacacac-1", {
+                  detached: true,
+                  stopped: {
+                    at: 5,
+                    reason: null,
+                    by: { kind: "session", sessionId: "other-session-0" },
+                  },
+                }),
+                projection("12121212-1", { detached: true }),
+                projection("34343434-1", { detached: true, pendingStart: true }),
+                projection("56565656-1", { archived: true, detached: true }),
               ],
           }
         : null,
@@ -183,6 +219,8 @@ describe("watch", () => {
       sessions: ["aaaaaaaa"],
       tickets: ["VC-12", "VC-14"],
       ended: 0,
+      stopped: [],
+      detached: [],
     });
   });
 
@@ -197,6 +235,8 @@ describe("watch", () => {
       sessions: [],
       tickets: ["VC-12"],
       ended: 2,
+      stopped: [],
+      detached: [],
     });
     const none = harness();
     none.watches.unwatch = () => 0;
@@ -207,6 +247,8 @@ describe("watch", () => {
       sessions: ["aaaaaaaa"],
       tickets: [],
       ended: 0,
+      stopped: [],
+      detached: [],
     });
     const one = harness();
     one.watches.unwatch = () => 1;
@@ -290,6 +332,93 @@ describe("watch", () => {
     expect((await h.call(watchTool, { sessions: "aaaaaaaa", tickets: "VC-12" })).text).toMatch(
       /watch no Ticket facts, so nothing was watched/,
     );
+    expect(h.sessions).toEqual([]);
+    expect(h.tickets).toEqual([]);
+  });
+
+  it("names a stop already in force instead of promising one (VC-825)", async () => {
+    const h = harness();
+    const result = await h.call(watchTool, { sessions: "eeeeeeee, aaaaaaaa" });
+    expect(result.text).toContain(
+      "Session eeeeeeee is already stopped by the user; nothing more will report unless a person reattaches it. If one does, a notice arrives when its next turn ends, when it signals done or blocked.",
+    );
+    // The live target beside it reads exactly as before.
+    expect(result.text).toContain(
+      "Watching Session aaaaaaaa: a notice arrives when its next turn ends, when it signals done or blocked, if it is stopped.",
+    );
+    expect(result.text.match(/if it is stopped/g)).toHaveLength(1);
+    // Still armed with the policy's kinds, so a reattach reports.
+    expect(h.sessions).toEqual([
+      expect.objectContaining({
+        targetSessionId: "eeeeeeee-1",
+        kinds: ["turn", "verdict", "stopped"],
+        armTurn: true,
+      }),
+      expect.objectContaining({ targetSessionId: "aaaaaaaa-1" }),
+    ]);
+    expect(result.details).toEqual({
+      action: "watch",
+      sessions: ["eeeeeeee", "aaaaaaaa"],
+      tickets: [],
+      ended: 0,
+      stopped: ["eeeeeeee"],
+      detached: [],
+    });
+
+    const byWhom = [
+      ["ffffffff", "by this Session"],
+      ["abababab", "by Volli's watchdog"],
+      ["acacacac", "by Session other-se"],
+    ] as const;
+    for (const [handle, by] of byWhom) {
+      const stopped = await h.call(watchTool, { sessions: handle });
+      expect(stopped.text).toContain(`Session ${handle} is already stopped ${by};`);
+      expect(stopped.text).not.toContain("if it is stopped");
+    }
+
+    // A policy that allows only the stop promises nothing past the reattach.
+    const stopsOnly = harness({
+      policy: resolveAuthorityPolicy({ actors: { session: { awaitableSessions: ["stopped"] } } }),
+    });
+    const only = await stopsOnly.call(watchTool, { sessions: "eeeeeeee" });
+    expect(only.text).toContain(
+      "Session eeeeeeee is already stopped by the user; nothing more will report unless a person reattaches it.\n",
+    );
+    expect(only.text).not.toContain("a notice arrives");
+  });
+
+  it("says when a target has no live executor (VC-825)", async () => {
+    const h = harness();
+    const result = await h.call(watchTool, { sessions: "12121212" });
+    expect(result.text).toContain(
+      "Session 12121212 has no live executor; a notice arrives only after a person reattaches it: then when its next turn ends, when it signals done or blocked, if it is stopped.",
+    );
+    expect(h.sessions).toEqual([
+      expect.objectContaining({ targetSessionId: "12121212-1", armTurn: true }),
+    ]);
+    expect(result.details).toEqual({
+      action: "watch",
+      sessions: ["12121212"],
+      tickets: [],
+      ended: 0,
+      stopped: [],
+      detached: ["12121212"],
+    });
+    // An executor still being attached is a live start, not a detached one.
+    const starting = await h.call(watchTool, { sessions: "34343434" });
+    expect(starting.text).toContain(
+      "Watching Session 34343434: a notice arrives when its next turn ends",
+    );
+    expect(starting.details).toMatchObject({ stopped: [], detached: [] });
+  });
+
+  it("refuses an archived target and arms nothing (VC-825)", async () => {
+    const h = harness();
+    const refused = await h.call(watchTool, { sessions: "aaaaaaaa 56565656", tickets: "VC-12" });
+    expect(refused.text).toBe(
+      "Session 56565656 is archived; nothing more will report from it, so nothing was watched.",
+    );
+    expect(refused.details).toBeUndefined();
     expect(h.sessions).toEqual([]);
     expect(h.tickets).toEqual([]);
   });
@@ -387,6 +516,35 @@ describe("the retired awaits (frozen surfaces only)", () => {
     expect(result.text).toMatch(/^session_await no longer waits/);
     expect(result.text).toContain("Watching aaaaaaaa: a notice arrives when its next turn ends.");
     expect(h.sessions).toEqual([expect.objectContaining({ kinds: ["turn"] })]);
+  });
+
+  it("session_await names a stopped or detached target and refuses an archived one (VC-825)", async () => {
+    const h = harness();
+    const result = await h.call(retiredSessionAwaitTool, {
+      sessions: "aaaaaaaa eeeeeeee 12121212",
+    });
+    expect(result.text).toContain(
+      "Watching aaaaaaaa: a notice arrives when its next turn ends, when it signals done or blocked, if it is stopped.",
+    );
+    expect(result.text).toContain(
+      "Session eeeeeeee is already stopped by the user; nothing more will report unless a person reattaches it. If one does, a notice arrives when its next turn ends, when it signals done or blocked.",
+    );
+    expect(result.text).toContain(
+      "Session 12121212 has no live executor; a notice arrives only after a person reattaches it: then when its next turn ends",
+    );
+    expect(h.sessions.map((watch) => watch.targetSessionId)).toEqual([
+      "aaaaaaaa-1",
+      "eeeeeeee-1",
+      "12121212-1",
+    ]);
+    // Only stopped targets: no line promises anything a live target would.
+    const onlyStopped = await h.call(retiredSessionAwaitTool, { sessions: "eeeeeeee" });
+    expect(onlyStopped.text).not.toContain("Watching");
+    const archived = harness();
+    expect(
+      (await archived.call(retiredSessionAwaitTool, { sessions: "aaaaaaaa 56565656" })).text,
+    ).toMatch(/Session 56565656 is archived/);
+    expect(archived.sessions).toEqual([]);
   });
 
   it("session_await refuses in words", async () => {
