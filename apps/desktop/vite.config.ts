@@ -693,6 +693,10 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",
+        // The flow-control ack (VC-821). Enrolled because a missed branch here
+        // fails silently and permanently: a chunk whose credit is never
+        // returned leaves its PTY paused, and the pane simply stops updating.
+        "src/terminal/output-dispatch.ts",
         // How a burst of invalidations becomes one (VC-359). Enrolled because
         // the merge is a SAFETY rule, not an optimisation: it may only ever
         // widen, and the one kind a venue cache depends on has to survive a

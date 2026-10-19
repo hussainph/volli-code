@@ -124,7 +124,9 @@ import {
   createTestSessionEngine,
   testHostHandlers,
 } from "@volli/host-core/testing";
-import type { HarnessId } from "@volli/shared";
+import type { HarnessId, TerminalDataEvent } from "@volli/shared";
+import type { TerminalEngine } from "@renderer/terminal/engine";
+import { deliverTerminalOutput } from "@renderer/terminal/output-dispatch";
 import { syncProjectRoots } from "@volli/host-core/board";
 import { createSessionTokenRegistry } from "@volli/host-core/sessions";
 
@@ -864,6 +866,110 @@ describe("flow control", () => {
 
   it("ignores an ack for an unknown session", () => {
     expect(() => sendAck(makeWebContents(), "nope", 10)).not.toThrow();
+  });
+});
+
+/**
+ * The renderer's half of flow control, driven end to end (VC-821): main's real
+ * IPC adapter sends `volli:terminal-data`, the renderer's real dispatcher feeds
+ * an engine and acks over `volli:terminal-ack`. The engine here parses LATE, as
+ * xterm does — it queues every chunk and only releases it when the test says
+ * so — and the IPC hop is explicit, so nothing is acked before it could be.
+ */
+describe("flow control through the renderer's output dispatch", () => {
+  /** `yes`-style output: a chunk per batch window, `chars` wide. */
+  const CHUNK = 10_000;
+
+  function wireRenderer(sender: WebContentsDouble) {
+    const unparsed: Array<() => void> = [];
+    const inFlight: TerminalDataEvent[] = [];
+    let throwOnWrite = false;
+    const engine: TerminalEngine = {
+      attach: vi.fn(),
+      write: (_data, onParsed) => {
+        // xterm refuses a write past its discard watermark before queueing it.
+        if (throwOnWrite) throw new Error("write data discarded");
+        if (onParsed !== undefined) unparsed.push(onParsed);
+      },
+      onData: () => () => {},
+      onResize: () => () => {},
+      setPaused: vi.fn(),
+      fit: vi.fn(),
+      focus: vi.fn(),
+      adjustFontSize: vi.fn(),
+      resetFontSize: vi.fn(),
+      dispose: vi.fn(),
+    };
+    sender.send.mockImplementation((channel: string, payload: unknown) => {
+      if (channel === "volli:terminal-data") inFlight.push(payload as TerminalDataEvent);
+    });
+    return {
+      /** Delivers every sent batch to the renderer — one IPC hop. */
+      deliver() {
+        for (const event of inFlight.splice(0)) {
+          deliverTerminalOutput(event, engine, (sessionId, chars) =>
+            sendAck(sender, sessionId, chars),
+          );
+        }
+      },
+      /** The engine finishes parsing everything it has queued. */
+      parseAll() {
+        for (const release of unparsed.splice(0)) release();
+      },
+      throwOnNextWrites(value: boolean) {
+        throwOnWrite = value;
+      },
+    };
+  }
+
+  it("pauses the pty while the engine has not parsed a burst, and resumes once it has", async () => {
+    vi.useFakeTimers();
+    const { pty, sender } = await createSession();
+    const renderer = wireRenderer(sender);
+
+    // Acking on receipt (the defect) returned every chunk's credit one hop
+    // later, so this burst never paused the producer however far behind the
+    // parser fell.
+    for (let i = 0; i < 20 && pty.pause.mock.calls.length === 0; i += 1) {
+      pty.emitData("y\n".repeat(CHUNK / 2));
+      flushBatchWindow();
+      renderer.deliver();
+    }
+    expect(pty.pause).toHaveBeenCalledTimes(1);
+    expect(pty.resume).not.toHaveBeenCalled();
+
+    renderer.parseAll();
+    expect(pty.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a thrown write's credit, so the pty still resumes after the burst", async () => {
+    vi.useFakeTimers();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { pty, sender } = await createSession();
+      const renderer = wireRenderer(sender);
+
+      for (let i = 0; i < 20 && pty.pause.mock.calls.length === 0; i += 1) {
+        pty.emitData("y\n".repeat(CHUNK / 2));
+        flushBatchWindow();
+        renderer.deliver();
+      }
+      expect(pty.pause).toHaveBeenCalledTimes(1);
+
+      // One more batch was already in flight when the pty paused; the engine
+      // refuses it. Its 10k chars are above the 5k low watermark, so a lost
+      // ack here would hold the pty paused forever.
+      pty.emitData("y\n".repeat(CHUNK / 2));
+      flushBatchWindow();
+      renderer.throwOnNextWrites(true);
+      renderer.deliver();
+      renderer.throwOnNextWrites(false);
+
+      renderer.parseAll();
+      expect(pty.resume).toHaveBeenCalledTimes(1);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
