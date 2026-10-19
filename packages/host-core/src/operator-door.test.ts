@@ -25,8 +25,10 @@ import { createAgentCommandService } from "./agent-commands";
 import { testHostHandlers } from "./testing/host-handlers";
 import type { OperatorWriteRecord } from "./agent-dispatch/context";
 import {
+  detachProject,
   findProjectByPath,
   insertProject,
+  isProjectAttached,
   listProjects,
   updateProjectAuthorityPolicy,
 } from "./db/projects-repo";
@@ -244,6 +246,36 @@ describe("project add", () => {
       ok: true,
       data: { target: { id: "project-one" }, durableWrites: [] },
     });
+  });
+
+  // VC-822: removal detaches a project, so the folder's own project comes back.
+  it("previews, then re-attaches, a removed project's folder with its tickets", async () => {
+    const { run, operator } = scenario();
+    const path = folder("Echo");
+    insertProject(
+      ctx.db,
+      testProject({ id: "project-echo", name: "Echo", path, ticketPrefix: "EC" }),
+    );
+    insertTicket(ctx.db, testTicket("project-echo", { id: "ticket-echo", ticketNumber: 3 }));
+    detachProject(ctx.db, "project-echo", 50);
+
+    const preview = await run("project.add", { id: path, dryRun: true }, operator);
+    expect(preview).toMatchObject({
+      ok: true,
+      data: {
+        target: { id: "project-echo", label: "Echo" },
+        durableWrites: [{ resource: "project", operation: "update" }],
+      },
+    });
+    expect(isProjectAttached(ctx.db, "project-echo")).toBe(false);
+
+    expect(await run("project.add", { id: path }, operator)).toMatchObject({
+      ok: true,
+      data: { created: false, project: { id: "project-echo", prefix: "EC" } },
+    });
+    expect(listTicketsByProject(ctx.db, "project-echo").map(({ id }) => id)).toEqual([
+      "ticket-echo",
+    ]);
   });
 
   it("refuses what the app refuses, with the app's sentences", async () => {

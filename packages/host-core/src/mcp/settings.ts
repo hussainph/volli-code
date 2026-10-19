@@ -23,7 +23,7 @@ import {
   putMcpServer,
   selectedMcpToolDefinitions,
 } from "../db/mcp-servers-repo";
-import { getProjectById } from "../db/projects-repo";
+import { getProjectById, isProjectAttached } from "../db/projects-repo";
 import { createMcpProtocolClientOpener } from "./client";
 import { MemoryMcpCredentialStore, type McpCredentialStore } from "./credential-store";
 import {
@@ -611,7 +611,7 @@ export class McpSettingsService {
   /**
    * Before a project is removed (VC-796): ends every sign-in still in flight
    * for its servers, and names them so {@link forgetRemovedServers} can drop
-   * their credentials once the cascade has taken the rows. A Session's own
+   * their credentials once the project is detached. A Session's own
    * connections are its attachment's, and close when its binding is released.
    */
   disconnectProject(projectId: string): readonly string[] {
@@ -622,12 +622,17 @@ export class McpSettingsService {
 
   /**
    * After a project is removed: every credential its servers held, for the
-   * reason {@link remove} drops one server's. A server whose row is still
-   * there (the removal did not commit) keeps its own.
+   * reason {@link remove} drops one server's. A removed project is detached,
+   * not deleted (VC-822), so its server rows stay, but no Settings screen
+   * shows them any more. A server whose project is still on the rail (the
+   * removal did not commit) keeps its own.
    */
   forgetRemovedServers(serverIds: readonly string[]): void {
     for (const serverId of serverIds) {
-      if (getMcpServer(this.#db, serverId) === undefined) this.#store.delete(serverId);
+      const server = getMcpServer(this.#db, serverId);
+      if (server === undefined || !isProjectAttached(this.#db, server.projectId)) {
+        this.#store.delete(serverId);
+      }
     }
   }
 

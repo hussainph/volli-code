@@ -8,8 +8,16 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { findProjectByPath, insertProject, listProjects } from "./db/projects-repo";
-import { openTestDb, testProject } from "./db/test-helpers";
+import {
+  detachProject,
+  findProjectByPath,
+  insertProject,
+  isProjectAttached,
+  listProjects,
+  listProjectSessionIds,
+} from "./db/projects-repo";
+import { insertTicket, listAllTickets } from "./db/tickets-repo";
+import { openTestDb, testProject, testTicket } from "./db/test-helpers";
 import type { TestDb } from "./db/test-helpers";
 
 import { createProject, planProjectCreate } from "./project-create";
@@ -146,5 +154,113 @@ describe("planProjectCreate", () => {
       ),
     ).toMatchObject({ kind: "new", project: { path, ticketPrefix: "PR" } });
     expect(listProjects(ctx.db)).toEqual([]);
+  });
+});
+
+/**
+ * VC-822: removing a project detaches it, so adding its folder again finds the
+ * same row and puts it back on the rail with everything it held.
+ */
+describe("re-adding a removed project's folder", () => {
+  function removedProject(path: string): void {
+    insertProject(
+      ctx.db,
+      testProject({ id: "old", name: "Old", path, ticketPrefix: "OL", baseBranch: "trunk" }),
+    );
+    insertTicket(ctx.db, testTicket("old", { id: "t1", ticketNumber: 4 }));
+    ctx.db.prepare("UPDATE projects SET next_ticket_number = 5 WHERE id = 'old'").run();
+    ctx.db
+      .prepare(
+        "INSERT INTO sessions (id, project_id, ticket_id, title, created_at) VALUES ('s1', 'old', 't1', 's1', 1)",
+      )
+      .run();
+    insertProject(ctx.db, testProject({ id: "other", path: "/other", ticketPrefix: "OT" }));
+    detachProject(ctx.db, "old", 3);
+  }
+
+  it("re-attaches the same project, its tickets, Sessions and counter included", async () => {
+    const path = dir("old");
+    removedProject(path);
+    const detect = vi.fn(async () => "main");
+    const onCreated = vi.fn();
+    const ports = { db: ctx.db, detectBaseBranch: detect, now: () => 9, onCreated };
+
+    const outcome = await createProject(ports, { path, name: "Renamed" });
+
+    // The row it always was: its own id, name, prefix and base branch, at the
+    // end of the rail. Nothing is detected again.
+    expect(outcome).toMatchObject({
+      ok: true,
+      created: false,
+      project: { id: "old", name: "Old", ticketPrefix: "OL", baseBranch: "trunk", updatedAt: 9 },
+    });
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["other", "old"]);
+    expect(detect).not.toHaveBeenCalled();
+    expect(listAllTickets(ctx.db).map(({ id }) => id)).toEqual(["t1"]);
+    expect(listProjectSessionIds(ctx.db, "old")).toEqual(["s1"]);
+    expect(
+      ctx.db.prepare("SELECT next_ticket_number, removed_at FROM projects WHERE id = 'old'").get(),
+    ).toEqual({ next_ticket_number: 5, removed_at: null });
+    // Announced once, as a registration: every window re-reads its board.
+    expect(onCreated).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: "old" }));
+
+    await createProject(ports, { path, name: "Renamed" });
+    expect(onCreated).toHaveBeenCalledOnce();
+  });
+
+  it("previews the re-attach without writing it", async () => {
+    const path = dir("old");
+    removedProject(path);
+
+    const plan = await planProjectCreate({ db: ctx.db }, { path, name: "Old" }, { write: false });
+
+    expect(plan).toMatchObject({ kind: "reattached", project: { id: "old" } });
+    expect(isProjectAttached(ctx.db, "old")).toBe(false);
+    // A door that announces nothing still re-attaches it.
+    expect(await createProject({ db: ctx.db }, { path, name: "Old" })).toMatchObject({
+      ok: true,
+      created: false,
+    });
+    expect(isProjectAttached(ctx.db, "old")).toBe(true);
+  });
+
+  it("re-attaches once when the folder is added twice at the same time", async () => {
+    const path = dir("old");
+    removedProject(path);
+    const onCreated = vi.fn();
+    const ports = { db: ctx.db, onCreated };
+
+    const outcomes = await Promise.all([
+      createProject(ports, { path, name: "Old" }),
+      createProject(ports, { path, name: "Old" }),
+    ]);
+
+    expect(outcomes).toMatchObject([
+      { ok: true, created: false, project: { id: "old" } },
+      { ok: true, created: false, project: { id: "old" } },
+    ]);
+    expect(onCreated).toHaveBeenCalledOnce();
+  });
+
+  it("refuses while a project on the rail holds its ticket prefix, or its folder is gone", async () => {
+    const path = dir("old");
+    removedProject(path);
+    // Adding another folder while it was removed could take the prefix: two
+    // projects on the rail with one prefix would make every display id ambiguous.
+    insertProject(
+      ctx.db,
+      testProject({ id: "new", name: "New", path: "/new", ticketPrefix: "OL" }),
+    );
+
+    expect(await createProject({ db: ctx.db }, { path, name: "Old" })).toEqual({
+      ok: false,
+      error: 'Ticket prefix "OL" is already used by New.',
+    });
+    rmSync(path, { recursive: true });
+    expect(await createProject({ db: ctx.db }, { path, name: "Old" })).toEqual({
+      ok: false,
+      error: "Project path does not exist",
+    });
+    expect(isProjectAttached(ctx.db, "old")).toBe(false);
   });
 });

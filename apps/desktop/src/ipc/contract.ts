@@ -3006,7 +3006,11 @@ export interface LegacyImportRequest {
 
 export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: number }>;
 
-/** `created: false` means an existing project at that path was selected instead of inserted. */
+/**
+ * `created: false` means an existing project at that path was selected instead
+ * of inserted: one already on the rail, or a removed one put back on it with
+ * its tickets and Sessions (VC-822).
+ */
 export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
 
 export type ProjectUpdateResult = Result<{ project: Project }>;

@@ -86,7 +86,9 @@ export function RemoveProjectDialog({ project, open, onOpenChange }: RemoveProje
         <AlertDialogHeader>
           <AlertDialogTitle>Remove {project.name} from Volli?</AlertDialogTitle>
           <AlertDialogDescription>
-            The folder on disk is untouched.
+            {/* Removal detaches the project (VC-822): nothing is deleted. */}
+            The folder on disk is untouched, and its tickets and Sessions are kept. Add the folder
+            again to bring them back.
             {busyLines.map((line) => (
               <span key={line} className="mt-2 block text-destructive">
                 {line}

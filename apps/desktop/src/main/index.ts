@@ -1532,7 +1532,7 @@ const appStartup = app.whenReady().then(async () => {
       automations: runtimeAutomations,
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
-      // What removing a project stops before its delete (VC-796): every door
+      // What removing a project stops before it detaches it (VC-796): every door
       // that removes one, the window's `volli:project-remove` included.
       projectLiveWork: hostProjectLiveWork({
         runtime: () => sessionRuntime,

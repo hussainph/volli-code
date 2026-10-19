@@ -1,34 +1,35 @@
 /**
- * Removing a project from the host (VC-796).
+ * Removing a project from the host (VC-796, VC-822).
  *
- * The delete is one statement, and it cascades: every Session of the project
- * and its whole event history go with the row (`sessions.project_id` and
- * `session_events.session_id` are `ON DELETE CASCADE`). So the work those
- * Sessions are doing has to stop FIRST. A structured turn left running past
- * the delete keeps spending and keeps acting in the folder while every append
- * it makes fails the foreign key; a shell, a terminal or a tab left open is a
- * process or a page nothing in the product names any more.
+ * Removal DETACHES the project: the row stays with a `removed_at` stamp, and
+ * so do its tickets, comments, Automations and every Session with its whole
+ * history. Every listing stops returning it, nothing starts new work in it,
+ * and adding the same folder again re-attaches it (`project-create.ts`). The
+ * foreign-key cascades are unchanged; removal no longer reaches them.
+ *
+ * The work its Sessions are doing still has to stop: a structured turn left
+ * running would keep spending and acting in a folder the person just took off
+ * the rail, and a shell, a terminal or a tab left open is a process or a page
+ * nothing in the product names any more.
  *
  * The order is the whole module, and each step is a port a test can watch:
  *
  * 1. stop the live work rooted in the project: its Sessions' structured
  *    bindings, background shells and terminals, its Browser Tabs, and the MCP
  *    sign-ins still in flight for its servers;
- * 2. delete the row;
- * 3. forget the credentials the cascaded MCP servers held;
+ * 2. detach the row;
+ * 3. forget the credentials its MCP servers held: no screen shows a removed
+ *    project's servers, so nobody would think to revoke them. A re-attached
+ *    project's servers ask to sign in again;
  * 4. end the project's board feed;
  * 5. tell every window, so a second one drops the project too.
  *
  * A binding that will not close refuses the removal before anything else is
- * stopped or deleted: deleting a Session's history under a turn that is still
- * running is the defect, and the person can stop that Session and try again.
- *
- * The cascade itself is unchanged here: what a removal keeps is a separate
- * decision.
+ * stopped or detached: the person can stop that Session and try again.
  */
 import type Database from "better-sqlite3";
 
-import { deleteProject, getProjectById, listProjectSessionIds } from "./db/projects-repo";
+import { detachProject, isProjectAttached, listProjectSessionIds } from "./db/projects-repo";
 import { releaseAgentSessions, type AgentSiteRuntime } from "./worktree/agent-sites";
 
 /** What a release left bound, by Session id. */
@@ -53,7 +54,7 @@ export interface ProjectLiveWork {
   closeBrowserTabs(projectId: string): void;
   /**
    * The project's MCP servers: `disconnect` ends their in-flight sign-ins and
-   * names them; `forget` drops their stored credentials after the delete.
+   * names them; `forget` drops their stored credentials once it is detached.
    */
   readonly mcp: {
     disconnect(projectId: string): readonly string[];
@@ -68,6 +69,8 @@ export interface ProjectRemovalPorts {
   disposeFeed(projectId: string): void;
   /** Tells every window the project list changed. */
   announce(): void;
+  /** Stamps `removed_at`; defaults to `Date.now`. */
+  readonly now?: () => number;
 }
 
 /**
@@ -86,18 +89,19 @@ export class ProjectRemovalRefused extends Error {
 }
 
 /**
- * Removes one project, its live work stopped first. An id no project has is a
- * no-op: there is nothing to stop and nothing to tell.
+ * Removes one project from the rail, its live work stopped first. An id no
+ * project on the rail has (unknown, or already removed) is a no-op: there is
+ * nothing to stop and nothing to tell.
  */
 export async function removeProject(ports: ProjectRemovalPorts, projectId: string): Promise<void> {
-  if (getProjectById(ports.db, projectId) === undefined) return;
+  if (!isProjectAttached(ports.db, projectId)) return;
   const sessionIds = new Set(listProjectSessionIds(ports.db, projectId));
 
   const { stillOpen } = await ports.live.releaseBindings(sessionIds);
   if (stillOpen.length > 0) throw new ProjectRemovalRefused(stillOpen);
   // The release awaited: a Session started meanwhile was not released, and
-  // the cascade would take its history from under it. From here to the
-  // delete nothing awaits, so this is the last such gap.
+  // would be left running in a project nobody can see. From here to the
+  // detach nothing awaits, so this is the last such gap.
   const started = listProjectSessionIds(ports.db, projectId).filter((id) => !sessionIds.has(id));
   if (started.length > 0) throw new ProjectRemovalRefused(started);
   ports.live.disposeShells(sessionIds);
@@ -105,7 +109,7 @@ export async function removeProject(ports: ProjectRemovalPorts, projectId: strin
   ports.live.closeBrowserTabs(projectId);
   const serverIds = ports.live.mcp?.disconnect(projectId) ?? [];
 
-  deleteProject(ports.db, projectId);
+  detachProject(ports.db, projectId, (ports.now ?? Date.now)());
 
   ports.live.mcp?.forget(serverIds);
   ports.disposeFeed(projectId);

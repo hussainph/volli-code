@@ -288,12 +288,10 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
     ticketsByProject[project.id] = [];
     labelsByProject[project.id] = [];
   }
-  for (const ticket of listAllTickets(db)) {
-    (ticketsByProject[ticket.projectId] ??= []).push(ticket);
-  }
-  for (const label of listAllLabels(db)) {
-    (labelsByProject[label.projectId] ??= []).push(label);
-  }
+  // Only the projects on the rail: a removed project is detached, not deleted
+  // (VC-822), and its tickets and labels stay out of every window with it.
+  for (const ticket of listAllTickets(db)) ticketsByProject[ticket.projectId]?.push(ticket);
+  for (const label of listAllLabels(db)) labelsByProject[label.projectId]?.push(label);
 
   return { projects, ticketsByProject, labelsByProject, appState };
 }
@@ -555,8 +553,9 @@ export function registerDataIpcHandlers(
     "volli:legacy-import": (request: LegacyImportRequest): LegacyImportResult => {
       // Idempotent-safe: only import into a genuinely empty projects
       // table; a second call (e.g. a relaunch racing the renderer) just
-      // hands back the current state instead of re-importing over it.
-      if (countProjects(db) > 0) {
+      // hands back the current state instead of re-importing over it. A
+      // removed project still holds its row (VC-822), so it counts here.
+      if (countProjects(db, "all") > 0) {
         return { ok: true, data: buildBootstrapPayload(db), imported: 0 };
       }
       const legacyProjects = sanitizeLegacyProjects(request.projects);
@@ -594,8 +593,17 @@ export function registerDataIpcHandlers(
 
     // The rules live in host-core (VC-623), shared with the operator's
     // `volli project add` on a headless host: one validation, every door.
+    // A registration is announced (VC-822): adding a removed project's folder
+    // again brings back its board, which a window only reads on a change.
     "volli:project-create": (input: ProjectCreateInput): Promise<ProjectCreateResult> =>
-      createProject({ db, detectBaseBranch: options.detectBaseBranch }, input),
+      createProject(
+        {
+          db,
+          detectBaseBranch: options.detectBaseBranch,
+          onCreated: (project) => broadcastDataChanged({ projectId: project.id }),
+        },
+        input,
+      ),
 
     /**
      * Whether one project's registered folder is still there (VC-430) — the
@@ -637,8 +645,9 @@ export function registerDataIpcHandlers(
 
     /**
      * The window's projection of the host's removal (VC-796): the project's
-     * live work stopped, then the delete, its feed ended and every window
-     * told. The renderer keeps only its own views' forgetting.
+     * live work stopped, then the project detached with its tickets and
+     * Sessions kept (VC-822), its feed ended and every window told. The
+     * renderer keeps only its own views' forgetting.
      */
     "volli:project-remove": async (id: string): Promise<ProjectMutationResult> => {
       await board("project.remove", { projectId: id });

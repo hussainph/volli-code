@@ -799,6 +799,10 @@ describe("desktop-only commands", () => {
 
     expect(stopped).toEqual(["bindings", "shells", "terminals", "tabs"]);
     expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["second"]);
+    // Detached at the host's clock, not deleted (VC-822).
+    expect(ctx.db.prepare("SELECT removed_at FROM projects WHERE id = ?").get(PROJECT)).toEqual({
+      removed_at: 50,
+    });
     expect(boardFeed.size).toBe(0);
     expect(publish.mock.calls).toEqual([["data-changed", {}]]);
   });
