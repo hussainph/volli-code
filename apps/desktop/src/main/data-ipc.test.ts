@@ -3719,6 +3719,7 @@ describe("the rail's last-known worktree snapshot (VC-372)", () => {
     status: {
       uncommitted: false,
       sequencerActive: false,
+      unmergedPaths: 0,
       aheadOfBase: 0,
       behindBase: 0,
       unpushed: null,

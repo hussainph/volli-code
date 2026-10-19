@@ -63,6 +63,7 @@ describe("getWorktreeStatus", () => {
     ).toEqual({
       uncommitted: false,
       sequencerActive: false,
+      unmergedPaths: 0,
       aheadOfBase: 0,
       behindBase: 0,
       unpushed: null,
@@ -93,6 +94,35 @@ describe("getWorktreeStatus", () => {
       baseBranch: "main",
     });
     expect(report.uncommitted).toBe(true);
+  });
+
+  it("counts unmerged entries (every porcelain v1 conflict XY) with no sequencer marker", async () => {
+    const gitDir = tempDir("gitdir");
+    const { gitAsync: git } = statusGit(gitDir, {
+      status: () =>
+        "UU a.ts\nAA b.ts\nDD c.ts\nAU d.ts\nUA e.ts\nDU f.ts\nUD g.ts\n M h.ts\nA  i.ts\n?? j.ts\n",
+    });
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
+    expect(report).toMatchObject({ uncommitted: true, sequencerActive: false, unmergedPaths: 7 });
+  });
+
+  it("reports zero unmerged paths when the status read fails (uncommitted still errs dirty)", async () => {
+    const gitDir = tempDir("gitdir");
+    const { gitAsync: git } = statusGit(gitDir, {
+      status: () => {
+        throw new Error("git status exploded");
+      },
+    });
+    const report = await getWorktreeStatus(git, {
+      worktreePath: "/wt",
+      branch: "b",
+      baseBranch: "main",
+    });
+    expect(report).toMatchObject({ uncommitted: true, unmergedPaths: 0 });
   });
 
   it("flags sequencerActive when a marker file exists in the private gitdir", async () => {

@@ -7,6 +7,12 @@
  *  - It REFUSES while a sequencer op (merge/rebase/cherry-pick/revert/bisect) is
  *    mid-flight — `git add -A && git commit` there would entomb a half-finished
  *    conflict resolution as a "chore" commit. The user finishes that first.
+ *  - It REFUSES, for the same reason, while the index holds UNMERGED entries
+ *    (VC-838). A conflicted `stash pop`, `merge --squash` or `checkout -m`
+ *    leaves those with no sequencer marker at all, and `add -A` would stage
+ *    the conflict-marked file and mark it resolved — clearing the refusal
+ *    `git commit` itself would have given. Read structurally off the porcelain
+ *    XY (`countUnmergedEntries`), never by grepping file content for markers.
  *  - A clean tree is a structured NO-OP (`committed: false`), not an error: the
  *    rail's status snapshot can be stale (the agent may have committed since it
  *    loaded), and a stacked commit→push flow must keep going in that case
@@ -37,6 +43,7 @@
 import { stderrOf } from "./git";
 import { extractFailure, type RunNet } from "./net";
 import { detectSequencerStateAsync } from "./sequencer";
+import { countUnmergedEntries } from "./status";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface CommitRemainingInput {
@@ -107,6 +114,14 @@ export async function commitRemaining(
     return err(stderrOf(caught));
   }
   if (porcelain.trim().length === 0) return ok({ committed: false });
+  // Before either staging mode: no commit is right over a half-resolved
+  // conflict, whatever the caller chose to stage.
+  if (countUnmergedEntries(porcelain) > 0) {
+    return err(
+      "This worktree has unresolved conflicts (from a stash pop, squash merge, or similar). " +
+        "Resolve them before committing.",
+    );
+  }
 
   const includeUnstaged = input.includeUnstaged ?? true;
   // Dirty tree, empty index, and the caller excluded everything unstaged: the
