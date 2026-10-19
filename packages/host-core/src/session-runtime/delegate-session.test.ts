@@ -1344,144 +1344,6 @@ describe("the notice carries the answer (VC-457)", () => {
   });
 });
 
-describe("rearm — a child a person resumes reports again (VC-457)", () => {
-  const entry = {
-    operationId: `${PARENT}:tc-1`,
-    parentSessionId: PARENT,
-    childSessionId: CHILD,
-    projectId: "project-1",
-    title: "Find where the auth token is refreshed",
-  };
-
-  it("watches the resumed turn and notifies under ids keyed on it, without a parent-stop cascade", async () => {
-    const h = harness({
-      answers: new Map([
-        ["x", "first"],
-        ["y", "second"],
-      ]),
-    });
-    await h.delegate();
-    await completeChildTurn(h);
-    expect(h.delegations.watching(CHILD)).toBe(false);
-
-    // A person reopened it; the turn that resumed it is the wake.
-    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
-    expect(h.delegations.watching(CHILD)).toBe(true);
-    // Idempotent while live.
-    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
-    expect(h.activeSubscriptions(CHILD)).toHaveLength(1);
-
-    // A parent stop does not stop what the person resumed.
-    await h.emit(PARENT, 1, { kind: "session.stopped", reason: null, by: { kind: "user" } });
-    expect(h.stops).toEqual([]);
-    h.setParent({});
-
-    await h.emit(CHILD, 11, {
-      kind: "transcript.referenced",
-      attachmentId: "a",
-      turnId: "t2",
-      reference: { id: "y", mediaType: "m", digest: "d" },
-    });
-    await h.emit(CHILD, 12, { kind: "turn.completed", attachmentId: "a", turnId: "t2" });
-
-    const ids = resumedNoticeIds(entry.operationId, "t2");
-    const resumed = h.commands.find((command) => command.commandId === ids.commandId);
-    expect(resumed?.command).toMatchObject({
-      kind: "message.submit",
-      message: { id: ids.messageId },
-    });
-    const text =
-      resumed?.command.kind === "message.submit" &&
-      resumed.command.message.parts[0]?.type === "text"
-        ? resumed.command.message.parts[0].text
-        : "";
-    expect(text).toContain("  | second");
-    expect(h.delegations.watching(CHILD)).toBe(false);
-  });
-
-  it.each(["shell-notice", "browser-notice", "watch-notice", "worktree-notice"] as const)(
-    "does not re-arm for a turn a %s opened in a settled child (VC-809)",
-    async (reason) => {
-      const h = harness({ answers: new Map([["x", "first"]]) });
-      await h.delegate();
-      await completeChildTurn(h);
-      const told = h.parentCommands().length;
-      h.projections.set(
-        CHILD,
-        projection(CHILD, {
-          latestTurnId: "t2",
-          latestTurnOrigin: { kind: "volli", reason },
-        }),
-      );
-      await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
-      expect(h.delegations.watching(CHILD)).toBe(false);
-      expect(h.activeSubscriptions(CHILD)).toEqual([]);
-      await completeChildTurn(h, CHILD, { from: 11, turnId: "t2", reference: "x" });
-      expect(h.parentCommands()).toHaveLength(told);
-      expect(
-        h.commands.some((command) => command.commandId.includes(`${entry.operationId}:resume:`)),
-      ).toBe(false);
-    },
-  );
-
-  it.each([
-    ["a person", { kind: "user" } as const],
-    ["the parent", { kind: "session", sessionId: PARENT } as const],
-    ["an unknown origin", null],
-  ])("re-arms for a turn %s opened", async (_who, origin) => {
-    const h = harness();
-    await h.delegate();
-    await completeChildTurn(h);
-    h.projections.set(CHILD, projection(CHILD, { latestTurnId: "t2", latestTurnOrigin: origin }));
-    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
-    expect(h.delegations.watching(CHILD)).toBe(true);
-  });
-
-  it("re-arms when a later turn already replaced the one this wake names", async () => {
-    const h = harness();
-    await h.delegate();
-    await completeChildTurn(h);
-    h.projections.set(
-      CHILD,
-      projection(CHILD, {
-        latestTurnId: "t3",
-        latestTurnOrigin: { kind: "volli", reason: "shell-notice" },
-      }),
-    );
-    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
-    expect(h.delegations.watching(CHILD)).toBe(true);
-  });
-
-  it("re-arms when what opened the turn cannot be read, and says so", async () => {
-    const h = harness();
-    await h.delegate();
-    await completeChildTurn(h);
-    h.projections.delete(CHILD);
-    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
-    expect(h.delegations.watching(CHILD)).toBe(true);
-    expect(h.reports).toEqual([expect.stringContaining("could not read what opened subagent")]);
-  });
-
-  it("answers under the delegation's own ids when its notice never landed", async () => {
-    const h = harness();
-    // Unanswered, so even a host notice's turn reports: the parent was never told.
-    h.projections.set(
-      CHILD,
-      projection(CHILD, {
-        latestTurnId: "t1",
-        latestTurnOrigin: { kind: "volli", reason: "shell-notice" },
-      }),
-    );
-    await h.delegations.rearm({ ...entry, answered: false }, { turnId: "t1", afterSequence: 3 });
-    // A kickoff receipt from the original watch is irrelevant to resumed work.
-    await h.emit(CHILD, 4, kickoffRejection(`${PARENT}:tc-1:kickoff`));
-    expect(h.delegations.watching(CHILD)).toBe(true);
-    expect(h.parentCommands()).toEqual([]);
-    await completeChildTurn(h, CHILD, { from: 5 });
-    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
-  });
-});
-
 describe("rearmJoined — a message steered into a running turn reports (VC-809)", () => {
   const entry = {
     operationId: `${PARENT}:tc-1`,
@@ -1622,6 +1484,144 @@ describe("commandOriginOf", () => {
       commandOriginOf(recorded({ commandOrigin: { kind: "volli", reason: "shell-notice" } })),
     ).toEqual({ kind: "volli", reason: "shell-notice" });
     expect(commandOriginOf(recorded({}))).toBeNull();
+  });
+});
+
+describe("rearm — a child a person resumes reports again (VC-457)", () => {
+  const entry = {
+    operationId: `${PARENT}:tc-1`,
+    parentSessionId: PARENT,
+    childSessionId: CHILD,
+    projectId: "project-1",
+    title: "Find where the auth token is refreshed",
+  };
+
+  it("watches the resumed turn and notifies under ids keyed on it, without a parent-stop cascade", async () => {
+    const h = harness({
+      answers: new Map([
+        ["x", "first"],
+        ["y", "second"],
+      ]),
+    });
+    await h.delegate();
+    await completeChildTurn(h);
+    expect(h.delegations.watching(CHILD)).toBe(false);
+
+    // A person reopened it; the turn that resumed it is the wake.
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+    expect(h.delegations.watching(CHILD)).toBe(true);
+    // Idempotent while live.
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+    expect(h.activeSubscriptions(CHILD)).toHaveLength(1);
+
+    // A parent stop does not stop what the person resumed.
+    await h.emit(PARENT, 1, { kind: "session.stopped", reason: null, by: { kind: "user" } });
+    expect(h.stops).toEqual([]);
+    h.setParent({});
+
+    await h.emit(CHILD, 11, {
+      kind: "transcript.referenced",
+      attachmentId: "a",
+      turnId: "t2",
+      reference: { id: "y", mediaType: "m", digest: "d" },
+    });
+    await h.emit(CHILD, 12, { kind: "turn.completed", attachmentId: "a", turnId: "t2" });
+
+    const ids = resumedNoticeIds(entry.operationId, "t2");
+    const resumed = h.commands.find((command) => command.commandId === ids.commandId);
+    expect(resumed?.command).toMatchObject({
+      kind: "message.submit",
+      message: { id: ids.messageId },
+    });
+    const text =
+      resumed?.command.kind === "message.submit" &&
+      resumed.command.message.parts[0]?.type === "text"
+        ? resumed.command.message.parts[0].text
+        : "";
+    expect(text).toContain("  | second");
+    expect(h.delegations.watching(CHILD)).toBe(false);
+  });
+
+  it.each(["shell-notice", "browser-notice", "watch-notice", "worktree-notice"] as const)(
+    "does not re-arm for a turn a %s opened in a settled child (VC-809)",
+    async (reason) => {
+      const h = harness({ answers: new Map([["x", "first"]]) });
+      await h.delegate();
+      await completeChildTurn(h);
+      const told = h.parentCommands().length;
+      h.projections.set(
+        CHILD,
+        projection(CHILD, {
+          latestTurnId: "t2",
+          latestTurnOrigin: { kind: "volli", reason },
+        }),
+      );
+      await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+      expect(h.delegations.watching(CHILD)).toBe(false);
+      expect(h.activeSubscriptions(CHILD)).toEqual([]);
+      await completeChildTurn(h, CHILD, { from: 11, turnId: "t2", reference: "x" });
+      expect(h.parentCommands()).toHaveLength(told);
+      expect(
+        h.commands.some((command) => command.commandId.includes(`${entry.operationId}:resume:`)),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ["a person", { kind: "user" } as const],
+    ["the parent", { kind: "session", sessionId: PARENT } as const],
+    ["an unknown origin", null],
+  ])("re-arms for a turn %s opened", async (_who, origin) => {
+    const h = harness();
+    await h.delegate();
+    await completeChildTurn(h);
+    h.projections.set(CHILD, projection(CHILD, { latestTurnId: "t2", latestTurnOrigin: origin }));
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+    expect(h.delegations.watching(CHILD)).toBe(true);
+  });
+
+  it("re-arms when a later turn already replaced the one this wake names", async () => {
+    const h = harness();
+    await h.delegate();
+    await completeChildTurn(h);
+    h.projections.set(
+      CHILD,
+      projection(CHILD, {
+        latestTurnId: "t3",
+        latestTurnOrigin: { kind: "volli", reason: "shell-notice" },
+      }),
+    );
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+    expect(h.delegations.watching(CHILD)).toBe(true);
+  });
+
+  it("re-arms when what opened the turn cannot be read, and says so", async () => {
+    const h = harness();
+    await h.delegate();
+    await completeChildTurn(h);
+    h.projections.delete(CHILD);
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+    expect(h.delegations.watching(CHILD)).toBe(true);
+    expect(h.reports).toEqual([expect.stringContaining("could not read what opened subagent")]);
+  });
+
+  it("answers under the delegation's own ids when its notice never landed", async () => {
+    const h = harness();
+    // Unanswered, so even a host notice's turn reports: the parent was never told.
+    h.projections.set(
+      CHILD,
+      projection(CHILD, {
+        latestTurnId: "t1",
+        latestTurnOrigin: { kind: "volli", reason: "shell-notice" },
+      }),
+    );
+    await h.delegations.rearm({ ...entry, answered: false }, { turnId: "t1", afterSequence: 3 });
+    // A kickoff receipt from the original watch is irrelevant to resumed work.
+    await h.emit(CHILD, 4, kickoffRejection(`${PARENT}:tc-1:kickoff`));
+    expect(h.delegations.watching(CHILD)).toBe(true);
+    expect(h.parentCommands()).toEqual([]);
+    await completeChildTurn(h, CHILD, { from: 5 });
+    expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
   });
 });
 
