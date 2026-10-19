@@ -34,7 +34,10 @@ vi.mock("./sessions", async (original) => ({
 }));
 vi.mock("./auto-title", () => ({ createAutoTitler: vi.fn() }));
 vi.mock("../session-control/peek-summary", () => ({ createPeekSummarizer: vi.fn() }));
-vi.mock("./delegate-session", () => ({ createDelegations: vi.fn() }));
+vi.mock("./delegate-session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./delegate-session")>()),
+  createDelegations: vi.fn(),
+}));
 vi.mock("../db/projects-repo", () => ({
   getProjectById: vi.fn(),
   listProjects: vi.fn(() => []),
@@ -408,6 +411,29 @@ describe("lifted Session facade and recovered agent staging", () => {
       turnId: "turn",
       afterSequence: 12,
     });
+    // A message steered into a running turn re-arms too (VC-809), with the
+    // origin its door recorded; any other command does not.
+    vi.mocked(f.delegation.subagentDelegation).mockReturnValueOnce(entry);
+    listener({
+      event: {
+        sessionId: "child",
+        sequence: 13,
+        commandOrigin: { kind: "user" },
+        payload: { kind: "command.recorded", command: { intent: { kind: "message.submit" } } },
+      },
+    } as never);
+    expect(delegated.rearmJoined).toHaveBeenCalledExactlyOnceWith(entry, {
+      origin: { kind: "user" },
+      afterSequence: 13,
+    });
+    listener({
+      event: {
+        sessionId: "child",
+        sequence: 14,
+        payload: { kind: "command.recorded", command: { intent: { kind: "context.compact" } } },
+      },
+    } as never);
+    expect(delegated.rearmJoined).toHaveBeenCalledOnce();
     // The door's mutations reach the staging's own event bus.
     expect(f.agentServices.createToolDoor.mock.calls[0]![0]).toEqual({ events: f.events });
     const toolPorts = f.agentServices.createToolDoor.mock.calls[0]![1];
