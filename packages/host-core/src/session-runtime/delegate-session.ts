@@ -118,6 +118,7 @@ import type {
   ModelSelection,
   RuntimeSessionIdentity,
   SessionEvent,
+  SessionOrigin,
   SessionStopActor,
   SubagentNoticeReason,
   SubagentNoticeState,
@@ -398,6 +399,15 @@ function outcomeOf(
 
 export type { NoticeDelivery } from "./host-notice-delivery";
 
+/** The origins `hostNoticeCommand` and the other host-notice producers stamp. */
+const HOST_NOTICE_REASONS: ReadonlySet<Extract<SessionOrigin, { kind: "volli" }>["reason"]> =
+  new Set(["watch-notice", "subagent-notice", "browser-notice", "shell-notice", "worktree-notice"]);
+
+/** A turn Volli opened by telling the Session something, not by anyone resuming it. */
+function isHostNoticeOrigin(origin: SessionOrigin | null): boolean {
+  return origin?.kind === "volli" && HOST_NOTICE_REASONS.has(origin.reason);
+}
+
 /**
  * The ids a resumed child's notice spends, keyed on the turn that resumed it
  * so each resumption lands one notice. DURABLE, not live, like the kickoff's.
@@ -425,7 +435,8 @@ export interface Delegations {
   /**
    * Watch a child whose delegation already settled, from the turn a person
    * resumed it with (VC-457), so that turn's end notifies the parent too.
-   * Idempotent per child while a watch is live.
+   * A turn a host notice opened in an answered child is not a resumption and
+   * arms nothing (VC-809). Idempotent per child while a watch is live.
    */
   rearm(
     entry: DelegationRef & { answered: boolean },
@@ -450,6 +461,23 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
 
   function childrenOf(parentSessionId: string): LiveDelegation[] {
     return [...live.values()].filter((entry) => entry.parentSessionId === parentSessionId);
+  }
+
+  /**
+   * Whether the child's turn `turnId` was opened by a host notice (VC-809):
+   * true only when that turn is still the latest and its recorded origin is
+   * one. A projection that cannot be read is reported and answers false.
+   */
+  async function openedByHostNotice(childSessionId: string, turnId: string): Promise<boolean> {
+    try {
+      const { projection } = await ports.runtime.projection({ sessionId: childSessionId });
+      return projection.latestTurnId === turnId && isHostNoticeOrigin(projection.latestTurnOrigin);
+    } catch (error) {
+      report(
+        `could not read what opened subagent ${shortSessionId(childSessionId)}'s turn: ${errorText(error)}`,
+      );
+      return false;
+    }
   }
 
   /** The child's answer, read off its own ledger; null when nothing can read it. */
@@ -740,6 +768,14 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
       return live.has(childSessionId);
     },
     async rearm({ answered, ...entry }, resumed) {
+      if (live.has(entry.childSessionId)) return;
+      // Only a turn someone OPENED reports again (VC-809). A host notice the
+      // child is told — its own shell exiting, a Browser Tab event — opens a
+      // turn too, but nobody resumed the child, and the parent already has
+      // its answer. The origin is read only when this wake's turn is still
+      // the latest; otherwise, or when it cannot be read, it stays unknown
+      // and the child reports, as before.
+      if (answered && (await openedByHostNotice(entry.childSessionId, resumed.turnId))) return;
       if (live.has(entry.childSessionId)) return;
       // A delegation whose own notice never landed — a child a person retried
       // after its first attach failed — answers under the delegation's ids, so

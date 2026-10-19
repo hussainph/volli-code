@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { BrowserTabBounds, BrowserTabState, SessionToolId } from "@volli/shared";
 import {
@@ -25,6 +25,8 @@ import { insertProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
+import { createAgentShellPort } from "../shell/agent-port";
+import { BackgroundShellHost, type BackgroundShellNotice } from "../shell/background-shell-host";
 import { installHostLog } from "../log/root";
 import { createDelegations, DELEGATION_ID_SUFFIXES } from "./delegate-session";
 import type { DelegateSessionPorts } from "./delegate-session";
@@ -142,11 +144,14 @@ class MemoryBrowser extends BrowserTabRegistry<BrowserTabRecord> {
 let db: TestDb | undefined;
 let runtime: ReturnType<typeof createSessionRuntime> | undefined;
 let unblockLoad: (() => void) | undefined;
+let shellHost: BackgroundShellHost | undefined;
 afterEach(async () => {
   unblockLoad?.();
   unblockLoad = undefined;
   await runtime?.close();
   runtime = undefined;
+  await shellHost?.close();
+  shellHost = undefined;
   db?.cleanup();
   db = undefined;
 });
@@ -171,7 +176,14 @@ const openPage = (path: string): ScriptedReply => ({
   tool: { name: "browser_navigate", args: { url: `https://example.com/${path}` } },
 });
 
-function fixture(role: "project" | "ticket") {
+const SHELL_SURFACE: readonly SessionToolId[] = ["shell_start", "shell_output", "shell_kill"];
+
+/** `shells`: wire a real background shell host, and offer its tools (VC-809). */
+function fixture(role: "project" | "ticket", options: { shells?: BackgroundShellHost } = {}) {
+  const { shells } = options;
+  // In the canonical order: the shell tools sit before `browser_find`.
+  const surfaceTools =
+    shells === undefined ? SURFACE : [...SURFACE.slice(0, -1), ...SHELL_SURFACE, "browser_find"];
   const database = (db = openTestDb());
   const directory = join(dirname(database.dbPath), "workspace");
   mkdirSync(directory);
@@ -204,6 +216,23 @@ function fixture(role: "project" | "ticket") {
     },
     now: () => clock++,
     resolveBrowserPort,
+    ...(shells === undefined
+      ? {}
+      : {
+          resolveShellPort: (
+            scope: Parameters<
+              NonNullable<Parameters<typeof createPiNativeAdapter>[0]["resolveShellPort"]>
+            >[0],
+          ) =>
+            createAgentShellPort({
+              host: shells,
+              scope,
+              session: scope,
+              workspacePath: directory,
+              identity: { sessionId: scope.sessionId, ticketDisplayId: null },
+              pathPrefixes: [],
+            }),
+        }),
     resolveRuntimeContext: async (sessionId) => {
       const { projection } = await host.projection({ sessionId });
       const session = projection.session;
@@ -266,7 +295,7 @@ function fixture(role: "project" | "ticket") {
     const sessionId = created.sessionId;
     await engine.getOrRecordSessionInput({
       sessionId,
-      input: { kind: "tool-surface", tools: SURFACE },
+      input: { kind: "tool-surface", tools: surfaceTools },
       provenance: { source: { kind: "system", id: "pi-runtime", detail: null }, venue: null },
     });
     const attached = await host.command({
@@ -315,6 +344,7 @@ function fixture(role: "project" | "ticket") {
   return {
     host,
     engine,
+    directory,
     start,
     submitSessionMessage,
     delegations,
@@ -532,4 +562,105 @@ describe("completed delegate browser cleanup (VC-754)", () => {
       expect(events.filter(({ payload }) => payload.kind === "attachment.closed")).toEqual([]);
     },
   );
+});
+
+const startShell = (command: string): ScriptedReply => ({
+  tool: { name: "shell_start", args: { command } },
+});
+/** A shell that records its process group's leader in `<name>.pid`, then waits. */
+const groupLeader = (name: string) => `echo $$ > ${name}.pid; exec sleep 300`;
+/** Whether any process of the group `pid` leads is still alive. */
+function groupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Real processes: the shell host spawns them in their own groups, as in a build.
+describe("completed delegate background shell cleanup (VC-809)", () => {
+  it("kills a delegate's shells with its attachment open, silently, and keeps a project's", async () => {
+    const notices: BackgroundShellNotice[] = [];
+    const shells = (shellHost = new BackgroundShellHost({
+      publishState: () => undefined,
+      publishRemoved: () => undefined,
+      onNotice: (notice) => notices.push(notice),
+      exitNoticeGraceMs: 10,
+      settleMs: 50,
+      killGraceMs: 200,
+    }));
+    const f = fixture("project", { shells });
+    const parent = await f.start({
+      operationId: "parent",
+      projectId: "project-1",
+      ticketId: null,
+      role: "project",
+      title: "Parent",
+    });
+    const child = await f.start({
+      operationId: "child",
+      projectId: "project-1",
+      ticketId: null,
+      role: "subagent",
+      parentSessionId: parent.sessionId,
+      title: "Helper",
+    });
+    f.replies.splice(
+      0,
+      f.replies.length,
+      startShell("exec sleep 300"),
+      { text: "Parent ready" },
+      startShell(groupLeader("first")),
+      { text: "Child answer" },
+      startShell(groupLeader("second")),
+      { text: "Child again" },
+    );
+    await f.submitSessionMessage({
+      sessionId: parent.sessionId,
+      commandId: "parent:first",
+      messageId: "parent:first-message",
+      text: "Start a server",
+    });
+    await f.submitSessionMessage({
+      sessionId: child.sessionId,
+      commandId: "child:first",
+      messageId: "child:first-message",
+      text: "Start a server and check it",
+    });
+    const { projection } = await f.host.projection({ sessionId: child.sessionId });
+    expect(projection.lastTurnOutcome).toBe("completed");
+    expect(projection.liveExecutor?.status).toBe("open");
+    expect(shells.list(child.sessionId)).toEqual([]);
+    const pidOf = (name: string) =>
+      Number(readFileSync(join(f.directory, `${name}.pid`), "utf8").trim());
+    const first = pidOf("first");
+    await vi.waitFor(() => expect(groupAlive(first)).toBe(false), { timeout: 5_000 });
+    // A Board or Ticket Session's shells outlive its turn, as before.
+    expect(shells.list(parent.sessionId)).toMatchObject([{ state: "running" }]);
+
+    // A person resuming it gets a working shell port, retired again at the end.
+    await f.submitSessionMessage({
+      sessionId: child.sessionId,
+      commandId: "child:resume",
+      messageId: "child:resume-message",
+      text: "Once more",
+    });
+    expect(shells.list(child.sessionId)).toEqual([]);
+    const second = pidOf("second");
+    await vi.waitFor(() => expect(groupAlive(second)).toBe(false), { timeout: 5_000 });
+    const toolResults = f.script.requests.flatMap((request) =>
+      request.filter((message) => message.role === "toolResult"),
+    );
+    // Each request carries its Session's whole history, so count calls once.
+    expect(new Set(toolResults.map((message) => message.toolCallId)).size).toBe(3);
+    expect(toolResults.every((message) => !message.isError)).toBe(true);
+
+    // Volli's kill is not news: no exit notice reaches the answered child.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(notices).toEqual([]);
+    const events = await f.engine.listEvents({ sessionId: child.sessionId });
+    expect(events.filter(({ payload }) => payload.kind === "turn.started")).toHaveLength(2);
+  });
 });
