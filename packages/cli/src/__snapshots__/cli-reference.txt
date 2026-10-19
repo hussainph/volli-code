@@ -1306,7 +1306,7 @@ Bundle identity
 
 VC-824 (after VC-478)
 Added
-- volli ticket list --no-body omits each ticket's body from the --json rows; every other field stays. volli ticket show <id> reads one body. Without the flag, --json rows keep their body.
+- volli ticket list --no-body omits each ticket's body from the --json rows; every other field stays. volli ticket show <id> reads one body. Without the flag, --json rows keep their body. An app build older than this one ignores the flag and still sends bodies.
 - RESPONSE_TOO_LARGE — the app answered, but the answer exceeded the CLI's 4 MiB response limit. The refusal names the verb; narrow the request with its filters and retry.
 Changed
 - The volli ticket list table no longer asks the app for ticket bodies, which it never printed. The table itself is unchanged.

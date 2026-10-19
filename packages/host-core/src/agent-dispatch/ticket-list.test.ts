@@ -1,13 +1,14 @@
 /**
  * `volli ticket list` on a long-lived board (VC-824).
  *
- * The CLI stops reading any answer past 4 MiB, and ticket bodies are most of a
+ * The CLI stops reading any answer past its response limit, and ticket bodies are most of a
  * `ticket list` answer. These drive the real dispatch with a board big enough
  * to cross that limit and measure the frame the socket would write.
  */
 
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
+import { AGENT_RESPONSE_LIMIT_BYTES } from "@volli/shared";
 import type { AgentResponse } from "@volli/shared";
 
 import { createAgentCommandService } from "../agent-commands";
@@ -18,23 +19,13 @@ import type { TestDb } from "../db/test-helpers";
 import { testHostHandlers } from "../testing/host-handlers";
 import { createTestSessionEngine } from "../testing/session-engine";
 
-/** The CLI's response limit (`packages/cli/src/client.ts`). */
-const CLI_RESPONSE_LIMIT = 4 * 1024 * 1024;
+type TicketList = (args: Record<string, unknown>) => Promise<AgentResponse>;
 
-let ctx: TestDb | undefined;
-
-afterEach(() => {
-  ctx?.cleanup();
-  ctx = undefined;
-});
-
-/** A project of 2,000 tickets, each with a 3 KB body. */
-function bigBoard() {
-  const db = openTestDb();
-  ctx = db;
+/** A project holding `tickets` tickets, each with a 3 KB body. */
+function board(db: TestDb, tickets: number): TicketList {
   insertProject(db.db, testProject({ id: "project-one", path: "/repo/volli", ticketPrefix: "VC" }));
   db.db.transaction(() => {
-    for (let number = 1; number <= 2_000; number += 1) {
+    for (let number = 1; number <= tickets; number += 1) {
       insertTicket(
         db.db,
         testTicket("project-one", {
@@ -56,7 +47,7 @@ function bigBoard() {
     now: () => 100,
     newId: () => "generated-1",
   });
-  return (args: Record<string, unknown>): Promise<AgentResponse> =>
+  return (args) =>
     service.execute({ v: 1, cmd: "ticket.list", args, ctx: { cwd: "/repo/volli", env: {} } });
 }
 
@@ -70,12 +61,19 @@ const ticketsOf = (response: AgentResponse): Record<string, unknown>[] => {
 };
 
 describe("ticket list past the CLI's response limit (VC-824)", () => {
-  it("answers body: false under the limit, with every row but no bodies", async () => {
-    const list = bigBoard();
+  // One 2,000-ticket board for the reads: neither one writes.
+  let db: TestDb;
+  let list: TicketList;
+  beforeAll(() => {
+    db = openTestDb();
+    list = board(db, 2_000);
+  });
+  afterAll(() => db.cleanup());
 
+  it("answers body: false under the limit, with every row but no bodies", async () => {
     const summary = await list({ body: false });
 
-    expect(frameBytes(summary)).toBeLessThan(CLI_RESPONSE_LIMIT);
+    expect(frameBytes(summary)).toBeLessThan(AGENT_RESPONSE_LIMIT_BYTES);
     const rows = ticketsOf(summary);
     expect(rows).toHaveLength(2_000);
     expect(rows.some((row) => "body" in row)).toBe(false);
@@ -88,23 +86,26 @@ describe("ticket list past the CLI's response limit (VC-824)", () => {
   });
 
   it("keeps bodies in the default rows, which is why the table opts out", async () => {
-    const list = bigBoard();
-
     const full = await list({});
 
     const rows = ticketsOf(full);
     expect(rows).toHaveLength(2_000);
     expect(rows.every((row) => typeof row["body"] === "string")).toBe(true);
-    expect(frameBytes(full)).toBeGreaterThan(CLI_RESPONSE_LIMIT);
+    expect(frameBytes(full)).toBeGreaterThan(AGENT_RESPONSE_LIMIT_BYTES);
     expect(ticketsOf(await list({ body: true }))[0]).toHaveProperty("body");
   });
+});
 
-  it("refuses a body selector that is not a boolean", async () => {
-    const list = bigBoard();
-
-    expect(await list({ body: "no" })).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST" },
-    });
+describe("ticket list's body selector", () => {
+  it("refuses one that is not a boolean", async () => {
+    const db = openTestDb();
+    try {
+      expect(await board(db, 0)({ body: "no" })).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST" },
+      });
+    } finally {
+      db.cleanup();
+    }
   });
 });

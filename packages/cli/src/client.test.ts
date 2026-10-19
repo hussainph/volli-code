@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { makeAgentError } from "@volli/shared";
+import { makeAgentError, verbEntry } from "@volli/shared";
 import type { AgentRequest } from "@volli/shared";
 
 import { AgentClientError, requestAgent } from "./client";
@@ -208,7 +208,7 @@ describe("requestAgent", () => {
           code: "RESPONSE_TOO_LARGE",
           message:
             "The app's answer to `volli ticket list` exceeded the CLI's 4 MiB response limit.",
-          next: expect.stringMatching(/--status.*--limit.*--no-body.*volli ticket show/s),
+          next: verbEntry("ticket.list")?.overflowNext,
         });
       },
     );

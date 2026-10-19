@@ -62,6 +62,16 @@ export const AGENT_ERROR_CODES = [
 
 export type AgentErrorCode = (typeof AGENT_ERROR_CODES)[number];
 
+/**
+ * The largest answer the CLI reads from the agent socket, in bytes. A guard on
+ * the CLI's memory, not a protocol limit: past it the CLI stops reading and
+ * refuses with RESPONSE_TOO_LARGE (VC-824).
+ */
+export const AGENT_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
+
+/** {@link AGENT_RESPONSE_LIMIT_BYTES} as people read it in refusals and help. */
+export const AGENT_RESPONSE_LIMIT_LABEL = `${AGENT_RESPONSE_LIMIT_BYTES / (1024 * 1024)} MiB`;
+
 export interface AgentRequestContext {
   cwd: string;
   env: {

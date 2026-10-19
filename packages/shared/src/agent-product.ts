@@ -1,5 +1,5 @@
 import type { SessionRole } from "./agent-runtime";
-import { AGENT_ERROR_CODES } from "./agent-surface";
+import { AGENT_ERROR_CODES, AGENT_RESPONSE_LIMIT_LABEL } from "./agent-surface";
 import type { AgentError, AgentErrorCode } from "./agent-surface";
 
 /** The source revision that begins the agent capability record. */
@@ -131,8 +131,8 @@ export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
     baseline: "VC-478",
     build: "VC-824",
     added: [
-      "volli ticket list --no-body omits each ticket's body from the --json rows; every other field stays. volli ticket show <id> reads one body. Without the flag, --json rows keep their body.",
-      "RESPONSE_TOO_LARGE — the app answered, but the answer exceeded the CLI's 4 MiB response limit. The refusal names the verb; narrow the request with its filters and retry.",
+      "volli ticket list --no-body omits each ticket's body from the --json rows; every other field stays. volli ticket show <id> reads one body. Without the flag, --json rows keep their body. An app build older than this one ignores the flag and still sends bodies.",
+      `RESPONSE_TOO_LARGE — the app answered, but the answer exceeded the CLI's ${AGENT_RESPONSE_LIMIT_LABEL} response limit. The refusal names the verb; narrow the request with its filters and retry.`,
     ],
     changed: [
       "The volli ticket list table no longer asks the app for ticket bodies, which it never printed. The table itself is unchanged.",
@@ -443,7 +443,7 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
     next: null,
   },
   RESPONSE_TOO_LARGE: {
-    why: "The app answered, but the answer exceeded the CLI's 4 MiB response limit, so the CLI stopped reading it.",
+    why: `The app answered, but the answer exceeded the CLI's ${AGENT_RESPONSE_LIMIT_LABEL} response limit, so the CLI stopped reading it.`,
     next: "Narrow the request with the verb's own filters (see `volli help <verb>`) and retry.",
   },
   SOCKET_PROTOCOL: {
