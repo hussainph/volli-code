@@ -198,10 +198,16 @@ describe("read streams text instead of loading the file (VC-801)", () => {
     // And only the prefix the cut can show was kept and decoded.
     expect(truncated.inputs).toHaveLength(1);
     expect(truncated.inputs[0]).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + 1 + CHUNK_BYTES);
+  }, 120_000); // 26 M lines are scanned, slowly under coverage instrumentation
 
-    const middle = await read(env, "big.log", 10_000_001, 2);
+  it("reads an offset and limit from the middle of a large file", async () => {
+    const line = "log entry 123456789\n";
+    const size = 800_000 * line.length;
+    const lines = size / line.length;
+    const env = await servingVirtual("big.log", virtualFile(line, size).reader);
+    const middle = await read(env, "big.log", 500_001, 2);
     expect(text(middle)).toBe(
-      `${line}${line.slice(0, -1)}\n\n[${lines + 1 - 10_000_002} more lines in file. Use offset=10000003 to continue.]`,
+      `${line}${line.slice(0, -1)}\n\n[${lines + 1 - 500_002} more lines in file. Use offset=500003 to continue.]`,
     );
   });
 
@@ -220,7 +226,7 @@ describe("read streams text instead of loading the file (VC-801)", () => {
     });
     expect(Math.max(...reads.map((call) => call.length))).toBeLessThanOrEqual(CHUNK_BYTES);
     expect(truncated.inputs[0]).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + 1 + CHUNK_BYTES);
-  });
+  }, 120_000);
 
   it.each([
     ["empty", ""],
