@@ -169,6 +169,7 @@ import type { OpenNativeBinding } from "@volli/session-engine";
 import {
   admittedHandlers,
   createHostHandlers,
+  hostProjectLiveWork,
   ROUTER_POLICY,
   type HostHandlerMap,
 } from "@volli/host-core/handlers";
@@ -1531,6 +1532,19 @@ const appStartup = app.whenReady().then(async () => {
       automations: runtimeAutomations,
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
+      // What removing a project stops before its delete (VC-796): every door
+      // that removes one, the window's `volli:project-remove` included.
+      projectLiveWork: hostProjectLiveWork({
+        runtime: () => sessionRuntime,
+        shells: backgroundShells,
+        terminals: () => ptyManagerRef ?? null,
+        browser: browserTabs,
+        mcp: mcpSettings,
+        newCommandId: randomUUID,
+        onReleaseError: (sessionId, error) => {
+          log.error("could not release session of a removed project", { sessionId, error });
+        },
+      }),
       ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
       // This Mac's recent log (VC-699): main's, the in-process host's and the
       // renderer's lines, which the dev log viewer reads through `host.logs`.
@@ -1858,8 +1872,6 @@ const appStartup = app.whenReady().then(async () => {
     mcpSettings: mcpSettings ?? undefined,
     // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
     piSessionsDirectory,
-    // A removed Workspace's board feed is released, its followers told to resnapshot.
-    onProjectRemoved: (projectId) => boardFeed.dispose(projectId),
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its

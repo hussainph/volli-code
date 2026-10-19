@@ -13,7 +13,6 @@ import {
   MIN_READER_VERSION_KEY,
   listAllLabels,
   countProjects,
-  deleteProject,
   getProjectById,
   insertProject,
   listProjects,
@@ -227,8 +226,14 @@ import {
   type HostHandlers,
 } from "@volli/host-core/handlers";
 
-/** The handler keys this channel table projects: the board's (VC-565) and the move (VC-668). */
-type BoardChannelKey = "ticket.move" | Extract<keyof HostHandlers, `board.${string}`>;
+/**
+ * The handler keys this channel table projects: the board's (VC-565), the
+ * move (VC-668) and the project's removal (VC-796).
+ */
+type BoardChannelKey =
+  | "ticket.move"
+  | "project.remove"
+  | Extract<keyof HostHandlers, `board.${string}`>;
 import type { HandlerCall } from "@volli/shared";
 
 /** The person at this desktop's own window, whose reply carries the board. */
@@ -407,8 +412,6 @@ export function registerDataIpcHandlers(
      * output. Absent (tests, degraded boot) means nothing is removed.
      */
     piSessionsDirectory?: string;
-    /** Told after a project is removed: the host releases what it held for it (its board feed). */
-    onProjectRemoved?: (projectId: string) => void;
   },
 ): void {
   if (!handle.ok) {
@@ -632,9 +635,13 @@ export function registerDataIpcHandlers(
       return { ok: true, project: outcome.project, aftermath: outcome.aftermath };
     },
 
-    "volli:project-remove": (id: string): ProjectMutationResult => {
-      deleteProject(db, id);
-      options.onProjectRemoved?.(id);
+    /**
+     * The window's projection of the host's removal (VC-796): the project's
+     * live work stopped, then the delete, its feed ended and every window
+     * told. The renderer keeps only its own views' forgetting.
+     */
+    "volli:project-remove": async (id: string): Promise<ProjectMutationResult> => {
+      await board("project.remove", { projectId: id });
       return { ok: true };
     },
 

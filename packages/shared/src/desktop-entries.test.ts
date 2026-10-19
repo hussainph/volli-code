@@ -47,6 +47,7 @@ describe("the desktop-only tier", () => {
     expect(hostCommands.map(({ key }) => key)).toEqual([
       "project.reorder",
       "worktree.trimSettings",
+      "project.remove",
     ]);
     for (const entry of DESKTOP_ENTRIES) {
       const clientLocal =

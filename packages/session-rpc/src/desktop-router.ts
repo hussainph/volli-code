@@ -68,10 +68,12 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { AsyncQueue } from "./async-queue";
+import { boardId } from "./board-schema";
 import {
   createCatalogBuilders,
   hostAnswer,
   HostProcedureError,
+  PROJECT_RESOURCE,
   type CatalogCallerContext,
   type CatalogMismatch,
   type ProcedurePaths,
@@ -126,6 +128,7 @@ export interface DesktopRouterHandlers {
     { shellId: string }
   >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
+  readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** Remote hosts this desktop added over SSH (VC-700 PR 2): desktop main's registry. */
   readonly "hosts.snapshot": HostHandler<void, RemoteHostsSnapshot>;
@@ -460,6 +463,17 @@ export function createDesktopRouter() {
         .input(z.object({ orderedIds: z.array(z.string()) }))
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["project.reorder"](input, ctx.call)),
+      /**
+       * `volli:project-remove` projects the same handler (VC-796): the
+       * project's live work stopped, then the delete, then every window told.
+       */
+      remove: workspaceProcedure(
+        "project.remove",
+        z.strictObject({ projectId: boardId }),
+        ({ projectId }) => ({ kind: PROJECT_RESOURCE, id: projectId }),
+      )
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["project.remove"](input, ctx.call)),
     },
     worktree: {
       /** Was `volli:worktree-trim-settings-get`: the host-level trim settings. */

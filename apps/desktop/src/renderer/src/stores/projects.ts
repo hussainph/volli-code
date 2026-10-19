@@ -38,10 +38,7 @@ import { create } from "zustand";
 
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
-import {
-  killProjectSessions,
-  killProjectTicketSessions,
-} from "@renderer/terminal/session-lifecycle";
+import { forgetProjectSessions } from "@renderer/terminal/session-lifecycle";
 
 import { useBoardStore } from "./board";
 import { hostOfProject, isRemoteProject, useHostConnectionStore } from "./host-connection";
@@ -668,21 +665,18 @@ export function createProjectsStore(
         if (!result) return;
         localProjectIds.delete(id);
 
-        // Removal, per-workspace-UI cleanup, and session teardown are one
-        // invariant, enforced here so no removal path (dialog today, context
-        // menu / CLI later) can forget the forget. Each kill* helper kills every
-        // live PTY and disposes its engine explicitly — teardown does NOT depend
-        // on a terminal view being mounted — then drops the session record.
-        // Ticket sessions are keyed by ticketId; killProjectTicketSessions finds
-        // them from the SESSIONS store (not the board's live ticket list), so an
-        // archived ticket's sessions are torn down too, not just live ones.
-        killProjectTicketSessions(id);
+        // The host stopped the project's live work before it deleted it (VC-796):
+        // its Sessions' bindings, shells, terminals and tabs, for every window
+        // and whichever door removed it. What is left here is this window's own
+        // views of it. `forgetProjectSessions` disposes the terminal engines
+        // and drops their records (the PTYs behind them are already gone), the
+        // archived tickets' included, whether or not a view is mounted.
+        forgetProjectSessions(id);
         useWorkspaceStore.getState().forget(id);
         // `board.forget` owns chat teardown as well as its owner-key bookkeeping,
         // so a local removal and an authoritative board hydration that loses the
         // same project share one disposal path.
         useBoardStore.getState().forget(id);
-        killProjectSessions(id);
 
         // Re-read FRESH: a concurrent add/reorder may have changed `projects`
         // while the remove IPC was in flight; computing the next list from the

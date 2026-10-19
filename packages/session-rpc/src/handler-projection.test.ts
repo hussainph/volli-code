@@ -68,6 +68,7 @@ const SAMPLE_INPUTS: {
     toolCallId: "bash-1",
   },
   "project.reorder": { orderedIds: [PROJECT] },
+  "project.remove": { projectId: PROJECT },
   "worktree.trimSettings": undefined,
   "hosts.snapshot": undefined,
   "hosts.subscribe": undefined,

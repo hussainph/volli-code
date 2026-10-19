@@ -517,6 +517,18 @@ export function insertProject(db: Database.Database, project: Project): void {
   });
 }
 
+/**
+ * Every Session of a project, ended or not: what its removal's cascade would
+ * take, and so what has to stop first (VC-796).
+ */
+export function listProjectSessionIds(db: Database.Database, projectId: string): string[] {
+  return (
+    prepared(db, "SELECT id FROM sessions WHERE project_id = ? ORDER BY id").all(projectId) as {
+      id: string;
+    }[]
+  ).map(({ id }) => id);
+}
+
 /** Deletes a project; `ON DELETE CASCADE` takes its tickets/labels/ticket_events with it. */
 export function deleteProject(db: Database.Database, id: string): void {
   prepared(db, "DELETE FROM projects WHERE id = ?").run(id);
