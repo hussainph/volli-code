@@ -15,6 +15,11 @@
  * VC-294: the pane keeps what the last check said (`updates-pane-model.ts`),
  * and a channel it could not read says so — a disabled select showing
  * "Stable" read as a preference this install did not offer, not as a fault.
+ *
+ * VC-851: the select shows the line this install actually follows — a canary
+ * build that never chose reads Canary. Leaving canary is honoured from the
+ * next launch (the running updater is not narrowed mid-run), and an installed
+ * canary is never downgraded, so the pane says both the moment it happens.
  */
 import * as React from "react";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
@@ -36,6 +41,10 @@ import { toastError } from "@renderer/lib/toast";
 import { useUpdateStore } from "@renderer/stores/update";
 
 import { updateStatus } from "./updates-pane-model";
+
+/** Shown once Stable is chosen over Canary — exactly when and how it takes effect. */
+const LEAVING_CANARY_DETAIL =
+  "An installed canary build stays until a newer stable release is out.";
 
 const ENTER_CANARY_WARNING =
   "Canary builds ship the newest work first and break more often. You can switch back, but an installed canary won't downgrade itself. Continue?";
@@ -59,6 +68,8 @@ export function UpdatesPane() {
   /** Why the channel could not be read — a fault, never a disabled preference. */
   const [channelError, setChannelError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
+  /** Stable was just chosen over Canary — not yet in effect (see LEAVING_CANARY_DETAIL). */
+  const [leftCanary, setLeftCanary] = React.useState(false);
   const [reads, setReads] = React.useState(0);
   // The clock behind "· 3h ago", read outside render (react/purity) and
   // ticking so the age keeps up while the pane stays open.
@@ -94,6 +105,7 @@ export function UpdatesPane() {
         toastError(`Couldn't change the release channel: ${result.error}`);
         return;
       }
+      setLeftCanary(channel === "canary" && result.channel === "stable");
       setChannel(result.channel);
     } catch (error) {
       toastError(`Couldn't change the release channel: ${errorMessage(error)}`);
@@ -118,6 +130,13 @@ export function UpdatesPane() {
               Restart now
             </Button>
           }
+        />
+      ) : null}
+      {leftCanary ? (
+        <Notice
+          icon={DownloadSimpleIcon}
+          title="Stable takes effect the next time Volli opens"
+          detail={LEAVING_CANARY_DETAIL}
         />
       ) : null}
 

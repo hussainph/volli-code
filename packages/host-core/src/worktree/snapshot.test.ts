@@ -29,7 +29,7 @@ import {
   type WorktreeChangeSetRead,
   type WorktreeStatusRead,
 } from "./read";
-import { scriptedGit, type ScriptedGit } from "./scripted-git";
+import { scriptedReadOnlyGit, type ScriptedGit } from "./scripted-git";
 import {
   createWorktreeSnapshotCache,
   getWorktreeSnapshots,
@@ -275,7 +275,7 @@ describe("the rail across a Now↔Diffs flip (VC-372)", () => {
       }),
     );
 
-    const git = scriptedGit((args) => {
+    const git = scriptedReadOnlyGit((args) => {
       if (args[0] === "status") return "";
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return ".git\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-sha\n";

@@ -21,6 +21,7 @@ import type { WorktreeDiffMode } from "@volli/shared";
 
 import { resolveComparisonRefAsync } from "./comparison-ref";
 import { stderrOf } from "./git";
+import { readOnlyGitAsync } from "./scan";
 import { err, ok, type RunGitAsync, type WorktreeResult } from "./types";
 
 export interface DiffStatInput {
@@ -104,12 +105,18 @@ export function total(files: readonly DiffFileStat[], key: "insertions" | "delet
  * IPC verb and the `volli worktree diff` CLI door, both of which run on the
  * Electron main process, where `execFileSync` froze every window for the length
  * of the spawn.
+ *
+ * Read-only git ({@link readOnlyGitAsync}): the working-tree `status` then never
+ * holds the worktree's `index.lock` out from under an agent's own git write.
+ * Porcelain `git diff` does not consult the switch — it may still refresh the
+ * index at its end when it finds stat-dirty entries (`diff.autoRefreshIndex`).
  */
 export async function diffStat(
-  git: RunGitAsync,
+  runGit: RunGitAsync,
   input: DiffStatInput,
   mode: WorktreeDiffMode,
 ): Promise<WorktreeResult<DiffStat>> {
+  const git = readOnlyGitAsync(runGit);
   if (mode === "merge-base" && !input.baseBranch) {
     return err("No base branch is known for this worktree, so its PR diff cannot be computed.");
   }

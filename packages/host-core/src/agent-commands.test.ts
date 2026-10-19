@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   ACTIVITY_METADATA_KEY,
+  buildHarnessResumeCommand,
   DEFAULT_CODE_MODE_LIMITS,
+  effectiveHarnessId,
+  getHarnessAdapter,
   sanitizeMcpToolDefinition,
   makeAgentError,
   MUTATION_PLAN_CONTRACT,
@@ -61,7 +64,7 @@ import { testHostHandlers, type TestHandlerPorts } from "./testing/host-handlers
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
 import { createSessionTokenRegistry } from "./session-tokens";
-import { scriptedGit } from "./worktree/scripted-git";
+import { scriptedGit, scriptedReadOnlyGit } from "./worktree/scripted-git";
 import * as worktree from "./worktree";
 import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
@@ -103,6 +106,14 @@ const ACTING_ENV: AgentRequest["ctx"]["env"] = {
   session: ACTING_SESSION,
   token: ACTING_TOKEN,
 };
+
+/** The minted id a mint response carries back to the wrapper. */
+function mintedId(response: AgentResponse): string {
+  if (!response.ok) throw new Error("the mint was refused");
+  const id = (response.data as { harnessSessionId?: unknown }).harnessSessionId;
+  if (typeof id !== "string") throw new Error("the mint returned no id");
+  return id;
+}
 
 /**
  * An env the door will authenticate as `sessionId`.
@@ -4046,7 +4057,28 @@ describe("agent command service", () => {
           args: { id, mint: true },
           ctx: { cwd: "/repo/volli", env: session ? asSession(session) : {} },
         });
-      return { announce, mint, notices };
+      // The same service, so a mint and the hook that answers it share the
+      // host's memory of what is pending — exactly as one running app does.
+      const hook = (args: Record<string, unknown>) =>
+        service.execute({
+          v: 1,
+          cmd: "hook",
+          args,
+          ctx: { cwd: "/repo/volli", env: asSession(sessionId) },
+        });
+      return { announce, mint, hook, notices };
+    }
+
+    /** What **Resume session** would run for this record — `pty/scope.ts`'s inputs. */
+    function resumeLine(): string | null {
+      const record = getSession(ctx.db, sessionId);
+      if (record === undefined) return null;
+      return buildHarnessResumeCommand(
+        effectiveHarnessId(record),
+        record.harnessSessionId,
+        null,
+        getHarnessAdapter,
+      );
     }
 
     // THE BUG. The terminal was opened by opencode; the user quit it and ran
@@ -4188,41 +4220,142 @@ describe("agent command service", () => {
     // reused it handed the second launch in one terminal a byte-identical id —
     // which cursor, mkdir-ing a directory named after it, refuses with EEXIST.
     // Every launch asks, and every ask is answered with a new one.
-    it("mints a fresh v4 id per launch, overwriting the previous launch's seed", async () => {
-      const { mint } = announceService("cursor");
+    it("mints a fresh v4 id per launch", async () => {
+      const { mint, hook } = announceService("cursor");
       const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-      const first = await mint("cursor");
-      const firstId = getSession(ctx.db, sessionId)?.harnessSessionId;
-      const second = await mint("cursor");
-      const secondId = getSession(ctx.db, sessionId)?.harnessSessionId;
+      const firstId = mintedId(await mint("cursor"));
+      const secondId = mintedId(await mint("cursor"));
 
-      expect(first).toMatchObject({ ok: true });
-      expect(second).toMatchObject({ ok: true });
       // Cursor validates exactly this shape and rejects a v7.
       expect(firstId).toMatch(v4);
       expect(secondId).toMatch(v4);
       expect(secondId).not.toBe(firstId);
-      // What the wrapper reads back is what was recorded, or the harness would
-      // launch under an id no future resume could find.
-      expect(first).toMatchObject({ ok: true, data: { harnessSessionId: firstId } });
-      expect(second).toMatchObject({ ok: true, data: { harnessSessionId: secondId } });
+      // The launch that boots names the id it was handed, and that id is what
+      // a future resume finds.
+      await hook({ harness: "cursor", event: "session.started", harnessSessionId: secondId });
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe(secondId);
     });
 
-    it("does not report a minted id when its native write loses the live attachment", async () => {
+    // VC-807. `claude --version`, `claude mcp list` or any other invocation
+    // that exits without starting a session still went through the wrapper,
+    // which minted for it. The mint overwrote the seed of the conversation the
+    // user actually had, so Resume session ran `claude --resume <a phantom>`.
+    it("keeps the confirmed seed when a minted launch never proves itself", async () => {
+      const { mint, hook } = announceService("claude-code");
+      await hook({ harness: "claude-code", event: "session.started", harnessSessionId: "seed-a" });
+
+      const phantom = mintedId(await mint("claude-code"));
+
+      expect(phantom).not.toBe("seed-a");
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("seed-a");
+      expect(resumeLine()).toBe("claude --resume 'seed-a'");
+    });
+
+    // The existing behaviour, kept: a real launch fires SessionStart at boot
+    // naming the id it was launched with, and that is when it becomes the seed.
+    it("makes a minted id the seed once the launch's own SessionStart names it", async () => {
+      const { mint, hook } = announceService("claude-code");
+      await hook({ harness: "claude-code", event: "session.started", harnessSessionId: "seed-a" });
+
+      const minted = mintedId(await mint("claude-code"));
+      await hook({ harness: "claude-code", event: "session.started", harnessSessionId: minted });
+
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe(minted);
+      expect(resumeLine()).toBe(`claude --resume '${minted}'`);
+    });
+
+    // A minted launch of a DIFFERENT harness moves nothing until it proves
+    // itself — not the seed, and not the harness it is paired with — and then
+    // moves both together, telling the renderer the record moved.
+    it("switches the running harness only when the minted launch proves itself", async () => {
+      const { mint, hook, notices } = announceService("opencode");
+      await hook({ harness: "opencode", event: "session.started", harnessSessionId: "ses_open" });
+
+      const minted = mintedId(await mint("claude-code"));
+
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBeNull();
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe("ses_open");
+      expect(resumeLine()).toBe("opencode --session 'ses_open'");
+      // Still a launch: the renderer's grace window is anchored to it.
+      expect(notices).toEqual([
+        expect.objectContaining({ harnessId: "claude-code", changed: false }),
+      ]);
+
+      await hook({ harness: "claude-code", event: "session.started", harnessSessionId: minted });
+
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("claude-code");
+      expect(resumeLine()).toBe(`claude --resume '${minted}'`);
+      expect(notices).toEqual([
+        expect.objectContaining({ harnessId: "claude-code", changed: false }),
+        expect.objectContaining({ harnessId: "claude-code", changed: true }),
+      ]);
+    });
+
+    // A startup event that carries no id still proves the launch; the id it was
+    // handed on argv is then the one it is running under.
+    it("accepts a startup event that names no id as proof of the minted launch", async () => {
+      const { mint, hook } = announceService("cursor");
+
+      const minted = mintedId(await mint("cursor"));
+      await hook({ harness: "cursor", event: "session.started" });
+
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBe(minted);
+    });
+
+    // A later launch supersedes a pending one, so a straggling hook from the
+    // launch that never proved itself cannot repoint the harness.
+    it("forgets a pending mint once another launch is announced", async () => {
+      const { mint, announce, hook } = announceService("claude-code");
+
+      await mint("cursor");
+      await announce("codex");
+      await hook({ harness: "cursor", event: "session.started" });
+
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("codex");
+    });
+
+    // VC-807. `codex --help` (or a real codex closed before its first turn,
+    // which reports nothing) after a claude session repointed the running
+    // harness and kept claude's id, so Resume session built
+    // `codex resume <a claude uuid>` — the wrong binary with the wrong id.
+    it("drops a foreign seed when an announce changes harness without a mint", async () => {
+      const { announce, hook } = announceService("claude-code");
+      await hook({ harness: "claude-code", event: "session.started", harnessSessionId: "seed-a" });
+
+      await announce("codex");
+
+      expect(getSession(ctx.db, sessionId)?.activeHarnessId).toBe("codex");
+      expect(getSession(ctx.db, sessionId)?.harnessSessionId).toBeNull();
+      expect(resumeLine()).toBe("codex resume --last");
+    });
+
+    it("keeps the seed when an announce names the harness already running", async () => {
+      const { announce, hook } = announceService("codex");
+      await hook({ harness: "codex", event: "turn.completed", harnessSessionId: "thread-c" });
+
+      await announce("codex");
+
+      expect(resumeLine()).toBe("codex resume 'thread-c'");
+    });
+
+    it("does not hand out an id when the attachment closes under the mint", async () => {
       announceService("cursor");
       const sessionEngine = createTestSessionEngine(ctx.db);
-      const observe = sessionEngine.observe.bind(sessionEngine);
-      let closeAfterHarnessWrite = true;
-      sessionEngine.observe = async (observation) => {
-        const event = await observe(observation);
-        if (closeAfterHarnessWrite && observation.kind === "attachment.native_referenced") {
-          closeAfterHarnessWrite = false;
-          await observe({
+      const getSessionProjection = sessionEngine.getSession.bind(sessionEngine);
+      let closeAfterFirstRead = true;
+      // The verb's own read sees the terminal open; it closes before the
+      // native read-modify-write that the mint is decided under.
+      sessionEngine.getSession = async (query) => {
+        const projection = await getSessionProjection(query);
+        const attachment = projection?.attachments.at(-1);
+        if (closeAfterFirstRead && attachment !== undefined) {
+          closeAfterFirstRead = false;
+          await sessionEngine.observe({
             id: "close-before-mint",
             kind: "attachment.closed",
             sessionId,
-            attachmentId: observation.attachmentId,
+            attachmentId: attachment.id,
             occurredAt: 5000,
             provenance: {
               source: { kind: "system", id: "test", detail: null },
@@ -4231,7 +4364,7 @@ describe("agent command service", () => {
             outcome: "interrupted",
           });
         }
-        return event;
+        return projection;
       };
       const service = createAgentCommandService({
         db: ctx.db,
@@ -4910,7 +5043,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "status") return " M src/a.ts\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
@@ -5106,7 +5239,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
       if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
@@ -5177,7 +5310,7 @@ describe("agent command service", () => {
     );
     const numstat =
       Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
       return "";
@@ -5768,7 +5901,7 @@ describe("agent command service", () => {
       );
       void paths;
     }
-    const { gitAsync } = scriptedGit((args, cwd) => {
+    const { gitAsync } = scriptedReadOnlyGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5847,7 +5980,7 @@ describe("agent command service", () => {
         }),
       );
     }
-    const { gitAsync } = scriptedGit((args, cwd) => {
+    const { gitAsync } = scriptedReadOnlyGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5934,7 +6067,7 @@ describe("agent command service", () => {
         baseBranch: "main",
       }),
     );
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) return rawModified(["package.json"]);
@@ -6062,7 +6195,7 @@ describe("agent command service", () => {
         }),
       );
     }
-    return scriptedGit((args) => {
+    return scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       // Every worktree, Done or not, has the same uncommitted edit (the diff
@@ -6144,7 +6277,7 @@ describe("agent command service", () => {
     }
     // VC-1 and VC-2 answer at once; every other worktree's git never returns,
     // the way a read wedged on a contended index lock does.
-    const scripted = scriptedGit((args) => {
+    const scripted = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       return "";

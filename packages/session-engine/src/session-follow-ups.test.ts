@@ -140,6 +140,7 @@ function fixture(
     diagnostics?: () => void;
     retryDelays?: readonly number[];
     admissionTimeoutMs?: number;
+    firstAttachPreparationTimeoutMs?: number;
     prepare?: () => void | Promise<void>;
     reaffirm?: () => void | Promise<void>;
   } = {},
@@ -183,6 +184,9 @@ function fixture(
       ...(options.admissionTimeoutMs === undefined
         ? {}
         : { followUpAdmissionTimeoutMs: options.admissionTimeoutMs }),
+      ...(options.firstAttachPreparationTimeoutMs === undefined
+        ? {}
+        : { firstAttachPreparationTimeoutMs: options.firstAttachPreparationTimeoutMs }),
     });
   return { engine, artifacts, followUps, adapter, errors, runtime };
 }
@@ -2415,6 +2419,91 @@ describe("host follow-ups never strand a row", () => {
       expect(await attentionDetails(runtime, sessionId)).toEqual([]);
       await runtime.close();
     }
+  });
+
+  it("waits out a first attach's slow workspace preparation instead of failing it unrecoverable (VC-799)", async () => {
+    // A Session's first attach is where its worktree is made, and under load
+    // that preparation outlasts the admission bound, which never stopped it.
+    const gate = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      retryDelays: [],
+      prepare: () => {
+        reached.resolve();
+        return gate.promise;
+      },
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const attaching = runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    // Past the bound from the moment the preparation is waited on.
+    await reached.promise;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    gate.resolve();
+    expect((await attaching).receipt).toMatchObject({ status: "accepted" });
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(f.adapter.attaches).toBe(1);
+    await runtime.close();
+  });
+
+  it("fails a first attach whose preparation outlasts its own ceiling as configuration_invalid (VC-799)", async () => {
+    const stalled = Promise.withResolvers<void>();
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      firstAttachPreparationTimeoutMs: 20,
+      retryDelays: [],
+      prepare: () => stalled.promise,
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const attached = await runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect(attached.receipt).toMatchObject({
+      status: "rejected",
+      code: "location_unavailable",
+      detail: "Workspace preparation did not finish within 0.02 s.",
+    });
+    const { projection } = await runtime.projection({ sessionId });
+    expect(projection.attention.active.map(({ kind }) => kind)).toEqual(["configuration_invalid"]);
+    expect(f.adapter.attaches).toBe(0);
+    stalled.resolve();
+    await runtime.close();
+  });
+
+  it("still bounds the workspace preparation of a Session that has attached before (VC-799)", async () => {
+    const stalled = Promise.withResolvers<void>();
+    let preparing: Promise<void> | undefined;
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [], prepare: () => preparing });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    const attachmentId = (await runtime.projection({ sessionId })).projection.liveExecutor!.id;
+    await runtime.command({
+      commandId: "release",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    preparing = stalled.promise;
+    const reattached = await runtime.command({
+      commandId: "reattach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    expect(reattached.receipt).toMatchObject({
+      status: "rejected",
+      code: "location_unavailable",
+      detail: expect.stringContaining("queue_admission_timeout: workspace preparation"),
+    });
+    stalled.resolve();
+    await runtime.close();
   });
 
   it("bounds cold binding recovery and prevents a late handle activating after close", async () => {

@@ -31,7 +31,7 @@
 import type Database from "better-sqlite3";
 import { checkMigrationHistory, describeMigrationHistory, SCHEMA_HEAD } from "@volli/host-core/db";
 
-import { summarizeUpdateFailure } from "@volli/shared";
+import { summarizeUpdateFailure, type ExperimentBuildKind } from "@volli/shared";
 
 import type { SupportInfo, UpdateLastCheck } from "../ipc/contract";
 import { readUpdateChannel } from "./auto-update";
@@ -43,6 +43,11 @@ export interface SupportInfoDeps {
   appVersion(): string;
   /** The profile database, or `null` when this launch could not open one. */
   database(): Database.Database | null;
+  /**
+   * The running build's kind (`runningBuildKind`) — a canary build that never
+   * chose a channel reports Canary, the line its updater actually follows.
+   */
+  buildKind: ExperimentBuildKind;
   /** `process.platform`, passed in so the collector stays a pure function of its deps. */
   platform: string;
   /** `process.arch`. */
@@ -87,7 +92,7 @@ export function collectSupportInfo(deps: SupportInfoDeps): SupportInfo {
   if (db === null) throw new Error("Profile database is unavailable");
   return {
     appVersion: deps.appVersion(),
-    channel: readUpdateChannel(db),
+    channel: readUpdateChannel(db, deps.buildKind),
     platform: deps.platform,
     arch: deps.arch,
     schemaVersion: schemaVersion(db),
