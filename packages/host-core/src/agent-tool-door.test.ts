@@ -1463,6 +1463,7 @@ describe("session_delegate through the Agent Tool Surface (VC-9)", () => {
       delegate: () => ({
         watching: () => false,
         rearm: async () => undefined,
+        rearmJoined: async () => undefined,
         delegate: async (input) => {
           delegated.push(input);
           if (input.task.includes("overflow")) {
@@ -1736,6 +1737,7 @@ describe("verb result details match the registry (VC-471)", () => {
       delegate: () => ({
         watching: () => false,
         rearm: async () => undefined,
+        rearmJoined: async () => undefined,
         delegate: async (input) => ({
           childSessionId: CHILD,
           handle: CHILD.slice(0, 8),

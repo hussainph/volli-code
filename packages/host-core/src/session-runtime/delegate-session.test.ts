@@ -44,6 +44,7 @@ import type {
 import { EMPTY_SESSION_USAGE_SUMMARY } from "@volli/shared";
 
 import {
+  commandOriginOf,
   createDelegations,
   DELEGATION_ID_SUFFIXES,
   resumedNoticeIds,
@@ -1378,6 +1379,149 @@ describe("the notice carries the answer (VC-457)", () => {
   });
 });
 
+describe("rearmJoined — a message steered into a running turn reports (VC-809)", () => {
+  const entry = {
+    operationId: `${PARENT}:tc-1`,
+    parentSessionId: PARENT,
+    childSessionId: CHILD,
+    projectId: "project-1",
+    title: "Find where the auth token is refreshed",
+  };
+  const parentOrigin = { kind: "session", sessionId: PARENT } as const;
+  /** A settled child mid-way through a turn its own shell's exit notice opened. */
+  async function inShellNoticeTurn(h: ReturnType<typeof harness>) {
+    await h.delegate();
+    await completeChildTurn(h);
+    h.projections.set(
+      CHILD,
+      projection(CHILD, {
+        latestTurnId: "t2",
+        latestTurnOrigin: { kind: "volli", reason: "shell-notice" },
+        turnActive: true,
+      }),
+    );
+    await h.emit(CHILD, 7, { kind: "turn.started", attachmentId: "a", turnId: "t2" });
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 7 });
+    expect(h.delegations.watching(CHILD)).toBe(false);
+  }
+  async function endTurn(h: ReturnType<typeof harness>) {
+    await h.emit(CHILD, 10, {
+      kind: "transcript.referenced",
+      attachmentId: "a",
+      turnId: "t2",
+      reference: { id: "y", mediaType: "m", digest: "d" },
+    });
+    await h.emit(CHILD, 11, { kind: "turn.completed", attachmentId: "a", turnId: "t2" });
+  }
+
+  it("reports exactly once when the parent steers into a shell-notice turn", async () => {
+    const h = harness({
+      answers: new Map([
+        ["x", "first"],
+        ["y", "joined answer"],
+      ]),
+    });
+    await inShellNoticeTurn(h);
+    const told = h.parentCommands().length;
+    await h.delegations.rearmJoined(
+      { ...entry, answered: true },
+      { origin: parentOrigin, afterSequence: 8 },
+    );
+    // A second message joining the same turn, and its start's wake landing
+    // late, arm nothing more.
+    await h.delegations.rearmJoined(
+      { ...entry, answered: true },
+      { origin: { kind: "user" }, afterSequence: 9 },
+    );
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 7 });
+    expect(h.activeSubscriptions(CHILD)).toHaveLength(1);
+    await endTurn(h);
+
+    const ids = resumedNoticeIds(entry.operationId, "t2");
+    expect(h.parentCommands()).toHaveLength(told + 1);
+    const resumed = h.commands.filter((command) => command.commandId === ids.commandId);
+    expect(resumed).toHaveLength(1);
+    const command = resumed[0]?.command;
+    const text =
+      command?.kind === "message.submit" && command.message.parts[0]?.type === "text"
+        ? command.message.parts[0].text
+        : "";
+    expect(text).toContain("  | joined answer");
+    expect(h.delegations.watching(CHILD)).toBe(false);
+  });
+
+  it.each([
+    ["a host notice", { kind: "volli", reason: "browser-notice" } as const],
+    ["anything, into an idle child", parentOrigin],
+  ])("arms nothing for %s", async (who, origin) => {
+    const h = harness();
+    await inShellNoticeTurn(h);
+    if (who !== "a host notice") {
+      h.projections.set(CHILD, projection(CHILD, { latestTurnId: "t2", turnActive: false }));
+    }
+    const told = h.parentCommands().length;
+    await h.delegations.rearmJoined({ ...entry, answered: true }, { origin, afterSequence: 8 });
+    expect(h.delegations.watching(CHILD)).toBe(false);
+    await endTurn(h);
+    expect(h.parentCommands()).toHaveLength(told);
+  });
+
+  it("leaves an unanswered delegation to its turn's start", async () => {
+    const h = harness();
+    h.projections.set(CHILD, projection(CHILD, { latestTurnId: "t1", turnActive: true }));
+    await h.delegations.rearmJoined(
+      { ...entry, answered: false },
+      { origin: parentOrigin, afterSequence: 3 },
+    );
+    expect(h.delegations.watching(CHILD)).toBe(false);
+  });
+
+  it("reports when the running turn cannot be read, and arms nothing", async () => {
+    const h = harness();
+    await inShellNoticeTurn(h);
+    h.projections.delete(CHILD);
+    await h.delegations.rearmJoined(
+      { ...entry, answered: true },
+      { origin: parentOrigin, afterSequence: 8 },
+    );
+    expect(h.delegations.watching(CHILD)).toBe(false);
+    expect(h.reports).toEqual([expect.stringContaining("could not read subagent")]);
+  });
+});
+
+describe("commandOriginOf", () => {
+  const recorded = (overrides: Partial<SessionEvent>): SessionEvent => ({
+    ...event(CHILD, 8, {
+      kind: "command.recorded",
+      command: {
+        id: "c",
+        sessionId: CHILD,
+        intent: { kind: "message.submit", reference: { id: "m", mediaType: "m", digest: "d" } },
+        createdAt: 8,
+        route: { adapterId: "pi", attachmentId: null },
+      },
+    } as SessionEvent["payload"]),
+    ...overrides,
+  });
+
+  it("reads the door's attribution from provenance, and prefers the slim field", () => {
+    expect(
+      commandOriginOf(
+        recorded({
+          provenance: {
+            ...PROVENANCE,
+            source: { ...PROVENANCE.source, detail: { sessionOrigin: { kind: "user" } } },
+          },
+        }),
+      ),
+    ).toEqual({ kind: "user" });
+    expect(
+      commandOriginOf(recorded({ commandOrigin: { kind: "volli", reason: "shell-notice" } })),
+    ).toEqual({ kind: "volli", reason: "shell-notice" });
+    expect(commandOriginOf(recorded({}))).toBeNull();
+  });
+});
+
 describe("rearm — a child a person resumes reports again (VC-457)", () => {
   const entry = {
     operationId: `${PARENT}:tc-1`,
@@ -1433,8 +1577,79 @@ describe("rearm — a child a person resumes reports again (VC-457)", () => {
     expect(h.delegations.watching(CHILD)).toBe(false);
   });
 
+  it.each(["shell-notice", "browser-notice", "watch-notice", "worktree-notice"] as const)(
+    "does not re-arm for a turn a %s opened in a settled child (VC-809)",
+    async (reason) => {
+      const h = harness({ answers: new Map([["x", "first"]]) });
+      await h.delegate();
+      await completeChildTurn(h);
+      const told = h.parentCommands().length;
+      h.projections.set(
+        CHILD,
+        projection(CHILD, {
+          latestTurnId: "t2",
+          latestTurnOrigin: { kind: "volli", reason },
+        }),
+      );
+      await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+      expect(h.delegations.watching(CHILD)).toBe(false);
+      expect(h.activeSubscriptions(CHILD)).toEqual([]);
+      await completeChildTurn(h, CHILD, { from: 11, turnId: "t2", reference: "x" });
+      expect(h.parentCommands()).toHaveLength(told);
+      expect(
+        h.commands.some((command) => command.commandId.includes(`${entry.operationId}:resume:`)),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ["a person", { kind: "user" } as const],
+    ["the parent", { kind: "session", sessionId: PARENT } as const],
+    ["an unknown origin", null],
+  ])("re-arms for a turn %s opened", async (_who, origin) => {
+    const h = harness();
+    await h.delegate();
+    await completeChildTurn(h);
+    h.projections.set(CHILD, projection(CHILD, { latestTurnId: "t2", latestTurnOrigin: origin }));
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+    expect(h.delegations.watching(CHILD)).toBe(true);
+  });
+
+  it("re-arms when a later turn already replaced the one this wake names", async () => {
+    const h = harness();
+    await h.delegate();
+    await completeChildTurn(h);
+    h.projections.set(
+      CHILD,
+      projection(CHILD, {
+        latestTurnId: "t3",
+        latestTurnOrigin: { kind: "volli", reason: "shell-notice" },
+      }),
+    );
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+    expect(h.delegations.watching(CHILD)).toBe(true);
+  });
+
+  it("re-arms when what opened the turn cannot be read, and says so", async () => {
+    const h = harness();
+    await h.delegate();
+    await completeChildTurn(h);
+    h.projections.delete(CHILD);
+    await h.delegations.rearm({ ...entry, answered: true }, { turnId: "t2", afterSequence: 10 });
+    expect(h.delegations.watching(CHILD)).toBe(true);
+    expect(h.reports).toEqual([expect.stringContaining("could not read what opened subagent")]);
+  });
+
   it("answers under the delegation's own ids when its notice never landed", async () => {
     const h = harness();
+    // Unanswered, so even a host notice's turn reports: the parent was never told.
+    h.projections.set(
+      CHILD,
+      projection(CHILD, {
+        latestTurnId: "t1",
+        latestTurnOrigin: { kind: "volli", reason: "shell-notice" },
+      }),
+    );
     await h.delegations.rearm({ ...entry, answered: false }, { turnId: "t1", afterSequence: 3 });
     // A kickoff receipt from the original watch is irrelevant to resumed work.
     await h.emit(CHILD, 4, kickoffRejection(`${PARENT}:tc-1:kickoff`));
