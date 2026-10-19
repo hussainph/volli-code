@@ -318,6 +318,19 @@ describe("sendSessionMessageOperation", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
+  it("fails closed for an unknown caller Role, even for an own subagent", async () => {
+    const { ports: p, command } = ports([
+      projection({
+        session: { ...projection().session, role: "subagent", parentSessionId: CALLER },
+        attachments: [openAttachment()],
+      }),
+    ]);
+    await expect(
+      sendSessionMessageOperation(p, sendInput({ callerRole: "future-role" as never })),
+    ).rejects.toThrow("may steer only its own subagents");
+    expect(command).not.toHaveBeenCalled();
+  });
+
   it("waits for a marked steer to be accepted before answering", async () => {
     const delivery = Promise.withResolvers<unknown>();
     const command = vi.fn(() => delivery.promise);

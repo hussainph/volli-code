@@ -217,8 +217,10 @@ export async function sendSessionMessageOperation(
     throw new SuperviseSessionError("A subagent Session cannot steer other Sessions.");
   }
   if (
-    input.callerRole === "ticket" &&
-    (target.session.role !== "subagent" || target.session.parentSessionId !== input.callerSessionId)
+    input.callerRole !== "project" &&
+    (input.callerRole !== "ticket" ||
+      target.session.role !== "subagent" ||
+      target.session.parentSessionId !== input.callerSessionId)
   ) {
     throw new SuperviseSessionError(
       `Session ${input.handle} is not one this Session delegated; a ticket Session may steer only its own subagents.`,

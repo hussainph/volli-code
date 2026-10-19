@@ -610,11 +610,11 @@ Input:
 Effects:
 - Durable write: Append a message.submit command carrying the marked steering message to the target Session's ledger.
 - Human sees: The steering message appears in the target Session's transcript, marked with the sending Session.
-- Does not: It does not wait for the target's turn to finish; the calling Session watches the target and is told when that turn ends, through a later notice.
+- Does not: It does not wait for the target's turn to finish; an active delegate reports through its delegation answer, and other targets through a later watch notice.
 - Does not: No Ticket moves, no Session stops, and no new Session starts.
 
 Notes:
-- Runs through the Agent Tool Surface in new Board and Ticket Session tool bundles; the shell never executes it.
+- Runs through the Agent Tool Surface in Board and new Ticket Session tool bundles; the shell never executes it.
 - A Board Session may steer any Session in its project; a Ticket Session only the subagents it delegated. A refusal names the rule.
 - Delivers into the target's live executor — mid-turn it steers the model now, between turns it opens one.
 - The message arrives marked as supervisor steering from this Session, never as the target's own user.
@@ -650,7 +650,7 @@ Notes:
 - Runs through the Agent Tool Surface in the project and ticket Role bundles; the shell never executes it.
 - Returns as soon as the subagent starts. When its first turn completes, a notice from Volli arrives in this Session carrying its final message; `volli session answer <handle>` prints it again in full.
 - The subagent shares this Session's working directory, holds every coding tool, and cannot ask a person or start, stop, steer or delegate to other Sessions.
-- If it drifts, steer it with session_send; it reads the message mid-turn and the delegation still answers exactly once.
+- If it drifts while it is still working and you hold session_send, steer it with session_send; it reads the message mid-turn and the delegation still answers exactly once.
 
 ============================================================================
 volli help session list

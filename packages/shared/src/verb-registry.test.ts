@@ -815,13 +815,17 @@ describe("the registry table", () => {
 
   it("teaches parent steering without promising a second delegation answer", () => {
     const delegate = verbEntry("session.delegate")?.tool?.description;
-    expect(delegate).toContain("If it drifts and you hold `session_send`");
+    expect(delegate).toContain("while it is still working and you hold `session_send`");
+    expect(verbEntry("session.delegate")?.notes?.join(" ")).toContain(
+      "while it is still working and you hold session_send",
+    );
     expect(delegate).toContain("steer it with `session_send`");
     expect(delegate).toContain("the delegation still answers exactly once");
     const send = verbEntry("session.send")?.tool?.description;
     expect(send).toContain("including a subagent you delegated");
     expect(send).toContain("a Ticket Session only the subagents it delegated");
     expect(send).toContain("opened or joined a turn");
+    expect(send).toContain("without a separate watch");
   });
 
   it("locates delegated Sessions in the parent's Activity Island", () => {

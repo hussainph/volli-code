@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   shortSessionId,
+  DEFAULT_AUTHORITY_POLICY,
   type BrowserTabBounds,
   type BrowserTabState,
   type SessionToolId,
@@ -26,7 +27,12 @@ import {
   type BrowserTabChrome,
   type BrowserTabRecord,
 } from "../browser/tab-registry";
-import { insertProject } from "../db/projects-repo";
+import { insertProject, listProjects } from "../db/projects-repo";
+import { createAgentToolDoor } from "../agent-tool-door";
+import { createDetachedWorkTracker } from "../detached-work";
+import { createWatches, type Watches } from "../watches";
+import { createSessionWakeBus } from "../session-control/session-wake";
+import { createTicketSessionDelegationStore } from "./delegation-store";
 import { insertTicket } from "../db/tickets-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
@@ -37,7 +43,7 @@ import { createDelegations, DELEGATION_ID_SUFFIXES } from "./delegate-session";
 import type { DelegateSessionPorts } from "./delegate-session";
 import { createPiNativeAdapter } from "./pi-adapter";
 import type { SessionStartInput } from "./sessions";
-import { sendSessionMessageOperation, supervisionMarker } from "./supervise-session";
+import { supervisionMarker } from "./supervise-session";
 import { createFileTranscriptArtifactStore } from "./transcript-artifacts";
 
 function deferred() {
@@ -151,7 +157,10 @@ let db: TestDb | undefined;
 let runtime: ReturnType<typeof createSessionRuntime> | undefined;
 let unblockLoad: (() => void) | undefined;
 let shellHost: BackgroundShellHost | undefined;
+let watchHost: Watches | undefined;
 afterEach(async () => {
+  watchHost?.dispose();
+  watchHost = undefined;
   unblockLoad?.();
   unblockLoad = undefined;
   await runtime?.close();
@@ -202,11 +211,15 @@ function fixture(role: "project" | "ticket", options: { shells?: BackgroundShell
   // give every Session here the same handle, and no verb could address one.
   const next = (kind: string) =>
     kind === "session" ? `s${clock++}-session` : `${kind}-${clock++}`;
-  const engine = createSessionEngine({
-    ledger: createSqliteSessionLedger(database.db),
-    clock: { now: () => clock++ },
-    ids: { next },
-  });
+  const wake = createSessionWakeBus(
+    createSessionEngine({
+      ledger: createSqliteSessionLedger(database.db),
+      clock: { now: () => clock++ },
+      ids: { next },
+    }),
+    { db: database.db },
+  );
+  const engine = wake.engine;
   const replies: ScriptedReply[] = [openPage("parent"), { text: "Parent ready" }];
   const script = scriptedProvider(replies);
   const browser = new MemoryBrowser();
@@ -351,10 +364,66 @@ function fixture(role: "project" | "ticket", options: { shells?: BackgroundShell
     readTranscriptArtifact: (ref) => artifacts.read(ref),
     report: (message) => reports.push(message),
   });
+  // Real watch delivery, with only its coalescing clock driven explicitly.
+  const detached = createDetachedWorkTracker({
+    reportFailure: (error) => reports.push(String(error)),
+  });
+  const timers = new Map<object, () => void>();
+  const watches = (watchHost = createWatches({
+    runtime: {
+      projection: (input) => host.projection(input),
+      subscribe: (query, listener, onError) => host.subscribe(query, listener, onError),
+      command: (input) => {
+        const delivery = host.command(input);
+        detached.track(delivery);
+        return delivery;
+      },
+    },
+    sessionEngine: engine,
+    subscribeSessionWake: wake.subscribe,
+    subscribeTicketWake: () => () => {},
+    readTranscriptArtifact: (ref) => artifacts.read(ref),
+    readComment: () => null,
+    pendingSubagents: (id) => delegations.liveChildren(id),
+    detachedWork: detached,
+    report: (message) => reports.push(message),
+    setTimeout: (callback) => {
+      const handle = {};
+      timers.set(handle, callback);
+      return handle;
+    },
+    clearTimeout: (handle) => {
+      timers.delete(handle as object);
+    },
+  }));
+  const door = createAgentToolDoor({
+    db: database.db,
+    projects: () => listProjects(database.db),
+    sessions: () => null,
+    delegation: createTicketSessionDelegationStore(database.db),
+    automations: () => null,
+    actorTicketDisplay: () => null,
+    now: () => clock++,
+    authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
+    watches: () => watches,
+    delegate: () => delegations,
+    mcp: () => null,
+    supervise: () => ({ sessionEngine: engine, runtime: host }),
+  });
+  async function flushWatchNotices() {
+    for (const [handle, callback] of timers) {
+      timers.delete(handle);
+      callback();
+    }
+    await detached.drain();
+  }
   return {
     host,
     engine,
     start,
+    door,
+    watches,
+    flushWatchNotices,
     submitSessionMessage,
     delegations,
     browser,
@@ -647,27 +716,25 @@ describe("a parent steers the delegate it started (VC-861)", () => {
       });
       expect(f.delegations.liveChildren(parent.sessionId)).toEqual([childId]);
 
-      const steered = await sendSessionMessageOperation(
-        { sessionEngine: f.engine, runtime: f.host },
+      const steered = await f.door(
         {
-          operationId: "steer-1",
-          callerSessionId: parent.sessionId,
-          // A Ticket Session may steer only the subagents it delegated, which
-          // is what this child is; a Board Session is bounded by its project.
-          callerRole: role,
+          ...(role === "ticket"
+            ? { role: "ticket" as const, ticketId: f.ticketId! }
+            : { role: "project" as const, ticketId: null }),
+          sessionId: parent.sessionId,
           projectId: "project-1",
-          handle: shortSessionId(childId),
-          message: "Also check the fixture page title",
+          rootThreadId: sessionRootThreadId(parent.sessionId),
+          attachmentId: parentAttachment.id,
         },
+        {
+          verb: "session.send",
+          toolCallId: "steer-1",
+          input: { session: shortSessionId(childId), message: "Also check the fixture page title" },
+        },
+        new AbortController().signal,
       );
-      expect(steered).toMatchObject({
-        sessionId: childId,
-        handle: shortSessionId(childId),
-        title: "Browser helper",
-        // The runtime's own answer: the steer joined the turn already running.
-        midTurn: true,
-        turnOpened: false,
-      });
+      expect(steered.text).toContain("Delivered into Session");
+      expect(steered.text).toContain("mid-stream");
       // Steering opens no turn in the sender, and nothing is answered while the
       // child is still working.
       expect(await parentTurnActive()).toBe(false);
@@ -692,6 +759,21 @@ describe("a parent steers the delegate it started (VC-861)", () => {
         expect(await parentTurnActive()).toBe(false);
       });
 
+      // Drain the actual Watch registry's coalescing window too. The send door
+      // must not add a second host notice beside the delegation's own answer.
+      await f.flushWatchNotices();
+      const parentMessages = (await f.engine.listEvents({ sessionId: parent.sessionId })).filter(
+        ({ payload }) =>
+          payload.kind === "command.recorded" &&
+          payload.command.intent.kind === "message.submit" &&
+          payload.command.id !== "parent:first",
+      );
+      expect(parentMessages).toMatchObject([
+        { payload: { command: { id: `delegate-1${DELEGATION_ID_SUFFIXES.notice}` } } },
+      ]);
+      expect(steered.text).toContain("Its delegation answer reports back");
+      expect(f.watches.watching(parent.sessionId).sessions).toEqual([]);
+
       // What the child read: the marker naming the parent, then the parent's
       // words — never a plain message from its own user.
       const marker = supervisionMarker(parent.sessionId);
@@ -710,7 +792,9 @@ describe("a parent steers the delegate it started (VC-861)", () => {
       expect(childTurns("turn.started")).toBe(1);
       expect(childTurns("turn.completed")).toBe(1);
       const steerEvent = childEvents.find(
-        ({ payload }) => payload.kind === "command.recorded" && payload.command.id === "steer-1",
+        ({ payload }) =>
+          payload.kind === "command.recorded" &&
+          payload.command.id === `${parent.sessionId}:steer-1`,
       );
       if (steerEvent === undefined || steerEvent.payload.kind !== "command.recorded")
         throw new Error("the steer never reached the child's ledger");

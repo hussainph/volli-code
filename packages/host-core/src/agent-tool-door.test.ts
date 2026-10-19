@@ -1190,6 +1190,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       caller?: RuntimeSessionIdentity;
       targetRole?: "project" | "ticket" | "subagent";
       parentSessionId?: string | null;
+      liveChildren?: readonly string[];
     } = {},
   ) {
     let lookups = 0;
@@ -1213,7 +1214,12 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
       watches: () => options.watches ?? null,
-      delegate: () => null,
+      delegate: () =>
+        options.liveChildren === undefined
+          ? null
+          : ({
+              liveChildren: () => options.liveChildren!,
+            } as NonNullable<ReturnType<AgentToolDoorOptions["delegate"]>>),
       mcp: () => null,
       supervise: () =>
         ({
@@ -1355,6 +1361,54 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       expect(h.sends).toHaveLength(1);
     },
   );
+
+  it.each([CALLER, TICKET_CALLER])(
+    "does not arm a second report for $role's active delegate",
+    async (caller) => {
+      const watches = recordingWatches();
+      const h = superviseHarness({
+        caller,
+        watches,
+        targetRole: "subagent",
+        parentSessionId: caller.sessionId,
+        liveChildren: [TARGET_SESSION],
+      });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Focus on the regression",
+      });
+      expect(h.sends).toHaveLength(1);
+      expect(result.text).toContain("Its delegation answer reports back");
+      expect(watches.sessions).toEqual([]);
+    },
+  );
+
+  it("does not arm a duplicate watch if the delegate answers during delivery", async () => {
+    const delivery = Promise.withResolvers<void>();
+    const watches = recordingWatches();
+    const state = { delivery: delivery.promise, watches, liveChildren: [TARGET_SESSION] };
+    const h = superviseHarness(state);
+    const sending = h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Focus",
+    });
+    await vi.waitFor(() => expect(h.sends).toHaveLength(1));
+    state.liveChildren = [];
+    delivery.resolve();
+    expect((await sending).text).toContain("Its delegation answer reports back");
+    expect(watches.sessions).toEqual([]);
+  });
+
+  it("still watches a target outside the caller's pending delegations", async () => {
+    const watches = recordingWatches();
+    const h = superviseHarness({ watches, liveChildren: ["another-child"] });
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Carry on",
+    });
+    expect(result.text).toContain("A notice from Volli will arrive");
+    expect(watches.sessions).toHaveLength(1);
+  });
 
   it("confirms a delivered send even when arming its watch cannot read the target (VC-457)", async () => {
     const watches = recordingWatches();

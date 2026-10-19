@@ -16,6 +16,7 @@ import { hostCodeMode } from "../codemode/dev-config";
 import { hostMcpDispatch } from "../mcp/dispatch-policy";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import { createAttachmentIdentities } from "./attachment-identity";
+import { LEGACY_TICKET_SURFACE } from "./fixtures/main-surface-baseline";
 import { createRuntimeAssembly, type RuntimeAssemblyOptions } from "./assembly";
 import * as agentRuntime from "@volli/agent-runtime";
 import * as shellPort from "../shell/agent-port";
@@ -465,7 +466,7 @@ describe("runtime attachment assembly", () => {
         const surface = assembled.sessionToolSurface!;
         const today = surface.resolve("ticket", []);
         expect(today).toContain("session.send");
-        const tools = held ? today : today.filter((tool) => tool !== "session.send");
+        const tools = held ? today : LEGACY_TICKET_SURFACE;
         await surface.record(session.id, tools);
         // Calling today's birth writer again must not replace the recorded input.
         await surface.record(session.id, today);

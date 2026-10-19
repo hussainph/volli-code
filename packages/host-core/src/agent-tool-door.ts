@@ -618,6 +618,9 @@ async function sendSessionTool(
   const message = requiredText(request.input, "message", "the steering text to deliver.");
   if (!message.ok) return refusal(message.text);
   const operationId = `${session.sessionId}:${request.toolCallId}`;
+  // Snapshot before delivery: a child that answers during the send already
+  // owes its parent a delegation report, not a second turn-watch notice.
+  const delegatedChildren = options.delegate()?.liveChildren(session.sessionId) ?? [];
   const withdrawn = sendWithdrawal(signal);
   try {
     const outcome = await Promise.race([
@@ -646,12 +649,14 @@ async function sendSessionTool(
             : outcome.midTurn === false
               ? "The adapter took it as a new prompt, but did not confirm that a turn opened."
               : "The adapter accepted it but did not report whether it opened or joined a turn.",
-        await watchOpenedSession(
-          watchPorts(options),
-          session,
-          { sessionId: outcome.sessionId, title: outcome.title },
-          "steered",
-        ),
+        delegatedChildren.includes(outcome.sessionId)
+          ? "Its delegation answer reports back; no separate watch was armed."
+          : await watchOpenedSession(
+              watchPorts(options),
+              session,
+              { sessionId: outcome.sessionId, title: outcome.title },
+              "steered",
+            ),
       ].join(" "),
     };
   } catch (error) {

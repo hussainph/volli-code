@@ -17,8 +17,9 @@
  *
  * VC-861 updates the Ticket birth entries by adding `session.send` in canonical
  * order; project/subagent entries and the matrix keep their original bytes.
- * The old Ticket membership is pinned by assembly.test.ts (held: false), not
- * these updated birth expectations. No durable Session record is rewritten.
+ * LEGACY_TICKET_SURFACE below pins the old headless Ticket birth as a literal;
+ * assembly.test.ts uses it to prove reattach and refresh cannot widen that
+ * authority. No durable Session record is rewritten.
  *
  * Encoding:
  * - `surfaces` — one distinct resolved surface per entry, tools comma-joined
@@ -29,6 +30,21 @@
  * - `table` — one entry per verified combination in enumeration order;
  *   `n >= 0` names `surfaces[n]`, `n < 0` names `errors[-n - 1]`.
  */
+import type { SessionToolId } from "@volli/shared";
+
+/** Pre-VC-861 headless Ticket birth: no web, browser, shells, or person ports.
+ * Pinned bytes, deliberately not filtered out of today's resolver output.
+ */
+export const LEGACY_TICKET_SURFACE: readonly SessionToolId[] = [
+  "read",
+  "edit",
+  "write",
+  "execute",
+  "todo_write",
+  "session.delegate",
+  "watch",
+];
+
 export interface MainSurfaceBaseline {
   readonly surfaces: readonly string[];
   readonly errors: readonly string[];
