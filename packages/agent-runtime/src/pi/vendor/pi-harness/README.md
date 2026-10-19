@@ -123,11 +123,11 @@ branch-summary execution. `Agent`/agent loop are **not** vendored.
    reported `patch` is built from the original and written text so it applies
    to the file's bytes. `detectLineEnding` and `restoreLineEndings` are removed.
 7. **Bounded read (VC-801):** `read` no longer calls `readBinaryFile`. It opens
-   the file through a new `FileSystem.openFileReader` (Node: the path is
-   `stat`ed, following symlinks, and a directory, FIFO, device or socket is
-   refused before anything is opened; the file is then opened
-   `O_NONBLOCK | O_NOCTTY` and judged again by `fstat` on the descriptor, so a
-   path swapped to another file type in between is still refused) and reads
+   the file through a new `FileSystem.openFileReader` (Node: opened
+   `O_NONBLOCK | O_NOCTTY` and judged by `fstat` on the descriptor, so a
+   directory, FIFO, device or socket is refused at once without a pathname
+   check/use window, symlinks followed; see
+   `docs/development/codeql-triage.md`) and reads
    the first 8 KiB. An image signature there still reads the whole file into
    the unchanged image path; a NUL byte there answers a binary notice (a
    UTF-16 notice when a UTF-16 BOM leads) instead of decoded text; anything

@@ -125,11 +125,6 @@ function pngChunk(type: string, length: number): Buffer {
   return data;
 }
 
-/** A path `stat` that says regular file, for mocks that serve their own handle. */
-async function regularPath() {
-  return { isFile: () => true, isDirectory: () => false };
-}
-
 function failure(result: Result<unknown, FileError>, code: string) {
   expect(result).toMatchObject({ ok: false, error: { name: "FileError", code } });
 }
@@ -351,7 +346,7 @@ describe("read refuses what is not a regular file at once (VC-801)", () => {
     }
   });
 
-  it("refuses a socket behind a symlink before opening it", async () => {
+  it("refuses a socket behind a symlink as not a regular file", async () => {
     const env = new NodeExecutionEnv({ cwd: scratch });
     // A short directory: a socket path must fit in sun_path.
     const short = await fs.mkdtemp(join(tmpdir(), "vc801-"));
@@ -483,7 +478,6 @@ describe("openFileReader (VC-801)", () => {
     const controller = new AbortController();
     let closed = false;
     const aborting = await mockedEnv({
-      stat: regularPath,
       open: async () => {
         controller.abort();
         return {
@@ -504,7 +498,6 @@ describe("openFileReader (VC-801)", () => {
   it("returns stat, read and close failures instead of rejecting", async () => {
     const io = Object.assign(new Error("fixture EIO"), { code: "EIO" });
     const statFails = await mockedEnv({
-      stat: regularPath,
       open: async () => ({
         stat: async () => {
           throw io;
@@ -519,7 +512,6 @@ describe("openFileReader (VC-801)", () => {
       throw io;
     };
     const reads = await mockedEnv({
-      stat: regularPath,
       open: async () => ({
         stat: async () => ({ isFile: () => true, isDirectory: () => false, size: 4 }),
         read: async () => onRead(),
@@ -539,12 +531,11 @@ describe("openFileReader (VC-801)", () => {
     await expect(opened.value.close(context)).resolves.toBeUndefined();
   });
 
-  it("opens without a controlling terminal and judges the open descriptor again", async () => {
+  it("opens without a controlling terminal and judges the open descriptor", async () => {
     const flags: number[] = [];
     let closes = 0;
     let kind = { isFile: () => false, isDirectory: () => false, size: 0 };
     const swapped = await mockedEnv({
-      stat: regularPath,
       open: async (_path: string, flag: number) => {
         flags.push(flag);
         return {
@@ -563,14 +554,20 @@ describe("openFileReader (VC-801)", () => {
     expect(closes).toBe(2);
     expect(flags[0]).toBe(constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY);
 
+    await fs.writeFile(join(scratch, "f"), "regular, but the open is refused");
     const denied = Object.assign(new Error("fixture EACCES"), { code: "EACCES" });
     const unopenable = await mockedEnv({
-      stat: regularPath,
       open: async () => {
         throw denied;
       },
     });
     failure(await unopenable.openFileReader("f", context), "permission_denied");
+    const odd = await mockedEnv({
+      open: async () => {
+        throw new Error("no code at all");
+      },
+    });
+    failure(await odd.openFileReader("f", context), "unknown");
   });
 
   it("is guarded like readBinaryFile in the scoped environment and refused for credential files", async () => {

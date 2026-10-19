@@ -537,7 +537,21 @@ function notRegularFile(
     : new FileError("invalid", NOT_A_REGULAR_FILE, path);
 }
 
-/** The descriptor judged again: the path's kind is checked before open, this catches a swap in between. */
+/**
+ * Why an open failed. A socket cannot be opened at all, and its errno differs
+ * by platform (ENXIO, or macOS's EOPNOTSUPP, which libuv leaves unnamed), so
+ * the path's kind is looked up after the failure, to choose the words only.
+ */
+async function openFailure(error: unknown, path: string): Promise<FileError> {
+  try {
+    const refusal = notRegularFile(await stat(path), path);
+    if (refusal) return refusal;
+  } catch {
+    // The open's own error says it better.
+  }
+  return toFileError(error, path);
+}
+
 async function regularFileReader(
   file: Awaited<ReturnType<typeof openFile>>,
   path: string,
@@ -978,12 +992,12 @@ export class NodeExecutionEnv implements ExecutionEnv {
   }
 
   /**
-   * The path's kind is judged before anything is opened, so a device, FIFO or
-   * socket behind a symlink is refused without an open's side effects, and
-   * judged again on the open descriptor, so a path swapped to one in between is
-   * still refused (VC-801). Opened non-blocking, so a FIFO swapped in cannot hold
-   * the open, and without a controlling terminal, so a terminal swapped in
-   * cannot become one. Neither flag changes anything for a regular file.
+   * Judged on the open descriptor rather than on the path, so there is no
+   * check-then-use window for a swap to slip a device past (VC-801; see
+   * docs/development/codeql-triage.md). Opened non-blocking, so a FIFO cannot
+   * hold the open, and without a controlling terminal, so a terminal cannot
+   * become one; neither flag changes anything for a regular file. A socket
+   * cannot be opened at all, and is refused in the same words.
    */
   async openFileReader(path: string, context: Context): Promise<Result<FileByteReader, FileError>> {
     const resolved = resolvePath(this.cwd, path);
@@ -991,14 +1005,12 @@ export class NodeExecutionEnv implements ExecutionEnv {
     if (aborted) return aborted;
     let file: Awaited<ReturnType<typeof openFile>>;
     try {
-      const refusal = notRegularFile(await stat(resolved), resolved);
-      if (refusal) return err(refusal);
       file = await openFile(
         resolved,
         constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY,
       );
     } catch (error) {
-      return err(toFileError(error, resolved));
+      return err(await openFailure(error, resolved));
     }
     const opened = await regularFileReader(file, resolved, context);
     if (!opened.ok) await file.close().catch(() => undefined);
