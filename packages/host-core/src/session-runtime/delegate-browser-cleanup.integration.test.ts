@@ -182,7 +182,7 @@ const SHELL_SURFACE: readonly SessionToolId[] = ["shell_start", "shell_output", 
 function fixture(role: "project" | "ticket", options: { shells?: BackgroundShellHost } = {}) {
   const { shells } = options;
   // In the canonical order: the shell tools sit before `browser_find`.
-  const surfaceTools =
+  const surfaceTools: readonly SessionToolId[] =
     shells === undefined ? SURFACE : [...SURFACE.slice(0, -1), ...SHELL_SURFACE, "browser_find"];
   const database = (db = openTestDb());
   const directory = join(dirname(database.dbPath), "workspace");
