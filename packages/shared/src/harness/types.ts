@@ -346,6 +346,27 @@ export interface HarnessAdapter {
    * name too many costs the user a terminal that cannot authenticate.
    */
   readonly sessionMarkers: readonly string[];
+  /**
+   * The invocations that only ask the harness about itself and exit without
+   * starting a session — `claude --version`, `codex --help`, `claude mcp list`.
+   * The wrapper still runs for them, so without this it announced each one as a
+   * launch: the running harness moved, a mint was spent on a launch that never
+   * happened, and the grace window started for a channel nothing would use.
+   *
+   * `flags` match any word the user typed, because a CLI answers `--help` and
+   * `--version` wherever they appear. `subcommands` match only the FIRST word,
+   * which is the only place a CLI reads one.
+   *
+   * List only what the installed CLI really treats this way. A word that is not
+   * one of its subcommands is a PROMPT, and a launch whose prompt matched here
+   * would start a real session that was never announced. Absent means the
+   * harness declares none, which is what a registered manifest gets: Volli
+   * cannot know another CLI's argv, and `-v` is not `--version` everywhere.
+   */
+  readonly nonSessionArgv?: {
+    readonly flags: readonly string[];
+    readonly subcommands: readonly string[];
+  };
 }
 
 /**
