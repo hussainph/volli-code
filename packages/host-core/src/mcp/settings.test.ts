@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { MCP_CONNECTION_TIMEOUT_MS, MCP_ERROR_MAX_CHARS } from "@volli/shared";
 import type { McpProtocolClient } from "./discovery";
-import { deleteProject, insertProject } from "../db/projects-repo";
+import { detachProject, insertProject } from "../db/projects-repo";
 import { MemoryMcpCredentialStore } from "./credential-store";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
@@ -255,10 +255,12 @@ describe("McpSettingsService", () => {
   });
 });
 
-// VC-796: a removed project's servers go with its row (ON DELETE CASCADE), so
-// their credentials have to go by name, and only once the row is gone.
+// VC-796, VC-822: a removed project is detached, not deleted, so its server
+// rows stay; but no Settings screen shows them any more, and a credential
+// nobody can see is one nobody would think to revoke. They go by name, once
+// the project is off the rail.
 describe("McpSettingsService on a project's removal", () => {
-  it("names the project's servers, then forgets only the credentials whose row is gone", async () => {
+  it("names the project's servers, then forgets the credentials of every one off the rail", async () => {
     const credentials = new MemoryMcpCredentialStore();
     const settings = new McpSettingsService({
       db: ctx.db,
@@ -279,17 +281,22 @@ describe("McpSettingsService on a project's removal", () => {
     });
     credentials.update("server-1", () => ({ secrets: { TOKEN: "one" } }));
     credentials.update("server-2", () => ({ secrets: { TOKEN: "two" } }));
+    // A record whose server row is gone altogether is no one's either.
+    credentials.update("server-gone", () => ({ secrets: { TOKEN: "gone" } }));
 
     const serverIds = settings.disconnectProject("p1");
     expect(serverIds).toEqual(["server-1"]);
-    // Before the delete commits, nothing is forgotten.
+    // Before the removal commits, nothing is forgotten.
     settings.forgetRemovedServers(serverIds);
     expect(credentials.read("server-1")).toEqual({ secrets: { TOKEN: "one" } });
 
-    deleteProject(ctx.db, "p1");
-    settings.forgetRemovedServers([...serverIds, "server-2"]);
+    detachProject(ctx.db, "p1", 200);
+    settings.forgetRemovedServers([...serverIds, "server-2", "server-gone"]);
     expect(credentials.read("server-1")).toBeUndefined();
+    expect(credentials.read("server-gone")).toBeUndefined();
     expect(credentials.read("server-2")).toEqual({ secrets: { TOKEN: "two" } });
+    // The server itself is kept for the project's return, without its secrets.
+    expect(settings.list("p1").map(({ id }) => id)).toEqual(["server-1"]);
   });
 });
 

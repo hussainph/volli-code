@@ -465,7 +465,8 @@ export function createDesktopRouter() {
         .mutation(({ ctx, input }) => ctx.handlers["project.reorder"](input, ctx.call)),
       /**
        * `volli:project-remove` projects the same handler (VC-796): the
-       * project's live work stopped, then the delete, then every window told.
+       * project's live work stopped, then the project detached (VC-822),
+       * then every window told.
        */
       remove: workspaceProcedure(
         "project.remove",

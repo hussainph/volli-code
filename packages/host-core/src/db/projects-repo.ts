@@ -66,6 +66,13 @@ interface ProjectRow {
    * read it.
    */
   next_ticket_number: number;
+  /**
+   * Migration 064 — when the person removed the project, or NULL while it is
+   * on the rail (VC-822). Like `next_ticket_number`, not on the domain
+   * `Project`: a detached project is one no listing returns, so nothing that
+   * holds a `Project` has to ask.
+   */
+  removed_at: number | null;
 }
 
 /**
@@ -174,23 +181,101 @@ function readDecisionModelColumn(value: string | null): DecisionModelSetting | n
   return parseDecisionModelSetting(parseJsonColumn(value)) ?? NO_DECISION_MODEL;
 }
 
-/** Every project, ordered by rail position. */
+/**
+ * Every project on the rail, ordered by rail position. A removed project is
+ * detached, not deleted (VC-822), and no listing returns it: this is the one
+ * read every rail, workspace list, worktree allow-list and CLI door builds on.
+ */
 export function listProjects(db: Database.Database): Project[] {
-  const rows = prepared<[], ProjectRow>(db, "SELECT * FROM projects ORDER BY sort_order").all();
+  const rows = prepared<[], ProjectRow>(
+    db,
+    "SELECT * FROM projects WHERE removed_at IS NULL ORDER BY sort_order",
+  ).all();
   return rows.map(mapProject);
 }
 
-export function countProjects(db: Database.Database): number {
-  const row = prepared<[], { count: number }>(db, "SELECT COUNT(*) as count FROM projects").get();
+/**
+ * How many projects are on the rail, or with `"all"` how many rows the table
+ * holds, detached ones included: an import that must only ever fill a
+ * genuinely empty table asks the second question.
+ */
+export function countProjects(
+  db: Database.Database,
+  scope: "attached" | "all" = "attached",
+): number {
+  const row = prepared<[], { count: number }>(
+    db,
+    scope === "all"
+      ? "SELECT COUNT(*) as count FROM projects"
+      : "SELECT COUNT(*) as count FROM projects WHERE removed_at IS NULL",
+  ).get();
   return row?.count ?? 0;
 }
 
+/**
+ * Whether `id` names a project on the rail: false for an unknown id and for
+ * a removed (detached) one. What starts work in a project asks this, so a
+ * removed project's Automations, armed columns and Sessions stay still.
+ */
+export function isProjectAttached(db: Database.Database, id: string): boolean {
+  return (
+    prepared<[string], { id: string }>(
+      db,
+      "SELECT id FROM projects WHERE id = ? AND removed_at IS NULL",
+    ).get(id) !== undefined
+  );
+}
+
+/**
+ * Whether `id` names a project that was removed: its row is there, detached.
+ * An unknown id answers false, so a door can keep its own wording for "no such
+ * project" and say "removed" only when that is what happened.
+ */
+export function isProjectRemoved(db: Database.Database, id: string): boolean {
+  return (
+    prepared<[string], { id: string }>(
+      db,
+      "SELECT id FROM projects WHERE id = ? AND removed_at IS NOT NULL",
+    ).get(id) !== undefined
+  );
+}
+
+/**
+ * The project tracked at `path`, on the rail or removed: the path stays the
+ * row's (`UNIQUE`), so adding the folder again finds the removed project and
+ * re-attaches it rather than registering a second one.
+ *
+ * The match is the exact stored string. A spelling of the same folder that
+ * differs (another letter case on a case-insensitive volume, a symlink to it)
+ * is a different path here, and registers a second project, as it always has.
+ */
 export function findProjectByPath(db: Database.Database, path: string): Project | undefined {
   const row = prepared<[string], ProjectRow>(db, "SELECT * FROM projects WHERE path = ?").get(path);
   return row ? mapProject(row) : undefined;
 }
 
-/** One project by id — used by the artifacts IPC handlers to resolve a ticket's project path. */
+/**
+ * The removed project that holds `ticketPrefix`, if one does. A removed
+ * project keeps its prefix for its return (VC-822): a new project may not take
+ * it, or adding the old folder again would meet a prefix on the rail it can
+ * never get back, since a prefix cannot be changed.
+ */
+export function findRemovedProjectByPrefix(
+  db: Database.Database,
+  ticketPrefix: string,
+): Project | undefined {
+  const row = prepared<[string], ProjectRow>(
+    db,
+    "SELECT * FROM projects WHERE ticket_prefix = ? AND removed_at IS NOT NULL ORDER BY sort_order",
+  ).get(ticketPrefix);
+  return row ? mapProject(row) : undefined;
+}
+
+/**
+ * One project by id, removed or not — used by the artifacts IPC handlers to
+ * resolve a ticket's project path. An id lookup is not a listing: a removed
+ * project's Sessions and tickets still name it.
+ */
 export function getProjectById(db: Database.Database, id: string): Project | undefined {
   const row = prepared<[string], ProjectRow>(db, "SELECT * FROM projects WHERE id = ?").get(id);
   return row ? mapProject(row) : undefined;
@@ -532,6 +617,39 @@ export function listProjectSessionIds(db: Database.Database, projectId: string):
 /** Deletes a project; `ON DELETE CASCADE` takes its tickets/labels/ticket_events with it. */
 export function deleteProject(db: Database.Database, id: string): void {
   prepared(db, "DELETE FROM projects WHERE id = ?").run(id);
+}
+
+/**
+ * Removes a project from the rail without deleting it (VC-822): the row, its
+ * tickets, Sessions and their history all stay, and every listing stops
+ * returning it. Answers whether this call detached it; an unknown or already
+ * removed project is left as it is.
+ */
+export function detachProject(db: Database.Database, id: string, now: number): boolean {
+  return (
+    prepared(
+      db,
+      `UPDATE projects
+          SET removed_at = ?, row_version = row_version + 1, updated_at = ?
+        WHERE id = ? AND removed_at IS NULL`,
+    ).run(now, now, id).changes > 0
+  );
+}
+
+/**
+ * Puts a removed project back on the rail, at its end, with everything it
+ * held when it was removed. Answers whether this call re-attached it; an
+ * unknown project, or one already on the rail, is left as it is.
+ */
+export function reattachProject(db: Database.Database, id: string, now: number): boolean {
+  return (
+    prepared(
+      db,
+      `UPDATE projects
+          SET removed_at = NULL, sort_order = ?, row_version = row_version + 1, updated_at = ?
+        WHERE id = ? AND removed_at IS NOT NULL`,
+    ).run(nextSortOrder(db), now, id).changes > 0
+  );
 }
 
 /**

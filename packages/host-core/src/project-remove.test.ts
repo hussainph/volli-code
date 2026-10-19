@@ -1,16 +1,24 @@
 /**
- * Removing a project (VC-796): its live work stops BEFORE the cascade takes
- * its Sessions, and the windows hear about it after.
+ * Removing a project (VC-796, VC-822): its live work stops while it is still
+ * on the rail, then it is DETACHED, keeping its tickets and Sessions, and the
+ * windows hear about it after.
  *
  * Every port records the step it was called at together with what the
- * database still held then, so "before the delete" is read off the database
- * rather than inferred from call order alone.
+ * database held then, so "before the detach" is read off the database rather
+ * than inferred from call order alone.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import type { OpenNativeBinding } from "@volli/session-engine";
 
-import { getProjectById, insertProject, listProjectSessionIds } from "./db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "./db/test-helpers";
+import {
+  getProjectById,
+  insertProject,
+  isProjectAttached,
+  listProjects,
+  listProjectSessionIds,
+} from "./db/projects-repo";
+import { insertTicket } from "./db/tickets-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "./db/test-helpers";
 import {
   hostProjectLiveWork,
   ProjectRemovalRefused,
@@ -39,10 +47,18 @@ function insertSession(id: string, projectId: string): void {
     .run(id, projectId, id);
 }
 
+function removedAt(projectId: string): number | null {
+  return (
+    ctx.db.prepare("SELECT removed_at FROM projects WHERE id = ?").get(projectId) as {
+      removed_at: number | null;
+    }
+  ).removed_at;
+}
+
 interface Step {
   step: string;
-  /** Whether the project row was still there when the step ran. */
-  projectRow: boolean;
+  /** Whether the project was still on the rail when the step ran. */
+  onRail: boolean;
   /** The project's Session rows when the step ran. */
   sessions: readonly string[];
   arg?: unknown;
@@ -53,7 +69,7 @@ function recorder(overrides: Partial<ProjectLiveWork> = {}) {
   const note = (step: string, arg?: unknown) => {
     steps.push({
       step,
-      projectRow: getProjectById(ctx.db, "p1") !== undefined,
+      onRail: isProjectAttached(ctx.db, "p1"),
       sessions: listProjectSessionIds(ctx.db, "p1"),
       ...(arg === undefined ? {} : { arg }),
     });
@@ -80,6 +96,7 @@ function recorder(overrides: Partial<ProjectLiveWork> = {}) {
     live,
     disposeFeed: (projectId) => note("disposeFeed", projectId),
     announce: () => note("announce"),
+    now: () => 42,
   };
   return { steps, ports };
 }
@@ -88,34 +105,58 @@ function seed(): void {
   ctx = openTestDb();
   insertProject(ctx.db, testProject({ id: "p1", path: "/repo/one" }));
   insertProject(ctx.db, testProject({ id: "p2", path: "/repo/two" }));
+  insertTicket(ctx.db, testTicket("p1", { id: "t-live", ticketNumber: 1 }));
+  insertTicket(ctx.db, testTicket("p1", { id: "t-archived", ticketNumber: 2 }));
+  ctx.db.prepare("UPDATE tickets SET archived_at = 5 WHERE id = 't-archived'").run();
   insertSession("s-board", "p1");
   insertSession("s-ticket", "p1");
   insertSession("s-other", "p2");
 }
 
 describe("removeProject", () => {
-  it("stops every Session's live work while its rows still exist, then deletes, then tells", async () => {
+  it("stops every Session's live work while the project is on the rail, then detaches it", async () => {
     const { steps, ports } = recorder();
 
     await removeProject(ports, "p1");
 
     const both = ["s-board", "s-ticket"];
     expect(steps).toEqual([
-      { step: "releaseBindings", projectRow: true, sessions: both, arg: both },
-      { step: "disposeShells", projectRow: true, sessions: both, arg: both },
-      { step: "killTerminals", projectRow: true, sessions: both, arg: both },
-      { step: "closeBrowserTabs", projectRow: true, sessions: both, arg: "p1" },
-      { step: "mcp.disconnect", projectRow: true, sessions: both, arg: "p1" },
-      // The cascade has run by now: the row and its Sessions are gone.
-      { step: "mcp.forget", projectRow: false, sessions: [], arg: ["server-1"] },
-      { step: "disposeFeed", projectRow: false, sessions: [], arg: "p1" },
-      { step: "announce", projectRow: false, sessions: [] },
+      { step: "releaseBindings", onRail: true, sessions: both, arg: both },
+      { step: "disposeShells", onRail: true, sessions: both, arg: both },
+      { step: "killTerminals", onRail: true, sessions: both, arg: both },
+      { step: "closeBrowserTabs", onRail: true, sessions: both, arg: "p1" },
+      { step: "mcp.disconnect", onRail: true, sessions: both, arg: "p1" },
+      // Detached by now, and nothing cascaded: its Sessions are all still there.
+      { step: "mcp.forget", onRail: false, sessions: both, arg: ["server-1"] },
+      { step: "disposeFeed", onRail: false, sessions: both, arg: "p1" },
+      { step: "announce", onRail: false, sessions: both },
     ]);
-    expect(getProjectById(ctx.db, "p2")).toBeDefined();
+    expect(isProjectAttached(ctx.db, "p2")).toBe(true);
     expect(listProjectSessionIds(ctx.db, "p2")).toEqual(["s-other"]);
   });
 
-  it("refuses, stopping and deleting nothing else, when a binding will not close", async () => {
+  // The defect (VC-822): removal used to delete the row, and the cascades took
+  // every ticket, live or archived, and every Session with its history.
+  it("keeps the project's tickets and Sessions, and only hides it from the rail", async () => {
+    const { ports } = recorder();
+
+    await removeProject(ports, "p1");
+
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["p2"]);
+    expect(getProjectById(ctx.db, "p1")).toMatchObject({ id: "p1", path: "/repo/one" });
+    expect(removedAt("p1")).toBe(42);
+    expect(
+      ctx.db
+        .prepare("SELECT id, archived_at FROM tickets WHERE project_id = 'p1' ORDER BY id")
+        .all(),
+    ).toEqual([
+      { id: "t-archived", archived_at: 5 },
+      { id: "t-live", archived_at: null },
+    ]);
+    expect(listProjectSessionIds(ctx.db, "p1")).toEqual(["s-board", "s-ticket"]);
+  });
+
+  it("refuses, stopping and detaching nothing else, when a binding will not close", async () => {
     const { steps, ports } = recorder({
       releaseBindings: async () => ({ stillOpen: ["s-ticket"] }),
     });
@@ -127,7 +168,7 @@ describe("removeProject", () => {
       "A Session in this project is still running, so nothing was removed. Stop it and try again.",
     );
     expect(steps).toEqual([]);
-    expect(getProjectById(ctx.db, "p1")).toBeDefined();
+    expect(isProjectAttached(ctx.db, "p1")).toBe(true);
     expect(listProjectSessionIds(ctx.db, "p1").toSorted()).toEqual(["s-board", "s-ticket"]);
   });
 
@@ -147,13 +188,15 @@ describe("removeProject", () => {
     );
     await expect(refusal).rejects.toMatchObject({ stillOpen: ["s-late", "s-later"] });
     expect(steps).toEqual([]);
-    expect(getProjectById(ctx.db, "p1")).toBeDefined();
+    expect(isProjectAttached(ctx.db, "p1")).toBe(true);
   });
 
-  it("removes a project on a host that keeps no MCP settings", async () => {
+  it("removes a project on a host that keeps no MCP settings, stamped by the wall clock", async () => {
     const { steps, ports } = recorder({ mcp: null });
+    const { now: _clock, ...unclocked } = ports;
+    const before = Date.now();
 
-    await removeProject(ports, "p1");
+    await removeProject(unclocked, "p1");
 
     expect(steps.map(({ step }) => step)).toEqual([
       "releaseBindings",
@@ -163,16 +206,22 @@ describe("removeProject", () => {
       "disposeFeed",
       "announce",
     ]);
-    expect(getProjectById(ctx.db, "p1")).toBeUndefined();
+    expect(isProjectAttached(ctx.db, "p1")).toBe(false);
+    expect(removedAt("p1")).toBeGreaterThanOrEqual(before);
   });
 
-  it("does nothing for an id no project has", async () => {
+  it("does nothing for an id no project on the rail has", async () => {
     const { steps, ports } = recorder();
 
     await removeProject(ports, "missing");
+    await removeProject(ports, "p1");
+    steps.length = 0;
+    // Removed already: there is nothing left to stop, and nothing to tell.
+    await removeProject({ ...ports, now: () => 99 }, "p1");
 
     expect(steps).toEqual([]);
-    expect(getProjectById(ctx.db, "p1")).toBeDefined();
+    expect(removedAt("p1")).toBe(42);
+    expect(isProjectAttached(ctx.db, "p2")).toBe(true);
   });
 });
 
@@ -332,6 +381,7 @@ describe("hostProjectLiveWork", () => {
       "mcp.forget:server-1",
     ]);
     expect(disposed).toEqual(["p1"]);
-    expect(getProjectById(ctx.db, "p1")).toBeUndefined();
+    expect(isProjectAttached(ctx.db, "p1")).toBe(false);
+    expect(listProjectSessionIds(ctx.db, "p1")).toEqual(["s-board", "s-ticket"]);
   });
 });

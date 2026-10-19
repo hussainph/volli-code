@@ -288,6 +288,9 @@ describe("buildExportDocument — populated db", () => {
         rowVersion: 4,
         createdAt: project.createdAt,
         updatedAt: 62,
+        // On the rail: removal detaches a project rather than deleting it
+        // (migration 064, VC-822).
+        removedAt: null,
       },
     ]);
 
