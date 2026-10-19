@@ -61,7 +61,7 @@ import { testHostHandlers, type TestHandlerPorts } from "./testing/host-handlers
 import { writeModelAccessDefault } from "./session-runtime/model-access-preferences";
 import { archiveTicketCommand, updateTicketFieldsCommand } from "./ticket-commands";
 import { createSessionTokenRegistry } from "./session-tokens";
-import { scriptedGit } from "./worktree/scripted-git";
+import { scriptedGit, scriptedReadOnlyGit } from "./worktree/scripted-git";
 import * as worktree from "./worktree";
 import { getWorktreeSnapshots, resetWorktreeSnapshotsForTest } from "./worktree/snapshot";
 import { createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
@@ -4910,7 +4910,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "status") return " M src/a.ts\n";
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "rev-list" && args[1] === "--left-right") return "0\t3\n";
@@ -5106,7 +5106,7 @@ describe("agent command service", () => {
         ticketPrefix: "VC",
       }),
     );
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff" && args.includes("main...HEAD")) return "3\t1\tsrc/a.ts\n";
       if (args[0] === "diff" && args.includes("HEAD")) return "9\t0\tsrc/wip.ts\n";
@@ -5177,7 +5177,7 @@ describe("agent command service", () => {
     );
     const numstat =
       Array.from({ length: 25 }, (_, i) => `1\t0\tsrc/file-${i}.ts`).join("\n") + "\n";
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no origin ref");
       if (args[0] === "diff") return numstat;
       return "";
@@ -5768,7 +5768,7 @@ describe("agent command service", () => {
       );
       void paths;
     }
-    const { gitAsync } = scriptedGit((args, cwd) => {
+    const { gitAsync } = scriptedReadOnlyGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5847,7 +5847,7 @@ describe("agent command service", () => {
         }),
       );
     }
-    const { gitAsync } = scriptedGit((args, cwd) => {
+    const { gitAsync } = scriptedReadOnlyGit((args, cwd) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) {
@@ -5934,7 +5934,7 @@ describe("agent command service", () => {
         baseBranch: "main",
       }),
     );
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       if (args[0] === "diff" && args.includes("--raw")) return rawModified(["package.json"]);
@@ -6062,7 +6062,7 @@ describe("agent command service", () => {
         }),
       );
     }
-    return scriptedGit((args) => {
+    return scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       // Every worktree, Done or not, has the same uncommitted edit (the diff
@@ -6144,7 +6144,7 @@ describe("agent command service", () => {
     }
     // VC-1 and VC-2 answer at once; every other worktree's git never returns,
     // the way a read wedged on a contended index lock does.
-    const scripted = scriptedGit((args) => {
+    const scripted = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") return "base-tip\n";
       if (args[0] === "merge-base") return "base-sha\n";
       return "";

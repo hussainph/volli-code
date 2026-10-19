@@ -19,7 +19,7 @@ import { CHANGE_SET_FILE_CAP } from "@volli/shared";
 
 import { changeSetSnapshot, readChangeSetBaseFile } from "./change-set";
 import { GitError, runGitCapturingAsync } from "./git";
-import { scriptedGit } from "./scripted-git";
+import { scriptedGit, scriptedReadOnlyGit } from "./scripted-git";
 
 /** Join NUL-terminated git -z fields without octal-escape hazards (`\03` ≠ NUL+"3"). */
 function z(...fields: string[]): string {
@@ -65,7 +65,7 @@ function scriptedChangeSetGit(opts: {
   numstat?: string;
   status?: string;
 }): ReturnType<typeof scriptedGit> {
-  return scriptedGit((args) => {
+  return scriptedReadOnlyGit((args) => {
     if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
     if (args[0] === "merge-base") return "basesha\n";
     if (args[0] === "rev-parse" && args[1] === "main") return "tipsha\n";
@@ -97,7 +97,7 @@ describe("changeSetSnapshot — merge-base stamping", () => {
   });
 
   it("reuses the remote-tracking probe's SHA rather than re-resolving the tip", async () => {
-    const { gitAsync, calls } = scriptedGit((args) => {
+    const { gitAsync, calls } = scriptedReadOnlyGit((args) => {
       // `rev-parse --verify` PRINTS the SHA it verified.
       if (args[0] === "rev-parse" && args[1] === "--verify") return "remotetip\n";
       if (args[0] === "merge-base") throw new GitError("failed", "fatal: no merge base", args);
@@ -117,7 +117,7 @@ describe("changeSetSnapshot — merge-base stamping", () => {
   });
 
   it("falls back to the comparison ref tip when merge-base cannot be computed", async () => {
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
       if (args[0] === "merge-base") throw new GitError("failed", "fatal: no merge base", args);
       if (args[0] === "rev-parse" && args[1] === "main") return "tipsha\n";
@@ -664,7 +664,7 @@ describe("changeSetSnapshot — file cap", () => {
 
 describe("changeSetSnapshot — failures", () => {
   it("errs when no base branch is known", async () => {
-    const { gitAsync, calls } = scriptedGit(() => "");
+    const { gitAsync, calls } = scriptedReadOnlyGit(() => "");
     const result = await changeSetSnapshot(gitAsync, { worktreePath: "/wt", baseBranch: null });
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -673,7 +673,7 @@ describe("changeSetSnapshot — failures", () => {
   });
 
   it("surfaces real git stderr when a read fails", async () => {
-    const { gitAsync } = scriptedGit((args) => {
+    const { gitAsync } = scriptedReadOnlyGit((args) => {
       if (args[0] === "rev-parse" && args[1] === "--verify") throw new Error("no such ref");
       if (args[0] === "merge-base" || (args[0] === "rev-parse" && args[1] === "main")) {
         throw new GitError("failed", "fatal: bad object main", args);
