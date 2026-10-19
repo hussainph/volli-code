@@ -160,7 +160,11 @@ function harness(
                 }),
                 projection("ffffffff-1", {
                   detached: true,
-                  stopped: { at: 5, reason: null, by: { kind: "session", sessionId: BOARD.sessionId } },
+                  stopped: {
+                    at: 5,
+                    reason: null,
+                    by: { kind: "session", sessionId: BOARD.sessionId },
+                  },
                 }),
                 projection("abababab-1", {
                   detached: true,
