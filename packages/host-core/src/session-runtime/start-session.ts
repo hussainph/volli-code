@@ -54,6 +54,7 @@ import type {
 } from "@volli/shared";
 
 import type { SessionStartedNotice } from "@volli/shared";
+import type { SessionRuntime } from "@volli/session-engine";
 import { attachRefusal } from "./attach-refusal";
 import type { AutoTitleRequest } from "./auto-title";
 import type { TicketSessionDelegation } from "./delegation-policy";
@@ -86,6 +87,11 @@ export interface StartSessionPorts {
    * the whole of this module's replay story: `message.submit` is deduplicated
    * by command id in the Session Engine, so a derived id makes a replayed start
    * submit the same turn instead of a second one.
+   *
+   * `delivery: "queue"` holds the message in the Session's durable follow-up
+   * queue instead, under the same ids, to be released at its next ready attach
+   * (VC-799). It answers once the queue has it, not when a turn ends. Rejects
+   * when the runtime refused the message: see {@link kickoffSubmitter}.
    */
   submitSessionMessage?: (input: {
     sessionId: string;
@@ -93,6 +99,7 @@ export interface StartSessionPorts {
     commandId: string;
     messageId: string;
     origin?: SessionOrigin;
+    delivery?: "queue";
   }) => Promise<void>;
   refineAutoTitle?: (input: AutoTitleRequest) => void;
   onMutation?: (input: { ticketId: string; projectId: string; kind: "session" }) => void;
@@ -129,7 +136,11 @@ export type StartSessionResult = {
   /** The title the Session was given, whether explicit or heuristic. */
   title: string;
 } & (
-  | { state: "ready" }
+  | {
+      state: "ready";
+      /** The kickoff went to the ready attach, detached. */
+      kickoff: "submitted";
+    }
   | {
       state: "needs-recovery";
       /**
@@ -139,6 +150,12 @@ export type StartSessionResult = {
        * so a door hands that on rather than a bare "needs recovery".
        */
       attachFailure: string;
+      /**
+       * Where the kickoff went (VC-799). `held`: it waits in the Session's
+       * queue for its next ready attach. `unsent`: it could not be held, which
+       * the log says.
+       */
+      kickoff: "held" | "unsent";
     }
 );
 
@@ -182,12 +199,20 @@ export async function startSessionOperation(
     ...(typeof input.message === "string" ? { autoSelect: { request: input.message } } : {}),
     ...(input.delegation === undefined ? {} : { delegation: input.delegation }),
   });
-  // The kickoff rides only a ready attach — a Session that needs recovery holds
-  // its first turn for the app's Retry — and it is deliberately detached: the
-  // runtime answers a `message.submit` when the TURN it started ends, and this
-  // reply is due as the Session opens, not when the agent finishes.
+  // The kickoff rides a ready attach, deliberately detached: the runtime
+  // answers a `message.submit` when the TURN it started ends, and this reply is
+  // due as the Session opens, not when the agent finishes. A refusal lands in
+  // the log (`kickoffSubmitter` reads the receipt).
+  //
+  // A Session that needs recovery has nothing to run it on yet, so its kickoff
+  // is HELD for the app's Retry instead (VC-799): queued in the Session's own
+  // durable follow-up queue under the same derived ids, which releases it at
+  // the next ready attach and shows it to a person meanwhile. A replayed start
+  // queues under the same command id again, and the queue answers that from
+  // its record rather than holding a second copy.
+  const ids = kickoffIds(input.operationId);
+  let held: "held" | "unsent" = "unsent";
   if (started.state === "ready") {
-    const ids = kickoffIds(input.operationId);
     void Promise.resolve()
       .then(() =>
         ports.submitSessionMessage?.({
@@ -202,6 +227,24 @@ export async function startSessionOperation(
         // was meant for as a field.
         log.error("kickoff was not delivered", { sessionId: started.sessionId, error });
       });
+  } else {
+    try {
+      if (ports.submitSessionMessage !== undefined) {
+        await ports.submitSessionMessage({
+          sessionId: started.sessionId,
+          text: kickoff,
+          origin: startOrigin(input),
+          ...ids,
+          delivery: "queue",
+        });
+        held = "held";
+      }
+    } catch (error) {
+      log.error("kickoff could not be held for the session's retry", {
+        sessionId: started.sessionId,
+        error,
+      });
+    }
   }
   // Only the heuristic door refines: a Session started with an explicit title is
   // a naming and gets zero title calls. Gated on the same `ready` the kickoff is
@@ -231,10 +274,55 @@ export async function startSessionOperation(
     sessionId: started.sessionId,
     ticketDisplayId: displayId,
     ...(started.state === "ready"
-      ? { state: "ready" as const }
-      : { state: "needs-recovery" as const, attachFailure: attachRefusal(started.receipt) }),
+      ? { state: "ready" as const, kickoff: "submitted" as const }
+      : {
+          state: "needs-recovery" as const,
+          attachFailure: attachRefusal(started.receipt),
+          kickoff: held,
+        }),
     model: started.model,
     title,
+  };
+}
+
+/**
+ * The runtime durably refused a kickoff: its receipt is `rejected`, and that
+ * receipt is already in the Session's own ledger, where a watcher reads it.
+ * A caller that settles on the ledger reports this rather than settling on
+ * it, so the earliest durable outcome stays the one that counts.
+ */
+export class KickoffRefusedError extends Error {
+  constructor(code: string, detail: string | null) {
+    super(`The kickoff was refused (${code})${detail === null ? "" : `: ${detail}`}`);
+    this.name = "KickoffRefusedError";
+  }
+}
+
+/**
+ * The kickoff port every start door is handed: one user `message.submit`
+ * under the ids its caller derived, with the runtime's receipt READ (VC-799).
+ *
+ * A refusal rejects with a {@link KickoffRefusedError} in the refusal's own
+ * words, into the caller's log or report, so a kickoff the runtime refused on
+ * a ready attach is never silent. Only `rejected` is a refusal: an `unknown`
+ * receipt may still have reached the executor, and calling that a failure
+ * would tell a parent its child failed while the child runs.
+ */
+export function kickoffSubmitter(
+  runtime: Pick<SessionRuntime, "command">,
+): NonNullable<StartSessionPorts["submitSessionMessage"]> {
+  return async ({ sessionId, text, commandId, messageId, origin, delivery }) => {
+    const { receipt } = await runtime.command({
+      origin,
+      commandId,
+      sessionId,
+      command: {
+        kind: "message.submit",
+        ...(delivery === undefined ? {} : { delivery }),
+        message: { id: messageId, role: "user", parts: [{ type: "text", text }] },
+      },
+    });
+    if (receipt?.status === "rejected") throw new KickoffRefusedError(receipt.code, receipt.detail);
   };
 }
 

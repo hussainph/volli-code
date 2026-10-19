@@ -15,7 +15,6 @@ import {
   skillsIndexResource,
   userInvokableSkills,
   type SessionExecutionVenue,
-  type SessionOrigin,
 } from "@volli/shared";
 import { isLiveHost, type HostCore } from "../index";
 import type { HostEventBus } from "../ports/events";
@@ -29,6 +28,7 @@ import { createPeekSummarizer } from "../session-control/peek-summary";
 import { createAutoTitler } from "./auto-title";
 import { readModelAccessDefaults } from "./model-access-preferences";
 import { createSessions, StructuredSessionsError, type SessionSkillPorts } from "./sessions";
+import { kickoffSubmitter } from "./start-session";
 import type { TicketSessionDelegationStore } from "./delegation-store";
 import type { createRuntimeAssembly } from "./assembly";
 import {
@@ -300,31 +300,7 @@ function assembleSessionServices(options: {
   // The caller derives both ids from its operation. CLI and tools share this
   // exact command so replay never mints a second kickoff message or turn.
   const submitKickoffMessage =
-    sessionRuntime === null
-      ? undefined
-      : async ({
-          sessionId,
-          text,
-          commandId,
-          messageId,
-          origin,
-        }: {
-          sessionId: string;
-          text: string;
-          commandId: string;
-          messageId: string;
-          origin?: SessionOrigin;
-        }): Promise<void> => {
-          await sessionRuntime.command({
-            origin,
-            commandId,
-            sessionId,
-            command: {
-              kind: "message.submit",
-              message: { id: messageId, role: "user", parts: [{ type: "text", text }] },
-            },
-          });
-        };
+    sessionRuntime === null ? undefined : kickoffSubmitter(sessionRuntime);
   return {
     sessions,
     sessionSkills,

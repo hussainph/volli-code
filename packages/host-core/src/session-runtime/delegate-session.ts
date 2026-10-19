@@ -59,6 +59,17 @@
  * until it answers, and a person or the
  * parent stops it when it is wrong, not a timer when it is slow.
  *
+ * ## A child whose first attach failed keeps its task
+ *
+ * The attach can fail before anything runs — a worktree that cannot be made,
+ * an executor that will not start. The task is then held in the child's own
+ * durable follow-up queue under the kickoff's ids (VC-799) and released at its
+ * next ready attach, which is a person's Retry; the turn that opens is
+ * watched by {@link Delegations.rearm}, and its end is the delegation's one
+ * notice. The tool call returns `needs-recovery` meanwhile, and boot recovery
+ * leaves a child whose queue still holds the task alone: its failed attach
+ * is not an outcome to report.
+ *
  * ## A child resumed later reports again
  *
  * A person can open a stopped or finished child and send it more work. Its
@@ -139,7 +150,7 @@ import {
 import type { DelegationRef } from "./delegation-policy";
 import { cutAtCodePoint, deliverHostNotice, errorText } from "./host-notice-delivery";
 import type { NoticeDelivery } from "./host-notice-delivery";
-import type { StartSessionPorts } from "./start-session";
+import { KickoffRefusedError, type StartSessionPorts } from "./start-session";
 import type { SessionModelOverride, Sessions } from "./sessions";
 import { stopSessionOperation } from "./supervise-session";
 import { hostLogger } from "../log/root";
@@ -202,14 +213,27 @@ export interface DelegateSessionInput {
   actor: TicketEventActor;
 }
 
-export interface DelegateSessionOutcome {
+export type DelegateSessionOutcome = {
   childSessionId: string;
   handle: string;
   title: string;
   model: ModelSelection;
-  /** `running` after a ready attach; `needs-recovery` when the attach failed and no task was sent. */
-  state: "running" | "needs-recovery";
-}
+} & (
+  | {
+      /** After a ready attach: the task was sent and its watch armed. */
+      state: "running";
+    }
+  | {
+      /** The attach failed, so no task was sent. */
+      state: "needs-recovery";
+      /**
+       * Whether the task waits in the child's queue for its next ready attach
+       * (VC-799); its notice then arrives under the delegation's own ids once
+       * the task has run.
+       */
+      taskHeld: boolean;
+    }
+);
 
 /**
  * How a watched delegation ended. `timed-out` stays readable in the shared
@@ -452,6 +476,24 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     return [...live.values()].filter((entry) => entry.parentSessionId === parentSessionId);
   }
 
+  /**
+   * Whether the child's queue still holds the delegated task, waiting for its
+   * next ready attach. A read that fails answers no, so the parent is still
+   * told rather than never told.
+   */
+  async function holdsTask(entry: DelegationRef): Promise<boolean> {
+    const { messageId } = kickoffIds(entry.operationId);
+    try {
+      const { projection } = await ports.runtime.projection({ sessionId: entry.childSessionId });
+      return (projection.queue ?? []).some(({ id }) => id === messageId);
+    } catch (error) {
+      report(
+        `could not read subagent ${shortSessionId(entry.childSessionId)}'s queue during recovery: ${errorText(error)}`,
+      );
+      return false;
+    }
+  }
+
   /** The child's answer, read off its own ledger; null when nothing can read it. */
   async function answerOf(childSessionId: string): Promise<SessionAnswer | null> {
     if (ports.readTranscriptArtifact === undefined) return null;
@@ -672,13 +714,41 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         projectId: parent.projectId,
         ...(parent.ticketId === null ? {} : { ticketId: parent.ticketId }),
       });
+      const ids = kickoffIds(input.operationId);
+      const kickoff = {
+        sessionId: started.sessionId,
+        text: `${delegatedTaskMarker(parent.sessionId)}\n\n${input.task}`,
+        commandId: ids.commandId,
+        messageId: ids.messageId,
+        origin: { kind: "session" as const, sessionId: parent.sessionId },
+      };
       if (started.state !== "ready") {
+        // Nothing can run the task yet, so it is HELD in the child's own
+        // durable queue under the kickoff's ids (VC-799), released at the
+        // child's next ready attach — a person's Retry. Boot recovery leaves a
+        // child holding it alone (`recover`).
+        //
+        // No watch is armed here. A held child is not work in progress: its
+        // parent's own watchers would defer their turn-end notices on it, for
+        // a child that may never be retried. When the held task's turn opens,
+        // `rearm` (armed on that wake in `agents.ts`) watches it under this
+        // delegation's own `:answer` ids, since its notice never landed.
+        let taskHeld = false;
+        try {
+          await ports.submitSessionMessage({ ...kickoff, delivery: "queue" });
+          taskHeld = true;
+        } catch (error) {
+          report(
+            `delegated task for subagent ${shortSessionId(started.sessionId)} could not be held for its retry: ${errorText(error)}`,
+          );
+        }
         return {
           childSessionId: started.sessionId,
           handle: shortSessionId(started.sessionId),
           title,
           model: started.model,
           state: "needs-recovery",
+          taskHeld,
         };
       }
       // Watch BEFORE the kickoff, from the sequence the start left the child
@@ -698,25 +768,21 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         );
         await watchParent(parent);
       }
-      const ids = kickoffIds(input.operationId);
       // Detached, for the reason `start-session.ts` detaches its kickoff: the
       // runtime answers a `message.submit` when the turn it opened ends, and
       // this call is due now. A refusal lands in the child's own durable
       // state — the watcher reads it there — and in the log.
       void Promise.resolve()
-        .then(() =>
-          ports.submitSessionMessage({
-            sessionId: started.sessionId,
-            text: `${delegatedTaskMarker(parent.sessionId)}\n\n${input.task}`,
-            commandId: ids.commandId,
-            messageId: ids.messageId,
-            origin: { kind: "session", sessionId: parent.sessionId },
-          }),
-        )
+        .then(() => ports.submitSessionMessage(kickoff))
         .catch(async (error: unknown) => {
           report(
             `delegated task for subagent ${shortSessionId(started.sessionId)} was not delivered: ${errorText(error)}`,
           );
+          // A durable refusal is the watcher's to settle, at the earliest
+          // outcome in the child's ledger: settling on it here could beat a
+          // stop committed before it. Only a kickoff that never reached the
+          // ledger is settled here.
+          if (error instanceof KickoffRefusedError) return;
           const child = live.get(started.sessionId);
           if (child !== undefined && !child.resumed) await settle(child, "failed");
         })
@@ -763,9 +829,31 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         // Recovery settles the original watch at its earliest outcome, just
         // like live delivery. A later stop (or relaunch sweep) cannot erase a
         // rejected kickoff whose frame never reached the watcher.
-        const firstOutcome = events.find(
+        let firstOutcome = events.find(
           (event) => outcomeOf(event.payload, entry.operationId) !== null,
         );
+        // A failed first attach is not the delegation's outcome when the task
+        // was held for a Retry (VC-799). Not yet run, and still queued: the
+        // Retry's turn is what reports, through `rearm`, and a notice now
+        // would be a second one then. Already run: that turn's outcome is it.
+        if (firstOutcome?.payload.kind === "attachment.failed") {
+          const failedAt = firstOutcome.sequence;
+          const heldRun = events.find(
+            (event) => event.sequence > failedAt && event.payload.kind === "turn.started",
+          );
+          if (heldRun === undefined) {
+            if (await holdsTask(entry)) {
+              recovery.skipped += 1;
+              continue;
+            }
+          } else {
+            firstOutcome = events.find(
+              (event) =>
+                event.sequence > heldRun.sequence &&
+                outcomeOf(event.payload, entry.operationId) !== null,
+            );
+          }
+        }
         const firstState =
           firstOutcome === undefined ? null : outcomeOf(firstOutcome.payload, entry.operationId);
         if (firstOutcome !== undefined && firstState !== null) {

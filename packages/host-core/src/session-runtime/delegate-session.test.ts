@@ -52,6 +52,7 @@ import {
 } from "./delegate-session";
 import type { DelegateSessionPorts } from "./delegate-session";
 import type { SessionStartInput } from "./sessions";
+import { KickoffRefusedError } from "./start-session";
 import { createTicketSessionDelegationStore } from "./delegation-store";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { insertSession } from "../session-control/test-support";
@@ -185,11 +186,23 @@ function harness(
     answers?: Map<string, string>;
     /** The parent's projection lags its ledger: the attach-vs-park race (VC-457). */
     staleParent?: boolean;
+    /** How the child's first attach settles; ready unless a test says otherwise. */
+    attach?: "ready" | "needs-recovery";
   } = {},
 ) {
   let children = 0;
   const starts: SessionStartInput[] = [];
-  const kickoffs: { sessionId: string; text: string; commandId: string; messageId: string }[] = [];
+  const kickoffs: {
+    sessionId: string;
+    text: string;
+    commandId: string;
+    messageId: string;
+    delivery?: "queue";
+  }[] = [];
+  /** What holding a task in the child's queue answers with; null accepts it. */
+  let holdRefusal: Error | null = null;
+  /** Each child's follow-up queue, as its projection shows it. */
+  const queues = new Map<string, { id: string; commandId: string }[]>();
   /** Each kickoff's turn, held open until the test ends it. */
   const kickoffTurns: ReturnType<typeof deferred>[] = [];
   const commands: SessionRuntimeCommandRequest[] = [];
@@ -223,15 +236,21 @@ function harness(
             }),
           );
           ledgers.set(sessionId, [
-            event(sessionId, 3, {
-              kind: "attachment.opened",
-              attachment: OPEN_ATTACHMENT(sessionId),
-            }),
+            options.attach === "needs-recovery"
+              ? event(sessionId, 3, {
+                  kind: "attachment.failed",
+                  attachment: OPEN_ATTACHMENT(sessionId),
+                  failure: { code: "attach_failed", detail: "refused", diagnostic: null },
+                })
+              : event(sessionId, 3, {
+                  kind: "attachment.opened",
+                  attachment: OPEN_ATTACHMENT(sessionId),
+                }),
           ]);
         }
         return {
           sessionId,
-          state: "ready",
+          state: options.attach ?? "ready",
           receipt: null,
           throughSequence: 3,
           model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "low" },
@@ -240,6 +259,12 @@ function harness(
     },
     submitSessionMessage: (input) => {
       kickoffs.push(input);
+      // A queued hold answers once the queue has it, never when a turn ends.
+      if (input.delivery === "queue") {
+        if (holdRefusal !== null) return Promise.reject(holdRefusal);
+        queues.set(input.sessionId, [{ id: input.messageId, commandId: input.commandId }]);
+        return Promise.resolve();
+      }
       const turn = deferred();
       kickoffTurns.push(turn);
       return turn.promise;
@@ -289,8 +314,14 @@ function harness(
       projection: async ({ sessionId }) => {
         const found = projections.get(sessionId);
         if (found === undefined) throw new Error(`no projection for ${sessionId}`);
+        const queue = queues.get(sessionId)?.map(({ id, commandId }) => ({
+          id,
+          commandId,
+          state: "queued" as const,
+          message: { id, role: "user" as const, parts: [] },
+        }));
         return {
-          projection: found,
+          projection: queue === undefined ? found : { ...found, queue },
           throughSequence:
             options.staleParent === true && sessionId === PARENT ? 0 : throughSequence(sessionId),
         };
@@ -412,6 +443,10 @@ function harness(
     setReceipt: (status: "accepted" | "rejected") => {
       receiptStatus = status;
     },
+    refuseHolds: (error: Error) => {
+      holdRefusal = error;
+    },
+    queues,
     starts,
     kickoffs,
     kickoffTurns,
@@ -1407,6 +1442,165 @@ describe("rearm — a child a person resumes reports again (VC-457)", () => {
     expect(h.parentCommands()).toEqual([]);
     await completeChildTurn(h, CHILD, { from: 5 });
     expect(noticeText(h.commands, `${PARENT}:tc-1`)).toMatch(/completed its task/);
+  });
+});
+
+describe("a child whose first attach failed keeps its task (VC-799)", () => {
+  const operationId = `${PARENT}:tc-1`;
+
+  it("holds the task in the child's queue under the kickoff ids, and arms no watch on it", async () => {
+    const h = harness({ attach: "needs-recovery" });
+
+    const result = await h.delegate();
+
+    expect(result).toMatchObject({
+      childSessionId: CHILD,
+      state: "needs-recovery",
+      taskHeld: true,
+    });
+    // The same message, marker and ids a ready delegation would have sent:
+    // only the delivery differs, held for the child's next ready attach.
+    expect(h.kickoffs).toEqual([
+      {
+        sessionId: CHILD,
+        text: expect.stringContaining("Find where the auth token is refreshed"),
+        commandId: `${operationId}:kickoff`,
+        messageId: `${operationId}:kickoff-message`,
+        origin: { kind: "session", sessionId: PARENT },
+        delivery: "queue",
+      },
+    ]);
+    expect(h.kickoffs[0]?.text).toContain("Delegated task from your parent Session");
+    // A held child is not pending work: a watch here would hold the parent's
+    // own watchers' turn-end notices for a child that may never be retried.
+    expect(h.subscriptions).toEqual([]);
+    expect(h.delegations.liveChildren(PARENT)).toEqual([]);
+    expect(h.parentCommands()).toEqual([]);
+  });
+
+  it("reports exactly one notice under the delegation's own ids once the held task has run", async () => {
+    const h = harness({ attach: "needs-recovery" });
+    await h.delegate();
+
+    // A person's Retry attaches the child and its queue releases the task;
+    // the turn that opens is the wake `rearm` is armed on (agents.ts), and
+    // the delegation is still unanswered.
+    await h.delegations.rearm(
+      {
+        operationId,
+        parentSessionId: PARENT,
+        childSessionId: CHILD,
+        projectId: "project-1",
+        title: "Find where the auth token is refreshed",
+        answered: false,
+      },
+      { turnId: "t1", afterSequence: 3 },
+    );
+    await completeChildTurn(h);
+
+    expect(noticeText(h.commands, operationId)).toMatch(/completed its task/);
+    expect(
+      h
+        .parentCommands()
+        .filter((c) => c.commandId === `${operationId}${DELEGATION_ID_SUFFIXES.notice}`),
+    ).toHaveLength(1);
+    expect(h.parentCommands()).toHaveLength(1);
+  });
+
+  it("says the task was not held when the queue refused it, and reports why", async () => {
+    const h = harness({ attach: "needs-recovery" });
+    h.refuseHolds(new Error("The kickoff was refused (session_archived)"));
+
+    const result = await h.delegate();
+
+    expect(result).toMatchObject({ state: "needs-recovery", taskHeld: false });
+    expect(h.reports).toEqual([
+      expect.stringContaining("could not be held for its retry: The kickoff was refused"),
+    ]);
+  });
+
+  const unanswered = [
+    {
+      operationId,
+      parentSessionId: PARENT,
+      childSessionId: CHILD,
+      projectId: "project-1",
+      title: "Find where the auth token is refreshed",
+    },
+  ];
+
+  it("leaves a child still holding its task alone at boot recovery: its failed attach is no outcome", async () => {
+    const h = harness({ attach: "needs-recovery" });
+    await h.delegate();
+
+    expect(await h.delegations.recover(unanswered)).toEqual({
+      answered: 0,
+      reported: 0,
+      skipped: 1,
+    });
+    expect(h.parentCommands()).toEqual([]);
+  });
+
+  it("reports a failed first attach at boot recovery when the task is not held", async () => {
+    const h = harness({ attach: "needs-recovery" });
+    h.refuseHolds(new Error("The kickoff was refused (session_archived)"));
+    await h.delegate();
+
+    expect(await h.delegations.recover(unanswered)).toEqual({
+      answered: 0,
+      reported: 1,
+      skipped: 0,
+    });
+    expect(noticeText(h.commands, operationId)).toMatch(/failed before it answered/);
+  });
+
+  it("reports rather than skips when the child's queue cannot be read", async () => {
+    const h = harness({ attach: "needs-recovery" });
+    await h.delegate();
+    h.projections.delete(CHILD);
+
+    expect(await h.delegations.recover(unanswered)).toMatchObject({ reported: 1, skipped: 0 });
+    expect(h.reports).toContainEqual(expect.stringContaining("could not read subagent"));
+  });
+
+  it("recovers the held task's own run, not the failed attach before it", async () => {
+    const h = harness({ attach: "needs-recovery" });
+    await h.delegate();
+    // A person's Retry ran the task; the relaunch came before its notice.
+    h.queues.delete(CHILD);
+    await completeChildTurn(h);
+
+    expect(await h.delegations.recover(unanswered)).toEqual({
+      answered: 1,
+      reported: 0,
+      skipped: 0,
+    });
+    expect(noticeText(h.commands, operationId)).toMatch(/completed its task/);
+  });
+});
+
+describe("a kickoff the runtime refused on a ready attach (VC-799)", () => {
+  it("is reported, and settled by the watcher at the child's earliest durable outcome", async () => {
+    const h = harness();
+    await h.delegate();
+
+    h.kickoffTurns[0]!.reject(new KickoffRefusedError("no_live_executor", "No live executor"));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(h.reports).toEqual([
+      expect.stringContaining("was not delivered: The kickoff was refused (no_live_executor)"),
+    ]);
+    // Not settled on the rejection: a stop committed before the refused
+    // receipt is what the parent hears.
+    expect(h.delegations.liveChildren(PARENT)).toEqual([CHILD]);
+    expect(h.parentCommands()).toEqual([]);
+    await h.emit(CHILD, 4, {
+      kind: "session.stopped",
+      reason: null,
+      by: { kind: "user" },
+    });
+    expect(h.parentCommands()).toHaveLength(1);
+    expect(JSON.stringify(h.parentCommands()[0])).toContain('"state":"stopped"');
   });
 });
 

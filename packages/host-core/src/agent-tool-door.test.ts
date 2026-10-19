@@ -312,13 +312,15 @@ describe("session_start through the Agent Tool Surface", () => {
 
     expect(result.details).toMatchObject({ handle: "abcdef12", state: "needs-recovery" });
     expect(result.text).toContain(
-      `It was created but its attachment failed, so no kickoff was submitted: ${detail}`,
+      `It was created but its attachment failed, so its kickoff is held as its first message: ${detail}`,
     );
     expect(result.text).not.toContain("needs recovery");
-    // Nothing was submitted to a Session that never attached, and nothing is
-    // watched for a turn that cannot happen.
-    expect(h.kickoffs).toEqual([]);
-    expect(watches.sessions).toEqual([]);
+    // Nothing was submitted to a Session that never attached: the kickoff is
+    // held for its Retry (VC-799), and the turn that Retry runs is watched.
+    expect(h.kickoffs).toEqual([expect.objectContaining({ delivery: "queue" })]);
+    expect(watches.sessions).toEqual([
+      expect.objectContaining({ targetSessionId: STARTED_SESSION, armTurn: true }),
+    ]);
   });
 
   it("binds the caller instead of believing one", async () => {
@@ -1669,7 +1671,10 @@ describe("verb result details match the registry (VC-471)", () => {
    * start, the delegation host, and a Session engine plus watch registry for
    * `watch`. `state` is what the start and the delegation report back.
    */
-  function fanOutDoor(state: "ready" | "needs-recovery" = "ready") {
+  function fanOutDoor(
+    state: "ready" | "needs-recovery" = "ready",
+    options: { holds?: boolean; watches?: Watches } = {},
+  ) {
     ctx = openTestDb();
     insertProject(
       ctx.db,
@@ -1697,13 +1702,15 @@ describe("verb result details match the registry (VC-471)", () => {
           model,
         }),
       }),
-      submitSessionMessage: async () => undefined,
+      submitSessionMessage: async () => {
+        if (options.holds === false) throw new Error("The kickoff was refused (session_archived)");
+      },
       actorTicketDisplay: () => null,
       now: () => 1_000,
       delegation: grantingDelegation(),
       automations: () => null,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
-      watches: () => recordingWatches(),
+      watches: () => options.watches ?? recordingWatches(),
       supervise: () =>
         ({
           sessionEngine: {
@@ -1730,7 +1737,9 @@ describe("verb result details match the registry (VC-471)", () => {
           handle: CHILD.slice(0, 8),
           title: input.title ?? "Delegated task",
           model,
-          state: state === "ready" ? "running" : "needs-recovery",
+          ...(state === "ready"
+            ? { state: "running" as const }
+            : { state: "needs-recovery" as const, taskHeld: options.holds !== false }),
         }),
         liveChildren: () => [],
         recover: async () => ({ answered: 0, reported: 0, skipped: 0 }),
@@ -1788,8 +1797,41 @@ describe("verb result details match the registry (VC-471)", () => {
     const recovering = await fanOutDoor("needs-recovery")("session.start", { ticket: "VC-1" });
     expect(recovering.details).toMatchObject({ handle: "abcdef12", state: "needs-recovery" });
     expect(recovering.text).toContain(
-      "its attachment failed, so no kickoff was submitted: the attach reported no receipt",
+      "its attachment failed, so its kickoff is held as its first message: the attach reported no receipt",
     );
+  });
+
+  it("tells the caller a recovering start's kickoff is held, and watches the run it will start (VC-799)", async () => {
+    const watches = recordingWatches();
+    const call = fanOutDoor("needs-recovery", { watches });
+
+    const started = await call("session.start", { ticket: "VC-1", message: "Fix the flaky test" });
+
+    expect(started.text).toContain("its kickoff is held as its first message");
+    expect(started.text).toMatch(/A notice from Volli will arrive in this Session/);
+    expect(watches.sessions).toEqual([
+      expect.objectContaining({ targetSessionId: STARTED_SESSION, armTurn: true }),
+    ]);
+
+    const delegated = await call("session.delegate", { task: "Find the token refresh" });
+    expect(delegated.text).toContain("the task is held as its first message");
+    expect(delegated.text).toContain("its notice arrives in this Session when it has run");
+  });
+
+  it("promises no notice for a recovering start or delegation whose first message could not be held", async () => {
+    const watches = recordingWatches();
+    const call = fanOutDoor("needs-recovery", { holds: false, watches });
+    // The start logs why its kickoff could not be held; that line is expected.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const started = await call("session.start", { ticket: "VC-1" }).finally(() =>
+      errors.mockRestore(),
+    );
+    expect(started.text).toContain("so no kickoff was submitted");
+    expect(watches.sessions).toEqual([]);
+
+    const delegated = await call("session.delegate", { task: "Find the token refresh" });
+    expect(delegated.text).toContain("nothing was sent, and no notice will arrive");
   });
 
   it("sends no details with a refusal, so a program can tell the two apart", async () => {

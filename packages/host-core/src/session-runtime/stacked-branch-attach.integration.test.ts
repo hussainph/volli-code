@@ -171,7 +171,7 @@ function ticketLeftOn(checkout: string) {
       recordBirth: () => undefined,
     },
   });
-  const kickoffs: { sessionId: string; text: string }[] = [];
+  const kickoffs: { sessionId: string; text: string; delivery?: "queue" }[] = [];
   const kickoffSent = Promise.withResolvers<void>();
   const db = ctx.db;
   const start = () =>
@@ -181,7 +181,11 @@ function ticketLeftOn(checkout: string) {
         projects: [project],
         sessions,
         submitSessionMessage: async (input) => {
-          kickoffs.push({ sessionId: input.sessionId, text: input.text });
+          kickoffs.push({
+            sessionId: input.sessionId,
+            text: input.text,
+            ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
+          });
           kickoffSent.resolve();
         },
         now,
@@ -231,9 +235,13 @@ describe("starting a Session on a ticket whose worktree is on another branch (VC
         `this ticket's branch is ${TICKET_BRANCH}. Commit or stash those changes, check out ` +
         `${TICKET_BRANCH} there (or remove the worktree), then retry.`,
     );
-    // Nothing ran, nothing was sent, and the checkout was not touched.
+    // Nothing ran and the checkout was not touched; the kickoff is held in the
+    // Session's queue for the Retry (VC-799), not sent.
     expect(world.executor.directories).toEqual([]);
-    expect(world.kickoffs).toEqual([]);
+    expect(started.kickoff).toBe("held");
+    expect(world.kickoffs).toEqual([
+      { sessionId: started.sessionId, text: "Continue the stacked venue work", delivery: "queue" },
+    ]);
     expect(git(world.worktreePath, ["branch", "--show-current"])).toBe(
       "volli/VC-6270-someone-elses",
     );
