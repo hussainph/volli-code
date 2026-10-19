@@ -1219,7 +1219,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
           ? null
           : ({
               liveChildren: () => options.liveChildren!,
-            } as NonNullable<ReturnType<AgentToolDoorOptions["delegate"]>>),
+            } as unknown as NonNullable<ReturnType<AgentToolDoorOptions["delegate"]>>),
       mcp: () => null,
       supervise: () =>
         ({
