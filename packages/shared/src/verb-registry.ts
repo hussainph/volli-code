@@ -494,6 +494,12 @@ export interface VerbEntry {
   /** Rendered after `<id>` for positionals the option table cannot express. */
   readonly extraUsage?: string;
   readonly options: readonly VerbOption[];
+  /**
+   * The recovery a RESPONSE_TOO_LARGE refusal prints for this verb, when its
+   * own filters say more than the code's generic guidance (VC-824). Absent
+   * means the generic guidance.
+   */
+  readonly overflowNext?: string;
 }
 
 /**
@@ -1014,7 +1020,16 @@ export const VERB_REGISTRY = [
       { name: "--label", kind: "value", placeholder: "<name>", help: "Filter by label." },
       { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
       { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of rows." },
+      {
+        name: "--no-body",
+        kind: "flag",
+        help: "Omit ticket bodies from --json rows; `ticket show` reads one.",
+      },
     ],
+    // Filters first: they shrink the answer from any app build. An older app
+    // ignores --no-body and sends the bodies anyway.
+    overflowNext:
+      "Narrow it with `--status <column>` or `--limit <n>`. With a matching app build, `--no-body` also drops bodies from `--json`; `volli ticket show <id>` reads one.",
   },
   {
     key: "ticket.show",
