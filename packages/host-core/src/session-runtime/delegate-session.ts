@@ -463,23 +463,6 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
     return [...live.values()].filter((entry) => entry.parentSessionId === parentSessionId);
   }
 
-  /**
-   * Whether the child's turn `turnId` was opened by a host notice (VC-809):
-   * true only when that turn is still the latest and its recorded origin is
-   * one. A projection that cannot be read is reported and answers false.
-   */
-  async function openedByHostNotice(childSessionId: string, turnId: string): Promise<boolean> {
-    try {
-      const { projection } = await ports.runtime.projection({ sessionId: childSessionId });
-      return projection.latestTurnId === turnId && isHostNoticeOrigin(projection.latestTurnOrigin);
-    } catch (error) {
-      report(
-        `could not read what opened subagent ${shortSessionId(childSessionId)}'s turn: ${errorText(error)}`,
-      );
-      return false;
-    }
-  }
-
   /** The child's answer, read off its own ledger; null when nothing can read it. */
   async function answerOf(childSessionId: string): Promise<SessionAnswer | null> {
     if (ports.readTranscriptArtifact === undefined) return null;
@@ -496,6 +479,23 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         `could not read subagent ${shortSessionId(childSessionId)}'s answer for its notice: ${errorText(error)}`,
       );
       return null;
+    }
+  }
+
+  /**
+   * Whether the child's turn `turnId` was opened by a host notice (VC-809):
+   * true only when that turn is still the latest and its recorded origin is
+   * one. A projection that cannot be read is reported and answers false.
+   */
+  async function openedByHostNotice(childSessionId: string, turnId: string): Promise<boolean> {
+    try {
+      const { projection } = await ports.runtime.projection({ sessionId: childSessionId });
+      return projection.latestTurnId === turnId && isHostNoticeOrigin(projection.latestTurnOrigin);
+    } catch (error) {
+      report(
+        `could not read what opened subagent ${shortSessionId(childSessionId)}'s turn: ${errorText(error)}`,
+      );
+      return false;
     }
   }
 
