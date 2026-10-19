@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   handler: null as ((event: KeyboardEvent) => boolean) | null,
   textarea: null as HTMLTextAreaElement | null,
   dispose: vi.fn(),
+  write: vi.fn(),
   fit: vi.fn(),
   scrollToBottom: vi.fn(),
   buffer: { viewportY: 0, baseY: 0 },
@@ -49,7 +50,9 @@ vi.mock("@xterm/xterm", () => ({
       host.append(root);
       mocks.textarea = this.textarea;
     }
-    write() {}
+    write(data: string, callback?: () => void) {
+      mocks.write(data, callback);
+    }
     focus() {}
     dispose() {
       mocks.dispose();
@@ -93,6 +96,7 @@ beforeEach(() => {
   mocks.handler = null;
   mocks.textarea = null;
   mocks.dispose.mockClear();
+  mocks.write.mockReset();
   Object.defineProperty(globalThis, "ResizeObserver", {
     configurable: true,
     value: class {
@@ -223,5 +227,79 @@ describe("XtermEngine follow-bottom behavior", () => {
 
     expect(mocks.scrollToBottom).not.toHaveBeenCalled();
     engine.dispose();
+  });
+});
+
+function mounted(): XtermEngine {
+  const engine = new XtermEngine();
+  const host = document.createElement("div");
+  document.body.append(host);
+  engine.attach(host);
+  return engine;
+}
+
+describe("XtermEngine write credit (VC-821)", () => {
+  it("releases a chunk only when xterm has parsed it", () => {
+    const engine = mounted();
+    const onParsed = vi.fn();
+    engine.write("abc", onParsed);
+    expect(mocks.write).toHaveBeenCalledWith("abc", expect.any(Function));
+    expect(onParsed).not.toHaveBeenCalled();
+    const parsed = mocks.write.mock.calls[0]?.[1] as () => void;
+    parsed();
+    expect(onParsed).toHaveBeenCalledTimes(1);
+    // Not again on dispose: the chunk is no longer held.
+    engine.dispose();
+    expect(onParsed).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes without a callback when no credit is asked for", () => {
+    const engine = mounted();
+    engine.write("abc");
+    expect(mocks.write).toHaveBeenCalledWith("abc", undefined);
+    engine.dispose();
+  });
+
+  it("releases buffered pre-attach output on receipt and flushes it on attach", () => {
+    const engine = new XtermEngine();
+    const onParsed = vi.fn();
+    engine.write("banner", onParsed);
+    expect(onParsed).toHaveBeenCalledTimes(1);
+    const host = document.createElement("div");
+    document.body.append(host);
+    engine.attach(host);
+    expect(mocks.write).toHaveBeenCalledWith("banner", undefined);
+    engine.dispose();
+  });
+
+  it("releases every unparsed chunk on dispose, since xterm drops their callbacks", () => {
+    const engine = mounted();
+    const first = vi.fn();
+    const second = vi.fn(() => {
+      throw new Error("ack door gone");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    engine.write("one", second);
+    engine.write("two", first);
+    engine.dispose();
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalled();
+    // A disposed engine holds nothing: a late write is released at once.
+    const late = vi.fn();
+    engine.write("late", late);
+    expect(late).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not release a chunk xterm refused, and rethrows the refusal", () => {
+    const engine = mounted();
+    mocks.write.mockImplementationOnce(() => {
+      throw new Error("write data discarded, use flow control to avoid losing data");
+    });
+    const onParsed = vi.fn();
+    expect(() => engine.write("abc", onParsed)).toThrow("write data discarded");
+    engine.dispose();
+    // Left to the caller, which acks it itself — never twice.
+    expect(onParsed).not.toHaveBeenCalled();
   });
 });

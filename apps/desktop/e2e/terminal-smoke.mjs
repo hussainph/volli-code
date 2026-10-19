@@ -758,6 +758,24 @@ async function main() {
     await page.mouse.wheel(0, 100_000);
     await sleep(500);
     await page.screenshot({ path: shot("08-symbol-presentation.png") });
+
+    // === 14. A burst far past xterm's write buffer still reaches the prompt ==
+    // VC-821. `yes` produces output far faster than xterm parses it. With
+    // flow control engaged, the PTY is paused whenever the renderer falls
+    // behind, so xterm's queue stays small. When the renderer acked chunks on
+    // receipt, the queue passed xterm's 50M-char discard mark, write threw,
+    // that chunk's ack was lost, and the PTY stayed paused, so the command after
+    // the burst never printed. The marker is computed by the shell, so the
+    // typed command line itself can never satisfy the wait.
+    await runInTerminal(page, 'yes | head -c 300000000; echo "flow-$((6 * 7))-done"');
+    const burstRows = await waitForRowsContaining(page, "flow-42-done", { timeoutMs: 240_000 });
+    const discarded = consoleErrors.filter((e) => /write data discarded/i.test(e));
+    check(
+      14,
+      "A 300M-char burst drains and the next command's output is shown",
+      burstRows !== null && burstRows.includes("flow-42-done") && discarded.length === 0,
+      `discarded=${discarded.length} rows=${JSON.stringify(burstRows?.slice(-60) ?? null)}`,
+    );
   } finally {
     await app.close();
   }
