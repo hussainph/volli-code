@@ -26,7 +26,7 @@ describe("MCP Agent Tool Surface", () => {
         capabilities: { coding: ["read"], interaction: ["ask_user"] },
         mcpTools: [tool],
       }),
-    ).toEqual(["read", "ask_user", "session.delegate", "watch", tool.providerName]);
+    ).toEqual(["read", "ask_user", "session.send", "session.delegate", "watch", tool.providerName]);
   });
 
   it("bounds a Subagent Session to MCP tools already frozen on its parent", () => {
