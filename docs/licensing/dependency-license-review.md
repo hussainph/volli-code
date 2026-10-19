@@ -133,9 +133,10 @@ entry was permissive was incorrect and is withdrawn.
 README SHA-256 evidence: 1.3.3 `47083f1ae7e990f74a56f576bcb8434051cb84ed1982fa57932720869e5147fe`;
 1.3.4 `5dd6d3c034f925604681d49b7bedc71bd08dcf3d0cfc6d16b9f0569497d700dc`.
 The regenerated notice retains upstream's table verbatim and separately names our election.
-The policy retains the prior 1.3.3 review because miniflare under wrangler in the docs/website
-**devDependencies** still installs sharp 0.35.4; that is not a shipped desktop/hostd/runtime
-copy. The desktop's explicit native optional pins now match sharp 0.35.5 / libvips 1.3.4.
+The policy kept the prior 1.3.3 review while miniflare under wrangler in the docs/website
+**devDependencies** still installed sharp 0.35.4 (never a shipped desktop/hostd/runtime copy).
+VC-793 overrode that copy to 0.35.5 (GHSA-wq5f-xc86-pv6w), so 1.3.3 is no longer installed
+and its review was dropped from the policy. The desktop's explicit native optional pins now match sharp 0.35.5 / libvips 1.3.4.
 The generators validate cairo's reviewed version and README terms before applying it.
 
 Read `build/posix.sh` at [v1.3.3](https://github.com/lovell/sharp-libvips/blob/v1.3.3/build/posix.sh)
