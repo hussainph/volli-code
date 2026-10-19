@@ -128,6 +128,21 @@ export interface AgentCapabilityChange {
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
   {
+    baseline: "VC-478",
+    build: "VC-824",
+    added: [
+      "volli ticket list --no-body omits each ticket's body from the --json rows; every other field stays. volli ticket show <id> reads one body. Without the flag, --json rows keep their body.",
+      "RESPONSE_TOO_LARGE — the app answered, but the answer exceeded the CLI's 4 MiB response limit. The refusal names the verb; narrow the request with its filters and retry.",
+    ],
+    changed: [
+      "The volli ticket list table no longer asks the app for ticket bodies, which it never printed. The table itself is unchanged.",
+    ],
+    fixed: [
+      "An answer past the CLI's response limit no longer fails as SOCKET_PROTOCOL with a build-compatibility hint.",
+    ],
+    removed: [],
+  },
+  {
     baseline: "VC-457",
     build: "VC-478",
     added: [
@@ -426,6 +441,10 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
   MUTATION_FAILED: {
     why: "The operation failed without enough durable outcome evidence for an automatic retry.",
     next: null,
+  },
+  RESPONSE_TOO_LARGE: {
+    why: "The app answered, but the answer exceeded the CLI's 4 MiB response limit, so the CLI stopped reading it.",
+    next: "Narrow the request with the verb's own filters (see `volli help <verb>`) and retry.",
   },
   SOCKET_PROTOCOL: {
     why: "The CLI connected to the app but the versioned request or response exchange was invalid.",

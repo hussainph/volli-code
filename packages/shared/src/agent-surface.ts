@@ -52,6 +52,10 @@ export const AGENT_ERROR_CODES = [
   "PREFIX_CONFLICT",
   "FILE_READ_FAILED",
   "MUTATION_FAILED",
+  // The app answered, and the answer was larger than the CLI will hold in
+  // memory (VC-824). Not SOCKET_PROTOCOL: nothing about the exchange was
+  // invalid, so a build-compatibility hint would send the caller the wrong way.
+  "RESPONSE_TOO_LARGE",
   "SOCKET_PROTOCOL",
   "TIMEOUT",
 ] as const;

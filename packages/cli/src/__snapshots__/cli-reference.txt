@@ -6,7 +6,7 @@ volli — self-documenting planning CLI for coding agents.
 Read
   identify [--project <p>]
   board [--project <p>]
-  ticket list [--status <column>] [--priority low|medium|high] [--label <name>] [--project <p>] [--limit <n>]
+  ticket list [--status <column>] [--priority low|medium|high] [--label <name>] [--project <p>] [--limit <n>] [--no-body]
   ticket show <id> [--events <n>] [--comments <n>] [--comments-only] [--full]
   ticket events <id> [--limit <n>] [--full]
   ticket brief <id>
@@ -118,6 +118,7 @@ Options:
   --label <name>              Filter by label.
   --project <p>               Target project.
   --limit <n>                 Cap the number of rows.
+  --no-body                   Omit ticket bodies from --json rows; `ticket show` reads one.
 
 Example: volli ticket list --status doing --priority high
 
@@ -1303,6 +1304,17 @@ Bundle identity
   Running app: not reached (static help remains available)
   Capability baseline: 8e8a17c0
 
+VC-824 (after VC-478)
+Added
+- volli ticket list --no-body omits each ticket's body from the --json rows; every other field stays. volli ticket show <id> reads one body. Without the flag, --json rows keep their body.
+- RESPONSE_TOO_LARGE — the app answered, but the answer exceeded the CLI's 4 MiB response limit. The refusal names the verb; narrow the request with its filters and retry.
+Changed
+- The volli ticket list table no longer asks the app for ticket bodies, which it never printed. The table itself is unchanged.
+Fixed
+- An answer past the CLI's response limit no longer fails as SOCKET_PROTOCOL with a build-compatibility hint.
+Removed
+- None in this record.
+
 VC-478 (after VC-457)
 Added
 - classify — ask the configured decision model typed questions about a JSON state: choice (one option key of several), score (a level on a scale, lowest first) or bool (yes or no). It answers with probabilities and a confidence from 0 to 1, never text, as structured content beside a short text line, so a script can read answers.<name>. Use it for decisions that repeat — labelling or triaging many items, checking which state a page or element is in, filtering inside a loop — and not for anything needing open-ended reasoning or written output. A Session has it only when a person configured a decision model before the Session was created, and a cloud one only with their opt-in. When it reports no decision (the model was turned off, is slow, or failed), decide yourself.
@@ -1529,6 +1541,9 @@ Error codes:
   MUTATION_FAILED      1 failure
     Why: The operation failed without enough durable outcome evidence for an automatic retry.
     Next: No safe retry is known; inspect current durable state first.
+  RESPONSE_TOO_LARGE   1 failure
+    Why: The app answered, but the answer exceeded the CLI's 4 MiB response limit, so the CLI stopped reading it.
+    Next: Narrow the request with the verb's own filters (see `volli help <verb>`) and retry.
   SOCKET_PROTOCOL      1 failure
     Why: The CLI connected to the app but the versioned request or response exchange was invalid.
     Next: Run `volli help changes` and confirm the CLI bundle and running app come from a compatible build before retrying.
@@ -1679,7 +1694,7 @@ USAGE Unknown option --not-an-option (options: --project) — see volli help boa
 ============================================================================
 volli ticket list --not-an-option
 ============================================================================
-USAGE Unknown option --not-an-option (options: --status, --priority, --label, --project, --limit) — see volli help ticket list
+USAGE Unknown option --not-an-option (options: --status, --priority, --label, --project, --limit, --no-body) — see volli help ticket list
 
 ============================================================================
 volli ticket show ORACLE-1 --not-an-option

@@ -1014,6 +1014,11 @@ export const VERB_REGISTRY = [
       { name: "--label", kind: "value", placeholder: "<name>", help: "Filter by label." },
       { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
       { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of rows." },
+      {
+        name: "--no-body",
+        kind: "flag",
+        help: "Omit ticket bodies from --json rows; `ticket show` reads one.",
+      },
     ],
   },
   {

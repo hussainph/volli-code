@@ -1,7 +1,7 @@
 import { createConnection } from "node:net";
 import { dirname } from "node:path";
 
-import { AGENT_ERROR_CODES, makeAgentError } from "@volli/shared";
+import { AGENT_ERROR_CODES, cliVerbName, makeAgentError } from "@volli/shared";
 import type { AgentErrorCode, AgentRequest, AgentResponse } from "@volli/shared";
 
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
@@ -197,6 +197,8 @@ export class AgentClientError extends Error {
   constructor(
     readonly code: AgentErrorCode,
     message: string,
+    /** Recovery more specific than the code's own; absent means the code's default. */
+    readonly next?: string,
   ) {
     super(message);
     this.name = "AgentClientError";
@@ -268,6 +270,21 @@ function parseResponse(line: string): AgentResponse {
   };
 }
 
+/**
+ * The refusal for an answer past {@link MAX_RESPONSE_BYTES} (VC-824). The limit
+ * itself stays: it is what keeps a runaway answer from exhausting memory. What
+ * the caller needs is the verb that overflowed and the way to ask for less.
+ */
+function responseTooLarge(cmd: string): AgentClientError {
+  return new AgentClientError(
+    "RESPONSE_TOO_LARGE",
+    `The app's answer to \`volli ${cliVerbName(cmd)}\` exceeded the CLI's 4 MiB response limit.`,
+    cmd === "ticket.list"
+      ? "Narrow it with `--status <column>` or `--limit <n>`, add `--no-body` to `--json`, and read a body with `volli ticket show <id>`."
+      : undefined,
+  );
+}
+
 export interface AgentClientOptions {
   timeoutMs: number;
 }
@@ -305,9 +322,7 @@ export function requestAgent(
       buffer += chunk;
       receivedBytes += Buffer.byteLength(chunk);
       if (receivedBytes > MAX_RESPONSE_BYTES) {
-        finish(() =>
-          reject(new AgentClientError("SOCKET_PROTOCOL", "The app response is too large.")),
-        );
+        finish(() => reject(responseTooLarge(request.cmd)));
         return;
       }
       const newline = buffer.indexOf("\n");
