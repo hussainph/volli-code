@@ -300,6 +300,7 @@ describe("stopSessionOperation", () => {
 function sendInput(overrides: Partial<Parameters<typeof sendSessionMessageOperation>[1]> = {}) {
   return {
     operationId: "op-2",
+    callerRole: "project" as const,
     callerSessionId: CALLER,
     projectId: "project-1",
     handle: TARGET.slice(0, 8),
@@ -309,6 +310,14 @@ function sendInput(overrides: Partial<Parameters<typeof sendSessionMessageOperat
 }
 
 describe("sendSessionMessageOperation", () => {
+  it("refuses subagent steering even if a frozen surface granted the verb", async () => {
+    const { ports: p, command } = ports([projection({ attachments: [openAttachment()] })]);
+    await expect(
+      sendSessionMessageOperation(p, sendInput({ callerRole: "subagent" })),
+    ).rejects.toThrow("A subagent Session cannot steer other Sessions");
+    expect(command).not.toHaveBeenCalled();
+  });
+
   it("waits for a marked steer to be accepted before answering", async () => {
     const delivery = Promise.withResolvers<unknown>();
     const command = vi.fn(() => delivery.promise);

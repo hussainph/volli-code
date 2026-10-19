@@ -32,7 +32,8 @@ import {
   createToolRefreshDelta,
 } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
-import { testProject } from "../db/test-helpers";
+import { testProject, testTicket } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
 import { createRuntimeContextResolver } from "./context";
 
 let core: LiveHostCore | undefined;
@@ -425,6 +426,77 @@ describe("runtime attachment assembly", () => {
         const oldAttach = await context(old.session.id);
         expect(oldAttach?.toolSurface).toEqual(oldInput.tools);
         expect(oldAttach).not.toHaveProperty("askUserQuestions");
+      } finally {
+        await assembled.sessionRuntime?.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps Ticket steering birth membership on reattach and refresh (held: %s)",
+    async (held) => {
+      const options = await fixture();
+      const engine = live().sessionEngine;
+      const db = live().database.db;
+      insertProject(db, testProject({ id: "project", path: root }));
+      insertTicket(db, testTicket("project", { id: "ticket" }));
+      const model = { providerId: "scripted", modelId: "test", reasoningLevel: "off" } as const;
+      const provenance = {
+        source: { kind: "system", id: "test", detail: null },
+        venue: options.venue,
+      } as const;
+      const { session } = await engine.createSession({
+        commandId: "ticket-birth",
+        projectId: "project",
+        ticketId: "ticket",
+        role: "ticket",
+        parentSessionId: null,
+        title: null,
+        provenance,
+      });
+      await engine.submit({
+        commandId: "model",
+        sessionId: session.id,
+        intent: { kind: "model.select", selection: model },
+        provenance,
+      });
+      const assembled = createRuntimeAssembly(options);
+      try {
+        const surface = assembled.sessionToolSurface!;
+        const today = surface.resolve("ticket", []);
+        expect(today).toContain("session.send");
+        const tools = held ? today : today.filter((tool) => tool !== "session.send");
+        await surface.record(session.id, tools);
+        // Calling today's birth writer again must not replace the recorded input.
+        await surface.record(session.id, today);
+        const resolver = createRuntimeContextResolver({
+          db,
+          sessionEngine: engine,
+          venue: options.venue,
+          mcpDispatch: options.mcpDispatch,
+          waitForBirth: async () => {},
+          toolSurface: () => surface,
+        });
+        options.resolveRuntimeContext = resolver;
+        expect((await resolver(session.id))?.toolSurface.includes("session.send")).toBe(held);
+        const native = vi.mocked(pi.createPiRuntimeHost).mock.calls[0]![0];
+        for (const trigger of [
+          "warm-turn",
+          "cold-turn",
+          "compaction",
+          "model-switch",
+          "code-mode",
+        ] as const) {
+          await native.refreshRuntimeContext!(session.id, { trigger, model });
+          expect((await surface.recorded(session.id))?.includes("session.send")).toBe(held);
+        }
+        const events = await engine.listEvents({ sessionId: session.id });
+        expect(
+          events.filter(
+            ({ payload }) =>
+              payload.kind === "session.input.recorded" && payload.input.kind === "tool-surface",
+          ),
+        ).toMatchObject([{ payload: { input: { tools } } }]);
       } finally {
         await assembled.sessionRuntime?.close();
       }

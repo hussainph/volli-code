@@ -10,7 +10,8 @@
  * Both operations resolve their target inside the CALLER'S project, before any
  * handle is parsed — the same scoping the start operation pins. A Session
  * cannot stop or steer outside the project its attachment belongs to, because
- * no other project's Sessions are ever candidates.
+ * no other project's Sessions are ever candidates. A Board Session may steer
+ * any Session in that project; a Ticket Session only the subagents it delegated.
  *
  * ## What a stop is
  *
@@ -68,7 +69,7 @@
  */
 
 import { shortSessionId } from "@volli/shared";
-import type { CommandReceipt, SessionProjection } from "@volli/shared";
+import type { CommandReceipt, SessionProjection, SessionRole } from "@volli/shared";
 import type { SessionEngine, SessionRuntime, StopSessionOutcome } from "@volli/session-engine";
 import { stopResolvedSession, SuperviseSessionError } from "@volli/session-engine";
 export { stopSessionById, SuperviseSessionError } from "@volli/session-engine";
@@ -171,6 +172,8 @@ export async function stopSessionOperation(
 }
 
 export interface SendSessionInput extends SuperviseTargetInput {
+  /** Bound by the tool door, never read from the caller's arguments. */
+  callerRole: SessionRole;
   /** Idempotency key: the message command id derives from it. */
   operationId: string;
   message: string;
@@ -210,6 +213,17 @@ export async function sendSessionMessageOperation(
     throw new SuperviseSessionError("`message` must be non-empty text.");
   }
   const target = await resolveTarget(ports, input);
+  if (input.callerRole === "subagent") {
+    throw new SuperviseSessionError("A subagent Session cannot steer other Sessions.");
+  }
+  if (
+    input.callerRole === "ticket" &&
+    (target.session.role !== "subagent" || target.session.parentSessionId !== input.callerSessionId)
+  ) {
+    throw new SuperviseSessionError(
+      `Session ${input.handle} is not one this Session delegated; a ticket Session may steer only its own subagents.`,
+    );
+  }
   if (target.stopped !== null) {
     throw new SuperviseSessionError(
       `Session ${input.handle} is stopped; a stopped Session reads nothing. A person can reattach it, or start a new Session.`,

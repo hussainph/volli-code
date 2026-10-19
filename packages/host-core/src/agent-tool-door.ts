@@ -624,6 +624,7 @@ async function sendSessionTool(
       sendSessionMessageOperation(ports, {
         operationId,
         callerSessionId: session.sessionId,
+        callerRole: session.role,
         projectId: session.projectId,
         handle: handle.value,
         message: message.value,
