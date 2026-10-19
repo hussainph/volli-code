@@ -944,28 +944,32 @@ describe("flow control through the renderer's output dispatch", () => {
 
   it("returns a thrown write's credit, so the pty still resumes after the burst", async () => {
     vi.useFakeTimers();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const { pty, sender } = await createSession();
-    const renderer = wireRenderer(sender);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { pty, sender } = await createSession();
+      const renderer = wireRenderer(sender);
 
-    for (let i = 0; i < 20 && pty.pause.mock.calls.length === 0; i += 1) {
+      for (let i = 0; i < 20 && pty.pause.mock.calls.length === 0; i += 1) {
+        pty.emitData("y\n".repeat(CHUNK / 2));
+        flushBatchWindow();
+        renderer.deliver();
+      }
+      expect(pty.pause).toHaveBeenCalledTimes(1);
+
+      // One more batch was already in flight when the pty paused; the engine
+      // refuses it. Its 10k chars are above the 5k low watermark, so a lost
+      // ack here would hold the pty paused forever.
       pty.emitData("y\n".repeat(CHUNK / 2));
       flushBatchWindow();
+      renderer.throwOnNextWrites(true);
       renderer.deliver();
+      renderer.throwOnNextWrites(false);
+
+      renderer.parseAll();
+      expect(pty.resume).toHaveBeenCalledTimes(1);
+    } finally {
+      errorSpy.mockRestore();
     }
-    expect(pty.pause).toHaveBeenCalledTimes(1);
-
-    // One more batch was already in flight when the pty paused; the engine
-    // refuses it. Its 10k chars are above the 5k low watermark, so a lost
-    // ack here would hold the pty paused forever.
-    pty.emitData("y\n".repeat(CHUNK / 2));
-    flushBatchWindow();
-    renderer.throwOnNextWrites(true);
-    renderer.deliver();
-    renderer.throwOnNextWrites(false);
-
-    renderer.parseAll();
-    expect(pty.resume).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -251,7 +251,15 @@ export class XtermEngine implements TerminalEngine {
     // xterm parses asynchronously, in time slices; its write callback is the
     // moment the chunk has actually been consumed (VC-821).
     const release = (): void => {
-      if (this.unparsed.delete(release)) onParsed();
+      if (!this.unparsed.delete(release)) return;
+      // This runs inside xterm's parse loop, before it advances past the
+      // chunk: a throw here would abort the loop and wedge its write queue,
+      // and with it the PTY.
+      try {
+        onParsed();
+      } catch (error) {
+        console.warn("terminal output credit release failed:", error);
+      }
     };
     this.unparsed.add(release);
     try {
@@ -494,13 +502,8 @@ export class XtermEngine implements TerminalEngine {
     this.preAttachOutput = [];
     this.preAttachChars = 0;
     this.hostEl.remove();
-    // Each release deletes itself; a Set tolerates that mid-iteration.
-    for (const release of this.unparsed) {
-      try {
-        release();
-      } catch (error) {
-        console.warn("terminal output credit release failed:", error);
-      }
-    }
+    // Each release deletes itself (a Set tolerates that mid-iteration) and
+    // isolates its own failure.
+    for (const release of this.unparsed) release();
   }
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 /**
  * The registry's two jobs: get-or-create-or-forget over one engine per session,
@@ -142,4 +142,36 @@ describe("engine registry", () => {
 
     expect(hooks.built.map((engine) => engine.rethemed)).toEqual([0, 1]);
   });
+
+  // VC-821 / VC-425: a reload tears xterm down without running its queued
+  // parse callbacks, and those callbacks are the flow-control acks. Disposing
+  // on `pagehide` is what returns that credit, so a PTY with output in flight
+  // is not left paused by a Cmd-R.
+  it("disposes and forgets every engine when the page goes away, even past a throwing one", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const listeners = new Map<string, () => void>();
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: () => void) => listeners.set(type, listener),
+      removeEventListener: vi.fn(),
+    });
+    const { getEngine, getOrCreateEngine } = await freshRegistry();
+    const first = getOrCreateEngine("s1");
+    const second = getOrCreateEngine("s2");
+    const failure = new Error("already gone");
+    first.dispose = () => {
+      throw failure;
+    };
+
+    listeners.get("pagehide")?.();
+
+    expect(asMock(second).alive).toBe(false);
+    expect(getEngine("s1")).toBeUndefined();
+    expect(getEngine("s2")).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith("terminal dispose on page hide failed:", failure);
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });

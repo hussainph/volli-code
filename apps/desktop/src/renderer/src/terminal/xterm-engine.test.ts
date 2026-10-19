@@ -253,6 +253,21 @@ describe("XtermEngine write credit (VC-821)", () => {
     expect(onParsed).toHaveBeenCalledTimes(1);
   });
 
+  it("survives a throwing release inside xterm's parse loop", () => {
+    const engine = mounted();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onParsed = vi.fn(() => {
+      throw new Error("ack door gone");
+    });
+    engine.write("abc", onParsed);
+    const parsed = mocks.write.mock.calls[0]?.[1] as () => void;
+    expect(() => parsed()).not.toThrow();
+    expect(onParsed).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalled();
+    engine.dispose();
+    expect(onParsed).toHaveBeenCalledTimes(1);
+  });
+
   it("writes without a callback when no credit is asked for", () => {
     const engine = mounted();
     engine.write("abc");
@@ -274,16 +289,16 @@ describe("XtermEngine write credit (VC-821)", () => {
 
   it("releases every unparsed chunk on dispose, since xterm drops their callbacks", () => {
     const engine = mounted();
-    const first = vi.fn();
-    const second = vi.fn(() => {
+    const plain = vi.fn();
+    const throwing = vi.fn(() => {
       throw new Error("ack door gone");
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    engine.write("one", second);
-    engine.write("two", first);
+    engine.write("one", throwing);
+    engine.write("two", plain);
     engine.dispose();
-    expect(second).toHaveBeenCalledTimes(1);
-    expect(first).toHaveBeenCalledTimes(1);
+    expect(throwing).toHaveBeenCalledTimes(1);
+    expect(plain).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalled();
     // A disposed engine holds nothing: a late write is released at once.
     const late = vi.fn();

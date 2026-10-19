@@ -14,6 +14,11 @@
  * ack exactly once per delivered batch no matter how the write ends — a lost
  * ack is a frozen terminal.
  *
+ * An ack carries no attachment generation. A late ack from before a same-client
+ * reattach can only lower the fresh attachment's count early: the host clamps
+ * at zero (`ack` in output.ts), so the worst case is an early resume, never a
+ * freeze.
+ *
  * Pure (the engine and the ack door are passed in) so main's flow-control
  * tests can drive the real IPC adapter through it.
  */

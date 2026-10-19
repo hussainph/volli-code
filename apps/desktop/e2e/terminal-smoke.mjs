@@ -760,13 +760,14 @@ async function main() {
     await page.screenshot({ path: shot("08-symbol-presentation.png") });
 
     // === 14. An interrupted burst leaves a responsive terminal ===============
-    // VC-821. `yes` produces output far faster than xterm parses it. With
-    // flow control engaged, the PTY is paused whenever the renderer falls
-    // behind, so xterm's queue stays a few hundred K at most and the command
-    // after a Ctrl-C prints within moments. When the renderer acked chunks on
-    // receipt, the queue grew by tens of MB a second: the next command's output
-    // waited behind all of it, and past xterm's 50M-char discard mark write
-    // threw, its ack was lost and the PTY stayed paused for good.
+    // VC-821. With flow control engaged, the PTY is paused whenever the
+    // renderer falls behind, so xterm's queue stays a few hundred K at most
+    // and the command after a Ctrl-C prints within moments. This GUARDS the
+    // ack-after-parse path against a stall (a lost ack leaves the PTY paused
+    // and the marker never shows); it does not by itself prove the old
+    // regression, which needs a runner where 5 s of `yes` outpaces xterm. The
+    // unit tests in src/main/pty.test.ts are that proof. `drainMs` is reported
+    // so a slow drain is visible without being a gate.
     //
     // Interrupted rather than run to a fixed size: any burst has to be PARSED
     // in full before a marker after it can show, fix or no fix, and 300M
