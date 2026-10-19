@@ -1,10 +1,15 @@
 import { createConnection } from "node:net";
 import { dirname } from "node:path";
 
-import { AGENT_ERROR_CODES, makeAgentError } from "@volli/shared";
+import {
+  AGENT_ERROR_CODES,
+  AGENT_RESPONSE_LIMIT_BYTES,
+  AGENT_RESPONSE_LIMIT_LABEL,
+  cliVerbName,
+  makeAgentError,
+  verbEntry,
+} from "@volli/shared";
 import type { AgentErrorCode, AgentRequest, AgentResponse } from "@volli/shared";
-
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 /**
  * The Volli contract variables, as the `ctx.env` block a request carries.
@@ -197,6 +202,8 @@ export class AgentClientError extends Error {
   constructor(
     readonly code: AgentErrorCode,
     message: string,
+    /** Recovery more specific than the code's own; absent means the code's default. */
+    readonly next?: string,
   ) {
     super(message);
     this.name = "AgentClientError";
@@ -268,6 +275,21 @@ function parseResponse(line: string): AgentResponse {
   };
 }
 
+/**
+ * The refusal for an answer past {@link AGENT_RESPONSE_LIMIT_BYTES} (VC-824).
+ * The limit itself stays: it is what keeps a runaway answer from exhausting
+ * memory. What the caller needs is the verb that overflowed and the way to ask
+ * for less, which the verb's registry entry declares when it has more to say
+ * than the code's generic guidance.
+ */
+function responseTooLarge(cmd: string): AgentClientError {
+  return new AgentClientError(
+    "RESPONSE_TOO_LARGE",
+    `The app's answer to \`volli ${cliVerbName(cmd)}\` exceeded the CLI's ${AGENT_RESPONSE_LIMIT_LABEL} response limit.`,
+    verbEntry(cmd)?.overflowNext,
+  );
+}
+
 export interface AgentClientOptions {
   timeoutMs: number;
 }
@@ -304,10 +326,8 @@ export function requestAgent(
     socket.on("data", (chunk: string) => {
       buffer += chunk;
       receivedBytes += Buffer.byteLength(chunk);
-      if (receivedBytes > MAX_RESPONSE_BYTES) {
-        finish(() =>
-          reject(new AgentClientError("SOCKET_PROTOCOL", "The app response is too large.")),
-        );
+      if (receivedBytes > AGENT_RESPONSE_LIMIT_BYTES) {
+        finish(() => reject(responseTooLarge(request.cmd)));
         return;
       }
       const newline = buffer.indexOf("\n");

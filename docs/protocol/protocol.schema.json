@@ -5037,6 +5037,32 @@
         "outputValidation": "network-and-tests",
         "voidOutput": false
       },
+      "project.remove": {
+        "compatibility": "host-command",
+        "input": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "additionalProperties": false,
+          "properties": {
+            "projectId": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "projectId"
+          ],
+          "type": "object"
+        },
+        "kind": "mutation",
+        "noInput": false,
+        "output": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "null"
+        },
+        "outputValidation": "network-and-tests",
+        "voidOutput": false
+      },
       "project.reorder": {
         "compatibility": "host-command",
         "input": {

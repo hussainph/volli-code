@@ -608,6 +608,29 @@ export class McpSettingsService {
     return { ok: true };
   }
 
+  /**
+   * Before a project is removed (VC-796): ends every sign-in still in flight
+   * for its servers, and names them so {@link forgetRemovedServers} can drop
+   * their credentials once the cascade has taken the rows. A Session's own
+   * connections are its attachment's, and close when its binding is released.
+   */
+  disconnectProject(projectId: string): readonly string[] {
+    const serverIds = this.list(projectId).map(({ id }) => id);
+    for (const serverId of serverIds) this.#oauth.cancelSignIn(serverId);
+    return serverIds;
+  }
+
+  /**
+   * After a project is removed: every credential its servers held, for the
+   * reason {@link remove} drops one server's. A server whose row is still
+   * there (the removal did not commit) keeps its own.
+   */
+  forgetRemovedServers(serverIds: readonly string[]): void {
+    for (const serverId of serverIds) {
+      if (getMcpServer(this.#db, serverId) === undefined) this.#store.delete(serverId);
+    }
+  }
+
   #prepare(
     projectId: string,
     candidate: unknown,

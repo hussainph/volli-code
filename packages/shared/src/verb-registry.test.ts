@@ -1290,12 +1290,28 @@ describe("verb result details (VC-471)", () => {
 
   it("gives watch the targets it resolved, as lists a program can compare", () => {
     const validate = ajv.compile(schemaOf("watch"));
+    const none = { stopped: [], detached: [] };
     expect(
-      validate({ action: "watch", sessions: ["abcdef12"], tickets: ["VC-1", "VC-2"], ended: 0 }),
+      validate({
+        action: "watch",
+        sessions: ["abcdef12", "12345678", "9abcdef0"],
+        tickets: ["VC-1", "VC-2"],
+        ended: 0,
+        stopped: ["12345678"],
+        detached: ["9abcdef0"],
+      }),
     ).toBe(true);
-    expect(validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1 })).toBe(true);
-    expect(validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0 })).toBe(false);
-    expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0 })).toBe(false);
+    expect(
+      validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1, ...none }),
+    ).toBe(true);
+    expect(
+      validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0, ...none }),
+    ).toBe(false);
+    expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0, ...none })).toBe(
+      false,
+    );
+    // A target's standing (VC-825) is always said, even when it is "none".
+    expect(validate({ action: "watch", sessions: [], tickets: [], ended: 0 })).toBe(false);
   });
 });
 

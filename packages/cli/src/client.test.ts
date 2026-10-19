@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { makeAgentError } from "@volli/shared";
+import { makeAgentError, verbEntry } from "@volli/shared";
 import type { AgentRequest } from "@volli/shared";
 
 import { AgentClientError, requestAgent } from "./client";
@@ -180,12 +180,36 @@ describe("requestAgent", () => {
       // character-count limit while exceeding the four-megabyte wire limit.
       (socket) => socket.end("💥".repeat(1024 * 1024 + 1)),
       async (socketPath) => {
-        await expect(requestAgent(socketPath, request, { timeoutMs: 4_000 })).rejects.toMatchObject(
-          {
-            code: "SOCKET_PROTOCOL",
-            message: "The app response is too large.",
-          },
-        );
+        // An answer too large to read is not a build mismatch (VC-824): the
+        // refusal names the verb and leaves the recovery to the code's own
+        // guidance, never SOCKET_PROTOCOL's compatible-build hint.
+        const refusal = requestAgent(socketPath, request, { timeoutMs: 4_000 });
+        await expect(refusal).rejects.toBeInstanceOf(AgentClientError);
+        await expect(refusal).rejects.toMatchObject({
+          code: "RESPONSE_TOO_LARGE",
+          message:
+            "The app's answer to `volli project list` exceeded the CLI's 4 MiB response limit.",
+          next: undefined,
+        });
+      },
+    );
+    await withSocketServer(
+      (socket) => socket.end("💥".repeat(1024 * 1024 + 1)),
+      async (socketPath) => {
+        await expect(
+          requestAgent(
+            socketPath,
+            { ...request, cmd: "ticket.list" },
+            {
+              timeoutMs: 4_000,
+            },
+          ),
+        ).rejects.toMatchObject({
+          code: "RESPONSE_TOO_LARGE",
+          message:
+            "The app's answer to `volli ticket list` exceeded the CLI's 4 MiB response limit.",
+          next: verbEntry("ticket.list")?.overflowNext,
+        });
       },
     );
     await withSocketServer(

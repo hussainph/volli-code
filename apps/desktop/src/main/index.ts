@@ -169,6 +169,7 @@ import type { OpenNativeBinding } from "@volli/session-engine";
 import {
   admittedHandlers,
   createHostHandlers,
+  hostProjectLiveWork,
   ROUTER_POLICY,
   type HostHandlerMap,
 } from "@volli/host-core/handlers";
@@ -1531,6 +1532,19 @@ const appStartup = app.whenReady().then(async () => {
       automations: runtimeAutomations,
       busyWorktreeSites,
       interruptTicketSessions: interruptTicketSessionsAnnounced,
+      // What removing a project stops before its delete (VC-796): every door
+      // that removes one, the window's `volli:project-remove` included.
+      projectLiveWork: hostProjectLiveWork({
+        runtime: () => sessionRuntime,
+        shells: backgroundShells,
+        terminals: () => ptyManagerRef ?? null,
+        browser: browserTabs,
+        mcp: mcpSettings,
+        newCommandId: randomUUID,
+        onReleaseError: (sessionId, error) => {
+          log.error("could not release session of a removed project", { sessionId, error });
+        },
+      }),
       ...(liveHost === undefined ? {} : { detachedWork: liveHost.detachedWork }),
       // This Mac's recent log (VC-699): main's, the in-process host's and the
       // renderer's lines, which the dev log viewer reads through `host.logs`.
@@ -1858,8 +1872,6 @@ const appStartup = app.whenReady().then(async () => {
     mcpSettings: mcpSettings ?? undefined,
     // Archiving or deleting a ticket drops its Sessions' saved tool output (VC-469).
     piSessionsDirectory,
-    // A removed Workspace's board feed is released, its followers told to resnapshot.
-    onProjectRemoved: (projectId) => boardFeed.dispose(projectId),
   });
   // Pi sidecar cleanup is a separate, explicit surface: registration performs
   // no scan and no deletion. The read-only inventory must run before its
@@ -2402,11 +2414,11 @@ const appStartup = app.whenReady().then(async () => {
   // native notification per downloaded version, failures only ever log.
   // Wired OUTSIDE the dbHandle.ok block: a broken db must not also strand
   // the install on a stale build (an update may well be what fixes it), so
-  // that case just falls back to the default prerelease policy (off).
+  // that case just falls back to the updater's version-derived default.
   const autoUpdate = startAutoUpdate({
     isPackaged: app.isPackaged,
     updater: autoUpdater,
-    allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : false,
+    allowPrerelease: dbHandle.ok ? readAllowPrerelease(dbHandle.db) : null,
     currentVersion: app.getVersion(),
     notify: (request) => notifications.deliver(request),
     log: hostLogger("auto-update").info,
@@ -2457,10 +2469,13 @@ const appStartup = app.whenReady().then(async () => {
     // pretending. VC-111 — retires the hand-run `sqlite3` INSERT.
     channel: dbHandle.ok
       ? {
-          read: () => readUpdateChannel(dbHandle.db),
+          // The effective line: a never-chosen canary build reads Canary
+          // (VC-851), so the select and the support report agree with the feed.
+          read: () => readUpdateChannel(dbHandle.db, buildKind),
           // The updater rides along so entering canary widens the RUNNING
           // process too — "Check now" right after switching must actually
-          // see prereleases. One-way; see `writeUpdateChannel`.
+          // see prereleases. Leaving applies at the next launch; see
+          // `writeUpdateChannel`.
           write: (channel) => writeUpdateChannel(dbHandle.db, channel, Date.now(), autoUpdater),
         }
       : undefined,
@@ -2924,6 +2939,7 @@ const appStartup = app.whenReady().then(async () => {
   registerSupportIpcHandlers({
     appVersion: () => app.getVersion(),
     database: () => (dbHandle.ok ? dbHandle.db : null),
+    buildKind,
     platform: process.platform,
     arch: process.arch,
     // Redacted to one sentence inside the collector (VC-294).

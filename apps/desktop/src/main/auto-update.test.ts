@@ -91,7 +91,7 @@ interface Harness {
   surface: { present: boolean };
   start(overrides?: {
     isPackaged?: boolean;
-    allowPrerelease?: boolean;
+    allowPrerelease?: boolean | null;
     lastCheck?: Parameters<typeof startAutoUpdate>[0]["lastCheck"];
     now?: () => number;
   }): ReturnType<typeof startAutoUpdate>;
@@ -113,7 +113,8 @@ function makeHarness(): Harness {
       startAutoUpdate({
         isPackaged: overrides.isPackaged ?? true,
         updater,
-        allowPrerelease: overrides.allowPrerelease ?? false,
+        // Never chosen unless a test says otherwise — the fresh-install case.
+        allowPrerelease: overrides.allowPrerelease ?? null,
         currentVersion: "0.1.0",
         notify: (request) => notifications.push(request),
         log: (line) => logs.push(line),
@@ -134,12 +135,12 @@ afterEach(() => {
 });
 
 describe("readAllowPrerelease", () => {
-  it("defaults to OFF when the row is absent", () => {
+  it("reads never-chosen (null) when the row is absent", () => {
     ctx = openTestDb();
-    expect(readAllowPrerelease(ctx.db)).toBe(false);
+    expect(readAllowPrerelease(ctx.db)).toBeNull();
   });
 
-  it("turns ON only for a stored JSON true", () => {
+  it("reads an explicit choice only from an exact JSON boolean", () => {
     ctx = openTestDb();
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "true", 1);
     expect(readAllowPrerelease(ctx.db)).toBe(true);
@@ -147,16 +148,42 @@ describe("readAllowPrerelease", () => {
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "false", 2);
     expect(readAllowPrerelease(ctx.db)).toBe(false);
 
-    // Truthy-but-not-true payloads fail closed: the toggle WIDENS the
-    // update surface, so only an exact `true` may open it.
+    // Truthy-but-not-true payloads are no choice at all: they never widen a
+    // stable build, whose updater default stays `false`.
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "1", 3);
-    expect(readAllowPrerelease(ctx.db)).toBe(false);
+    expect(readAllowPrerelease(ctx.db)).toBeNull();
   });
 
-  it("fails closed on a malformed payload", () => {
+  it("reads a malformed payload as never chosen", () => {
     ctx = openTestDb();
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "not-json{", 1);
-    expect(readAllowPrerelease(ctx.db)).toBe(false);
+    expect(readAllowPrerelease(ctx.db)).toBeNull();
+  });
+});
+
+describe("readUpdateChannel", () => {
+  // VC-851: a fresh canary install's updater follows the canary feed (its
+  // version-derived default), so the setting must say Canary, not Stable.
+  it("reads the running build's line for an install that has never chosen", () => {
+    ctx = openTestDb();
+    expect(readUpdateChannel(ctx.db, "canary")).toBe("canary");
+    expect(readUpdateChannel(ctx.db, "stable")).toBe("stable");
+    expect(readUpdateChannel(ctx.db, "dev")).toBe("stable");
+  });
+
+  it("reads an explicit choice regardless of the build", () => {
+    ctx = openTestDb();
+    writeUpdateChannel(ctx.db, "stable", 1);
+    expect(readUpdateChannel(ctx.db, "canary")).toBe("stable");
+    writeUpdateChannel(ctx.db, "canary", 2);
+    expect(readUpdateChannel(ctx.db, "stable")).toBe("canary");
+  });
+
+  it("reads a malformed row as never chosen", () => {
+    ctx = openTestDb();
+    setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "not-json{", 1);
+    expect(readUpdateChannel(ctx.db, "canary")).toBe("canary");
+    expect(readUpdateChannel(ctx.db, "stable")).toBe("stable");
   });
 });
 
@@ -166,19 +193,14 @@ describe("writeUpdateChannel", () => {
 
     expect(writeUpdateChannel(ctx.db, "canary", 1)).toBe("canary");
     expect(readAllowPrerelease(ctx.db)).toBe(true);
-    expect(readUpdateChannel(ctx.db)).toBe("canary");
+    expect(readUpdateChannel(ctx.db, "stable")).toBe("canary");
 
     expect(writeUpdateChannel(ctx.db, "stable", 2)).toBe("stable");
     expect(readAllowPrerelease(ctx.db)).toBe(false);
-    expect(readUpdateChannel(ctx.db)).toBe("stable");
+    expect(readUpdateChannel(ctx.db, "canary")).toBe("stable");
   });
 
-  it("reads stable for an install that has never chosen", () => {
-    ctx = openTestDb();
-    expect(readUpdateChannel(ctx.db)).toBe("stable");
-  });
-
-  it("widens a handed-over running updater on canary — and only widens", () => {
+  it("widens a handed-over running updater on canary, and leaves narrowing to the next launch", () => {
     ctx = openTestDb();
     const updater = { allowPrerelease: false };
 
@@ -187,25 +209,27 @@ describe("writeUpdateChannel", () => {
     writeUpdateChannel(ctx.db, "canary", 1, updater);
     expect(updater.allowPrerelease).toBe(true);
 
-    // Leaving is one-way live: `false` is never assigned over the updater's
-    // version-derived default (the stranding rule startup already follows).
+    // Leaving is not applied live (a staged canary must not be re-checked
+    // away); the stored `false` is what the next launch assigns.
     writeUpdateChannel(ctx.db, "stable", 2, updater);
     expect(updater.allowPrerelease).toBe(true);
-    expect(readUpdateChannel(ctx.db)).toBe("stable");
+    expect(readAllowPrerelease(ctx.db)).toBe(false);
   });
 
-  it("writes the exact JSON true the reader fails closed against", () => {
+  it("writes the exact JSON booleans the reader accepts", () => {
     ctx = openTestDb();
-    writeUpdateChannel(ctx.db, "canary", 1);
-
-    // Not "1", not "yes" — `readAllowPrerelease` only opens on an exact JSON
-    // `true`, so the writer has to produce precisely that or the toggle is a
-    // switch that silently does nothing.
-    expect(
-      ctx.db
+    const stored = () =>
+      ctx?.db
         .prepare("SELECT value FROM app_state WHERE key = ?")
-        .get(UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY),
-    ).toEqual({ value: "true" });
+        .get(UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY);
+
+    // Not "1", not "yes" — `readAllowPrerelease` only reads an exact JSON
+    // boolean as a choice, so the writer has to produce precisely that or the
+    // setting is a switch that silently does nothing.
+    writeUpdateChannel(ctx.db, "canary", 1);
+    expect(stored()).toEqual({ value: "true" });
+    writeUpdateChannel(ctx.db, "stable", 2);
+    expect(stored()).toEqual({ value: "false" });
   });
 });
 
@@ -252,23 +276,34 @@ describe("startAutoUpdate", () => {
     handle.stop();
   });
 
-  it("applies the prerelease toggle one-way: off defers to the updater's own default", () => {
+  it("leaves the updater's version-derived default alone when nothing was chosen", () => {
     vi.useFakeTimers();
 
-    // Stable-build default (false) stays false with the toggle off…
+    // Stable-build default (false) stays false…
     const stable = makeHarness();
-    stable.start({ allowPrerelease: false }).stop();
+    stable.start({ allowPrerelease: null }).stop();
     expect(stable.updater.allowPrerelease).toBe(false);
-    expect(stable.logs).toContain("[updater] allowPrerelease=false (toggle=false)");
+    expect(stable.logs).toContain("[updater] allowPrerelease=false (toggle=unset)");
 
-    // …and a canary build's version-derived default (true) is never
-    // clobbered by an absent/false toggle — forcing false would point the
-    // install at the stable-only feed and off its own canary line.
+    // …and a fresh canary build keeps following its own canary line.
     const canary = makeHarness();
     canary.updater.allowPrerelease = true;
-    canary.start({ allowPrerelease: false }).stop();
+    canary.start({ allowPrerelease: null }).stop();
     expect(canary.updater.allowPrerelease).toBe(true);
-    expect(canary.logs).toContain("[updater] allowPrerelease=true (toggle=false)");
+    expect(canary.logs).toContain("[updater] allowPrerelease=true (toggle=unset)");
+  });
+
+  // VC-851: choosing Stable on a canary build used to be written and then
+  // never applied — the install kept taking canaries indefinitely.
+  it("honours an explicit Stable on a canary build at launch", () => {
+    vi.useFakeTimers();
+    const canary = makeHarness();
+    canary.updater.allowPrerelease = true;
+
+    canary.start({ allowPrerelease: false }).stop();
+
+    expect(canary.updater.allowPrerelease).toBe(false);
+    expect(canary.logs).toContain("[updater] allowPrerelease=false (toggle=false)");
   });
 
   it("checks after the initial delay and then on the interval", () => {
@@ -325,7 +360,7 @@ describe("startAutoUpdate", () => {
     harness.updater.emit("error", new Error("feed unreachable"));
 
     expect(harness.logs).toEqual([
-      "[updater] allowPrerelease=false (toggle=false)",
+      "[updater] allowPrerelease=false (toggle=unset)",
       "[updater] checking for updates",
       "[updater] update available: 0.2.0 — downloading",
       "[updater] up to date (latest: 0.1.0)",

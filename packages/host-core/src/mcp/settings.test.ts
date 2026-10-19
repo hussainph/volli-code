@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { MCP_CONNECTION_TIMEOUT_MS, MCP_ERROR_MAX_CHARS } from "@volli/shared";
 import type { McpProtocolClient } from "./discovery";
-import { insertProject } from "../db/projects-repo";
+import { deleteProject, insertProject } from "../db/projects-repo";
+import { MemoryMcpCredentialStore } from "./credential-store";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
 import { McpSessionHost, serversForFrozenMcpTools } from "./session-host";
@@ -251,6 +252,44 @@ describe("McpSettingsService", () => {
     } finally {
       await host.close();
     }
+  });
+});
+
+// VC-796: a removed project's servers go with its row (ON DELETE CASCADE), so
+// their credentials have to go by name, and only once the row is gone.
+describe("McpSettingsService on a project's removal", () => {
+  it("names the project's servers, then forgets only the credentials whose row is gone", async () => {
+    const credentials = new MemoryMcpCredentialStore();
+    const settings = new McpSettingsService({
+      db: ctx.db,
+      now: () => 100,
+      credentials,
+      open: async (): Promise<McpProtocolClient> => ({
+        listTools: async () => listedTools,
+        callTool: vi.fn(async () => ({ content: [] })),
+        close: closed,
+      }),
+    });
+    insertProject(ctx.db, testProject({ id: "p2", path: "/repo/other" }));
+    await settings.save({ projectId: "p1", server: draft, enabledTools: [] });
+    await settings.save({
+      projectId: "p2",
+      server: { ...draft, id: "server-2" },
+      enabledTools: [],
+    });
+    credentials.update("server-1", () => ({ secrets: { TOKEN: "one" } }));
+    credentials.update("server-2", () => ({ secrets: { TOKEN: "two" } }));
+
+    const serverIds = settings.disconnectProject("p1");
+    expect(serverIds).toEqual(["server-1"]);
+    // Before the delete commits, nothing is forgotten.
+    settings.forgetRemovedServers(serverIds);
+    expect(credentials.read("server-1")).toEqual({ secrets: { TOKEN: "one" } });
+
+    deleteProject(ctx.db, "p1");
+    settings.forgetRemovedServers([...serverIds, "server-2"]);
+    expect(credentials.read("server-1")).toBeUndefined();
+    expect(credentials.read("server-2")).toEqual({ secrets: { TOKEN: "two" } });
   });
 });
 

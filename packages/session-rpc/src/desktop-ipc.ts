@@ -160,6 +160,7 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // renderer and main in one bundle and are not cross-version promises.
   "shells.moveToBackground": "ipc",
   "project.reorder": "ipc",
+  "project.remove": "ipc",
   "worktree.trimSettings": "ipc",
   "hosts.snapshot": "ipc",
   "hosts.subscribe": "ipc",

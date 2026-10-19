@@ -12,6 +12,7 @@ import {
 } from "@volli/shared";
 import type { AgentRequest, AgentResponse, VerbEntry } from "@volli/shared";
 
+import { renderCliSuccess } from "./render";
 import { renderParseRefusal, runCli, teachingErrorForParseResult } from "./run";
 import { AgentClientError, requestAgent } from "./client";
 
@@ -1545,4 +1546,130 @@ describe("route metadata at the CLI boundary", () => {
       }
     },
   );
+});
+
+/** Runs argv against a real socket that answers `ticket.list` with `answer`. */
+const runAgainstBoard = async (
+  argv: string[],
+  answer: (request: AgentRequest) => readonly object[],
+) => {
+  const dir = await mkdtemp(join(process.cwd(), ".ticket-list-"));
+  const socketPath = join(basename(dir), "host.sock");
+  const received: AgentRequest[] = [];
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
+    let input = "";
+    socket.setEncoding("utf8");
+    // The CLI hangs up mid-answer once it passes its limit.
+    socket.on("error", () => undefined);
+    socket.on("data", (chunk: string) => {
+      input += chunk;
+    });
+    socket.on("end", () => {
+      const request = JSON.parse(input.trim()) as AgentRequest;
+      received.push(request);
+      const tickets = answer(request);
+      socket.end(`${JSON.stringify({ v: 1, ok: true, data: { tickets } })}\n`);
+    });
+  });
+  const output: string[] = [];
+  const errors: string[] = [];
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    const code = await runCli(argv, {
+      env: { VOLLI_SOCKET: socketPath, VOLLI_SESSION: "s" },
+      cwd: "/work",
+      stdout: (text: string) => output.push(text),
+      stderr: (text: string) => errors.push(text),
+      readText: async () => "",
+      observe: async () => ({}),
+      request: (path: string, request: AgentRequest) =>
+        requestAgent(path, request, { timeoutMs: 10_000 }),
+      helpRequest: (path: string, request: AgentRequest) =>
+        requestAgent(path, request, { timeoutMs: 1_000 }),
+      launch: async () => ({ alreadyRunning: true }),
+    });
+    return { code, output: output.join(""), errors: errors.join(""), received };
+  } finally {
+    if (server.listening) {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+};
+
+describe("ticket list on a board past the response limit (VC-824)", () => {
+  /** 2,000 tickets with 3 KB bodies: about 7 MB with bodies, under 1 MB without. */
+  const rows = Array.from({ length: 2_000 }, (_, index) => ({
+    id: `VC-${index + 1}`,
+    project: "Volli",
+    title: `Ticket number ${index + 1}`,
+    body: `## Evidence\n\n${"x".repeat(3_000)}`,
+    status: index % 3 === 0 ? "done" : "backlog",
+    priority: "medium",
+    labels: index % 2 === 0 ? ["bug"] : [],
+    usesWorktree: true,
+    harness: null,
+    worktreePath: null,
+    branch: null,
+    baseBranch: null,
+    badge: null,
+    createdAt: index,
+    updatedAt: index,
+  }));
+  const withoutBody = rows.map(({ body: _body, ...row }) => row);
+
+  /** host-core's answer: `body: false` drops each row's body. */
+  const currentApp = (request: AgentRequest) =>
+    request.args["body"] === false ? withoutBody : rows;
+
+  it("prints the unchanged human table without asking for the bodies it never shows", async () => {
+    const result = await runAgainstBoard(["ticket", "list"], currentApp);
+
+    expect(result.errors).toBe("");
+    expect(result.code).toBe(0);
+    expect(result.received[0]?.args["body"]).toBe(false);
+    // The table the full rows would have printed, had they fit.
+    expect(result.output).toBe(renderCliSuccess("ticket.list", { tickets: rows }, { json: false }));
+    expect(result.output.split("\n")[0]).toBe("VC-1  Done  Ticket number 1  [bug]");
+  });
+
+  it("prints the same table from an older app that ignores body: false", async () => {
+    // An app build before this one ignores the selector and sends full rows.
+    // On a board that fits, the table cannot tell the difference.
+    const small = rows.slice(0, 20);
+    const older = await runAgainstBoard(["ticket", "list"], () => small);
+
+    expect(older.code).toBe(0);
+    expect(older.received[0]?.args["body"]).toBe(false);
+    expect(older.output).toBe(renderCliSuccess("ticket.list", { tickets: small }, { json: false }));
+    expect(older.output).toBe(
+      renderCliSuccess("ticket.list", { tickets: withoutBody.slice(0, 20) }, { json: false }),
+    );
+  });
+
+  it("keeps bodies in --json and opts out of them with --no-body", async () => {
+    const summary = await runAgainstBoard(["ticket", "list", "--json", "--no-body"], currentApp);
+    expect(summary.code).toBe(0);
+    expect(summary.received[0]?.args["body"]).toBe(false);
+    expect(JSON.parse(summary.output)).toEqual({ tickets: withoutBody });
+
+    const full = await runAgainstBoard(["ticket", "list", "--json"], currentApp);
+    expect(full.received[0]?.args).not.toHaveProperty("body");
+    expect(full.code).toBe(1);
+    const error = (JSON.parse(full.errors) as { error: Record<string, unknown> }).error;
+    expect(error).toMatchObject({
+      code: "RESPONSE_TOO_LARGE",
+      message: "The app's answer to `volli ticket list` exceeded the CLI's 4 MiB response limit.",
+    });
+    // Filters first: they work against any app build, --no-body only a matching one.
+    expect(error["next"]).toMatch(
+      /^Narrow it with `--status.*--limit.*matching app build.*--no-body/s,
+    );
+    expect(full.errors).not.toMatch(/compatible build|SOCKET_PROTOCOL/);
+  });
 });

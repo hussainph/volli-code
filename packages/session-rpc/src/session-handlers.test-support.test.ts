@@ -58,6 +58,7 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, CALL),
     () => handlers["shells.moveToBackground"]({ sessionId: "s", toolCallId: "bash-1" }, CALL),
     () => handlers["project.reorder"]({ orderedIds: [] }, CALL),
+    () => handlers["project.remove"]({ projectId: "p" }, CALL),
     () => handlers["worktree.trimSettings"](undefined, CALL),
     () => handlers["hosts.snapshot"](undefined, CALL),
     () => handlers["hosts.subscribe"](undefined, CALL, sink),
@@ -175,6 +176,7 @@ describe("sessionHandlersFrom", () => {
       desktop: {
         "shells.moveToBackground": port as never,
         "project.reorder": port as never,
+        "project.remove": port as never,
         "worktree.trimSettings": port as never,
         "hosts.snapshot": port as never,
         "hosts.subscribe": port as never,
@@ -204,7 +206,7 @@ describe("sessionHandlersFrom", () => {
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(43);
+    expect(port).toHaveBeenCalledTimes(44);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -251,6 +253,6 @@ describe("sessionHandlersFrom", () => {
     // projects' four (VC-710), the active add flows' one (VC-720), and
     // the host-scoped projects' two and HOST relay's three (VC-722),
     // and moving a running command to the background (VC-757).
-    expect(Object.keys(context.handlers)).toHaveLength(86);
+    expect(Object.keys(context.handlers)).toHaveLength(87);
   });
 });

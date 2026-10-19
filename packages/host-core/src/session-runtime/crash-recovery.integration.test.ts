@@ -33,6 +33,13 @@ afterEach(async () => {
 const QUESTION = "Which implementation should continue?";
 const OPTIONS = [{ id: "first", label: "First implementation" }];
 const provenance = { source: { kind: "system" as const, id: "test", detail: null }, venue: null };
+// The runtime's queue admission bound covers EVERY attach (its workspace and
+// executor stages) and every cold binding rebuild, not only queued messages.
+// A short wall-clock bound on all of them made a merely slow real Pi attach
+// under CI load a false `rejected` (VC-778). Genuine work keeps the production
+// bound; only a stage this fixture deliberately stalls gets the short one.
+const PRODUCTION_ADMISSION_BOUND_MS = 30_000;
+const STALLED_STAGE_BOUND_MS = 50;
 
 function fixture() {
   const database = openTestDb();
@@ -63,7 +70,17 @@ function fixture() {
       attachFailure: Error | null;
       attachGate: Promise<void> | null;
       admissionGate: Promise<void> | null;
-    } = { attachFailure: null, attachGate: null, admissionGate: null };
+      /** Real delay before every attach, to model a slow but healthy executor. */
+      attachDelayMs: number;
+      /** Set synchronously on entering a gate, before the runtime arms its timer. */
+      stalled: boolean;
+    } = {
+      attachFailure: null,
+      attachGate: null,
+      admissionGate: null,
+      attachDelayMs: 0,
+      stalled: false,
+    };
     const adapter = createPiNativeAdapter({
       sessionDataDir,
       models: script.models,
@@ -90,13 +107,20 @@ function fixture() {
         ...adapter,
         attach: async (spec, sink) => {
           attachSpecs.push(spec);
-          if (control.attachGate) await control.attachGate;
+          if (control.attachGate) {
+            control.stalled = true;
+            await control.attachGate;
+          }
+          if (control.attachDelayMs > 0)
+            await new Promise((resolve) => setTimeout(resolve, control.attachDelayMs));
           if (control.attachFailure) throw control.attachFailure;
           const binding = await adapter.attach(spec, sink);
           const dispatch = binding.dispatch.bind(binding);
           binding.dispatch = async (command) => {
-            if (command.kind === "message.submit" && control.admissionGate)
+            if (command.kind === "message.submit" && control.admissionGate) {
+              control.stalled = true;
               await control.admissionGate;
+            }
             return dispatch(command);
           };
           return binding;
@@ -105,7 +129,11 @@ function fixture() {
       followUps: createSqliteSessionFollowUpLedger(database.db),
       // Explicit recovery wakes exercise retry; no background backoff races.
       followUpRetryDelaysMs: [],
-      followUpAdmissionTimeoutMs: 50,
+      // Read when each bounded stage arms its timer, which is after the
+      // wrappers above have entered (and flagged) any gate synchronously.
+      get followUpAdmissionTimeoutMs() {
+        return control.stalled ? STALLED_STAGE_BOUND_MS : PRODUCTION_ADMISSION_BOUND_MS;
+      },
       onFollowUpFailure: (error) => {
         failures.push(error);
       },
@@ -194,7 +222,7 @@ async function start(f: Host, settledPrefix = false) {
     commandId: `attach-${clock++}`,
     command: { kind: "adapter.attach", continuity: "fresh" },
   });
-  expect(attached.receipt?.status).toBe("accepted");
+  expect(attached.receipt?.status, JSON.stringify(attached.receipt)).toBe("accepted");
   if (settledPrefix) {
     const settled = await f.host.command({
       sessionId,
@@ -208,7 +236,7 @@ async function start(f: Host, settledPrefix = false) {
         },
       },
     });
-    expect(settled.receipt?.status).toBe("accepted");
+    expect(settled.receipt?.status, JSON.stringify(settled.receipt)).toBe("accepted");
   }
   const commandId = `submit-${clock++}`;
   const result = await f.host.command({
@@ -224,7 +252,7 @@ async function start(f: Host, settledPrefix = false) {
       },
     },
   });
-  expect(result.receipt?.status).toBe("accepted");
+  expect(result.receipt?.status, JSON.stringify(result.receipt)).toBe("accepted");
   await expect
     .poll(
       async () => (await f.host.projection({ sessionId })).projection.interactions.active.length,
@@ -254,7 +282,7 @@ async function queue(current: Launch, sessionId: string, commandId = "queue-next
       },
     },
   });
-  expect(result.receipt?.status).toBe("accepted");
+  expect(result.receipt?.status, JSON.stringify(result.receipt)).toBe("accepted");
   await current.host.recoverFollowUps();
 }
 
@@ -340,6 +368,24 @@ async function assertNoAnswers(current: Launch, sessionId: string) {
 // The provider alone is scripted. Session admission, SQLite events/queue,
 // Pi sidecars, boot recovery and the adapter's parked ask are production code.
 describe("crash recovery through the durable Pi binding (VC-753)", () => {
+  it("accepts a slow but healthy attach and recovers its binding without a false admission timeout (VC-778)", async () => {
+    const f = fixture();
+    // Longer than the stalled-stage bound: a fixture that bounded genuine
+    // work by it rejected the fresh attach and failed the boot rebuild.
+    const slow = STALLED_STAGE_BOUND_MS * 3;
+    f.control.attachDelayMs = slow;
+    const { sessionId } = await start(f);
+    const current = await f.restart(f, true);
+    current.control.attachDelayMs = slow;
+    expect(await f.boot(current)).toEqual({ closed: 0, errors: [] });
+    expect(current.attachSpecs.map(({ continuity }) => continuity)).toEqual(["native_resume"]);
+    const recovered = (await current.host.projection({ sessionId })).projection;
+    expect(recovered.liveExecutor).not.toBeNull();
+    expect(
+      recovered.attention.active.filter(({ kind }) => kind === "adapter_unrecoverable"),
+    ).toEqual([]);
+  });
+
   it("reconciles an accepted command with a different persisted timestamp without a false recovery failure", async () => {
     const f = fixture();
     const { sessionId, commandId } = await start(f);
@@ -655,7 +701,7 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
       sessionId,
       command: { kind: "adapter.release", attachmentId },
     });
-    expect(released.receipt?.status).toBe("accepted");
+    expect(released.receipt?.status, JSON.stringify(released.receipt)).toBe("accepted");
     current.control.attachFailure = new Error("Scripted attach unavailable");
     await queue(current, sessionId);
     const projection = (await current.host.projection({ sessionId })).projection;
@@ -678,7 +724,7 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
       sessionId,
       command: { kind: "adapter.attach", continuity: "context_replay" },
     });
-    expect(attached.receipt?.status).toBe("accepted");
+    expect(attached.receipt?.status, JSON.stringify(attached.receipt)).toBe("accepted");
     await assertDeliveredOnce(f, current, sessionId);
   });
 
@@ -751,7 +797,10 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
           expect.objectContaining({
             id: expect.stringContaining("message-delivery:"),
             kind: "adapter_unrecoverable",
-            detail: expect.stringContaining("queue_admission_timeout"),
+            // The stalled stage, not a slow real rebuild before it, is what timed out.
+            detail: expect.stringContaining(
+              `queue_admission_timeout: ${stage === "attach" ? "executor attach" : "message admission"} did not finish`,
+            ),
           }),
         );
         expect(f.script.requests).toHaveLength(2);
@@ -761,6 +810,7 @@ describe("crash recovery through the durable Pi binding (VC-753)", () => {
         gate.reject(new Error("Stalled fixture transport ended"));
         current.control.attachGate = null;
         current.control.admissionGate = null;
+        current.control.stalled = false;
       }
       const relaunched = await f.restart(current);
       const projection = (await relaunched.host.projection({ sessionId })).projection;

@@ -56,6 +56,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -99,6 +100,10 @@ const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWa
      * coverage and change reports the real manager sends.
      */
     worktreeWatch: {
+      /** The client the last `watch` was asked for, as the IPC door built it. */
+      client: undefined as
+        | { onceClosed(listener: () => void): void; removeCloseListener(l: () => void): void }
+        | undefined,
       options: undefined as
         | {
             onCoverageChange?: (ticketId: string, covered: boolean) => void;
@@ -217,7 +222,8 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
     constructor(options: (typeof worktreeWatch)["options"] = undefined) {
       worktreeWatch.options = options;
     }
-    watch = vi.fn((_sender: unknown, ticketId: string) => {
+    watch = vi.fn((client: (typeof worktreeWatch)["client"], ticketId: string) => {
+      worktreeWatch.client = client;
       worktreeWatch.options?.onCoverageChange?.(ticketId, true);
       return { ok: true as const };
     });
@@ -232,6 +238,7 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
 
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc.test-support";
+import type { ProjectLiveWork } from "@volli/host-core/handlers";
 import { watchSessionActivity } from "@volli/host-core/sessions";
 import {
   createTestSessionEngine,
@@ -450,19 +457,72 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
+// VC-796: the channel projects the host's `project.remove`. The cascade takes
+// every Session of the project, so the live work they hold stops first, while
+// the row is still there, and every window (a second one included) is told.
 describe("project removal", () => {
-  it("tells the host after the project is gone, so it releases the board feed it held", () => {
-    const removed = vi.fn<(projectId: string) => void>();
+  function liveWork(projectId: string, stillOpen: readonly string[] = []) {
+    const stopped: string[] = [];
+    const stop = (step: string) => {
+      // Each stop runs while the project, and so its Sessions, still exist.
+      expect(getProjectById(ctx.db, projectId)).toBeDefined();
+      stopped.push(step);
+    };
+    const live: ProjectLiveWork = {
+      releaseBindings: async () => {
+        stop("bindings");
+        return { stillOpen };
+      },
+      disposeShells: () => stop("shells"),
+      killTerminals: () => stop("terminals"),
+      closeBrowserTabs: () => stop("tabs"),
+      mcp: null,
+    };
+    return { live, stopped };
+  }
+
+  it("stops the project's live work before deleting it, then tells every window", async () => {
+    const projectId = createProject();
+    const { live, stopped } = liveWork(projectId);
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { sessionEngine: fixtureSessionEngine, onProjectRemoved: removed },
+      { sessionEngine: fixtureSessionEngine, projectLiveWork: live },
     );
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", projectId),
+    ).resolves.toEqual({ ok: true });
+
+    expect(stopped).toEqual(["bindings", "shells", "terminals", "tabs"]);
+    expect(getProjectById(ctx.db, projectId)).toBeUndefined();
+    // Untargeted, so a window that still holds the project re-reads the list
+    // without it; the fan-out reaches every window, a second one included.
+    await expectDataChanged({ entity: "tickets" });
+  });
+
+  it("keeps the project, and says why, when one of its Sessions will not stop", async () => {
     const projectId = createProject();
-    removed.mockImplementation(() => {
-      expect(getProjectById(ctx.db, projectId)).toBeUndefined();
+    const { live, stopped } = liveWork(projectId, ["session-1"]);
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, projectLiveWork: live },
+    );
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", projectId),
+    ).resolves.toEqual({
+      ok: false,
+      error:
+        "A Session in this project is still running, so nothing was removed. Stop it and try again.",
     });
-    expect(invoke<ProjectMutationResult>("volli:project-remove", projectId)).toEqual({ ok: true });
-    expect(removed).toHaveBeenCalledExactlyOnceWith(projectId);
+
+    expect(stopped).toEqual(["bindings"]);
+    expect(getProjectById(ctx.db, projectId)).toBeDefined();
+    expectNoDataChange();
   });
 });
 
@@ -3617,6 +3677,28 @@ describe("volli:worktree-change-watch (VC-369)", () => {
     expect(
       await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
     ).toEqual({ ok: false, error: "This ticket has no worktree." });
+  });
+
+  // VC-831: the watch is the page's, not the window's — a reload keeps the
+  // WebContents, so a watch closed only on `destroyed` outlived its page.
+  it("closes the subscription when the page that opened it goes away", async () => {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "ok",
+      target: { displayId: "VC-1", worktreePath: "/wt/VC-1", branch: "b", baseBranch: "main" },
+    } as never);
+    const sender = new EventEmitter();
+    const handler = handlers.get("volli:worktree-change-watch") as unknown as (
+      event: unknown,
+      input: unknown,
+    ) => Promise<Result>;
+    expect(await handler({ sender }, { ticketId: "t1" })).toMatchObject({ ok: true });
+
+    const closed = vi.fn();
+    worktreeWatch.client?.onceClosed(closed);
+    sender.emit("did-navigate-in-page");
+    expect(closed).not.toHaveBeenCalled();
+    sender.emit("did-navigate");
+    expect(closed).toHaveBeenCalledOnce();
   });
 });
 

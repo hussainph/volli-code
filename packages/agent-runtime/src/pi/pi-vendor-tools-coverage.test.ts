@@ -283,7 +283,8 @@ describe("vendored read contracts", () => {
       read.execute("read", { path: null as unknown as string }, () => {}, { env }, ...inert),
     ).rejects.toThrow(TypeError);
     const failure = new FileError("permission_denied", "binary denied");
-    const binary = vi.spyOn(env, "readBinaryFile").mockResolvedValue(err(failure));
+    // VC-801: `read` opens a bounded reader rather than reading the file whole.
+    const binary = vi.spyOn(env, "openFileReader").mockResolvedValue(err(failure));
     await expect(
       read.execute("read", { path: "note.txt" }, () => {}, { env }, ...inert),
     ).rejects.toBe(failure);

@@ -140,6 +140,11 @@ export interface SessionRuntimePorts {
   followUpRetryDelaysMs?: readonly number[];
   /** Bounds queue attach/admission, not model execution or a person's answer. */
   followUpAdmissionTimeoutMs?: number;
+  /**
+   * The ceiling on a Session's first attach's workspace preparation, which is
+   * not admission-bounded (VC-799). Ten minutes unless a test says otherwise.
+   */
+  firstAttachPreparationTimeoutMs?: number;
   /** The one structured executor this runtime attaches. */
   executor: NativeHarnessAdapter;
   artifacts: TranscriptArtifactStore;
@@ -1685,13 +1690,27 @@ class DefaultSessionRuntime implements SessionRuntime {
     // The directory has to be real before it is bound: an adapter handed one
     // that is not there fails per prompt, deep inside the harness, wearing
     // whatever name that harness gives a missing path.
+    //
+    // A Session's FIRST attach, from any door but the queue's own, is where
+    // its worktree is made, and under load that outlasts the admission bound —
+    // which never stopped the preparation, only failed the attach while the
+    // preparation went on to finish. So it waits under a generous ceiling of
+    // its own instead (VC-799), and outlasting that is a configuration
+    // failure for a person to look at, like any preparation that fails. Every
+    // later attach, and every attach a queue drain makes, keeps the bound.
+    const firstAttach =
+      !request.commandId.startsWith("follow-up:") &&
+      projection.attachments.every(({ openedAt }) => openedAt === null);
     let site: SessionLocation;
     try {
-      site = await this.#queueAdmissionWait(
-        `follow-up:${request.commandId}`,
-        this.ports.locations.prepare(projection.session),
-        "workspace preparation",
-      );
+      const preparing = this.ports.locations.prepare(projection.session);
+      site = firstAttach
+        ? await this.#firstAttachPreparation(preparing)
+        : await this.#queueAdmissionWait(
+            `follow-up:${request.commandId}`,
+            preparing,
+            "workspace preparation",
+          );
     } catch (error) {
       return this.#failAttach({
         request,
@@ -2333,6 +2352,30 @@ class DefaultSessionRuntime implements SessionRuntime {
     }
     await this.#publish(cleared);
     return this.#requireSession(projection.session.id);
+  }
+
+  /**
+   * A first attach's workspace preparation, under its own ceiling rather than
+   * the admission bound. The ceiling rejects with a plain error, which the
+   * attach records as `configuration_invalid`; the preparation itself is not
+   * stopped, so a worktree it finishes later is there for the Retry.
+   */
+  async #firstAttachPreparation(preparing: Promise<SessionLocation>): Promise<SessionLocation> {
+    const ceilingMs =
+      this.ports.firstAttachPreparationTimeoutMs ?? FIRST_ATTACH_PREPARATION_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ceiling = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error(`Workspace preparation did not finish within ${ceilingMs / 1000} s.`)),
+        ceilingMs,
+      );
+    });
+    try {
+      return await Promise.race([preparing, ceiling]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async #queueAdmissionWait<T>(
@@ -5429,6 +5472,8 @@ function followUpFailureDetail(error: unknown): string {
 
 /** Pre-intent release retries: quick for a blip, then sparse, then visible and waiting. */
 const FOLLOW_UP_RETRY_DELAYS_MS: readonly number[] = [1_000, 5_000, 30_000, 120_000, 600_000];
+/** A first attach's preparation ceiling: generous, for a loaded machine making a worktree. */
+const FIRST_ATTACH_PREPARATION_TIMEOUT_MS = 10 * 60_000;
 
 export function createSessionRuntime(ports: SessionRuntimePorts): HostedSessionRuntime {
   return new DefaultSessionRuntime(ports);

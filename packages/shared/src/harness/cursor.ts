@@ -71,4 +71,25 @@ export const cursorAdapter: HarnessAdapter = {
   // Empty until a marker is observed on a real cursor-agent session — a guessed
   // name is a variable deleted from the user's environment for no reason.
   sessionMarkers: [],
+  // Read off `cursor-agent --help`. `agent`, `ls` and `resume` start or reopen
+  // a chat, so they are launches and stay off this list.
+  nonSessionArgv: {
+    flags: ["--version", "-v", "--help", "-h"],
+    subcommands: [
+      "install-shell-integration",
+      "uninstall-shell-integration",
+      "login",
+      "logout",
+      "mcp",
+      "plugin",
+      "status",
+      "whoami",
+      "models",
+      "bedrock",
+      "about",
+      "update",
+      "create-chat",
+      "help",
+    ],
+  },
 };

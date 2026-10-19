@@ -98,6 +98,24 @@ export async function buildFakeHarness(scratchDir, probePath, opts = {}) {
     // only — see the module header), the fake then puts the pty in raw mode and
     // blocks forever copying stdin verbatim into a per-session log instead of
     // exiting; otherwise (every other smoke) it exits 0 right after recording.
+    // In interactive mode the fake `claude` also does what a real one does at
+    // boot: fire SessionStart naming the id it was launched with. The app
+    // holds a wrapper's minted id as pending until that event proves the
+    // launch (VC-807), so a fake that stayed silent would never be resumable
+    // by id. Synchronous, so it has landed before the capture loop opens.
+    const startupHook =
+      name === "claude"
+        ? `  fake_sid=''
+  fake_prev=''
+  for arg in "$@"; do
+    if [ "$fake_prev" = "--session-id" ]; then fake_sid=$arg; fi
+    fake_prev=$arg
+  done
+  if [ -n "$fake_sid" ]; then
+    volli hook claude-code session.started "{\\"session_id\\":\\"$fake_sid\\"}" </dev/null >/dev/null 2>&1 || true
+  fi
+`
+        : "";
     const script = `#!/bin/sh
 # Fake "${name}" harness for e2e kickoff / interrupt-resume probes. Records
 # argv, then either exits 0 (default) or blocks copying raw stdin (interactive
@@ -110,7 +128,7 @@ probe="\${VOLLI_FAKE_HARNESS_PROBE:-${probe}}"
   done
 } >> "$probe"
 if [ -n "$VOLLI_FAKE_HARNESS_INTERACTIVE_DIR" ] && [ -n "$VOLLI_SESSION" ]; then
-  stty raw -echo 2>/dev/null
+${startupHook}  stty raw -echo 2>/dev/null
   exec cat >> "$VOLLI_FAKE_HARNESS_INTERACTIVE_DIR/$VOLLI_SESSION.stdin"
 fi
 exit 0

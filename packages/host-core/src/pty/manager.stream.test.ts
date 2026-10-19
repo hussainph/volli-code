@@ -213,6 +213,27 @@ describe("attach (VC-560)", () => {
   });
 });
 
+// VC-796: a removed project's terminals end on the host, before its delete,
+// whichever window drew them.
+describe("killSessions", () => {
+  it("kills exactly the named live sessions, attached or not, and names them", async () => {
+    const first = makeClient("window-1");
+    const second = makeClient("window-2");
+    const a = await start(first);
+    const b = await start(second);
+    const kept = await start(first);
+
+    const killed = manager.killSessions(new Set([a.sessionId, b.sessionId, "not-live"]));
+
+    expect(killed.toSorted()).toEqual([a.sessionId, b.sessionId].toSorted());
+    expect(a.pty.kill).toHaveBeenCalledOnce();
+    expect(b.pty.kill).toHaveBeenCalledOnce();
+    expect(kept.pty.kill).not.toHaveBeenCalled();
+    expect(manager.workspaceIdFor(a.sessionId)).toBeUndefined();
+    expect(manager.workspaceIdFor(kept.sessionId)).toBe("w");
+  });
+});
+
 describe("detach (VC-560)", () => {
   it("is owner-only, answering a stranger as it answers an unknown id", async () => {
     const holder = makeClient("holder");
