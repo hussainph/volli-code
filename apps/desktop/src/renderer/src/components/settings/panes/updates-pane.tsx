@@ -44,7 +44,7 @@ import { updateStatus } from "./updates-pane-model";
 
 /** Shown once Stable is chosen over Canary — exactly when and how it takes effect. */
 const LEAVING_CANARY_DETAIL =
-  "An installed canary build stays until a newer stable release is out; it never downgrades.";
+  "An installed canary build stays until a newer stable release is out.";
 
 const ENTER_CANARY_WARNING =
   "Canary builds ship the newest work first and break more often. You can switch back, but an installed canary won't downgrade itself. Continue?";

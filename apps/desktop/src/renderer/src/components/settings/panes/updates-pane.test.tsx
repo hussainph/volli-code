@@ -79,9 +79,13 @@ beforeEach(() => {
   vi.mocked(toastError).mockClear();
 });
 
+/** jsdom's own (absent) `scrollIntoView`, put back after a test that stubs it. */
+const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
 });
 
 /** Opens the channel select from the keyboard and picks the option reading `text`. */
@@ -123,7 +127,7 @@ describe("UpdatesPane", () => {
     expect(container.querySelector("#update-channel")?.textContent).toContain("Stable");
     expect(container.textContent).toContain("Stable takes effect the next time Volli opens");
     expect(container.textContent).toContain(
-      "An installed canary build stays until a newer stable release is out; it never downgrades.",
+      "An installed canary build stays until a newer stable release is out.",
     );
   });
 

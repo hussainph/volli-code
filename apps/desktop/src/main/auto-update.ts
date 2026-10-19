@@ -119,11 +119,11 @@ export function readUpdateChannel(
 /**
  * Moves this install between release lines, and returns where it landed.
  *
- * Writes the EXACT `true`/`false` JSON {@link readAllowPrerelease} tests for.
- * That reader fails closed on anything else — `"1"`, `"yes"`, a bare `true`
- * with whitespace — so a writer that produced any of them would be a switch
- * that moves on screen and changes nothing, which is the specific failure the
- * round-trip test above exists to prevent.
+ * Writes the JSON boolean {@link readAllowPrerelease} reads as a choice.
+ * Anything that does not parse to a boolean — `"1"`, `"yes"`, malformed JSON —
+ * reads as "never chosen" and follows the running build's line, so a writer
+ * that produced one would be a switch that moves on screen and changes
+ * nothing; the round-trip test exists to prevent exactly that.
  *
  * Entering canary reaches the RUNNING updater too, when the caller hands it
  * over — without that, "Check now" pressed right after switching silently
