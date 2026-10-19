@@ -39,7 +39,13 @@ export function credentialPath(path: string): boolean {
 }
 
 export function refusingCredentialReads(env: ExecutionEnv, workspacePath: string): ExecutionEnv {
-  const reads = new Set(["openTextLineReader", "readTextFile", "readTextLines", "readBinaryFile"]);
+  const reads = new Set([
+    "openFileReader",
+    "openTextLineReader",
+    "readTextFile",
+    "readTextLines",
+    "readBinaryFile",
+  ]);
   return new Proxy(env, {
     get(target, property) {
       const member: unknown = Reflect.get(target, property);
