@@ -495,7 +495,7 @@ describe("removeProject", () => {
   });
 
   it("forgets the removed project's terminal sessions, leaving their PTYs to the host", async () => {
-    // The host's `project.remove` ended the PTYs before its delete (VC-796),
+    // The host's `project.remove` ended the PTYs before its detach (VC-796),
     // for every window; the store only forgets this window's views of them,
     // with no terminal view mounted to do it as an unmount side effect.
     // Keeps `appState` in the stub too: zustand's `persist` middleware writes

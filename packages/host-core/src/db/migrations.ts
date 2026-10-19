@@ -17,6 +17,10 @@
 import { BOARD_COMMAND_RECEIPTS_MIGRATION } from "./board-receipts-migration";
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
+import {
+  applyProjectRemovedColumn,
+  PROJECT_REMOVED_COLUMN_MIGRATION,
+} from "./project-removed-migration";
 import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
 import {
   applySpawnLedgerParkedColumn,
@@ -2808,6 +2812,12 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "spawned_processes.parked_at — terminals a crash left SIGSTOPped (VC-833)",
     sql: SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
     apply: applySpawnLedgerParkedColumn,
+  },
+  {
+    version: 64,
+    name: "projects.removed_at — removing a project detaches it instead of deleting (VC-822)",
+    sql: PROJECT_REMOVED_COLUMN_MIGRATION,
+    apply: applyProjectRemovedColumn,
   },
 ];
 

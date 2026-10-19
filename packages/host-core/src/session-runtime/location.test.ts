@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { roleImpliedByTicket } from "@volli/shared";
 import type { Session } from "@volli/shared";
-import { insertProject } from "../db/projects-repo";
+import { detachProject, insertProject, reattachProject } from "../db/projects-repo";
 import { insertTicket } from "../db/tickets-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 
@@ -354,6 +354,38 @@ describe("desktop Session location resolver", () => {
       `The Session's directory ${project.path} is gone and couldn't be recreated.`,
     );
     expect(ensureWorktree).not.toHaveBeenCalled();
+  });
+
+  // VC-822: removal detaches a project and keeps its Sessions, so nothing may
+  // start one there: not a new binding, and not a turn on a binding that
+  // outlived the removal. Reading where it ran starts nothing and still works.
+  it("refuses to start or reaffirm a Session of a removed project, until it is re-added", async () => {
+    testDb = openTestDb();
+    const root = scratch();
+    const project = testProject({ id: "project-1", path: root });
+    insertProject(testDb.db, project);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
+    const session: Session = {
+      id: "project-session",
+      projectId: project.id,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      createdAt: 0,
+    };
+    const removed =
+      "This Session's project was removed from Volli. Add its folder again to use it.";
+
+    detachProject(testDb.db, project.id, 1);
+
+    await expect(resolver.prepare(session)).rejects.toThrow(removed);
+    await expect(resolver.reaffirm(session, root)).rejects.toThrow(removed);
+    await expect(resolver.resolve(session)).resolves.toMatchObject({ directory: root });
+
+    reattachProject(testDb.db, project.id, 2);
+    await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: root });
+    await expect(resolver.reaffirm(session, root)).resolves.toBeUndefined();
   });
 
   // VC-284. An agent start is the other side of the deletion

@@ -390,13 +390,14 @@ export const DESKTOP_ENTRIES = [
     summary: "Give keyboard focus back to a shown Browser page whose shortcut did nothing.",
   },
   // VC-796: the host's removal, which `volli:project-remove` projects. It
-  // stops the project's live work before the delete its cascade makes.
+  // stops the project's live work, then detaches the project (VC-822): its
+  // tickets and Sessions are kept, and adding the folder again restores them.
   {
     key: "project.remove",
     compatibility: "host-command",
     placement: "workspace",
     idempotency: "natural",
-    summary: "Remove a project from Volli: stop its Sessions' live work, then delete it.",
+    summary: "Remove a project from Volli: stop its Sessions' live work, then detach it.",
   },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 

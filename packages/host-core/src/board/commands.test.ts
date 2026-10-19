@@ -25,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { getComment } from "../db/comments-repo";
 import { listTicketEvents } from "../db/events-repo";
 import { listTicketLabels } from "../db/labels-repo";
-import { insertProject } from "../db/projects-repo";
+import { detachProject, insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { getTicket, getTicketRow, listTicketsByProject } from "../db/tickets-repo";
 import { ADMITTED, admittedHandlers, type HandlerPolicy } from "../handlers/handler-map";
@@ -280,6 +280,47 @@ describe("reads", () => {
     expect(roster.cursor).toBe(feed.cursor(PROJECT));
 
     expect(await map["board.ticketBody"]({ ticketId: "t-1" }, USER)).toEqual({ body: "the body" });
+  });
+
+  // VC-822: a removed project is detached, not deleted. Its board is not read
+  // or written until its folder is added again; a write it already took
+  // still replays.
+  it("reads and writes nothing in a removed project, but replays a write it took", async () => {
+    const map = handlers();
+    seed("t-1");
+    const input = {
+      projectId: PROJECT,
+      commandId: "c-before",
+      status: "todo" as const,
+      title: "A",
+    };
+    const before = await map["board.createTicket"](input, USER);
+    detachProject(ctx.db, PROJECT, 7);
+    const receipts = counts().board_command_receipts;
+    batches.length = 0;
+    const removed = "This project was removed from Volli. Add its folder again to change it.";
+
+    await expect(async () => map["board.snapshot"]({ projectId: PROJECT }, USER)).rejects.toThrow(
+      "Unknown project",
+    );
+    await expect(async () => map["board.roster"]({ projectId: PROJECT }, USER)).rejects.toThrow(
+      "Unknown project",
+    );
+    await expect(async () =>
+      map["board.createTicket"]({ ...input, commandId: "c-after" }, USER),
+    ).rejects.toThrow(removed);
+    await expect(async () =>
+      map["board.updateTicket"]({ ticketId: "t-1", title: "Renamed" }, USER),
+    ).rejects.toThrow(removed);
+    await expect(async () =>
+      map["board.updateProject"]({ projectId: PROJECT, baseBranch: "main" }, USER),
+    ).rejects.toThrow(removed);
+    await expectReplay(before, () => map["board.createTicket"](input, USER));
+
+    expect(getTicket(ctx.db, "t-1")?.title).not.toBe("Renamed");
+    expect(listTicketsByProject(ctx.db, PROJECT)).toHaveLength(2);
+    expect(counts().board_command_receipts).toBe(receipts);
+    expect(batches).toEqual([]);
   });
 
   it("refuses an unknown project or ticket rather than answering empty", async () => {

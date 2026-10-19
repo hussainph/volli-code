@@ -665,9 +665,10 @@ export function createProjectsStore(
         if (!result) return;
         localProjectIds.delete(id);
 
-        // The host stopped the project's live work before it deleted it (VC-796):
+        // The host stopped the project's live work before it detached it (VC-796):
         // its Sessions' bindings, shells, terminals and tabs, for every window
-        // and whichever door removed it. What is left here is this window's own
+        // and whichever door removed it. Its tickets and Sessions are kept for
+        // a re-add of the folder (VC-822). What is left here is this window's own
         // views of it. `forgetProjectSessions` disposes the terminal engines
         // and drops their records (the PTYs behind them are already gone), the
         // archived tickets' included, whether or not a view is mounted.
