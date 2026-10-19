@@ -193,7 +193,8 @@ never reads as the parent's user (VC-457). The parent is never parked on it,
 nothing bounds the child's time, and stopping the parent stops its children. A
 child a person resumes after that notice reports to its parent again when the
 resumed turn ends; a turn a host notice opens in it (its own shell exiting, a
-Browser Tab event) does not (VC-809). The Session
+Browser Tab event) does not, unless a person or another Session steers a
+message into that turn (VC-809). The Session
 Presentation Contract projects that notice into the parent's transcript as a
 quiet host-authored receipt row, not as a Turn in the person's voice. This row
 records the delegation outcome; it is not a listing of the child. While work is
@@ -478,7 +479,8 @@ parent's — is capped per Session, runs inside the workspace, is spawned
 through the same environment record and the same attachment identity the
 `execute` tool gets, and is killed when the attachment ends — a subagent's
 already when a turn of it completes, silently, so a shell it left running
-cannot reopen it after its parent has the answer (VC-809). Every shell
+cannot reopen it after its parent has the answer (VC-809); its exited shells'
+output is forgotten at that point too. Every shell
 result restates the Session's live shells, because the tool calls are the
 durable record; shells are live resources, not ledger facts, and do not
 survive a relaunch. The Activity Island's shells cluster reads them through

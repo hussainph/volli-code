@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { BrowserTabBounds, BrowserTabState, SessionToolId } from "@volli/shared";
 import {
@@ -344,7 +344,6 @@ function fixture(role: "project" | "ticket", options: { shells?: BackgroundShell
   return {
     host,
     engine,
-    directory,
     start,
     submitSessionMessage,
     delegations,
@@ -567,8 +566,23 @@ describe("completed delegate browser cleanup (VC-754)", () => {
 const startShell = (command: string): ScriptedReply => ({
   tool: { name: "shell_start", args: { command } },
 });
-/** A shell that records its process group's leader in `<name>.pid`, then waits. */
-const groupLeader = (name: string) => `echo $$ > ${name}.pid; exec sleep 300`;
+/**
+ * The pids `shell_start` reported, one per call, in the order first seen. The
+ * spawned shell leads its own group, and the pid is known at the spawn — so
+ * nothing races the turn's end the way a pid file the shell writes would.
+ */
+function startedPids(requests: ReturnType<typeof fixture>["script"]["requests"]): number[] {
+  const byCall = new Map<string, number>();
+  for (const message of requests.flat()) {
+    if (message.role !== "toolResult") continue;
+    const match = /Started background shell \S+ \(pid (\d+)\)/.exec(
+      JSON.stringify(message.content),
+    );
+    if (match !== null && !byCall.has(message.toolCallId))
+      byCall.set(message.toolCallId, Number(match[1]));
+  }
+  return [...byCall.values()];
+}
 /** Whether any process of the group `pid` leads is still alive. */
 function groupAlive(pid: number): boolean {
   try {
@@ -612,9 +626,9 @@ describe("completed delegate background shell cleanup (VC-809)", () => {
       f.replies.length,
       startShell("exec sleep 300"),
       { text: "Parent ready" },
-      startShell(groupLeader("first")),
+      startShell("exec sleep 300"),
       { text: "Child answer" },
-      startShell(groupLeader("second")),
+      startShell("exec sleep 300"),
       { text: "Child again" },
     );
     await f.submitSessionMessage({
@@ -633,12 +647,12 @@ describe("completed delegate background shell cleanup (VC-809)", () => {
     expect(projection.lastTurnOutcome).toBe("completed");
     expect(projection.liveExecutor?.status).toBe("open");
     expect(shells.list(child.sessionId)).toEqual([]);
-    const pidOf = (name: string) =>
-      Number(readFileSync(join(f.directory, `${name}.pid`), "utf8").trim());
-    const first = pidOf("first");
-    await vi.waitFor(() => expect(groupAlive(first)).toBe(false), { timeout: 5_000 });
+    const [parentPid, first] = startedPids(f.script.requests);
+    expect(first).toBeTypeOf("number");
+    await vi.waitFor(() => expect(groupAlive(first!)).toBe(false), { timeout: 5_000 });
     // A Board or Ticket Session's shells outlive its turn, as before.
     expect(shells.list(parent.sessionId)).toMatchObject([{ state: "running" }]);
+    expect(groupAlive(parentPid!)).toBe(true);
 
     // A person resuming it gets a working shell port, retired again at the end.
     await f.submitSessionMessage({
@@ -648,8 +662,9 @@ describe("completed delegate background shell cleanup (VC-809)", () => {
       text: "Once more",
     });
     expect(shells.list(child.sessionId)).toEqual([]);
-    const second = pidOf("second");
-    await vi.waitFor(() => expect(groupAlive(second)).toBe(false), { timeout: 5_000 });
+    const second = startedPids(f.script.requests)[2];
+    expect(second).toBeTypeOf("number");
+    await vi.waitFor(() => expect(groupAlive(second!)).toBe(false), { timeout: 5_000 });
     const toolResults = f.script.requests.flatMap((request) =>
       request.filter((message) => message.role === "toolResult"),
     );

@@ -109,6 +109,7 @@
 import { sessionStopSummary, type SessionStopDetail } from "@volli/shared";
 
 import {
+  readSessionOrigin,
   sessionHostNoticeMetadata,
   shortSessionId,
   SUBAGENT_NOTICE_MESSAGE_ID_SUFFIX,
@@ -399,13 +400,38 @@ function outcomeOf(
 
 export type { NoticeDelivery } from "./host-notice-delivery";
 
-/** The origins `hostNoticeCommand` and the other host-notice producers stamp. */
-const HOST_NOTICE_REASONS: ReadonlySet<Extract<SessionOrigin, { kind: "volli" }>["reason"]> =
-  new Set(["watch-notice", "subagent-notice", "browser-notice", "shell-notice", "worktree-notice"]);
+/**
+ * Which of Volli's own origins are a host notice — Volli telling the Session
+ * something, not anyone resuming it (VC-809). A Record, so a new reason fails
+ * to compile here until someone decides which it is.
+ */
+const IS_HOST_NOTICE: Record<Extract<SessionOrigin, { kind: "volli" }>["reason"], boolean> = {
+  "watch-notice": true,
+  "subagent-notice": true,
+  "browser-notice": true,
+  "shell-notice": true,
+  "worktree-notice": true,
+  "relaunch-recovery": false,
+  "scheduled-resume": false,
+  supervision: false,
+  "auto-title": false,
+};
 
 /** A turn Volli opened by telling the Session something, not by anyone resuming it. */
 function isHostNoticeOrigin(origin: SessionOrigin | null): boolean {
-  return origin?.kind === "volli" && HOST_NOTICE_REASONS.has(origin.reason);
+  return origin?.kind === "volli" && IS_HOST_NOTICE[origin.reason];
+}
+
+/**
+ * The origin a `command.recorded` event carries: the slim fold's field when
+ * present, else the door's attribution in its provenance. Null when unknown.
+ */
+export function commandOriginOf(event: SessionEvent): SessionOrigin | null {
+  if (event.commandOrigin !== undefined) return event.commandOrigin;
+  const detail = event.provenance?.source.detail;
+  return typeof detail === "object" && detail !== null && !Array.isArray(detail)
+    ? readSessionOrigin((detail as Record<string, unknown>).sessionOrigin)
+    : null;
 }
 
 /**
@@ -441,6 +467,19 @@ export interface Delegations {
   rearm(
     entry: DelegationRef & { answered: boolean },
     resumed: { turnId: string; afterSequence: number },
+  ): Promise<void>;
+  /**
+   * Watch an answered child that a person or another Session steered a
+   * message into while a turn of it was already running (VC-809). That turn
+   * was opened by something else — a host notice, typically, which
+   * {@link rearm} leaves alone — so its start named no resumption; the joined
+   * message is one, and the turn's end reports under that turn's resume ids.
+   * A message whose origin is a host notice, or that arrived while the child
+   * was idle (its own turn's start re-arms), arms nothing.
+   */
+  rearmJoined(
+    entry: DelegationRef & { answered: boolean },
+    joined: { origin: SessionOrigin | null; afterSequence: number },
   ): Promise<void>;
   /**
    * Notify every delegation a relaunch left unanswered, off the children's own
@@ -786,6 +825,30 @@ export function createDelegations(ports: DelegateSessionPorts): Delegations {
         answered
           ? resumedNoticeIds(entry.operationId, resumed.turnId)
           : noticeIds(entry.operationId),
+        true,
+      );
+    },
+    async rearmJoined({ answered, ...entry }, joined) {
+      // An unanswered delegation re-arms on any turn's start already.
+      if (!answered || isHostNoticeOrigin(joined.origin)) return;
+      if (live.has(entry.childSessionId)) return;
+      let turnId: string | null;
+      try {
+        const { projection } = await ports.runtime.projection({ sessionId: entry.childSessionId });
+        turnId = projection.turnActive ? projection.latestTurnId : null;
+      } catch (error) {
+        report(
+          `could not read subagent ${shortSessionId(entry.childSessionId)}'s running turn: ${errorText(error)}`,
+        );
+        return;
+      }
+      if (turnId === null || live.has(entry.childSessionId)) return;
+      // Keyed on the joined turn, so a racing `rearm` for the same turn
+      // spends the same ids and the parent is told once.
+      await watchChild(
+        entry,
+        joined.afterSequence,
+        resumedNoticeIds(entry.operationId, turnId),
         true,
       );
     },

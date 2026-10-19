@@ -272,8 +272,9 @@ export type AttachmentBrowserPort = RuntimeBrowserPort & {
  * (VC-270): the attachment ending. Required rather than optional, for
  * {@link AttachmentBrowserPort}'s reason — it is what keeps a Session's shells
  * from outliving it. A completed Subagent turn drives the same door early
- * (VC-809); it forgets only the shells it killed, so the port keeps serving
- * the attachment.
+ * (VC-809): every shell the child owns, running or exited, is killed and
+ * forgotten (its removal published), and the port keeps serving the
+ * attachment for a turn a person resumes it with.
  */
 export type AttachmentShellPort = RuntimeShellPort & { dispose: () => void };
 

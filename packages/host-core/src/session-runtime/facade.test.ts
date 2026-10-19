@@ -92,6 +92,7 @@ async function fixture() {
     recover: vi.fn(),
     watching: vi.fn(),
     rearm: vi.fn(async () => {}),
+    rearmJoined: vi.fn(async () => {}),
   } as never);
   const sessions = { create: vi.fn() } as unknown as Sessions;
   const titler = { refine: vi.fn(async () => {}) } as AutoTitler;
@@ -356,6 +357,7 @@ describe("lifted Session facade and recovered agent staging", () => {
       liveChildren: vi.fn(() => ["child"]),
       watching: vi.fn(() => false),
       rearm: vi.fn(async () => {}),
+      rearmJoined: vi.fn(async () => {}),
     };
     vi.mocked(createDelegations).mockReturnValue(
       delegated as unknown as ReturnType<typeof createDelegations>,
@@ -668,6 +670,7 @@ describe("agent staging ports", () => {
       liveChildren: vi.fn(() => ["child"]),
       watching: vi.fn(() => false),
       rearm: vi.fn(async () => {}),
+      rearmJoined: vi.fn(async () => {}),
     };
     vi.mocked(createDelegations).mockReturnValue(delegated as never);
     const runner = { run: vi.fn(async () => "run") };
