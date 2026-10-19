@@ -56,6 +56,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -99,6 +100,10 @@ const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWa
      * coverage and change reports the real manager sends.
      */
     worktreeWatch: {
+      /** The client the last `watch` was asked for, as the IPC door built it. */
+      client: undefined as
+        | { onceClosed(listener: () => void): void; removeCloseListener(l: () => void): void }
+        | undefined,
       options: undefined as
         | {
             onCoverageChange?: (ticketId: string, covered: boolean) => void;
@@ -217,7 +222,8 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
     constructor(options: (typeof worktreeWatch)["options"] = undefined) {
       worktreeWatch.options = options;
     }
-    watch = vi.fn((_sender: unknown, ticketId: string) => {
+    watch = vi.fn((client: (typeof worktreeWatch)["client"], ticketId: string) => {
+      worktreeWatch.client = client;
       worktreeWatch.options?.onCoverageChange?.(ticketId, true);
       return { ok: true as const };
     });
@@ -3671,6 +3677,28 @@ describe("volli:worktree-change-watch (VC-369)", () => {
     expect(
       await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
     ).toEqual({ ok: false, error: "This ticket has no worktree." });
+  });
+
+  // VC-831: the watch is the page's, not the window's — a reload keeps the
+  // WebContents, so a watch closed only on `destroyed` outlived its page.
+  it("closes the subscription when the page that opened it goes away", async () => {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "ok",
+      target: { displayId: "VC-1", worktreePath: "/wt/VC-1", branch: "b", baseBranch: "main" },
+    } as never);
+    const sender = new EventEmitter();
+    const handler = handlers.get("volli:worktree-change-watch") as unknown as (
+      event: unknown,
+      input: unknown,
+    ) => Promise<Result>;
+    expect(await handler({ sender }, { ticketId: "t1" })).toMatchObject({ ok: true });
+
+    const closed = vi.fn();
+    worktreeWatch.client?.onceClosed(closed);
+    sender.emit("did-navigate-in-page");
+    expect(closed).not.toHaveBeenCalled();
+    sender.emit("did-navigate");
+    expect(closed).toHaveBeenCalledOnce();
   });
 });
 
