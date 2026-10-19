@@ -815,6 +815,7 @@ describe("the registry table", () => {
 
   it("teaches parent steering without promising a second delegation answer", () => {
     const delegate = verbEntry("session.delegate")?.tool?.description;
+    expect(delegate).toContain("If it drifts and you hold `session_send`");
     expect(delegate).toContain("steer it with `session_send`");
     expect(delegate).toContain("the delegation still answers exactly once");
     const send = verbEntry("session.send")?.tool?.description;

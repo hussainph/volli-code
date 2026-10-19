@@ -1,7 +1,7 @@
 /**
  * Frozen main baseline for the desktop Session tool surface (VC-622 a2).
  *
- * Provenance: every value below was produced by main's own
+ * Original provenance: these values were produced by main's own
  * `sessionToolSurface.resolve` closure as it shipped at bdc0e925b (the last
  * main commit before VC-622 lifted it), extracted verbatim by the a1 verifier
  * (reference-only scratch: .scratch/vc622a1-verify/verify-tests/
@@ -15,8 +15,10 @@
  * shared resolver at test time; the covering test reads this file and
  * nothing else.
  *
- * VC-861: Ticket birth surfaces now include delegation-scoped `session.send`.
- * These expected birth bytes do not rewrite any durable Session record.
+ * VC-861 updates the Ticket birth entries by adding `session.send` in canonical
+ * order; project/subagent entries and the matrix keep their original bytes.
+ * The old Ticket membership is pinned by assembly.test.ts (held: false), not
+ * these updated birth expectations. No durable Session record is rewritten.
  *
  * Encoding:
  * - `surfaces` — one distinct resolved surface per entry, tools comma-joined

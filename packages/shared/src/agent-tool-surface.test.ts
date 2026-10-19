@@ -23,7 +23,7 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 }
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
-  it("gives a Board Session the agent-control family and a Ticket Role's default bundle none", () => {
+  it("gives Board Sessions project-wide control and Ticket Sessions only delegated steering", () => {
     // The whole family travels together (VC-92's pairing rule; stop and send
     // joined start in VC-86, and `automation.run` rides with them per VC-134)
     // — shipping part of it would make the bundle no boundary.
