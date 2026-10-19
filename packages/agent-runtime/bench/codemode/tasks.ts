@@ -362,7 +362,14 @@ function sessionFanout(): TaskRun {
       }
       return {
         text: `Watching ${[...watched].join(", ")}. Notices arrive as new turns.`,
-        details: { action: "watch", sessions, tickets: ticketsWatched, ended: 0 },
+        details: {
+          action: "watch",
+          sessions,
+          tickets: ticketsWatched,
+          ended: 0,
+          stopped: [],
+          detached: [],
+        },
       };
     }
     return { text: `${request.verb} is not part of this fixture.` };

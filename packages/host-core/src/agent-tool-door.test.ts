@@ -1724,6 +1724,10 @@ describe("verb result details match the registry (VC-471)", () => {
                   title: "Implementer",
                   createdAt: 1,
                 },
+                status: "open",
+                stopped: null,
+                liveExecutor: { id: "live", status: "open" },
+                pendingExecutorStart: null,
                 attachments: [],
               },
             ],
@@ -1790,6 +1794,8 @@ describe("verb result details match the registry (VC-471)", () => {
       sessions: ["dddddddd"],
       tickets: [],
       ended: 0,
+      stopped: [],
+      detached: [],
     });
   });
 
@@ -1868,7 +1874,7 @@ describe("verb result details match the registry (VC-471)", () => {
     ]);
     expect(
       detailsProblems(
-        { action: "watch", sessions: "a", tickets: [1], ended: "0" },
+        { action: "watch", sessions: "a", tickets: [1], ended: "0", stopped: [], detached: [] },
         schemaOf("watch"),
       ),
     ).toEqual([
