@@ -1383,16 +1383,19 @@ function decodeMcpToolDefinitions(value: unknown, context: string): readonly Mcp
     const toolName = readString(row.toolName, `${context}[${index}].toolName`);
     const providerName = readString(row.providerName, `${context}[${index}].providerName`);
     const description = readString(row.description, `${context}[${index}].description`);
-    const sanitized = sanitizeMcpToolDefinition({
-      serverId,
-      serverName: "recorded",
-      toolName,
-      description,
-      inputSchema: row.inputSchema,
-      // Absent on every definition frozen before VC-469, which replays as it
-      // was written: without one.
-      ...(row.outputSchema === undefined ? {} : { outputSchema: row.outputSchema }),
-    });
+    const sanitized = sanitizeMcpToolDefinition(
+      {
+        serverId,
+        serverName: "recorded",
+        toolName,
+        description,
+        inputSchema: row.inputSchema,
+        // Absent on every definition frozen before VC-469, which replays as it
+        // was written: without one.
+        ...(row.outputSchema === undefined ? {} : { outputSchema: row.outputSchema }),
+      },
+      "replay",
+    );
     if (!sanitized.ok) throw new Error(`${context}[${index}] ${sanitized.reason}`);
     if (sanitized.outputSchemaRejected !== undefined) {
       throw new Error(`${context}[${index}] ${sanitized.outputSchemaRejected}`);
