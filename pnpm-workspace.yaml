@@ -82,6 +82,10 @@ minimumReleaseAgeExclude:
 
 overrides:
   vite: "catalog:"
+  # Keep Vite+'s optional YAML peer equal to the root dependency. Otherwise
+  # re-resolution splits the root task runner and package tests into separate
+  # Vitest instances, and file snapshots cannot see the runner's snapshot state.
+  "@voidzero-dev/vite-plus-core@0.3.0>yaml": "2.9.0"
   # VC-598 / GHSA-p98j-92pf-mc4p: Monaco 0.57.0 pins vulnerable 3.4.15
   # exactly, so re-resolution cannot select patched 3.4.16. Latest stable
   # Monaco is still 0.57.0; scope this version override to that parent only.
