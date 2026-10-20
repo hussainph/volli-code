@@ -38,7 +38,7 @@ test("dispatch defaults to dry run and can never enter tagging or desktop signin
   assert.equal(sign.if, "github.event_name != 'workflow_dispatch' || !inputs.dry_run");
 });
 
-test("tag and owner-button releases require both architecture builds and verified pin", () => {
+test("tag and manually dispatched releases require both architecture builds and verified pin", () => {
   for (const event of ["push", "workflow_dispatch"]) {
     const ctx = {
       event,

@@ -1,4 +1,4 @@
-import { clientEventSink } from "./client-event-sink";
+import { pageClientEventSink } from "./client-event-sink";
 import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
 import {
@@ -13,7 +13,6 @@ import {
   MIN_READER_VERSION_KEY,
   listAllLabels,
   countProjects,
-  deleteProject,
   getProjectById,
   insertProject,
   listProjects,
@@ -216,6 +215,7 @@ import {
   isOwnedWorktreePath,
   ownedContainers,
   orphanCleanupEngine,
+  runGitCapturing,
   worktreeHomeDir,
 } from "@volli/host-core/worktree";
 import { worktreeDeps } from "./worktree-host";
@@ -226,8 +226,14 @@ import {
   type HostHandlers,
 } from "@volli/host-core/handlers";
 
-/** The handler keys this channel table projects: the board's (VC-565) and the move (VC-668). */
-type BoardChannelKey = "ticket.move" | Extract<keyof HostHandlers, `board.${string}`>;
+/**
+ * The handler keys this channel table projects: the board's (VC-565), the
+ * move (VC-668) and the project's removal (VC-796).
+ */
+type BoardChannelKey =
+  | "ticket.move"
+  | "project.remove"
+  | Extract<keyof HostHandlers, `board.${string}`>;
 import type { HandlerCall } from "@volli/shared";
 
 /** The person at this desktop's own window, whose reply carries the board. */
@@ -282,12 +288,10 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
     ticketsByProject[project.id] = [];
     labelsByProject[project.id] = [];
   }
-  for (const ticket of listAllTickets(db)) {
-    (ticketsByProject[ticket.projectId] ??= []).push(ticket);
-  }
-  for (const label of listAllLabels(db)) {
-    (labelsByProject[label.projectId] ??= []).push(label);
-  }
+  // Only the projects on the rail: a removed project is detached, not deleted
+  // (VC-822), and its tickets and labels stay out of every window with it.
+  for (const ticket of listAllTickets(db)) ticketsByProject[ticket.projectId]?.push(ticket);
+  for (const label of listAllLabels(db)) labelsByProject[label.projectId]?.push(label);
 
   return { projects, ticketsByProject, labelsByProject, appState };
 }
@@ -406,8 +410,6 @@ export function registerDataIpcHandlers(
      * output. Absent (tests, degraded boot) means nothing is removed.
      */
     piSessionsDirectory?: string;
-    /** Told after a project is removed: the host releases what it held for it (its board feed). */
-    onProjectRemoved?: (projectId: string) => void;
   },
 ): void {
   if (!handle.ok) {
@@ -551,8 +553,9 @@ export function registerDataIpcHandlers(
     "volli:legacy-import": (request: LegacyImportRequest): LegacyImportResult => {
       // Idempotent-safe: only import into a genuinely empty projects
       // table; a second call (e.g. a relaunch racing the renderer) just
-      // hands back the current state instead of re-importing over it.
-      if (countProjects(db) > 0) {
+      // hands back the current state instead of re-importing over it. A
+      // removed project still holds its row (VC-822), so it counts here.
+      if (countProjects(db, "all") > 0) {
         return { ok: true, data: buildBootstrapPayload(db), imported: 0 };
       }
       const legacyProjects = sanitizeLegacyProjects(request.projects);
@@ -590,8 +593,17 @@ export function registerDataIpcHandlers(
 
     // The rules live in host-core (VC-623), shared with the operator's
     // `volli project add` on a headless host: one validation, every door.
+    // A registration is announced (VC-822): adding a removed project's folder
+    // again brings back its board, which a window only reads on a change.
     "volli:project-create": (input: ProjectCreateInput): Promise<ProjectCreateResult> =>
-      createProject({ db, detectBaseBranch: options.detectBaseBranch }, input),
+      createProject(
+        {
+          db,
+          detectBaseBranch: options.detectBaseBranch,
+          onCreated: (project) => broadcastDataChanged({ projectId: project.id }),
+        },
+        input,
+      ),
 
     /**
      * Whether one project's registered folder is still there (VC-430) — the
@@ -631,9 +643,14 @@ export function registerDataIpcHandlers(
       return { ok: true, project: outcome.project, aftermath: outcome.aftermath };
     },
 
-    "volli:project-remove": (id: string): ProjectMutationResult => {
-      deleteProject(db, id);
-      options.onProjectRemoved?.(id);
+    /**
+     * The window's projection of the host's removal (VC-796): the project's
+     * live work stopped, then the project detached with its tickets and
+     * Sessions kept (VC-822), its feed ended and every window told. The
+     * renderer keeps only its own views' forgetting.
+     */
+    "volli:project-remove": async (id: string): Promise<ProjectMutationResult> => {
+      await board("project.remove", { projectId: id });
       return { ok: true };
     },
 
@@ -1195,7 +1212,7 @@ export function registerDataIpcHandlers(
         refresh,
         // Read-only, and the same supplier the destructive paths use: an
         // occupied checkout is reported as KEPT rather than proposed and then
-        // refused after the confirmation (review C5).
+        // refused after the confirmation.
         busyWorktreeSites: options.busyWorktreeSites,
       });
       // The durable history, so Storage can say who removed a directory and
@@ -1232,12 +1249,12 @@ export function registerDataIpcHandlers(
       input: WorktreeOrphanCleanupInput,
     ): Promise<WorktreeOrphanCleanupResult> => {
       // The confirmed half, and a transport adapter over a command — nothing
-      // more (review S1). The renderer names a scan revision and item ids; main
+      // more. The renderer names a scan revision and item ids; main
       // resolves them against the proposal IT minted, so no client can point
-      // this channel at a directory no completed scan offered (review C1).
+      // this channel at a directory no completed scan offered.
       const engine = orphanCleanupEngine(db);
       // FIRST, before any live fact is consulted: has this exact command id
-      // already been answered? (VC-284 re-review S1, the rule
+      // already been answered? (VC-284, the rule
       // `automations/service.ts` follows.) A completed cleanup invalidates the
       // scan it ran against, so validating a retry against the CURRENT scan
       // would tell a caller whose reply was lost that its command was
@@ -1277,7 +1294,11 @@ export function registerDataIpcHandlers(
       try {
         outcome = await cleanupOrphans(
           {
-            worktree: worktreeDeps(db),
+            // The gate's reads are the one place the blocking runner is still
+            // wanted: it may not yield between its last look and the removal it
+            // admits. The removal and prune themselves run on `gitAsync`, so a
+            // large delete never stalls Electron main (VC-786).
+            worktree: { ...worktreeDeps(db), gateGit: runGitCapturing },
             engine,
             busyWorktreeSites: options.busyWorktreeSites,
             releaseAgentSites: options.releaseAgentSites,
@@ -1289,7 +1310,7 @@ export function registerDataIpcHandlers(
             // The window the confirmation was MEASURED against, carried from the
             // scan itself rather than re-read here: if the setting has moved
             // since, the executor must skip rather than apply a policy nobody
-            // confirmed (review C1/C2).
+            // confirmed.
             retentionDays: plan.retentionDays,
             items: plan.items,
             source: "settings",
@@ -1329,7 +1350,7 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "That path is outside this project's worktree folder." };
       }
       // This is a destructive worktree act, so it takes the same lease the
-      // confirmed cleanup takes (VC-284 re-review C4). Without it, "serialized
+      // confirmed cleanup takes (VC-284). Without it, "serialized
       // against every start" was only true of one of the two routes that
       // delete a checkout — and two acts removing one directory, or a terminal
       // being born inside this one mid-delete, were both still possible.
@@ -1537,7 +1558,7 @@ export function registerDataIpcHandlers(
           return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
           return changeWatchManager.watch(
-            clientEventSink(sender),
+            pageClientEventSink(sender),
             input.ticketId,
             resolved.target.worktreePath,
           );
@@ -1545,13 +1566,13 @@ export function registerDataIpcHandlers(
     },
 
     "volli:worktree-change-watch-pause": (input: TicketIdInput, sender): Result =>
-      changeWatchManager.pause(clientEventSink(sender), input.ticketId),
+      changeWatchManager.pause(pageClientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-watch-resume": async (input: TicketIdInput, sender): Promise<Result> =>
-      changeWatchManager.resume(clientEventSink(sender), input.ticketId),
+      changeWatchManager.resume(pageClientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
-      changeWatchManager.unwatch(clientEventSink(sender), input.ticketId);
+      changeWatchManager.unwatch(pageClientEventSink(sender), input.ticketId);
       return { ok: true };
     },
 
@@ -1675,7 +1696,7 @@ export function registerDataIpcHandlers(
       const stored = setRetentionTtlDays(db, input.days, Date.now());
       // Every eligibility date the cached scan proposed was measured against the
       // OLD window, so that proposal no longer describes this app's policy
-      // (VC-284 re-review C1/C6). Dropping it supersedes the revision: a
+      // (VC-284). Dropping it supersedes the revision: a
       // confirmation still open from before the change is refused with
       // `scan-superseded` rather than silently applying a window nobody
       // reviewed, and the next read re-measures.

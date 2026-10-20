@@ -255,7 +255,7 @@ describe("beginScopeRepaint as a view transition", () => {
   });
 
   it("leaves a superseded transition's rejection handled", async () => {
-    // Two workspace hops inside one crossfade — the owner's actual usage.
+    // Two workspace hops inside one crossfade supersede the first transition.
     // Chromium abandons the first transition, which REJECTS its `ready` with an
     // AbortError; unhandled, the app's most repeated interaction would print a
     // rejection every time it worked correctly.

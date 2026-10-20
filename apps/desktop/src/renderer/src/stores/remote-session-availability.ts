@@ -1,6 +1,6 @@
 /**
- * Remote projects whose host grants this window no Session features (VC-713,
- * review B3): an older host that predates `sessions.listing`. The rail, Home
+ * Remote projects whose host grants this window no Session features (VC-713):
+ * an older host that predates `sessions.listing`. The rail, Home
  * and the ticket panel say so in the host's name instead of a generic
  * failure, and nothing re-reads the listing until the project's link changes
  * (a new welcome may grant it). Kept in memory, per window; nothing durable.

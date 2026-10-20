@@ -1,7 +1,6 @@
 /**
- * Migration 059 (VC-643): step E of the web search keys' move into the sealed
- * credential store (`docs/plans/sealed-credential-store.md` §4, "E — expand,
- * compatible with the legacy writer").
+ * Migration 059 (VC-643): expand-only support for a sealed mirror of web
+ * search keys, compatible with legacy writers.
  *
  * EXPAND ONLY, and `raisesMinReader` stays off: `secrets` keeps every row and
  * stays the one source of truth. Two new tables and three triggers:

@@ -22,8 +22,9 @@
  *   board's reads, writes and change feed, all from the host's one handler map
  *   (VC-668) under the router's policy: the same handlers the agent socket
  *   answers through. Sign-ins on this host (`sign-ins`, and the relay's
- *   `auth.callback`, VC-702): person-only. `model-access` itself is not
- *   offered yet: the rest of VC-572 decides its policy for a paired device.
+ *   `auth.callback`, VC-702): person-only. `host.model-defaults` (VC-729) offers Model Access catalog/defaults and
+ *   preferences on host connections only, device-only; the frozen
+ *   `model-access` feature remains unoffered.
  * - **The Workspace** a hello names is a project on this host, at the
  *   highest epoch `workspace_epochs` records for it (0: never served under
  *   the flag). Raising it is promotion's (VC-591), never a connection's.
@@ -33,7 +34,7 @@ import {
   createBoardChangeFeed,
   type BoardChangeFeed,
 } from "@volli/host-core/board";
-import { getProjectById, getTicketRow, listProjects, prepared } from "@volli/host-core/db";
+import { getTicketRow, isProjectAttached, listProjects, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
 import {
   HOST_CONNECTION_ONLY_FEATURES,
@@ -75,12 +76,14 @@ export const HOSTD_FEATURES: readonly HostV1Feature[] = [
   "sessions.queue",
   "sessions.subscribe",
   "sessions.history",
+  "sessions.pictures",
   "session.read",
   "board.read",
   "board.write",
   "sign-ins",
   "auth.callback",
   "host.workspaces",
+  "host.model-defaults",
   // The Session listing rows a remote rail paints (VC-713).
   "sessions.listing",
 ];
@@ -143,12 +146,16 @@ export function parseListen(value: string): HostProtocolBind | string {
   return { host, port };
 }
 
-/** The highest epoch this host records for a project, or null when it has no such project. */
+/**
+ * The highest epoch this host records for a project, or null when it has no
+ * such project on its rail: a removed project is detached, not deleted
+ * (VC-822), and no Workspace door serves it.
+ */
 export function servedWorkspace(
   db: Database.Database,
   workspaceId: string,
 ): ServedWorkspace | null {
-  if (getProjectById(db, workspaceId) === undefined) return null;
+  if (!isProjectAttached(db, workspaceId)) return null;
   // An aggregate answers one row, with a null epoch when there is none.
   const { epoch } = prepared<[string], { epoch: number | null }>(
     db,

@@ -494,6 +494,12 @@ export interface VerbEntry {
   /** Rendered after `<id>` for positionals the option table cannot express. */
   readonly extraUsage?: string;
   readonly options: readonly VerbOption[];
+  /**
+   * The recovery a RESPONSE_TOO_LARGE refusal prints for this verb, when its
+   * own filters say more than the code's generic guidance (VC-824). Absent
+   * means the generic guidance.
+   */
+  readonly overflowNext?: string;
 }
 
 /**
@@ -1014,7 +1020,16 @@ export const VERB_REGISTRY = [
       { name: "--label", kind: "value", placeholder: "<name>", help: "Filter by label." },
       { name: "--project", kind: "value", placeholder: "<p>", help: "Target project." },
       { name: "--limit", kind: "value", placeholder: "<n>", help: "Cap the number of rows." },
+      {
+        name: "--no-body",
+        kind: "flag",
+        help: "Omit ticket bodies from --json rows; `ticket show` reads one.",
+      },
     ],
+    // Filters first: they shrink the answer from any app build. An older app
+    // ignores --no-body and sends the bodies anyway.
+    overflowNext:
+      "Narrow it with `--status <column>` or `--limit <n>`. With a matching app build, `--no-body` also drops bodies from `--json`; `volli ticket show <id>` reads one.",
   },
   {
     key: "ticket.show",
@@ -3279,11 +3294,10 @@ export const VERB_REGISTRY = [
     options: [],
   },
   {
-    // Previews by default for a reason `mcp.disable` does not share, and the
-    // reason is a property of the frozen tool surface rather than of this
-    // table: `serversForFrozenMcpTools` THROWS when a frozen tool's server is
-    // gone, so deleting a row breaks reattachment for older Sessions that were
-    // using it — an effect on Sessions the caller has never heard of.
+    // Preview destructive removal: retained Session names can still attach,
+    // but calls need the deleted transport and return a named unavailable error.
+    // Legacy tool-description bytes below stay frozen; versioned refresh copy
+    // is supplied by sessionVerbToolDescription (VC-756).
     key: "mcp.remove",
     accessModes: ["tool"],
     actor: "role",
@@ -3296,8 +3310,8 @@ export const VERB_REGISTRY = [
     example: "volli mcp remove",
     notes: [
       "Previews by default: without confirm=apply nothing is deleted.",
-      "Older Sessions born holding one of this server's tools will fail to reattach once it is gone, because the transport their frozen tool needs no longer exists.",
-      "mcp_disable is the reversible alternative and keeps reattachment working.",
+      "Existing Sessions keep their tools and can reattach, but calls to the removed server return a named unavailable error.",
+      "mcp_disable is the reversible alternative and preserves the server configuration.",
     ],
     effects: {
       durableWrites: [
@@ -3432,8 +3446,20 @@ export const VERB_REGISTRY = [
             description:
               "unwatch: how many of the named targets this Session was watching and now is not. watch: always 0.",
           },
+          stopped: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "watch: the named Sessions already stopped; nothing reports from them unless a person reattaches one. unwatch: always empty.",
+          },
+          detached: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "watch: the named Sessions with no live executor; nothing reports from them until a person reattaches one. unwatch: always empty.",
+          },
         },
-        required: ["action", "sessions", "tickets", "ended"],
+        required: ["action", "sessions", "tickets", "ended", "stopped", "detached"],
         additionalProperties: false,
       },
     },
@@ -3646,6 +3672,128 @@ export const VERB_REGISTRY = [
     options: [],
     catalog: { scope: "host", idempotency: "natural" },
   },
+  // VC-729: host-connection-only projections of the existing Model Access handlers.
+  {
+    key: "hostModels.inspect",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.inspect" },
+    listed: false,
+    group: "App",
+    summary: "Read the Model Access snapshot: providers, models and their availability.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "hostModels.defaults",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.defaults" },
+    listed: false,
+    group: "App",
+    summary: "Read the default model for each purpose.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "hostModels.setDefault",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.setDefault" },
+    listed: false,
+    group: "App",
+    summary: "Set or clear the default model for one purpose.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "hostModels.hiddenModels",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.hiddenModels" },
+    listed: false,
+    group: "App",
+    summary: "Read the models hidden from the pickers.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "hostModels.setHiddenModels",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.setHiddenModels" },
+    listed: false,
+    group: "App",
+    summary: "Replace the list of models hidden from the pickers.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "hostModels.compactionPolicy",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.compactionPolicy" },
+    listed: false,
+    group: "App",
+    summary: "Read the automatic compaction policy.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "hostModels.setCompactionPolicy",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.setCompactionPolicy" },
+    listed: false,
+    group: "App",
+    summary: "Replace the automatic compaction policy.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "hostModels.codeModePolicy",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.codeModePolicy" },
+    listed: false,
+    group: "App",
+    summary: "Read the Code Mode policy and its per-model pins.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "hostModels.setCodeModePolicy",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.setCodeModePolicy" },
+    listed: false,
+    group: "App",
+    summary: "Replace the Code Mode policy and its per-model pins.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
+  {
+    key: "hostModels.pickerView",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.pickerView" },
+    listed: false,
+    group: "App",
+    summary: "Read which list the model pickers open on.",
+    options: [],
+    catalog: { scope: "host", idempotency: "read" },
+  },
+  {
+    key: "hostModels.setPickerView",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "hostModels.setPickerView" },
+    listed: false,
+    group: "App",
+    summary: "Set which list the model pickers open on.",
+    options: [],
+    catalog: { scope: "host", idempotency: "natural" },
+  },
   {
     key: "session.snapshot",
     accessModes: ["hostApi"],
@@ -3665,6 +3813,17 @@ export const VERB_REGISTRY = [
     listed: false,
     group: "Session",
     summary: "Read one page of a Session's older transcript frames.",
+    options: [],
+    catalog: { scope: "workspace", idempotency: "read" },
+  },
+  {
+    key: "session.picture",
+    accessModes: ["hostApi"],
+    actor: "user",
+    handler: { site: "main", id: "session.picture" },
+    listed: false,
+    group: "Session",
+    summary: "Read a bounded chunk of one Session's saved transcript picture.",
     options: [],
     catalog: { scope: "workspace", idempotency: "read" },
   },

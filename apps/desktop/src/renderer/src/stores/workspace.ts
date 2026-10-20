@@ -15,6 +15,7 @@
  * state — a view preference, the ticket-detail-mvp decision that the open
  * ticket persists across restart, decision #3, the Home tab that was in front
  * so Home has the same relaunch parity a Ticket workspace already had, VC-54,
+ * and the rest of Home's strip so its Sessions come back with it, VC-105,
  * Diff tabs landing where you left them after lazy content reload, issue #109,
  * or the Project Files workspace that must resume where you left it, decisions
  * #55/#56) — as does `markdownDocumentFiles`, which markdown files open in
@@ -124,7 +125,7 @@ export const WORKSPACE_UI_APP_STATE_KEY = "volli:workspace";
  */
 export type NavKey = "home" | "automations" | "configure";
 
-/** Kanban columns vs. Linear-style grouped list — same data, filter, selection. */
+/** Kanban columns vs. grouped list — same data, filter, selection. */
 export type BoardView = "board" | "list";
 
 /**
@@ -254,14 +255,15 @@ export interface WorkspaceUiState {
    *
    * PERSISTED, and that is the whole of VC-54's scope 4. What it points at is
    * resident (`chat-sessions.ts`'s `openTabs`), so this is not a receipt for
-   * live state — it is the one durable fact needed to put the same Session back
-   * in front on relaunch, exactly as a Ticket workspace's `ticketTabs[].active`
-   * already did. A stale id is never repaired at boot: `home-tabs.ts`'s
-   * `resolveHomeTabs` asks the project's durable Session listing first, so
-   * "not hydrated yet" can never be mistaken for "gone".
+   * live state — it is the durable fact needed to put the same tab back in
+   * front on relaunch, exactly as a Ticket workspace's `ticketTabs[].active`
+   * already did; {@link homeTabOrder} is the rest of the strip around it. A
+   * stale id is never repaired at boot: `home-tabs.ts`'s `resolveHomeTabs` asks
+   * the project's durable Session listing first, so "not hydrated yet" can
+   * never be mistaken for "gone".
    *
    * Terminals deliberately do NOT come back — a PTY dies with the app, exactly
-   * as it does for a Ticket. Full strip restoration is VC-105.
+   * as it does for a Ticket.
    */
   homeActiveTab: string;
   /**
@@ -272,16 +274,22 @@ export interface WorkspaceUiState {
    *
    * PERSISTED, and read for shape alone: an id here need not name anything on
    * screen. That is what lets an arrangement outlive a relaunch in which the
-   * Sessions it names come back one at a time, and it is the seam VC-105 (Home
-   * remembers its whole strip) builds its restore on — one order model, not
-   * two. This ticket persists the ARRANGEMENT only; which Sessions reopen is
-   * still VC-105's.
+   * Sessions it names come back one at a time.
+   *
+   * And it is the strip's WHOLE record, not just a memory of the last drag
+   * (VC-105): once a project's strip has been restored, Home records the strip
+   * as drawn here (`home-tabs.ts`'s `homeTabOrderReceipt`, via
+   * {@link WorkspaceState.recordHomeTabOrder}), so every chat Session tab that
+   * is open is named in order, and a relaunch reopens each of them against the
+   * project's durable listing. One order model, not two. It is pruned live by
+   * that receipt and never here: the read cannot tell a Session that has not
+   * come back yet from one that is gone.
    */
   homeTabOrder: TabOrder;
   /**
    * Home tabs in least-to-most-recent visit order. Session-only: it answers
-   * where closing an active File tab returns during this app run, while VC-105
-   * owns durable restoration of the whole strip.
+   * where closing an active File tab returns during this app run, while
+   * {@link homeTabOrder} is what survives a relaunch.
    */
   homeTabHistory: readonly string[];
   /**
@@ -732,6 +740,14 @@ interface WorkspaceState {
    * never announces a selection.
    */
   recordResolvedHomeTab(projectId: string, tabId: string): void;
+  /**
+   * Record Home's strip as drawn (VC-105): `order` is its movable tab ids, the
+   * Board never among them. A receipt, not an arrangement — it moves no tab and
+   * touches no File list, unlike {@link WorkspaceState.moveHomeTab} — and the
+   * record a relaunch reads its Sessions back from. Recording the order already
+   * held leaves the store by identity.
+   */
+  recordHomeTabOrder(projectId: string, order: readonly string[]): void;
   /** Preview a Main-checkout file and bring its Home tab to the front atomically. */
   previewHomeFile(projectId: string, relPath: string): void;
   /** Pin a Main-checkout file and bring its Home tab to the front atomically. */
@@ -1574,6 +1590,17 @@ export function createWorkspaceStore(
               homeActiveTab: tabId,
               homeTabHistory: homeHistoryAfterVisit(current, tabId),
             });
+          });
+        },
+
+        recordHomeTabOrder(projectId, order) {
+          set((state) => {
+            const recorded = (state.byProject[projectId] ?? DEFAULT_WORKSPACE_UI).homeTabOrder;
+            const homeTabOrder = sanitizeTabOrder(order);
+            const same =
+              homeTabOrder.length === recorded.length &&
+              homeTabOrder.every((tabId, at) => tabId === recorded[at]);
+            return same ? state : patchWorkspace(state, projectId, { homeTabOrder });
           });
         },
 
@@ -2561,8 +2588,8 @@ export function createWorkspaceStore(
                   // The Home tab that was in front — an id, never the Session
                   // behind it, which is recovered from its own durable record.
                   homeActiveTab: ui.homeActiveTab,
-                  // And the order the rest were in: an arrangement is a
-                  // deliberate act, so it outlives the sitting that made it.
+                  // And the rest of the strip, in order: which Sessions a
+                  // relaunch reopens (VC-105), and how they were arranged.
                   homeTabOrder: ui.homeTabOrder,
                   // A layout is a deliberate act too — but an unsplit surface
                   // writes no key, so the persisted blob of a workspace that

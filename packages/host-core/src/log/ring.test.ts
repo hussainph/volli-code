@@ -288,7 +288,7 @@ describe("the host's recent log, in bytes (VC-712)", () => {
   });
 });
 
-/* ------------------------------------- what a follower retains (VC-712, B1) */
+/* ----------------------------------------- what a follower retains (VC-712) */
 
 /** The engine's own collector, reached without a flag on the command line. */
 function collector(): () => void {

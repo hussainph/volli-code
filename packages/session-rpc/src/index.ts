@@ -1,5 +1,6 @@
 import { procedureSchemas, type ProcedureSchema } from "./procedure-schema";
 export type { ProcedureSchema } from "./procedure-schema";
+export { workspacesProcedureSchemas } from "./workspaces-router";
 import { TRPCError, tracked } from "@trpc/server";
 import {
   HOST_SCOPE_PROOF_LIMITS,
@@ -203,7 +204,10 @@ type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["m
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
 
 export type RendererSessionCommand =
-  | Pick<Extract<SessionClientCommand, { kind: "message.submit" }>, "kind" | "message" | "delivery">
+  | Pick<
+      Extract<SessionClientCommand, { kind: "message.submit" }>,
+      "kind" | "message" | "delivery" | "settle"
+    >
   | Extract<
       SessionClientCommand,
       | { kind: "session.stop" }
@@ -354,6 +358,10 @@ export interface SessionRouterHandlers extends SignInRouterHandlers {
   readonly "session.history": HostHandler<
     { sessionId: string; before: number },
     SessionHistoryPage
+  >;
+  readonly "session.picture": HostHandler<
+    { sessionId: string; pictureId: string; offset?: number },
+    { data: string | null; mimeType: string | null; nextOffset: number | null }
   >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
@@ -716,6 +724,7 @@ const experimentIdSchema = z.enum(EXPERIMENTS.map(({ id }) => id));
 const experimentFlagSchema = z.object({
   enabled: z.boolean(),
   source: z.enum(["default", "storage", "environment"]),
+  visible: z.boolean().optional(),
 });
 const experimentSnapshotSchema = z.object(
   Object.fromEntries(EXPERIMENTS.map(({ id }) => [id, experimentFlagSchema])) as Record<
@@ -868,6 +877,9 @@ const commandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("message.submit"),
     message: uiMessageSchema,
     delivery: z.enum(["queue", "steer", "replace"]).optional(),
+    // Runtime-only wait boundary, not part of durable intent. Without this
+    // codec field the client asks for opening acceptance but waits for finish.
+    settle: z.enum(["turn", "opened"]).optional(),
     model: z.object({ providerId: nonEmptyString, modelId: nonEmptyString }).nullable().optional(),
     agent: nullableString.optional(),
     variant: nullableString.optional(),
@@ -1251,6 +1263,104 @@ export function createSessionRouter() {
         }
       },
     );
+  // One schema/handler projection, two independently frozen wire features.
+  // hostModels admission is stricter; its domain command remains modelAccess.
+  function modelAccessProcedures(namespace: "modelAccess" | "hostModels") {
+    return {
+      inspect: hostProcedure(`${namespace}.inspect`)
+        .input(z.object({ refresh: z.boolean().optional() }))
+        .output(modelAccessSnapshotSchema)
+        .query(async ({ ctx, input }) =>
+          modelAccessSnapshotSchema.parse(
+            await ctx.handlers["modelAccess.inspect"](input, ctx.call),
+          ),
+        ),
+      defaults: hostProcedure(`${namespace}.defaults`)
+        .output(modelAccessDefaultsSchema)
+        .query(async ({ ctx }) =>
+          modelAccessDefaultsSchema.parse(
+            await ctx.handlers["modelAccess.defaults"](undefined, ctx.call),
+          ),
+        ),
+      setDefault: hostProcedure(`${namespace}.setDefault`)
+        .input(
+          z
+            .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
+            // Clearing ticket/utility means "use the Board default"; clearing
+            // global would leave every purpose resolving to nothing, which is a
+            // state the UI never offers and this edge refuses to mint.
+            .refine(
+              (input) => input.purpose !== "global" || input.selection !== null,
+              "The Board default cannot be cleared — choose a model instead",
+            ),
+        )
+        .output(modelAccessDefaultsSchema)
+        .mutation(async ({ ctx, input }) =>
+          modelAccessDefaultsSchema.parse(
+            await ctx.handlers["modelAccess.setDefault"](input, ctx.call),
+          ),
+        ),
+      hiddenModels: hostProcedure(`${namespace}.hiddenModels`)
+        .output(hiddenModelsSchema)
+        .query(async ({ ctx }) =>
+          hiddenModelsSchema.parse(
+            await ctx.handlers["modelAccess.hiddenModels"](undefined, ctx.call),
+          ),
+        ),
+      setHiddenModels: hostProcedure(`${namespace}.setHiddenModels`)
+        .input(hiddenModelsSchema)
+        .output(hiddenModelsSchema)
+        .mutation(async ({ ctx, input }) => {
+          await ctx.handlers["modelAccess.setHiddenModels"](input, ctx.call);
+          return input;
+        }),
+      compactionPolicy: hostProcedure(`${namespace}.compactionPolicy`)
+        .output(compactionPolicySchema)
+        .query(async ({ ctx }) =>
+          compactionPolicySchema.parse(
+            await ctx.handlers["modelAccess.compactionPolicy"](undefined, ctx.call),
+          ),
+        ),
+      setCompactionPolicy: hostProcedure(`${namespace}.setCompactionPolicy`)
+        .input(compactionPolicySchema)
+        .output(compactionPolicySchema)
+        .mutation(async ({ ctx, input }) =>
+          compactionPolicySchema.parse(
+            await ctx.handlers["modelAccess.setCompactionPolicy"](input, ctx.call),
+          ),
+        ),
+      codeModePolicy: hostProcedure(`${namespace}.codeModePolicy`)
+        .output(codeModePolicySchema)
+        .query(async ({ ctx }) =>
+          codeModePolicySchema.parse(
+            await ctx.handlers["modelAccess.codeModePolicy"](undefined, ctx.call),
+          ),
+        ),
+      setCodeModePolicy: hostProcedure(`${namespace}.setCodeModePolicy`)
+        .input(codeModePolicySchema)
+        .output(codeModePolicySchema)
+        .mutation(async ({ ctx, input }) =>
+          codeModePolicySchema.parse(
+            await ctx.handlers["modelAccess.setCodeModePolicy"](input, ctx.call),
+          ),
+        ),
+      pickerView: hostProcedure(`${namespace}.pickerView`)
+        .output(modelPickerViewSchema)
+        .query(async ({ ctx }) =>
+          modelPickerViewSchema.parse(
+            await ctx.handlers["modelAccess.pickerView"](undefined, ctx.call),
+          ),
+        ),
+      setPickerView: hostProcedure(`${namespace}.setPickerView`)
+        .input(modelPickerViewSchema)
+        .output(modelPickerViewSchema)
+        .mutation(async ({ ctx, input }) =>
+          modelPickerViewSchema.parse(
+            await ctx.handlers["modelAccess.setPickerView"](input, ctx.call),
+          ),
+        ),
+    };
+  }
   return catalogRouter({
     // Sign-ins on a host (VC-702): their own module, this router's family.
     ...signInProcedures(),
@@ -1340,100 +1450,8 @@ export function createSessionRouter() {
           ),
         ),
     },
-    modelAccess: {
-      inspect: hostProcedure("modelAccess.inspect")
-        .input(z.object({ refresh: z.boolean().optional() }))
-        .output(modelAccessSnapshotSchema)
-        .query(async ({ ctx, input }) =>
-          modelAccessSnapshotSchema.parse(
-            await ctx.handlers["modelAccess.inspect"](input, ctx.call),
-          ),
-        ),
-      defaults: hostProcedure("modelAccess.defaults")
-        .output(modelAccessDefaultsSchema)
-        .query(async ({ ctx }) =>
-          modelAccessDefaultsSchema.parse(
-            await ctx.handlers["modelAccess.defaults"](undefined, ctx.call),
-          ),
-        ),
-      setDefault: hostProcedure("modelAccess.setDefault")
-        .input(
-          z
-            .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
-            // Clearing ticket/utility means "use the Board default"; clearing
-            // global would leave every purpose resolving to nothing, which is a
-            // state the UI never offers and this edge refuses to mint.
-            .refine(
-              (input) => input.purpose !== "global" || input.selection !== null,
-              "The Board default cannot be cleared — choose a model instead",
-            ),
-        )
-        .output(modelAccessDefaultsSchema)
-        .mutation(async ({ ctx, input }) =>
-          modelAccessDefaultsSchema.parse(
-            await ctx.handlers["modelAccess.setDefault"](input, ctx.call),
-          ),
-        ),
-      hiddenModels: hostProcedure("modelAccess.hiddenModels")
-        .output(hiddenModelsSchema)
-        .query(async ({ ctx }) =>
-          hiddenModelsSchema.parse(
-            await ctx.handlers["modelAccess.hiddenModels"](undefined, ctx.call),
-          ),
-        ),
-      setHiddenModels: hostProcedure("modelAccess.setHiddenModels")
-        .input(hiddenModelsSchema)
-        .output(hiddenModelsSchema)
-        .mutation(async ({ ctx, input }) => {
-          await ctx.handlers["modelAccess.setHiddenModels"](input, ctx.call);
-          return input;
-        }),
-      compactionPolicy: hostProcedure("modelAccess.compactionPolicy")
-        .output(compactionPolicySchema)
-        .query(async ({ ctx }) =>
-          compactionPolicySchema.parse(
-            await ctx.handlers["modelAccess.compactionPolicy"](undefined, ctx.call),
-          ),
-        ),
-      setCompactionPolicy: hostProcedure("modelAccess.setCompactionPolicy")
-        .input(compactionPolicySchema)
-        .output(compactionPolicySchema)
-        .mutation(async ({ ctx, input }) =>
-          compactionPolicySchema.parse(
-            await ctx.handlers["modelAccess.setCompactionPolicy"](input, ctx.call),
-          ),
-        ),
-      codeModePolicy: hostProcedure("modelAccess.codeModePolicy")
-        .output(codeModePolicySchema)
-        .query(async ({ ctx }) =>
-          codeModePolicySchema.parse(
-            await ctx.handlers["modelAccess.codeModePolicy"](undefined, ctx.call),
-          ),
-        ),
-      setCodeModePolicy: hostProcedure("modelAccess.setCodeModePolicy")
-        .input(codeModePolicySchema)
-        .output(codeModePolicySchema)
-        .mutation(async ({ ctx, input }) =>
-          codeModePolicySchema.parse(
-            await ctx.handlers["modelAccess.setCodeModePolicy"](input, ctx.call),
-          ),
-        ),
-      pickerView: hostProcedure("modelAccess.pickerView")
-        .output(modelPickerViewSchema)
-        .query(async ({ ctx }) =>
-          modelPickerViewSchema.parse(
-            await ctx.handlers["modelAccess.pickerView"](undefined, ctx.call),
-          ),
-        ),
-      setPickerView: hostProcedure("modelAccess.setPickerView")
-        .input(modelPickerViewSchema)
-        .output(modelPickerViewSchema)
-        .mutation(async ({ ctx, input }) =>
-          modelPickerViewSchema.parse(
-            await ctx.handlers["modelAccess.setPickerView"](input, ctx.call),
-          ),
-        ),
-    },
+    modelAccess: modelAccessProcedures("modelAccess"),
+    hostModels: modelAccessProcedures("hostModels"),
     session: {
       // The socket's Session reads, forced to the caller's Workspace (D4).
       list: workspaceProcedure("session.list", sessionListInput, readWorkspace)
@@ -1516,6 +1534,27 @@ export function createSessionRouter() {
         .query(async ({ ctx, input }) =>
           rendererHistoryPage(await ctx.handlers["session.history"](input, ctx.call)),
         ),
+      // Pictures use their own optional feature and never enlarge transcript frames.
+      picture: workspaceProcedure(
+        "session.picture",
+        z.object({
+          sessionId: nonEmptyString,
+          pictureId: nonEmptyString,
+          offset: z.number().int().nonnegative().multipleOf(3).optional(),
+        }),
+        sessionResource,
+      )
+        .output(
+          z.object({
+            data: z
+              .string()
+              .max(256 * 1024)
+              .nullable(),
+            mimeType: z.string().nullable(),
+            nextOffset: z.number().int().nonnegative().nullable(),
+          }),
+        )
+        .query(({ ctx, input }) => ctx.handlers["session.picture"](input, ctx.call)),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per

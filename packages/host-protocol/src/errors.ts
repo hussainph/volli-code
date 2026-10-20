@@ -67,6 +67,8 @@ export const HOST_ERROR_REASON_CODES = {
    * truncated; a bounded or paged read is the way to what it held.
    */
   "response-too-large": "PAYLOAD_TOO_LARGE",
+  /** Client-side: a HOST answer failed its public operation output schema. */
+  "response-invalid": "BAD_GATEWAY",
   "operation-unavailable": "NOT_IMPLEMENTED",
   /**
    * Sign-ins (VC-702). No such flow on this connection: a flow another

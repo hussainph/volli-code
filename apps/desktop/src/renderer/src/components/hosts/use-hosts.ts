@@ -88,8 +88,45 @@ export function useCurrentProjectId(): string | null {
 }
 
 /** The host of the project in front of the person, with its aggregate link (the chip's). */
+function usePendingHost(): HostRecord | null {
+  const pending = useProjectsStore((state) => state.pendingRemoteSelection);
+  const known = useHostConnectionStore((state) =>
+    pending === null ? undefined : state.hosts.find(({ id }) => id === pending.hostId),
+  );
+  return React.useMemo(
+    () =>
+      pending === null
+        ? null
+        : (known ?? {
+            id: pending.hostId,
+            name: pending.hostName,
+            local: false,
+            os: null,
+            version: null,
+            link: { status: "connecting" },
+            liveSessions: null,
+            update: null,
+            expiredSignIns: [],
+          }),
+    [pending, known],
+  );
+}
+
 export function useCurrentHost(): HostRecord {
-  return useProjectHost(useCurrentProjectId());
+  const host = useProjectHost(useCurrentProjectId());
+  return usePendingHost() ?? host;
+}
+
+/** Pending intent is presentation only; actual ownership/routing still reads the source's claims. */
+export function useCurrentProjectHostView(): HostRecord {
+  const host = useProjectHostView(useCurrentProjectId());
+  const pending = usePendingHost();
+  return React.useMemo(() => {
+    if (pending === null) return host;
+    return pending.link.status === "open" || pending.link.status === "version-skewed"
+      ? { ...pending, link: { status: "connecting" } }
+      : pending;
+  }, [pending, host]);
 }
 
 /**

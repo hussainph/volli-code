@@ -1,6 +1,6 @@
 /**
  * A remote Workspace's Session streams, within the link's subscription budget
- * (VC-713; review amendment AM1).
+ * (VC-713).
  *
  * hostd allows four open streams per Workspace connection, and one Workspace
  * link carries the board's change feed, possibly the host's log, and one

@@ -1,7 +1,7 @@
 /**
  * The VC-353 fixture's Session Event mix.
  *
- * The owner's real profile is 259,855 Session Events holding about 173 MB of a
+ * The fixture targets 259,855 Session Events holding about 173 MB of a
  * 373 MB database — roughly 670 physical bytes per event. A fixture that wrote
  * a uniform cycle of tiny payloads would reproduce the row count and none of
  * the cost: the app pays for JSON it parses, rows that spill to overflow pages,

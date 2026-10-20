@@ -55,6 +55,7 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 function record(ts: string, msg = "m"): [LogRecord, string] {
@@ -172,8 +173,7 @@ describe("the rotating file sink", () => {
 });
 
 /*
- * Review blockers 3, 4 and 5 (VC-699), permanent: the reviewer's probes,
- * asserting the bounds now hold.
+ * Backlog, line and file bounds under oversized input (VC-699).
  */
 describe("bounds (strict, at the boundary)", () => {
   it("holds a synchronous burst to the backlog bound across rotations, and counts the rest", async () => {
@@ -182,7 +182,7 @@ describe("bounds (strict, at the boundary)", () => {
       directory,
       policy: { maxFileBytes: 200, maxBufferedBytes: 250, maxTotalBytes: 100_000 },
     });
-    // The reviewer's line: 138 bytes with its newline.
+    // A 138-byte line including its newline.
     const value: LogRecord = {
       ts: new Date().toISOString(),
       level: "info",
@@ -197,7 +197,7 @@ describe("bounds (strict, at the boundary)", () => {
       sink.write(value, line);
       peak = Math.max(peak, sink.pendingBytes());
     }
-    // The reviewer's probe accepted 5,520 bytes here; one line fits 250.
+    // Only one line fits the 250-byte backlog.
     expect(peak).toBeLessThanOrEqual(250);
     expect(sink.pendingBytes()).toBe(size);
     expect(sink.dropped()).toBe(39);
@@ -234,7 +234,7 @@ describe("bounds (strict, at the boundary)", () => {
     const sink = createRotatingFileSink({ directory, policy: { maxFileBytes: 200 } });
     sink.write(...record(`${day}T00:00:00.000Z`, "hello"));
     await sink.close();
-    // The reviewer's probe: 273 bytes against a 200-byte cap.
+    // A 273-byte line against a 200-byte cap.
     expect(statSync(join(directory, `volli-${day}.jsonl`)).size).toBe(190);
     expect(lines(join(directory, `volli-${day}.1.jsonl`)).map(({ msg }) => msg)).toEqual(["hello"]);
   });
@@ -244,7 +244,11 @@ describe("bounds (strict, at the boundary)", () => {
     const day = "2026-10-07";
     const [value, line] = record(`${day}T00:00:00.000Z`);
     const size = Buffer.byteLength(line) + 1;
-    const sink = createRotatingFileSink({ directory, policy: { maxFileBytes: size * 2 } });
+    const sink = createRotatingFileSink({
+      directory,
+      policy: { maxFileBytes: size * 2 },
+      now: () => new Date(`${day}T12:00:00Z`),
+    });
     for (let index = 0; index < 3; index += 1) sink.write(value, line);
     await sink.close();
     expect(statSync(join(directory, `volli-${day}.jsonl`)).size).toBe(size * 2);
@@ -254,7 +258,11 @@ describe("bounds (strict, at the boundary)", () => {
   it("drops a line past the line ceiling or the file cap, counted and reported", async () => {
     const directory = tempDir();
     const day = "2026-10-07";
-    const sink = createRotatingFileSink({ directory, policy: { maxLineBytes: 120 } });
+    const sink = createRotatingFileSink({
+      directory,
+      policy: { maxLineBytes: 120 },
+      now: () => new Date(`${day}T12:00:00Z`),
+    });
     const [big, bigLine] = record(`${day}T00:00:00.000Z`, "y".repeat(120));
     sink.write(big, bigLine);
     expect(sink.dropped()).toBe(1);
@@ -274,31 +282,41 @@ describe("bounds (strict, at the boundary)", () => {
 });
 
 describe("never fatal, never synchronous", () => {
-  it("does no synchronous filesystem call: creating, writing, rotating, pruning or closing", async () => {
-    const directory = join(tempDir(), "logs");
-    const sync = [
-      nodeFs.existsSync,
-      nodeFs.statSync,
-      nodeFs.mkdirSync,
-      nodeFs.openSync,
-      nodeFs.writeSync,
-      nodeFs.appendFileSync,
-      nodeFs.readdirSync,
-    ] as unknown as ReturnType<typeof vi.fn>[];
-    for (const spy of sync) spy.mockClear();
-    const sink = createRotatingFileSink({ directory, policy: { maxFileBytes: 120 } });
-    for (let index = 0; index < 5; index += 1) {
-      sink.write(...record(`2026-10-0${index + 1}T00:00:00.000Z`, `n${index}`));
-      sink.write(...record(`2026-10-0${index + 1}T00:00:01.000Z`, `m${index}`));
-    }
-    // Nothing touched the disk on the caller's stack: not even the directory.
-    expect(sink.currentFile()).toBeNull();
-    await sink.flush();
-    await sink.prune();
-    await sink.close();
-    for (const spy of sync) expect(spy).not.toHaveBeenCalled();
-    expect(readdirSync(directory).length).toBeGreaterThan(5);
-  });
+  // Real timers keep the asynchronous writer running; only the system date moves.
+  it.each(["2026-10-12", "2026-11-11", "2026-12-11"])(
+    "does no synchronous filesystem call: creating, writing, rotating, pruning or closing (clock %s)",
+    async (day) => {
+      vi.setSystemTime(new Date(`${day}T12:00:00Z`));
+      const directory = join(tempDir(), "logs");
+      const sync = [
+        nodeFs.existsSync,
+        nodeFs.statSync,
+        nodeFs.mkdirSync,
+        nodeFs.openSync,
+        nodeFs.writeSync,
+        nodeFs.appendFileSync,
+        nodeFs.readdirSync,
+      ] as unknown as ReturnType<typeof vi.fn>[];
+      for (const spy of sync) spy.mockClear();
+      const sink = createRotatingFileSink({
+        directory,
+        policy: { maxFileBytes: 120 },
+        // Keep all five fixture days in the seven-day retention window.
+        now: () => new Date("2026-10-05T12:00:00Z"),
+      });
+      for (let index = 0; index < 5; index += 1) {
+        sink.write(...record(`2026-10-0${index + 1}T00:00:00.000Z`, `n${index}`));
+        sink.write(...record(`2026-10-0${index + 1}T00:00:01.000Z`, `m${index}`));
+      }
+      // Nothing touched the disk on the caller's stack: not even the directory.
+      expect(sink.currentFile()).toBeNull();
+      await sink.flush();
+      await sink.prune();
+      await sink.close();
+      for (const spy of sync) expect(spy).not.toHaveBeenCalled();
+      expect(readdirSync(directory).length).toBeGreaterThan(5);
+    },
+  );
 
   it("survives a file where its directory should be: no throw, one report, lines dropped", async () => {
     const userData = tempDir();
@@ -405,7 +423,12 @@ describe("never fatal, never synchronous", () => {
     const directory = join(tempDir(), "logs");
     mkdirSync(directory);
     const fs = failing({});
-    const sink = createRotatingFileSink({ directory, fs, policy: { maxFileBytes: 100 } });
+    const sink = createRotatingFileSink({
+      directory,
+      fs,
+      policy: { maxFileBytes: 100 },
+      now: () => new Date("2026-10-07T12:00:00Z"),
+    });
     for (let index = 0; index < 4; index += 1) {
       sink.write(...record("2026-10-07T00:00:00.000Z", `n${index}`));
     }

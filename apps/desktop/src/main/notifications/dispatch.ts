@@ -103,7 +103,7 @@ export interface NotificationDispatchPorts {
    * Electron reported the OS took it. Not a claim that anybody SAW it — a
    * notification the OS has muted still reports `show` — only that delivery
    * got past the point an earlier one failed at, which is what lets Settings
-   * retire a failure that is no longer current (round 5).
+   * retire a failure that is no longer current.
    */
   onDeliveryShown(input: { producer: NotificationProducer }): void;
   /** Diagnostics seam. Defaults to the host log. */

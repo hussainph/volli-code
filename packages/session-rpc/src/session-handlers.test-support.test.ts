@@ -56,7 +56,9 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
       ),
     () => handlers["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, CALL),
     () => handlers["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, CALL),
+    () => handlers["shells.moveToBackground"]({ sessionId: "s", toolCallId: "bash-1" }, CALL),
     () => handlers["project.reorder"]({ orderedIds: [] }, CALL),
+    () => handlers["project.remove"]({ projectId: "p" }, CALL),
     () => handlers["worktree.trimSettings"](undefined, CALL),
     () => handlers["hosts.snapshot"](undefined, CALL),
     () => handlers["hosts.subscribe"](undefined, CALL, sink),
@@ -79,6 +81,11 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
     () => handlers["hosts.devices"]({ hostId: HOST }, CALL),
     () => handlers["hostAdd.facts"]({ flowId: "f" }, CALL),
     () => handlers["hostAdd.active"](undefined, CALL),
+    () => handlers["hostScope.query"]({ hostId: HOST, path: "workspaces.list" }, CALL),
+    () => handlers["hostScope.mutate"]({ hostId: HOST, path: "workspaces.create" }, CALL),
+    () => handlers["hostScope.subscribe"]({ hostId: HOST, path: "logs.follow" }, CALL, sink),
+    () => handlers["browserShortcuts.subscribe"](undefined, CALL, sink),
+    () => handlers["browserShortcuts.focusPage"]({ tabId: "opaque-1" }, CALL),
     () => handlers["hostLink.query"]({ workspaceId: HOST, path: "board.snapshot" }, CALL),
     () => handlers["hostLink.mutate"]({ workspaceId: HOST, path: "board.setPriority" }, CALL),
     () => handlers["hostLink.subscribe"]({ workspaceId: HOST, path: "board.changes" }, CALL, sink),
@@ -86,6 +93,21 @@ function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
 }
 
 describe("sessionHandlersFrom", () => {
+  it("reads a picture through the stated port, or returns an explicit unavailable chunk", async () => {
+    const ports: Ports = { runtime: {}, sessionMayAct, resourceWorkspace };
+    const input = { sessionId: "session", pictureId: "picture" };
+    expect(await sessionHandlersFrom(ports)["session.picture"](input, CALL)).toEqual({
+      data: null,
+      mimeType: null,
+      nextOffset: null,
+    });
+    const readPicture = vi.fn(() => ({ data: "AAAA", mimeType: "image/png", nextOffset: null }));
+    expect(
+      await sessionHandlersFrom({ ...ports, readPicture })["session.picture"](input, CALL),
+    ).toEqual({ data: "AAAA", mimeType: "image/png", nextOffset: null });
+    expect(readPicture).toHaveBeenCalledExactlyOnceWith(input, CALL);
+  });
+
   it("answers unavailable for the host project ports absent from legacy fixtures", () => {
     const handlers = sessionHandlersFrom({ runtime: {} });
     expect(() => handlers["workspaces.list"](undefined, CALL)).toThrowError(
@@ -152,7 +174,9 @@ describe("sessionHandlersFrom", () => {
       readModelPickerView: port as never,
       writeModelPickerView: port as never,
       desktop: {
+        "shells.moveToBackground": port as never,
         "project.reorder": port as never,
+        "project.remove": port as never,
         "worktree.trimSettings": port as never,
         "hosts.snapshot": port as never,
         "hosts.subscribe": port as never,
@@ -174,10 +198,15 @@ describe("sessionHandlersFrom", () => {
         "hostLink.query": port as never,
         "hostLink.mutate": port as never,
         "hostLink.subscribe": port as never,
+        "hostScope.query": port as never,
+        "hostScope.mutate": port as never,
+        "hostScope.subscribe": port as never,
+        "browserShortcuts.subscribe": port as never,
+        "browserShortcuts.focusPage": port as never,
       },
     };
     for (const call of callAll(sessionHandlersFrom(ports))) await call();
-    expect(port).toHaveBeenCalledTimes(37);
+    expect(port).toHaveBeenCalledTimes(44);
     expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
     expect(runtime.command).toHaveBeenCalledWith({
       commandId: "cancel",
@@ -222,7 +251,8 @@ describe("sessionHandlersFrom", () => {
     // and eight remote sign-in commands (VC-702), the two Session listing
     // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
     // projects' four (VC-710), the active add flows' one (VC-720), and
-    // the host-scoped projects' two (VC-722).
-    expect(Object.keys(context.handlers)).toHaveLength(79);
+    // the host-scoped projects' two and HOST relay's three (VC-722),
+    // and moving a running command to the background (VC-757).
+    expect(Object.keys(context.handlers)).toHaveLength(87);
   });
 });

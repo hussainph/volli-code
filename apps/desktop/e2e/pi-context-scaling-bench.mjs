@@ -11,7 +11,7 @@
  *
  *   pnpm run build
  *   node apps/desktop/e2e/pi-context-scaling-bench.mjs \
- *     --repetitions 5 --output docs/research/perf/pi-context-scaling-vc445
+ *     --repetitions 5 --output .tmp/pi-context-scaling
  *
  * ## What runs
  *

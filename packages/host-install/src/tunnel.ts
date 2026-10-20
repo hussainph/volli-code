@@ -1,7 +1,7 @@
 /**
  * The tunnel (VC-700 flow step 7): `ssh -N -L` from a loopback port on this
- * Mac to the host protocol's loopback listener on the box, the owner's
- * default transport for a host added over SSH (VC-615 decision 3). The
+ * Mac to the host protocol's loopback listener on the box: the default
+ * transport for a host added over SSH (VC-615). The
  * client link (VC-670) connects to the local end: `ws://127.0.0.1:<port>`.
  *
  * - **Its own ssh process**, not the ControlMaster: a sleeping Mac kills a

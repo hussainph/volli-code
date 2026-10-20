@@ -1,7 +1,7 @@
 /**
  * Setup-command sentinel helpers (worktree-support §6). The setup command runs
  * NOT here but in the PTY after spawn (a later wiring stage), typed into the
- * session terminal — never the pane's primary process (cmux #5032). These two
+ * session terminal — never the pane's primary process. These two
  * pure helpers are the contract that stage consumes: one builds the wrapped
  * line to type, the other scans accumulated terminal output for its completion
  * marker. Kept pure and side-effect-free so both ends unit-test trivially.

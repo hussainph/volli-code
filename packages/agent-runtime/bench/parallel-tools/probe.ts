@@ -15,13 +15,10 @@
  * `FALLBACK_PROFILE` when that file is absent, and always prints which one it
  * used.
  *
- * That file is a generated artefact committed in-tree, which is a rule this
- * repo otherwise holds to. It is kept deliberately: the VC-245 benchmark tables
- * are only reproducible
- * against the latencies they were produced with, and network latency in
- * particular moves enough between runs to shift every absolute millisecond in
- * them. **Re-running this probe invalidates those tables** — regenerate them
- * with `run bench` in the same sitting, or restore the committed profile.
+ * The committed profile is a machine-read latency baseline (VC-245), not a run report.
+ * Network latency varies between runs, so comparisons must use the same
+ * profile. Re-running the probe changes the input: regenerate the associated
+ * tables in the same run, or use the original baseline for both arms.
  */
 
 import { execFile } from "node:child_process";

@@ -33,7 +33,7 @@ import { insertProject } from "@volli/host-core/db";
 import { admittedHandlers, createHostHandlers, ROUTER_POLICY } from "@volli/host-core/handlers";
 import { createTestSessionEngine, openTestDb, testProject } from "@volli/host-core/testing";
 import { createLogRing } from "@volli/host-core/log";
-import { runGitCapturing, runGitCapturingAsync } from "@volli/host-core/worktree";
+import { runGitCapturingAsync } from "@volli/host-core/worktree";
 import { createSessionRuntime, createInMemoryTranscriptArtifactStore } from "@volli/session-engine";
 import {
   createSurfaceStore,
@@ -237,7 +237,7 @@ async function box(features: readonly string[] = FEATURES) {
       } as unknown as Parameters<typeof createHostHandlers>[1]["automations"],
       busyWorktreeSites: async () => [],
       logs: createLogRing(),
-      worktree: { db: ctx.db, git: runGitCapturing, gitAsync: runGitCapturingAsync, blobsRoot: "" },
+      worktree: { db: ctx.db, gitAsync: runGitCapturingAsync, blobsRoot: "" },
       sessionListing: {
         db: ctx.db,
         listSessions: (query) => engine.listSessions(query),
@@ -659,7 +659,7 @@ function cloudFlag(enabled: boolean) {
 }
 
 describe(
-  "the window's remote-Session binding, over a real link (VC-713 review)",
+  "the window's remote-Session binding, over a real link (VC-713)",
   {
     timeout: 15_000,
   },

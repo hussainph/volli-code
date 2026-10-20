@@ -164,7 +164,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
       title: "Session may be wedged",
       body: `${projection.session.title ?? `Session ${shortSessionId(sessionId)}`} has an open turn with no runtime progress for ${minutes}m${overdue}.`,
       // The Session, and whatever inside it a person can actually act on
-      // (round 2). A wedge is very often a broken transport, and the Attention
+      // A wedge is very often a broken transport, and the Attention
       // carrying that failure is the thing worth landing on — sending someone
       // to the top of a Session and leaving them to find it is what a deep link
       // is supposed to prevent. Derived with the same rule a window uses to

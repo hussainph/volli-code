@@ -14,7 +14,7 @@ import type { OrphanCleanupPlanItem } from "@volli/shared";
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { insertTicket, updateTicketFields } from "../db/tickets-repo";
-import { cleanupOrphans } from "./cleanup";
+import { cleanupOrphans, type OrphanCleanupWorktreePorts } from "./cleanup";
 import { DEFAULT_RETENTION_TTL_DAYS, setRetentionTtlDays } from "./retention";
 import { createOrphanCleanupEngine, type OrphanCleanupEngine } from "./cleanup-engine";
 import { SqliteOrphanCleanupLedger } from "./cleanup-ledger";
@@ -25,9 +25,9 @@ import {
   isUnderDeletion,
   resetDeletionLeasesForTest,
 } from "./deletion-lease";
+import { runGitCapturing, runGitCapturingAsync } from "./git";
 import { resetRepositoryTurnsForTest, withRepositoryWorktreeTurn } from "./repository-turn";
 import { scriptedGit } from "./scripted-git";
-import type { WorktreePorts } from "./types";
 
 let ctx: TestDb;
 let tempDirs: string[] = [];
@@ -107,7 +107,7 @@ function runRepoGit(cwd: string, args: readonly string[]): string {
 /**
  * The branch the fixture's listing reports for a container leaf. A plan item
  * carries the branch the scan SAW, and the cleanup compares it against the
- * branch git reports at mutation time (re-review C1), so a test item that
+ * branch git reports at mutation time, so a test item that
  * claims the wrong branch is correctly refused — which is why the helper
  * derives it rather than leaving each case to remember.
  */
@@ -225,14 +225,21 @@ function fixture(
     return "";
   });
 
-  const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, now, blobsRoot: "unused" };
+  const deps: OrphanCleanupWorktreePorts = {
+    db: ctx.db,
+    gateGit: git,
+    gitAsync,
+    home,
+    now,
+    blobsRoot: "unused",
+  };
   return { projectPath, home, container, paths, stale, deps, removed, pruned, calls };
 }
 
 /**
  * The standard request wrapper — one command id per call unless a case reuses
  * one. `retentionDays` is the window the SCAN measured its proposal against;
- * the executor refuses if the setting has moved since (re-review C1).
+ * the executor refuses if the setting has moved since.
  */
 function request(items: OrphanCleanupPlanItem[], commandId = COMMAND_ID) {
   return {
@@ -293,10 +300,10 @@ describe("cleanupOrphans", () => {
     });
     let runSnapshot: unknown = null;
     // Read the durable run the instant before the mutation lands.
-    const original = f.deps.git;
-    const deps: WorktreePorts = {
+    const original = f.deps.gitAsync;
+    const deps: OrphanCleanupWorktreePorts = {
       ...f.deps,
-      git: (args, cwd) => {
+      gitAsync: (args, cwd) => {
         if (verb(args)[0] === "worktree" && verb(args)[1] === "remove") {
           // Synchronous read of what the ledger already holds.
           runSnapshot = ctx.db
@@ -338,11 +345,11 @@ describe("cleanupOrphans", () => {
     const [first, second] = f.paths as [string, string];
     // The second path picks up an edit between the scan and the confirm.
     const dirtied = new Set([second]);
-    const deps: WorktreePorts = {
+    const deps: OrphanCleanupWorktreePorts = {
       ...f.deps,
-      git: (args, cwd) => {
+      gateGit: (args, cwd) => {
         if (verb(args)[0] === "status" && dirtied.has(cwd)) return " M src/app.ts\n";
-        return f.deps.git(args, cwd);
+        return f.deps.gateGit(args, cwd);
       },
     };
 
@@ -391,7 +398,7 @@ describe("cleanupOrphans", () => {
     const f = fixture();
     // Nothing is live when the first check runs; a terminal appears while the
     // agent bindings are being released. The re-check after every await is what
-    // has to see it (review C4).
+    // has to see it.
     let releaseHappened = false;
     const { run } = await cleanupOrphans(
       {
@@ -413,10 +420,9 @@ describe("cleanupOrphans", () => {
     );
   });
 
-  // The seam the re-review named: a durable write used to sit between the last
-  // check and `git worktree remove`, so anything that changed the world inside
-  // that write was applied to a verdict taken before it. The `started` fact is
-  // now written BEFORE the last look, and these cases change the world from
+  // A durable write after the last check could invalidate its verdict before
+  // `git worktree remove`. The `started` fact is written before the last look,
+  // and these cases change the world from
   // inside that write to prove the gate still catches it.
   describe("the seam between announcing intent and mutating", () => {
     /** Every ordered act of one item, so the shape of the run is the assertion. */
@@ -437,11 +443,11 @@ describe("cleanupOrphans", () => {
     it("asks what is live, then removes, with no durable write in between", async () => {
       const f = fixture();
       const timeline: string[] = [];
-      const deps: WorktreePorts = {
+      const deps: OrphanCleanupWorktreePorts = {
         ...f.deps,
-        git: (args, cwd) => {
+        gitAsync: (args, cwd) => {
           if (verb(args)[0] === "worktree" && verb(args)[1] === "remove") timeline.push("removed");
-          return f.deps.git(args, cwd);
+          return f.deps.gitAsync(args, cwd);
         },
       };
 
@@ -477,13 +483,17 @@ describe("cleanupOrphans", () => {
     it("lists the stale records, then prunes, with no durable write in between", async () => {
       const f = fixture();
       const timeline: string[] = [];
-      const deps: WorktreePorts = {
+      const deps: OrphanCleanupWorktreePorts = {
         ...f.deps,
-        git: (args, cwd) => {
+        gateGit: (args, cwd) => {
           const verbs = verb(args);
           if (verbs[0] === "worktree" && verbs[1] === "list") timeline.push("listed");
+          return f.deps.gateGit(args, cwd);
+        },
+        gitAsync: (args, cwd) => {
+          const verbs = verb(args);
           if (verbs[0] === "worktree" && verbs[1] === "prune") timeline.push("pruned");
-          return f.deps.git(args, cwd);
+          return f.deps.gitAsync(args, cwd);
         },
       };
 
@@ -559,9 +569,9 @@ describe("cleanupOrphans", () => {
       // as the prune.
       const f = fixture();
       let extraRecord = false;
-      const deps: WorktreePorts = {
+      const deps: OrphanCleanupWorktreePorts = {
         ...f.deps,
-        git: (args, cwd) => {
+        gateGit: (args, cwd) => {
           if (verb(args)[0] === "worktree" && verb(args)[1] === "list" && extraRecord) {
             return (
               `worktree ${f.projectPath}\nHEAD a\nbranch refs/heads/main\n` +
@@ -574,7 +584,7 @@ describe("cleanupOrphans", () => {
               `worktree ${join(f.container, "VC-11-appeared")}\nHEAD d\nprunable gitdir file points to non-existent location\n`
             );
           }
-          return f.deps.git(args, cwd);
+          return f.deps.gateGit(args, cwd);
         },
       };
 
@@ -650,7 +660,7 @@ describe("cleanupOrphans", () => {
     const f = fixture();
     // Moved, but still called the same thing — so the container name is
     // unchanged and the ownership gate cannot see it. Only comparing the
-    // project path the plan named can (re-review C1).
+    // project path the plan named can.
     const moved = movedProject(f.projectPath);
     ctx.db.prepare("UPDATE projects SET path = ? WHERE id = ?").run(moved, "proj-1");
 
@@ -1055,9 +1065,9 @@ describe("cleanupOrphans", () => {
       const container = f.container;
       // Confirmed one record; the repo now reports a second one as well, so a
       // repo-wide prune would take something nobody confirmed.
-      const deps: WorktreePorts = {
+      const deps: OrphanCleanupWorktreePorts = {
         ...f.deps,
-        git: (args, cwd) => {
+        gateGit: (args, cwd) => {
           if (verb(args)[0] === "worktree" && verb(args)[1] === "list") {
             return (
               `worktree ${f.projectPath}\nHEAD a\nbranch refs/heads/main\n` +
@@ -1065,7 +1075,7 @@ describe("cleanupOrphans", () => {
               `worktree ${join(container, "VC-10-appeared")}\nHEAD d\nprunable gitdir file points to non-existent location\n`
             );
           }
-          return f.deps.git(args, cwd);
+          return f.deps.gateGit(args, cwd);
         },
       };
 
@@ -1167,7 +1177,7 @@ describe("cleanupOrphans", () => {
         {
           worktree: {
             db: ctx.db,
-            git,
+            gateGit: git,
             gitAsync,
             home,
             // Past the window measured from the fixture's own fresh commit.
@@ -1223,5 +1233,242 @@ describe("cleanupOrphans", () => {
     ]);
     // And the lease the interrupted item held is not stranded.
     expect(isUnderDeletion(second)).toBe(false);
+  });
+});
+
+/**
+ * The delete itself happens off Electron main (VC-786). `git worktree remove`
+ * deletes a checkout's ignored dependency tree with it — about 100k files for a
+ * pnpm worktree — and on the blocking runner every window, IPC channel and PTY
+ * stream froze for the whole delete, then the read deadline SIGKILLed it part
+ * way through. The final gate stays synchronous; the mutation it admits is
+ * started in the gate's own turn on the async runner and awaited inside the
+ * repository's turn, with the deletion lease held across it.
+ */
+/** What the blocking runner does to the thread while a large delete runs. */
+function blockThread(ms: number): void {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    // execFileSync: nothing else on this thread runs until the child exits.
+  }
+}
+
+describe("cleanupOrphans keeps the event loop free during the mutation (VC-786)", () => {
+  const SLOW_MUTATION_MS = 300;
+
+  /**
+   * Wraps a fixture's runners so each mutation is slow in the way its runner
+   * would make it slow, records which runner each verb reached, and counts the
+   * heartbeat ticks that land while a mutation is in flight.
+   */
+  function slowMutations(f: ReturnType<typeof fixture>, mutation: "remove" | "prune") {
+    const syncVerbs: string[] = [];
+    const asyncVerbs: string[] = [];
+    let inFlight = false;
+    let ticksDuringMutation = 0;
+    const isMutation = (args: readonly string[]) =>
+      verb(args)[0] === "worktree" && verb(args)[1] === mutation;
+    const deps: OrphanCleanupWorktreePorts = {
+      ...f.deps,
+      gateGit: (args, cwd) => {
+        syncVerbs.push(verb(args).slice(0, 2).join(" "));
+        if (isMutation(args)) blockThread(SLOW_MUTATION_MS);
+        return f.deps.gateGit(args, cwd);
+      },
+      gitAsync: async (args, cwd) => {
+        asyncVerbs.push(verb(args).slice(0, 2).join(" "));
+        if (!isMutation(args)) return f.deps.gitAsync(args, cwd);
+        inFlight = true;
+        try {
+          await new Promise<void>((resolve) => setTimeout(resolve, SLOW_MUTATION_MS));
+          return await f.deps.gitAsync(args, cwd);
+        } finally {
+          inFlight = false;
+        }
+      },
+    };
+    const heartbeat = setInterval(() => {
+      if (inFlight) ticksDuringMutation += 1;
+    }, 10);
+    return {
+      deps,
+      syncVerbs,
+      asyncVerbs,
+      ticksDuringMutation: () => ticksDuringMutation,
+      stop: () => clearInterval(heartbeat),
+    };
+  }
+
+  it("runs a slow `git worktree remove` on the async runner while timers keep firing", async () => {
+    const f = fixture();
+    const slow = slowMutations(f, "remove");
+    try {
+      const { run } = await cleanupOrphans(
+        { worktree: slow.deps, engine },
+        request([worktreeItem(f.paths[0]!, f.projectPath)]),
+      );
+      expect(run.items.map((item) => item.state)).toEqual(["completed"]);
+    } finally {
+      slow.stop();
+    }
+
+    expect(f.removed).toEqual(f.paths);
+    // The blocking runner never sees the mutation…
+    expect(slow.syncVerbs).not.toContain("worktree remove");
+    expect(slow.asyncVerbs).toContain("worktree remove");
+    // …and the event loop kept turning while the delete ran.
+    expect(slow.ticksDuringMutation()).toBeGreaterThan(0);
+  });
+
+  it("runs a slow `git worktree prune` on the async runner while timers keep firing", async () => {
+    const f = fixture();
+    const slow = slowMutations(f, "prune");
+    try {
+      const { run } = await cleanupOrphans(
+        { worktree: slow.deps, engine },
+        request([metadataItem(f.stale[0]!, f.projectPath)]),
+      );
+      expect(run.items.map((item) => item.state)).toEqual(["completed"]);
+    } finally {
+      slow.stop();
+    }
+
+    expect(f.pruned).toEqual([f.projectPath]);
+    expect(slow.syncVerbs).not.toContain("worktree prune");
+    expect(slow.asyncVerbs).toContain("worktree prune");
+    expect(slow.ticksDuringMutation()).toBeGreaterThan(0);
+  });
+
+  it("starts the removal in the same synchronous turn as the gate's last answer", async () => {
+    // The gate's promise survives the move: nothing may run between the last
+    // look and the irreversible call. A microtask queued by the gate's final
+    // read must not have run by the time the mutation is started.
+    const f = fixture();
+    let gateTurnOpen = false;
+    const startedInGateTurn: boolean[] = [];
+    const deps: OrphanCleanupWorktreePorts = {
+      ...f.deps,
+      gateGit: (args, cwd) => {
+        gateTurnOpen = true;
+        queueMicrotask(() => {
+          gateTurnOpen = false;
+        });
+        return f.deps.gateGit(args, cwd);
+      },
+      gitAsync: (args, cwd) => {
+        if (verb(args)[0] === "worktree" && verb(args)[1] === "remove") {
+          startedInGateTurn.push(gateTurnOpen);
+        }
+        return f.deps.gitAsync(args, cwd);
+      },
+    };
+
+    await cleanupOrphans(
+      { worktree: deps, engine },
+      request([worktreeItem(f.paths[0]!, f.projectPath)]),
+    );
+
+    expect(startedInGateTurn).toEqual([true]);
+  });
+
+  // The production runners themselves, against real git: the gate's reads on
+  // the blocking one and the removal on the async one, so each command's shape
+  // has to pass the runner vocabulary it now goes through.
+  it(
+    "removes an orphan and its ignored dependency tree through the production runners",
+    async () => {
+      const home = tempDir("home");
+      const originPath = tempDir("origin");
+      runRepoGit(originPath, ["init", "-q", "--bare", "-b", "main"]);
+      const projectPath = tempDir("proj");
+      runRepoGit(projectPath, ["init", "-q", "-b", "main"]);
+      writeFileSync(join(projectPath, ".gitignore"), "node_modules/\n");
+      runRepoGit(projectPath, ["add", "."]);
+      runRepoGit(projectPath, ["commit", "-q", "-m", "base"]);
+      runRepoGit(projectPath, ["remote", "add", "origin", originPath]);
+      runRepoGit(projectPath, ["push", "-q", "origin", "main"]);
+      const container = join(
+        home,
+        ".volli",
+        "worktrees",
+        projectContainerName(projectPath, "proj-1"),
+      );
+      mkdirSync(container, { recursive: true });
+      const orphan = join(container, "VC-6-installed");
+      runRepoGit(projectPath, ["worktree", "add", "-q", "-b", "volli/VC-6-installed", orphan]);
+      runRepoGit(projectPath, ["push", "-q", "origin", "volli/VC-6-installed"]);
+      // An installed dependency tree: ignored, so it is not unsaved work, and
+      // `git worktree remove` takes it with the checkout.
+      const modules = join(orphan, "node_modules", "left-pad");
+      mkdirSync(modules, { recursive: true });
+      for (let file = 0; file < 200; file += 1) {
+        writeFileSync(join(modules, `${file}.js`), "module.exports = 0;\n");
+      }
+      insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
+
+      const { run } = await cleanupOrphans(
+        {
+          worktree: {
+            db: ctx.db,
+            gateGit: runGitCapturing,
+            gitAsync: runGitCapturingAsync,
+            home,
+            now: () => Date.now() + 400 * DAY_MS,
+            blobsRoot: "unused",
+          },
+          engine,
+        },
+        request([worktreeItem(orphan, projectPath, "volli/VC-6-installed")]),
+      );
+
+      expect(run.items.map((item) => [item.state, item.detail])).toEqual([
+        ["completed", "Removed the folder. Branch volli/VC-6-installed is still in git."],
+      ]);
+      expect(existsSync(orphan)).toBe(false);
+      expect(runRepoGit(projectPath, ["branch", "--list", "volli/VC-6-installed"])).toContain(
+        "volli/VC-6-installed",
+      );
+      expect(runRepoGit(projectPath, ["worktree", "list", "--porcelain"])).not.toContain(orphan);
+    },
+    REAL_GIT_TIMEOUT_MS,
+  );
+
+  it("holds the deletion lease until the async removal has settled", async () => {
+    const f = fixture();
+    const path = f.paths[0]!;
+    let finishRemoval!: () => void;
+    const removalHeld = new Promise<void>((resolve) => {
+      finishRemoval = resolve;
+    });
+    const deps: OrphanCleanupWorktreePorts = {
+      ...f.deps,
+      gitAsync: async (args, cwd) => {
+        if (verb(args)[0] === "worktree" && verb(args)[1] === "remove") await removalHeld;
+        return f.deps.gitAsync(args, cwd);
+      },
+    };
+
+    const cleanup = cleanupOrphans(
+      { worktree: deps, engine },
+      request([worktreeItem(path, f.projectPath)]),
+    );
+    await settleCleanup();
+    // Mid-delete: nothing may start a terminal or an agent in the path, and the
+    // repository's turn is still held, so no other change to it can begin.
+    expect(isUnderDeletion(path)).toBe(true);
+    expect(acquireWorktreeStartLease(path)).toBeNull();
+    let otherChangeRan = false;
+    const other = withRepositoryWorktreeTurn(f.projectPath, () => {
+      otherChangeRan = true;
+    });
+    await settleCleanup();
+    expect(otherChangeRan).toBe(false);
+
+    finishRemoval();
+    const { run } = await cleanup;
+    await other;
+    expect(run.items[0]?.state).toBe("completed");
+    expect(otherChangeRan).toBe(true);
+    expect(isUnderDeletion(path)).toBe(false);
   });
 });

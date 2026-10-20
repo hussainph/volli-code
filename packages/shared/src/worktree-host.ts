@@ -50,13 +50,49 @@ export interface WorktreeBranchListing {
   fetchedAt: number | null;
 }
 
+/**
+ * The ticket whose `worktreePath` still names an orphaned folder (VC-292) —
+ * what lets a Storage row lead with "VC-82 · Fix the thing" instead of a
+ * clipped path, and offer the ticket's own repair. Archived tickets included,
+ * because an archived ticket can still hold a checkout, and its row has to
+ * say why it cannot simply be opened.
+ */
+export interface DirtyWorktreeOrphanTicket {
+  id: string;
+  /**
+   * The ticket's own project — what Open ticket opens it in. Usually the
+   * project whose container holds the folder, but a claim is a claim whichever
+   * project makes it, and main's delete guard refuses on any of them.
+   */
+  projectId: string;
+  /** `VC-82` form — the prefix and number a person reads on the board. */
+  displayId: string;
+  title: string;
+  /** Off the board: it cannot be opened until it is restored from the Archive. */
+  archived: boolean;
+}
+
 /** One orphan the scan refuses to propose for cleanup, for the Storage list. */
 export interface DirtyWorktreeOrphan {
   path: string;
   projectId?: string;
-  /** The project's display name, so a row can name a project and not an id (VC-284 review C6). */
+  /** The project's display name, so a row can name a project and not an id (VC-284). */
   projectName?: string;
   reason: string;
+  /**
+   * The ticket that still claims this folder (VC-292) — its `worktreePath` is
+   * the folder, inside it, or holds it, the same test main's delete guard
+   * applies. Absent when no ticket claims it, and from a host that predates
+   * the field.
+   */
+  ticket?: DirtyWorktreeOrphanTicket;
+  /**
+   * `false` when the scan could not open the folder itself (VC-292), so the row
+   * can say so. Reveal is still offered: it selects the folder in its parent,
+   * which does not need the folder to be readable. Absent means it could, or
+   * that the host predates the field.
+   */
+  pathReadable?: boolean;
 }
 
 /**
@@ -67,7 +103,7 @@ export interface DirtyWorktreeOrphan {
 export interface RemovableWorktreeOrphan {
   /**
    * This item's id inside its scan revision — what a cleanup command selects
-   * (VC-284 review C1). Scoped by the revision UUID, so an id from a superseded
+   * (VC-284). Scoped by the revision UUID, so an id from a superseded
    * scan can never name work in the current one.
    */
   id: string;
@@ -110,7 +146,7 @@ export interface KeptWorktreeOrphan {
  * marker in `git worktree list --porcelain`, so naming it costs nothing and
  * changes nothing.
  *
- * One record per entry, not one bundle per project (VC-284 review C2): the
+ * One record per entry, not one bundle per project (VC-284): the
  * confirmation shows records, so the plan has to carry records, and every one
  * of them earns its own outcome in the durable history.
  */
@@ -138,7 +174,7 @@ export interface KeptWorktreeMetadata {
 }
 
 /**
- * A project whose worktree listing could not be read (VC-284 review C5). It is
+ * A project whose worktree listing could not be read (VC-284). It is
  * reported rather than skipped in silence: without the listing, every checkout
  * in that project's container is unaccounted for, and "we could not look" is a
  * different statement from "there was nothing there".

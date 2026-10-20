@@ -14,6 +14,8 @@ import { useHostsWritable, useRemoteHostsStore } from "@renderer/stores/remote-h
 import { AddHostSheet } from "./add-host-sheet";
 import { OpenProjectSheet } from "./open-project-sheet";
 import { HostSignInSheet } from "./sign-ins/host-sign-in-sheet";
+import { HostModelSheet } from "./host-model-sheet";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
 import { openAddHostSheet, openHostsSettings } from "./host-entry";
 import { useHostSignInSheet } from "./sign-ins/remote-host-sign-in-source";
 import { useCloudEnabled } from "./use-hosts";
@@ -37,6 +39,7 @@ export function HostsChrome() {
       useRemoteHostsStore.getState().closeAddHost();
       useRemoteHostsStore.getState().closeProjectSheet();
       useHostSignInSheet.getState().close();
+      useHostModelSheet.getState().close();
     };
   }, [cloud]);
   return cloud ? (
@@ -44,6 +47,7 @@ export function HostsChrome() {
       <AddHostSheet />
       <OpenProjectSheet />
       <HostSignInSheet />
+      <HostModelSheet />
     </>
   ) : null;
 }

@@ -96,7 +96,7 @@ volli-drive list                    # nothing of yours should remain live
 ## Limits (today)
 
 - Terminal Sessions: the instance's `$SHELL` is a fake login shell (PATH probe), so terminal/harness CLIs are not meaningfully drivable yet; use `apps/desktop/e2e/lib/fake-harness.mjs` smokes for those.
-- Remote hosts ("Add a host over SSH"): design only — see `docs/research/volli-drive-sshd-fixture.md`.
+- Remote hosts: use `apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs` and its loopback fixture. Do not connect the harness to a real remote host.
 - Packed apps are refused (`--build packed`/`--app` → "not yet safe; dev builds only"; the app itself also refuses harness mode when packaged) until VC-705 gives them a validated gate. Launch is the built `dist-electron/` on the dev Electron binary, rebuilt when the harness sources are newer. No HMR renderer yet.
 - Fixture repos are scratch-created with a local bare `origin`; never point an instance at a real repo or remote.
 - `logs --trace` is a literal match until VC-699's structured logs land (it already reads `logs/structured/*.jsonl` when present).

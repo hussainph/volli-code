@@ -190,6 +190,7 @@ describe("host scope at hostd's enrolled-device loopback door", () => {
     expect(welcome.features.toSorted()).toEqual([
       "auth.callback",
       "host.logs",
+      "host.model-defaults",
       "host.workspaces",
       "sign-ins",
     ]);

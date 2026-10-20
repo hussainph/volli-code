@@ -118,6 +118,12 @@ interface DragState {
   ticketIds: string[];
   preview: Ticket[];
   hiddenAtStart: TicketStatus[];
+  /**
+   * The one column every lifted ticket already stands in, or `null` for a group
+   * drawn from several. A release there is not an arrival, so its Offered rows
+   * are drawn inert — it starts nothing whatever row the picker names.
+   */
+  originStatus: TicketStatus | null;
   /** Final slot in the preview, ready for the atomic persistence call. */
   drop: DropTarget | null;
 }
@@ -558,6 +564,9 @@ export const Board = React.memo(function Board({
   // pill that stands in for an EMPTY one. An empty column can be armed, so the
   // pill has to be able to grow the same picker; what a column offers is a fact
   // about the column, never about how much of it is on screen.
+  // Fixed for the whole gesture, so it is a primitive dependency rather than
+  // the drag state itself, which changes on every slot the card crosses.
+  const originStatus = drag?.originStatus ?? null;
   const offeredPanelFor = React.useCallback(
     (status: TicketStatus): ColumnOfferedPanelProps | undefined =>
       showsOfferedList(picker, status)
@@ -566,9 +575,10 @@ export const Board = React.memo(function Board({
             expanded: isPickerColumn(picker, status),
             highlighted: highlightedIndex(picker, pickerColumns, status),
             armedId: offeredByStatus.armed[status],
+            inert: status === originStatus,
           }
         : undefined,
-    [picker, pickerColumns, offeredByStatus],
+    [picker, pickerColumns, offeredByStatus, originStatus],
   );
   // One column is being aimed at, and the rest — standing or collapsed — are
   // not the question.
@@ -942,6 +952,9 @@ export const Board = React.memo(function Board({
       ticketIds,
       preview: storeTickets,
       hiddenAtStart: hidden,
+      originStatus: selectedTickets.every((ticket) => ticket.status === activeTicket.status)
+        ? activeTicket.status
+        : null,
       drop: null,
     });
     // A drag may BEGIN with ⌥ already down, and that drag never sees a keydown.
@@ -1162,7 +1175,7 @@ export const Board = React.memo(function Board({
                 data-board-ticket-count={visible.length}
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
-                  // grab-able under them (Trello-style mouse pan). Scrollbar is
+                  // grab-able under them (mouse pan). Scrollbar is
                   // hidden — drag / shift-wheel / trackpad replace it.
                   "flex min-h-0 flex-1 items-start gap-4 overflow-x-auto px-gutter pb-4",
                   "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
@@ -1185,8 +1198,8 @@ export const Board = React.memo(function Board({
                     // column for rendering. Drag mechanics stay unchanged — a drop
                     // still writes the manual `order` (see handleDragEnd), but under
                     // a non-manual sort the displayed position is sort-driven, so the
-                    // card snaps to its sorted slot after the drop (Linear behaves the
-                    // same). "manual" remains the true drag-reorder mode.
+                    // card snaps to its sorted slot after the drop. "manual" remains
+                    // the true drag-reorder mode.
                     tickets={sortedGroups[status]}
                     projectId={projectId}
                     ticketPrefix={ticketPrefix}

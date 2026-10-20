@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The rest of the host writes the read-only audit found (VC-576 re-check,
- * blocker 4): a card's context menu (Move to, Priority, Labels, Archive,
+ * The rest of the host writes the read-only audit found (VC-576): a card's
+ * context menu (Move to, Priority, Labels, Archive,
  * Remove worktree, Resume), the rail's label Add and Remove, the Archive
  * confirm, Remove worktree, the repository's destination / base branch /
  * branch, every hand-run Automation, and the file navigator's create, rename,

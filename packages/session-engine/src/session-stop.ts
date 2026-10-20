@@ -51,8 +51,7 @@ export interface StopSessionByIdInput {
  * named by id. No project bound and no self-guard — a person is not a Session,
  * and the renderer only ever names Sessions it is already showing.
  *
- * NOT-LIVE IS A NAMED REFUSAL (fix-first, review c5714a22), checked before the
- * durable write: a target with no open structured attachment has nothing for
+ * A not-live target is refused by name before the durable write: a target with no open structured attachment has nothing for
  * the runtime acts to touch, and the island's stop button races the row's own
  * state (it shows only while the child reads `working`) — by the time the
  * click reaches here the child may already have gone idle or fully closed.

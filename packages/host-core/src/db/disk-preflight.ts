@@ -4,8 +4,7 @@
  * Migrating an existing database needs room for three copies of it at once:
  * the file itself, the verified safety copy published beside it
  * (`publishRollbackPoint`), and the rewrite the migration and the compaction
- * after it put through the WAL (VACUUM rebuilds the whole file). On the
- * owner's 950 MB profile that is about 2.8 GB on one volume. A disk that runs
+ * after it put through the WAL (VACUUM rebuilds the whole file). A disk that runs
  * out halfway fails with SQLITE_FULL or ENOSPC from somewhere deep in the copy
  * or the transaction, which names neither the cause nor the remedy; this
  * check runs first, on the directory the copy is written to, and refuses

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * A notification click landing in a mounted chat plane (VC-295 round 5).
+ * A notification click landing in a mounted chat plane (VC-295).
  *
  * A failure draws on the blocker row above the composer. A click naming that
  * failure overrides its dismissal. Remaining permission requests use the

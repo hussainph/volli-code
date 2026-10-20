@@ -1881,7 +1881,7 @@ describe("delivering the pinned release, on a real local shell", { timeout: 30_0
     expect(existsSync(third.releaseDir)).toBe(true);
   });
 
-  // The recheck's N-B1: two desktops delivering to one account's cache.
+  // Two desktops delivering to one account's cache: each must leave the other's young tree alone.
   it("never removes another delivery's young tree, which may be awaiting its sudo password", async () => {
     const { artifact, bytes } = buildRelease();
     const home = join(root, "shared-remote");

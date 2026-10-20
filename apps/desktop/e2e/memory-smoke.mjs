@@ -173,8 +173,8 @@ async function main() {
     },
   ];
 
-  // An isolated Chromium profile. Sharing <userData> with a Volli the owner
-  // already has open loses the single-instance lock, so the launch quits at
+  // An isolated Chromium profile. Sharing <userData> with an open Volli
+  // instance loses the single-instance lock, so the launch quits at
   // exit code 0 before its first window — surfacing only as "Target page,
   // context or browser has been closed", which reads like a crash in the app.
   const profileDir = await fs.mkdtemp(join(os.tmpdir(), "volli-memory-smoke-profile-"));

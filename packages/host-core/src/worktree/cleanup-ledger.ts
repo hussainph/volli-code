@@ -1,5 +1,5 @@
 /**
- * The SQLite adapter behind the orphan-cleanup command core (VC-284 review S1).
+ * The SQLite adapter behind the orphan-cleanup command core (VC-284).
  *
  * Three append-only tables — commands, facts, receipts — and nothing that is
  * ever updated in place. That is the whole point: the previous design replaced
@@ -159,7 +159,7 @@ class SqliteOrphanCleanupTransaction implements OrphanCleanupLedgerTransaction {
 
   /**
    * The open runs, asked of the store rather than filtered out of a page of
-   * recent ones (VC-284 re-review C3). Accepted, never closed: a refused command
+   * recent ones (VC-284). Accepted, never closed: a refused command
    * has no run to reconcile, and a finished or already-interrupted one is
    * settled. Oldest first, because that is the order they stopped in.
    */

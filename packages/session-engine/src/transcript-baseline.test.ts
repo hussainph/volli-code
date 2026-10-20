@@ -32,9 +32,9 @@ import type { SessionTranscriptArtifact } from "./transcript-artifacts";
  * The plan and reply of a Session whose history predates transcript digests,
  * recovered by the host on a bounded open (VC-315's legacy baseline).
  *
- * The first describe block holds the re-check review's host probe, kept as a
- * passing test: a Session recorded before digests existed, reopened through a
- * fresh runtime with its projection checkpoint gone, still answers its plan
+ * The first describe block verifies that a Session recorded before digests
+ * existed, reopened through a fresh runtime without its projection checkpoint,
+ * still answers its plan
  * and its current turn's reply although both sit above the window. The rest
  * pin how: once, cached, best effort, and through digests where there are
  * some.
@@ -340,7 +340,7 @@ function outside(open: { snapshot: SessionRuntimeSnapshot; reads: readonly strin
 /** Silent messages enough to push everything before them above the window. */
 const BEYOND = SESSION_HISTORY_WINDOW.events + 4;
 
-describe("VC-315 recheck: legacy host snapshot", () => {
+describe("VC-315: legacy host snapshot", () => {
   it("recovers the legacy plan and reply above the bounded tail", async () => {
     const legacy = await record([{ say: "Current-turn reply", plan: PLAN }, { silent: BEYOND }]);
     try {

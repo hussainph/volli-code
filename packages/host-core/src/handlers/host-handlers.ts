@@ -55,6 +55,7 @@ import {
   type AddHostStartInput,
   type AddHostStepId,
   type AgentResponse,
+  type BrowserAppShortcutEvent,
   type CodeModePolicy,
   type CompactionPolicy,
   type ExperimentId,
@@ -69,6 +70,8 @@ import {
   type HostSignInAnswerInput,
   type HostSignInFlow,
   type HostSignInStartInput,
+  type HostScopeRelayCall,
+  type HostScopeRelaySubscribeCall,
   type HostLinkRelayCall,
   type HostLinkRelayEvent,
   type HostLinkRelaySubscribeCall,
@@ -99,13 +102,15 @@ import {
 } from "@volli/shared";
 
 import type { DetachedWorkPort } from "../detached-work";
+import type { BrowserShortcutsPort } from "./browser-shortcuts-port";
+import type { BrowserPictureStore } from "../browser/picture-store";
 import type { HostSignIns } from "../host-sign-ins";
 import { withLogContext } from "../log/context";
 import type { LogRing } from "../log/ring";
 import { sealHostHandlers, type AdmissionObserver, type HostHandlerMap } from "./handler-map";
 import type { RemoteHostsPort, RemoteHostUpdateWhen } from "./remote-hosts-port";
 import type { RemoteSignInsPort } from "./remote-sign-ins-port";
-import type { HostLinkRelayPort } from "./host-link-relay-port";
+import type { HostLinkRelayPort, HostScopeRelayPort } from "./host-link-relay-port";
 import type { HostSessionPorts } from "../session-services";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import {
@@ -133,6 +138,7 @@ import type { SessionAttachInput, SessionStartInput, Sessions } from "../session
 import { createBoardHandlers, type BoardHandlerSignatures } from "../board/commands";
 import { createBoardChangeFeed, type BoardChangeFeed } from "../board/change-feed";
 import { reorderProjects } from "../db/projects-repo";
+import { removeProject, type ProjectLiveWork } from "../project-remove";
 import {
   executeTicketMove,
   type TicketMoveCommandInput,
@@ -194,6 +200,10 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "session.history": HostHandler<
     { sessionId: string; before: number },
     SessionHistoryPage
+  >;
+  readonly "session.picture": HostHandler<
+    { sessionId: string; pictureId: string; offset?: number },
+    { data: string | null; mimeType: string | null; nextOffset: number | null }
   >;
   readonly "session.projection": HostHandler<
     { sessionId: string },
@@ -273,9 +283,15 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "logs.follow": HostSubscriptionHandler<HostLogsRead, HostLogsBatch>;
   /**
    * The desktop-only tier (`DESKTOP_ENTRIES`, VC-608): the same map, under
-   * placement-derived policy (both host-placed: device-as-user).
+   * placement-derived policy: the person only, on no network door.
    */
+  readonly "shells.moveToBackground": HostHandler<
+    { sessionId: string; toolCallId: string },
+    { shellId: string }
+  >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
+  /** Stops a project's live work, then detaches it (VC-796, VC-822): `../project-remove`. */
+  readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /**
    * Remote hosts this desktop added over SSH (VC-700 PR 2), all host-placed:
@@ -347,6 +363,13 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
   readonly "hosts.createProject": HostHandler<CreateRemoteProjectInput, CreateRemoteProjectResult>;
   readonly "hosts.openWorkspace": HostHandler<RemoteWorkspaceInput, null>;
   readonly "hosts.closeWorkspace": HostHandler<RemoteWorkspaceInput, null>;
+  /** HOST-scoped operations before any Workspace, through desktop main's port. */
+  readonly "hostScope.query": HostHandler<HostScopeRelayCall, unknown>;
+  readonly "hostScope.mutate": HostHandler<HostScopeRelayCall, unknown>;
+  readonly "hostScope.subscribe": HostSubscriptionHandler<
+    HostScopeRelaySubscribeCall,
+    HostLinkRelayEvent
+  >;
   /**
    * The Workspace link relay (VC-711): a remote project's public operations
    * over desktop main's Workspace link, {@link HostHandlerOptions.hostLinkRelay}'s
@@ -358,6 +381,13 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
     HostLinkRelaySubscribeCall,
     HostLinkRelayEvent
   >;
+  /**
+   * App shortcuts out of a focused Browser page (VC-301): desktop main's
+   * Browser Tab host, {@link HostHandlerOptions.browserShortcuts}'s, or
+   * unavailable.
+   */
+  readonly "browserShortcuts.subscribe": HostSubscriptionHandler<void, BrowserAppShortcutEvent>;
+  readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
 }
 
 /** What a Session read's handler is asked: its Workspace, and the socket verb's args. */
@@ -405,6 +435,8 @@ export interface HostHandlerOptions {
   readonly db: Database.Database | null;
   /** The host's data directory: where a worktree's attachment bytes live. */
   readonly dataDir: string;
+  /** The same screenshot store Code Mode writes; absent means an explicit unavailable picture. */
+  readonly pictures?: BrowserPictureStore;
   /** The recovered Session runtime, or null when this launch has none. */
   readonly runtime: SessionRuntime | null;
   /** The recovered Sessions facade, or null when this launch has none. */
@@ -461,8 +493,19 @@ export interface HostHandlerOptions {
   readonly boardFeed?: BoardChangeFeed;
   /** The Session ledger's latest outcome per ticket, or null on a host without one. */
   readonly ticketSignals?: ((projectId: string) => Promise<readonly LatestSessionSignal[]>) | null;
+  /** The host's foreground-shell registry. Absent on hosts without this UI operation. */
+  readonly backgroundShells?: {
+    moveForeground(sessionId: string, toolCallId: string): { shellId: string };
+  } | null;
   /** Where Pi keeps saved tool output, which an archive or delete releases (VC-469). */
   readonly piSessionsDirectory?: string;
+  /**
+   * The live work this host holds for a project's Sessions, which removing
+   * the project stops before it detaches it (VC-796, VC-822). Absent or null:
+   * a host that cannot stop it, where `project.remove` answers unavailable
+   * rather than hiding Sessions that are still working.
+   */
+  readonly projectLiveWork?: ProjectLiveWork | null;
   /**
    * The remote hosts this desktop added over SSH, and their add flows
    * (VC-700 PR 2): desktop main's registry. Absent or null (hostd, a desktop
@@ -481,6 +524,13 @@ export interface HostHandlerOptions {
    * or null on a host that holds none (hostd): `hostLink.*` answer unavailable.
    */
   readonly hostLinkRelay?: HostLinkRelayPort | null;
+  /** Desktop main's HOST links; absent or null on hostd: `hostScope.*` unavailable. */
+  readonly hostScopeRelay?: HostScopeRelayPort | null;
+  /**
+   * App shortcuts out of desktop main's Browser pages (VC-301); absent or null
+   * on hostd: `browserShortcuts.*` answer unavailable.
+   */
+  readonly browserShortcuts?: BrowserShortcutsPort | null;
 }
 
 /** Messages a client may show; unchanged from the router's own (VC-564). */
@@ -496,7 +546,10 @@ const REMOTE_HOSTS_UNAVAILABLE = "Remote hosts are unavailable on this host";
 const REMOTE_SIGN_INS_UNAVAILABLE = "Remote host sign-ins are unavailable on this host";
 const LOGS_UNAVAILABLE = "This host keeps no log to read";
 const SESSION_LISTING_UNAVAILABLE = "The Session listing is unavailable on this host";
+const HOST_SCOPE_RELAY_UNAVAILABLE = "Remote host operations are unavailable on this host";
 const HOST_LINK_RELAY_UNAVAILABLE = "Remote projects are unavailable on this host";
+const BROWSER_SHORTCUTS_UNAVAILABLE = "Browser Tab shortcuts are unavailable on this host";
+const PROJECT_REMOVAL_UNAVAILABLE = "Removing a project is unavailable on this host";
 
 /**
  * Runs a handler with the ids its input names joined to the operation's log
@@ -573,7 +626,12 @@ function hostHandlerEntries(
   const remoteSignIns = () => present(options.remoteSignIns ?? null, REMOTE_SIGN_INS_UNAVAILABLE);
   const logs = () => present(options.logs ?? null, LOGS_UNAVAILABLE);
   const listing = () => present(options.sessionListing ?? null, SESSION_LISTING_UNAVAILABLE);
+  const hostScopeRelay = () =>
+    present(options.hostScopeRelay ?? null, HOST_SCOPE_RELAY_UNAVAILABLE);
   const hostLinkRelay = () => present(options.hostLinkRelay ?? null, HOST_LINK_RELAY_UNAVAILABLE);
+  const browserShortcuts = () =>
+    present(options.browserShortcuts ?? null, BROWSER_SHORTCUTS_UNAVAILABLE);
+  const feed = options.boardFeed ?? createBoardChangeFeed();
 
   const worktree = (database: Database.Database) =>
     options.worktree ?? worktreeDeps(database, ports, { dataDir: options.dataDir });
@@ -623,7 +681,7 @@ function hostHandlerEntries(
       db,
       now,
       events: ports.events,
-      feed: options.boardFeed ?? createBoardChangeFeed(),
+      feed,
       worktree,
       busyWorktreeSites: options.busyWorktreeSites,
       detachedWork: options.detachedWork,
@@ -682,6 +740,12 @@ function hostHandlerEntries(
     "modelAccess.setPickerView": (view) => writeModelPickerView(preferences(), view, now()),
     "session.snapshot": (input) => runtime().snapshot(input),
     "session.history": (input) => runtime().history(input),
+    "session.picture": ({ sessionId, pictureId, offset }) =>
+      options.pictures?.readActivityImage(sessionId, pictureId, offset) ?? {
+        data: null,
+        mimeType: null,
+        nextOffset: null,
+      },
     "session.projection": (input) => runtime().projection(input),
     "session.subscribe": (input, _call, sink) =>
       runtime().subscribe(
@@ -766,10 +830,34 @@ function hostHandlerEntries(
       logs().follow(query, (batch) => void sink.emit(batch)),
     // The desktop-only tier: the bodies `volli:project-reorder` and
     // `volli:worktree-trim-settings-get` had in `data-ipc.ts`, moved, not copied.
+    "shells.moveToBackground": ({ sessionId, toolCallId }) =>
+      joined({ sessionId, toolCallId }, () =>
+        present(
+          options.backgroundShells ?? null,
+          "Moving commands to the background is unavailable on this host",
+        ).moveForeground(sessionId, toolCallId),
+      ),
     "project.reorder": ({ orderedIds }) => {
       reorderProjects(board(), orderedIds, now());
       return null;
     },
+    // Every window hears it, the asking one included, so a second window
+    // drops the project. Untapped: the removed Workspace's feed has ended,
+    // and no other Workspace changed.
+    "project.remove": ({ projectId }) =>
+      joined({ projectId }, async () => {
+        await removeProject(
+          {
+            db: board(),
+            live: present(options.projectLiveWork ?? null, PROJECT_REMOVAL_UNAVAILABLE),
+            disposeFeed: (id) => feed.dispose(id),
+            announce: () => feed.untapped(() => ports.events.publish("data-changed", {})),
+            now,
+          },
+          projectId,
+        );
+        return null;
+      }),
     "worktree.trimSettings": () => getTrimSettings(board()),
     // Remote hosts (VC-700 PR 2): desktop main's registry, through its port.
     "hosts.snapshot": () => remoteHosts().snapshot(),
@@ -848,6 +936,11 @@ function hostHandlerEntries(
       done(() => remoteHosts().openWorkspace(hostId, workspaceId)),
     "hosts.closeWorkspace": ({ hostId, workspaceId }) =>
       done(() => remoteHosts().closeWorkspace(hostId, workspaceId)),
+    // HOST relay (VC-722): before any project, through desktop main's port.
+    "hostScope.query": ({ hostId, path, input }) => hostScopeRelay().query(hostId, path, input),
+    "hostScope.mutate": ({ hostId, path, input }) => hostScopeRelay().mutate(hostId, path, input),
+    "hostScope.subscribe": async ({ hostId, path, input, lastEventId }, _call, sink) =>
+      hostScopeRelay().subscribe(hostId, path, input, lastEventId, (event) => sink.emit(event)),
     // The Workspace link relay (VC-711): desktop main's, through its port.
     "hostLink.query": ({ workspaceId, path, input }) =>
       hostLinkRelay().query(workspaceId, path, input),
@@ -861,5 +954,9 @@ function hostHandlerEntries(
         (event) => sink.emit(event),
         lastEventId === undefined ? {} : { lastEventId },
       ),
+    // Browser page shortcuts (VC-301): desktop main's Browser Tab host, through its port.
+    "browserShortcuts.subscribe": async (_input, _call, sink) =>
+      browserShortcuts().subscribe((event) => void sink.emit(event)),
+    "browserShortcuts.focusPage": ({ tabId }) => done(() => browserShortcuts().focusPage(tabId)),
   };
 }

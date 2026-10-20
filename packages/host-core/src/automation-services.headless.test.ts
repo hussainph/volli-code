@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import { nextScheduleOccurrence } from "@volli/shared";
 import { createHostAutomations, type AutomationSessionPorts } from "./automation-services";
 import { openTestDb, testProject, type TestDb } from "./db/test-helpers";
-import { insertProject } from "./db/projects-repo";
+import { detachProject, insertProject } from "./db/projects-repo";
 import { listSkippedOccurrencesForProject } from "./db/automations-repo";
 
 let ctx: TestDb | undefined;
@@ -70,6 +70,64 @@ it("keeps CRUD and the unattended schedule alive without a window or attention a
       projectId: project.id,
       attendance: "unattended",
     });
+    expect(log.error).not.toHaveBeenCalled();
+  } finally {
+    automations.stop();
+    await automations.settled();
+  }
+});
+
+// VC-822: removal detaches a project and keeps its Automations, so its schedule
+// still comes due. The real Run door refuses it, and the skip says why.
+it("records a removed project's due schedule as a skip that names the removal", async () => {
+  vi.useFakeTimers();
+  const now = Date.UTC(2026, 9, 4, 12);
+  vi.setSystemTime(now);
+  ctx = openTestDb();
+  const project = testProject();
+  insertProject(ctx.db, project);
+  const log = { error: vi.fn() };
+  const automations = createHostAutomations({ db: ctx.db, events: { publish: vi.fn() }, log });
+  const schedule = { preset: "hourly" as const, minute: 30, timeZone: "UTC" };
+  const created = await automations.service.create({
+    commandId: randomUUID(),
+    projectId: project.id,
+    name: "Removed sweep",
+    instructions: "Check the project",
+    trigger: { kind: "schedule", schedule },
+    runtime: { kind: "tier", tier: "fast" },
+  });
+  if (!created.ok) throw new Error(created.error);
+  await automations.service.setEnabled({
+    commandId: randomUUID(),
+    automationId: created.automation.id,
+    enabled: true,
+  });
+  detachProject(ctx.db, project.id, now);
+
+  const create = vi.fn();
+  automations.start(() => ({
+    sessions: { create, attach: vi.fn() },
+    promptSupply: vi.fn(),
+    deliverInstructions: vi.fn(),
+    reportInstructionDeliveryFailure: vi.fn(),
+    readSessionActivity: vi.fn(),
+  }));
+  try {
+    const due = nextScheduleOccurrence({ schedule, staggerKey: created.automation.id, after: now });
+    await vi.advanceTimersByTimeAsync(due - now);
+    await vi.waitFor(() =>
+      expect(listSkippedOccurrencesForProject(ctx!.db, project.id)).toMatchObject([
+        {
+          reason: {
+            kind: "run-refused",
+            code: "PROJECT_REMOVED",
+            error: "The project was removed from Volli.",
+          },
+        },
+      ]),
+    );
+    expect(create).not.toHaveBeenCalled();
     expect(log.error).not.toHaveBeenCalled();
   } finally {
     automations.stop();

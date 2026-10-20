@@ -138,7 +138,7 @@ describe("cleanup command core", () => {
     expect(retry.code).toBe("conflict");
   });
 
-  // The gateway rule (re-review S1): a used command id answers from the durable
+  // The gateway rule: a used command id answers from the durable
   // record BEFORE anything live is consulted, and the answer needs no scan.
   describe("replay", () => {
     it("says nothing about an id it has never seen", async () => {
@@ -257,7 +257,7 @@ describe("cleanup command core", () => {
   });
 
   // A completed deletion that later grows a `rejected` receipt reads, to
-  // whoever takes the last receipt, as a command that never ran (re-review S1).
+  // whoever takes the last receipt, as a command that never ran.
   it("never records a refusal over a command id that was accepted", async () => {
     const { engine, ledger } = engineWith();
     await engine.accept({ commandId: "cmd-1", ...ACCEPT, items: [planItem()] });
@@ -449,7 +449,7 @@ describe("foldCleanupRun", () => {
     ).toBeNull();
   });
 
-  // The re-review's C3: JSON that parses but does not MEAN anything used to be
+  // JSON that parses but does not match the stored shape must not be
   // defaulted away — a damaged accepted plan folded into "an empty finished
   // run", which is a deletion history disappearing without anybody being told.
   // Every one of these shapes is now a named fault.

@@ -180,7 +180,7 @@ export default defineConfig(({ mode }) => ({
           // inherits nothing, and vitest refuses a run whose projects disagree
           // about `maxWorkers` while sharing a `sequence.groupOrder` — which is
           // exactly what a `--maxWorkers` flag on the command line produced
-          // (VC-339 review r2). Both projects say the same thing; the flag then
+          // (VC-339). Both projects say the same thing; the flag then
           // governs the pool they share.
           ...SHARED_MACHINE_TEST_WORKERS,
         },
@@ -259,6 +259,9 @@ export default defineConfig(({ mode }) => ({
         // which a permanent Change Set list satisfied forever. Each transition
         // is gated because none of them is visible in a screenshot.
         "src/components/browser/browser-plane-freeze.ts",
+        // Which pane a ⌘W or ⌘L from inside a page acts on (VC-301): a missed
+        // branch here is a close landing on the wrong tab.
+        "src/components/browser/browser-app-shortcuts.ts",
         // Where the Browser replay moves (VC-453): which step a key, a drag or
         // a growing trace lands on. None of it shows in a screenshot.
         "src/components/browser/browser-trace-model.ts",
@@ -431,6 +434,10 @@ export default defineConfig(({ mode }) => ({
         // and which are only killable one at a time. A missed branch there is
         // a button that signals something the person never singled out.
         "src/components/settings/panes/processes-model.ts",
+        // What Updates says the last check found (VC-294). The defect was a
+        // page that looked identical whatever a check answered, and a failure
+        // that lived only as long as its toast — every phase is a branch here.
+        "src/components/settings/panes/updates-pane-model.ts",
         // What the user is TOLD about a launch-wide environment fault — the
         // same class of decision as cli-status-model, enrolled for the same
         // reason (VC-94).
@@ -493,6 +500,9 @@ export default defineConfig(({ mode }) => ({
         // unavailable tool, or a row that called a broken server Ready, is a
         // tool offered to every new Session that nobody chose.
         "src/components/settings/configure/mcp-tools-model.ts",
+        // Whether a repo has AGENTS.md / CLAUDE.md (VC-305): a wrong answer
+        // offers Reveal on a file that is not there, or hides one that is.
+        "src/components/settings/configure/instruction-files.ts",
         "src/components/update/live-work-copy.ts",
         "src/components/ticket/session-history.ts",
         "src/components/ticket/ticket-chat-tab.ts",
@@ -524,7 +534,7 @@ export default defineConfig(({ mode }) => ({
         // not open on Home), and which store write a drop is.
         "src/components/split/split-drop.ts",
         // …and the routing between that meaning and the store twin that writes
-        // it, extracted from the two surfaces (review S2 on VC-202) so they
+        // it, shared by the two surfaces (VC-202) so they
         // cannot answer the same drop differently. Its wrong answer is a drop
         // that lands somewhere other than where the zone said it would.
         "src/components/split/split-surface-drop.ts",
@@ -545,7 +555,7 @@ export default defineConfig(({ mode }) => ({
         // like every other glue module — and so does `notification-surface.ts`,
         // which is the store calls that carry that decision out.
         "src/lib/notification-target.ts",
-        // The click's ORDER and its terminal/chat fork (round 2): select the
+        // The click's ORDER and its terminal/chat fork: select the
         // project, open the Session, then reveal the item. Ported precisely so
         // the sequence is assertable, because the failure it prevents — a card
         // revealed in a Session nobody opened, or a harness alert opening a chat
@@ -619,6 +629,10 @@ export default defineConfig(({ mode }) => ({
         // Which remote boards a window opens, when it says a host offers none,
         // and when it asks again (VC-711): a loop or a silence no screenshot shows.
         "src/lib/follow-remote-projects.ts",
+        // Reopen restores remote intent only while its bounded boot owner is current.
+        "src/lib/restore-remote-selection.ts",
+        // An acknowledged draft must remain durable after its debounce/write completes.
+        "src/lib/app-state-storage.ts",
         "src/editor/autosave-plan.ts",
         "src/editor/document-decorations.ts",
         "src/editor/document-identity.ts",
@@ -679,6 +693,10 @@ export default defineConfig(({ mode }) => ({
         "src/terminal/local-fonts.ts",
         "src/terminal/option-as-alt.ts",
         "src/terminal/session-lifecycle.ts",
+        // The flow-control ack (VC-821). Enrolled because a missed branch here
+        // fails silently and permanently: a chunk whose credit is never
+        // returned leaves its PTY paused, and the pane simply stops updating.
+        "src/terminal/output-dispatch.ts",
         // How a burst of invalidations becomes one (VC-359). Enrolled because
         // the merge is a SAFETY rule, not an optimisation: it may only ever
         // widen, and the one kind a venue cache depends on has to survive a
@@ -689,6 +707,10 @@ export default defineConfig(({ mode }) => ({
         "**/src/main/ipc-descriptors.ts",
         "**/src/main/ipc-registry.ts",
         "**/src/main/navigation.ts",
+        // Which keys leave a Browser page for the app (VC-301). Every branch
+        // is a chord taken from, or left to, a page the person is typing in.
+        "**/src/main/browser/app-shortcuts.ts",
+        "**/src/main/browser/app-shortcut-relay.ts",
         // The notification delivery boundary (VC-295). Enrolled for the same
         // reason the IPC handlers are: a missed branch here is an alert that
         // escapes a preference, a click that opens nothing, or a suppression

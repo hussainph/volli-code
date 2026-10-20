@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * Every board create path stands down while the project's host cannot serve
- * (VC-576, review B4), through the one `useCanWrite` gate: the header's and
+ * (VC-576), through the one `useCanWrite` gate: the header's and
  * the empty board's New ticket, the list view's New, a column composer that
  * was already open (Enter and blur keep the draft and write nothing), a
  * collapsed column's expand, and an arming menu that was already open. With
@@ -130,6 +130,8 @@ describe("board create controls", () => {
 });
 
 describe("a column composer", () => {
+  /** A keydown no IME is composing — the composer's guard reads it (VC-806). */
+  const PLAIN = { isComposing: false };
   let composer: ReturnType<typeof useTicketComposer> | null = null;
   function Probe({ initiallyOpen = false }: { initiallyOpen?: boolean }) {
     composer = useTicketComposer({ projectId: "remote", status: "todo", initiallyOpen });
@@ -159,7 +161,9 @@ describe("a column composer", () => {
     expect(composer!.canWrite).toBe(false);
 
     const preventDefault = vi.fn();
-    act(() => composer!.handleKeyDown({ key: "Enter", preventDefault } as never));
+    act(() =>
+      composer!.handleKeyDown({ key: "Enter", preventDefault, nativeEvent: PLAIN } as never),
+    );
     expect(addTicket).not.toHaveBeenCalled();
     expect(composer!.title).toBe("Do not write while offline");
     expect(toast).toHaveBeenCalledWith(REASON, { id: "host-read-only" });
@@ -174,7 +178,9 @@ describe("a column composer", () => {
     world.setHetzner({ link: { status: "open" } });
     act(() => composer!.openComposer());
     expect(composer!.open).toBe(true);
-    act(() => composer!.handleKeyDown({ key: "Enter", preventDefault } as never));
+    act(() =>
+      composer!.handleKeyDown({ key: "Enter", preventDefault, nativeEvent: PLAIN } as never),
+    );
     expect(addTicket).toHaveBeenCalledWith("remote", "todo", "Do not write while offline");
   });
 

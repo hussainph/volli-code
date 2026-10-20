@@ -61,6 +61,10 @@ export type ChatMessageDelivery = "queue" | "steer" | "replace";
  * A throw lands on `refused`. It is the ambiguous case — a transport that never
  * reached main and a failure past the durable write both arrive as exceptions —
  * and keeping the words is the arm that cannot lose anything.
+ *
+ * An `unreconciled` receipt is the harness saying it cannot account for the
+ * message. It lands on the same two arms by the same rule, and it is never
+ * `delivered`: nothing was confirmed, so nothing may be latched as working.
  */
 export type MessageDelivery = "delivered" | "recorded" | "refused";
 
@@ -199,11 +203,10 @@ export interface ChatSessionWrites {
    * The harness took a message — optimistically, and only while the stream has
    * said nothing since it left.
    *
-   * `turnEpoch` is the transcript's count at submit. Pi answers a
-   * `message.submit` when the turn it started has ALREADY ENDED (the runtime
-   * awaits `agent.prompt`), so an unconditional latch here re-opens a turn the
-   * stream has closed. An unchanged epoch is the one case
-   * where nothing has been heard and optimism is all there is.
+   * `turnEpoch` is the transcript's count at submit. Even an opening receipt
+   * can reach the client after a fast turn has already ended, so an
+   * unconditional latch here re-opens a turn the stream has closed. An unchanged
+   * epoch is the one case where nothing has been heard and optimism is all there is.
    */
   delivered(sessionId: string, turnEpoch: number): void;
   /** A failure, or `null` to clear one and hand the Session back to its stream. */
@@ -249,6 +252,7 @@ type ChatCommand =
       kind: "message.submit";
       message: UIMessage;
       delivery?: ChatMessageDelivery;
+      settle?: "opened";
     }
   | { kind: "model.select"; selection: ModelSelection }
   | { kind: "executor.interrupt"; attachmentId?: string }
@@ -563,7 +567,7 @@ export class ChatSessionClient {
    * never the transport's `started`. tRPC's WebSocket adapter sends `started`
    * as soon as the subscription's iterator exists, before its first `next()`
    * runs the replay that may refuse; a guard cleared there is cleared by
-   * every refusal it was meant to count (VC-315 review, B4).
+   * every refusal it was meant to count (VC-315).
    */
   #silentReloads = 0;
   #projectionRefresh: Promise<void> | null = null;
@@ -677,7 +681,15 @@ export class ChatSessionClient {
         operationId: this.#newCommandId(),
         sessionId: this.sessionId,
       });
-      const refusal = rejectedReceipt(attached);
+      // `commandRefusal` reads every receipt status that is not a start, so an
+      // `unreconciled` one cannot fall through to a `ready` state: the runtime does
+      // not know whether the attach ran, and reporting that as started is the silent
+      // success this surface refuses.
+      const refusal = commandRefusal(attached);
+      // An unreconciled outcome is the runtime saying it does not know whether the
+      // attach ran, not that it could not start. So it takes the "unconfirmed"
+      // wording a message does, and its words, when there are any, are the host's own.
+      const unconfirmed = refusal !== null && rejectedReceipt(attached) === null;
       // One wording for the receiptless case, whichever door asked. The store
       // used to own the first attach and said this; the client said
       // "attachment needs recovery" for every other. Now that there is one
@@ -686,16 +698,19 @@ export class ChatSessionClient {
       const failure =
         attached.state === "ready" && refusal === null
           ? null
-          : (refusal ?? "Runtime recovery is required.");
+          : (refusal?.message ?? "Runtime recovery is required.");
       // A retired client must not settle over a replacement surface's slice.
       if (this.#retired) return failure === null;
-      // A refusal with a durable home is told once, there. An outstanding local
-      // stream failure is independent: attach success cannot repair that stream
-      // or clear the band that offers its recovery.
+      // A refusal with a durable home is told once, there. Only a rejected attach
+      // has one: the runtime raises Ticket Attention when an attach fails outright
+      // (`#failAttach`), while an unconfirmed outcome is recorded as a receipt alone.
+      // So that one stays on the slice whichever door asked. An outstanding local
+      // stream failure is independent: attach success cannot repair that stream or
+      // clear the band that offers its recovery.
       const attachPart =
-        failure === null || options?.refusalIsReportedElsewhere === true
+        failure === null || (options?.refusalIsReportedElsewhere === true && !unconfirmed)
           ? null
-          : `Could not start Session: ${failure}`;
+          : `${unconfirmed ? "Session start unconfirmed" : "Could not start Session"}: ${failure}`;
       const slicePart = attachPart ?? this.#reportedLocalFailures.stream ?? null;
       if (failure === null) delete this.#reportedLocalFailures.attach;
       this.#writes().settle(this.sessionId, slicePart);
@@ -883,16 +898,21 @@ export class ChatSessionClient {
         kind: "message.submit",
         message: wireMessage,
         ...(delivery === undefined ? {} : { delivery }),
+        // Acceptance belongs to the opening boundary, not the end of Pi's
+        // reply. The receipt carries command identity; turn-event order does
+        // not. Queue acceptance/release and targeted steering consumption
+        // remain the host's responsibility.
+        ...(delivery === "queue" ? {} : { settle: "opened" }),
       };
       const deliveryResult = this.#rpc.session.command.mutate({
         commandId: message.id,
         sessionId: this.sessionId,
         command,
       });
-      // Pi answers an opening prompt only after its whole turn settles. Its
-      // subject is already known when this message starts, so the detached
-      // title write cannot wait on that answer: a steering message can resolve
-      // first and would otherwise name the Session instead of this prompt.
+      // The subject is already known when this message starts, so the
+      // detached title write cannot wait even on opening acceptance: a
+      // steering message can resolve first and would otherwise name the
+      // Session instead of this prompt.
       //
       // So the moment a Session gains a subject is the first message it STARTS
       // delivering, no longer the first one accepted (VC-180). Firing ahead of
@@ -903,15 +923,34 @@ export class ChatSessionClient {
       // steer can interleave — and so the promise above is never left floating.
       this.#autoTitle(message, body, attachments);
       const delivered = await deliveryResult;
+      // Only an accepted receipt is a delivery. `commandRefusal` reads every other
+      // status, so an `unreconciled` receipt cannot fall through to `delivered`:
+      // the harness does not know whether it took the message, and reporting that
+      // as success is the silent end this surface exists to refuse.
+      //
       // A harness that cannot take a message says so in its receipt rather than
       // by throwing, and that receipt is the failure. It is also proof the
       // round trip completed, which means the runtime committed the intent and
       // the transcript artifact before it ever asked the executor — so the
-      // words are recorded, not lost.
-      const refusal = rejectedReceipt(delivered);
+      // words are recorded, not lost. An unreconciled receipt is the same arm of
+      // the ledger, but its outcome is open, so its words say so rather than
+      // asserting a "not" nobody established.
+      const refusal = commandRefusal(delivered);
       if (refusal !== null) {
-        this.#writes().settle(this.sessionId, `Message not delivered: ${refusal}`);
-        if (delivery === "queue") this.#notify(`Message not queued: ${refusal}`, "error");
+        const unconfirmed = rejectedReceipt(delivered) === null;
+        this.#writes().settle(
+          this.sessionId,
+          unconfirmed
+            ? `Message delivery unconfirmed: ${refusal.message}`
+            : `Message not delivered: ${refusal.message}`,
+        );
+        if (delivery === "queue")
+          this.#notify(
+            unconfirmed
+              ? `Message queueing unconfirmed: ${refusal.message}`
+              : `Message not queued: ${refusal.message}`,
+            "error",
+          );
         return delivery === "queue" ? "refused" : "recorded";
       }
       if (delivery === "queue") this.#refreshProjection();
@@ -1273,6 +1312,12 @@ export class ChatSessionClient {
    *
    * A resolved round trip is not the same as a delivered command: a harness that
    * will not serve one answers with a rejected receipt rather than by throwing.
+   *
+   * Reconcile is the only caller, and its answer carries no receipt:
+   * `session.reconcile` is a void-output procedure (session-rpc's `voidOutputs`),
+   * so an `unreconciled` outcome cannot arrive here. A recovery that starts
+   * answering with a receipt must read it through `commandRefusal`, as submit and
+   * attach do.
    */
   async #run(label: string, call: () => Promise<unknown>): Promise<boolean> {
     try {

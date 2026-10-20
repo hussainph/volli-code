@@ -17,7 +17,14 @@
  * back over the record the restore was about to use — silently dropping the
  * Session the person left in front. {@link HomeTabResolution} states both, and
  * `restore` is also the caller's write-back permit.
+ *
+ * A relaunch puts back the WHOLE strip, not just the tab in front (VC-105).
+ * `homeTabOrder` is that record — the VC-189 arrangement, kept equal to the
+ * strip as drawn by {@link homeTabOrderReceipt} — so a restore is the same
+ * adopt/wait/fallback decision looped over every id it names.
  */
+import type { TabOrder } from "@volli/shared";
+
 import { resolveChatRelaunch } from "@renderer/components/ticket/ticket-chat-tab";
 
 /**
@@ -97,20 +104,27 @@ export function closeHomeTabHistory(input: {
  * What the caller owes the workspace record after rendering {@link
  * HomeTabResolution.active}.
  *
- *  - `settled` — the record is either right or stale-for-good; write back what
- *    was derived. This is also how a reset happens: there is no separate reset
- *    kind, because "record the fallback" IS the reset.
+ *  - `settled` — nothing is left to restore, and the record is either right or
+ *    stale-for-good; write back what was derived. This is also how a reset
+ *    happens: there is no separate reset kind, because "record the fallback" IS
+ *    the reset. It is also the caller's cue that this project's strip has been
+ *    restored for the run.
  *  - `pending` — the project's durable Session listing has not answered yet, so
- *    nothing is known about the recorded id. Write NOTHING: a write here is the
- *    bug where "not hydrated yet" is mistaken for "gone".
- *  - `adopt` — the recorded Session is real and has no tab. Put it back, and
- *    still write nothing: the record already names it, and the next render will
- *    find it among `tabIds`.
+ *    nothing is known about the Sessions the record names. Write NOTHING and
+ *    adopt nothing: a write here is the bug where "not hydrated yet" is
+ *    mistaken for "gone".
+ *  - `adopt` — these recorded Sessions are real and have no tab. Put them back,
+ *    in this order, and still write nothing: the strip is about to change under
+ *    the derivation, and the next render — which finds them among `tabIds` —
+ *    is the one that settles.
  */
 export type HomeTabRestore =
   | { kind: "settled" }
   | { kind: "pending" }
-  | { kind: "adopt"; sessionId: string };
+  | { kind: "adopt"; sessionIds: readonly string[] };
+
+const SETTLED: HomeTabRestore = { kind: "settled" };
+const PENDING: HomeTabRestore = { kind: "pending" };
 
 export interface HomeTabResolution {
   /** The tab to render. Always legal — {@link HOME_BOARD_TAB_ID} at worst. */
@@ -123,6 +137,12 @@ export interface HomeTabsInput {
   tabIds: readonly string[];
   /** `homeActiveTab` off the workspace record. */
   recorded: string;
+  /**
+   * The strip a relaunch puts back: `homeTabOrder` as this run first read it
+   * for the project. Only its chat Session ids can come back — a terminal's
+   * PTY died with the app, and every other kind restores itself.
+   */
+  recordedOrder: TabOrder;
   /** The terminal container's own active session id, or null. */
   containerActive: string | null;
   /**
@@ -161,33 +181,97 @@ export interface HomeTabsInput {
  * was derived instead of repairing what was stored.
  *
  * The one thing that is NOT resident is a chat Session, which outlives the app.
- * So before a stale-looking record is written off, it is put to
- * {@link resolveChatRelaunch} — the same adopt/wait/fallback discipline
+ * So until the strip has been restored once this run, every chat id the record
+ * names — the tab in front and the whole `recordedOrder` beside it — is put to
+ * {@link resolveChatRelaunch}, the same adopt/wait/fallback discipline
  * `ticket-detail.tsx` uses for a ticket's own persisted tab. A persisted
  * TERMINAL id needs no such patience: a PTY dies with the app, so it is stale
  * by definition and `resolveChatRelaunch` says so without asking.
+ *
+ * During that restore a recorded tab that names nothing falls back to the
+ * Board, not down the chain above: the strip is still coming back, so its head
+ * is an accident of which tabs have arrived, and the Board is the one tab a
+ * relaunch can promise.
  */
 export function resolveHomeTabs(input: HomeTabsInput): HomeTabResolution {
-  const { tabIds, recorded, containerActive, durableChatIds, browserTabsHydrated, hydrated } =
-    input;
-  if (isHomeBoardTab(recorded)) return { active: HOME_BOARD_TAB_ID, restore: { kind: "settled" } };
-  if (tabIds.includes(recorded)) return { active: recorded, restore: { kind: "settled" } };
+  const { tabIds, recorded, containerActive, browserTabsHydrated, hydrated } = input;
+  const restore = (): HomeTabRestore => (hydrated ? SETTLED : restoreHomeStrip(input));
+  if (isHomeBoardTab(recorded) || tabIds.includes(recorded)) {
+    return { active: recorded, restore: restore() };
+  }
 
-  const active =
-    containerActive !== null && tabIds.includes(containerActive)
+  const active = !hydrated
+    ? HOME_BOARD_TAB_ID
+    : containerActive !== null && tabIds.includes(containerActive)
       ? containerActive
       : (tabIds[0] ?? HOME_BOARD_TAB_ID);
+  // Ahead of the strip, too: until main's registry answers, a Session adopted
+  // now would sit on screen with the restore unfinished, and closing it in that
+  // window would read as a Session still waiting to come back.
   if (parseBrowserTabId(recorded) !== null && !browserTabsHydrated) {
-    return { active, restore: { kind: "pending" } };
+    return { active, restore: PENDING };
   }
-  if (hydrated) return { active, restore: { kind: "settled" } };
+  return { active, restore: restore() };
+}
 
-  const relaunch = resolveChatRelaunch(recorded, durableChatIds);
-  if (relaunch.kind === "wait") return { active, restore: { kind: "pending" } };
-  if (relaunch.kind === "adopt") {
-    return { active, restore: { kind: "adopt", sessionId: relaunch.sessionId } };
+/**
+ * The relaunch itself: every recorded id with no tab, put to
+ * {@link resolveChatRelaunch} in strip order.
+ *
+ * One unanswered listing holds the whole strip — the listing is one read, so
+ * no Session in it is known before every Session in it is. A Session the
+ * listing does not know (archived, removed, or never a ticketless chat) is
+ * simply not adopted: it strands no tab and holds up none of its neighbours.
+ * The tab in front rides along at the end, so a record written before the
+ * strip was (VC-54, active tab only) still brings its one Session back.
+ */
+function restoreHomeStrip(input: HomeTabsInput): HomeTabRestore {
+  const { tabIds, recorded, recordedOrder, durableChatIds } = input;
+  const sessionIds: string[] = [];
+  for (const tabId of new Set([...recordedOrder, recorded])) {
+    if (tabIds.includes(tabId)) continue;
+    const relaunch = resolveChatRelaunch(tabId, durableChatIds);
+    if (relaunch.kind === "wait") return PENDING;
+    if (relaunch.kind === "adopt") sessionIds.push(relaunch.sessionId);
   }
-  return { active, restore: { kind: "settled" } };
+  return sessionIds.length === 0 ? SETTLED : { kind: "adopt", sessionIds };
+}
+
+export interface HomeTabOrderReceiptInput {
+  /** The strip as drawn, Board first — `arrangeTabs` over the composed tabs. */
+  drawn: readonly string[];
+  /** Tabs on screen that must never reach the record: an empty Chat Draft's. */
+  transient: ReadonlySet<string>;
+  /**
+   * Whether everything the record names has had its chance to come back: the
+   * strip's restore has settled and main's Browser Tab registry has answered.
+   */
+  restored: boolean;
+}
+
+/**
+ * The arrangement Home records for the strip it is drawing, or `null` while it
+ * may record nothing at all. Recording what the record already says is the
+ * store's no-op (`recordHomeTabOrder`), so this never has to compare.
+ *
+ * This is what makes `homeTabOrder` the strip's whole record rather than a
+ * memory of the last drag: an arrangement that named only dragged tabs would
+ * forget every Session nobody happened to move, and the relaunch reads its
+ * Sessions from here. The receipt is the strip AS DRAWN — `arrangeTabs`'
+ * output fed back as its own overlay — so recording it moves no tab. What it
+ * changes is only where the next new tab lands: at the end of the strip, which
+ * is where `arrangeTabs` puts any tab an overlay does not name yet.
+ *
+ * This is also the one place the record is pruned, and it is pruned LIVE: a
+ * closed tab, a dead terminal, a Session the listing no longer knows all drop
+ * out here because they are not drawn. Before the restore has settled nothing
+ * is written at all — an id that has not come back yet looks exactly like one
+ * that never will, and only one of those may lose its place (`tab-order.ts`).
+ */
+export function homeTabOrderReceipt(input: HomeTabOrderReceiptInput): TabOrder | null {
+  const { drawn, transient, restored } = input;
+  if (!restored) return null;
+  return drawn.filter((tabId) => !isHomeBoardTab(tabId) && !transient.has(tabId));
 }
 
 /**

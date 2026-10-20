@@ -11,6 +11,7 @@ function status(overrides: Partial<WorktreeStatusSnapshot> = {}): WorktreeStatus
   return {
     uncommitted: false,
     sequencerActive: false,
+    unmergedPaths: 0,
     aheadOfBase: null,
     behindBase: null,
     unpushed: null,
@@ -141,6 +142,42 @@ describe("resolveDoneFlow — sequencer rule", () => {
     expect(menu.commit.disabled).toBe(true);
     expect(menu.commit.reason).toBe("Merge in progress. Finish it in the terminal.");
     expect(menu.push.disabled).toBe(false);
+  });
+});
+
+// VC-838: a stash-pop or `merge --squash` conflict leaves unmerged paths with no
+// sequencer marker; the commit stack must still refuse to run over them.
+describe("resolveDoneFlow — unmerged-paths rule", () => {
+  const REASON = "Unresolved conflicts. Resolve them in the terminal.";
+
+  it("disables 'Commit & create draft PR' while the index holds unmerged paths", () => {
+    const { primary } = view(status({ uncommitted: true, unmergedPaths: 1 }), null);
+    expect(primary.kind).toBe("commit-pr");
+    expect(primary.disabled).toBe(true);
+    expect(primary.reason).toBe(REASON);
+  });
+
+  it("disables 'Commit & push updates' while the index holds unmerged paths", () => {
+    const { primary } = view(status({ uncommitted: true, unmergedPaths: 2 }), PR);
+    expect(primary.kind).toBe("commit-push-updates");
+    expect(primary.disabled).toBe(true);
+    expect(primary.reason).toBe(REASON);
+  });
+
+  it("disables the menu Commit verb but leaves Push enabled", () => {
+    const { menu } = view(status({ uncommitted: true, aheadOfBase: 2, unmergedPaths: 1 }), null);
+    expect(menu.commit.disabled).toBe(true);
+    expect(menu.commit.reason).toBe(REASON);
+    expect(menu.push.disabled).toBe(false);
+  });
+
+  it("keeps the sequencer reason when both a sequencer op and unmerged paths are present", () => {
+    const { primary, menu } = view(
+      status({ uncommitted: true, sequencerActive: true, unmergedPaths: 1 }),
+      null,
+    );
+    expect(primary.reason).toBe("Merge in progress. Finish it in the terminal.");
+    expect(menu.commit.reason).toBe("Merge in progress. Finish it in the terminal.");
   });
 });
 

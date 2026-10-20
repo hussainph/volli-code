@@ -30,7 +30,7 @@ import { chatSessionFrame } from "./wire";
  * first). Counts are asserted; times are printed.
  */
 
-/** The ticket's 100, 1,000 and 10,000 events, and the review's 500. */
+/** Event-count samples: 100, 500, 1,000 and 10,000. */
 const SIZES = [100, 500, 1_000, 10_000] as const;
 const RESULT_CHARS = [400, 1_200, 3_000, 800, 600, 2_000, 900, 24_000] as const;
 const REPLY_CHARS = 1_500;

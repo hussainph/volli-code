@@ -17,7 +17,15 @@
 import { BOARD_COMMAND_RECEIPTS_MIGRATION } from "./board-receipts-migration";
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
+import {
+  applyProjectRemovedColumn,
+  PROJECT_REMOVED_COLUMN_MIGRATION,
+} from "./project-removed-migration";
 import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
+import {
+  applySpawnLedgerParkedColumn,
+  SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
+} from "./spawn-ledger-parked-migration";
 import { WEB_CREDENTIAL_SOURCE_MIGRATION } from "./web-credential-migration";
 import {
   LOCKED_FINGERPRINTS,
@@ -225,9 +233,8 @@ ALTER TABLE tickets DROP COLUMN harness_id;
 `;
 
 /**
- * Migration 005: a durable per-project ticket-number counter (found during
- * PR #34 review — commit 83a7298 introduced real hard-delete from the
- * archive). `nextTicketNumberForProject` used to be `MAX(ticket_number) + 1`
+ * Migration 005: a durable per-project ticket-number counter.
+ * Computing `nextTicketNumberForProject` as `MAX(ticket_number) + 1`
  * over the table's *remaining* rows, so deleting a project's highest-numbered
  * ticket freed its number: the next ticket created reused a dead ticket's
  * display id, and its worktree branch `volli/<PREFIX>-<n>-<slug>` could
@@ -310,8 +317,7 @@ ALTER TABLE tickets ADD COLUMN pr_url TEXT;
  * Migration 010: the retention "Keep" pin (CONCEPT #16, issue #76).
  * `tickets.retention_keep` (0/1, default 0) is an EXPLICIT per-ticket exemption
  * from BOTH retention paths — the PR-merge archive prompt AND the Done-TTL sweep
- * (Vibe Kanban's source-verified bug is a TTL sweep that ignores its own pinned
- * flag; the keep pin here must be honored by both). Unlike the transient
+ * (the keep pin must be honored by both). Unlike the transient
  * merge/conflict/archive-ready state (computed, never stored — decision #42),
  * the pin is durable user intent, so it is a real column. Additive; every
  * existing row starts `0` (not kept).
@@ -385,7 +391,7 @@ ALTER TABLE projects ADD COLUMN theme_seed TEXT;
 `;
 
 /**
- * Migration 014: per-project canvas + appearance (the arc theming migration).
+ * Migration 014: per-project canvas and appearance.
  * Two nullable columns, replacing what 013's four columns meant rather than
  * what they held: a project now overrides the CANVAS (the authored gradient)
  * and/or the APPEARANCE, independently, and `NULL` still means *inherit*.
@@ -675,8 +681,7 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
  * ticket-keyed, id-keyed, no deduplication, and structurally unable to be
  * referenced from a chat message. Dropping it costs nothing — `createAttachment`
  * never had a caller, so the table has never held a row in any build that
- * shipped. (Vibe Kanban shipped that same owner-keyed shape and had to migrate
- * off it for exactly this reason; we get to skip the migration.)
+ * shipped.
  *
  * `blobs` is content-addressed: the sha256 IS the primary key, so re-attaching
  * a file the user has already attached is an INSERT OR IGNORE rather than a
@@ -804,14 +809,14 @@ ALTER TABLE web_access_settings_new RENAME TO web_access_settings;
  *
  *  - **main lineage**: `user_version = 23` means VC-158's web-keys migration
  *    ran; these three columns are missing.
- *  - **branch lineage** (the VC-111 dogfood profile): `user_version = 23`
+ *  - **branch lineage** (VC-111): `user_version = 23`
  *    means THIS migration's DDL ran under its original number; the columns
  *    exist, and the web-keys rebuild never happened — `secrets` still holds
  *    `ciphertext` while every reader now expects `value`.
  *
  * A plain-SQL 024 picks one population and breaks the other — re-adding an
  * existing column is the exact "duplicate column name: skill_modes" boot
- * failure the dogfood profile hit. So this is the runner's one `apply`
+ * failure this reconciler prevents. This is an `apply`
  * migration: it probes `table_info` and runs only what the database in front
  * of it is missing — the column adds, the secrets rebuild, both, or (for a
  * fully-reconciled copy) neither. Probing over renumbering because a probe
@@ -1189,7 +1194,7 @@ CREATE INDEX ticket_signals_latest ON ticket_signals(ticket_id, kind, created_at
 `;
 
 /**
- * Migration 029: a durable total order for Ticket Events (VC-85 review).
+ * Migration 029: a durable total order for Ticket Events (VC-85).
  *
  * `created_at` is metadata, not a cursor: two commits can share one
  * millisecond, clocks can move, and imported events can arrive out of timestamp
@@ -1796,7 +1801,7 @@ UPDATE sessions
 const MIGRATION_040_SESSION_ROLE = `${MIGRATION_040_SESSION_ROLE_COLUMN}${MIGRATION_040_SESSION_ROLE_BACKFILL}`;
 
 /**
- * Migration 041: the Session's parent becomes a column (VC-9 review).
+ * Migration 041: the Session's parent becomes a column (VC-9).
  *
  * The parent link is the fact the `subagent` Role MEANS, and it lives on the
  * `session.create` intent and the Session itself, not in a host table
@@ -1892,7 +1897,7 @@ CREATE INDEX session_receipts_session_sequence ON session_command_receipts(sessi
 `;
 
 /**
- * Migration 043: the orphan CLEANUP command ledger (VC-284 review S1/C3).
+ * Migration 043: the orphan CLEANUP command ledger (VC-284).
  *
  * Deleting a worktree directory is a destructive product act, so it takes the
  * shape every other product write takes (docs/BOUNDARIES.md rule 5): a command
@@ -2802,6 +2807,18 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "board command receipts — idempotent board commands by command id (VC-565)",
     sql: BOARD_COMMAND_RECEIPTS_MIGRATION,
   },
+  {
+    version: 63,
+    name: "spawned_processes.parked_at — terminals a crash left SIGSTOPped (VC-833)",
+    sql: SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
+    apply: applySpawnLedgerParkedColumn,
+  },
+  {
+    version: 64,
+    name: "projects.removed_at — removing a project detaches it instead of deleting (VC-822)",
+    sql: PROJECT_REMOVED_COLUMN_MIGRATION,
+    apply: applyProjectRemovedColumn,
+  },
 ];
 
 /**
@@ -2819,8 +2836,8 @@ function applyMigration053ProjectDecisionModel(db: Database.Database): void {
 }
 
 /**
- * VC-478 keeps 053; VC-480 dogfood already stamped that same number for the
- * approval ledger. Both lineages therefore enter 054 with different schemas.
+ * VC-478 used 053 for decision models; VC-480 branch builds used that number
+ * for the approval ledger. The lineages enter 054 with different schemas.
  * Repair the skipped decision-model column before creating any missing ledger
  * tables, without rewinding user_version or rebuilding populated tables.
  */

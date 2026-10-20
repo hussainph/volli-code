@@ -35,6 +35,7 @@
  *   pnpm run build   # only if apps/desktop/dist-electron is missing
  *   env -u ELECTRON_RUN_AS_NODE node apps/desktop/e2e/session-peek-shots.mjs
  *
+ * Captures default to .tmp/session-peek-shots/ (gitignored).
  * Optional first argument overrides the output directory.
  */
 import { execFile } from "node:child_process";
@@ -58,7 +59,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-const OUT_DIR = process.argv[2] ?? join(REPO, "docs", "plans", "session-peek", "production");
+const OUT_DIR = process.argv[2] ?? join(REPO, ".tmp", "session-peek-shots");
 
 /** The window the shots are composed for. */
 const WINDOW = { width: 1440, height: 900 };

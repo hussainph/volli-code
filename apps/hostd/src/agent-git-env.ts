@@ -6,7 +6,7 @@
  * configuration, and a person's own often names it too. On a host, a
  * Session's `git push` over HTTPS would then run `git-credential-osxkeychain`
  * against the account's login keychain: a prompt nobody is there to answer,
- * a hang, or worse (the owner's keychain incident; `worktree/net.ts`). So on
+ * or a hung command (see `worktree/net.ts`). So on
  * a Mac every Session command gets command-scope git configuration that
  * empties the helper list (`credential.helper` set to the empty string resets
  * every helper configured before it, system and global alike) and turns

@@ -3,6 +3,8 @@ export * from "./quick-open-rank";
 export * from "./file-save-policy";
 export * from "./file-workspace";
 export * from "./tab-order";
+export * from "./version-order";
+export * from "./update-failure";
 export * from "./split-view";
 export * from "./board";
 export * from "./ticket";
@@ -13,6 +15,8 @@ export * from "./harness-command";
 export * from "./harness";
 export * from "./token-list";
 export * from "./verb-registry";
+export * from "./tool-refresh-copy";
+export * from "./tool-refresh-delta";
 export * from "./catalog-actor";
 export * from "./command-intent-conflict";
 export * from "./queue-revision-conflict";
@@ -20,6 +24,7 @@ export * from "./operation-unavailable";
 export * from "./handler-refused";
 export * from "./handler-keys";
 export * from "./desktop-entries";
+export type * from "./browser-app-shortcut";
 export * from "./host-link-relay";
 export * from "./agent-surface";
 export * from "./agent-product";
@@ -88,6 +93,7 @@ export * from "./label";
 export * from "./legacy-import";
 export * from "./fs-entries";
 export type * from "./file-types";
+export { SHELL_MAX_PER_SESSION } from "./background-shell";
 export type * from "./background-shell";
 export * from "./walk-prune";
 export * from "./errors";
@@ -146,6 +152,7 @@ export type {
   WorktreeWatchErrorEvent,
   WorktreeBranchListing,
   DirtyWorktreeOrphan,
+  DirtyWorktreeOrphanTicket,
   RemovableWorktreeOrphan,
   KeptWorktreeOrphan,
   PrunableWorktreeMetadata,
@@ -167,3 +174,4 @@ export * from "./sign-in-catalog";
 export * from "./remote-hosts";
 export * from "./host-workspaces";
 export * from "./remote-host-health";
+export * from "./git-url";

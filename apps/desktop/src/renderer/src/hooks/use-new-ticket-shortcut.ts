@@ -6,7 +6,7 @@ import { useProjectsStore } from "@renderer/stores/projects";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
- * Linear-style plain "c" opens the global New-ticket dialog from anywhere in
+ * Plain "c" opens the global New-ticket dialog from anywhere in
  * the app. Reads the stores at press time (not from a render closure) so the
  * guard tracks the latest settings/dialog/selection state. Bails when: the
  * event was already handled (`defaultPrevented`), the keypress itself isn't a

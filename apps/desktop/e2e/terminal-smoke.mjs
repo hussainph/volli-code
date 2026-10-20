@@ -322,9 +322,9 @@ async function main() {
   const consoleErrors = [];
   // The isolated profile owns the SQLite db in both development and packaged
   // runs. Its empty first-run state is what lets bootstrap import this smoke's
-  // localStorage project fixture without touching the owner's data.
+  // localStorage project fixture without touching the user's data.
   // An isolated Chromium profile, for the db's reason and one more: sharing
-  // <userData> with a Volli the owner already has open loses the
+  // <userData> with an open Volli instance loses the
   // single-instance lock, so this launch quits at exit code 0 before its first
   // window. That surfaces only as "Target page, context or browser has been
   // closed" from launch() — which reads like a crash in the app under test.
@@ -543,8 +543,7 @@ async function main() {
     );
 
     // === 7. Split panes: each leaf owns an independent shell + renderer ====
-    // This is the architecture boundary used by Ghostty/cmux: splitting a
-    // surface creates a fresh terminal surface/PTY. A second `.xterm` wired to
+    // Splitting a surface creates a fresh terminal surface/PTY. A second `.xterm` wired to
     // the original PTY is not a split — input/output from both panes aliases.
     await runInTerminal(page, `echo $$ > ${splitRootPid}`);
     await waitForFileContains(splitRootPid, "", 3000);
@@ -759,6 +758,38 @@ async function main() {
     await page.mouse.wheel(0, 100_000);
     await sleep(500);
     await page.screenshot({ path: shot("08-symbol-presentation.png") });
+
+    // === 14. An interrupted burst leaves a responsive terminal ===============
+    // VC-821. With flow control engaged, the PTY is paused whenever the
+    // renderer falls behind, so xterm's queue stays a few hundred K at most
+    // and the command after a Ctrl-C prints within moments. This GUARDS the
+    // ack-after-parse path against a stall (a lost ack leaves the PTY paused
+    // and the marker never shows); it does not by itself prove the old
+    // regression, which needs a runner where 5 s of `yes` outpaces xterm. The
+    // unit tests in src/main/pty.test.ts are that proof. `drainMs` is reported
+    // so a slow drain is visible without being a gate.
+    //
+    // Interrupted rather than run to a fixed size: any burst has to be PARSED
+    // in full before a marker after it can show, fix or no fix, and 300M
+    // chars of it outlasted a 240 s wait on a CI runner. What the fix changes
+    // is how much is waiting when the burst stops. The marker is computed
+    // by the shell, so the typed command line can never satisfy the wait.
+    await runInTerminal(page, "yes");
+    await sleep(5000);
+    await page.keyboard.press("Control+c");
+    const interruptedAt = Date.now();
+    // SIGINT flushes the tty's input queue; type the next command after it.
+    await sleep(300);
+    await runInTerminal(page, 'echo "flow-$((6 * 7))-done"');
+    const burstRows = await waitForRowsContaining(page, "flow-42-done", { timeoutMs: 30_000 });
+    const drainMs = Date.now() - interruptedAt;
+    const discarded = consoleErrors.filter((e) => /write data discarded/i.test(e));
+    check(
+      14,
+      "After a Ctrl-C'd `yes` burst, the next command's output shows promptly",
+      burstRows !== null && burstRows.includes("flow-42-done") && discarded.length === 0,
+      `drainMs=${drainMs} discarded=${discarded.length} rows=${JSON.stringify(burstRows?.slice(-60) ?? null)}`,
+    );
   } finally {
     await app.close();
   }

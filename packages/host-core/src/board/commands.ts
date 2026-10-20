@@ -58,6 +58,8 @@ import { listTicketEvents, listTicketStatusEntries } from "../db/events-repo";
 import { getLabel, listLabelsByProject, listTicketLabels, setLabelColor } from "../db/labels-repo";
 import {
   getProjectById,
+  isProjectAttached,
+  isProjectRemoved,
   updateProjectBaseBranch,
   updateProjectSessionDefaults,
   updateProjectSetupCommand,
@@ -286,6 +288,8 @@ export interface BoardCommandOptions {
 
 const BOARD_UNAVAILABLE = "The board is unavailable: the database did not open";
 const SIGNALS_UNAVAILABLE = "Ticket signals are unavailable on this host";
+/** Why a removed project's board takes no write (VC-822). */
+const PROJECT_REMOVED = "This project was removed from Volli. Add its folder again to change it.";
 
 /**
  * Tickets whose worktree is being materialized right now (VC-98): a
@@ -400,6 +404,12 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
           throughCursor: feed.cursor(prior.workspaceId),
         };
       }
+    }
+    // A removed project takes no write (VC-822): it is detached, not deleted,
+    // and nothing in it changes until its folder is added again. A replay above
+    // still answers the write it already took.
+    if (spec.workspaceId !== null && isProjectRemoved(db, spec.workspaceId)) {
+      throw new Error(PROJECT_REMOVED);
     }
     // A resource that is gone refuses inside `write`, with today's message.
     const workspaceId = spec.workspaceId ?? "";
@@ -549,10 +559,13 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
   return {
     "ticket.move": (input, call) => movedWithFeed(board(), input, call, undefined),
 
+    // A removed project (VC-822) is no board to read: refused like an unknown one.
     "board.snapshot": ({ projectId }) => {
       const db = board();
       const project = getProjectById(db, projectId);
-      if (project === undefined) throw new Error("Unknown project");
+      if (project === undefined || isProjectRemoved(db, projectId)) {
+        throw new Error("Unknown project");
+      }
       return {
         project,
         tickets: listTicketsByProject(db, projectId),
@@ -565,7 +578,7 @@ export function createBoardHandlers(options: BoardCommandOptions): BoardHandlerS
     // roster would clear a live slice off a board (VC-387).
     "board.roster": ({ projectId }) => {
       const db = board();
-      if (getProjectById(db, projectId) === undefined) throw new Error("Unknown project");
+      if (!isProjectAttached(db, projectId)) throw new Error("Unknown project");
       return {
         tickets: listTicketRosterByProject(db, projectId),
         labels: listLabelsByProject(db, projectId),

@@ -198,6 +198,8 @@ export interface SessionComposerProps {
    */
   hostReadOnly?: boolean;
   queued: readonly QueuedMessage[];
+  /** A queued payload is owned by an in-flight steer, not a second submission. */
+  steeringMessages?: ReadonlySet<string>;
   /** `false` means the host refused the mutation; leave its UI untouched. */
   onQueuedChange: QueuedChange;
   onSteerQueued(id: string): void;
@@ -392,6 +394,7 @@ export const SessionComposer = React.memo(function SessionComposer({
   ready,
   hostReadOnly = false,
   queued,
+  steeringMessages,
   onQueuedChange,
   onSteerQueued,
   onSubmit,
@@ -547,6 +550,15 @@ export const SessionComposer = React.memo(function SessionComposer({
                     (VC-273). */}
                 <AttachmentThumbRow attachments={entry.attachments ?? []} />
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
+                <span data-slot="queue-status" className="shrink-0 text-muted-foreground">
+                  {steeringMessages?.has(entry.id) || entry.afterCurrentStep
+                    ? "Sends after this step"
+                    : entry.localUnsent
+                      ? "Not sent"
+                      : entry.queueState === "releasing"
+                        ? "Sending"
+                        : "Queued"}
+                </span>
                 <span className="flex shrink-0 items-center gap-1">
                   {working ? (
                     <Button
@@ -556,7 +568,11 @@ export const SessionComposer = React.memo(function SessionComposer({
                       aria-label={`Steer queued message: ${entry.text}`}
                       // A release already claimed this identity; only the
                       // host's cancel can take it back, so Steer stays off.
-                      disabled={entry.queueState === "releasing"}
+                      disabled={
+                        entry.queueState === "releasing" ||
+                        steeringMessages?.has(entry.id) === true ||
+                        entry.afterCurrentStep === true
+                      }
                       onClick={() => {
                         onSteerQueued(entry.id);
                         onComposerFocusRequest?.();
@@ -742,9 +758,9 @@ export const SessionComposer = React.memo(function SessionComposer({
                 that sends. Outline rather than the muted fill because on the
                 dark canvases `--muted` is two steps off `--card` and a muted
                 disc on the card simply vanished; the hairline is what holds it
-                as a shape. Not destructive red, though T3 Code draws it so —
-                ending a turn is an outcome the person chose, not an error, and
-                this app keeps red for the latter. */}
+                as a shape. Not destructive red: ending a turn is an outcome the
+                person chose, not an error, and this app keeps red for the
+                latter. */}
             {working ? (
               <ComposerHint label="Stop turn">
                 <Button
@@ -902,6 +918,7 @@ export function ComposerPickerStack({
       {layout === "overlay" ? (
         <div
           data-slot="composer-picker-overlay"
+          data-native-plane-overlay
           className="pointer-events-none absolute inset-x-0 top-10 z-10 min-w-0 max-w-full"
         >
           {card}
@@ -1178,6 +1195,10 @@ function useComposerPicker(input: {
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
     if (state === null) return false;
+    // Never mid-word: while an IME composes, Enter accepts its candidate, the
+    // arrows walk its list and Escape closes it. Those keys are the IME's, and
+    // `PromptInputTextarea` runs this before its own composition guard.
+    if (event.nativeEvent.isComposing) return false;
     if (event.key === "Escape") {
       event.preventDefault();
       // The app's Esc guard would read this as "leave the surface". Closing a
@@ -1826,7 +1847,7 @@ export function ModelPill({
   // offers nothing to switch to.
   const frozen = disabled || models.length === 0;
 
-  // READING IS NOT CHOOSING (VC-288 review). `disabled` took the pill out of
+  // READING IS NOT CHOOSING (VC-288). `disabled` took the pill out of
   // the tab order, and the enabled pill's reveal is the list it opens — so in
   // the one state a person is most likely to ask what they are talking to,
   // mid-turn, the answer was a `title` and nothing else. A frozen pill draws

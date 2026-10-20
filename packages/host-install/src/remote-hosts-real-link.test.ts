@@ -8,6 +8,7 @@ import { startHostProtocolListener } from "../../session-rpc/src/websocket-serve
 import { generateDeviceKey } from "./remote-hosts-device-key";
 import { createRemoteHosts } from "./remote-hosts";
 import type { SshTunnel } from "./tunnel";
+import { signedDeviceVerifier } from "./testing/signed-device-verifier";
 import {
   DEVICE_ID,
   HOST_ID,
@@ -36,18 +37,16 @@ async function until(check: () => boolean): Promise<void> {
 
 async function fixture(statusResult?: Promise<{ stdout: string }>) {
   const identity = { id: HOST_ID, version: "1.2.0" };
+  const key = generateDeviceKey("test");
+  const credentials = signedDeviceVerifier(HOST_ID, () => Date.UTC(2026, 0, 1, 12, 0, 0));
+  credentials.enroll(DEVICE_ID, key.privateKeyPem);
   const listener = await startHostProtocolListener({
     router: createHostRouter(),
     bind: { host: "127.0.0.1", port: 0 },
     host: identity,
     workspace: () => ({ id: WS1, epoch: 1 }),
     features: ["sessions"],
-    verifier: {
-      verify: async () => ({
-        actor: { kind: "device", deviceId: DEVICE_ID, workspaceId: WS1 },
-        current: () => true,
-      }),
-    },
+    verifier: credentials.verifier,
     context: () => ({ handlers: {} as never, diagnostics: new RpcDiagnosticLog() }),
   });
   cleanups.push(() => listener.close());
@@ -107,7 +106,7 @@ async function fixture(statusResult?: Promise<{ stdout: string }>) {
           : undefined,
     ],
   });
-  h.keys.keys.set(HOST_KEY, generateDeviceKey("test").privateKeyPem);
+  h.keys.keys.set(HOST_KEY, key.privateKeyPem);
   const links: HostLink[] = [];
   const engine = createRemoteHosts({
     ...h.ports,

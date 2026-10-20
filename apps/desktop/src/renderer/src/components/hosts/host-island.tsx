@@ -1,5 +1,5 @@
 /**
- * The connection Island (VC-576; the owner's VC-615 decision 5): a capsule
+ * The connection Island (VC-576; VC-615): a capsule
  * floating over the bottom of the content card while the current project's
  * host is in a state the page has to say — one line, at most one action, and
  * the board under it never moves.
@@ -27,10 +27,9 @@ import { hostSurface, type HostSurface, type HostSurfaceTone } from "./host-surf
 import {
   runHostAction,
   useCloudEnabled,
-  useCurrentProjectId,
   useGrace,
   useNow,
-  useProjectHostView,
+  useCurrentProjectHostView,
 } from "./use-hosts";
 
 const TONE: Record<HostSurfaceTone, string> = {
@@ -54,7 +53,7 @@ export function HostIsland() {
 function EnabledHostIsland() {
   // The current PROJECT's link, not the host's aggregate: a fence on another
   // project of the same box never takes this board's controls away.
-  const host = useProjectHostView(useCurrentProjectId());
+  const host = useCurrentProjectHostView();
   const now = useNow(host.link.status === "offline");
   const shown = useGrace(hostSurface(host, now));
   const lane = React.useRef<HTMLDivElement>(null);
@@ -72,6 +71,7 @@ function EnabledHostIsland() {
             <motion.div
               key="island"
               role="status"
+              data-native-plane-overlay
               layout
               initial={{ opacity: 0, y: 12, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}

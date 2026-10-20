@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { ExperimentSnapshot } from "@volli/shared";
 
-import { createExperimentsStore, isExperimentOn } from "./experiments";
+import { createExperimentsStore, hasVisibleExperiments, isExperimentOn } from "./experiments";
 
 function snapshot(enabled: boolean): ExperimentSnapshot {
   return { cloud: { enabled, source: "storage" } };
@@ -13,6 +13,16 @@ afterEach(() => {
 });
 
 describe("experiments store", () => {
+  it("hides experiments until an answer and honors host visibility with older-host compatibility", () => {
+    expect(hasVisibleExperiments(null)).toBe(false);
+    expect(
+      hasVisibleExperiments({ cloud: { enabled: false, source: "default", visible: false } }),
+    ).toBe(false);
+    expect(hasVisibleExperiments(snapshot(false))).toBe(true);
+    expect(
+      hasVisibleExperiments({ cloud: { enabled: true, source: "environment", visible: true } }),
+    ).toBe(true);
+  });
   it("reads every flag off until the host answers", () => {
     const store = createExperimentsStore(() => new Promise(() => {}));
     expect(store.getState().snapshot).toBeNull();
@@ -51,6 +61,20 @@ describe("experiments store", () => {
     await store.getState().ensure();
     expect(store.getState().snapshot).toBeNull();
     expect(warn).toHaveBeenCalledWith("[volli] Couldn't read experiments:", "bridge down");
+  });
+
+  it("retries a failed boot read when Settings asks again", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const read = vi
+      .fn<() => Promise<ExperimentSnapshot>>()
+      .mockRejectedValueOnce(new Error("bridge down"))
+      .mockResolvedValueOnce(snapshot(false));
+    const store = createExperimentsStore(read);
+    await store.getState().ensure();
+    expect(hasVisibleExperiments(store.getState().snapshot)).toBe(false);
+    await store.getState().ensure();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(hasVisibleExperiments(store.getState().snapshot)).toBe(true);
   });
 
   it("reads through the Session RPC client by default", async () => {

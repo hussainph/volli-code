@@ -20,6 +20,7 @@ import { useUiStore } from "@renderer/stores/ui";
 /** No router: the selected project's nav page dispatches directly to a page component. */
 export function MainContent({ override }: { override?: ReactNode } = {}) {
   const selected = useSelectedProject();
+  const pending = useProjectsStore((state) => state.pendingRemoteSelection);
   const projectCount = useProjectsStore((state) => state.projects.length);
   const [activeNav] = useActiveNav();
   const settingsOpen = useUiStore((state) => state.settingsOpen);
@@ -61,6 +62,8 @@ export function MainContent({ override }: { override?: ReactNode } = {}) {
             initialCategoryKey={settingsCategory ?? undefined}
             initialSignInProviderId={settingsSignInProviderId ?? undefined}
           />
+        ) : pending !== null ? (
+          <div className={cn("flex-1", EMPTY_PAGE)} />
         ) : selected === null && projectCount === 0 ? (
           <EmptyProjectsState />
         ) : selected === null ? (

@@ -20,11 +20,10 @@
  *
  * Because the promise "Preview makes no network request" is about the DOM, not
  * about a `fetch` call, and the sanitizer's schema is not written to keep that
- * promise. Review round 1 proved it twice over: a `<picture><source srcset>`
- * written INLINE — which the block gate never sees, by design — survived
- * sanitization and the browser fetched the remote candidate; and widening the
- * schema with `math`/`mtext` put MathML on the page, because every downstream
- * opinion was derived from that same schema.
+ * promise. An inline `<picture><source srcset>` — which the block gate never
+ * sees, by design — can survive sanitization and fetch a remote candidate.
+ * Widening the schema with `math`/`mtext` can admit MathML too. This pass has
+ * an independent allowlist so neither change compromises the preview.
  *
  * So this pass carries its own allowlists (`markdown-preview-html.ts`) and
  * applies them to EVERY element in the tree, wherever it came from:

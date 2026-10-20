@@ -434,7 +434,7 @@ describe("a notice sink that fails", () => {
   });
 });
 
-describe("review regressions: safe output and lifecycle", () => {
+describe("safe output and lifecycle", () => {
   it("withholds a multiline exact-value prefix across chunks before matching", async () => {
     const secret = "Ready ALMOND123\nWALNUT456";
     const { host, notices } = harness(credentialRedactors(secret));

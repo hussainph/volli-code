@@ -71,10 +71,22 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "modelAccess.setCodeModePolicy": "ipc",
   "modelAccess.pickerView": "ipc",
   "modelAccess.setPickerView": "ipc",
+  "hostModels.inspect": "websocket-only",
+  "hostModels.defaults": "websocket-only",
+  "hostModels.setDefault": "websocket-only",
+  "hostModels.hiddenModels": "websocket-only",
+  "hostModels.setHiddenModels": "websocket-only",
+  "hostModels.compactionPolicy": "websocket-only",
+  "hostModels.setCompactionPolicy": "websocket-only",
+  "hostModels.codeModePolicy": "websocket-only",
+  "hostModels.setCodeModePolicy": "websocket-only",
+  "hostModels.pickerView": "websocket-only",
+  "hostModels.setPickerView": "websocket-only",
   "sessions.create": "ipc",
   "sessions.attach": "ipc",
   "session.snapshot": "ipc",
   "session.history": "ipc",
+  "session.picture": "ipc",
   "session.projection": "ipc",
   "session.subscribe": "ipc",
   "session.command": "ipc",
@@ -143,9 +155,12 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   // Its compatibility classes (VC-725) govern the schema gate, not exposure:
   // host commands (`project.reorder`, `worktree.trimSettings`) are
   // additive-only across supported skew, while the client-local families
-  // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`) ship with this
+  // (`hosts.*`, `hostAdd.*`, `hostSignIns.*`, `hostLink.*`, `hostScope.*`,
+  // `browserShortcuts.*`) ship with this
   // renderer and main in one bundle and are not cross-version promises.
+  "shells.moveToBackground": "ipc",
   "project.reorder": "ipc",
+  "project.remove": "ipc",
   "worktree.trimSettings": "ipc",
   "hosts.snapshot": "ipc",
   "hosts.subscribe": "ipc",
@@ -181,6 +196,12 @@ export const DESKTOP_IPC_EXPOSURE = Object.freeze({
   "hostLink.query": "ipc",
   "hostLink.mutate": "ipc",
   "hostLink.subscribe": "ipc",
+  "hostScope.query": "ipc",
+  "hostScope.mutate": "ipc",
+  "hostScope.subscribe": "ipc",
+  // App shortcuts out of a focused Browser page (VC-301).
+  "browserShortcuts.subscribe": "ipc",
+  "browserShortcuts.focusPage": "ipc",
 } satisfies IpcExposureTable<DesktopIpcRouters>);
 
 type Exposure = typeof DESKTOP_IPC_EXPOSURE;

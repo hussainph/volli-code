@@ -339,6 +339,66 @@ export const DESKTOP_ENTRIES = [
     idempotency: "read",
     summary: "The add flows main still owns, newest first, without their views.",
   },
+  // HOST relay (VC-722): client-local like the Workspace relay, but addressed
+  // by host id so the window can act before opening any project.
+  {
+    key: "hostScope.query",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Send one HOST query over desktop main's host link.",
+  },
+  {
+    key: "hostScope.mutate",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Send one HOST mutation over desktop main's host link; never resent.",
+  },
+  {
+    key: "hostScope.subscribe",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Follow one HOST subscription over desktop main's host link.",
+  },
+  // Person-only intent on one Session; no agent tool or public network operation.
+  {
+    key: "shells.moveToBackground",
+    compatibility: "client-local",
+    placement: "workspace",
+    idempotency: "natural",
+    summary: "Move a running foreground command into its Session's background shells.",
+  },
+  // App shortcuts out of a focused Browser page (VC-301). Host-placed like
+  // `hosts.*`: the Browser Tab host and its native views are desktop main's,
+  // across every Workspace, and only the person's own window follows them.
+  // Desktop main serves them through the map's `BrowserShortcutsPort`
+  // (`@volli/host-core/handlers`); hostd has none, so both answer unavailable.
+  {
+    key: "browserShortcuts.subscribe",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "read",
+    summary: "Every app shortcut a focused Browser page hands back to the window.",
+  },
+  {
+    key: "browserShortcuts.focusPage",
+    compatibility: "client-local",
+    placement: "host",
+    idempotency: "natural",
+    summary: "Give keyboard focus back to a shown Browser page whose shortcut did nothing.",
+  },
+  // VC-796: the host's removal, which `volli:project-remove` projects. It
+  // stops the project's live work, then detaches the project (VC-822): its
+  // tickets and Sessions are kept, and adding the folder again restores them.
+  {
+    key: "project.remove",
+    compatibility: "host-command",
+    placement: "workspace",
+    idempotency: "natural",
+    summary: "Remove a project from Volli: stop its Sessions' live work, then detach it.",
+  },
 ] as const satisfies readonly DesktopEntryDeclaration[];
 
 export type DesktopEntry = (typeof DESKTOP_ENTRIES)[number];

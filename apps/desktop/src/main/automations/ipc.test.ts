@@ -1362,6 +1362,7 @@ describe("automation IPC", () => {
         const outcome = await relaunchedEngine.recordSkip(input);
         if (!outcome.ok) throw new Error(outcome.error);
       },
+      runAccepted: async (commandId) => (await relaunchedEngine.replayRun(commandId))?.ok === true,
       startRun: (input) => {
         runs.push(input.commandId);
         return Promise.resolve({ ok: true });

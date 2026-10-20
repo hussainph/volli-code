@@ -130,7 +130,7 @@ function boundedDialogText(message: string): string {
  * The permissions every context denies, by the names `Browser.setPermission`
  * knows. Desktop's session handler denies every request; CDP has no "deny
  * everything" call, so the list is spelled out. A name this Chromium does not
- * know is not fatal, but it is logged by name (security review N7): that
+ * know is not fatal, but it is logged by name: that
  * permission falls back to the browser's own default, and someone should see.
  */
 const DENIED_PERMISSIONS = [
@@ -459,9 +459,9 @@ export class ChromiumBrowserBackend extends BrowserTabRegistry<
       // runs and our own targets are configured before their first request.
       await engine.connection.send("Target.setDiscoverTargets", { discover: true });
       await engine.connection.send("Target.setAutoAttach", PAUSED_AUTO_ATTACH);
-      // The page the browser started with is nobody's tab (security review
-      // N2): close it rather than park it for the browser's lifetime. A
-      // headless browser outlives its last page.
+      // The page the browser started with is nobody's tab: close it rather
+      // than park it for the browser's lifetime. A headless browser outlives
+      // its last page.
       const { targetInfos } = (await engine.connection.send("Target.getTargets")) as {
         targetInfos: Array<{ targetId: string; type: string }>;
       };

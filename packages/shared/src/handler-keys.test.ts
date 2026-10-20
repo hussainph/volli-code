@@ -4,6 +4,7 @@ import { DESKTOP_ENTRIES, type DesktopKey } from "./desktop-entries";
 import {
   DESKTOP_HANDLER_KEYS,
   DOOR_LOCAL_CATALOG_KEYS,
+  HANDLER_PROJECTION_KEYS,
   HOST_HANDLER_KEYS,
   PUBLIC_HANDLER_KEYS,
   SOCKET_DELEGATED_HANDLER_KEYS,
@@ -21,10 +22,12 @@ import {
 
 describe("the host handler map's keys", () => {
   it("are every catalog key but the ones a door answers itself", () => {
-    expect([...PUBLIC_HANDLER_KEYS, ...DOOR_LOCAL_CATALOG_KEYS].toSorted()).toEqual(
-      CATALOG_ENTRIES.map(({ key }) => key).toSorted(),
-    );
+    expect(
+      [...PUBLIC_HANDLER_KEYS, ...DOOR_LOCAL_CATALOG_KEYS, ...HANDLER_PROJECTION_KEYS].toSorted(),
+    ).toEqual(CATALOG_ENTRIES.map(({ key }) => key).toSorted());
     expect(HOST_HANDLER_KEYS.some((key) => key.startsWith("labDiagnostics."))).toBe(false);
+    expect(Object.isFrozen(HANDLER_PROJECTION_KEYS)).toBe(true);
+    expect(HOST_HANDLER_KEYS.some((key) => key.startsWith("hostModels."))).toBe(false);
     expect(Object.isFrozen(HOST_HANDLER_KEYS)).toBe(true);
     expect(Object.isFrozen(PUBLIC_HANDLER_KEYS)).toBe(true);
     expect(Object.isFrozen(DOOR_LOCAL_CATALOG_KEYS)).toBe(true);

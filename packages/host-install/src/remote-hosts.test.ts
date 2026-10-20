@@ -140,6 +140,7 @@ describe("adding a host end to end", () => {
           addedAt: new Date(NOW).toISOString(),
           liveSessions: null,
           reachability: { state: { status: "ready" }, everReady: true, droppedAt: null },
+          hostScope: { status: "older", granted: [] },
           lastWelcome: null,
           signInExpiry: null,
           lastSshFailure: null,
@@ -255,7 +256,7 @@ describe("questions", () => {
     expect(h.engine.snapshot().hosts[0]?.hostKeys).toEqual(["SHA256:box"]);
   });
 
-  // Review B1 (VC-710): a host's words may echo the password with no label a
+  // VC-710: a host's words may echo the password with no label a
   // pattern could find; only the exact value, scrubbed, keeps it in.
   it("never lets the operator step's stderr carry the sudo password out", async () => {
     const echoed = "Zq8-unlabelled-7Kw";

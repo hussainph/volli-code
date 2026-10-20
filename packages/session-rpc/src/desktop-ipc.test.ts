@@ -40,6 +40,7 @@ describe("the desktop's IPC exposure", () => {
       "sessions.attach",
       "session.snapshot",
       "session.history",
+      "session.picture",
       "session.projection",
       "session.subscribe",
       "session.command",
@@ -76,7 +77,9 @@ describe("the desktop's IPC exposure", () => {
       "board.updateComment",
       "board.removeComment",
       "board.setLabelColor",
+      "shells.moveToBackground",
       "project.reorder",
+      "project.remove",
       "worktree.trimSettings",
       "hosts.snapshot",
       "hosts.subscribe",
@@ -110,6 +113,11 @@ describe("the desktop's IPC exposure", () => {
       "hostLink.query",
       "hostLink.mutate",
       "hostLink.subscribe",
+      "hostScope.query",
+      "hostScope.mutate",
+      "hostScope.subscribe",
+      "browserShortcuts.subscribe",
+      "browserShortcuts.focusPage",
     ]);
   });
 

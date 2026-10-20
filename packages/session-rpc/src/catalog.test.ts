@@ -258,7 +258,7 @@ describe("the actor matrix (VC-564)", () => {
     }
   });
 
-  // VC-564 re-check B3: the desktop's exemptions belong to its one actor
+  // VC-564: the desktop's exemptions belong to its one actor
   // object, never to a lookalike some caller built.
   it("refuses a local-shaped actor that is not the desktop's own, before any read", async () => {
     for (const actor of [
@@ -750,7 +750,7 @@ describe("binding procedures to the catalog (D2)", () => {
     );
   });
 
-  // VC-564 review B1: metadata anyone can set is not provenance.
+  // VC-564: metadata anyone can set is not provenance.
   it("refuses a bare procedure that only claims its entry in metadata", () => {
     const readExperiments = vi.fn();
     const forged = initTRPC
@@ -777,7 +777,7 @@ describe("binding procedures to the catalog (D2)", () => {
     expect(snapshot).not.toHaveBeenCalled();
   });
 
-  // VC-663 B1: the entry's chain alone is not enough; its resolver must answer to the admission.
+  // VC-663: the entry's chain alone is not enough; its resolver must answer to the admission.
   it("refuses a procedure built on its entry's chain but resolved past the admission guard", () => {
     const resolver = vi.fn();
     const unguarded = initTRPC

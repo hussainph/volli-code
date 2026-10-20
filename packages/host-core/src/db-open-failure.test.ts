@@ -76,7 +76,7 @@ describe("describeDbOpenFailure", () => {
   });
 
   it("answers with a COMPLETE sentence, so no caller has to prefix one", () => {
-    // The regression this guards (VC-160 review): the user copy was written as a
+    // The regression this guards (VC-160): the user copy was written as a
     // standalone paragraph while four call sites still glued "the local database
     // failed to open:" in front of it, so the person read one fact three times.
     // Every arm now names the failure itself, and no arm names it twice.

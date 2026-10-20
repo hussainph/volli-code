@@ -36,7 +36,7 @@ remain explicit operations, not a periodic scheduler.
 ### The host protocol (behind `cloud`)
 
 With `VOLLI_EXPERIMENTAL=cloud` and `--listen <host>:<port>`, hostd also serves
-the host protocol's WebSocket (VC-663; `docs/plans/host-protocol.md`): the
+the host protocol's WebSocket (VC-663; see `docs/host-protocol.md`): the
 Session router (`sessions`, `sessions.subscribe`) and the socket's Session reads
 (`session.read`), from the same runtime and verb handlers the socket answers
 through. Without the flag nothing listens, whatever `--listen` says (hostd warns
@@ -56,9 +56,9 @@ and ignores it); without `--listen` nothing listens either.
   operators file; only root enrolls), never in the data directory `volli`
   owns; a user install keeps them in `<data dir>/enrolled-devices.json`. With
   no device enrolled every hello answers `UNAUTHORIZED` /
-  `credential-invalid`. An operator token is never accepted here. Trust
-  argument, credential and the accepted pre-VC-575 exception:
-  `docs/plans/host-protocol.md`, "Enrollment over SSH".
+  `credential-invalid`. An operator token is never accepted here. The trust
+  argument, credential, and accepted pre-VC-575 exception are documented in
+  `docs/host-protocol.md`, "Enrollment over SSH".
 - An address it cannot bind refuses boot (`host-protocol`, exit 78).
 
 ## Managed install (VC-700)
@@ -296,7 +296,7 @@ sudo volli-hostd operator-token --revoke alice   # revoke; holds from the next r
 - **A valid token is the person.** Its writes are attributed to `user`, the
   actor the app's own writes carry, and governed by each project's `user`
   policy. `project add` is the person's verb alone: no Session may run it,
-  whatever a policy grants (`docs/plans/host-identity.md`, "Operator token").
+  whatever a policy grants (see `docs/host-identity.md`, "Operator token").
   `session start` is likewise operator-only on the CLI: ordinary and
   Session-token callers retain `WRONG_DOOR`; the bound agent tool door is unchanged.
 - **Revocation needs no restart.** hostd reads the operators file again for
@@ -514,8 +514,8 @@ worker/wasm paths explicitly and refuses an artifact missing either.
 
 All four are already in the lockfile, so the platform packages pnpm picks on
 Linux add no lockfile entries. They are built in `.devcontainer/host/Dockerfile`
-(Debian bookworm, glibc 2.36), so it needs glibc 2.36 or later: Ubuntu 24.04,
-the owner's box, qualifies.
+(Debian bookworm, glibc 2.36), so it needs glibc 2.36 or later; Ubuntu 24.04
+qualifies.
 `MANIFEST.json` records the versions; `bin/node lib/probe-natives.cjs` checks a
 box before you start the service.
 

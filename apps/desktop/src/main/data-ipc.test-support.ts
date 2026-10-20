@@ -10,7 +10,7 @@
  * files may import (`host-core-testing-boundary.test.ts`).
  */
 import type { DbHandle } from "@volli/host-core";
-import { createHostHandlers } from "@volli/host-core/handlers";
+import { createHostHandlers, type ProjectLiveWork } from "@volli/host-core/handlers";
 import type { TicketMovedNotice } from "@volli/shared";
 
 import { windowEventBus } from "./broadcast";
@@ -22,10 +22,12 @@ export type TestDataIpcOptions = Omit<Options, "handlers"> & {
   handlers?: Options["handlers"];
   interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
   onDeliberateMove?: (notice: TicketMovedNotice) => void;
+  /** What `project.remove` stops before its delete (VC-796); absent, it answers unavailable. */
+  projectLiveWork?: ProjectLiveWork;
 };
 
 export function registerDataIpcHandlers(handle: DbHandle, options: TestDataIpcOptions): void {
-  const { interruptTicketSessions, onDeliberateMove, handlers, ...rest } = options;
+  const { interruptTicketSessions, onDeliberateMove, projectLiveWork, handlers, ...rest } = options;
   register(handle, {
     ...rest,
     handlers:
@@ -58,6 +60,7 @@ export function registerDataIpcHandlers(handle: DbHandle, options: TestDataIpcOp
           busyWorktreeSites:
             rest.busyWorktreeSites ?? (async () => [{ directory: "/", surface: "agent" }]),
           ...(interruptTicketSessions === undefined ? {} : { interruptTicketSessions }),
+          ...(projectLiveWork === undefined ? {} : { projectLiveWork }),
           ...(rest.detachedWork === undefined ? {} : { detachedWork: rest.detachedWork }),
           // The board's commands own these effects now (VC-565): the archive's
           // tool-output release and the sidebar's Session signals.

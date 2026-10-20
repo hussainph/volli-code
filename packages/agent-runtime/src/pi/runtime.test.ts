@@ -41,6 +41,7 @@ import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages"
 import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import {
   mcpProviderToolName,
+  codeModeSurfaceFor,
   parseMcpToolKey,
   withParallelReadEligibility,
   sessionToolIds,
@@ -59,6 +60,7 @@ import {
   type RuntimeObservation,
   type RuntimeVerbCall,
   type SessionRuntimeSpec,
+  type SessionInteractionResolution,
 } from "@volli/shared";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { attachRefreshableCatalog, piDevCatalogSource, PiFileModelsStore } from "./model-catalog";
@@ -2103,6 +2105,151 @@ describe("asking the driver", () => {
     expect(serialized).toContain("and time-box it to a day");
   });
 
+  it("preserves redacted saved tool results while rebuilding recovery context", async () => {
+    const definition = batchDefinition("fixture", "saved_output");
+    const attachment = fixture({
+      tools: { tools: ["read"], mcp: [definition] },
+      credentialRedaction: { redact: (text) => text.replaceAll("fixture-secret", "[redacted]") },
+      mcp: {
+        call: async () => ({
+          content: [{ type: "text", text: `${"output ".repeat(10_000)}fixture-secret` }],
+          isError: false,
+        }),
+      },
+    });
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall(definition.providerName, {});
+            emit.finish();
+          },
+          (emit) => {
+            emit.text("Saved output.");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    await first.submitUserMessage("Read output");
+    const recovery = first.recovery!;
+    await first.close();
+    const entries = entryRecords(recovery.sessionFilePath);
+    const result = entries.find((entry) => {
+      const message = entry["message"] as { role?: string; toolName?: string } | undefined;
+      return message?.role === "toolResult" && message.toolName === definition.providerName;
+    })?.["message"] as { details: { output: { fullOutputPath: string } } };
+    const outputPath = result.details.output.fullOutputPath;
+    expect(readFileSync(outputPath, "utf8")).toContain("[redacted]");
+    expect(readFileSync(outputPath, "utf8")).not.toContain("fixture-secret");
+    const reopened = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("read", { path: outputPath });
+            emit.finish();
+          },
+          (emit, context) => {
+            expect(JSON.stringify(context.messages)).toContain("output output");
+            emit.text("Read recovered output.");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({ ...attachment.spec, recovery });
+    await reopened.submitUserMessage("Read the saved output after restart");
+    await reopened.close();
+  });
+
+  it("persists one failed result for an ask whose wait was lost, without inventing an answer", async () => {
+    const asked = Promise.withResolvers<void>();
+    const attachment = fixture({
+      askUser: async (_request, signal) => {
+        asked.resolve();
+        return new Promise<SessionInteractionResolution>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("The question was withdrawn.")), {
+            once: true,
+          });
+        });
+      },
+    });
+    const first = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("ask_user", { question: "Which scope?" });
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession(attachment.spec);
+    const delivered = await first.submitUserMessage(
+      "Plan this",
+      "queue",
+      "before-crash",
+      [],
+      [],
+      "opened",
+    );
+    await asked.promise;
+    const recovery = first.recovery!;
+    const beforeCrash = readFileSync(recovery.sessionFilePath, "utf8");
+    await first.close();
+    writeFileSync(recovery.sessionFilePath, beforeCrash);
+
+    let context: Context | undefined;
+    const second = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit, request) => {
+            context = request;
+            emit.text("Continued without an answer");
+            emit.finish();
+          },
+        ]),
+      ),
+    }).startSession({ ...attachment.spec, recovery });
+    expect((await second.reconcile(null)).receipts).toEqual([
+      {
+        commandId: "before-crash",
+        acceptedAt: delivered.kind === "delivered" ? delivered.acceptedAt : undefined,
+      },
+    ]);
+    await second.submitUserMessage("Continue without the decision");
+    expect(JSON.stringify(context?.messages)).toContain("Which scope?");
+    const results = context?.messages.filter(
+      (message) => message.role === "toolResult" && message.toolName === "ask_user",
+    );
+    expect(results).toEqual([
+      expect.objectContaining({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+          },
+        ],
+      }),
+    ]);
+    expect(JSON.stringify(results)).not.toContain("Chose:");
+    await second.close();
+
+    const third = await createPiAgentRuntime({
+      sessionDataDir: attachment.sessionDataDir,
+      models: modelsWithStream(scriptedStream([])),
+    }).startSession({ ...attachment.spec, recovery });
+    const repaired = entryRecords(recovery.sessionFilePath).filter((entry) => {
+      const message = entry["message"] as { role?: string; toolName?: string } | undefined;
+      return message?.role === "toolResult" && message.toolName === "ask_user";
+    });
+    expect(repaired).toHaveLength(1);
+    await third.close();
+  });
+
   it("reaches the person through the frozen ask_user tool", async () => {
     const asked: RuntimeAskUserRequest[] = [];
     const attachment = fixture({
@@ -2870,6 +3017,55 @@ describe("startSession", () => {
 
     expect(kinds(attachment.observations)).toEqual(["attachment:started"]);
     await handle.close();
+  });
+
+  it("persists returned Code Mode pixels through the owning Session's host sink", async () => {
+    const tools = ["read", "codemode"] as const;
+    const att = fixture({ tools: { tools: ["read"], codeMode: codeModeSurfaceFor({ tools }) } });
+    writeFileSync(join(att.worktreePath, "canvas.png"), Buffer.from(TINY_PNG, "base64"));
+    const persistActivityImage = vi.fn(() => "runtime-picture");
+    const runtime = createPiAgentRuntime({
+      sessionDataDir: att.sessionDataDir,
+      persistActivityImage,
+      models: modelsWithStream(
+        scriptedStream([
+          (emit) => {
+            emit.toolCall("codemode", { code: 'return await tools.read({path:"canvas.png"});' });
+            emit.finish();
+          },
+          settles("Picture delivered."),
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(att.spec);
+    try {
+      await handle.submitUserMessage("Read the canvas");
+      expect(persistActivityImage).toHaveBeenCalledWith("session-1", {
+        data: TINY_PNG,
+        mimeType: "image/png",
+      });
+      const activity = att.observations.find(
+        (item) =>
+          item.kind === "activity" &&
+          item.state === "completed" &&
+          item.descriptor.nativeToolName === "codemode",
+      );
+      expect(activity).toMatchObject({
+        output: {
+          content: expect.arrayContaining([
+            {
+              type: "image",
+              mimeType: "image/png",
+              picture: "runtime-picture",
+              caption: "Image from read (call 1) (Session workspace content).",
+            },
+          ]),
+        },
+      });
+      expect(JSON.stringify(activity)).not.toContain(TINY_PNG);
+    } finally {
+      await handle.close();
+    }
   });
 
   it("runs the real Pi loop against the worktree and settles durable history", async () => {
@@ -4108,7 +4304,7 @@ describe("startSession", () => {
     expect(wire).not.toContain("original question");
   });
 
-  it("raises the fallback Attention when an earlier conversation exists but its binding cannot be read (VC-457 review)", async () => {
+  it("raises the fallback Attention when an earlier conversation exists but its binding cannot be read (VC-457)", async () => {
     const attachment = fixture();
     const seen: Context[] = [];
     const handle = await createPiAgentRuntime({
@@ -4135,7 +4331,7 @@ describe("startSession", () => {
     );
   });
 
-  it("keeps the history a native checkpoint replaced, so a model change after a carry still has it (VC-457 review)", async () => {
+  it("keeps the history a native checkpoint replaced, so a model change after a carry still has it (VC-457)", async () => {
     const attachment = fixture();
     const first = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -4213,7 +4409,7 @@ describe("startSession", () => {
     expect(wire).toContain("second answer");
   });
 
-  it("carries no tool result whose call was withheld (VC-457 review)", async () => {
+  it("carries no tool result whose call was withheld (VC-457)", async () => {
     const attachment = fixture();
     const first = await createPiAgentRuntime({
       sessionDataDir: attachment.sessionDataDir,
@@ -4317,7 +4513,7 @@ describe("startSession", () => {
     expect(carried).not.toContain("call-1");
   });
 
-  it("bounds an oversized carry at a turn boundary, and flattens a carry of a carry (VC-457 review)", async () => {
+  it("bounds an oversized carry at a turn boundary, and flattens a carry of a carry (VC-457)", async () => {
     const attachment = fixture();
     const huge = "h".repeat(CONTEXT_CARRY_MAX_CHARS + 10_000);
     const runtimeWith = (steps: Parameters<typeof scriptedStream>[0]) =>
@@ -4373,7 +4569,7 @@ describe("startSession", () => {
     expect(JSON.stringify(flattened.entries)).not.toContain("context-carried");
   });
 
-  it("bounds a carry by the attaching model's window, so its first turn is sendable (VC-457 review)", async () => {
+  it("bounds a carry by the attaching model's window, so its first turn is sendable (VC-457)", async () => {
     const attachment = fixture();
     // Written by a model with a million-token window: three ~50k-token turns.
     const first = await createPiAgentRuntime({
@@ -4529,10 +4725,19 @@ describe("startSession", () => {
       ),
     });
     const first = await runtime.startSession(attachment.spec);
-    await first.submitUserMessage("once", "queue", "command-once");
+    const accepted = await first.submitUserMessage("once", "queue", "command-once");
+    expect(accepted).toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      acceptedAt: expect.any(Number),
+    });
+    const acceptedAt = accepted.kind === "delivered" ? accepted.acceptedAt : undefined;
+    expect((await first.reconcile(null)).receipts).toEqual([
+      { commandId: "command-once", acceptedAt },
+    ]);
     expect(
       await first.submitUserMessage("once", "queue", "command-once", [], [], "opened"),
-    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false });
+    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false, acceptedAt });
     const recovery = first.recovery;
     await first.close();
     const reopenedRuntime = createPiAgentRuntime({
@@ -4542,7 +4747,7 @@ describe("startSession", () => {
     const reopened = await reopenedRuntime.startSession({ ...attachment.spec, recovery });
     expect(
       await reopened.submitUserMessage("once", "queue", "command-once", [], [], "opened"),
-    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false });
+    ).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: false, acceptedAt });
     expect(
       (await reopened.reconcile(null)).receipts?.filter(
         ({ commandId }) => commandId === "command-once",
@@ -4605,7 +4810,12 @@ describe("startSession", () => {
     allowCompletion.resolve();
     await first;
     await secondStarted.promise;
-    expect(await second).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    expect(await second).toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      turnOpened: true,
+      acceptedAt: expect.any(Number),
+    });
     expect((await handle.reconcile(null)).receipts?.map(({ commandId }) => commandId)).toEqual([
       "first-command",
       "second-command",
@@ -4710,26 +4920,26 @@ describe("startSession", () => {
     await secondHandle.close();
   });
 
-  it("settles an unterminated recovered turn as partial instead of completing it", async () => {
-    const attachment = fixture();
-    const firstRuntime = createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(
-        scriptedStream([
-          (emit) => {
-            emit.text("settled before crash");
-            emit.finish();
-          },
-        ]),
-      ),
-    });
-    const firstHandle = await firstRuntime.startSession(attachment.spec);
-    await firstHandle.submitUserMessage("start", "queue", "command-partial-turn");
-    const recovery = firstHandle.recovery!;
-    await firstHandle.close();
-    writeSidecarEntries(
-      recovery.sessionFilePath,
-      entryRecords(recovery.sessionFilePath).filter((entry) => {
+  it.each([false, true])(
+    "settles an unterminated recovered turn without downgrading conflicting settled history (%s)",
+    async (conflictingHistory) => {
+      const attachment = fixture();
+      const firstRuntime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(
+          scriptedStream([
+            (emit) => {
+              emit.text("settled before crash");
+              emit.finish();
+            },
+          ]),
+        ),
+      });
+      const firstHandle = await firstRuntime.startSession(attachment.spec);
+      await firstHandle.submitUserMessage("start", "queue", "command-partial-turn");
+      const recovery = firstHandle.recovery!;
+      await firstHandle.close();
+      const entries = entryRecords(recovery.sessionFilePath).filter((entry) => {
         const data = entry["data"] as { kind?: string; state?: string } | undefined;
         return !(
           entry["type"] === "custom" &&
@@ -4737,33 +4947,45 @@ describe("startSession", () => {
           data?.kind === "turn" &&
           data.state === "completed"
         );
-      }),
-    );
+      });
+      if (conflictingHistory) {
+        const marker = entries.find(
+          (entry) => (entry["data"] as { kind?: string } | undefined)?.kind === "message-settled",
+        )!;
+        (marker["data"] as { message: { entryId: string } }).message.entryId = "missing-entry";
+      }
+      writeSidecarEntries(recovery.sessionFilePath, entries);
 
-    const secondRuntime = createPiAgentRuntime({
-      sessionDataDir: attachment.sessionDataDir,
-      models: modelsWithStream(scriptedStream([])),
-    });
-    const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
-    const replay = await secondHandle.reconcile(null);
+      const secondRuntime = createPiAgentRuntime({
+        sessionDataDir: attachment.sessionDataDir,
+        models: modelsWithStream(scriptedStream([])),
+      });
+      const secondHandle = await secondRuntime.startSession({ ...attachment.spec, recovery });
+      const replay = await secondHandle.reconcile(null);
 
-    expect(kinds([...replay.observations])).toEqual([
-      "turn:started",
-      "usage",
-      "message-settled",
-      "attention",
-      "turn:interrupted",
-    ]);
-    expect(replay.observations[3]).toMatchObject({
-      kind: "attention",
-      state: "raised",
-      reason: "partial-turn",
-    });
-    expect(replay.receipts).toEqual([
-      expect.objectContaining({ commandId: "command-partial-turn" }),
-    ]);
-    await secondHandle.close();
-  });
+      expect(kinds([...replay.observations])).toEqual([
+        "turn:started",
+        "usage",
+        ...(conflictingHistory ? [] : ["message-settled"]),
+        "attention",
+        "turn:interrupted",
+      ]);
+      expect(replay.observations.filter(({ kind }) => kind === "attention")).toEqual([
+        expect.objectContaining({
+          kind: "attention",
+          state: "raised",
+          reason: "partial-turn",
+          message: conflictingHistory
+            ? "Pi recovery history disagreed about a settled assistant message; the incomplete turn was withheld."
+            : "A recovered Pi turn ended before its completion marker was committed.",
+        }),
+      ]);
+      expect(replay.receipts).toEqual([
+        expect.objectContaining({ commandId: "command-partial-turn" }),
+      ]);
+      await secondHandle.close();
+    },
+  );
 
   it("withholds an assistant entry without a semantic marker as a recoverable partial turn", async () => {
     const attachment = fixture();
@@ -5630,7 +5852,11 @@ describe("startSession", () => {
     ).not.toContain("host-steer");
     release.resolve();
     await steerStarted.promise;
-    await expect(steer).resolves.toEqual({ kind: "delivered", delivery: "steer" });
+    await expect(steer).resolves.toEqual({
+      kind: "delivered",
+      delivery: "steer",
+      acceptedAt: expect.any(Number),
+    });
     const reconciled = await handle.reconcile(null);
     expect(reconciled.receipts?.map(({ commandId }) => commandId)).toContain("host-steer");
     expect(entryRecords(handle.recovery!.sessionFilePath)).toContainEqual(
@@ -5657,6 +5883,7 @@ describe("startSession", () => {
       kind: "delivered",
       delivery: "steer",
       turnOpened: false,
+      acceptedAt: expect.any(Number),
     });
     await handle.close();
   });
@@ -5885,7 +6112,11 @@ describe("startSession", () => {
       ).resolves.toEqual({ kind: "delivered", delivery });
 
       allowCompletion.resolve();
-      await expect(first).resolves.toEqual({ kind: "delivered", delivery: "prompt" });
+      await expect(first).resolves.toEqual({
+        kind: "delivered",
+        delivery: "prompt",
+        acceptedAt: expect.any(Number),
+      });
 
       expect(contexts).toHaveLength(2);
       expect(JSON.stringify(contexts[1]?.messages)).toContain("take another route");
@@ -5923,6 +6154,37 @@ describe("startSession", () => {
 
     await handle.close();
     expect(kinds(observations)).toContain("attachment:closed");
+  });
+
+  it("honors Stop when the provider races the abort with a normal finish (VC-758)", async () => {
+    const { spec, observations, sessionDataDir } = fixture();
+    const running = Promise.withResolvers<void>();
+    const aborted = Promise.withResolvers<void>();
+    const runtime = createPiAgentRuntime({
+      sessionDataDir,
+      models: modelsWithStream(
+        scriptedStream([
+          async (emit, _context, signal) => {
+            signal!.addEventListener("abort", () => aborted.resolve(), { once: true });
+            running.resolve();
+            await aborted.promise;
+            emit.text("last chunk raced Stop");
+            emit.finish();
+          },
+        ]),
+      ),
+    });
+    const handle = await runtime.startSession(spec);
+    const delivery = handle.submitUserMessage("go");
+    await running.promise;
+    await handle.interrupt();
+    await delivery;
+    expect(kinds(observations)).toContain("turn:interrupted");
+    expect(kinds(observations)).not.toContain("turn:completed");
+    expect(attentions(observations)).toEqual([]);
+    const replay = await handle.reconcile(null);
+    expect(kinds([...replay.observations])).toContain("turn:interrupted");
+    await handle.close();
   });
 
   it("interrupts a running tool without calling the Session broken", async () => {
@@ -6538,7 +6800,12 @@ describe("settling a submit on the turn opening (VC-324)", () => {
       "opened",
     );
 
-    expect(delivered).toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    expect(delivered).toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      turnOpened: true,
+      acceptedAt: expect.any(Number),
+    });
     // The run is still going: the answer came back on `turn:started` alone.
     await running.promise;
     expect(kinds(observations)).toEqual(["attachment:started", "turn:started"]);
@@ -6588,7 +6855,12 @@ describe("settling a submit on the turn opening (VC-324)", () => {
 
     await expect(
       handle.submitUserMessage("go", "steer", "command-doomed", [], [], "opened"),
-    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    ).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      turnOpened: true,
+      acceptedAt: expect.any(Number),
+    });
 
     await raised.promise;
     expect(attentions(observations)).toEqual([
@@ -6656,7 +6928,12 @@ describe("settling a submit on the turn opening (VC-324)", () => {
 
     await expect(
       handle.submitUserMessage("first", "steer", "command-detached", [], [], "opened"),
-    ).resolves.toEqual({ kind: "delivered", delivery: "prompt", turnOpened: true });
+    ).resolves.toEqual({
+      kind: "delivered",
+      delivery: "prompt",
+      turnOpened: true,
+      acceptedAt: expect.any(Number),
+    });
     await detachedFailed.promise;
     await runEnded.promise;
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -7899,6 +8176,7 @@ describe("compacting a context that reached its reserve", () => {
     await expect(handle.submitUserMessage("and now?", "queue", "command-2")).resolves.toEqual({
       kind: "delivered",
       delivery: "prompt",
+      acceptedAt: expect.any(Number),
     });
 
     // No compaction was due and none may be reported — least of all a failure.
@@ -8356,7 +8634,7 @@ describe("provider-native context persistence", () => {
     },
   );
 
-  it("round-trips the canonical OpenAI window across restart and restores original history on model switch", async () => {
+  it("round-trips the canonical OpenAI window across restart, preserves it on a rejected model switch and restores history on success", async () => {
     const attachment = fixture();
     const canonical = [
       {
@@ -8383,16 +8661,18 @@ describe("provider-native context persistence", () => {
         provider: "openai",
         models: [
           { id: "gpt-5.3-codex", contextWindow: 264_000 },
-          { id: "gpt-5.4", contextWindow: 264_000 },
+          { id: "gpt-5.4", contextWindow: 264_000, reasoning: true },
         ],
       });
       const requests: unknown[] = [];
+      const selectedPairs: { model: string; reasoning: string | undefined }[] = [];
       const projectors: ((payload: unknown) => unknown)[] = [];
       const script = scriptedStream([
         settles("original answer"),
         settlesHolding("recent answer", 250_000),
         settles("after checkpoint"),
         settles("after restart"),
+        settles("after rejected switch"),
         settles("after model switch"),
       ]);
       const models = createModels();
@@ -8403,6 +8683,7 @@ describe("provider-native context persistence", () => {
             .getModels()
             .map((model) => Object.assign({}, model, { baseUrl: "https://api.openai.com/v1" })),
         streamSimple: (async (model, context, options) => {
+          selectedPairs.push({ model: model.id, reasoning: options?.reasoning });
           const payload = { input: convertResponsesMessages(model, context, new Set(["openai"])) };
           projectors.push((value) => options?.onPayload?.(value, model));
           requests.push((await options?.onPayload?.(payload, model)) ?? payload);
@@ -8428,7 +8709,20 @@ describe("provider-native context persistence", () => {
         "opaque-checkpoint",
       );
       await first.close();
-      const second = await runtime.startSession({ ...spec, recovery });
+      let rejectSwitch = true;
+      const second = await runtime.startSession({
+        ...spec,
+        recovery,
+        toolRefreshAnnouncements: [],
+        refreshTools: async ({ trigger, model }) => {
+          if (trigger === "model-switch" && rejectSwitch) {
+            rejectSwitch = false;
+            expect(model.modelId).toBe("gpt-5.4");
+            throw new Error("model refresh failed");
+          }
+          return null;
+        },
+      });
       await second.submitUserMessage("resume");
       expect((requests[3] as { input: unknown[] }).input.slice(1, 3)).toEqual(canonical);
       expect(fetch).toHaveBeenCalledTimes(1);
@@ -8440,11 +8734,19 @@ describe("provider-native context persistence", () => {
         }),
       ).resolves.toEqual({ kind: "selected" });
       await expect(
+        second.selectModel({ providerId: "openai", modelId: "gpt-5.4", reasoningLevel: "high" }),
+      ).rejects.toThrow("model refresh failed");
+      await second.submitUserMessage("still the old model");
+      expect((requests[4] as { input: unknown[] }).input.slice(1, 3)).toEqual(canonical);
+      expect(JSON.stringify(requests[4])).not.toContain("original answer");
+      expect(selectedPairs[4]).toEqual(selectedPairs[3]);
+      expect(selectedPairs[4]?.model).toBe("gpt-5.3-codex");
+      await expect(
         second.selectModel({ providerId: "openai", modelId: "gpt-5.4", reasoningLevel: "off" }),
       ).resolves.toEqual({ kind: "selected" });
       await second.submitUserMessage("use the other model");
-      expect(JSON.stringify(requests[4])).not.toContain("opaque-checkpoint");
-      expect(JSON.stringify(requests[4])).toContain("original answer");
+      expect(JSON.stringify(requests[5])).not.toContain("opaque-checkpoint");
+      expect(JSON.stringify(requests[5])).toContain("original answer");
       // The native compaction was metered ONCE, and the restart did not buy it
       // again. A replayed maintenance bill is the failure this guards: the
       // record is named after the durable compaction entry precisely so a
@@ -10881,6 +11183,7 @@ describe("recovering a turn whose reasoning the provider refused", () => {
     await expect(handle.retry("command-retry")).resolves.toEqual({
       kind: "delivered",
       delivery: "retry",
+      acceptedAt: expect.any(Number),
     });
     expect(calls).toHaveLength(4);
     expect(settledTexts(attachment.observations)).toEqual(["first answer", "recovered by hand"]);
@@ -12321,7 +12624,7 @@ it("keeps unsupported-fetch routes unchanged and records a refusal without a mes
   await handle.close();
 });
 
-it("redacts provider failures before sidecar, replay and observations (review items 1–2)", async () => {
+it("redacts provider failures before sidecar, replay and observations", async () => {
   const { spec, observations, sessionDataDir } = fixture();
   const stored = "stored-dummy-482";
   const request = "request-dummy-482";
@@ -12401,7 +12704,7 @@ it("redacts provider failures before sidecar, replay and observations (review it
   }
 });
 
-it("keeps Anthropic context recovery beside its truthful bad-request stop category (review item 5)", async () => {
+it("keeps Anthropic context recovery beside its truthful bad-request stop category", async () => {
   const { spec, observations, sessionDataDir } = fixture();
   const runtime = createPiAgentRuntime({
     sessionDataDir,

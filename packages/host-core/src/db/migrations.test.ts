@@ -2056,7 +2056,7 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
   });
 
   it("reconciles a branch-lineage database — agent columns at 23, web keys never ran", () => {
-    // The VC-111 dogfood profile: its original migration 23 was the
+    // The VC-111 branch-lineage profile: its original migration 23 was the
     // agent-config DDL, so the columns exist, `user_version` says 23, and the
     // web-keys rebuild never happened. A plain-SQL 024 re-added the column
     // and killed the boot ("duplicate column name: skill_modes"); the

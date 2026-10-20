@@ -14,7 +14,7 @@
  * which moved `collisionRect`, which flipped `over` straight back. The cycle
  * reached React's nested-update limit inside one commit chain and took the
  * whole board out through `BoardBoundary` — React error #185, `Maximum update
- * depth exceeded`, reported constantly on the owner's display and needing no
+ * depth exceeded`, triggered by the display geometry and needing no
  * modifier at all (⌥ was how it was noticed, not why it happened).
  *
  * The other half of the fix lives in `patches/@dnd-kit__core@6.3.1.patch` and

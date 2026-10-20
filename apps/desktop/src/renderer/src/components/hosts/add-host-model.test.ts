@@ -166,10 +166,8 @@ describe("the checklist's rows", () => {
     expect(memoryText(1)).toBe("1 MB");
   });
 
-  it("claims the tunnel, not the host: done says Connected over SSH (VC-719)", () => {
-    // The flow proved SSH and pairing; whether the host ANSWERS is the
-    // engine's health, read on the host after the sheet closes. The last
-    // row never claims ready or a serving hostd.
+  it("retains SSH wording when no validated HOST evidence is available", () => {
+    // Old DTOs lack HOST welcome evidence: do not invent it.
     const rows = stepRows(view({ status: "done", steps: all("done") }));
     expect(rows[4]).toMatchObject({ id: "pair", mark: "done", label: "Connected over SSH" });
     expect(readySummary(view({ status: "done", steps: all("done") }), undefined)).toBe(
@@ -179,6 +177,29 @@ describe("the checklist's rows", () => {
     expect(
       stepRows(view({ facts: { ...NO_FACTS, alreadyPaired: true }, steps: all("done") }))[4],
     ).toMatchObject({ label: "Already paired with this Mac" });
+  });
+
+  it("calls completed, granted HOST welcome Connected, not SSH", () => {
+    const modern = host({
+      version: null,
+      os: null,
+      hostScope: { status: "ready", granted: ["host.workspaces"] },
+    });
+    const done = view({ status: "done", hostId: modern.id, steps: all("done") });
+    expect(stepRows(done, modern)[4]?.label).toBe("Connected");
+    expect(readySummary(done, modern)).toBe("Connected");
+    for (const status of ["connecting", "unavailable", "older"] as const) {
+      const unvalidated = { ...modern, hostScope: { status, granted: [] } };
+      expect(stepRows(done, unvalidated)[4]?.label).toBe("Connected over SSH");
+      expect(readySummary(done, unvalidated)).toBe("Connected over SSH");
+    }
+    expect(
+      stepRows(done, { ...modern, hostScope: { status: "ready", granted: [] } })[4]?.label,
+    ).toBe("Connected over SSH");
+    expect(stepRows({ ...done, status: "running" }, modern)[4]?.label).toBe("Connected over SSH");
+    expect(stepRows({ ...done, hostId: "another-host" }, modern)[4]?.label).toBe(
+      "Connected over SSH",
+    );
   });
 
   it("marks the row a question waits on for attention, and a failed row failed", () => {

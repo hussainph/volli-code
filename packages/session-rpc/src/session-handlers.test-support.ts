@@ -43,6 +43,7 @@ import type { SessionStartResult } from "@volli/session-engine";
 /** The ports a Session router test may state, as the context once took them. */
 export interface LegacySessionPorts extends Omit<SessionRouterContext, "handlers"> {
   runtime: Partial<SessionRuntime>;
+  readPicture?: SessionRouterHandlers["session.picture"];
   inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
   readModelAccessDefaults?: () => ModelAccessDefaults;
   writeModelAccessDefault?: (
@@ -159,6 +160,8 @@ export function sessionHandlersFrom(
     "modelAccess.setPickerView": (view) => need(ports.writeModelPickerView, PREFERENCES)(view),
     "session.snapshot": (input) => runtime("snapshot")(input),
     "session.history": (input) => runtime("history")(input),
+    "session.picture": (input, call) =>
+      ports.readPicture?.(input, call) ?? { data: null, mimeType: null, nextOffset: null },
     "session.projection": (input) => runtime("projection")(input),
     "session.subscribe": (input, _call, sink) =>
       runtime("subscribe")(
@@ -222,8 +225,11 @@ export function sessionHandlersFrom(
         ...args,
       )) as DesktopRouterHandlers[Key];
   const desktop: DesktopRouterHandlers = {
+    "shells.moveToBackground": (input, call) =>
+      need(ports.desktop?.["shells.moveToBackground"], RUNTIME)(input, call),
     "project.reorder": (input, call) =>
       need(ports.desktop?.["project.reorder"], BOARD)(input, call),
+    "project.remove": (input, call) => need(ports.desktop?.["project.remove"], BOARD)(input, call),
     "worktree.trimSettings": (input, call) =>
       need(ports.desktop?.["worktree.trimSettings"], BOARD)(input, call),
     "hosts.snapshot": remote("hosts.snapshot"),
@@ -258,6 +264,11 @@ export function sessionHandlersFrom(
     "hostLink.query": remote("hostLink.query"),
     "hostLink.mutate": remote("hostLink.mutate"),
     "hostLink.subscribe": remote("hostLink.subscribe"),
+    "hostScope.query": remote("hostScope.query"),
+    "hostScope.mutate": remote("hostScope.mutate"),
+    "hostScope.subscribe": remote("hostScope.subscribe"),
+    "browserShortcuts.subscribe": remote("browserShortcuts.subscribe"),
+    "browserShortcuts.focusPage": remote("browserShortcuts.focusPage"),
   };
   return {
     ...handlers,

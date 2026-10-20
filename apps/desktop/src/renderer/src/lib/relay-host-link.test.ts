@@ -328,7 +328,7 @@ describe("a relayed subscription", () => {
     expect(opened).toHaveLength(0);
   });
 
-  // VC-711 review B1: a view told its stream is waiting may close itself from
+  // VC-711: a view told its stream is waiting may close itself from
   // inside the callback. Nothing may then wait for a slot, or open on the host.
   it("opens nothing again when the view cancels inside onStreamLimited", () => {
     const { rpc, opened } = fakeRpc();

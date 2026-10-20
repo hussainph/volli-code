@@ -14,7 +14,10 @@ import { startHostProtocolListener } from "./websocket-server";
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */
 const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter(
-  (feature) => !feature.startsWith("board.") && feature !== "host.workspaces",
+  (feature) =>
+    !feature.startsWith("board.") &&
+    feature !== "host.workspaces" &&
+    feature !== "host.model-defaults",
 );
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const HOST = "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b";

@@ -31,6 +31,7 @@ import {
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
 import { UpdateInstallDialog } from "@renderer/components/update/update-install-dialog";
+import { useBrowserAppShortcuts } from "@renderer/hooks/use-browser-app-shortcuts";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
@@ -345,6 +346,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   useNavHistory();
   useProjectRootsSync();
   useZoomCommands();
+  useBrowserAppShortcuts();
   useBootNotice();
   useCliLaunchNotice();
   // What this window is showing, reported to main so an alert for a Session or
@@ -865,7 +867,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             standing the remaining strip is thin enough that the user has to
             aim, and this is what they aim at. With the rail down the target is
             the zone below, which widens by one shell inset to answer the aiming
-            problem itself; the owner's call is that a hint there is not worth
+            problem itself; a hint there is not worth
             the ink. A hint, not a handle. */}
         {!pinned && !terminalFocused && !workspaceRailHidden ? (
           <div

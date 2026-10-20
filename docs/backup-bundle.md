@@ -182,9 +182,8 @@ In practice: **a bundle restores into the app version that wrote it or any later
 one; never into an earlier one.** `restore.test.ts` exercises the newest schema
 and the two below it end to end, including the two rebuilt usage views.
 
-## Not yet wired
+## Host API boundary
 
-Creating and restoring a bundle is a main-process capability with no menu item
-or Settings surface yet. Streaming, progress, cancellation and atomic writes are
-VC-317's; the reader takes bytes and the writer returns bytes precisely so that
-work can land without changing this format.
+Bundle readers and writers are host capabilities. Presentation, progress and
+cancellation belong to their callers; the versioned bundle format remains
+independent of any menu or Settings surface.

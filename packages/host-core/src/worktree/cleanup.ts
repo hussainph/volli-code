@@ -4,14 +4,14 @@
  *
  * It is the EXECUTOR, not the record: `cleanup-engine.ts` owns the command, its
  * acceptance receipt and the immutable facts, and this file is what actually
- * runs git between them. The split is the review's S1 — a destructive product
- * act takes the command → event → projection shape, with the transport (and
+ * runs git between them. A destructive product act takes the command → event
+ * → projection shape, with the transport (and
  * this executor) as adapters around a core that knows nothing about either.
  *
  * What it acts on is never a list of paths from a client. A caller names a scan
  * revision and the ids of items in THAT scan's plan; main resolves them to the
- * proposal it minted itself (`orphan-scan.ts`), and anything else is refused
- * (review C1). So the confirmation, the accepted intent, and the work are the
+ * proposal it minted itself (`orphan-scan.ts`), and anything else is refused.
+ * So the confirmation, the accepted intent, and the work are the
  * same three lists by construction.
  *
  * Then it distrusts even that. A scan is a snapshot, and the seconds between
@@ -19,32 +19,45 @@
  * terminal, handed to an agent, claimed by a ticket, moved to another branch,
  * or measured against a retention window somebody just changed. So the last
  * thing before each mutation is a COMPLETE re-ask, and it is deliberately
- * shaped so nothing can happen inside it (VC-284 re-review C1/C2/C4):
+ * shaped so nothing can happen inside it (VC-284):
  *
  *  - everything asynchronous happens BEFORE the gate — the agent bindings are
  *    released, the activity supplier is asked, the durable `started` fact is
  *    written;
  *  - the gate itself ({@link finalGate}, {@link metadataEligibility}) is
- *    SYNCHRONOUS, reading the database and git in one turn;
- *  - the mutation runs in that same turn, with no `await` between the last
- *    answer and the irreversible call.
+ *    SYNCHRONOUS, reading the database and git in one turn — on
+ *    {@link OrphanCleanupWorktreePorts.gateGit}, the one blocking runner left;
+ *  - the mutation is STARTED in that same turn, with no `await` between the
+ *    last answer and the irreversible call — and then awaited on the async
+ *    runner, off the main thread (VC-786).
  *
- * Around the awaits that cannot be avoided sits a two-sided deletion lease
- * (`deletion-lease.ts`): while cleanup holds a path, nothing may start a
- * terminal or an agent inside it, and while something is starting there,
- * cleanup will not take it.
+ * The delete itself may not block. `git worktree remove` takes a checkout's
+ * ignored dependency tree with it — about 100k files for a pnpm worktree — and
+ * on the blocking runner every window, IPC channel and PTY stream froze for the
+ * whole delete, until the read deadline SIGKILLed it part way through. On the
+ * async runner it has the local-mutation backstop and a SIGTERM-first stop
+ * instead (`git.ts`, `GIT_MUTATION_TIMEOUT_MS`).
  *
- * A second serialization sits INSIDE those awaits, and it is about a different
- * hazard (VC-389): the lease orders this cleanup against work starting in one
- * DIRECTORY, while the repository turn (`repository-turn.ts`) orders its git
- * commands against other changes to the same REPOSITORY. Both mutations here
- * run on the synchronous runner, which is what makes the second one necessary
- * rather than incidental: while `execFileSync` blocks, no NEW async git child
- * can start, but one that is already running keeps going — so a confirmed
- * cleanup's `worktree remove` could overlap a Session start's `worktree add`
- * in the same repository. The gate-and-mutation region of each path is
- * therefore handed to the turn as ONE SYNCHRONOUS CALLBACK, which orders it
- * and preserves the no-await promise below at the same time.
+ * Around every await — the ones before the gate and the mutation after it —
+ * sits a two-sided deletion lease (`deletion-lease.ts`): while cleanup holds a
+ * path, nothing may start a terminal or an agent inside it, and while something
+ * is starting there, cleanup will not take it.
+ *
+ * A second serialization sits around the gate and the mutation, and it is
+ * about a different hazard (VC-389): the lease orders this cleanup against work
+ * starting in one DIRECTORY, while the repository turn (`repository-turn.ts`)
+ * orders its git commands against other changes to the same REPOSITORY — so a
+ * confirmed cleanup's `worktree remove` cannot overlap a Session start's
+ * `worktree add` in the same repository. Each path's gate-plus-mutation region
+ * is handed to the turn as one callback whose body is synchronous up to the
+ * moment the mutation starts, and the turn is held until the mutation settles.
+ *
+ * "Started in the gate's turn" holds whenever the async runner has a free child
+ * slot, which is the ordinary case: the runner spawns before it returns. When
+ * all of its slots are busy the start waits in line, and what keeps in-process
+ * work out of that wait is what is still held across it — the lease and the
+ * repository's turn — with git's own refusal (no `--force`) the last word on
+ * the directory itself.
  *
  * What it may do, in order: prune one project's stale git metadata, and remove
  * a worktree directory with `git worktree remove` — no `--force`, ever, so
@@ -52,7 +65,7 @@
  * clean worktree directory is cache; a branch is data.
  *
  * `git worktree prune` cannot be aimed at one record, so metadata is handled as
- * a set (review C2): immediately before pruning, the project's current prunable
+ * a set: immediately before pruning, the project's current prunable
  * records are listed again, and the prune runs only if that set is EXACTLY the
  * set of confirmed records — in a repository whose path still matches the one
  * confirmed, with every confirmed record still owned by this database and
@@ -87,7 +100,7 @@ import { canonicalize, isInside } from "./paths";
 import { lastTouchedAt, metadataKeptReason, readOnlyGit } from "./scan";
 import { getRetentionTtlDays, retentionTtlMs } from "./retention";
 import { withRepositoryWorktreeTurn } from "./repository-turn";
-import type { WorktreePorts } from "./types";
+import type { RunGit, RunGitAsync, WorktreePorts } from "./types";
 
 /** What a cleanup was asked to do: a command id, a scan revision, and its items. */
 export interface OrphanCleanupRequest {
@@ -104,9 +117,24 @@ export interface OrphanCleanupRequest {
   source: OrphanCleanupSource;
 }
 
+/**
+ * The worktree bundle the confirmed cleanup runs on: the standard one, plus the
+ * blocking runner its final gate reads through.
+ *
+ * `gateGit` is here and nowhere else on purpose. The gate may not yield between
+ * its last look and the mutation it admits, so its reads are synchronous — and
+ * that is the only reason the blocking runner is left in the app. Keeping it
+ * off {@link WorktreePorts} means no other worktree path can pick it up by
+ * accident (VC-369, VC-383, VC-786). It is for READS: the mutations go
+ * through `gitAsync`.
+ */
+export interface OrphanCleanupWorktreePorts extends WorktreePorts {
+  gateGit: RunGit;
+}
+
 /** The seams the cleanup needs beyond the worktree bundle. */
 export interface OrphanCleanupPorts {
-  worktree: WorktreePorts;
+  worktree: OrphanCleanupWorktreePorts;
   /** The durable command core; the executor never writes storage itself. */
   engine: OrphanCleanupEngine;
   /** The activity supplier the manual Delete path uses; absent means "assume none". */
@@ -122,7 +150,7 @@ export interface OrphanCleanupPorts {
  * item.
  *
  * A release that never settles used to hold the deletion lease for the life of
- * the process (VC-284 re-review C4): the item never completed, and every later
+ * the process (VC-284): the item never completed, and every later
  * cleanup and every terminal start under that path was refused by a lease
  * nobody would ever release. Timing out is the honest end — the directory is
  * left alone, the reason says so, and the lease goes back.
@@ -190,8 +218,8 @@ interface Recheck {
 
 /**
  * Everything asked again, in the cheapest-first order — SYNCHRONOUSLY, so the
- * mutation that follows a clean verdict runs in the same turn as the verdict
- * (VC-284 re-review C1/C4). The one asynchronous input, what is live inside the
+ * mutation that follows a clean verdict starts in the same turn as the verdict
+ * (VC-284). The one asynchronous input, what is live inside the
  * directory, is fetched by the caller and handed in.
  *
  * Ownership, the confirmed project, the ticket link, the branch, the retention
@@ -208,7 +236,7 @@ function finalGate(
   const { worktree } = deps;
   // Every question below goes through the scan's read-only runner: a check that
   // ends in a SKIP must leave the checkout exactly as it found it.
-  const git = readOnlyGit(worktree.git);
+  const git = readOnlyGit(worktree.gateGit);
   const target = canonicalize(item.path);
   const idle: Recheck = { skip: null, branch: null, gitPath: item.path, projectPath: null };
 
@@ -382,7 +410,7 @@ export async function cleanupOrphans(
       await settle(item.id, "skipped", verdict.skip, verdict.branch);
       continue;
     }
-    // The lease closes the window the review named: from here until this item
+    // The lease closes the deletion race: from here until this item
     // settles, nothing may start a terminal or a harness inside this path — and
     // nothing that is already starting there could have let cleanup take it.
     const lease = acquireDeletionLease(verdict.gitPath);
@@ -406,7 +434,7 @@ export async function cleanupOrphans(
         await settle(item.id, "skipped", SKIP_STILL_BOUND, verdict.branch);
         continue;
       }
-      // Announced BEFORE the last look (review C3, re-review C1): if the app
+      // Announced BEFORE the last look: if the app
       // dies from here on, the run says this item was being executed and the
       // launch reconcile asks git and disk what actually happened. It is
       // written here rather than after the gate so that nothing awaits between
@@ -415,8 +443,10 @@ export async function cleanupOrphans(
       // The last asynchronous act of this item: what is live inside it.
       const sites = await busySitesFor(deps, item.path);
       // Then the repository's turn, and the gate-plus-mutation region is what
-      // it is given — so the region is still one synchronous turn and is now
-      // ordered against every other change to this repository (VC-389).
+      // it is given — so the gate and the start of the removal are still one
+      // synchronous turn, the turn is held until the removal settles, and the
+      // whole region is ordered against every other change to this repository
+      // (VC-389).
       //
       // Taken HERE rather than earlier on purpose: the activity supplier above
       // has no deadline of its own, and a turn held across it would refuse
@@ -425,21 +455,26 @@ export async function cleanupOrphans(
       // gate re-reads everything else from scratch; `sites` is the one input
       // measured a moment ago, and the deletion lease taken above is what stops
       // anything new from starting inside the path while this waits in line.
-      const removal = await withRepositoryWorktreeTurn(item.projectPath, () => {
-        // ---- no `await` from here to the mutation ---------------------------
-        const confirmed = finalGate(deps, item, request, sites);
-        if (confirmed.skip !== null)
-          return { kind: "skipped" as const, detail: confirmed.skip, branch: confirmed.branch };
-        try {
-          worktree.git(
+      const removal = await withRepositoryWorktreeTurn(
+        item.projectPath,
+        (): RemovalOutcome | Promise<RemovalOutcome> => {
+          // ---- no `await` from here to the start of the mutation --------------
+          const confirmed = finalGate(deps, item, request, sites);
+          if (confirmed.skip !== null)
+            return { kind: "skipped", detail: confirmed.skip, branch: confirmed.branch };
+          // Started here, in the gate's own turn, and awaited off the main
+          // thread: the turn and the lease stay held until it settles (VC-786).
+          return settleMutation(
+            worktree.gitAsync,
             ["worktree", "remove", confirmed.gitPath],
             confirmed.projectPath ?? confirmed.gitPath,
+          ).then((failure): RemovalOutcome =>
+            failure === null
+              ? { kind: "completed", branch: confirmed.branch }
+              : { kind: "failed", error: failure, branch: confirmed.branch },
           );
-          return { kind: "completed" as const, branch: confirmed.branch };
-        } catch (caught) {
-          return { kind: "failed" as const, error: errorText(caught), branch: confirmed.branch };
-        }
-      });
+        },
+      );
       // ---- the mutation is over; recording it may await again ---------------
       if (removal.kind === "completed") {
         await settle(
@@ -461,6 +496,35 @@ export async function cleanupOrphans(
   }
 
   return engine.finish({ commandId: request.commandId });
+}
+
+/** What one directory's gate-plus-removal region decided, carried out of the repository's turn. */
+type RemovalOutcome =
+  | { kind: "completed"; branch: string | null }
+  | { kind: "failed"; error: string; branch: string | null }
+  | { kind: "skipped"; detail: string; branch: string | null };
+
+/**
+ * Starts one mutation on the async runner NOW — in the caller's turn — and
+ * answers with its failure text, or `null` once it succeeded. A runner that
+ * throws before it hands back a promise is a failed mutation, exactly like one
+ * that rejects, so neither escapes the item as an uncontained throw.
+ */
+function settleMutation(
+  git: RunGitAsync,
+  args: readonly string[],
+  cwd: string,
+): Promise<string | null> {
+  let running: Promise<string>;
+  try {
+    running = git(args, cwd);
+  } catch (caught) {
+    return Promise.resolve(errorText(caught));
+  }
+  return running.then(
+    () => null,
+    (caught: unknown) => errorText(caught),
+  );
 }
 
 /** The agent-binding release, with a deadline. A timeout is a skip, never a removal. */
@@ -506,7 +570,7 @@ interface MetadataGate {
 
 /**
  * Whether this project's confirmed records are still this flow's to prune —
- * synchronously, from a fresh database read (VC-284 re-review C2).
+ * synchronously, from a fresh database read (VC-284).
  *
  * Set equality alone is not enough. A ticket that starts claiming a confirmed
  * record after the scan leaves the stale SET untouched while making the record
@@ -542,7 +606,7 @@ function metadataEligibility(
 
 /**
  * Prunes one project's stale records, or skips every confirmed record of that
- * project with the reason it was not safe to (review C2).
+ * project with the reason it was not safe to.
  *
  * `git worktree prune` takes no path argument: it drops every record the repo
  * currently calls prunable. So the only way to make it do exactly what was
@@ -580,38 +644,41 @@ async function pruneProject(
   // The repository's turn is taken around the WHOLE gate-and-prune region, not
   // just the prune (VC-389). Two things at once: it orders this prune against
   // any `worktree add` or `worktree remove` running in the same repository, and
-  // — because the region is one synchronous callback — it keeps the promise the
-  // region already made, that nothing awaits between the set-equality answer
-  // and the irreversible command. Awaiting the turn INSIDE the region would
-  // have re-opened exactly the window the region exists to close.
+  // — because the region is synchronous up to the prune's start — it keeps the
+  // promise the region already made, that nothing awaits between the
+  // set-equality answer and the irreversible command. Awaiting the turn INSIDE
+  // the region would have re-opened exactly the window the region exists to
+  // close. The prune itself is then awaited on the async runner, with the turn
+  // still held (VC-786).
   // Keyed on the CONFIRMED project path rather than on whatever the database
   // reads now: the gate inside refuses outright if the project's folder has
   // moved since the confirmation, so a prune that runs at all runs in exactly
   // this repository.
-  const verdict = await withRepositoryWorktreeTurn(first.projectPath, (): PruneVerdict => {
-    // ---- no `await` from here to the prune --------------------------------
-    const gate = metadataEligibility(deps, items, first);
-    if (gate.skip !== null) return { kind: "skip-all", detail: gate.skip };
-    const git = readOnlyGit(worktree.git);
-    let current: Set<string>;
-    try {
-      current = new Set(
-        parseWorktreeList(git(["worktree", "list", "--porcelain"], gate.projectPath))
-          .filter((entry) => entry.prunable !== null)
-          .map((entry) => canonicalize(entry.path)),
+  const verdict = await withRepositoryWorktreeTurn(
+    first.projectPath,
+    (): PruneVerdict | Promise<PruneVerdict> => {
+      // ---- no `await` from here to the start of the prune -------------------
+      const gate = metadataEligibility(deps, items, first);
+      if (gate.skip !== null) return { kind: "skip-all", detail: gate.skip };
+      const git = readOnlyGit(worktree.gateGit);
+      let current: Set<string>;
+      try {
+        current = new Set(
+          parseWorktreeList(git(["worktree", "list", "--porcelain"], gate.projectPath))
+            .filter((entry) => entry.prunable !== null)
+            .map((entry) => canonicalize(entry.path)),
+        );
+      } catch (caught) {
+        return { kind: "fail-all", detail: errorText(caught) };
+      }
+      const confirmed = confirmedRecordPaths(request.items, first.projectId);
+      if (!sameSet(current, confirmed)) return { kind: "drift", current };
+      return settleMutation(worktree.gitAsync, ["worktree", "prune"], gate.projectPath).then(
+        (failure): PruneVerdict =>
+          failure === null ? { kind: "pruned" } : { kind: "fail-all", detail: failure },
       );
-    } catch (caught) {
-      return { kind: "fail-all", detail: errorText(caught) };
-    }
-    const confirmed = confirmedRecordPaths(request.items, first.projectId);
-    if (!sameSet(current, confirmed)) return { kind: "drift", current };
-    try {
-      worktree.git(["worktree", "prune"], gate.projectPath);
-      return { kind: "pruned" };
-    } catch (caught) {
-      return { kind: "fail-all", detail: errorText(caught) };
-    }
-  });
+    },
+  );
   // ---- the mutation is over; recording it may await again ------------------
   if (verdict.kind === "skip-all") return skipAll(verdict.detail);
   if (verdict.kind === "drift") {

@@ -178,6 +178,15 @@ const remoteHost = z.object({
   system: z.string().nullable(),
   arch: z.string().nullable(),
   hostKeys: z.array(z.string()).readonly(),
+  hostScope: z
+    .object({
+      status: z.enum(["connecting", "ready", "older", "unavailable"]),
+      granted: z
+        .array(z.string().max(MAX_GRANTED_FEATURE_LENGTH))
+        .max(MAX_GRANTED_FEATURES)
+        .readonly(),
+    })
+    .optional(),
   // Reuses the existing CLOSED link-state union; no new output enum.
   reachability: z
     .object({

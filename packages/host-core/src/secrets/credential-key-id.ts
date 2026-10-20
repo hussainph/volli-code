@@ -1,6 +1,5 @@
 /**
- * The key-id format of the typed credential inventory (VC-642;
- * `docs/plans/sealed-credential-store.md` §3, §7).
+ * The key-id format of the typed credential inventory (VC-642).
  *
  * `credentialKeyId(key)` is the first {@link CREDENTIAL_KEY_ID_BYTES} bytes of
  * SHA-256 over a fixed label and the key, as lowercase hex. 128 bits, where

@@ -256,18 +256,30 @@ const TIER_TABLE: Record<VerbKey, VerbTier | null> = {
   "logs.tail": "coordination",
   "logs.follow": "coordination",
   "modelAccess.inspect": "coordination",
+  "hostModels.inspect": "coordination",
   "modelAccess.defaults": "coordination",
+  "hostModels.defaults": "coordination",
   "modelAccess.setDefault": "coordination",
+  "hostModels.setDefault": "coordination",
   "modelAccess.hiddenModels": "coordination",
+  "hostModels.hiddenModels": "coordination",
   "modelAccess.setHiddenModels": "coordination",
+  "hostModels.setHiddenModels": "coordination",
   "modelAccess.compactionPolicy": "coordination",
+  "hostModels.compactionPolicy": "coordination",
   "modelAccess.setCompactionPolicy": "coordination",
+  "hostModels.setCompactionPolicy": "coordination",
   "modelAccess.codeModePolicy": "coordination",
+  "hostModels.codeModePolicy": "coordination",
   "modelAccess.setCodeModePolicy": "coordination",
+  "hostModels.setCodeModePolicy": "coordination",
   "modelAccess.pickerView": "coordination",
+  "hostModels.pickerView": "coordination",
   "modelAccess.setPickerView": "coordination",
+  "hostModels.setPickerView": "coordination",
   "session.snapshot": "coordination",
   "session.history": "coordination",
+  "session.picture": "coordination",
   "session.projection": "coordination",
   "session.subscribe": "coordination",
   "session.subscribeQueue": "coordination",
@@ -890,9 +902,8 @@ describe("the registry table", () => {
     ]);
   });
 
-  // VC-431: the delegate door offers the SAME rungs, for the reason the owner
-  // gave — "it gives a working session an anchor to the user's preferences for
-  // models and effort". A delegation that names neither a tier nor a model is
+  // VC-431: the delegate door offers the same model and effort preferences.
+  // A delegation that names neither a tier nor a model is
   // anchored to its parent's own, which is why `model` no longer speaks of a
   // utility default: nothing on a chat path resolves that row.
   it("lets session_delegate name the same model tiers, and never the Utility row", () => {
@@ -1279,12 +1290,28 @@ describe("verb result details (VC-471)", () => {
 
   it("gives watch the targets it resolved, as lists a program can compare", () => {
     const validate = ajv.compile(schemaOf("watch"));
+    const none = { stopped: [], detached: [] };
     expect(
-      validate({ action: "watch", sessions: ["abcdef12"], tickets: ["VC-1", "VC-2"], ended: 0 }),
+      validate({
+        action: "watch",
+        sessions: ["abcdef12", "12345678", "9abcdef0"],
+        tickets: ["VC-1", "VC-2"],
+        ended: 0,
+        stopped: ["12345678"],
+        detached: ["9abcdef0"],
+      }),
     ).toBe(true);
-    expect(validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1 })).toBe(true);
-    expect(validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0 })).toBe(false);
-    expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0 })).toBe(false);
+    expect(
+      validate({ action: "unwatch", sessions: [], tickets: ["VC-1"], ended: 1, ...none }),
+    ).toBe(true);
+    expect(
+      validate({ action: "watch", sessions: "abcdef12", tickets: [], ended: 0, ...none }),
+    ).toBe(false);
+    expect(validate({ action: "rewatch", sessions: [], tickets: [], ended: 0, ...none })).toBe(
+      false,
+    );
+    // A target's standing (VC-825) is always said, even when it is "none".
+    expect(validate({ action: "watch", sessions: [], tickets: [], ended: 0 })).toBe(false);
   });
 });
 
@@ -1350,8 +1377,20 @@ describe("the host-protocol command catalog (VC-564)", () => {
     "modelAccess.setCodeModePolicy": ["host", "natural"],
     "modelAccess.pickerView": ["host", "read"],
     "modelAccess.setPickerView": ["host", "natural"],
+    "hostModels.inspect": ["host", "read"],
+    "hostModels.defaults": ["host", "read"],
+    "hostModels.setDefault": ["host", "natural"],
+    "hostModels.hiddenModels": ["host", "read"],
+    "hostModels.setHiddenModels": ["host", "natural"],
+    "hostModels.compactionPolicy": ["host", "read"],
+    "hostModels.setCompactionPolicy": ["host", "natural"],
+    "hostModels.codeModePolicy": ["host", "read"],
+    "hostModels.setCodeModePolicy": ["host", "natural"],
+    "hostModels.pickerView": ["host", "read"],
+    "hostModels.setPickerView": ["host", "natural"],
     "session.snapshot": ["workspace", "read"],
     "session.history": ["workspace", "read"],
+    "session.picture": ["workspace", "read"],
     "session.projection": ["workspace", "read"],
     "session.subscribe": ["workspace", "read"],
     "session.subscribeQueue": ["workspace", "read"],
@@ -1488,6 +1527,7 @@ describe("the host-protocol command catalog (VC-564)", () => {
       | "sessions.attach"
       | "session.snapshot"
       | "session.history"
+      | "session.picture"
       | "session.projection"
       | "session.subscribe"
       | "session.subscribeQueue"

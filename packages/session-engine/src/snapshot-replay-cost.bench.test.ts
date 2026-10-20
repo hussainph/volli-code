@@ -20,7 +20,7 @@ import {
 
 /**
  * What opening, resuming and scrolling back through a Session costs, by age
- * (VC-315; the post-M1 architecture review's benchmark 3).
+ * (VC-315).
  *
  * Before VC-315 a snapshot was the whole log: one frame per event, one
  * artifact read per transcript event, one reply. Measured on this fixture
@@ -41,10 +41,10 @@ import {
  * This probe pins that, and pins the other half of the contract: paging back
  * with `history` and resuming with `subscribe` both reach every event exactly
  * once, so the bound never hides a gap. Sizes are the ticket's own 100, 1,000
- * and 10,000 events, and the review's 500.
+ * and 10,000 events, plus a 500-event sample.
  *
  * Counts and bytes are asserted; times are printed (the in-memory stores make
- * them a floor, not a disk figure). The one time asserted is the review's own
+ * them a floor, not a disk figure). The latency assertion uses the
  * target, 200 ms at 500 events, which this clears by more than an order of
  * magnitude.
  *
@@ -63,7 +63,7 @@ const SIZES = [100, 500, 1_000, 10_000] as const;
 const MISSED_BACKLOG = 1_000;
 const RESULT_CHARS = [400, 1_200, 3_000, 800, 600, 2_000, 900, 24_000] as const;
 const REPLY_CHARS = 1_500;
-/** The review's target for opening a 500-event Session (benchmark 3). */
+/** The target for opening a 500-event Session. */
 const OPEN_BYTES_TARGET = 1024 * 1024;
 const OPEN_MS_TARGET = 200;
 

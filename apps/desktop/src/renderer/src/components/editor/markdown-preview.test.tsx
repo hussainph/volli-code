@@ -258,8 +258,8 @@ describe("MarkdownPreview — hostile input", () => {
   });
 
   it("marks a block that authors a document root or hides a request in CSS", async () => {
-    // Both rendered with no marker until review round 2: the sanitizer cleaned
-    // them, and the page said nothing about what it had left out.
+    // Sanitization must not silently discard a document root or a CSS request:
+    // the page marks the unsupported content.
     for (const markup of [
       '<body onload="globalThis.pwned = true">body</body>',
       '<html onclick="globalThis.pwned = true"><body>html</body></html>',
@@ -309,12 +309,11 @@ describe("MarkdownPreview — hostile input", () => {
 });
 
 /**
- * The no-network promise, probed at the DOM rather than at `fetch` (review
- * round 1, P1). A `fetch` spy cannot see what the BROWSER loads for a page: an
- * `<img srcset>` or a `<source>` inside a `<picture>` is a request the platform
- * makes on its own, and the first round of this work left one standing because
- * the loud gate only sees Lezer HTML BLOCKS and the image pass rewrote only
- * `<img>`. So the assertion is now about the tree that reaches the document:
+ * The no-network promise, probed at the DOM rather than at `fetch`. A `fetch`
+ * spy cannot see what the BROWSER loads for a page: an `<img srcset>` or a
+ * `<source>` inside a `<picture>` is a request the platform makes on its own.
+ * The loud gate only sees Lezer HTML BLOCKS, so inline sources must be checked
+ * in the tree that reaches the document:
  * nothing in it may name a remote host.
  */
 describe("MarkdownPreview — nothing that reaches the page can fetch", () => {

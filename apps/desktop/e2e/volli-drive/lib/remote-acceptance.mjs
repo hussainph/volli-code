@@ -38,6 +38,46 @@ export function visibleControls(tree, role, name, { contains = false } = {}) {
     return actualRole === role && (contains ? label?.includes(name) : label === name);
   });
 }
+/** Read the production registry's Workspace state, not host health or the UI's
+ * five-second writable reconnect grace. This journey opens exactly one remote
+ * project; absent/ambiguous claims must not supply readiness.
+ */
+export function acceptanceWorkspaceReady(snapshot) {
+  const hosts = snapshot.hosts.filter((host) => host.name === REMOTE_HOST);
+  if (hosts.length !== 1 || snapshot.readOnly !== null) return false;
+  const projects = Object.values(snapshot.projects).filter(
+    (project) => project.hostId === hosts[0].id,
+  );
+  return projects.length === 1 && projects[0].link.status === "ready";
+}
+
+/** An exiting dialog can leave background text visible before its names/refs return. */
+export function hasActionableControl(tree, role, name) {
+  const hits = visibleControls(tree, role, name);
+  return hits.length === 1 && hits[0].includes("[ref=") && !hits[0].includes("[disabled]");
+}
+/** A durable answer quotes this exact question and selected label in one row.
+ * The trailer span has a title, so its snapshot uses an accessible name rather
+ * than a text suffix. Pending radios and receipts for other questions cannot
+ * supply the proof.
+ */
+export function visibleAnswerReceipt(tree, question, answer) {
+  const lines = tree.split("\n");
+  return lines.some((line, index) => {
+    const subject = lines[index + 1] ?? "";
+    const trailer = lines[index + 2] ?? "";
+    const indent = line.search(/\S/u);
+    return (
+      line.endsWith(": You answered") &&
+      /^\s*- code(?: \[ref=[^\]]+\])?: /u.test(subject) &&
+      subject.endsWith(`: ${question}`) &&
+      visibleControls(trailer, "generic", answer).length === 1 &&
+      subject.search(/\S/u) === indent &&
+      trailer.search(/\S/u) === indent
+    );
+  });
+}
+
 /** The visible subtree of one named surface, not matching background controls. */
 export function snapshotSubtree(tree, role, name) {
   const hits = visibleControls(tree, role, name);
@@ -48,6 +88,53 @@ export function snapshotSubtree(tree, role, name) {
   let end = start + 1;
   while (end < lines.length && lines[end].search(/\S/u) > indent) end++;
   return lines.slice(start, end).join("\n");
+}
+
+/** Native snapshots expose the model sheet's title as a heading and Select's
+ * value as child text, not accessible names on the dialog/combobox themselves.
+ * Bind only the Board row inside that host's sheet; ambiguity fails closed.
+ */
+export function boardDefaultControl(tree, hostName, displayedValue) {
+  const lines = tree.split("\n");
+  const subtree = (start) => {
+    const indent = lines[start].search(/\S/u);
+    let end = start + 1;
+    while (end < lines.length && lines[end].search(/\S/u) > indent) end++;
+    return lines.slice(start, end);
+  };
+  const sheets = lines.flatMap((line, index) => {
+    if (!/^\s*- '?dialog(?: |:|$)/u.test(line)) return [];
+    const surface = subtree(index).join("\n");
+    return visibleControls(surface, "heading", `Models on ${hostName}`).length === 1
+      ? [subtree(index)]
+      : [];
+  });
+  if (sheets.length !== 1) return null;
+  const sheet = sheets[0];
+  const labels = sheet.filter((line) =>
+    /^\s*- generic(?: \[ref=[^\]]+\])?: Board chats$/u.test(line),
+  );
+  if (labels.length !== 1) return null;
+  const label = lines.indexOf(labels[0]);
+  const indent = lines[label].search(/\S/u);
+  let row = label - 1;
+  while (row >= 0 && lines[row].search(/\S/u) >= indent) row--;
+  if (row < 0 || !sheet.includes(lines[row])) return null;
+  const matches = subtree(row).filter((line) => {
+    if (!/^\s*- '?combobox(?: |:|$)/u.test(line)) return false;
+    const content = subtree(lines.indexOf(line)).slice(1);
+    return (
+      controlLabel(line) === displayedValue ||
+      content.some(
+        (child) =>
+          /^\s*- generic(?: |:|$)/u.test(child) &&
+          (controlLabel(child) === displayedValue || child.endsWith(`: ${displayedValue}`)),
+      )
+    );
+  });
+  return matches.length === 1 && matches[0].includes("[ref=") && !matches[0].includes("[disabled]")
+    ? matches[0]
+    : null;
 }
 
 /** VC-724 is optional until it lands; a visible self-add question is never skipped. */
@@ -101,7 +188,21 @@ export function acceptanceScript(turn) {
   const input = turn.body.input ?? [];
   const last = input.at(-1);
   if (last?.type === "function_call_output") {
-    if (!String(last.output).includes("proceed"))
+    const question = turn.text.includes("remote-reopen-question")
+      ? REOPEN_QUESTION
+      : ANSWER_QUESTION;
+    let answers;
+    try {
+      answers = JSON.parse(String(last.output));
+    } catch {
+      return "REMOTE: expected Proceed answer was not delivered";
+    }
+    if (
+      !Array.isArray(answers) ||
+      answers.length !== 1 ||
+      answers[0]?.question !== question ||
+      answers[0]?.answer !== "Proceed"
+    )
       return "REMOTE: expected Proceed answer was not delivered";
     return turn.text.includes("remote-reopen-question") ? REOPEN_REPLY : ANSWER_REPLY;
   }
@@ -114,14 +215,14 @@ export function acceptanceScript(turn) {
         {
           name: "ask_user",
           arguments: {
-            question: turn.text.includes("remote-reopen-question")
-              ? REOPEN_QUESTION
-              : ANSWER_QUESTION,
-            options: [
-              { id: "proceed", label: "Proceed" },
-              { id: "stop", label: "Stop" },
+            questions: [
+              {
+                question: turn.text.includes("remote-reopen-question")
+                  ? REOPEN_QUESTION
+                  : ANSWER_QUESTION,
+                choices: ["Proceed", "Stop"],
+              },
             ],
-            allowOther: false,
           },
         },
       ],
@@ -130,19 +231,38 @@ export function acceptanceScript(turn) {
   return undefined;
 }
 
-/** Classify only visible creation outcomes; arbitrary errors never qualify as XFAIL. */
-export function projectCreationOutcome(tree, { hostName, projectName, expectedTicket }) {
-  if (tree.includes(`Opened ${projectName} on ${hostName}`)) {
-    if (expectedTicket)
-      throw new Error(
-        `XPASS ${expectedTicket}: remove project expected-failure marker and run the full journey`,
-      );
-    return { status: "PASS" };
-  }
+/** Creation must really open the project; even the old user-install refusal fails. */
+export function projectCreationOutcome(tree, { hostName, projectName }) {
+  if (tree.includes(`Opened ${projectName} on ${hostName}`)) return { status: "PASS" };
   const refusal = `${hostName} runs Volli as your login, so this Mac can't add projects to it.`;
-  if (!tree.includes(refusal)) return null;
-  if (!expectedTicket) throw new Error(`Unexpected project refusal: ${refusal}`);
-  return { status: "XFAIL", detail: `${expectedTicket}: ${refusal}` };
+  if (tree.includes(refusal)) throw new Error(`Unexpected project refusal: ${refusal}`);
+  return null;
+}
+
+/** Validate the supervisor's actual stop manifest, not merely CLI exit zero. */
+export function assertAcceptanceCleanup(manifest) {
+  if (!manifest || typeof manifest !== "object")
+    throw new Error("Stop returned without a guard/cleanup manifest");
+  if (manifest.scratchRemoved !== true)
+    throw new Error("Cleanup manifest must confirm scratchRemoved:true");
+  const close = manifest.electron?.close;
+  if (
+    close?.kind !== "graceful" ||
+    close.exit?.code !== 0 ||
+    close.exit?.signal !== null ||
+    !Array.isArray(close.closeFailures) ||
+    close.closeFailures.length
+  )
+    throw new Error(`Electron did not close gracefully: ${JSON.stringify(close ?? null)}`);
+  if (
+    !Array.isArray(manifest.keychainViolations) ||
+    manifest.keychainViolations.length ||
+    manifest.keychainViolationExit !== false ||
+    !Array.isArray(manifest.leftovers) ||
+    manifest.leftovers.length ||
+    manifest.remoteCleanupError !== null
+  )
+    throw new Error(`Guard/cleanup manifest failed: ${JSON.stringify(manifest)}`);
 }
 
 /** Stopped status files retain the old pid; never adopt that possibly reused pid. */
@@ -325,8 +445,8 @@ export async function prepareRemoteAcceptance(layout, provider) {
           }
         }
       },
-      // Deployment precondition, NOT an acceptance action: a host has a
-      // default model configured by its operator. v1 hides the remote picker.
+      // Deployment precondition only: route Azure to the fake provider.
+      // Step 4 stores the key and chooses the default through production UI.
       async configureModel() {
         assertAcceptanceRunner();
         const plist = join(home, "Library/LaunchAgents/com.volli.hostd.plist");
@@ -359,21 +479,6 @@ export async function prepareRemoteAcceptance(layout, provider) {
         // `start` is idempotent. Cleanly stop the freshly installed daemon so
         // its next production start re-reads the operator's environment.
         await stopHostd();
-        const db = join(home, "Library/Application Support/volli-hostd/volli.db");
-        const defaults = JSON.stringify({ global: provider.pin, ticket: provider.pin }).replaceAll(
-          "'",
-          "''",
-        );
-        // Same persisted default as volli-drive's standard seedDefaultModel.
-        // No tickets, projects, Sessions, answers or logs are seeded here.
-        await exec(
-          "sqlite3",
-          [
-            db,
-            `PRAGMA busy_timeout=10000; INSERT INTO app_state(key,value,updated_at) VALUES('volli:model-access-defaults','${defaults}',${Date.now()}) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at;`,
-          ],
-          { timeout: 15_000 },
-        );
         daemonIdentity = null;
         await runHostd("start --user");
         await captureDaemon();

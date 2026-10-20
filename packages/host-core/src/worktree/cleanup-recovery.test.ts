@@ -1,5 +1,5 @@
 /**
- * The window the review's C3 names: the folder is already gone and the outcome
+ * The crash window: the folder is already gone and the outcome
  * was never written. These cases stop the app in exactly that instant — after a
  * real `git worktree remove`, before the fact lands — and then ask what the
  * next launch says about it.
@@ -13,7 +13,7 @@ import type { OrphanCleanupPlanItem } from "@volli/shared";
 
 import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
-import { cleanupOrphans } from "./cleanup";
+import { cleanupOrphans, type OrphanCleanupWorktreePorts } from "./cleanup";
 import { DEFAULT_RETENTION_TTL_DAYS } from "./retention";
 import { createOrphanCleanupEngine, type OrphanCleanupEngine } from "./cleanup-engine";
 import { SqliteOrphanCleanupLedger } from "./cleanup-ledger";
@@ -72,7 +72,7 @@ function runRepoGit(cwd: string, args: readonly string[]): string {
 }
 
 /** A real project with one real orphan worktree inside a container this db owns. */
-function realFixture(): { deps: WorktreePorts; projectPath: string; orphan: string } {
+function realFixture(): { deps: OrphanCleanupWorktreePorts; projectPath: string; orphan: string } {
   const home = tempDir("home");
   const originPath = tempDir("origin");
   runRepoGit(originPath, ["init", "-q", "--bare", "-b", "main"]);
@@ -97,7 +97,7 @@ function realFixture(): { deps: WorktreePorts; projectPath: string; orphan: stri
     orphan,
     deps: {
       db: ctx.db,
-      git,
+      gateGit: git,
       gitAsync,
       home,
       now: () => Date.now() + 400 * DAY_MS,
@@ -202,10 +202,10 @@ describe("reconcileInterruptedCleanups", () => {
     const home = tempDir("home");
     const projectPath = tempDir("proj");
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-    const { git, gitAsync } = scriptedGit(() => {
+    const { gitAsync } = scriptedGit(() => {
       throw new Error("not a git repository");
     });
-    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
     const orphan = join(home, "gone");
 
     await engine.accept({
@@ -231,10 +231,10 @@ describe("reconcileInterruptedCleanups", () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
     // Git cannot be read at all, so the one announced item is genuinely
     // unresolvable — the honest third answer.
-    const { git, gitAsync } = scriptedGit(() => {
+    const { gitAsync } = scriptedGit(() => {
       throw new Error("not a git repository");
     });
-    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-1",
@@ -276,12 +276,12 @@ describe("reconcileInterruptedCleanups", () => {
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
     const stale = join(home, "records", "VC-9");
     let stillStale = true;
-    const { git, gitAsync } = scriptedGit(() =>
+    const { gitAsync } = scriptedGit(() =>
       stillStale
         ? `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\nworktree ${stale}\nHEAD b\nprunable gitdir file points to non-existent location\n`
         : `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
     );
-    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
     const metadata: OrphanCleanupPlanItem = {
       id: "m1",
       kind: "metadata",
@@ -309,8 +309,8 @@ describe("reconcileInterruptedCleanups", () => {
 
     // The record is gone now — but `git worktree prune` leaves no trace of
     // itself, so "gone" is not evidence THIS command pruned it: a shell, a
-    // later cleanup or git's own housekeeping would look identical (re-review
-    // C3). The truthful answer is that this host cannot say.
+    // later cleanup or git's own housekeeping would look identical.
+    // The truthful answer is that this host cannot say.
     stillStale = false;
     await engine.accept({
       commandId: "cmd-2",
@@ -336,11 +336,11 @@ describe("reconcileInterruptedCleanups", () => {
     const projectPath = tempDir("proj");
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
     const record = join(home, "records", "VC-9");
-    const { git, gitAsync } = scriptedGit(
+    const { gitAsync } = scriptedGit(
       () =>
         `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\nworktree ${record}\nHEAD b\nbranch refs/heads/volli/VC-9\n`,
     );
-    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-3",
@@ -371,7 +371,7 @@ describe("reconcileInterruptedCleanups", () => {
 
   // `existsSync` answers false for a path it cannot stat for ANY reason, so an
   // unreadable filesystem used to be reported as "the folder is gone" — a
-  // completed deletion invented out of a permissions error (re-review C3).
+  // completed deletion invented out of a permissions error.
   it("treats an unreadable path as unknown, not as a removed folder", async () => {
     const home = tempDir("home");
     const projectPath = tempDir("proj");
@@ -383,10 +383,10 @@ describe("reconcileInterruptedCleanups", () => {
     const unreadable = join(blocker, "VC-8-orphan");
     // Git says it is not registered — the same half of the answer a real
     // removal leaves behind.
-    const { git, gitAsync } = scriptedGit(
+    const { gitAsync } = scriptedGit(
       () => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
     );
-    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
 
     await engine.accept({
       commandId: "cmd-4",
@@ -412,10 +412,10 @@ describe("reconcileInterruptedCleanups", () => {
     const home = tempDir("home");
     const projectPath = tempDir("proj");
     insertProject(ctx.db, testProject({ id: "proj-1", path: projectPath }));
-    const { git, gitAsync } = scriptedGit(
+    const { gitAsync } = scriptedGit(
       () => `worktree ${projectPath}\nHEAD a\nbranch refs/heads/main\n`,
     );
-    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const deps: WorktreePorts = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
     // Still on disk, no longer registered: the mixed state, so the assertion
     // below is about the run being FOUND, not about which verdict it got.
     mkdirSync(join(home, "long-gone"), { recursive: true });
@@ -453,8 +453,8 @@ describe("reconcileInterruptedCleanups", () => {
 
   it("does nothing when every run closed normally", async () => {
     const home = tempDir("home");
-    const { git, gitAsync } = scriptedGit(() => "");
-    const deps: WorktreePorts = { db: ctx.db, git, gitAsync, home, blobsRoot: "unused" };
+    const { gitAsync } = scriptedGit(() => "");
+    const deps: WorktreePorts = { db: ctx.db, gitAsync, home, blobsRoot: "unused" };
     expect(await reconcileInterruptedCleanups({ worktree: deps, engine })).toEqual([]);
   });
 });

@@ -49,7 +49,7 @@ import { cn } from "@renderer/lib/utils";
  *
  * `tone="neutral"`, deliberately: this is not a fault, not a warning and not
  * something the reader can act on. An amber notice here would compete with the
- * real attention states on the same rail for a fact that is merely a roadmap.
+ * real attention states on the same rail for a feature that is not built yet.
  */
 export function UnavailableNotice({
   what,

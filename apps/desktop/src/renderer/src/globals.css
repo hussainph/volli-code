@@ -566,8 +566,7 @@
    * dense, and the chat feed was proving it while a ticket body two panes over
    * read at 1.7 (`typeset.css`). This names that ratio so both surfaces breathe
    * at the same rate: the transcript wears it as the `leading-prose` utility,
-   * typeset reads `var(--leading-prose)`. 1.7 on 14px is ~24px lines — the
-   * band chat products settle in (ChatGPT 1.75, Claude ~1.65). */
+   * typeset reads `var(--leading-prose)`. 1.7 on 14px is ~24px lines. */
   --leading-prose: 1.7;
 }
 

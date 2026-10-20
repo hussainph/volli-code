@@ -56,6 +56,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -72,9 +73,8 @@ import {
 
 // Keep the production detector entrypoints observable. Project-create tests
 // usually inject a detector; this seam also verifies the uninjected default.
-const { detectAsync, detectSync } = vi.hoisted(() => ({
+const { detectAsync } = vi.hoisted(() => ({
   detectAsync: vi.fn<(path: string) => Promise<string | null>>(),
-  detectSync: vi.fn<(path: string) => string | null>(),
 }));
 
 vi.mock("../../../../packages/host-core/src/project-base-branch", async (importOriginal) => ({
@@ -82,7 +82,6 @@ vi.mock("../../../../packages/host-core/src/project-base-branch", async (importO
     typeof import("../../../../packages/host-core/src/project-base-branch")
   >()),
   detectProjectBaseBranchAsync: detectAsync,
-  detectProjectBaseBranch: detectSync,
 }));
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
@@ -101,6 +100,10 @@ const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWa
      * coverage and change reports the real manager sends.
      */
     worktreeWatch: {
+      /** The client the last `watch` was asked for, as the IPC door built it. */
+      client: undefined as
+        | { onceClosed(listener: () => void): void; removeCloseListener(l: () => void): void }
+        | undefined,
       options: undefined as
         | {
             onCoverageChange?: (ticketId: string, covered: boolean) => void;
@@ -185,7 +188,7 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
     "../../../../packages/host-core/src/worktree/activity",
   )),
   // NOT mocked either: the deletion lease is the serialization the manual
-  // delete and the cleanup share (VC-284 review C4), and a stand-in would let
+  // delete and the cleanup share (VC-284), and a stand-in would let
   // this channel claim a lease discipline it does not have.
   ...(await vi.importActual<
     typeof import("../../../../packages/host-core/src/worktree/deletion-lease")
@@ -193,9 +196,9 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
   ensure: vi.fn(),
-  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` and by the
-  // commit/push handlers' deps — needs a stub export so that value import
-  // doesn't throw under strict ESM mocking.
+  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps`, the
+  // commit/push handlers' deps and the orphan cleanup's gate port — needs a
+  // stub export so that value import doesn't throw under strict ESM mocking.
   runGitCapturing: vi.fn(),
   runGitCapturingAsync: vi.fn(),
   runNet: vi.fn(),
@@ -219,7 +222,8 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
     constructor(options: (typeof worktreeWatch)["options"] = undefined) {
       worktreeWatch.options = options;
     }
-    watch = vi.fn((_sender: unknown, ticketId: string) => {
+    watch = vi.fn((client: (typeof worktreeWatch)["client"], ticketId: string) => {
+      worktreeWatch.client = client;
       worktreeWatch.options?.onCoverageChange?.(ticketId, true);
       return { ok: true as const };
     });
@@ -234,6 +238,7 @@ vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
 
 import { flushDataChangedForTest } from "./broadcast";
 import { registerDataIpcHandlers } from "./data-ipc.test-support";
+import type { ProjectLiveWork } from "@volli/host-core/handlers";
 import { watchSessionActivity } from "@volli/host-core/sessions";
 import {
   createTestSessionEngine,
@@ -269,6 +274,8 @@ import {
   trimFinishedWorktree,
   orphanCleanupEngine,
   acquireDeletionLease,
+  runGitCapturing,
+  runGitCapturingAsync,
 } from "@volli/host-core/worktree";
 import {
   updateTicketFieldsCommand,
@@ -450,19 +457,128 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
+// VC-796: the channel projects the host's `project.remove`. The live work its
+// Sessions hold stops first, while the project is still on the rail, and
+// every window (a second one included) is told. VC-822: the project is then
+// detached, not deleted, so adding its folder again brings its board back.
 describe("project removal", () => {
-  it("tells the host after the project is gone, so it releases the board feed it held", () => {
-    const removed = vi.fn<(projectId: string) => void>();
+  function onRail(projectId: string): boolean {
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    return bootstrap.ok && bootstrap.data.projects.some(({ id }) => id === projectId);
+  }
+
+  function liveWork(projectId: string, stillOpen: readonly string[] = []) {
+    const stopped: string[] = [];
+    const stop = (step: string) => {
+      // Each stop runs while the project is still on the rail.
+      expect(onRail(projectId)).toBe(true);
+      stopped.push(step);
+    };
+    const live: ProjectLiveWork = {
+      releaseBindings: async () => {
+        stop("bindings");
+        return { stillOpen };
+      },
+      disposeShells: () => stop("shells"),
+      killTerminals: () => stop("terminals"),
+      closeBrowserTabs: () => stop("tabs"),
+      mcp: null,
+    };
+    return { live, stopped };
+  }
+
+  it("stops the project's live work before detaching it, then tells every window", async () => {
+    const projectId = createProject();
+    const { live, stopped } = liveWork(projectId);
     registerDataIpcHandlers(
       { ok: true, db: ctx.db },
-      { sessionEngine: fixtureSessionEngine, onProjectRemoved: removed },
+      { sessionEngine: fixtureSessionEngine, projectLiveWork: live },
     );
-    const projectId = createProject();
-    removed.mockImplementation(() => {
-      expect(getProjectById(ctx.db, projectId)).toBeUndefined();
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", projectId),
+    ).resolves.toEqual({ ok: true });
+
+    expect(stopped).toEqual(["bindings", "shells", "terminals", "tabs"]);
+    expect(onRail(projectId)).toBe(false);
+    // Untargeted, so a window that still holds the project re-reads the list
+    // without it; the fan-out reaches every window, a second one included.
+    await expectDataChanged({ entity: "tickets" });
+  });
+
+  // The defect (VC-822): the removal used to delete the row, and the cascades
+  // took the board and every Session with it. A re-add found nothing.
+  it("brings the board back when the same folder is added again", async () => {
+    const path = freshProjectDir();
+    const nothingRunning: ProjectLiveWork = {
+      releaseBindings: async () => ({ stillOpen: [] }),
+      disposeShells: () => undefined,
+      killTerminals: () => undefined,
+      closeBrowserTabs: () => undefined,
+      mcp: null,
+    };
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        sessionEngine: fixtureSessionEngine,
+        projectLiveWork: nothingRunning,
+        detectBaseBranch: async () => "main",
+      },
+    );
+    const added = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Kept",
     });
-    expect(invoke<ProjectMutationResult>("volli:project-remove", projectId)).toEqual({ ok: true });
-    expect(removed).toHaveBeenCalledExactlyOnceWith(projectId);
+    if (!added.ok) throw new Error(added.error);
+    const ticket = createTicket(added.project.id);
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", added.project.id),
+    ).resolves.toEqual({ ok: true });
+
+    // Off every window's rail, its tickets with it.
+    const hidden = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(hidden.ok && hidden.data.projects).toEqual([]);
+    expect(hidden.ok && Object.keys(hidden.data.ticketsByProject)).toEqual([]);
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", { path, name: "Kept" }),
+    ).resolves.toMatchObject({ ok: true, created: false, project: { id: added.project.id } });
+
+    const back = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(back.ok && back.data.projects.map(({ id }) => id)).toEqual([added.project.id]);
+    expect(back.ok && back.data.ticketsByProject[added.project.id]).toEqual([
+      expect.objectContaining({ id: ticket.id, ticketNumber: ticket.ticketNumber }),
+    ]);
+    // Every window re-reads it: one that seeded an empty board on the add
+    // must not keep showing it empty.
+    await expectDataChanged({ projectId: added.project.id, entity: "tickets" });
+  });
+
+  it("keeps the project, and says why, when one of its Sessions will not stop", async () => {
+    const projectId = createProject();
+    const { live, stopped } = liveWork(projectId, ["session-1"]);
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, projectLiveWork: live },
+    );
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", projectId),
+    ).resolves.toEqual({
+      ok: false,
+      error:
+        "A Session in this project is still running, so nothing was removed. Stop it and try again.",
+    });
+
+    expect(stopped).toEqual(["bindings"]);
+    expect(onRail(projectId)).toBe(true);
+    expectNoDataChange();
   });
 });
 
@@ -692,7 +808,6 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     const path = freshProjectDir();
     const branch = deferredBranch();
     detectAsync.mockReturnValue(branch.promise);
-    detectSync.mockReturnValue("sync-default");
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
 
     const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
@@ -700,7 +815,6 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
       name: "Volli Code",
     });
     await vi.waitFor(() => expect(detectAsync).toHaveBeenCalledExactlyOnceWith(path));
-    expect(detectSync).not.toHaveBeenCalled();
     expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
       ok: true,
       data: { projects: [] },
@@ -2248,7 +2362,7 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     });
   });
 
-  // The other door (review r2): an archive KEEPS the checkout, which makes an
+  // An archive KEEPS the checkout, which makes an
   // archived ticket the longest-lived carrier of a dead dependency tree, so the
   // wiring is held here and not only in the primitive's own suite.
   it("trims the ticket's worktree when the ticket is archived", () => {
@@ -3620,6 +3734,28 @@ describe("volli:worktree-change-watch (VC-369)", () => {
       await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
     ).toEqual({ ok: false, error: "This ticket has no worktree." });
   });
+
+  // VC-831: the watch is the page's, not the window's — a reload keeps the
+  // WebContents, so a watch closed only on `destroyed` outlived its page.
+  it("closes the subscription when the page that opened it goes away", async () => {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "ok",
+      target: { displayId: "VC-1", worktreePath: "/wt/VC-1", branch: "b", baseBranch: "main" },
+    } as never);
+    const sender = new EventEmitter();
+    const handler = handlers.get("volli:worktree-change-watch") as unknown as (
+      event: unknown,
+      input: unknown,
+    ) => Promise<Result>;
+    expect(await handler({ sender }, { ticketId: "t1" })).toMatchObject({ ok: true });
+
+    const closed = vi.fn();
+    worktreeWatch.client?.onceClosed(closed);
+    sender.emit("did-navigate-in-page");
+    expect(closed).not.toHaveBeenCalled();
+    sender.emit("did-navigate");
+    expect(closed).toHaveBeenCalledOnce();
+  });
 });
 
 /**
@@ -3639,6 +3775,7 @@ describe("the rail's last-known worktree snapshot (VC-372)", () => {
     status: {
       uncommitted: false,
       sequencerActive: false,
+      unmergedPaths: 0,
       aheadOfBase: 0,
       behindBase: 0,
       unpushed: null,
@@ -4268,6 +4405,12 @@ describe("volli:worktree-orphans", () => {
       expect(result).toEqual({ ok: true, run, receipt });
       expect(vi.mocked(cleanupOrphans)).toHaveBeenCalledWith(
         expect.objectContaining({
+          // The blocking runner reaches the gate's reads and nothing else; the
+          // removal and the prune ride the async one (VC-786).
+          worktree: expect.objectContaining({
+            gateGit: runGitCapturing,
+            gitAsync: runGitCapturingAsync,
+          }),
           busyWorktreeSites: noBusySites,
           releaseAgentSites: noAgentSites,
           engine: expect.anything(),
@@ -4277,7 +4420,7 @@ describe("volli:worktree-orphans", () => {
           scanRevision: "rev-1",
           // The ids as the caller sent them, kept so a retry is decidable from
           // the durable record alone, and the window the proposal was measured
-          // against (re-review S1/C1).
+          // against.
           requestedItemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
           retentionDays: 14,
           source: "settings",
@@ -4377,7 +4520,7 @@ describe("volli:worktree-orphans", () => {
       expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
     });
 
-    // The gateway rule (re-review S1). A cleanup invalidates the scan it ran
+    // A cleanup invalidates the scan it ran
     // against, so a retry validated against the CURRENT scan is told its
     // command was superseded — a completed deletion reported as a failure, with
     // a second deletion the obvious next step. The durable record answers
@@ -4735,7 +4878,7 @@ describe("volli:worktree-orphan-delete", () => {
     );
 
     expect(result).toEqual({ ok: true });
-    // Asked TWICE, and the second time is the point (VC-284 re-review C4):
+    // Recheck occupancy after releasing the bindings (VC-284):
     // releasing the bindings takes time, and the answer from before that await
     // is not an answer about the instant of the delete.
     expect(asked).toEqual([canonical, canonical]);
@@ -4777,7 +4920,7 @@ describe("volli:worktree-orphan-delete", () => {
     const target = ownedPath("VC-7-contended");
     mkdirSync(target, { recursive: true });
     // A cleanup is mid-removal on this exact directory; the manual delete takes
-    // the same lease, so it skips rather than racing it (VC-284 re-review C4).
+    // the same lease, so it skips rather than racing it (VC-284).
     const held = acquireDeletionLease(realpathSync.native(target));
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(

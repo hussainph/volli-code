@@ -13,9 +13,8 @@
  * spinner says "you are waiting on this" — it is what a row wears while one
  * call is in flight, and it belongs to that call. The turn is not a call: it is
  * the whole reply, most of which the reader can already read. Three orbs
- * breathing is the idiom every messaging surface converged on for exactly this
- * (iMessage, Slack, ChatGPT), and it carries no urgency at all, which is right
- * for something that may be on screen for ten minutes.
+ * breathing signal a continuing reply without urgency, which is right for
+ * something that may be on screen for ten minutes.
  *
  * CSS ANIMATION, NEVER A JS TIMELINE. This mark's whole life is spent beside a
  * transcript that is streaming tokens, which is to say beside a busy main

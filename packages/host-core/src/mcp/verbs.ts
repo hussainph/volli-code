@@ -79,8 +79,8 @@ const log = hostLogger("mcp");
  *
  * `mcp.install` and `mcp.remove` gate. Both do something a caller cannot undo
  * by calling something else: an install starts a process as the user, or opens
- * a relationship with a third party; a removal breaks reattachment for Sessions
- * that already exist. The gate is `previewsByDefault` — the plain call reports
+ * a relationship with a third party; removal deletes the transport and makes
+ * retained tools unavailable to existing Sessions. The gate is `previewsByDefault` — the plain call reports
  * and writes nothing, and only `confirm: "apply"` acts — and on the apply call
  * a person is ALSO asked, when the attachment has somewhere to put a question.
  * The ask is not a second mechanism competing with the first: the preview is
@@ -133,13 +133,19 @@ function refusal(text: string): RuntimeVerbResult {
 /**
  * The sentence every successful write ends with (VC-380 item 7).
  *
- * Not decoration. A Session's tool list is resolved once, at birth, and a model
- * that has just installed a server will otherwise try to call its tools in this
- * turn, fail, and conclude the install did not work. Saying WHEN they become
- * usable is the difference between a correct result and a retry loop.
+ * Explain when tools arrive without implying a selection changed the warm
+ * provider prefix. Delegates inherit their parent's current recorded tools,
+ * including refreshes, rather than the project's unacquired selection.
  */
-const FROZEN_SURFACE_NOTE =
-  "These tools are not available in this Session: a Session's tool list is frozen when it is created, and this one's is unchanged. They become usable in the next Session created.";
+const TOOL_REFRESH_NOTE =
+  "Selected Code-Mode-only tools become usable in this Session before the next program. Other additions wait for a cold prompt cache, compaction or a model switch. New root Sessions get the updated MCP tools; delegated helpers inherit their parent's current recorded MCP tools, including refreshed additions. Existing tools are never removed.";
+
+/**
+ * Disabling keeps inherited tools but stops offering them to new root Sessions,
+ * and stops the server for the Sessions that keep them (VC-771).
+ */
+const KEPT_ON_DISABLE_NOTE =
+  "This Session keeps every tool it already holds, and a delegated helper inherits them. New root Sessions are no longer offered them. Until it is turned on again, a call to one of its tools answers that the server is disabled, and the server is not started; turning it on makes the same calls work again.";
 
 /** A list of tool names as the caller spelled it, each counted once. */
 function nameList(raw: unknown): readonly string[] {
@@ -440,7 +446,7 @@ type Routed = { provided: true; note: string } | { provided: false; text: string
 /**
  * Put a connection blocked on a person in front of that person (VC-470).
  *
- * The owner's rule, applied: an agent never supplies, sees or stores a
+ * An agent never supplies, sees or stores a
  * credential. A sign-in is offered as a `confirm.mcp-sign-in` question; when
  * the person allows it, Volli opens the server's page in their browser and the
  * agent is told only that it worked or why not. A missing key is a
@@ -937,7 +943,7 @@ export async function mcpInstallTool(
           ]),
       `  ${provenanceSummary(recorded)}`,
       "",
-      FROZEN_SURFACE_NOTE,
+      TOOL_REFRESH_NOTE,
       confirmed.asked
         ? "The person driving confirmed this install."
         : 'Nobody was asked to confirm: this Session had no way to put a question in front of a person, so the explicit confirm="apply" was the confirmation.',
@@ -996,7 +1002,7 @@ export async function mcpRefreshTool(
       `Refreshed ${result.server.name}: ${result.server.catalog.length} tool${result.server.catalog.length === 1 ? "" : "s"} discovered, ${on.length} on.`,
       `  tools on: ${on.length === 0 ? "none" : on.join(", ")}`,
       "",
-      FROZEN_SURFACE_NOTE,
+      TOOL_REFRESH_NOTE,
       ...(personNote === null ? [] : [personNote]),
     ].join("\n"),
   };
@@ -1022,8 +1028,8 @@ async function setEnabledTool(
     text: [
       `Turned ${result.server.name} ${enabled ? "on" : "off"}.`,
       enabled
-        ? FROZEN_SURFACE_NOTE
-        : `Its configuration is kept, so Sessions already holding its tools can still reattach. ${FROZEN_SURFACE_NOTE}`,
+        ? TOOL_REFRESH_NOTE
+        : `Its configuration is kept, so Sessions already holding its tools can still reattach. ${KEPT_ON_DISABLE_NOTE}`,
     ].join(" "),
   };
 }
@@ -1064,7 +1070,7 @@ export async function mcpToolsTool(
   return {
     text: [
       `${result.server.name} now has ${on.length} of ${result.server.catalog.length} tools on: ${on.length === 0 ? "none" : on.join(", ")}.`,
-      FROZEN_SURFACE_NOTE,
+      TOOL_REFRESH_NOTE,
     ].join(" "),
   };
 }
@@ -1147,7 +1153,7 @@ export async function mcpRemoveTool(
     text: [
       summary,
       `To put it back: mcp_install with id ${existing.id} and ${transportSummary(existing)}.`,
-      "Any Session born holding one of its tools will now fail to reattach; re-adding it under the same id restores the transport those Sessions need.",
+      "Sessions keep their tool names and can reattach, but calls return a named unavailable error; re-adding the same id restores the transport.",
       confirmed.asked
         ? "The person driving confirmed this removal."
         : "Nobody was asked to confirm: this Session had no way to put a question in front of a person.",

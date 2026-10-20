@@ -24,6 +24,7 @@ import { setBootNotice } from "@renderer/lib/boot-notice";
 import {
   PROJECTS_UI_APP_STATE_KEY,
   decodeProjectsUiState,
+  decodeRemoteSelection,
   encodeProjectsUiState,
   useProjectsStore,
 } from "@renderer/stores/projects";
@@ -37,6 +38,11 @@ import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+
+import { restoreRemoteSelection } from "./restore-remote-selection";
+import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
+
+let stopSelectionRestore: (() => void) | null = null;
 
 const LEGACY_PROJECTS_KEY = "volli:projects";
 const LEGACY_UI_KEY = "volli:ui";
@@ -243,9 +249,30 @@ export function followRemoteProjects(
 }
 
 /** Whether the host has the `cloud` flag on: the Session router's experiments read. */
-async function readCloudFlag(): Promise<boolean> {
-  const experiments = await sessionRpcClient().settings.experiments.query();
+async function readCloudFlag(signal?: AbortSignal): Promise<boolean> {
+  const experiments = await sessionRpcClient().settings.experiments.query(undefined, { signal });
   return experiments.cloud.enabled;
+}
+
+/** A stalled flag read must not strand a fresh window before its first paint. */
+async function readBootCloudFlag(
+  read: (signal: AbortSignal) => Promise<boolean>,
+): Promise<boolean> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(() => read(controller.signal))
+        .catch(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
 }
 
 /**
@@ -425,7 +452,10 @@ async function notifyOrphanedWorktrees(): Promise<void> {
 export async function boot(
   gateway: BootGateway = defaultGateway,
   storage: BootStorage = localStorage,
+  readCloud: (signal: AbortSignal) => Promise<boolean> = readCloudFlag,
 ): Promise<BootResult> {
+  stopSelectionRestore?.();
+  stopSelectionRestore = null;
   const bootstrapResult = await gateway.bootstrap();
   if (!bootstrapResult.ok) return bootstrapResult;
 
@@ -484,8 +514,17 @@ export async function boot(
   // Resolved BEFORE hydrate (rather than hydrating with `null` and calling
   // `select` afterward) so boot never fires a redundant appState.set — the
   // value already came FROM app_state, there's nothing new to persist.
+  const cloud = await readBootCloudFlag(readCloud);
+  const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
-  useProjectsStore.getState().hydrate(payload.projects, selectedProjectId);
+  useProjectsStore.setState({ pendingRemoteSelection: null });
+  useProjectsStore
+    .getState()
+    .hydrate(
+      payload.projects,
+      remote === null ? selectedProjectId : (selectedProjectId ?? payload.projects[0]?.id ?? null),
+    );
+  if (remote !== null) useProjectsStore.getState().beginRemoteRestore(remote);
   useBoardStore.getState().hydrate(payload.ticketsByProject, payload.labelsByProject);
 
   // The theme store is deliberately absent: it has no `persist` middleware and
@@ -510,6 +549,36 @@ export async function boot(
       ),
       new Set(payload.projects.map(({ id }) => id)),
     );
+
+  if (remote !== null) {
+    const stop = restoreRemoteSelection({
+      selection: remote,
+      hosts: useHostConnectionStore,
+      projects: useProjectsStore,
+      failed: (message) => toast.warning(message),
+    });
+    // Boot owns the wait, not a component effect: StrictMode cannot restart its deadline.
+    const cleanups: (() => void)[] = [stop];
+    const dispose = () => {
+      for (const cleanup of cleanups.splice(0)) cleanup();
+      window.removeEventListener?.("pagehide", dispose);
+    };
+    cleanups.push(
+      useExperimentsStore.subscribe((state) => {
+        if (state.snapshot !== null && !isExperimentOn(state.snapshot, "cloud")) {
+          useProjectsStore.getState().cancelRemoteRestore();
+        }
+      }),
+    );
+    cleanups.push(
+      useProjectsStore.subscribe((state) => {
+        if (state.pendingRemoteSelection !== remote) dispose();
+      }),
+    );
+    stopSelectionRestore = dispose;
+    window.addEventListener?.("pagehide", dispose, { once: true });
+    if (useProjectsStore.getState().pendingRemoteSelection !== remote) dispose();
+  }
 
   // Fire-and-forget — never awaited, so it can't delay the app's first paint,
   // and its own try/catch means it can't fail boot either.

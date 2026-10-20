@@ -675,7 +675,9 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
     const createOwnedWindow = vi.fn();
     const revealWindow = vi.fn();
     const warn = vi.fn();
+    const deferred: (() => void)[] = [];
     const scope = {
+      setImmediate: (run: () => void) => deferred.push(run),
       liveWindows: () => all.filter((each) => !each.isDestroyed() && !retiringWindows.has(each)),
       retiringWindows,
       MENU_BAR_FLUSH_OVERDUE_MS,
@@ -699,6 +701,7 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
       // index.ts logs through the structured logger (VC-699).
       hostLogger: (component: string) => ({
         warn: (msg: string, fields?: unknown) => warn(`[${component}] ${msg}`, fields),
+        info: vi.fn(),
       }),
       BrowserWindow: { getAllWindows: () => all.filter((each) => !each.isDestroyed()) },
       createOwnedWindow,
@@ -710,6 +713,9 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
       open: evaluate<() => void>(objectProperty(windowsPort, "open"), scope),
       count: evaluate<() => number>(objectProperty(windowsPort, "count"), scope),
       ack: (name: string) => flusher.acknowledge(requests.get(name)),
+      runDeferred: () => {
+        for (const run of deferred.splice(0)) run();
+      },
       overdue: () => {
         for (const [id, run] of timers) {
           timers.delete(id);
@@ -733,9 +739,13 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
     // Retired at once: hidden windows no longer count as open.
     expect(entry.count()).toBe(0);
     entry.ack("a");
+    expect(entry.a.isDestroyed()).toBe(false);
+    entry.runDeferred();
     expect(entry.calls.at(-1)).toBe("a.destroy");
     expect(entry.b.isDestroyed()).toBe(false);
     entry.ack("b");
+    expect(entry.b.isDestroyed()).toBe(false);
+    entry.runDeferred();
     expect(entry.calls.at(-1)).toBe("b.destroy");
     await new Promise((resolve) => setImmediate(resolve));
     expect(entry.warn).not.toHaveBeenCalled();
@@ -745,6 +755,7 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
     const entry = liftedEntry();
     entry.closeAll();
     entry.ack("a");
+    entry.runDeferred();
     entry.overdue();
     await new Promise((resolve) => setImmediate(resolve));
     expect(entry.warn).toHaveBeenCalledWith(
@@ -755,6 +766,8 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
     expect(entry.retiringWindows.has(entry.b)).toBe(true);
     // The slow renderer finally saved its latest draft: now it may go.
     entry.ack("b");
+    expect(entry.b.isDestroyed()).toBe(false);
+    entry.runDeferred();
     expect(entry.b.isDestroyed()).toBe(true);
   });
 
@@ -762,17 +775,40 @@ describe("index.ts menu-bar entry wiring (VC-577 B2)", () => {
     const entry = liftedEntry();
     entry.closeAll();
     entry.ack("a");
+    entry.runDeferred();
     entry.open();
     expect(entry.createOwnedWindow).not.toHaveBeenCalled();
     expect(entry.revealWindow).toHaveBeenCalledExactlyOnceWith(entry.b, { kind: "native" });
     expect(entry.retiringWindows.has(entry.b)).toBe(false);
     expect(entry.count()).toBe(1);
     entry.ack("b");
+    entry.runDeferred();
     expect(entry.b.isDestroyed()).toBe(false);
     // With nothing retained, a reveal builds a fresh window.
     entry.b.destroy();
     entry.open();
     expect(entry.createOwnedWindow).toHaveBeenCalledOnce();
+  });
+
+  it("a reveal after the flush ack but before native destruction cancels the deferred teardown", () => {
+    const entry = liftedEntry();
+    entry.closeAll();
+    entry.ack("a");
+    entry.open();
+    expect(entry.revealWindow).toHaveBeenCalledExactlyOnceWith(entry.a, { kind: "native" });
+    entry.runDeferred();
+    expect(entry.a.isDestroyed()).toBe(false);
+    expect(entry.count()).toBe(1);
+    expect(entry.b.isDestroyed()).toBe(false);
+  });
+
+  it("an already destroyed acknowledged window is not destroyed again by its Immediate", () => {
+    const entry = liftedEntry();
+    entry.closeAll();
+    entry.ack("a");
+    entry.a.destroy();
+    entry.runDeferred();
+    expect(entry.calls.filter((call) => call === "a.destroy")).toHaveLength(1);
   });
 
   it("closes agent Browser Tabs with a model-readable reason, and reopens them on reveal", () => {

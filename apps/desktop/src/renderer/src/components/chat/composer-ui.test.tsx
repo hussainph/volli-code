@@ -530,8 +530,7 @@ describe("the effort control's place in the footer", () => {
   it("stands beside the model pill rather than inside its popover", () => {
     const html = renderFooter();
 
-    // Readable before the first keystroke, which is the whole complaint the
-    // redesign answers — it used to be two levels down, on one row of a list.
+    // Readable before the first keystroke, not two levels down in a list.
     expect(html).toContain('aria-label="Reasoning effort: Medium"');
   });
 
@@ -584,8 +583,9 @@ describe("the effort control's place in the footer", () => {
   it("keeps its chrome at one ink — no resting dim (VC-335)", () => {
     // The row rested at 70% and came up under focus. On the app's own
     // canvases that made a resting composer and a disabled one the same
-    // picture, and the field (T3 Code, OpenCode, ChatGPT, Cursor) draws the
-    // chrome at one ink and lets the muted tier say "chrome" by itself.
+    // picture. The chrome rests at one ink, and the muted tier alone says
+    // "chrome", so normal chrome and a disabled control read as different
+    // pictures.
     const html = renderFooter();
 
     expect(html).not.toContain("opacity-70");
@@ -1202,7 +1202,10 @@ describe("the picker's place in the composer stack", () => {
   it("offers an opt-in contained overlay that contributes no flow height", () => {
     const html = renderStack("overlay");
     const stack = /<div data-slot="composer-picker-stack" class="([^"]*)"/.exec(html)?.[1];
-    const layer = /<div data-slot="composer-picker-overlay" class="([^"]*)"/.exec(html)?.[1];
+    const layer =
+      /<div data-slot="composer-picker-overlay" data-native-plane-overlay="true" class="([^"]*)"/.exec(
+        html,
+      )?.[1];
 
     expect(stack).toContain("relative");
     expect(stack).toContain("min-w-0");
@@ -1219,4 +1222,15 @@ describe("the picker's place in the composer stack", () => {
       html.indexOf('aria-label="Layout probe"'),
     );
   });
+});
+
+it.each([
+  [{ id: "q", text: "later", queueState: "queued" as const }, "Queued"],
+  [{ id: "q", text: "later", queueState: "releasing" as const }, "Sending"],
+  [{ id: "q", text: "later", localUnsent: true as const }, "Not sent"],
+  [{ id: "q", text: "later", afterCurrentStep: true as const }, "Sends after this step"],
+])("names queue ownership instead of showing unexplained words", (message, label) => {
+  const html = renderToStaticMarkup(<SessionComposer {...composerProps({ queued: [message] })} />);
+  expect(html).toContain('data-slot="queue-status"');
+  expect(html).toContain(`>${label}</span>`);
 });

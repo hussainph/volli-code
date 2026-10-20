@@ -29,7 +29,7 @@ import {
 import { disposeChatClient, getOrCreateChatClient } from "./registry";
 import { createSurfaceStore, type SessionSurfaceStore } from "./surface-store";
 import { EMPTY_TRANSCRIPT } from "./transcript";
-import { rejectedReceipt } from "./wire";
+import { commandRefusal } from "./wire";
 
 /* ------------------------------------------------------------------ scripts */
 
@@ -65,6 +65,33 @@ const REFUSED = {
   sessionId: SESSION.id,
   receipt: REJECTED_RECEIPT,
 };
+
+/**
+ * The receipt a harness sends when it does not know whether a command ran
+ * (CONTEXT.md's `unreconciled`). It is NOT a rejection and NOT an acceptance,
+ * so it must never be read as a success: that read latches `working` for a
+ * message and clears the error band for an attach, which is the silent success
+ * this surface exists to refuse. Its words, when there are any, are the host's
+ * own.
+ */
+const unreconciledReceipt = (detail: string | null): CommandReceipt => ({
+  id: "receipt-unreconciled",
+  commandId: "command-unreconciled",
+  status: "unreconciled",
+  detail,
+  recordedAt: 0,
+  sequence: 1,
+});
+const unreconciledAnswer = (detail: string | null): CommandAnswer => ({
+  sessionId: SESSION.id,
+  receipt: unreconciledReceipt(detail),
+});
+
+/**
+ * Crosses the RPC edge as JSON, as every answer here does: a key set to
+ * `undefined` is dropped, so the reader meets it absent rather than undefined.
+ */
+const overTheWire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 /**
  * The durable policy every structured Session records before anything attaches
@@ -451,7 +478,9 @@ async function adopted(
       const answer = await rpc.answerAttach();
       return {
         sessionId: answer.sessionId,
-        state: answer.state ?? (rejectedReceipt(answer) === null ? "ready" : "needs-recovery"),
+        // A `ready` needs a receipt that proves the start. An unreconciled one
+        // proves nothing, so the default never reads it as started.
+        state: answer.state ?? (commandRefusal(answer) === null ? "ready" : "needs-recovery"),
         receipt: answer.receipt ?? null,
         throughSequence: answer.throughSequence ?? 1,
       };
@@ -1171,6 +1200,82 @@ describe("product-owned attach", () => {
     expect(slice()!.lifecycle).toBe("error");
     expect(slice()!.sessionError).toBe("Could not start Session: Runtime recovery is required.");
   });
+
+  // The runtime answers with this when a replayed attach cannot be confirmed:
+  // its attachment recovery threw after the attachment opened, or the outcome
+  // was recorded without its receipt. The words are the runtime's own.
+  it("keeps the host's words for an unconfirmed attachment, and does not call it a failure to start", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: unreconciledReceipt("Attachment recovery failed: resume transport failed"),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: Attachment recovery failed: resume transport failed",
+    );
+  });
+
+  it("names the uncertainty itself when an unconfirmed attachment left no words", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: unreconciledReceipt(null),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: the runtime could not confirm whether this ran",
+    );
+  });
+
+  it("does not read a ready state beside an unconfirmed receipt as a started Session", async () => {
+    // The wire permits this pairing (the attach output takes any receipt beside
+    // any state), and the client's success rule must not depend on the host
+    // never sending it: an unconfirmed receipt is not proof of a start.
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "ready",
+        receipt: unreconciledReceipt("Pi stopped answering before it attached."),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: Pi stopped answering before it attached.",
+    );
+  });
+
+  it("reads an unconfirmed attachment that crossed the edge without its words the same way", async () => {
+    // Over JSON a key set to `undefined` is simply absent. The codec reads an
+    // absent `detail` as it reads a null one: no words, so the uncertainty is
+    // still named rather than read as a missing field.
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () =>
+        overTheWire({
+          sessionId: SESSION.id,
+          state: "needs-recovery",
+          receipt: { ...unreconciledReceipt(null), detail: undefined },
+          throughSequence: 1,
+        }) as unknown as CommandAnswer;
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: the runtime could not confirm whether this ran",
+    );
+  });
 });
 
 describe("startAttach", () => {
@@ -1204,6 +1309,29 @@ describe("startAttach", () => {
     await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
     expect(slice()!.sessionError).toBeNull();
     expect(notifications).toEqual([]);
+  });
+
+  it("keeps an unconfirmed attach on the slice even when a refusal is reported elsewhere", async () => {
+    // The elsewhere is Ticket Attention, and the runtime raises that only when an
+    // attach fails outright (a rejected receipt). An unconfirmed outcome writes
+    // no Attention, so withholding it here would leave a Ticket Session that
+    // stopped with nothing on screen at all.
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: unreconciledReceipt(
+          "Attachment outcome is recorded but its delivery receipt is unreconciled",
+        ),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: Attachment outcome is recorded but its delivery receipt is unreconciled",
+    );
   });
 
   it("waits for nothing when the surface dropped the Session mid-attach", async () => {
@@ -1556,6 +1684,40 @@ describe("recover", () => {
     await expect(client.recover()).resolves.toBe(false);
 
     expect(slice()!.sessionError).toBe("Reconcile: socket hang up");
+  });
+
+  it("clears the band on a reconcile the runtime answered with no receipt", async () => {
+    // The real answer: `session.reconcile` is a void-output procedure, so a
+    // completed reconcile resolves with nothing, and nothing on the wire is a
+    // receipt that could say otherwise. Pinned so a void answer stays a success.
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+      fake.answerReconcile = () => undefined;
+    });
+
+    await expect(client.recover()).resolves.toBe(true);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("does not count a re-attach the runtime could not confirm as a recovery", async () => {
+    // The no-executor arm of `recover` is a re-attach. Its unconfirmed outcome
+    // must latch the band the same way a direct Retry does, not clear it.
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: unreconciledReceipt("Pi stopped answering before it attached."),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.recover()).resolves.toBe(false);
+    expect(rpc.attaches).toHaveLength(1);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: Pi stopped answering before it attached.",
+    );
   });
 });
 
@@ -2006,6 +2168,23 @@ describe("submit", () => {
     });
   }
 
+  it.each([undefined, "steer", "replace"] as const)(
+    "asks for opening acceptance for immediate delivery=%s",
+    async (delivery) => {
+      const { client, rpc } = await ready();
+      await expect(client.submit({ id: "ordinary", text: "go" }, delivery)).resolves.toBe(
+        "delivered",
+      );
+      expect(overTheWire(rpc.submissions()[0]!.command)).toMatchObject({ settle: "opened" });
+    },
+  );
+
+  it("leaves queued acceptance with the host, not opening settlement", async () => {
+    const { client, rpc } = await ready();
+    await client.submit({ id: "queued", text: "later" }, "queue");
+    expect(rpc.submissions()[0]!.command).not.toHaveProperty("settle");
+  });
+
   it("keeps model policy out of message commands", async () => {
     const { client, rpc, sessionId } = await ready();
 
@@ -2025,6 +2204,7 @@ describe("submit", () => {
             parts: [{ type: "text", text: "ship it" }],
           },
           delivery: "steer",
+          settle: "opened",
         },
       },
     ]);
@@ -2032,6 +2212,7 @@ describe("submit", () => {
       "delivery",
       "kind",
       "message",
+      "settle",
     ]);
   });
 
@@ -2238,6 +2419,73 @@ describe("submit", () => {
 
     await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("refused");
     expect(slice()!.sessionError).toBe("Message not delivered: socket hang up");
+  });
+
+  it("does not call an unreconciled message delivered, and keeps the host's words visible", async () => {
+    const { client, slice, notifications } = await ready((fake) => {
+      fake.answer = (request) =>
+        request.command.kind === "message.submit"
+          ? unreconciledAnswer("Pi stopped answering before it started the turn.")
+          : ACCEPTED;
+    });
+
+    // Recorded, not delivered: the words are in the ledger, so a composer must
+    // not hand them back. The band is the visible account; no toast is owed for
+    // a message that was not queued.
+    await expect(client.submit({ id: "m1", text: "go" })).resolves.toBe("recorded");
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Message delivery unconfirmed: Pi stopped answering before it started the turn.",
+    );
+    expect(notifications).toEqual([]);
+  });
+
+  it("names the uncertainty itself when an unreconciled message left no words", async () => {
+    const { client, slice } = await ready((fake) => {
+      fake.answer = (request) =>
+        request.command.kind === "message.submit" ? unreconciledAnswer(null) : ACCEPTED;
+    });
+
+    await expect(client.submit({ id: "m1", text: "go" }, "steer")).resolves.toBe("recorded");
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Message delivery unconfirmed: the runtime could not confirm whether this ran",
+    );
+  });
+
+  it("refuses an unreconciled queued message, keeps its words, and says so in a toast", async () => {
+    const { client, rpc, slice, notifications, notificationTones } = await ready((fake) => {
+      fake.answer = (request) =>
+        request.command.kind === "message.submit"
+          ? unreconciledAnswer("Pi stopped answering before it queued the message.")
+          : ACCEPTED;
+    });
+
+    // A queue that was never confirmed admitted nothing this surface can show,
+    // so it neither refreshes the queue as if it had landed nor reads as success.
+    await expect(client.submit({ id: "q1", text: "later" }, "queue")).resolves.toBe("refused");
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Message delivery unconfirmed: Pi stopped answering before it queued the message.",
+    );
+    expect(notifications).toEqual([
+      "Message queueing unconfirmed: Pi stopped answering before it queued the message.",
+    ]);
+    expect(notificationTones).toEqual(["error"]);
+    expect(rpc.projectionQueries).toBe(0);
+  });
+
+  it("names the uncertainty in a queued message's toast when the host left no words", async () => {
+    const { client, notifications, notificationTones } = await ready((fake) => {
+      fake.answer = (request) =>
+        request.command.kind === "message.submit" ? unreconciledAnswer(null) : ACCEPTED;
+    });
+
+    await expect(client.submit({ id: "q2", text: "later" }, "queue")).resolves.toBe("refused");
+    expect(notifications).toEqual([
+      "Message queueing unconfirmed: the runtime could not confirm whether this ran",
+    ]);
+    expect(notificationTones).toEqual(["error"]);
   });
 });
 
@@ -2926,7 +3174,7 @@ describe("bounded history (VC-315)", () => {
 
   // tRPC's WebSocket adapter answers `started` once the subscription's
   // iterator exists, before its first `next()` runs the replay that refuses.
-  // `started` therefore proves nothing about the replay (VC-315 review, B4).
+  // `started` therefore proves nothing about the replay (VC-315).
   it("reports repeated refusals even when the transport says started before the replay refuses", async () => {
     const { rpc, slice, stream, notifications } = await adopted();
     for (let attempt = 0; attempt < 2; attempt += 1) {

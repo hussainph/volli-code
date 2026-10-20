@@ -191,6 +191,30 @@ export interface TextLineReader {
 }
 
 /**
+ * Positional byte reader over one open regular file (VC-801, a local
+ * divergence): `read` reads only what it is asked for, where it is asked, so a
+ * caller can look at a file of any size without holding it.
+ */
+export interface FileByteReader {
+  /** Size in bytes when the file was opened. */
+  readonly size: number;
+  /**
+   * Read up to `length` bytes from byte `position`; fewer only at end of file.
+   * With `into` (at least `length` bytes) the bytes land there and the result
+   * is a view of it, valid until the next read into it; without it, a new
+   * buffer is allocated.
+   */
+  read(
+    position: number,
+    length: number,
+    context: Context,
+    into?: Uint8Array,
+  ): Promise<Result<Uint8Array, FileError>>;
+  /** Release the open file. Must be best-effort and must not throw or reject. */
+  close(context: Context): Promise<void>;
+}
+
+/**
  * Filesystem capability used by the harness.
  *
  * Paths passed to methods may be absolute or relative to {@link cwd}. Paths returned by file operations are addressed paths
@@ -219,6 +243,12 @@ export interface FileSystem {
   ): Promise<Result<string[], FileError>>;
   /** Read a binary file. */
   readBinaryFile(path: string, context: Context): Promise<Result<Uint8Array, FileError>>;
+  /**
+   * Open a regular file for positional byte reads, following symlinks. Anything
+   * else — a directory, FIFO, device or socket — is refused at once, without
+   * waiting on a writer or reading a byte.
+   */
+  openFileReader(path: string, context: Context): Promise<Result<FileByteReader, FileError>>;
   /** Create or overwrite a file, creating parent directories when supported. */
   writeFile(
     path: string,
@@ -312,7 +342,25 @@ export type ShellOutputUpdate =
 /** Bounded shell completion. Output text is delivered through {@link ShellExecOptions.onUpdate}. */
 export interface ShellExecResult extends ShellOutputMetadata {
   exitCode: number;
+  /** Person-requested handoff; plain text is the replay fallback. */
+  backgroundShellId?: string;
+  /** Capture failed after handoff; the shell id must still reach the model. */
+  backgroundCaptureIncomplete?: boolean;
 }
+
+/** Host-owned foreground execution, using the normal background-shell lifecycle on handoff. */
+export type ForegroundShellExecutor = (input: {
+  command: string;
+  /** Resolved by the execution environment, including PATH/sh fallback and command transport. */
+  shellConfig: { shell: string; args: string[]; commandTransport?: "argv" | "stdin" };
+  cwd: string;
+  env: Record<string, string>;
+  toolCallId: string;
+  timeout?: number;
+  signal: AbortSignal;
+  onOutput(chunk: Uint8Array): void;
+  onReady(control: { pauseOutput(): void; resumeOutput(): void }): void;
+}) => Promise<{ code: number | null; signal: string | null; background?: { shellId: string } }>;
 
 /** Options for {@link Shell.exec}. */
 export interface ShellExecOptions {
@@ -328,6 +376,9 @@ export interface ShellExecOptions {
   capture?: ShellOutputCaptureOptions;
   /** Called with bounded output changes. */
   onUpdate?: (update: ShellOutputUpdate, context: Context) => void;
+  /** Only a top-level bash call can be handed off; ignored by unsupported environments. */
+  foregroundCallId?: string;
+  onForegroundReady?: () => void;
 }
 
 /** Shell execution capability used by the harness. */

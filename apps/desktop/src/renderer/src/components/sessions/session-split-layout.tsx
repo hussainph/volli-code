@@ -10,6 +10,7 @@ import { XCircleIcon } from "@phosphor-icons/react/dist/csr/XCircle";
 import type { SessionListingRow, SessionRecord } from "@volli/shared";
 
 import { TerminalView } from "@renderer/components/sessions/terminal-view";
+import { SplitViewDivider } from "@renderer/components/split/split-view-divider";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -23,10 +24,13 @@ import { canResumeSession } from "@renderer/components/ticket/session-history";
 import { useTerminalFocusTarget } from "@renderer/hooks/use-terminal-focus-target";
 import { cn } from "@renderer/lib/utils";
 import type { SessionLayout, SessionTab, TerminalSplitDirection } from "@renderer/stores/sessions";
-import { launchAdapter, sessionPanes } from "@renderer/stores/sessions";
+import { launchAdapter, sessionPanes, TERMINAL_SPLIT_RATIO_RANGE } from "@renderer/stores/sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 import { getEngine } from "@renderer/terminal/registry";
+
+/** No terminal pane is squeezed below this — a prompt and a few columns. */
+const TERMINAL_MIN_PANE_PX = 96;
 
 interface SessionSplitLayoutProps {
   /** The unified store owner key (projectId for scratch, ticketId for ticket). */
@@ -317,135 +321,22 @@ function SplitNode(props: SplitNodeProps) {
       >
         <SplitNode {...props} layout={layout.first} />
       </div>
-      <SplitDivider
-        direction={layout.direction}
+      {/* The shared split grip, with the terminal's floor: a terminal pane
+          stays usable far narrower than a surface pane, and the range it
+          reports and steps within is the sessions store's own clamp. */}
+      <SplitViewDivider
+        direction={vertical ? "row" : "column"}
         ratio={layout.ratio}
+        minPanePx={TERMINAL_MIN_PANE_PX}
+        valueRange={TERMINAL_SPLIT_RATIO_RANGE}
+        label={
+          vertical ? "Resize left and right terminal panes" : "Resize top and bottom terminal panes"
+        }
         onChange={(ratio) => props.onResize(layout.id, ratio)}
       />
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <SplitNode {...props} layout={layout.second} />
       </div>
-    </div>
-  );
-}
-
-interface SplitDividerProps {
-  direction: TerminalSplitDirection;
-  ratio: number;
-  onChange(ratio: number): void;
-}
-
-/**
- * ONE RATIO PER FRAME, not one per pointer sample — and on this divider that
- * is not a micro-optimisation.
- *
- * Every write runs the whole chain: the store re-renders the split, each pane
- * gets a new `flex` basis, every engine refits and reports a new grid, and each
- * live pane sends a PTY resize over IPC — for both sides of the split, and again for
- * every pane of a nested one. A trackpad samples past 120Hz, so an uncoalesced
- * drag charged all of that several times per displayed frame, to terminals that
- * reflow their scrollback on every column change. The pointer cannot be in two
- * places within one frame, so only a frame's last sample could ever have
- * decided where the divider lands; the rest were work nobody saw.
- */
-function SplitDivider({ direction, ratio, onChange }: SplitDividerProps) {
-  const vertical = direction === "vertical";
-  const dragRef = React.useRef<{
-    pointerId: number;
-    parent: HTMLElement;
-    x: number;
-    y: number;
-    frame: number | null;
-  } | null>(null);
-
-  React.useEffect(() => {
-    return () => {
-      const drag = dragRef.current;
-      if (drag !== null && drag.frame !== null) window.cancelAnimationFrame(drag.frame);
-      dragRef.current = null;
-    };
-  }, []);
-
-  // The rect is read per frame rather than cached at the press: this box is not
-  // the drag's to own — a sidebar toggle or a full-screen shortcut can resize it
-  // mid-drag, and a stale rect would put the divider where the pointer isn't.
-  const ratioFromPointer = (parent: HTMLElement, clientX: number, clientY: number): number => {
-    const rect = parent.getBoundingClientRect();
-    const total = vertical ? rect.width : rect.height;
-    const position = vertical ? clientX - rect.left : clientY - rect.top;
-    const minRatio = Math.min(0.45, 96 / Math.max(total, 1));
-    return Math.min(1 - minRatio, Math.max(minRatio, position / Math.max(total, 1)));
-  };
-
-  function endDrag(event: React.PointerEvent<HTMLDivElement>, release: boolean): void {
-    const drag = dragRef.current;
-    if (drag === null || event.pointerId !== drag.pointerId) return;
-    dragRef.current = null;
-    if (release) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (drag.frame === null) return;
-    // The frame the last sample was waiting on will never run. Land it here, or
-    // the panes settle one sample short of where the pointer was released —
-    // visible as a divider that stops just shy of the cursor.
-    window.cancelAnimationFrame(drag.frame);
-    onChange(ratioFromPointer(drag.parent, drag.x, drag.y));
-  }
-
-  return (
-    <div
-      role="separator"
-      aria-orientation={vertical ? "vertical" : "horizontal"}
-      aria-label={
-        vertical ? "Resize left and right terminal panes" : "Resize top and bottom terminal panes"
-      }
-      tabIndex={0}
-      className={cn(
-        "group relative z-10 shrink-0 bg-transparent outline-none focus-visible:ring-1 focus-visible:ring-primary",
-        vertical ? "w-1.5 cursor-col-resize" : "h-1.5 cursor-row-resize",
-      )}
-      onPointerDown={(event) => {
-        const parent = event.currentTarget.parentElement;
-        if (parent === null) return;
-        event.currentTarget.setPointerCapture(event.pointerId);
-        dragRef.current = {
-          pointerId: event.pointerId,
-          parent,
-          x: event.clientX,
-          y: event.clientY,
-          frame: null,
-        };
-        // The press itself jumps the divider to the pointer, unthrottled: it is
-        // one write, and waiting a frame for it would read as lag on the click.
-        onChange(ratioFromPointer(parent, event.clientX, event.clientY));
-      }}
-      onPointerMove={(event) => {
-        const drag = dragRef.current;
-        if (drag === null || event.pointerId !== drag.pointerId) return;
-        drag.x = event.clientX;
-        drag.y = event.clientY;
-        if (drag.frame !== null) return;
-        drag.frame = window.requestAnimationFrame(() => {
-          drag.frame = null;
-          onChange(ratioFromPointer(drag.parent, drag.x, drag.y));
-        });
-      }}
-      onPointerUp={(event) => endDrag(event, true)}
-      onPointerCancel={(event) => endDrag(event, false)}
-      onKeyDown={(event) => {
-        const decrement = vertical ? event.key === "ArrowLeft" : event.key === "ArrowUp";
-        const increment = vertical ? event.key === "ArrowRight" : event.key === "ArrowDown";
-        if (!decrement && !increment) return;
-        event.preventDefault();
-        onChange(ratio + (increment ? 0.03 : -0.03));
-      }}
-    >
-      <span
-        className={cn(
-          "absolute bg-border transition-colors duration-150 group-hover:bg-primary/70 group-focus-visible:bg-primary",
-          vertical
-            ? "inset-y-0 left-1/2 w-px -translate-x-1/2"
-            : "inset-x-0 top-1/2 h-px -translate-y-1/2",
-        )}
-      />
     </div>
   );
 }

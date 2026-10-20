@@ -33,6 +33,7 @@ import {
   type QueuedMessage,
   type TranscriptCompaction,
   type TranscriptReasoningDrop,
+  type TranscriptToolRefresh,
 } from "@volli/session-presentation";
 import { useChatSessionsStore, type ChatSessionsState } from "@renderer/stores/chat-sessions";
 
@@ -42,6 +43,7 @@ const NO_OPENED: ReadonlyMap<string, RendererSessionInteraction> = new Map();
 const NO_PROMPT_RESOURCES: readonly string[] = [];
 const NO_COMPACTIONS: readonly TranscriptCompaction[] = [];
 const NO_REASONING_DROPS: readonly TranscriptReasoningDrop[] = [];
+const NO_TOOL_REFRESHES: readonly TranscriptToolRefresh[] = [];
 const NO_LIVE_COMPACTION: LiveTranscriptCompaction | null = null;
 
 /**
@@ -106,6 +108,7 @@ export interface SessionView {
   compactions: readonly TranscriptCompaction[];
   /** Every provider recovery notice, anchored beside the Turn it affected. */
   reasoningDrops: readonly TranscriptReasoningDrop[];
+  toolRefreshes: readonly TranscriptToolRefresh[];
   /** The summary currently being generated, absent once its durable result lands. */
   liveCompaction: LiveTranscriptCompaction | null;
   /**
@@ -212,6 +215,10 @@ export function useSessionController(
     store,
     (state) => state.sessions[sessionId]?.transcript.reasoningDrops ?? NO_REASONING_DROPS,
   );
+  const toolRefreshes = useStore(
+    store,
+    (state) => state.sessions[sessionId]?.transcript.toolRefreshes ?? NO_TOOL_REFRESHES,
+  );
   const liveCompaction = useStore(
     store,
     (state) => state.sessions[sessionId]?.transcript.liveCompaction ?? NO_LIVE_COMPACTION,
@@ -240,6 +247,7 @@ export function useSessionController(
       promptResources,
       compactions,
       reasoningDrops,
+      toolRefreshes,
       liveCompaction,
       historyBefore,
       latestReply,
@@ -258,6 +266,7 @@ export function useSessionController(
       queue,
       queueRevision,
       reasoningDrops,
+      toolRefreshes,
       sessionError,
       turnActive,
       working,

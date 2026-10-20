@@ -1,30 +1,15 @@
 /**
- * What real Sessions actually did, measured from Pi's own session logs (VC-245).
+ * Aggregate local Pi Session logs for tool-execution benchmarks (VC-245).
  *
- * The synthetic benches answer "what *would* parallel mode save" and "does a
- * model batch when handed a batchable task". Both are hypotheticals. This
- * answers the two questions that actually decide the ticket, from the product's
- * own history:
+ *  1. Estimate recoverable wall-clock time for sequential logs. Consecutive
+ *     tool-result timestamps within one assistant reply approximate per-call
+ *     durations; sequential cost is their sum and concurrent cost their maximum.
+ *     Gaps can include time spent answering a question, so the saving is an
+ *     upper bound, not observed concurrent execution. Do not apply this
+ *     estimate to logs whose calls already ran concurrently.
  *
- *  1. **How much wall-clock would parallel mode have saved?** Volli executes
- *     sequentially today, so consecutive tool-result timestamps inside one
- *     assistant reply ARE the per-call durations. For every batched reply ever
- *     issued, sequential cost is the sum of those durations and parallel cost
- *     is the largest of them. The difference is measured, not modelled.
- *
- *     One inflation is deliberate and worth naming rather than burying. The
- *     gap between two tool results contains whatever happened in between,
- *     including a question's wait (or per-call approvals in historical logs).
- *     Tool concurrency does not recover time a person spent answering. The
- *     saving reported here is therefore an UPPER BOUND. That errs
- *     in favour of parallel mode while the conclusion drawn from it is against
- *     parallel mode, so it is the safe direction to be wrong in: a tighter
- *     measurement can only make the case weaker.
- *
- *  2. **How many tokens does a turn spend re-sending tool results?** A result
- *     produced in round 1 of a turn is re-sent on rounds 2..R, because the
- *     transcript is replayed every round. That re-send is what Code Mode
- *     claims to remove, and its size is the whole of Code Mode's case.
+ *  2. Estimate result-token resend volume. A result produced in round 1 is
+ *     sent again in rounds 2..R when the transcript is replayed each round.
  *
  *   node --experimental-strip-types bench/parallel-tools/transcript-audit.ts
  *   VOLLI_PI_SESSIONS="/path/to/pi-sessions" node ... transcript-audit.ts
@@ -171,10 +156,8 @@ interface Totals {
   /**
    * Per-tool result volume produced inside fan-out replies.
    *
-   * This is what decides which tools would have to be callable from a program
-   * for Code Mode to be worth building: a design that excludes the tools at
-   * the top of this list cannot collect the saving the rest of the audit
-   * attributes to it.
+   * Attribute result volume to the tools a Code Mode program would have to
+   * cover to avoid those resends; excluded tools cannot yield that saving.
    */
   perToolFanoutChars: Map<string, number>;
 
@@ -277,9 +260,8 @@ async function foldSession(path: string, totals: Totals): Promise<void> {
         bump(totals.batchHistogram, round.toolCalls);
       }
 
-      // The measurement at the heart of this file. Volli runs sequentially, so
-      // these durations are what a batch actually cost; the largest of them is
-      // what it would have cost run concurrently.
+      // For sequential source logs, sum is the observed batch cost and max
+      // estimates the concurrent cost. Question waits can inflate this bound.
       const durations = round.durationsMs;
       if (round.toolCalls >= 2 && durations.length >= 2) {
         totals.batchedRounds += 1;

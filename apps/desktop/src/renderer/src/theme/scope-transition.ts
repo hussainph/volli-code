@@ -47,9 +47,8 @@
  * the document gets a live transition, and every one of them is restyled on
  * every frame of it. Measured on a workspace hop: token derivation and the DOM
  * write together were under 7ms, and the crossfade held the main thread in
- * continuous style recalculation for ~331ms afterwards. The owner hops
- * workspaces constantly, so that was ~400ms of jank on the app's most repeated
- * interaction.
+ * continuous style recalculation for ~331ms afterwards. Repeated workspace
+ * hops would therefore incur ~400ms of jank per interaction.
  *
  * A view transition inverts the cost. The tokens move exactly once, in one
  * recalculation, inside the update callback — the same work as a hard cut — and

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
 import { getHarnessAdapter, roleImpliedByTicket } from "@volli/shared";
-import { insertProject } from "../db/projects-repo";
+import { detachProject, insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { insertTicket } from "../db/tickets-repo";
@@ -146,6 +146,39 @@ describe("resolveScope", () => {
       (id) => getHarnessAdapter(id),
     );
     expect(result).toMatchObject({ ok: true, scope: { title: "Terminal 2", ticketId: null } });
+  });
+
+  // VC-822: a removed project keeps its Sessions for a re-add, and opens no
+  // terminal until then, ticket or Board.
+  it("refuses a terminal in a removed project, and still opens one for an unknown project", async () => {
+    const { project, ticket, control } = setup();
+    detachProject(ctx.db, project.id, 5);
+    const resolve = (workspaceId: string, ticketId?: string) =>
+      resolveScope(
+        ctx.db,
+        control,
+        {
+          workspaceId,
+          cwd: project.path,
+          cols: 80,
+          rows: 24,
+          ...(ticketId === undefined ? {} : { ticket: { ticketId } }),
+        },
+        "",
+        () => null,
+        (id) => getHarnessAdapter(id),
+      );
+    const removed = {
+      ok: false,
+      error: "This project was removed from Volli. Add its folder again to use it.",
+    };
+
+    await expect(resolve(project.id)).resolves.toEqual(removed);
+    await expect(resolve(project.id, ticket.id)).resolves.toEqual(removed);
+    await expect(resolve("no-such-project")).resolves.toMatchObject({
+      ok: true,
+      scope: { artifactsRoot: null },
+    });
   });
 
   it("rejects unknown, mismatched, open, and shell history instead of manufacturing a resume", async () => {

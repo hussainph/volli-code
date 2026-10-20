@@ -1,8 +1,7 @@
 /**
- * The #815 review's B4 probe, ported: a late subscriber to a flow whose log
- * is full reads it through the real desktop router, twice in a row, never
- * overflowing the 256-event stream. The engine is the real one over the
- * package's fakes (no SSH, no keychain).
+ * A late subscriber to a flow whose log is full (#815) reads it through the
+ * real desktop router, twice in a row, never overflowing the 256-event stream.
+ * The engine is the real one over the package's fakes (no SSH, no keychain).
  */
 import { flush, harness, watch } from "@volli/host-install/testing";
 import { createDesktopRouter, LOCAL_DESKTOP_CALLER, RpcDiagnosticLog } from "@volli/session-rpc";

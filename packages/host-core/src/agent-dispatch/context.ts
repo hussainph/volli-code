@@ -29,6 +29,7 @@ import type {
   AgentResponse,
   AuthorityPolicy,
   DoctorFacts,
+  HarnessId,
   ModelAccessSnapshot,
   Project,
   PromptResource,
@@ -53,7 +54,7 @@ import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
 import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import type { Sessions } from "../session-runtime/sessions";
 import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
-import type { RunGit, RunGitAsync } from "../worktree";
+import type { RunGitAsync } from "../worktree";
 import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
@@ -66,16 +67,11 @@ export interface AgentCommandServiceOptions {
   now?: () => number;
   newId?: () => string;
   /**
-   * The git runner the read-only worktree commands execute through. All git
-   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
-   * tests substitute a scripted runner. Defaults to {@link runGitCapturing}.
-   */
-  git?: RunGit;
-  /**
-   * The non-blocking git runner for verbs that can execute user-configured
-   * hooks or scan complete Change Sets. Defaults to {@link runGitCapturingAsync}
-   * and is separate from {@link git} so a caller cannot accidentally put a
-   * long-running child back onto Electron main.
+   * The git runner every worktree verb executes through — the non-blocking
+   * one. All git calls stay inside the worktree module (CONCEPT #42); this seam
+   * only lets tests substitute a scripted runner. Defaults to
+   * {@link runGitCapturingAsync}. There is no synchronous runner here, so a
+   * verb cannot put a git child back onto Electron main's thread (VC-786).
    */
   gitAsync?: RunGitAsync;
   /**
@@ -83,7 +79,7 @@ export interface AgentCommandServiceOptions {
    * threaded into the worktree read verbs' disk-existence seam so a stamped-
    * but-deleted directory refuses with INVALID_REQUEST rather than letting
    * status.ts's errs-dirty fallback report `uncommitted: true` for a tree that's
-   * gone. Same seam shape as {@link git} — defaults to {@link existsSync}; tests
+   * gone. The same kind of seam as {@link gitAsync} — defaults to {@link existsSync}; tests
    * substitute a scripted predicate.
    */
   worktreeExists?: (path: string) => boolean;
@@ -169,7 +165,7 @@ export interface AgentCommandServiceOptions {
   }) => Promise<void>;
   /**
    * Fires one model-call title refinement (VC-81) behind a kickoff-derived
-   * heuristic title, on the owner's ladder — utility default, then the
+   * heuristic title, using the model ladder — utility default, then the
    * Session's own model, then the Role's default. Never fires for an
    * explicit `--title` (that is already a person's choice), and never
    * rejects: the heuristic is the fallback the titler keeps on failure.
@@ -331,6 +327,16 @@ export interface EnvSessionIdentity {
 }
 
 /**
+ * A launch a wrapper minted a harness session id for, held until the harness
+ * proves the launch happened (VC-807). Until then it is a promise, not a fact:
+ * `claude --version` mints too, and never starts a session.
+ */
+export interface PendingHarnessLaunch {
+  readonly harnessId: HarnessId;
+  readonly harnessSessionId: string;
+}
+
+/**
  * The service state and request-scoped snapshot one verb handler runs against.
  *
  * `options` is the composition root verbatim, because most of what a handler
@@ -346,8 +352,6 @@ export interface AgentCommandContext {
   readonly now: () => number;
   /** {@link AgentCommandServiceOptions.newId}, defaulted to `randomUUID`. */
   readonly newId: () => string;
-  /** {@link AgentCommandServiceOptions.git}, defaulted to `runGitCapturing`. */
-  readonly git: RunGit;
   /** {@link AgentCommandServiceOptions.gitAsync}, defaulted to `runGitCapturingAsync`. */
   readonly gitAsync: RunGitAsync;
   /** {@link AgentCommandServiceOptions.worktreeExists}, defaulted to `existsSync`. */
@@ -370,6 +374,12 @@ export interface AgentCommandContext {
    * Session are exactly what it exists to serialize.
    */
   readonly terminalUpdateLocks: Map<string, Promise<void>>;
+  /**
+   * The launch each Session's wrapper last minted an id for and that has not
+   * yet proved itself — see `sessionHarnessVerb`. Service-lived: the mint and
+   * the startup hook that confirms it arrive on separate requests.
+   */
+  readonly pendingLaunches: Map<string, PendingHarnessLaunch>;
   /** Every registered project, listed once per request. */
   readonly projects: readonly Project[];
   /**

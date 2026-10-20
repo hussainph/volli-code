@@ -40,12 +40,15 @@ import {
   type AddHostFacts,
   type AddHostStartInput,
   type AddHostStepId,
+  type BrowserAppShortcutEvent,
   type CreateRemoteProjectInput,
   type CreateRemoteProjectResult,
   type DesktopCatalogEntry,
   type DesktopKey,
   type HandlerCall,
   type HostHandler,
+  type HostScopeRelayCall,
+  type HostScopeRelaySubscribeCall,
   type HostLinkRelayCall,
   type HostLinkRelayEvent,
   type HostLinkRelaySubscribeCall,
@@ -65,10 +68,12 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { AsyncQueue } from "./async-queue";
+import { boardId } from "./board-schema";
 import {
   createCatalogBuilders,
   hostAnswer,
   HostProcedureError,
+  PROJECT_RESOURCE,
   type CatalogCallerContext,
   type CatalogMismatch,
   type ProcedurePaths,
@@ -118,7 +123,12 @@ export type DesktopSubscriptionHandler<Input, Emission> = (
 
 /** The slice of the host's handler map the desktop router projects (D2: structural). */
 export interface DesktopRouterHandlers {
+  readonly "shells.moveToBackground": HostHandler<
+    { sessionId: string; toolCallId: string },
+    { shellId: string }
+  >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
+  readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /** Remote hosts this desktop added over SSH (VC-700 PR 2): desktop main's registry. */
   readonly "hosts.snapshot": HostHandler<void, RemoteHostsSnapshot>;
@@ -184,6 +194,13 @@ export interface DesktopRouterHandlers {
   readonly "hosts.createProject": HostHandler<CreateRemoteProjectInput, CreateRemoteProjectResult>;
   readonly "hosts.openWorkspace": HostHandler<RemoteWorkspaceInput, null>;
   readonly "hosts.closeWorkspace": HostHandler<RemoteWorkspaceInput, null>;
+  /** HOST-scoped operations over main's host link (VC-722), before any project. */
+  readonly "hostScope.query": HostHandler<HostScopeRelayCall, unknown>;
+  readonly "hostScope.mutate": HostHandler<HostScopeRelayCall, unknown>;
+  readonly "hostScope.subscribe": DesktopSubscriptionHandler<
+    HostScopeRelaySubscribeCall,
+    HostLinkRelayEvent
+  >;
   /** The Workspace link relay (VC-711): a remote project's public operations, over main's link. */
   readonly "hostLink.query": HostHandler<HostLinkRelayCall, unknown>;
   readonly "hostLink.mutate": HostHandler<HostLinkRelayCall, unknown>;
@@ -191,6 +208,9 @@ export interface DesktopRouterHandlers {
     HostLinkRelaySubscribeCall,
     HostLinkRelayEvent
   >;
+  /** App shortcuts out of a focused Browser page (VC-301): desktop main's Browser Tab host. */
+  readonly "browserShortcuts.subscribe": DesktopSubscriptionHandler<void, BrowserAppShortcutEvent>;
+  readonly "browserShortcuts.focusPage": HostHandler<{ tabId: string }, null>;
 }
 
 type AssertNever<Type extends never> = Type;
@@ -207,7 +227,7 @@ export interface DesktopRouterContext extends CatalogCallerContext {
 
 export type DesktopRouterContextPorts = AssertNever<RouterContextPorts<DesktopRouterContext>>;
 
-const { hostProcedure, catalogRouter } = createCatalogBuilders<
+const { hostProcedure, workspaceProcedure, catalogRouter } = createCatalogBuilders<
   DesktopRouterContext,
   DesktopCatalogEntry
 >({ entries: DESKTOP_CATALOG_ENTRIES });
@@ -216,7 +236,7 @@ const hostId = z.uuid();
 const providerId = z.string().min(1).max(256);
 /**
  * The window's name for one sign-in run, minted per run: an answer or cancel
- * naming an older run reaches nothing (VC-702 review B3). Optional, so a
+ * naming an older run reaches nothing (VC-702). Optional, so a
  * caller without one reaches the host and provider's current run.
  */
 const runId = identifier.optional();
@@ -277,6 +297,14 @@ const hostLinkSubscribeSchema = z.strictObject({
   input: z.unknown().optional(),
   lastEventId: z.string().min(1).max(HOST_LINK_RELAY_EVENT_ID_MAX).optional(),
 });
+const hostScopeCallSchema = z.strictObject({
+  hostId,
+  path: relayPath,
+  input: z.unknown().optional(),
+});
+const hostScopeSubscribeSchema = hostScopeCallSchema.extend({
+  lastEventId: z.string().min(1).max(HOST_LINK_RELAY_EVENT_ID_MAX).optional(),
+});
 const hostLinkRelayErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
@@ -313,6 +341,27 @@ async function relayAnswer(run: () => unknown): Promise<unknown> {
     throw new TRPCError({ code: hostError.code, message: hostError.message, cause: error });
   }
 }
+
+/** One Browser page shortcut, as main hands it to the window (VC-301). */
+const browserAppShortcutEventSchema = z.object({
+  tabId: z.string().min(1),
+  shortcut: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("replay"),
+      chord: z.object({
+        key: z.string(),
+        code: z.string(),
+        metaKey: z.boolean(),
+        ctrlKey: z.boolean(),
+        altKey: z.boolean(),
+        shiftKey: z.boolean(),
+        repeat: z.boolean(),
+      }),
+    }),
+    z.object({ kind: z.literal("close-tab") }),
+    z.object({ kind: z.literal("focus-address") }),
+  ]),
+});
 
 const trimSettingsSchema = z.object({
   keepPatterns: z.array(z.string()),
@@ -392,19 +441,40 @@ async function* desktopStream<Emission>(
 }
 
 /**
- * Every desktop-only command so far is host-placed (VC-574), so each is a
+ * Most desktop-only commands are host-placed (VC-574), each a
  * `hostProcedure`: device-as-user, no Workspace resource to name. A
  * workspace-placed command is a `workspaceProcedure` naming every resource
  * its input addresses, exactly as a public area's is.
  */
 export function createDesktopRouter() {
   return catalogRouter({
+    shells: {
+      moveToBackground: workspaceProcedure(
+        "shells.moveToBackground",
+        z.strictObject({ sessionId: z.uuid(), toolCallId: z.string().min(1).max(512) }),
+        ({ sessionId }) => ({ kind: "session", id: sessionId }),
+      )
+        .output(z.object({ shellId: z.string().min(1) }))
+        .mutation(({ ctx, input }) => ctx.handlers["shells.moveToBackground"](input, ctx.call)),
+    },
     project: {
       /** Was `volli:project-reorder`: the rail's order, across every Workspace. */
       reorder: hostProcedure("project.reorder")
         .input(z.object({ orderedIds: z.array(z.string()) }))
         .output(z.null())
         .mutation(({ ctx, input }) => ctx.handlers["project.reorder"](input, ctx.call)),
+      /**
+       * `volli:project-remove` projects the same handler (VC-796): the
+       * project's live work stopped, then the project detached (VC-822),
+       * then every window told.
+       */
+      remove: workspaceProcedure(
+        "project.remove",
+        z.strictObject({ projectId: boardId }),
+        ({ projectId }) => ({ kind: PROJECT_RESOURCE, id: projectId }),
+      )
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["project.remove"](input, ctx.call)),
     },
     worktree: {
       /** Was `volli:worktree-trim-settings-get`: the host-level trim settings. */
@@ -638,6 +708,57 @@ export function createDesktopRouter() {
           );
         }),
     },
+    /** HOST-scoped relay (VC-722), sharing the Workspace relay's bounded stream and errors. */
+    hostScope: {
+      query: hostProcedure("hostScope.query")
+        .input(hostScopeCallSchema)
+        .output(z.unknown())
+        .query(({ ctx, input }) =>
+          relayAnswer(() => ctx.handlers["hostScope.query"](input, ctx.call)),
+        ),
+      mutate: hostProcedure("hostScope.mutate")
+        .input(hostScopeCallSchema)
+        .output(z.unknown())
+        .mutation(({ ctx, input }) =>
+          relayAnswer(() => ctx.handlers["hostScope.mutate"](input, ctx.call)),
+        ),
+      subscribe: hostProcedure("hostScope.subscribe")
+        .input(hostScopeSubscribeSchema)
+        .subscription(async function* ({ ctx, input, signal }) {
+          yield* desktopStream<HostLinkRelayEvent>(
+            ctx,
+            "hostScope.subscribe",
+            signal,
+            (sink) => ctx.handlers["hostScope.subscribe"](input, ctx.call, sink),
+            hostLinkRelayEventEnds,
+          );
+        }),
+    },
+    /**
+     * App shortcuts out of a focused Browser page (VC-301). No channel
+     * preceded them on the bridge's terms: host-placed like `hosts.*`, the
+     * person's own window only; desktop main's Browser Tab host answers
+     * through the map, and every other host answers unavailable.
+     */
+    browserShortcuts: {
+      /** Every app chord a focused page hands back, from now on; nothing is replayed to a late window. */
+      subscribe: hostProcedure("browserShortcuts.subscribe").subscription(async function* ({
+        ctx,
+        signal,
+      }) {
+        yield* desktopStream<BrowserAppShortcutEvent>(
+          ctx,
+          "browserShortcuts.subscribe",
+          signal,
+          (sink) => ctx.handlers["browserShortcuts.subscribe"](undefined, ctx.call, sink),
+        );
+      }),
+      /** Keyboard focus back to the page whose shortcut the window had nothing to do with. */
+      focusPage: hostProcedure("browserShortcuts.focusPage")
+        .input(z.strictObject({ tabId: z.string().min(1).max(256) }))
+        .output(z.null())
+        .mutation(({ ctx, input }) => ctx.handlers["browserShortcuts.focusPage"](input, ctx.call)),
+    },
   });
 }
 
@@ -660,5 +781,7 @@ export function desktopProcedureSchemas(router: DesktopRouter = createDesktopRou
     "hostAdd.subscribe": addHostEventSchema,
     "hostSignIns.run": hostSignInRunEventSchema,
     "hostLink.subscribe": hostLinkRelayEventSchema,
+    "hostScope.subscribe": hostLinkRelayEventSchema,
+    "browserShortcuts.subscribe": browserAppShortcutEventSchema,
   });
 }

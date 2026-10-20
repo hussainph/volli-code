@@ -58,10 +58,9 @@ export type MarkBy = "family" | "provider";
 
 /**
  * Which mark leads when a model has both: the account's (Anthropic's A) or
- * the family's (Claude's starburst). The owner chose the provider's in the
- * VC-259 Lab review — the mark then says who is billed, which is the fact a
- * person setting defaults is actually deciding. The family still fills in
- * for providers with no mark of their own (the OpenAI knot on a GPT from a
+ * the family's (Claude's starburst). The provider's leads (VC-259): the mark
+ * says who is billed, which is the fact a person setting defaults is deciding.
+ * The family still fills in for providers with no mark of their own (the OpenAI knot on a GPT from a
  * gateway that has none), so a row is never markless when it need not be.
  */
 export const DEFAULT_MARK_BY: MarkBy = "provider";
@@ -428,7 +427,7 @@ export function ModelName({
   const full = [model.label, sayProvider ? providerLabel : null, trailing ?? null]
     .filter((term) => term !== null)
     .join(" · ");
-  // WHERE IT CLIPS, IT CAN BE ASKED (VC-288 re-review). The reveal rides the
+  // WHERE IT CLIPS, IT CAN BE ASKED (VC-288). The reveal rides the
   // Select trigger rather than bringing a stop of its own, on the tab strip's
   // reasoning: the trigger is already focusable, and a control nested inside
   // one is a second press between a person and the list they were opening.
@@ -447,7 +446,7 @@ export function ModelName({
       <TooltipProvider>
         <Tooltip open={reveal.open} onOpenChange={reveal.onOpenChange}>
           <TooltipTrigger asChild>
-            {/* IT WRAPS RATHER THAN TRUNCATES (VC-288 review). A `title` was the
+            {/* IT WRAPS RATHER THAN TRUNCATES (VC-288). A `title` was the
                 whole of the way out of a clipped name here, and a `title` is the
                 pointer's alone — on rows a keyboard walks, `Claude Son…` was
                 simply where the fact ended. Every surface drawing this is a row

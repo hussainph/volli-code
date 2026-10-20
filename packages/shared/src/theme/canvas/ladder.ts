@@ -102,8 +102,7 @@ export const LIGHT_LADDER = {
    * design: a flat multiplier would fix the surfaces and turn the border rungs
    * into rules in the same stroke. Fading it means the rungs that are invisible
    * get the correction and the rungs that already work are left alone;
-   * `--border-strong`, the furthest, does not move at all. Appendix § Surface
-   * spread.
+   * `--border-strong`, the furthest, does not move at all.
    *
    * ONE PROPERTY THIS CURVE DOES NOT HAVE: monotonicity past a gain of 2.0.
    * `spreadCurve` applies the faded multiplier to a rung's whole distance from
@@ -202,8 +201,7 @@ export const DARK_LADDER = {
  *
  * Known defect, characterised by a test rather than fixed: the faded multiplier
  * is applied to a rung's whole distance rather than integrated along it, which
- * makes the map non-monotone above gain 2.0. Appendix § The non-monotone spread
- * curve.
+ * makes the map non-monotone above gain 2.0.
  */
 export function spreadCurve(origin: number, deepest: number, gain: number): (L: number) => number {
   return (L) => {

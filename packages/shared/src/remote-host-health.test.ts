@@ -141,12 +141,44 @@ describe("bounded host health producer", () => {
 });
 
 describe("host diagnostic one-line policy", () => {
+  it.each(["'", '"', "?", "#", "\\", "<", ">", "@"])(
+    "redacts authority userinfo containing %s before query/fragment scanning",
+    (punctuation) => {
+      for (const surroundingQuote of ["", "'", '"']) {
+        for (const suffix of ["", "?dummy-query#dummy-fragment", "#dummy-fragment"]) {
+          const raw = `before ${surroundingQuote}https://user:ab${punctuation}cd@host/path${suffix}${surroundingQuote} after`;
+          const safeUrl =
+            suffix === "" ? "https://[redacted]@host/path" : "https://host/path?[redacted]";
+          expect(remoteHostDiagnostic(raw)).toBe(
+            `before ${surroundingQuote}${safeUrl}${surroundingQuote} after`,
+          );
+        }
+      }
+    },
+  );
+
+  it("bounds authority scans without hiding path @ signs or quoted near misses", () => {
+    const nearMiss = `https://${"ab'cd\"".repeat(10_000)}/path/person@host`;
+    expect(remoteHostDiagnostic(nearMiss, nearMiss.length)).toBe(nearMiss);
+    const candidates = `${"https://ab'cd\"/".repeat(10_000)} end`;
+    expect(remoteHostDiagnostic(candidates, candidates.length)).toBe(candidates);
+  });
+
   it("strips controls, redacts URL userinfo/query/fragment and credential-shaped text before bounding", () => {
     const token = `ghp_${"a".repeat(36)}`;
-    const text = `bad\u0007\n https://person:fake-password@example.test/path?token=fake-query#fake-fragment ${token} https://user:fake-other@example.test/plain`;
+    const text = `bad\u0007\n\u202e\u2028 vdc1.fixture_body.fixture_signature https://person:fake-password@example.test/path?token=fake-query#fake-fragment ${token} https://user:fake-other@example.test/plain`;
     const line = remoteHostDiagnostic(text);
     expect(line).not.toMatch(/[\p{Cc}]/u);
-    for (const secret of ["fake-password", "fake-query", "fake-fragment", "fake-other", token])
+    for (const secret of [
+      "fake-password",
+      "fake-query",
+      "fake-fragment",
+      "fake-other",
+      token,
+      "vdc1.",
+      "fixture_body",
+      "fixture_signature",
+    ])
       expect(line).not.toContain(secret);
     expect(line).toContain("[redacted]");
     expect(remoteHostDiagnostic("x".repeat(limits.diagnostic))).toHaveLength(limits.diagnostic);

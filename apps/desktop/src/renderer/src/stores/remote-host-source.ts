@@ -87,6 +87,7 @@ export function remoteHostRecord(host: RemoteHost): HostSourceRecord {
     liveSessions: host.liveSessions,
     // No update operation is running: re-add is the SSH update path.
     update: null,
+    ...(host.hostScope === undefined ? {} : { hostScope: host.hostScope }),
     expiredSignIns: (host.signInExpiry ?? [])
       .filter((signIn) => signIn.expired)
       .map(({ providerId, name }) => ({ providerId, name })),
@@ -107,7 +108,8 @@ const sameRecord = (a: HostSourceRecord, b: HostSourceRecord): boolean =>
   a.version === b.version &&
   a.liveSessions === b.liveSessions &&
   JSON.stringify(a.expiredSignIns) === JSON.stringify(b.expiredSignIns) &&
-  JSON.stringify(a.link) === JSON.stringify(b.link);
+  JSON.stringify(a.link) === JSON.stringify(b.link) &&
+  JSON.stringify(a.hostScope) === JSON.stringify(b.hostScope);
 
 const sameView = (a: HostLinkView, b: HostLinkView): boolean =>
   JSON.stringify(a) === JSON.stringify(b);

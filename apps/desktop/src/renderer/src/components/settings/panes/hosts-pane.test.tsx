@@ -9,6 +9,7 @@ import {
   type HostWorld,
 } from "@renderer/components/hosts/hosts.test-support";
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useHostConnectionStore, type HostLinkView } from "@renderer/stores/host-connection";
 import { remoteHost } from "@renderer/stores/host-sources";
@@ -48,6 +49,7 @@ afterEach(async () => {
   await world?.cleanup();
   world = null;
   setRemoteHostsApi(null);
+  useHostModelSheet.getState().close();
   useRemoteHostsStore.setState({ hosts: [], addHost: { open: false, target: "" } });
   document.body.innerHTML = "";
   toast.mockClear();
@@ -257,6 +259,13 @@ describe("Settings → Hosts", () => {
       providerId: null,
     });
     act(() => useHostSignInSheet.getState().close());
+  });
+
+  it("opens Models beside Sign-ins for the host whose page is open", async () => {
+    const root = await renderPane();
+    await openHost(root, "studio");
+    await click(root, "Models…");
+    expect(useHostModelSheet.getState().target).toEqual({ hostId: IDLE.id, hostName: "studio" });
   });
 
   it("lists a host's projects", async () => {

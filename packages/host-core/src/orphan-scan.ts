@@ -1,6 +1,6 @@
 /**
  * The orphan SCAN cache, and the only place a cleanup's plan may come from
- * (VC-284, review C1).
+ * (VC-284).
  *
  * This file used to cache a DESTRUCTIVE sweep, and the caching was the safety
  * mechanism: the sweep pruned git metadata and deleted clean orphan

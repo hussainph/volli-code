@@ -9,9 +9,8 @@
  * row is which, so this registry does. It is the source of truth; no markdown
  * copy of it exists.
  *
- * The vocabulary is the one `docs/plans/host-protocol.md` §Host operations vs
- * client-local sets as the classification test, with host vs workspace drawn
- * at the file boundary of `docs/plans/host-identity.md` (VC-588):
+ * Classify host operations separately from client-local presentation, then
+ * distinguish host-wide state from movable Workspace state (VC-588):
  *
  * - `client-local`: a presentation or native preference of the viewing device
  *   (BOUNDARIES rule 7's "device-local"). It never becomes host state.
@@ -158,6 +157,12 @@ const EXACT = {
     owner: "stays",
     reason:
       "The desktop updater's channel (main/auto-update.ts); host-protocol.md's Update row. hostd's version follows the desktop (Decided 1).",
+  },
+  "volli:update-last-check": {
+    placement: "client-local",
+    owner: "stays",
+    reason:
+      "When the desktop updater last checked and what it found (main/auto-update.ts), shown in Settings → Updates (VC-294). The desktop's own install, like the channel above.",
   },
   "volli:notification-preferences": {
     placement: "client-local",

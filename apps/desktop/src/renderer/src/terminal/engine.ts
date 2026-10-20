@@ -57,8 +57,18 @@ export interface TerminalEngine {
    */
   attach(container: HTMLElement): void;
 
-  /** Feed a chunk of raw PTY output (ANSI intact) into the terminal. */
-  write(data: string): void;
+  /**
+   * Feed a chunk of raw PTY output (ANSI intact) into the terminal.
+   *
+   * `onParsed` is the flow-control credit (VC-821): the engine calls it once it
+   * no longer holds the chunk — after its parser has consumed it, or as soon
+   * as the chunk is buffered, dropped or the engine is disposed. Called at
+   * most once per write, and an engine whose write throws must not call it
+   * (the caller releases the credit instead). Acking on receipt instead lets a
+   * fast producer outrun an asynchronous parser without ever engaging the
+   * host's backpressure.
+   */
+  write(data: string, onParsed?: () => void): void;
 
   /**
    * Subscribe to user input (already-encoded bytes) to forward to the PTY.

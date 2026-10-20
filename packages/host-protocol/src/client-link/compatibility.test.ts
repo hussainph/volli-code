@@ -7,7 +7,17 @@ import { WebSocket, WebSocketServer } from "ws";
 import { createHostRouter, RpcDiagnosticLog } from "../../../session-rpc/src/index";
 import { startHostProtocolListener } from "../../../session-rpc/src/websocket-server";
 import { hostError, readHostError } from "../errors";
-import { classifyHandshakeFailure } from "./index";
+import { classifyHandshakeFailure, createHostScopeLink } from "./index";
+
+const preModelDefaults = JSON.parse(
+  readFileSync(new URL("../../fixtures/pre-vc729-host-models.json", import.meta.url), "utf8"),
+) as {
+  sourceRevision: string;
+  received: [
+    { id: number; result: { data: { host: { id: string }; features: string[] } } },
+    { id: number; error: { data: unknown } },
+  ];
+};
 
 const refusal = JSON.parse(
   readFileSync(new URL("../../fixtures/pre-vc722-host-refusal.json", import.meta.url), "utf8"),
@@ -43,6 +53,63 @@ async function exchange(url: string, sent: unknown[]) {
   const [data] = await message;
   return { socket, received: JSON.parse(data.toString()) as unknown };
 }
+
+describe("frozen pre-VC-729 host model compatibility", () => {
+  it("reads the independently captured old host welcome through a real host scope link", async () => {
+    expect(preModelDefaults.sourceRevision).toBe("49fc56278edba86607999b7c1d366e87ac02a800");
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (typeof address !== "object" || address === null) throw new Error("No fixture port");
+    const paths: string[] = [];
+    server.on("connection", (socket) =>
+      socket.on("message", (data) => {
+        const request = JSON.parse(data.toString()) as { id?: number; params?: { path: string } };
+        if (!request.params) return;
+        paths.push(request.params.path);
+        const recorded =
+          request.params.path === "protocol.hostWelcome"
+            ? preModelDefaults.received[0]
+            : preModelDefaults.received[1];
+        socket.send(JSON.stringify({ ...recorded, id: request.id }));
+      }),
+    );
+    const link = createHostScopeLink({
+      url: `ws://127.0.0.1:${address.port}`,
+      hostId: preModelDefaults.received[0].result.data.host.id,
+      client: { kind: "desktop", version: "head" },
+      features: ["host.workspaces", "host.model-defaults"],
+      credential: () => "fixture-not-a-secret",
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          stop();
+          reject(new Error("Old peer did not become ready"));
+        }, 3000);
+        const stop = link.subscribeState((state) => {
+          if (state.status !== "ready") return;
+          clearTimeout(timer);
+          stop();
+          resolve();
+        });
+      });
+      const welcome = await link.query("protocol.hostWelcome");
+      expect(welcome).toEqual(preModelDefaults.received[0].result.data);
+      const state = link.getState();
+      expect(state.status === "ready" && state.welcome.features).toEqual(["host.workspaces"]);
+      // Absence is the compatibility decision, not a trial call or spinner.
+      expect(paths.every((path) => path === "protocol.hostWelcome")).toBe(true);
+      expect(readHostError({ data: preModelDefaults.received[1].error.data })).toMatchObject({
+        code: "NOT_FOUND",
+      });
+    } finally {
+      link.close();
+      for (const socket of server.clients) socket.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
 
 describe("frozen pre-VC-722 wire compatibility", () => {
   it("reads the actual old host refusal envelope and close, only tagging a host attempt unsupported", async () => {
@@ -109,7 +176,7 @@ describe("frozen pre-VC-722 wire compatibility", () => {
       bind: { host: "127.0.0.1", port: 5384 },
       host: oldWelcome.host,
       // A new feature must not leak into the old request's grants.
-      features: [...oldWelcome.features, "host.workspaces"],
+      features: [...oldWelcome.features, "host.workspaces", "host.model-defaults"],
       workspace: (id) => (id === oldWelcome.workspace.id ? oldWelcome.workspace : null),
       verifier: { verify: async () => ({ actor: oldWelcome.actor, current: () => true }) },
       context: () => ({ handlers: {} as never, diagnostics: new RpcDiagnosticLog() }),

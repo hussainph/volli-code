@@ -47,7 +47,8 @@ import {
 import { toast } from "sonner";
 
 import { renameChatSession } from "@renderer/chat/rename";
-import { remoteHostNameNow } from "@renderer/components/hosts/use-remote-project";
+import { remoteHostNow } from "@renderer/stores/remote-project";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
 import { chatTransportFor } from "@renderer/chat/transport";
 import { toastError } from "@renderer/lib/toast";
 import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
@@ -84,7 +85,16 @@ export interface CreateChatSessionInput {
   autoSelect?: { request: string };
 }
 
+/** Renderer-only receipt shadow; it never owns delivery or crosses the wire. */
+export interface IdleSend extends QueuedMessage {
+  accepted: boolean;
+}
+
 export interface ChatSessionsState extends ChatSessionWrites {
+  /** Sent bubbles survive view remounts and queue-before-transcript delivery. */
+  idleSends: Readonly<Record<string, readonly IdleSend[]>>;
+  rememberIdleSend(sessionId: string, message: QueuedMessage, accepted?: boolean): void;
+  forgetIdleSend(sessionId: string, messageId: string): void;
   /**
    * Mints one durable Session and attaches its first executor, resolving the id.
    *
@@ -156,8 +166,9 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * Resident for the reason the client is: a chat view mounts and unmounts
    * freely, and the tabs a person left open are not a fact about whether the
    * ticket detail is on screen. Deliberately NOT persisted — a durable Session
-   * is recovered from its own record, and the workspace store's active tab id
-   * is the only thing that has to survive a restart.
+   * is recovered from its own record, and which tabs come back is the workspace
+   * store's to remember: a ticket's active tab id, and Home's whole strip
+   * (`homeTabOrder`, VC-105).
    */
   openTabs: Readonly<Record<string, readonly string[]>>;
   /**
@@ -280,6 +291,20 @@ export function createChatSessionsStore(
       });
     };
 
+    const retireAcceptedHeld = (sessionId: string) => {
+      const slice = get().sessions[sessionId];
+      if (slice === undefined) return;
+      const accepted = new Set([
+        ...slice.queue.map((message) => message.id),
+        ...slice.transcript.durableMessages.map((message) => message.id),
+      ]);
+      const drafts = useChatDraftsStore.getState();
+      for (const message of drafts.drafts[sessionId]?.held ?? []) {
+        if (message.deliveryAccepted && accepted.has(message.id))
+          drafts.dropHeld(sessionId, message.id);
+      }
+    };
+
     const attach = (sessionId: string) =>
       getOrCreateChatClient(sessionId, {
         ...transport(projectOfSession(sessionId)),
@@ -330,6 +355,8 @@ export function createChatSessionsStore(
       input: CreateChatSessionInput,
       makeClient: boolean,
     ): Promise<string | null> => {
+      // Keep the identity the request addresses even if project selection or pairing changes.
+      const remoteHost = remoteHostNow(input.projectId);
       let created: Awaited<ReturnType<ChatSessionTransport["createSession"]>>;
       try {
         created = await edge.createSession({
@@ -347,15 +374,21 @@ export function createChatSessionsStore(
           ...(input.autoSelect === undefined ? {} : { autoSelect: input.autoSelect }),
         });
       } catch (failure) {
-        // A create refused for the missing default model is a predictable
-        // configuration state, not an error: the recovery is Model Access,
-        // so this opens it instead of raising a toast about it (VC-53).
+        // A missing default has one recovery: local Model Access (VC-53),
+        // or the named host's picker (VC-729), never this Mac's preferences
+        // for a remote Session.
         if (isDefaultModelRequired(errorMessage(failure))) {
-          // A remote host runs its own default (VC-713), which this Mac's
-          // Model Access cannot set: say whose it is instead of opening ours.
-          const host = remoteHostNameNow(input.projectId);
-          if (host !== null) {
-            toastError(`Could not start Session: ${host} has no default model yet`);
+          if (remoteHost !== null) {
+            toastError(`Could not start Session: ${remoteHost.name} has no default model yet`, {
+              action: {
+                label: "Choose a model",
+                onClick: () =>
+                  useHostModelSheet.getState().open({
+                    hostId: remoteHost.id,
+                    hostName: remoteHost.name,
+                  }),
+              },
+            });
             return null;
           }
           useUiStore.getState().setSettingsOpen(true, "model-access");
@@ -392,6 +425,34 @@ export function createChatSessionsStore(
 
     return {
       sessions: {},
+      idleSends: {},
+      rememberIdleSend(sessionId, message, accepted = false) {
+        set((state) => {
+          const rows = state.idleSends[sessionId] ?? [];
+          const previous = rows.find((row) => row.id === message.id);
+          const next = { ...message, accepted: accepted || previous?.accepted === true };
+          return {
+            idleSends: {
+              ...state.idleSends,
+              [sessionId]:
+                previous === undefined
+                  ? [...rows, next]
+                  : rows.map((row) => (row.id === message.id ? next : row)),
+            },
+          };
+        });
+      },
+      forgetIdleSend(sessionId, messageId) {
+        set((state) => {
+          const rows = state.idleSends[sessionId];
+          if (!rows?.some((row) => row.id === messageId)) return state;
+          const remaining = rows.filter((row) => row.id !== messageId);
+          const idleSends = { ...state.idleSends };
+          if (remaining.length === 0) delete idleSends[sessionId];
+          else idleSends[sessionId] = remaining;
+          return { idleSends };
+        });
+      },
       openTabs: {},
       rehomedTicketBySession: {},
       starting: {},
@@ -581,10 +642,13 @@ export function createChatSessionsStore(
         // remote Session is remote (VC-713, B1).
         disposeChatClient(sessionId);
         set((state) => {
-          if (state.sessions[sessionId] === undefined) return state;
+          if (state.sessions[sessionId] === undefined && state.idleSends[sessionId] === undefined)
+            return state;
           const sessions = { ...state.sessions };
+          const idleSends = { ...state.idleSends };
           delete sessions[sessionId];
-          return { sessions };
+          delete idleSends[sessionId];
+          return { sessions, idleSends };
         });
       },
 
@@ -597,10 +661,12 @@ export function createChatSessionsStore(
         update(sessionId, (slice) =>
           foldStreamBatch(slice, frames, overlays, progress, clearLiveCompaction),
         );
+        retireAcceptedHeld(sessionId);
       },
 
       applySnapshot(sessionId, window, projection) {
         update(sessionId, (slice) => applySnapshotWindow(slice, window, projection));
+        retireAcceptedHeld(sessionId);
       },
 
       prependHistory(sessionId, requested, page) {
@@ -609,6 +675,7 @@ export function createChatSessionsStore(
 
       setProjection(sessionId, projection) {
         update(sessionId, (slice) => applyProjection(slice, projection));
+        retireAcceptedHeld(sessionId);
       },
 
       attaching(sessionId) {
@@ -638,13 +705,26 @@ export function createChatSessionsStore(
           return "refused";
         }
         const outcome = await client.submit(message, "queue");
+        const shadow = get().idleSends[sessionId]?.find((row) => row.id === message.id);
+        if (shadow !== undefined) {
+          if (outcome === "refused") get().forgetIdleSend(sessionId, message.id);
+          else get().rememberIdleSend(sessionId, message, true);
+        }
         if (outcome === "refused") drafts.markHeld(sessionId, message.id, "unsent");
-        else drafts.dropHeld(sessionId, message.id);
+        else {
+          drafts.amendHeldMessage(sessionId, message.id, (held) => ({
+            ...held,
+            delivery: "queue",
+            deliveryAccepted: true,
+          }));
+          retireAcceptedHeld(sessionId);
+        }
         await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
         return outcome;
       },
       setQueue(sessionId, queue, revision) {
         update(sessionId, (slice) => applyQueue(slice, queue, revision));
+        retireAcceptedHeld(sessionId);
       },
 
       retitle(sessionId, title) {
@@ -912,6 +992,7 @@ export function createChatSessionsStore(
           return { rehomedTicketBySession, openTabs, provisionalActive };
         });
         for (const sessionId of abandonedDraftIds) {
+          get().closeChatSession(sessionId);
           useChatDraftsStore.getState().discardProvisional(sessionId);
         }
       },
@@ -935,14 +1016,22 @@ export function createChatSessionsStore(
             delete nextOpenTabs[ownerId];
           }
           const sessions = { ...state.sessions };
+          const idleSends = { ...state.idleSends };
           const rehomedTicketBySession = { ...state.rehomedTicketBySession };
           const provisionalActive = { ...state.provisionalActive };
           for (const ownerId of ownerIds) delete provisionalActive[ownerId];
           for (const sessionId of removedSessionIds) {
             delete sessions[sessionId];
+            delete idleSends[sessionId];
             delete rehomedTicketBySession[sessionId];
           }
-          return { openTabs: nextOpenTabs, sessions, rehomedTicketBySession, provisionalActive };
+          return {
+            openTabs: nextOpenTabs,
+            sessions,
+            idleSends,
+            rehomedTicketBySession,
+            provisionalActive,
+          };
         });
         // This path means the owning project is gone, not merely that a tab was
         // closed or a Ticket left the live board. No surface remains from which

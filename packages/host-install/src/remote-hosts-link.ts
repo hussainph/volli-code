@@ -9,7 +9,14 @@
  * `unreachable`, else `connecting`. A ready link's welcome is dropped. With
  * none, host-scoped status evidence answers; TCP alone stays connecting.
  */
-import type { HostLinkState } from "@volli/host-protocol/client-link";
+import type { HostLinkState, HostScopeLinkState } from "@volli/host-protocol/client-link";
+
+type LinkState = HostLinkState | HostScopeLinkState;
+
+/** Only an attempted host handshake can establish N-1 compatibility. Never downgrade auth failures. */
+export function isOlderHostScope(state: HostScopeLinkState): boolean {
+  return state.status === "refused" && state.compatibility === "host-scope-unsupported";
+}
 import {
   remoteHostDiagnostic,
   REMOTE_HOST_HEALTH_LIMITS,
@@ -27,7 +34,7 @@ export interface LinkInputs {
   readonly attempt: number;
   /** Epoch ms of the tunnel's next attempt, when it is down. */
   readonly retryAt: number;
-  readonly links: readonly HostLinkState[];
+  readonly links: readonly LinkState[];
   /** Validated hostd status, only for host health (never a Workspace's readiness). */
   readonly health?: RemoteHostLinkState;
 }
@@ -41,13 +48,11 @@ function errorOf(error: { code: string; message: string; reason?: string }): Rem
 }
 
 /** The first link in `status`, in the order links were opened. */
-function first<S extends HostLinkState["status"]>(
-  links: readonly HostLinkState[],
+function first<S extends LinkState["status"]>(
+  links: readonly LinkState[],
   status: S,
-): Extract<HostLinkState, { status: S }> | undefined {
-  return links.find(
-    (link): link is Extract<HostLinkState, { status: S }> => link.status === status,
-  );
+): Extract<LinkState, { status: S }> | undefined {
+  return links.find((link): link is Extract<LinkState, { status: S }> => link.status === status);
 }
 
 export function remoteHostLinkState(inputs: LinkInputs): RemoteHostLinkState {

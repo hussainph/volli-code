@@ -35,9 +35,8 @@ configurable in this version.
 
 Cloud classifiers authenticate exactly like chat providers: through Pi's own
 `auth.json` (`packages/agent-runtime/src/pi/models.ts`), entered by a person in
-**Settings → Models → Accounts**. Model Access now lists providers that serve
-only decision models (`typesafe`), because there is finally something on the
-page to pick them for; VC-469 hid them when there was not. A provider with no
+**Settings → Models → Accounts**. Model Access lists providers that serve
+only decision models (`typesafe`) as well as chat providers. A provider with no
 credential shows **Needs setup** in the Decision model section, whose one
 action presses that provider's own sign-in. No setting, IPC channel, tool,
 verb or Session record has a field a key could occupy, and the tests pin it
@@ -149,9 +148,8 @@ service is `packages/host-core/src/decision/auto-select.ts`, reached from
 - **Shown.** The model pill reads `Auto · <model>`, and its list leads with
   "Auto-picked <model> · <effort>" and one button per alternative.
 
-Not built here: per-effort variants of one model beyond what a tier row saves,
-the measurement of auto-picked against default (owner: after release), and a
-local backend.
+Automatic selection uses the saved tier model-and-effort pairs and supports
+the cloud backend only.
 
 ### Adding a purpose
 
@@ -195,23 +193,6 @@ call answers that no model is configured.
   capability tool's *text*; it should hand them `structuredContent` for a tool
   that declares an `outputSchema`, as it already does for MCP tools.
 
-## Ollama
-
-Investigated as a local backend. Ollama 0.12.11+ (this machine has 0.32.1)
-returns `logprobs` with up to 20 `top_logprobs` on `/api/chat`, which is the
-raw material a classifier needs. pi's `llama-cpp-classify` cannot drive it as
-is: it needs llama-server's `/tokenize` (to find each label's token id),
-`/apply-template` (the model's own chat template) and `/completion` with
-`n_probs` up to 32,768. An Ollama adapter is feasible on pi's exported pieces
-(`renderQuestion`, `labelProbabilities`, `answerFromProbabilities`): render the
-question, call `/api/chat` with `think: false`, `num_predict: 1`,
-`top_logprobs: 20`, and match labels by token text. Its limits: labels outside
-the top 20 must be bounded rather than read (fine for yes/no and small
-choices, lossy for wide ones), and token text matching is less exact than ids.
-Not shipped here: it could not be validated without downloading a model,
-which was not approved for this ticket. llama-server can load the GGUF an
-Ollama install already downloaded, so one model download serves both.
-
 ## Benchmark
 
 `packages/agent-runtime/bench/decision/`: the same decisions made by a chat
@@ -220,5 +201,5 @@ decision service per decision (what a Code Mode loop does), on three tasks —
 browser page-state checks, labelling 200 support messages, and an arithmetic
 control a classifier is the wrong tool for. `decision.bench.test.ts` proves
 the harness against the network-free fixture; `decision.live.test.ts` is the
-real run (`PI_LIVE_BENCH=1`). Results are in the PR and under
-`bench/decision/results/`.
+opt-in live run (`PI_LIVE_BENCH=1`). Generated results remain local under
+`bench/decision/results/`; do not commit run reports.

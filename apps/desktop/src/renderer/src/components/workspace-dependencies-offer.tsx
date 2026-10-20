@@ -24,9 +24,8 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
  * the ordinary state of a clone nobody has installed yet — and the app that was
  * reporting it is an app whose entire premise is doing that sort of thing for
  * you. So the notice is neutral, one line, and every part of it is an action:
- * the state's remedy IS the surface, which is the shape Conductor and the Codex
- * app both settled on (they run setup at workspace creation and show progress
- * in the workspace; neither ships a pre-flight warning).
+ * the state's remedy IS the surface. Setup progress stays in the workspace
+ * rather than presenting a pre-flight warning.
  *
  * Three ways out, and no fourth. RUN types the workspace's own lockfile-derived
  * command into a real Session terminal, where its output is visible and

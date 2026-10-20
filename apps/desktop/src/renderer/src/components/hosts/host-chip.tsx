@@ -3,8 +3,7 @@
  * ported from the lab's `#host-health`).
  *
  * The chip names the machine the project in front of the person runs on —
- * where Zed puts a remote's name and Xcode its run destination — between the
- * history arrows and search. Its tile carries the host's state: a badge for
+ * between the history arrows and search. Its tile carries the host's state: a badge for
  * what needs attention (an update, an expired sign-in, a host that cannot
  * serve), a slow breath while the link is on its way back, the name greyed
  * while it is unreachable. The page itself only speaks for blocking states,
@@ -27,6 +26,8 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { WifiSlashIcon } from "@phosphor-icons/react/dist/csr/WifiSlash";
 
 import { useHostSignInSheet } from "@renderer/components/hosts/sign-ins/remote-host-sign-in-source";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
+import { CpuIcon } from "@phosphor-icons/react/dist/csr/Cpu";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
@@ -61,10 +62,9 @@ import {
   useAddHostOffered,
   useCloudEnabled,
   useCurrentHost,
-  useCurrentProjectId,
   useHostRecoveryToasts,
   useNow,
-  useProjectHostView,
+  useCurrentProjectHostView,
 } from "./use-hosts";
 
 /** What the tile's badge says to a screen reader: the chip's name carries it. */
@@ -87,7 +87,7 @@ function EnabledHostChip() {
   // The tile draws the HOST's engine-owned health; the detail under the
   // current host in the switcher speaks for the project in front.
   const host = useCurrentHost();
-  const view = useProjectHostView(useCurrentProjectId());
+  const view = useCurrentProjectHostView();
   const pulsing = hostPulsing(host);
   const offline = host.link.status === "offline";
   return (
@@ -143,9 +143,10 @@ export function HostSwitcher({
   const offline = hosts.some((host) => host.link.status === "offline");
   const now = useNow(offline, 30_000);
   const list = hosts.some((host) => host.id === current.id) ? hosts : [current, ...hosts];
-  // Sign-ins on any remote host this Mac can reach, the current one first (AM2).
-  const signInHosts = [current, ...list.filter((host) => host.id !== current.id)].filter(
-    (host) => !host.local && (host.link.status === "open" || host.link.status === "version-skewed"),
+  // Preferences for every remote host, the current one first (AM2). Models
+  // remains a door on older/offline hosts so its named recovery is reachable.
+  const preferenceHosts = [current, ...list.filter((host) => host.id !== current.id)].filter(
+    (host) => !host.local,
   );
   return (
     <div role="group" aria-label="Hosts">
@@ -187,6 +188,7 @@ export function HostSwitcher({
                     (project) => (claims[project.id]?.hostId ?? THIS_MAC_HOST_ID) === host.id,
                   );
                 onDone();
+                useProjectsStore.getState().cancelRemoteRestore();
                 if (target !== undefined) useProjectsStore.getState().select(target.id);
                 // A remote host with no project open here (VC-710): open one on it.
                 else if (!host.local) useRemoteHostsStore.getState().openProjectSheet(host.id);
@@ -199,18 +201,29 @@ export function HostSwitcher({
         );
       })}
       <div className="my-1 h-px bg-border/60" />
-      {signInHosts.map((host) => (
-        <MenuAction
-          key={`sign-ins:${host.id}`}
-          icon={KeyIcon}
-          label={`Sign-ins on ${host.name}…`}
-          onAct={() => {
-            onDone();
-            useHostSignInSheet
-              .getState()
-              .open({ hostId: host.id, hostName: host.name, providerId: null });
-          }}
-        />
+      {preferenceHosts.map((host) => (
+        <React.Fragment key={host.id}>
+          {host.link.status === "open" || host.link.status === "version-skewed" ? (
+            <MenuAction
+              icon={KeyIcon}
+              label={`Sign-ins on ${host.name}…`}
+              onAct={() => {
+                onDone();
+                useHostSignInSheet
+                  .getState()
+                  .open({ hostId: host.id, hostName: host.name, providerId: null });
+              }}
+            />
+          ) : null}
+          <MenuAction
+            icon={CpuIcon}
+            label={`Models on ${host.name}…`}
+            onAct={() => {
+              onDone();
+              useHostModelSheet.getState().open({ hostId: host.id, hostName: host.name });
+            }}
+          />
+        </React.Fragment>
       ))}
       {addHostOffered ? (
         <MenuAction

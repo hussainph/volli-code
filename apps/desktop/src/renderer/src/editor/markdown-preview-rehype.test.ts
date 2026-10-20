@@ -1,11 +1,10 @@
 /**
  * The preview's own hardening pass, run on trees the sanitizer has already
- * cleaned (VC-307, review round 2).
+ * cleaned (VC-307).
  *
  * These trees are written by hand ON PURPOSE. The point of the pass is that it
- * does not trust the step before it: review round 1 widened Streamdown's
- * sanitize schema with `math`/`mtext` and the MathML reached the document,
- * because everything downstream derived its opinion from that same schema. So
+ * does not trust the step before it: widening Streamdown's sanitize schema
+ * with `math`/`mtext` must not let MathML reach the document. So
  * every case here feeds the pass a node the sanitizer is not supposed to emit
  * today, and asserts the pass removes it anyway.
  */

@@ -1705,7 +1705,7 @@ describe("DATA_IPC descriptor table", () => {
       ).toBe(true);
     });
 
-    // The id a destructive command is REPLAYED under (VC-284 re-review S1).
+    // The id a destructive command is REPLAYED under (VC-284).
     // `"cmd-1"` is an id a second writer could mint too, and cross-writer
     // string equality has to mean "the same logical fact"
     // (docs/BOUNDARIES.md rule 1) — here, the same deletion.
@@ -2214,7 +2214,7 @@ describe("DATA_IPC descriptor table", () => {
       const { guard, invalidError } = DATA_IPC["volli:worktree-trim"];
       expect(guard([])).toBe(true);
       // There is nothing to vary, so anything at all is a caller that does not
-      // know what this channel is (review r2 removed an unused dry-run input).
+      // know what this channel is; even a dry-run option is invalid.
       expect(guard([{}])).toBe(false);
       expect(guard([{ dryRun: true }])).toBe(false);
       expect(guard(["nope"])).toBe(false);
@@ -2872,13 +2872,23 @@ describe("THEME_IPC descriptor table", () => {
 
     it("refuses an unresolved first-paint appearance, and a background that is not a color", () => {
       const { guard, invalidError } = THEME_IPC["volli:theme-first-paint-set"];
+      const plane = { planeBackground: "#1c1310" };
 
-      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(true);
-      expect(guard([{ appearance: "light", background: "#f4efe9" }])).toBe(true);
+      expect(guard([{ appearance: "dark", background: "#141210", ...plane }])).toBe(true);
+      expect(guard([{ appearance: "light", background: "#f4efe9", ...plane }])).toBe(true);
       // `auto` is the one value main cannot act on at window construction.
-      expect(guard([{ appearance: "auto", background: "#141210" }])).toBe(false);
-      expect(guard([{ appearance: "dark", background: "rebeccapurple" }])).toBe(false);
-      expect(guard([{ appearance: "dark" }])).toBe(false);
+      expect(guard([{ appearance: "auto", background: "#141210", ...plane }])).toBe(false);
+      expect(guard([{ appearance: "dark", background: "rebeccapurple", ...plane }])).toBe(false);
+      expect(guard([{ appearance: "dark", ...plane }])).toBe(false);
+      // The live plane color (VC-302) is the handler's to vet: absent, or a
+      // string that is not a color, still lets the hint through.
+      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(true);
+      expect(
+        guard([{ appearance: "dark", background: "#141210", planeBackground: "transparent" }]),
+      ).toBe(true);
+      expect(guard([{ appearance: "dark", background: "#141210", planeBackground: 7 }])).toBe(
+        false,
+      );
       expect(guard([])).toBe(false);
       expect(invalidError).toBe("Invalid first-paint hint");
     });

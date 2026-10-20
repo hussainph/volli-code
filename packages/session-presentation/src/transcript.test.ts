@@ -244,6 +244,43 @@ describe("appendFrames", () => {
     expect(interrupted.turnEpoch).toBe(2);
   });
 
+  it.each(["completed", "interrupted", "failed"] as const)(
+    "ends the live turn at attachment.closed: %s without an explicit turn end",
+    (outcome) => {
+      const closed = frame(3, { kind: "attachment.closed", attachmentId: "attachment-1", outcome });
+      const opened = appendFrames(EMPTY_TRANSCRIPT, [turn(1, "turn.started")]);
+      const ended = appendFrames(opened, [closed]);
+      expect(ended.turnActive).toBe(false);
+      expect(ended.turnEpoch).toBe(2);
+      expect(appendFrames(ended, [closed])).toBe(ended);
+      const batched = appendFrames(EMPTY_TRANSCRIPT, [turn(1, "turn.started"), closed]);
+      expect(batched.turnActive).toBe(false);
+      expect(batched.turnEpoch).toBe(2);
+    },
+  );
+
+  it("counts failed attachment attempts as a boundary even without a live turn", () => {
+    const failed = frame(2, {
+      kind: "attachment.failed",
+      attachment: {
+        id: "attachment-1",
+        sessionId: "session-1",
+        adapterId: "pi",
+        continuity: "fresh",
+        native: null,
+        authority: null,
+        venue: { id: "local", kind: "local" },
+      },
+      failure: { code: "failed", detail: "Runtime stopped", diagnostic: null },
+    });
+    const ended = appendFrames(EMPTY_TRANSCRIPT, [failed]);
+    expect(ended.turnActive).toBe(false);
+    expect(ended.turnEpoch).toBe(1);
+    expect(appendFrames(ended, [failed])).toBe(ended);
+    const live = appendFrames(EMPTY_TRANSCRIPT, [turn(1, "turn.started")]);
+    expect(appendFrames(live, [failed])).toMatchObject({ turnActive: false, turnEpoch: 2 });
+  });
+
   it("folds the Session's prompt-resources record into the skill names it shows", () => {
     const folded = appendFrames(EMPTY_TRANSCRIPT, [
       frame(1, {
@@ -854,9 +891,8 @@ describe("a bounded transcript window (VC-315)", () => {
 });
 
 /**
- * `/copy`'s answer on a bounded transcript (VC-315; the verification review's
- * B2 probe, kept): a current turn whose reply sits above 256 tool-only
- * messages still has one.
+ * `/copy`'s answer on a bounded transcript (VC-315): a current turn whose
+ * reply sits above 256 tool-only messages still has one.
  */
 describe("the current turn's reply", () => {
   const reply: UIMessage = message("reply", "Current-turn reply");
@@ -942,4 +978,26 @@ describe("the current turn's reply", () => {
     expect(reopened.latestReply).toEqual(next);
     expect(reopened.before).toBe(4);
   });
+});
+
+it("anchors refreshed names as a quiet fact and does not double-announce a replay", () => {
+  const batch = [
+    transcriptFrame(1, message("reply", "Hello")),
+    frame(2, {
+      kind: "session.tools.refreshed",
+      trigger: "warm-turn",
+      added: ["write"],
+      changed: [],
+      delta: {},
+    }),
+  ];
+  const state = appendFrames(EMPTY_TRANSCRIPT, batch);
+  expect(state.toolRefreshes).toEqual([
+    { sequence: 2, afterMessageId: "reply", trigger: "warm-turn", added: ["write"], changed: [] },
+  ]);
+  expect(appendFrames(state, batch)).toBe(state);
+  expect(appendFrames(state, [frame(3, { kind: "session.archived" })]).toolRefreshes).toBe(
+    state.toolRefreshes,
+  );
+  expect(appendFrames(EMPTY_TRANSCRIPT, [batch[1]!]).toolRefreshes[0]?.afterMessageId).toBeNull();
 });

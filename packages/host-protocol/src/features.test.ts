@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { REFUSING_CREDENTIAL_VERIFIER } from "./credentials";
 import {
   HOST_BASE_OPERATIONS,
+  HOST_SCOPE_BASE_OPERATIONS,
   HOST_FEATURE_OPERATIONS,
   HOST_V1_FEATURES,
   hostOffersSignIns,
@@ -30,6 +31,7 @@ describe("the v1 feature table", () => {
       "host.logs": ["logs.tail", "logs.follow"],
       "sessions.subscribe": ["session.subscribe"],
       "sessions.history": ["session.history"],
+      "sessions.pictures": ["session.picture"],
       "session.read": ["session.list", "session.show", "session.peek", "session.answer"],
       "board.read": [
         "board.snapshot",
@@ -88,6 +90,19 @@ describe("the v1 feature table", () => {
       "auth.callback": ["auth.callback.deliver"],
       "sessions.listing": ["session.listing", "session.listingForTicket"],
       "host.workspaces": ["workspaces.list", "workspaces.create"],
+      "host.model-defaults": [
+        "hostModels.inspect",
+        "hostModels.defaults",
+        "hostModels.setDefault",
+        "hostModels.hiddenModels",
+        "hostModels.setHiddenModels",
+        "hostModels.compactionPolicy",
+        "hostModels.setCompactionPolicy",
+        "hostModels.codeModePolicy",
+        "hostModels.setCodeModePolicy",
+        "hostModels.pickerView",
+        "hostModels.setPickerView",
+      ],
     });
     expect(HOST_V1_FEATURES).toStrictEqual([
       "sessions",
@@ -95,6 +110,7 @@ describe("the v1 feature table", () => {
       "host.logs",
       "sessions.subscribe",
       "sessions.history",
+      "sessions.pictures",
       "session.read",
       "board.read",
       "board.write",
@@ -103,6 +119,7 @@ describe("the v1 feature table", () => {
       "auth.callback",
       "sessions.listing",
       "host.workspaces",
+      "host.model-defaults",
     ]);
     expect(HOST_V1_FEATURES.every(isHostFeature)).toBe(true);
   });
@@ -114,6 +131,7 @@ describe("the v1 feature table", () => {
 
   it("grants the base set plus the granted features' operations, and nothing for unknown names", () => {
     expect([...operationsGrantedBy([])]).toStrictEqual(["protocol.welcome"]);
+    expect([...operationsGrantedBy([], "host")]).toStrictEqual([...HOST_SCOPE_BASE_OPERATIONS]);
     expect([
       ...operationsGrantedBy(["sessions.subscribe", "toString", "from-the-future"]),
     ]).toStrictEqual(["protocol.welcome", "session.subscribe"]);

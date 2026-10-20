@@ -34,6 +34,19 @@ export interface HostLinkRelaySubscribeCall extends HostLinkRelayCall {
   readonly lastEventId?: string;
 }
 
+/** One HOST-scoped call over desktop main's host link, before any Workspace is open. */
+export interface HostScopeRelayCall {
+  readonly hostId: string;
+  /** A HOST operation's catalog key; main checks the host welcome's grant. */
+  readonly path: string;
+  readonly input?: unknown;
+}
+
+/** A HOST-scoped subscription, using the same events and errors as the Workspace relay. */
+export interface HostScopeRelaySubscribeCall extends HostScopeRelayCall {
+  readonly lastEventId?: string;
+}
+
 /**
  * What a relayed subscription says. Every kind but `started` and `data` is its
  * last: the stream ends after it, in main and in the window alike.

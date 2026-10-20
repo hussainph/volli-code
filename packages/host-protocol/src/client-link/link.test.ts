@@ -24,6 +24,7 @@ import {
 import { HOST_TRACE_FIELD, type HostTrace } from "../trace";
 import {
   createHostLink,
+  createClientSocketPool,
   HOST_LINK_TIMING,
   hostLinkBackoffDelay,
   HostLinkError,
@@ -105,7 +106,7 @@ interface Ctx {
   readonly connection: ServerConnection;
 }
 
-async function startHost(overrides: Partial<HostState> = {}) {
+async function startHost(overrides: Partial<HostState> = {}, port = 0, proxyPort = 0) {
   const host: HostState = {
     epoch: 2,
     hostId: HOST,
@@ -209,7 +210,7 @@ async function startHost(overrides: Partial<HostState> = {}) {
       }),
   });
 
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const server = new WebSocketServer({ host: "127.0.0.1", port });
   await once(server, "listening");
   /** Every text frame a client sent, as it arrived. */
   const frames: string[] = [];
@@ -265,8 +266,8 @@ async function startHost(overrides: Partial<HostState> = {}) {
       return { refused: null, welcome: negotiated.welcome, connection };
     },
   });
-  const { port } = server.address() as AddressInfo;
-  const proxy = await startProxy(port);
+  const targetPort = (server.address() as AddressInfo).port;
+  const proxy = await startProxy(targetPort, proxyPort);
   cleanups.push(async () => {
     await proxy.close();
     for (const peer of server.clients) peer.terminate();
@@ -311,7 +312,7 @@ async function startHost(overrides: Partial<HostState> = {}) {
 }
 
 /** Loopback TCP in front of the host: `down` refuses and drops, `blackhole` goes silent without a close. */
-async function startProxy(target: number) {
+async function startProxy(target: number, port = 0) {
   let down = false;
   const pairs = new Set<{ client: Socket; upstream: Socket }>();
   const server = createServer((client) => {
@@ -334,11 +335,11 @@ async function startProxy(target: number) {
       socket.on("close", end);
     }
   });
-  server.listen(0, "127.0.0.1");
+  server.listen(port, "127.0.0.1");
   await once(server, "listening");
-  const { port } = server.address() as AddressInfo;
+  const listeningPort = (server.address() as AddressInfo).port;
   return {
-    url: `ws://127.0.0.1:${port}`,
+    url: `ws://127.0.0.1:${listeningPort}`,
     /** Every connection dropped (no close frame), and new ones refused. */
     down() {
       down = true;
@@ -1559,14 +1560,23 @@ describe("a server-requested reconnect goes through the link", () => {
         built += 1;
       }
     }
-    const { link: subject } = link(url, { WebSocket: Counting as unknown as typeof WebSocket });
-    // The credential answered and the attempt handed tRPC its hello; tRPC
-    // builds the socket a few microtasks on, after this close.
+    const socketPool = createClientSocketPool(1);
+    const { link: subject } = link(url, {
+      WebSocket: Counting as unknown as typeof WebSocket,
+      socketPool,
+    });
+    // Credentials and admission answered, but tRPC's asynchronous URL
+    // preparation has not constructed the socket yet.
+    await Promise.resolve();
+    await Promise.resolve();
     await Promise.resolve();
     subject.close();
     await sleep(1_200);
     expect(built).toBe(0);
     expect(host.connections).toHaveLength(0);
+    const replacement = link(url, { socketPool }).link;
+    await until(replacement, "ready");
+    expect(host.connections).toHaveLength(1);
   });
 });
 
@@ -1938,5 +1948,140 @@ describe("the link's log says why", () => {
         path: "feed",
       }),
     );
+  });
+});
+
+describe("physical socket admission", () => {
+  it("admits FIFO, cancels waiters, ignores duplicate release, and rejects invalid limits", async () => {
+    for (const limit of [0, -1, 1.5, NaN])
+      expect(() => createClientSocketPool(limit)).toThrow("socket limit");
+    const pool = createClientSocketPool(1);
+    const stopped = new AbortController();
+    stopped.abort();
+    expect(await pool.acquire(stopped.signal)).toBeNull();
+    const first = (await pool.acquire(new AbortController().signal))!;
+    const cancelled = new AbortController();
+    const waiting = pool.acquire(cancelled.signal);
+    cancelled.abort();
+    expect(await waiting).toBeNull();
+    const order: number[] = [];
+    const second = pool.acquire(new AbortController().signal).then((release) => {
+      order.push(2);
+      return release!;
+    });
+    const third = pool.acquire(new AbortController().signal).then((release) => {
+      order.push(3);
+      return release!;
+    });
+    first();
+    first();
+    const releaseSecond = await second;
+    expect(order).toEqual([2]);
+    releaseSecond();
+    const releaseThird = await third;
+    expect(order).toEqual([2, 3]);
+    releaseThird();
+  });
+
+  it("never exceeds 24 actual loopback client sockets during retries and wholesale replacement with stalled closes", async () => {
+    const started = await startHost({}, 5386, 5387);
+    const pool = createClientSocketPool(24);
+    const actual = new Set<NodeWebSocket>();
+    let peak = 0;
+    class Counted extends NodeWebSocket {
+      constructor(url: string) {
+        super(url);
+        actual.add(this);
+        peak = Math.max(peak, actual.size);
+        this.once("close", () => actual.delete(this));
+      }
+    }
+    const options = {
+      socketPool: pool,
+      WebSocket: Counted as unknown as typeof WebSocket,
+      timing: { ...FAST, heartbeatIntervalMs: 50, heartbeatTimeoutMs: 30 },
+    };
+    const previous = Array.from({ length: 24 }, () => link(started.url, options).link);
+    await Promise.all(previous.map((old) => until(old, "ready")));
+    expect(actual.size).toBe(24);
+    // No FIN and no close response: every retiring socket remains real.
+    started.proxy.blackhole();
+    await Promise.all(previous.map((old) => until(old, "unreachable")));
+    previous.slice(1).forEach((old) => old.close());
+    const replacements = Array.from({ length: 23 }, () => link(started.url, options).link);
+    // Also cancel an admission waiter; it must never construct a socket later.
+    const abandoned = link(started.url, options).link;
+    await sleep(50);
+    abandoned.close();
+    expect(actual.size).toBe(24);
+    expect(peak).toBe(24);
+    expect(started.host.connections).toHaveLength(24);
+    // Release the physical sockets; the retry and replacements can now open.
+    started.proxy.down();
+    started.proxy.up();
+    await Promise.all([
+      until(previous[0]!, "ready"),
+      ...replacements.map((next) => until(next, "ready")),
+    ]);
+    expect(actual.size).toBe(24);
+    expect(peak).toBe(24);
+    expect(abandoned.getState().status).toBe("closed");
+    started.proxy.down();
+  });
+
+  it("waits for its own physical close before retry even without a shared budget", async () => {
+    const started = await startHost({}, 5388, 5389);
+    const created: NodeWebSocket[] = [];
+    class Counted extends NodeWebSocket {
+      constructor(url: string) {
+        super(url);
+        created.push(this);
+      }
+    }
+    const subject = link(started.url, {
+      WebSocket: Counted as unknown as typeof WebSocket,
+      timing: { ...FAST, heartbeatIntervalMs: 30, heartbeatTimeoutMs: 20 },
+    }).link;
+    await until(subject, "ready");
+    started.proxy.blackhole();
+    await until(subject, "unreachable");
+    await sleep(60);
+    expect(created).toHaveLength(1);
+    expect(created[0]!.readyState).toBe(NodeWebSocket.CLOSING);
+    subject.close();
+    started.proxy.down();
+    await eventually(() => created[0]!.readyState === NodeWebSocket.CLOSED, "physical close");
+    expect(created).toHaveLength(1);
+  });
+});
+
+describe("admission exceptional exits", () => {
+  it("bounds a credential provider that never answers", async () => {
+    const subject = link("ws://127.0.0.1:5390", {
+      credential: () => new Promise<string>(() => {}),
+      timing: { ...FAST, handshakeTimeoutMs: 30 },
+    }).link;
+    expect((await until(subject, "unreachable")).error.message).toContain("handshake within 30 ms");
+    subject.close();
+  });
+
+  it("releases admission if socket construction throws, then retries normally", async () => {
+    const started = await startHost({}, 5391, 5392);
+    let throws = true;
+    const Socket = new Proxy(NodeWebSocket, {
+      construct(target, args: [string]) {
+        if (throws) throw new Error("constructor failed");
+        return new target(...args);
+      },
+    });
+    const subject = link(started.url, {
+      WebSocket: Socket as unknown as typeof WebSocket,
+      socketPool: createClientSocketPool(1),
+    }).link;
+    expect((await until(subject, "unreachable")).error.message).toContain("constructor failed");
+    throws = false;
+    subject.reconnect();
+    await until(subject, "ready");
+    expect(started.host.connections).toHaveLength(1);
   });
 });

@@ -1,4 +1,4 @@
-/** VC-329 review hub: shipping components over the same in-memory fixtures. */
+/** VC-329 hub: shipping components over the same in-memory fixtures. */
 import * as React from "react";
 import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
 import { AutomationsPage } from "@renderer/components/automations/automations-page";

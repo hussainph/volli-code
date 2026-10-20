@@ -38,14 +38,18 @@ class Adapter implements NativeHarnessAdapter {
   dispatchGate: Promise<void> | undefined;
   startGate: Promise<void> | undefined;
   refuse = false;
+  refusalDetail: string | null = "Cannot deliver";
   startTurns = true;
   attachFailure: Error | undefined;
+  released = 0;
+  releaseFailure: Error | undefined;
   unknown = false;
   crashAfterAcceptance = false;
   ambiguous = false;
   unknownAfterTurn = false;
   reconcileGate: Promise<void> | undefined;
   reconciling = false;
+  reconcileStarted?: () => void;
   async attach(
     _spec: Parameters<NativeHarnessAdapter["attach"]>[0],
     sink: ObservationSink,
@@ -70,7 +74,7 @@ class Adapter implements NativeHarnessAdapter {
             commandId: command.commandId,
             status: "rejected",
             code: "refused",
-            detail: "Cannot deliver",
+            detail: this.refusalDetail,
             native: null,
           };
         if (this.startTurns && command.kind === "message.submit" && command.delivery !== "steer")
@@ -100,6 +104,7 @@ class Adapter implements NativeHarnessAdapter {
       },
       reconcile: async () => {
         this.reconciling = true;
+        this.reconcileStarted?.();
         await this.reconcileGate;
         return {
           cursor: null,
@@ -107,7 +112,10 @@ class Adapter implements NativeHarnessAdapter {
           receipts: this.crashAfterAcceptance ? [] : this.receipts,
         };
       },
-      release: async () => undefined,
+      release: async () => {
+        this.released++;
+        if (this.releaseFailure) throw this.releaseFailure;
+      },
     };
   }
   emit(observation: RuntimeObservation) {
@@ -131,6 +139,10 @@ function fixture(
     locate?: () => void | Promise<void>;
     diagnostics?: () => void;
     retryDelays?: readonly number[];
+    admissionTimeoutMs?: number;
+    firstAttachPreparationTimeoutMs?: number;
+    prepare?: () => void | Promise<void>;
+    reaffirm?: () => void | Promise<void>;
   } = {},
 ) {
   let sequence = 0;
@@ -158,14 +170,23 @@ function fixture(
           await options.locate?.();
           return { directory: "/fake", venue: { id: "local", kind: "local" } };
         },
-        prepare: async () => ({ directory: "/fake", venue: { id: "local", kind: "local" } }),
-        reaffirm: async () => undefined,
+        prepare: async () => {
+          await options.prepare?.();
+          return { directory: "/fake", venue: { id: "local", kind: "local" } };
+        },
+        reaffirm: async () => options.reaffirm?.(),
       },
       onFollowUpFailure: (error) => {
         errors.push(error);
         options.diagnostics?.();
       },
       ...(options.retryDelays === undefined ? {} : { followUpRetryDelaysMs: options.retryDelays }),
+      ...(options.admissionTimeoutMs === undefined
+        ? {}
+        : { followUpAdmissionTimeoutMs: options.admissionTimeoutMs }),
+      ...(options.firstAttachPreparationTimeoutMs === undefined
+        ? {}
+        : { firstAttachPreparationTimeoutMs: options.firstAttachPreparationTimeoutMs }),
     });
   return { engine, artifacts, followUps, adapter, errors, runtime };
 }
@@ -279,6 +300,11 @@ describe("host follow-up commands", () => {
     await expect
       .poll(async () => (await runtime.projection({ sessionId })).projection.queue?.[0].state)
       .toBe("releasing");
+    expect((await runtime.projection({ sessionId })).projection.queue?.[0]).toMatchObject({
+      id: "queued",
+      state: "releasing",
+      afterCurrentStep: true,
+    });
     for (const command of [
       { kind: "message.cancel" as const, messageId: "queued" },
       { kind: "message.edit" as const, messageId: "queued", message: message("queued", "edit") },
@@ -1242,12 +1268,19 @@ describe("host follow-up commands", () => {
     await runtime.command({ commandId: "stop", sessionId, command: { kind: "session.stop" } });
     await runtime.recoverFollowUps();
     expect(f.adapter.commands.filter(({ kind }) => kind === "message.submit")).toHaveLength(1);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued message is waiting: session_stopped. Reattach the Session to retry.",
+    ]);
     await f.engine.submit({
       commandId: "archive",
       sessionId,
       intent: { kind: "session.archive" },
       provenance: { source: { kind: "user", id: "test", detail: null }, venue: null },
     });
+    await runtime.recoverFollowUps();
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued message is waiting: session_archived. Reopen the Session to retry.",
+    ]);
     expect(
       (
         await runtime.command({
@@ -1418,9 +1451,8 @@ const queue = (runtime: Runtime, sessionId: string, id: string) =>
 const tick = () => new Promise((resolve) => setTimeout(resolve, 1));
 
 /**
- * VC-675 regressions for follow-ups that could get stuck with no exit (review
- * probes P1–P6, glm N3/N5/N6). Every probe that used to only log is an
- * assertion here.
+ * VC-675 regressions for follow-ups that could get stuck with no exit.
+ * Every path must settle or report a recoverable failure.
  */
 describe("host follow-ups never strand a row", () => {
   const AMBIGUOUS =
@@ -1504,9 +1536,11 @@ describe("host follow-ups never strand a row", () => {
       .toBe("client-attach");
     await queue(runtime, sessionId, "kickoff");
     await runtime.recoverFollowUps();
-    // Not claimed: no `releasing` row with nobody to send it, no Attention.
+    // Attaching is normal progress, not a delivery failure or a claimed row.
     expect(await queueStates(runtime, sessionId)).toEqual(["kickoff:queued"]);
     expect(submits(adapter)).toEqual([]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(f.errors).toEqual([]);
     gate.resolve();
     expect((await clientAttach).receipt?.status).toBe("accepted");
     await expect.poll(() => submits(adapter)).toEqual([deliveryId(sessionId, "kickoff")]);
@@ -1549,11 +1583,93 @@ describe("host follow-ups never strand a row", () => {
     expect(await queueStates(runtime, sessionId)).toEqual(["kickoff:queued"]);
     expect(submits(adapter)).toEqual([]);
     expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    // The racing attach's refusal remains diagnostic, not user Attention.
     expect(String(f.errors[0])).toContain("executor_start_pending");
     gate.resolve();
     await clientAttach;
     await expect.poll(() => submits(adapter)).toEqual([deliveryId(sessionId, "kickoff")]);
     await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+  });
+
+  it.each([
+    ["live", "archived"],
+    ["live", "attention"],
+    ["orphaned", "archived"],
+    ["orphaned", "attention"],
+  ] as const)("keeps %s starts from hiding %s queue blockers", async (start, blocker) => {
+    const adapter = new GatedAdapter();
+    const f = fixture({ adapter });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const gate = Promise.withResolvers<void>();
+    let clientAttach: Promise<unknown> | undefined;
+    const provenance = {
+      source: { kind: "user" as const, id: "test", detail: null },
+      venue: null,
+    };
+    if (start === "live") {
+      adapter.gate = gate.promise;
+      clientAttach = runtime.command({
+        commandId: "client-attach",
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      await expect
+        .poll(async () => (await f.engine.getSession({ sessionId }))?.pendingExecutorStart?.id)
+        .toBe("client-attach");
+    } else {
+      await f.engine.submit({
+        commandId: "stale-start",
+        sessionId,
+        intent: { kind: "executor.start", adapterId: "fake", continuity: "fresh" },
+        provenance,
+      });
+    }
+    try {
+      await queue(runtime, sessionId, "first");
+      await runtime.recoverFollowUps();
+      if (blocker === "archived") {
+        await f.engine.submit({
+          commandId: "archive",
+          sessionId,
+          intent: { kind: "session.archive" },
+          provenance,
+        });
+      } else {
+        await f.engine.observe({
+          id: "unrelated-attention",
+          sessionId,
+          attachmentId: null,
+          occurredAt: 400,
+          provenance,
+          kind: "attention.raised",
+          attention: {
+            id: "unrelated-attention",
+            attachmentId: null,
+            kind: "configuration_invalid",
+            detail: "Choose a model",
+            diagnostic: null,
+          },
+        });
+      }
+      await runtime.recoverFollowUps();
+      expect(await attentionDetails(runtime, sessionId)).toEqual(
+        blocker === "archived"
+          ? ["Queued message is waiting: session_archived. Reopen the Session to retry."]
+          : ["Choose a model", "Queued message is waiting: configuration_invalid: Choose a model"],
+      );
+      expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+      expect(submits(adapter)).toEqual([]);
+      expect(f.errors).toEqual([]);
+    } finally {
+      gate.resolve();
+      if (start === "live" && blocker === "archived") {
+        await expect(clientAttach).rejects.toThrow(`Session ${sessionId} is archived`);
+      } else {
+        await clientAttach;
+      }
+      await runtime.close();
+    }
   });
 
   it("never claims behind a stale start, and returns a recovered claim to the queue", async () => {
@@ -1569,11 +1685,16 @@ describe("host follow-ups never strand a row", () => {
     await queue(runtime, sessionId, "first");
     await runtime.recoverFollowUps();
     expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    const actionableAttention = [
+      "Queued message is waiting: executor_start_pending. Finish or retry the attachment.",
+    ];
+    expect(await attentionDetails(runtime, sessionId)).toEqual(actionableAttention);
     await f.followUps.transaction(sessionId, (state) => {
       state.entries[0].state = "releasing";
     });
     await runtime.recoverFollowUps();
     expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual(actionableAttention);
     expect(f.adapter.attaches).toBe(0);
     // A claim with no recorded intent sent nothing: cancelling it is safe.
     await f.followUps.transaction(sessionId, (state) => {
@@ -2100,6 +2221,615 @@ describe("host follow-ups never strand a row", () => {
     expect(await queueStates(runtime, sessionId)).toEqual(["first:queued"]);
     expect(await attentionDetails(runtime, sessionId)).toContain("Choose a model");
     await runtime.close();
+  });
+
+  it("acknowledges only a closed attachment's boot warning and opens one queued turn", async () => {
+    const f = fixture();
+    const { runtime, sessionId } = await activeWithQueue(f, ["next"]);
+    const attachmentId = (await f.engine.getSession({ sessionId }))!.liveExecutor!.id;
+    const provenance = {
+      source: { kind: "system" as const, id: "desktop-recovery", detail: null },
+      venue: null,
+    };
+    await f.engine.observe({
+      id: "boot-warning",
+      sessionId,
+      attachmentId,
+      occurredAt: 400,
+      provenance,
+      kind: "attention.raised",
+      attention: {
+        id: `${attachmentId}:boot-recovery`,
+        attachmentId,
+        kind: "partial_turn_interrupted",
+        detail: "Prior process ended",
+        diagnostic: null,
+      },
+    });
+    // Not obsolete while the old turn is still active.
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active"]);
+    await f.engine.observe({
+      id: "boot-close",
+      sessionId,
+      attachmentId,
+      occurredAt: 401,
+      provenance,
+      kind: "attachment.closed",
+      outcome: "interrupted",
+    });
+    await runtime.recoverFollowUps();
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual(["active", deliveryId(sessionId, "next")]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(await queueStates(runtime, sessionId)).toEqual([]);
+    await runtime.close();
+  });
+
+  it("bounds workspace resolution and preparation without losing the queued payload", async () => {
+    for (const stage of ["resolve", "prepare"] as const) {
+      const gate = Promise.withResolvers<void>();
+      const f = fixture({
+        admissionTimeoutMs: 10,
+        retryDelays: [],
+        ...(stage === "resolve" ? { locate: () => gate.promise } : { prepare: () => gate.promise }),
+      });
+      const runtime = f.runtime();
+      const sessionId = await create(runtime);
+      await queue(runtime, sessionId, "next");
+      await runtime.recoverFollowUps();
+      expect(await queueStates(runtime, sessionId)).toEqual(["next:queued"]);
+      expect((await attentionDetails(runtime, sessionId)).join()).toContain(
+        "queue_admission_timeout",
+      );
+      gate.resolve();
+      await runtime.command({
+        commandId: "retry-edit",
+        sessionId,
+        command: {
+          kind: "message.edit",
+          messageId: "next",
+          message: message("next", "retry"),
+        },
+      });
+      await runtime.recoverFollowUps();
+      expect(submits(f.adapter)).toEqual([deliveryId(sessionId, "retry-edit")]);
+      await runtime.close();
+    }
+  });
+
+  it("bounds an attach and discards its late binding before retrying once", async () => {
+    const adapter = new GatedAdapter();
+    const gate = Promise.withResolvers<void>();
+    adapter.gate = gate.promise;
+    const f = fixture({ adapter, admissionTimeoutMs: 10, retryDelays: [] });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "next");
+    await expect.poll(() => f.errors.length).toBe(1);
+    expect(await queueStates(runtime, sessionId)).toEqual(["next:queued"]);
+    expect((await attentionDetails(runtime, sessionId)).join()).toContain(
+      "queue_admission_timeout",
+    );
+    adapter.releaseFailure = new Error("late release failed");
+    gate.resolve();
+    await expect.poll(() => adapter.released).toBe(1);
+    await expect.poll(() => f.errors.map(String).join()).toContain("late release failed");
+    adapter.releaseFailure = undefined;
+    await runtime.command({
+      commandId: "retry-edit",
+      sessionId,
+      command: {
+        kind: "message.edit",
+        messageId: "next",
+        message: message("next", "retry"),
+      },
+    });
+    await runtime.recoverFollowUps();
+    expect(submits(adapter)).toEqual([deliveryId(sessionId, "retry-edit")]);
+    expect(await queueStates(runtime, sessionId)).toEqual([]);
+    await runtime.close();
+  });
+
+  it("bounds admission without redispatching, retaining late acceptance evidence", async () => {
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [] });
+    f.adapter.startTurns = false;
+    const gate = Promise.withResolvers<void>();
+    f.adapter.dispatchGate = gate.promise;
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "next");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["next:releasing"]);
+    expect((await attentionDetails(runtime, sessionId)).join()).toContain(
+      "queue_admission_timeout",
+    );
+    gate.resolve();
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    expect(submits(f.adapter)).toEqual([deliveryId(sessionId, "next")]);
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    await runtime.close();
+  });
+
+  it("keeps definitely-unsent validation timeout named, editable and retryable", async () => {
+    const gate = Promise.withResolvers<void>();
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [], reaffirm: () => gate.promise });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    await queue(runtime, sessionId, "next");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["next:queued"]);
+    expect((await attentionDetails(runtime, sessionId)).join()).toContain(
+      "queue_admission_timeout",
+    );
+    gate.resolve();
+    expect(submits(f.adapter)).toEqual([]);
+    await runtime.command({
+      commandId: "retry-validation",
+      sessionId,
+      command: {
+        kind: "message.edit",
+        messageId: "next",
+        message: message("next"),
+      },
+    });
+    await runtime.recoverFollowUps();
+    expect(submits(f.adapter)).toEqual([deliveryId(sessionId, "retry-validation")]);
+    await runtime.close();
+  });
+
+  it("bounds the Client's reattach before a follow-up exists, with durable retryable failure", async () => {
+    for (const stage of ["resolve", "attach"] as const) {
+      const adapter = new GatedAdapter();
+      const gate = Promise.withResolvers<void>();
+      if (stage === "attach") adapter.gate = gate.promise;
+      const f = fixture({
+        adapter,
+        admissionTimeoutMs: 10,
+        retryDelays: [],
+        ...(stage === "resolve" ? { locate: () => gate.promise } : {}),
+      });
+      const runtime = f.runtime();
+      const sessionId = await create(runtime);
+      const attaching = runtime.command({
+        commandId: "client-attach",
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      if (stage === "resolve") await expect(attaching).rejects.toThrow("queue_admission_timeout");
+      else
+        expect((await attaching).receipt).toMatchObject({
+          status: "rejected",
+          code: "queue_admission_timeout",
+        });
+      expect((await attentionDetails(runtime, sessionId)).join()).toContain(
+        "queue_admission_timeout",
+      );
+      expect((await f.engine.getSession({ sessionId }))!.pendingExecutorStart).toBeNull();
+      gate.resolve();
+      await runtime.command({
+        commandId: "retry-client-attach",
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      await queue(runtime, sessionId, "next");
+      await runtime.recoverFollowUps();
+      expect(submits(adapter)).toEqual([deliveryId(sessionId, "next")]);
+      expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+      await runtime.close();
+    }
+  });
+
+  it("waits out a first attach's slow workspace preparation instead of failing it unrecoverable (VC-799)", async () => {
+    // A Session's first attach is where its worktree is made, and under load
+    // that preparation outlasts the admission bound, which never stopped it.
+    const gate = Promise.withResolvers<void>();
+    const reached = Promise.withResolvers<void>();
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      retryDelays: [],
+      prepare: () => {
+        reached.resolve();
+        return gate.promise;
+      },
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const attaching = runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    // Past the bound from the moment the preparation is waited on.
+    await reached.promise;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    gate.resolve();
+    expect((await attaching).receipt).toMatchObject({ status: "accepted" });
+    expect(await attentionDetails(runtime, sessionId)).toEqual([]);
+    expect(f.adapter.attaches).toBe(1);
+    await runtime.close();
+  });
+
+  it("fails a first attach whose preparation outlasts its own ceiling as configuration_invalid (VC-799)", async () => {
+    const stalled = Promise.withResolvers<void>();
+    const f = fixture({
+      admissionTimeoutMs: 10,
+      firstAttachPreparationTimeoutMs: 20,
+      retryDelays: [],
+      prepare: () => stalled.promise,
+    });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    const attached = await runtime.command({
+      commandId: "operation:start",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "fresh" },
+    });
+    expect(attached.receipt).toMatchObject({
+      status: "rejected",
+      code: "location_unavailable",
+      detail: "Workspace preparation did not finish within 0.02 s.",
+    });
+    const { projection } = await runtime.projection({ sessionId });
+    expect(projection.attention.active.map(({ kind }) => kind)).toEqual(["configuration_invalid"]);
+    expect(f.adapter.attaches).toBe(0);
+    stalled.resolve();
+    await runtime.close();
+  });
+
+  it("still bounds the workspace preparation of a Session that has attached before (VC-799)", async () => {
+    const stalled = Promise.withResolvers<void>();
+    let preparing: Promise<void> | undefined;
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [], prepare: () => preparing });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    const attachmentId = (await runtime.projection({ sessionId })).projection.liveExecutor!.id;
+    await runtime.command({
+      commandId: "release",
+      sessionId,
+      command: { kind: "adapter.release", attachmentId },
+    });
+    preparing = stalled.promise;
+    const reattached = await runtime.command({
+      commandId: "reattach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+    expect(reattached.receipt).toMatchObject({
+      status: "rejected",
+      code: "location_unavailable",
+      detail: expect.stringContaining("queue_admission_timeout: workspace preparation"),
+    });
+    stalled.resolve();
+    await runtime.close();
+  });
+
+  it("bounds cold binding recovery and prevents a late handle activating after close", async () => {
+    const adapter = new GatedAdapter();
+    const f = fixture({ adapter, admissionTimeoutMs: 10, retryDelays: [] });
+    const first = f.runtime();
+    const sessionId = await create(first);
+    await attach(first, sessionId);
+    await first.close();
+    const gate = Promise.withResolvers<void>();
+    adapter.gate = gate.promise;
+    const recovered = f.runtime();
+    await queue(recovered, sessionId, "next");
+    await recovered.recoverFollowUps();
+    expect(await queueStates(recovered, sessionId)).toEqual(["next:queued"]);
+    expect((await attentionDetails(recovered, sessionId)).join()).toContain("binding recovery");
+    expect(submits(adapter)).toEqual([]);
+    await recovered.close();
+    gate.resolve();
+    await expect.poll(() => adapter.released).toBe(2);
+    expect(recovered.openNativeBindings()).toEqual([]);
+    const retry = f.runtime();
+    await retry.command({
+      commandId: "retry-cold",
+      sessionId,
+      command: {
+        kind: "message.edit",
+        messageId: "next",
+        message: message("next"),
+      },
+    });
+    await retry.recoverFollowUps();
+    expect(submits(adapter)).toEqual([deliveryId(sessionId, "retry-cold")]);
+    await retry.close();
+  });
+
+  it("bounds retained-delivery reconciliation, then settles late proof without resending", async () => {
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [] });
+    f.adapter.startTurns = false;
+    f.adapter.unknown = true;
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "next");
+    await runtime.recoverFollowUps();
+    const gate = Promise.withResolvers<void>();
+    f.adapter.reconcileGate = gate.promise;
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["next:releasing"]);
+    expect((await attentionDetails(runtime, sessionId)).join()).toContain(
+      "delivery reconciliation",
+    );
+    f.adapter.receipts = [
+      {
+        commandId: deliveryId(sessionId, "next"),
+        status: "accepted",
+        acceptedAt: 201,
+        native: null,
+      },
+    ];
+    gate.resolve();
+    await expect.poll(() => queueStates(runtime, sessionId)).toEqual([]);
+    expect(submits(f.adapter)).toEqual([deliveryId(sessionId, "next")]);
+    await runtime.close();
+  });
+
+  it("keeps a late admission failure visible without losing the retained claim", async () => {
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [] });
+    const gate = Promise.withResolvers<void>();
+    f.adapter.startGate = gate.promise;
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "next");
+    await runtime.recoverFollowUps();
+    expect(await queueStates(runtime, sessionId)).toEqual(["next:releasing"]);
+    gate.reject(new Error("late transport failed"));
+    await expect.poll(() => f.errors.map(String).join()).toContain("late transport failed");
+    expect(await queueStates(runtime, sessionId)).toEqual(["next:releasing"]);
+    await runtime.close();
+  });
+
+  it("retains a rejected delivery with no provider detail across another recovery", async () => {
+    const f = fixture();
+    f.adapter.refuse = true;
+    f.adapter.refusalDetail = null;
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "next");
+    await runtime.recoverFollowUps();
+    expect(await attentionDetails(runtime, sessionId)).toEqual([
+      "Queued delivery refused: refused",
+    ]);
+    await runtime.close();
+    const recovered = f.runtime();
+    await recovered.recoverFollowUps();
+    expect(await attentionDetails(recovered, sessionId)).toEqual([
+      "Queued delivery refused: refused",
+    ]);
+    await recovered.close();
+  });
+
+  it.each(["fresh", "cold"] as const)(
+    "discards a %s attach that rejects after timing out",
+    async (stage) => {
+      const adapter = new GatedAdapter();
+      const f = fixture({ adapter, admissionTimeoutMs: 10, retryDelays: [] });
+      let runtime = f.runtime();
+      const sessionId = await create(runtime);
+      if (stage === "cold") {
+        await attach(runtime, sessionId);
+        await runtime.close();
+        runtime = f.runtime();
+      }
+      const gate = Promise.withResolvers<void>();
+      adapter.gate = gate.promise;
+      await queue(runtime, sessionId, "next");
+      await expect.poll(() => f.errors.length).toBeGreaterThan(0);
+      expect(await queueStates(runtime, sessionId)).toEqual(["next:queued"]);
+      gate.reject(new Error("late attach failed"));
+      await runtime.close();
+      expect(runtime.openNativeBindings()).toEqual([]);
+    },
+  );
+
+  it("reports failure to record late admission evidence without silently removing the message", async () => {
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [] });
+    f.adapter.startTurns = false;
+    const gate = Promise.withResolvers<void>();
+    f.adapter.dispatchGate = gate.promise;
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "next");
+    await runtime.recoverFollowUps();
+    const observe = f.engine.observe;
+    f.engine.observe = (observation) =>
+      observation.kind === "command.receipt" && observation.receipt.status === "accepted"
+        ? Promise.reject(new Error("late evidence write failed"))
+        : observe(observation);
+    gate.resolve();
+    await expect.poll(() => f.errors.map(String).join()).toContain("late evidence write failed");
+    expect(await queueStates(runtime, sessionId)).toEqual(["next:releasing"]);
+    f.engine.observe = observe;
+    await runtime.close();
+  });
+
+  it("reports a retained reconciliation that rejects after its deadline", async () => {
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [] });
+    f.adapter.startTurns = false;
+    f.adapter.unknown = true;
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "next");
+    await runtime.recoverFollowUps();
+    const gate = Promise.withResolvers<void>();
+    f.adapter.reconcileGate = gate.promise;
+    await runtime.recoverFollowUps();
+    gate.reject(new Error("late reconcile failed"));
+    await expect.poll(() => f.errors.map(String).join()).toContain("late reconcile failed");
+    expect(await queueStates(runtime, sessionId)).toEqual(["next:releasing"]);
+    await runtime.close();
+  });
+
+  it("keeps late cold binding cleanup failures diagnostic, never activating the handle", async () => {
+    const adapter = new GatedAdapter();
+    const f = fixture({ adapter, admissionTimeoutMs: 10, retryDelays: [] });
+    let runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    await runtime.close();
+    runtime = f.runtime();
+    const gate = Promise.withResolvers<void>();
+    adapter.gate = gate.promise;
+    await queue(runtime, sessionId, "next");
+    await expect.poll(() => f.errors.length).toBeGreaterThan(0);
+    adapter.releaseFailure = new Error("late cold release failed");
+    gate.resolve();
+    await expect.poll(() => f.errors.map(String).join()).toContain("late cold release failed");
+    expect(runtime.openNativeBindings()).toEqual([]);
+    await runtime.close();
+  });
+
+  it("settles durable delivery proof even when reconciliation exceeds its deadline", async () => {
+    const f = fixture({ admissionTimeoutMs: 100, retryDelays: [] });
+    f.adapter.startTurns = false;
+    f.adapter.unknown = true;
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await queue(runtime, sessionId, "next");
+    await runtime.recoverFollowUps();
+    const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    f.adapter.reconcileGate = gate.promise;
+    f.adapter.reconcileStarted = started.resolve;
+    const recovering = runtime.recoverFollowUps();
+    await started.promise;
+    const attachmentId = (await f.engine.getSession({ sessionId }))!.liveExecutor!.id;
+    await f.engine.observe({
+      id: "proof-during-recovery",
+      sessionId,
+      attachmentId,
+      occurredAt: 400,
+      provenance: { source: { kind: "adapter", id: "fake", detail: null }, venue: null },
+      kind: "command.receipt",
+      receipt: {
+        id: "proof-receipt",
+        commandId: deliveryId(sessionId, "next"),
+        status: "accepted",
+        acceptedAt: 400,
+        result: { kind: "message.submitted", sessionId },
+      },
+    });
+    await recovering;
+    expect(await queueStates(runtime, sessionId)).toEqual([]);
+    gate.resolve();
+    await runtime.close();
+  });
+
+  it.each([
+    new Error("cold unavailable"),
+    new NativeAttachmentError("cold unavailable", "recovery_failed", "adapter_unrecoverable"),
+  ])("does not conceal a genuine cold binding failure (%s)", async (failure) => {
+    const f = fixture();
+    const first = f.runtime();
+    const sessionId = await create(first);
+    await attach(first, sessionId);
+    await first.close();
+    f.adapter.attachFailure = failure;
+    const recovered = f.runtime();
+    await expect(
+      recovered.command({
+        commandId: "direct-next",
+        sessionId,
+        command: { kind: "message.submit", message: message("next") },
+      }),
+    ).rejects.toThrow("cold unavailable");
+    await recovered.close();
+  });
+
+  it("keeps an already-recorded command uncertain when its cold replay times out before dispatch", async () => {
+    const adapter = new GatedAdapter();
+    const f = fixture({ adapter, admissionTimeoutMs: 10, retryDelays: [] });
+    const first = f.runtime();
+    const sessionId = await create(first);
+    await attach(first, sessionId);
+    adapter.ambiguous = true;
+    adapter.startTurns = false;
+    const request = {
+      commandId: "replay-message",
+      sessionId,
+      command: {
+        kind: "message.submit" as const,
+        message: message("replay"),
+      },
+    };
+    await expect(first.command(request)).rejects.toThrow("transport lost");
+    await first.close();
+    adapter.ambiguous = false;
+    const gate = Promise.withResolvers<void>();
+    adapter.gate = gate.promise;
+    const recovered = f.runtime();
+    expect((await recovered.command(request)).receipt).toMatchObject({
+      status: "unreconciled",
+      detail: expect.stringContaining("queue_admission_timeout"),
+    });
+    gate.resolve();
+    await recovered.close();
+    expect(submits(adapter)).toEqual([request.commandId]);
+  });
+
+  it("bounds a queued delivery waiting behind a stalled direct admission without ever sending the timed-out attempt", async () => {
+    const f = fixture({ admissionTimeoutMs: 10, retryDelays: [] });
+    const runtime = f.runtime();
+    const sessionId = await create(runtime);
+    await attach(runtime, sessionId);
+    const gate = Promise.withResolvers<void>();
+    f.adapter.startGate = gate.promise;
+    f.adapter.startTurns = false;
+    let following: Promise<unknown> | undefined;
+    const direct = runtime.command({
+      commandId: "direct-stalled",
+      sessionId,
+      command: { kind: "message.submit", message: message("direct-stalled") },
+    });
+    try {
+      await expect.poll(() => submits(f.adapter)).toEqual(["direct-stalled"]);
+      await queue(runtime, sessionId, "next");
+      const recovering = runtime.recoverFollowUps();
+      await expect
+        .poll(async () =>
+          (await runtime.projection({ sessionId })).projection.attention.active
+            .map(({ detail }) => detail)
+            .join(),
+        )
+        .toContain("previous command admission");
+      await recovering;
+      expect(await queueStates(runtime, sessionId)).toEqual(["next:queued"]);
+      following = runtime.command({
+        commandId: "following-direct",
+        sessionId,
+        command: { kind: "message.submit", message: message("following-direct") },
+      });
+      await runtime.projection({ sessionId });
+      // Timing out the queue did not unlock the predecessor for later work.
+      expect(submits(f.adapter)).toEqual(["direct-stalled"]);
+      // Withdrawing the definitely-unsent row prevents any future delivery,
+      // even when the original admission unblocks after its deadline.
+      expect(
+        (
+          await runtime.command({
+            commandId: "cancel-timed-out",
+            sessionId,
+            command: { kind: "message.cancel", messageId: "next" },
+          })
+        ).receipt?.status,
+      ).toBe("accepted");
+      gate.resolve();
+      await direct;
+      await following;
+      await runtime.recoverFollowUps();
+      expect(submits(f.adapter)).toEqual(["direct-stalled", "following-direct"]);
+      expect(await queueStates(runtime, sessionId)).toEqual([]);
+    } finally {
+      gate.resolve();
+      await direct;
+      await following;
+      await runtime.close();
+    }
   });
 
   it("P4: concurrent cancels and release races keep FIFO and never deliver cancelled text", async () => {

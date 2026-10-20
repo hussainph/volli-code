@@ -2617,6 +2617,107 @@ describe("hydrateProjectRoster keeps identities (VC-447)", () => {
     expect(store.getState().ticketsByProject.p1?.[0]).not.toBe(a);
     expect(store.getState().labelsByProject.p1).toEqual([labelNamed("bug")]);
   });
+
+  it("writes nothing at all when the roster reads back what the board holds", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate(
+      {
+        p1: [ticket({ id: "a", status: "doing", labels: ["bug"] })],
+        p2: [ticket({ id: "o", projectId: "p2", status: "todo" })],
+      },
+      { p1: [labelNamed("bug")], p2: [] },
+    );
+    // A row the roster seeded carries a placeholder mark; it must survive too.
+    store
+      .getState()
+      .hydrateProjectRoster(
+        "p1",
+        [
+          rosterRow({ ...store.getState().ticketsByProject.p1![0]! }),
+          rosterRow({ id: "seeded", status: "todo" }),
+        ],
+        [labelNamed("bug")],
+      );
+    const before = store.getState();
+    expect(before.unloadedTicketBodies).toEqual({ seeded: true });
+    const listener = vi.fn();
+    const unsubscribe = store.subscribe(listener);
+
+    store.getState().hydrateProjectRoster(
+      "p1",
+      // Fresh objects with equal values: the refresh must keep the identities.
+      // oxlint-disable-next-line oxc/no-map-spread
+      before.ticketsByProject.p1!.map(({ body: _body, ...row }) => ({
+        ...row,
+        labels: [...row.labels],
+      })),
+      [labelNamed("bug")],
+    );
+    unsubscribe();
+
+    // The outer maps too, not only the slices inside them: a whole-map
+    // subscriber (the command palette) must not hear about this refresh.
+    expect(listener).not.toHaveBeenCalled();
+    expect(store.getState().ticketsByProject).toBe(before.ticketsByProject);
+    expect(store.getState().labelsByProject).toBe(before.labelsByProject);
+    expect(store.getState().unloadedTicketBodies).toBe(before.unloadedTicketBodies);
+  });
+
+  it("replaces only the edited project's entries, and keeps the maps a refresh did not change", () => {
+    const store = createBoardStore(fakeGateway());
+    const others = [ticket({ id: "o", projectId: "p2", status: "todo" })];
+    store.getState().hydrate(
+      {
+        p1: [ticket({ id: "a", status: "doing" }), ticket({ id: "b", status: "todo" })],
+        p2: others,
+      },
+      { p1: [labelNamed("bug")], p2: [] },
+    );
+    const before = store.getState();
+    const [a, b] = before.ticketsByProject.p1!;
+
+    store
+      .getState()
+      .hydrateProjectRoster(
+        "p1",
+        [rosterRow({ ...a!, title: "edited" }), rosterRow({ ...b! })],
+        [labelNamed("bug")],
+      );
+
+    const after = store.getState();
+    expect(after.ticketsByProject).not.toBe(before.ticketsByProject);
+    expect(after.ticketsByProject.p1?.[0]).toMatchObject({ id: "a", title: "edited" });
+    expect(after.ticketsByProject.p1?.[1]).toBe(b);
+    expect(after.ticketsByProject.p2).toBe(others);
+    // Labels and placeholder marks did not move, so neither map is rebuilt.
+    expect(after.labelsByProject).toBe(before.labelsByProject);
+    expect(after.unloadedTicketBodies).toBe(before.unloadedTicketBodies);
+  });
+
+  it("shortens the list and drops the departed mark when a ticket leaves", () => {
+    const store = createBoardStore(fakeGateway());
+    store.getState().hydrate({ p1: [ticket({ id: "a", status: "doing" })] }, { p1: [] });
+    store
+      .getState()
+      .hydrateProjectRoster(
+        "p1",
+        [
+          rosterRow({ ...store.getState().ticketsByProject.p1![0]! }),
+          rosterRow({ id: "gone", status: "todo" }),
+        ],
+        [],
+      );
+    const before = store.getState();
+    const [a] = before.ticketsByProject.p1!;
+
+    store.getState().hydrateProjectRoster("p1", [rosterRow({ ...a! })], []);
+
+    const after = store.getState();
+    expect(after.ticketsByProject.p1).toHaveLength(1);
+    expect(after.ticketsByProject.p1?.[0]).toBe(a);
+    expect(after.unloadedTicketBodies).toEqual({});
+    expect(after.labelsByProject).toBe(before.labelsByProject);
+  });
 });
 
 // ---- VC-565: the protocol path (`cloud` on) -------------------------------------------
@@ -3145,7 +3246,7 @@ describe("the board store on the protocol path (cloud on)", () => {
   });
 });
 
-// ---- the #810 review's identity probes, kept (VC-447) ----------------------------------------
+// ---- #810 identity probes (VC-447) ----------------------------------------
 
 describe("VC-447: a refresh keeps every unchanged identity and drops no changed field (flag off and on)", () => {
   const base = ticket({ id: "a", status: "todo", labels: ["a", "b"] });

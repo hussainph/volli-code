@@ -1,9 +1,8 @@
 /**
- * N-1 compatibility of step E for the web search keys (VC-643;
- * `docs/plans/sealed-credential-store.md` §4, "Downgrade contract and tests").
+ * N-1 compatibility of the sealed web search key mirror (VC-643).
  *
- * External users run releases cut from main, so the release before this one
- * (N-1) must keep working on a profile this build migrated and mirrored:
+ * The preceding release (N-1) must keep working on a profile this build
+ * migrated and mirrored:
  * open it, save, clear and attach with its keys, make a backup bundle and
  * restore one. Then this build must reconcile whatever N-1 left, from
  * `secrets`, and never bring back a key N-1 cleared.

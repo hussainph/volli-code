@@ -10,9 +10,8 @@
  *    into the Done column — the anchor the TTL counts from;
  *  - `computeArchiveReadiness` (re-exported from `@volli/shared` — it's pure
  *    and dependency-free, so it lives there), the verdict (merge vs TTL vs
- *    neither) with the Keep-pin and dismissal exemptions folded in — the one
- *    place the Vibe-Kanban bug (a TTL sweep that ignores its own pin) is
- *    forbidden;
+ *    neither) with the Keep-pin and dismissal exemptions applied to both
+ *    merge and TTL cleanup paths;
  *  - `archiveAndClean`, the human-disposes composition: it reuses `remove`
  *    (dirty ALWAYS refuses via the shared refusal contract) and the existing
  *    archive path, adding no new git call site (decision #42).

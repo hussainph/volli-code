@@ -1,7 +1,7 @@
 /**
- * The remote hosts engine's lifetimes (VC-700 PR 2, the #815 review's
- * blockers): quit owns everything in flight, one finalization per host, a
- * finalization that fails can still finish, owned SSH children, bounded
+ * The remote hosts engine's lifetimes (VC-700): quit owns everything in
+ * flight, one finalization per host, a finalization that fails can still finish,
+ * owned SSH children, bounded
  * flow retention, answers that must fit the current question, the link cap,
  * waking on resume, and the sudo password forgotten at every stop.
  */
@@ -104,7 +104,7 @@ function holdFirstHostKey(h: Harness): { release: () => void; held: () => boolea
   return { release: () => release!(), held: () => release !== undefined };
 }
 
-describe("a cancel at any step leaves nothing behind (the review's cancel probes)", () => {
+describe("a cancel at any step leaves nothing behind", () => {
   it.each(["connect", "probe", "deliver", "install", "start", "enroll", "link"])(
     "at %s: no host, no key, no tunnel, no open SSH, and the flow says cancelled",
     async (step) => {
@@ -519,7 +519,7 @@ setInterval(() => {}, 1000);
   });
 
   it("returns within the default grace when the command and ssh -O exit both ignore SIGTERM", async () => {
-    // Even the control-exit command stalls: the re-check's stubborn-control-ssh.
+    // Even the control-exit command stalls: the stubborn-control-ssh stand-in ignores SIGTERM.
     const stubborn = join(dir, "stubborn-control-ssh");
     writeFileSync(
       stubborn,

@@ -1,6 +1,5 @@
 /**
- * Where a managed install lives (VC-700), for each of the two modes the
- * owner ruled (VC-615, 2026-10-07):
+ * Where a managed install lives (VC-700, VC-615), for the system and user modes:
  *
  * | | `system` (sudo) | `user` (no sudo) |
  * |---|---|---|

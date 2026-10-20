@@ -82,8 +82,8 @@ function schema(table: string): unknown[] {
     .all(table);
 }
 
-function expectConverged(): void {
-  expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+function expectConverged(version: number = LATEST_SCHEMA_VERSION): void {
+  expect(db.pragma("user_version", { simple: true })).toBe(version);
   expect((db.pragma("table_info(projects)") as { name: string }[]).map((c) => c.name)).toContain(
     "decision_model",
   );
@@ -123,14 +123,24 @@ describe("053 collision: decision models and remembered authority approvals", ()
     const project = db.prepare("SELECT * FROM projects").all();
     const session = db.prepare("SELECT * FROM sessions").all();
     const projectSchema = schema("projects");
-    expect(migrate(db, dbPath)).toBe(true);
-    expectConverged();
+    // The repair itself, judged where it ends: 054.
+    expect(migrate(db, dbPath, { toVersion: 54 })).toBe(true);
+    expectConverged(54);
     expect(db.prepare("SELECT * FROM projects").all()).toEqual(project);
     expect(db.prepare("SELECT * FROM sessions").all()).toEqual(session);
     expect(schema("projects")).toEqual(projectSchema);
+    // And on to the head, where a later expand-only migration only adds a
+    // column: 064's `removed_at` (VC-822), NULL for every project on the rail.
+    expect(migrate(db, dbPath)).toBe(true);
+    expectConverged();
+    expect(project).toHaveLength(1);
+    expect(db.prepare("SELECT * FROM projects").all()).toEqual([
+      { ...(project[0] as object), removed_at: null },
+    ]);
+    expect(db.prepare("SELECT * FROM sessions").all()).toEqual(session);
   });
 
-  it("repairs old dogfood stamped 53 while preserving approval and decision history and schemas", () => {
+  it("repairs a branch-lineage database stamped 53 while preserving approval and decision history and schemas", () => {
     const dbPath = fixture();
     base52(dbPath);
     db.exec(DOGFOOD_APPROVALS_053);
@@ -158,6 +168,8 @@ describe("053 collision: decision models and remembered authority approvals", ()
     expect(db.prepare("SELECT * FROM projects").get()).toEqual({
       ...project!,
       decision_model: null,
+      // Migration 064 (VC-822): on the rail.
+      removed_at: null,
     });
     expect(db.prepare("SELECT * FROM sessions").all()).toEqual(session);
     expect(db.prepare("SELECT * FROM authority_approvals").all()).toEqual(approvals);
@@ -168,7 +180,7 @@ describe("053 collision: decision models and remembered authority approvals", ()
   });
 
   it.each(["authority_approvals", "authority_decisions"])(
-    "repairs a partial dogfood schema missing %s independently",
+    "repairs a partial branch-lineage schema missing %s independently",
     (missingTable) => {
       const dbPath = fixture();
       base52(dbPath);

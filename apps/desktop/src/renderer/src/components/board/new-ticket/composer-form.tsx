@@ -45,8 +45,8 @@ import { notAvailableOn, refuseRemoteTicket, remoteHostNow } from "@renderer/sto
  *
  * Mounted only while the dialog is open (Radix unmounts the content on close).
  * Field state seeds from the DRAFT CACHE (draft.ts) when one exists — an
- * accidental Escape/overlay-click/quit mid-compose is non-destructive, Linear
- * style — and from blank defaults otherwise (`target` then seeds from the
+ * accidental Escape/overlay-click/quit mid-compose is non-destructive —
+ * and from blank defaults otherwise (`target` then seeds from the
  * currently selected project). Every field change re-saves the draft; a
  * successful create clears it.
  *
@@ -459,7 +459,9 @@ export function ComposerForm({
           onChange={(event) => setTitle(event.target.value)}
           onKeyDown={(event) => {
             // Enter in the title never submits — it moves focus to the body
-            // (⌘/Ctrl+Enter is handled by the capture handler above).
+            // (⌘/Ctrl+Enter is handled by the capture handler above). An
+            // IME's Enter accepts a candidate, so a composing one stays here.
+            if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
               event.preventDefault();
               editorRef.current?.focus();

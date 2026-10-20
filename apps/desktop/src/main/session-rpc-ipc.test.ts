@@ -251,8 +251,8 @@ beforeEach(() => {
 });
 
 describe("registerSessionRpcIpcHandlers", () => {
-  // VC-564 review B2: the window is the desktop's own (D7), and production
-  // options cannot make it anyone else.
+  // VC-564: the window is the desktop's own (D7), and production options
+  // cannot make it anyone else.
   it("takes no caller and no Session-to-Workspace port in its options", () => {
     expectTypeOf<RegisterSessionRpcIpcOptions>().not.toHaveProperty("caller");
     expectTypeOf<RegisterSessionRpcIpcOptions>().not.toHaveProperty("resourceWorkspace");

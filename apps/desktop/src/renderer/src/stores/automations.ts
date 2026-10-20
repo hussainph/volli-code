@@ -26,11 +26,13 @@ import {
   isValidAutomationRuntime,
   offeredAutomationsForColumn,
   offeredAutomationsInDigitOrder,
+  offeredAutomationsInPinnedOrder,
   type Automation,
   type AutomationRun,
   type AutomationSkippedOccurrence,
   type ColumnArming,
   type ColumnAutomationOrder,
+  type OfferedAutomationsInput,
   type TicketStatus,
 } from "@volli/shared";
 
@@ -850,12 +852,28 @@ export function offeredInDigitOrder(
   slices: OfferedListSlices,
   status: TicketStatus,
 ): readonly Automation[] {
-  return offeredAutomationsInDigitOrder({
+  return offeredAutomationsInDigitOrder(offeredInput(slices, status));
+}
+
+/**
+ * The same pinned list UNCAPPED: what the lane draws, so a row ranked past the
+ * ninth stays on screen (without a digit) and can be dragged back up. Its first
+ * nine rows are {@link offeredInDigitOrder}, by construction.
+ */
+export function offeredInPinnedOrder(
+  slices: OfferedListSlices,
+  status: TicketStatus,
+): readonly Automation[] {
+  return offeredAutomationsInPinnedOrder(offeredInput(slices, status));
+}
+
+function offeredInput(slices: OfferedListSlices, status: TicketStatus): OfferedAutomationsInput {
+  return {
     automations: slices.automations,
     status,
     rankedAutomationIds: rankFor(slices.orders, status),
     effectiveArmedAutomationId: effectiveArmedIn(slices, status)?.id ?? null,
-  });
+  };
 }
 
 /**

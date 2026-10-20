@@ -1,9 +1,9 @@
 /**
  * Harness mode's home containment (VC-703).
  *
- * A `volli-drive` instance runs beside the owner's real Volli on a shared Mac.
+ * A `volli-drive` instance may run beside the user's Volli on a shared Mac.
  * Its keychain is trapped (`keychain-guard.ts`); this module keeps its
- * FILESYSTEM out of the owner's world: every home-derived path main resolves
+ * FILESYSTEM isolated from the user's files: every home-derived path main resolves
  * must sit inside the instance's scratch root, or the app refuses to boot.
  *
  * Main reaches "home" through exactly these doors, each pinned here:
@@ -80,7 +80,7 @@ export interface ContainmentInput {
   /** `--user-data-dir`, from the command line (empty when absent). */
   readonly userDataDir: string | undefined;
   readonly isPackaged: boolean;
-  /** The owner's passwd home (`os.userInfo().homedir`): a string, never read. */
+  /** The user's passwd home (`os.userInfo().homedir`): a string, never read. */
   readonly ownerHome: string;
   readonly realpath?: (path: string) => string;
 }

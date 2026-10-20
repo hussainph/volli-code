@@ -212,7 +212,7 @@ function FileRow({
   const renaming = mutable && controls.edit.kind === "rename" && controls.edit.relPath === relPath;
   const row = (
     <ListRow
-      // 36px, ONE line (VC-406, revision 05). The second line every row used to
+      // 36px, ONE line (VC-406). The second line every row used to
       // carry was its parent path, and in a flat CURRENT-FOLDER listing that is
       // the folder the header already names — twenty rows repeating "src/"
       // under twenty filenames, for sixteen extra pixels each. A referenced row

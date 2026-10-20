@@ -274,6 +274,20 @@ export function watchSessionActivity(
       mark(request.sessionId);
       return result;
     },
+    async recordToolRefresh(request) {
+      const event = await engine.recordToolRefresh(request);
+      if (event !== null) {
+        if (ports.observeEvent !== undefined) {
+          try {
+            ports.observeEvent(event);
+          } catch (error) {
+            onError(error);
+          }
+        }
+        mark(event.sessionId);
+      }
+      return event;
+    },
     async observe(observation) {
       const event = await engine.observe(observation);
       if (ports.observeEvent !== undefined) {

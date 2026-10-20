@@ -685,7 +685,7 @@ function launchdAgent(layout: InstallLayout, port: number, keyFile: string | nul
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-    "<!-- Written by `volli-hostd install --user` (VC-700) and rewritten by every install. -->",
+    "<!-- Written by the volli-hostd user installer (VC-700) and rewritten by every install. -->",
     '<plist version="1.0">',
     "<dict>",
     `  <key>Label</key>`,

@@ -341,7 +341,7 @@ const WEDGE_FAILURE = {
   diagnostic: null,
 };
 
-describe("the wedge alert's target (VC-295 round 2)", () => {
+describe("the wedge alert's target (VC-295)", () => {
   it("names the failure the wedged Session is already carrying", async () => {
     // A wedge often IS a broken transport: the Attention is what a person can
     // act on, so the click has to land on it rather than on the Session's top.

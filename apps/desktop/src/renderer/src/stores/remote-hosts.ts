@@ -26,7 +26,13 @@ import type {
   RemoteHostProjects,
 } from "@volli/shared";
 import { create } from "zustand";
+import type { HostWorkspaceCreateInput } from "@volli/shared";
 
+import type {
+  HostProjectsListing,
+  ProjectCreateResult,
+} from "../components/hosts/open-project-model";
+import { hostWorkspacesApi } from "../lib/host-workspaces-api";
 import { sessionRpcClient } from "../lib/session-rpc-ipc-link";
 
 /** What managing remote hosts asks of desktop main (the desktop-only tier). */
@@ -228,4 +234,52 @@ export function remoteHostOf(
   hostId: string | null,
 ): RemoteHost | undefined {
   return hostId === null ? undefined : hosts.find((host) => host.id === hostId);
+}
+
+/** Absent is the pre-HOST DTO; only explicit incompatibility is classified older. */
+export function usesLegacyProjects(host: RemoteHost): boolean {
+  return host.hostScope === undefined || host.hostScope.status === "older";
+}
+
+function requireHostWorkspaces(host: RemoteHost): void {
+  if (host.hostScope?.status !== "ready")
+    throw new Error(`Couldn’t reach ${host.name}. Try again when it reconnects.`);
+  if (!host.hostScope.granted.includes("host.workspaces"))
+    throw new Error(`${host.name} did not grant project access.`);
+}
+
+export async function projectsOnHost(host: RemoteHost): Promise<HostProjectsListing> {
+  if (usesLegacyProjects(host)) {
+    const listing = await remoteHosts().projects(host.id);
+    return host.mode === "user" ? { ...listing, adds: { kind: "user-install" } } : listing;
+  }
+  requireHostWorkspaces(host);
+  const listing = await hostWorkspacesApi(host.id).list();
+  return {
+    hostId: host.id,
+    projects: listing.workspaces,
+    adds: { kind: "ready" },
+    omitted: listing.omitted,
+  };
+}
+
+export async function createProjectOnHost(
+  host: RemoteHost,
+  input: HostWorkspaceCreateInput,
+  sudoPassword?: string,
+): Promise<ProjectCreateResult> {
+  if (usesLegacyProjects(host)) {
+    if (host.mode === "user") throw new Error(`Update ${host.name} to create projects from here`);
+    return remoteHosts().createProject({
+      hostId: host.id,
+      ...input.source,
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(sudoPassword === undefined ? {} : { sudoPassword }),
+    });
+  }
+  requireHostWorkspaces(host);
+  const result = await hostWorkspacesApi(host.id).create(input);
+  return result.ok
+    ? { ok: true, project: result.workspace }
+    : { ok: false, failure: { ...result.failure, command: null } };
 }

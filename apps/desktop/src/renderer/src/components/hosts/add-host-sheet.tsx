@@ -1,6 +1,5 @@
 /**
- * Add a host over SSH (VC-700 PR 3; VC-615 flow 1, ported from the lab's
- * `#host-add` in its "Checklist" direction, the owner's pick).
+ * Add a host over SSH (VC-700; VC-615 flow 1), with a live checklist of steps.
  *
  * Type `you@box` (or a `~/.ssh/config` alias) and Connect; desktop main
  * connects, checks the system, uploads and installs Volli host, starts it,
@@ -290,7 +289,7 @@ function FlowScreen({
             <ol aria-label="Steps" className="flex flex-col px-6 pb-4">
               {view === null
                 ? null
-                : stepRows(view).map((row) => (
+                : stepRows(view, host).map((row) => (
                     <li key={row.id} className="flex h-8 items-center gap-2" data-step={row.id}>
                       <StepMark status={row.mark} />
                       <SwapText

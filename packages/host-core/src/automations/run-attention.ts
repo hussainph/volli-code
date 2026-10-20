@@ -150,7 +150,7 @@ export function runAttentionNotification(
  *
  * The item comes from `sessionNotificationItem`, which is also what a WINDOW
  * reports about what it is showing — so the click and the focused-target
- * comparison are talking about the same thing (round 2). It is read from the
+ * comparison are talking about the same thing. It is read from the
  * same projection in the same fold as the need, not looked up again later,
  * which is how a click comes to point at a question the rule was not talking
  * about. It may of course have RESOLVED by the time somebody clicks; that is

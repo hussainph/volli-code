@@ -1,6 +1,5 @@
 /**
- * The typed credential families one host's sealed inventory holds (VC-642;
- * `docs/plans/sealed-credential-store.md` §3).
+ * The typed credential families one host's sealed inventory holds (VC-642).
  *
  * A record is one family, a selector naming its owner or scope, and a value.
  * The selector is a fixed set of string fields per family, so a caller
@@ -11,8 +10,8 @@
  *
  * Only `session-env` ever reaches a shell environment; every other family is
  * read by the host service that owns it. VC-623's operator verifier and a
- * user's own Pi `auth.json` are deliberately not families here (owner
- * decision 4): the verifier's integrity comes from a root-owned file a
+ * user's own Pi `auth.json` are deliberately not families here: the verifier's
+ * integrity comes from a root-owned file a
  * service-writable store cannot give, and `auth.json` is the user's.
  *
  * Today no family is canonical in this inventory. `web-search` is mirrored

@@ -1,17 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+// Import the adapter directly: the package root's lazy autoUpdater getter loads Electron.
+import { AppImageUpdater } from "electron-updater/out/AppImageUpdater";
 
-import type { UpdateUiState } from "../ipc/contract";
+import type { UpdateLastCheck, UpdateUiState } from "../ipc/contract";
 import type { NotificationRequest } from "./notifications/dispatch";
 import {
   readAllowPrerelease,
   readUpdateChannel,
+  readUpdateLastCheck,
+  runningBuildKind,
   writeUpdateChannel,
+  writeUpdateLastCheck,
   startAutoUpdate,
   UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY,
+  UPDATE_LAST_CHECK_APP_STATE_KEY,
   type AutoUpdaterLike,
 } from "./auto-update";
 import { setAppState } from "@volli/host-core/db";
 import { openTestDb, type TestDb } from "@volli/host-core/testing";
+
+describe("running build kind", () => {
+  it.each([
+    [false, "0.2.2", "dev"],
+    [false, "0.3.0-canary.1", "dev"],
+    [true, "0.3.0-canary.1", "canary"],
+    [true, "0.3.0-beta.2+build.7", "canary"],
+    [true, "0.3.0-1", "canary"],
+    [true, "0.2.2", "stable"],
+    [true, "0.2.2+canary-build.1", "stable"],
+  ] as const)("packaged=%s version=%s → %s", (isPackaged, version, kind) => {
+    // AppImageUpdater uses the same AppUpdater constructor/parser as MacUpdater,
+    // but an injected app avoids Electron entirely. No update checks or IO run.
+    const updater = new AppImageUpdater(null, { version, name: "Volli", isPackaged });
+    expect(runningBuildKind(isPackaged, updater.currentVersion)).toBe(kind);
+    // A user choosing the canary feed must not change the running build's kind.
+    updater.allowPrerelease = !updater.allowPrerelease;
+    expect(runningBuildKind(isPackaged, updater.currentVersion)).toBe(kind);
+  });
+});
 
 const INITIAL_DELAY_MS = 30_000;
 const INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -65,7 +91,9 @@ interface Harness {
   surface: { present: boolean };
   start(overrides?: {
     isPackaged?: boolean;
-    allowPrerelease?: boolean;
+    allowPrerelease?: boolean | null;
+    lastCheck?: Parameters<typeof startAutoUpdate>[0]["lastCheck"];
+    now?: () => number;
   }): ReturnType<typeof startAutoUpdate>;
 }
 
@@ -85,12 +113,15 @@ function makeHarness(): Harness {
       startAutoUpdate({
         isPackaged: overrides.isPackaged ?? true,
         updater,
-        allowPrerelease: overrides.allowPrerelease ?? false,
+        // Never chosen unless a test says otherwise — the fresh-install case.
+        allowPrerelease: overrides.allowPrerelease ?? null,
         currentVersion: "0.1.0",
         notify: (request) => notifications.push(request),
         log: (line) => logs.push(line),
         onStateChange: (state) => stateChanges.push(state),
         hasUpdateSurface: () => surface.present,
+        lastCheck: overrides.lastCheck,
+        now: overrides.now,
       }),
   };
 }
@@ -104,12 +135,12 @@ afterEach(() => {
 });
 
 describe("readAllowPrerelease", () => {
-  it("defaults to OFF when the row is absent", () => {
+  it("reads never-chosen (null) when the row is absent", () => {
     ctx = openTestDb();
-    expect(readAllowPrerelease(ctx.db)).toBe(false);
+    expect(readAllowPrerelease(ctx.db)).toBeNull();
   });
 
-  it("turns ON only for a stored JSON true", () => {
+  it("reads an explicit choice only from an exact JSON boolean", () => {
     ctx = openTestDb();
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "true", 1);
     expect(readAllowPrerelease(ctx.db)).toBe(true);
@@ -117,16 +148,42 @@ describe("readAllowPrerelease", () => {
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "false", 2);
     expect(readAllowPrerelease(ctx.db)).toBe(false);
 
-    // Truthy-but-not-true payloads fail closed: the toggle WIDENS the
-    // update surface, so only an exact `true` may open it.
+    // Truthy-but-not-true payloads are no choice at all: they never widen a
+    // stable build, whose updater default stays `false`.
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "1", 3);
-    expect(readAllowPrerelease(ctx.db)).toBe(false);
+    expect(readAllowPrerelease(ctx.db)).toBeNull();
   });
 
-  it("fails closed on a malformed payload", () => {
+  it("reads a malformed payload as never chosen", () => {
     ctx = openTestDb();
     setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "not-json{", 1);
-    expect(readAllowPrerelease(ctx.db)).toBe(false);
+    expect(readAllowPrerelease(ctx.db)).toBeNull();
+  });
+});
+
+describe("readUpdateChannel", () => {
+  // VC-851: a fresh canary install's updater follows the canary feed (its
+  // version-derived default), so the setting must say Canary, not Stable.
+  it("reads the running build's line for an install that has never chosen", () => {
+    ctx = openTestDb();
+    expect(readUpdateChannel(ctx.db, "canary")).toBe("canary");
+    expect(readUpdateChannel(ctx.db, "stable")).toBe("stable");
+    expect(readUpdateChannel(ctx.db, "dev")).toBe("stable");
+  });
+
+  it("reads an explicit choice regardless of the build", () => {
+    ctx = openTestDb();
+    writeUpdateChannel(ctx.db, "stable", 1);
+    expect(readUpdateChannel(ctx.db, "canary")).toBe("stable");
+    writeUpdateChannel(ctx.db, "canary", 2);
+    expect(readUpdateChannel(ctx.db, "stable")).toBe("canary");
+  });
+
+  it("reads a malformed row as never chosen", () => {
+    ctx = openTestDb();
+    setAppState(ctx.db, UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY, "not-json{", 1);
+    expect(readUpdateChannel(ctx.db, "canary")).toBe("canary");
+    expect(readUpdateChannel(ctx.db, "stable")).toBe("stable");
   });
 });
 
@@ -136,19 +193,14 @@ describe("writeUpdateChannel", () => {
 
     expect(writeUpdateChannel(ctx.db, "canary", 1)).toBe("canary");
     expect(readAllowPrerelease(ctx.db)).toBe(true);
-    expect(readUpdateChannel(ctx.db)).toBe("canary");
+    expect(readUpdateChannel(ctx.db, "stable")).toBe("canary");
 
     expect(writeUpdateChannel(ctx.db, "stable", 2)).toBe("stable");
     expect(readAllowPrerelease(ctx.db)).toBe(false);
-    expect(readUpdateChannel(ctx.db)).toBe("stable");
+    expect(readUpdateChannel(ctx.db, "canary")).toBe("stable");
   });
 
-  it("reads stable for an install that has never chosen", () => {
-    ctx = openTestDb();
-    expect(readUpdateChannel(ctx.db)).toBe("stable");
-  });
-
-  it("widens a handed-over running updater on canary — and only widens", () => {
+  it("widens a handed-over running updater on canary, and leaves narrowing to the next launch", () => {
     ctx = openTestDb();
     const updater = { allowPrerelease: false };
 
@@ -157,25 +209,27 @@ describe("writeUpdateChannel", () => {
     writeUpdateChannel(ctx.db, "canary", 1, updater);
     expect(updater.allowPrerelease).toBe(true);
 
-    // Leaving is one-way live: `false` is never assigned over the updater's
-    // version-derived default (the stranding rule startup already follows).
+    // Leaving is not applied live (a staged canary must not be re-checked
+    // away); the stored `false` is what the next launch assigns.
     writeUpdateChannel(ctx.db, "stable", 2, updater);
     expect(updater.allowPrerelease).toBe(true);
-    expect(readUpdateChannel(ctx.db)).toBe("stable");
+    expect(readAllowPrerelease(ctx.db)).toBe(false);
   });
 
-  it("writes the exact JSON true the reader fails closed against", () => {
+  it("writes the exact JSON booleans the reader accepts", () => {
     ctx = openTestDb();
-    writeUpdateChannel(ctx.db, "canary", 1);
-
-    // Not "1", not "yes" — `readAllowPrerelease` only opens on an exact JSON
-    // `true`, so the writer has to produce precisely that or the toggle is a
-    // switch that silently does nothing.
-    expect(
-      ctx.db
+    const stored = () =>
+      ctx?.db
         .prepare("SELECT value FROM app_state WHERE key = ?")
-        .get(UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY),
-    ).toEqual({ value: "true" });
+        .get(UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY);
+
+    // Not "1", not "yes" — `readAllowPrerelease` only reads an exact JSON
+    // boolean as a choice, so the writer has to produce precisely that or the
+    // setting is a switch that silently does nothing.
+    writeUpdateChannel(ctx.db, "canary", 1);
+    expect(stored()).toEqual({ value: "true" });
+    writeUpdateChannel(ctx.db, "stable", 2);
+    expect(stored()).toEqual({ value: "false" });
   });
 });
 
@@ -222,23 +276,34 @@ describe("startAutoUpdate", () => {
     handle.stop();
   });
 
-  it("applies the prerelease toggle one-way: off defers to the updater's own default", () => {
+  it("leaves the updater's version-derived default alone when nothing was chosen", () => {
     vi.useFakeTimers();
 
-    // Stable-build default (false) stays false with the toggle off…
+    // Stable-build default (false) stays false…
     const stable = makeHarness();
-    stable.start({ allowPrerelease: false }).stop();
+    stable.start({ allowPrerelease: null }).stop();
     expect(stable.updater.allowPrerelease).toBe(false);
-    expect(stable.logs).toContain("[updater] allowPrerelease=false (toggle=false)");
+    expect(stable.logs).toContain("[updater] allowPrerelease=false (toggle=unset)");
 
-    // …and a canary build's version-derived default (true) is never
-    // clobbered by an absent/false toggle — forcing false would point the
-    // install at the stable-only feed and off its own canary line.
+    // …and a fresh canary build keeps following its own canary line.
     const canary = makeHarness();
     canary.updater.allowPrerelease = true;
-    canary.start({ allowPrerelease: false }).stop();
+    canary.start({ allowPrerelease: null }).stop();
     expect(canary.updater.allowPrerelease).toBe(true);
-    expect(canary.logs).toContain("[updater] allowPrerelease=true (toggle=false)");
+    expect(canary.logs).toContain("[updater] allowPrerelease=true (toggle=unset)");
+  });
+
+  // VC-851: choosing Stable on a canary build used to be written and then
+  // never applied — the install kept taking canaries indefinitely.
+  it("honours an explicit Stable on a canary build at launch", () => {
+    vi.useFakeTimers();
+    const canary = makeHarness();
+    canary.updater.allowPrerelease = true;
+
+    canary.start({ allowPrerelease: false }).stop();
+
+    expect(canary.updater.allowPrerelease).toBe(false);
+    expect(canary.logs).toContain("[updater] allowPrerelease=false (toggle=false)");
   });
 
   it("checks after the initial delay and then on the interval", () => {
@@ -295,7 +360,7 @@ describe("startAutoUpdate", () => {
     harness.updater.emit("error", new Error("feed unreachable"));
 
     expect(harness.logs).toEqual([
-      "[updater] allowPrerelease=false (toggle=false)",
+      "[updater] allowPrerelease=false (toggle=unset)",
       "[updater] checking for updates",
       "[updater] update available: 0.2.0 — downloading",
       "[updater] up to date (latest: 0.1.0)",
@@ -401,6 +466,7 @@ describe("startAutoUpdate", () => {
       targetVersion: null,
       percent: null,
       error: null,
+      lastCheck: null,
     });
 
     harness.updater.emit("checking-for-update");
@@ -487,6 +553,239 @@ describe("startAutoUpdate", () => {
     ]);
     // The download itself still logs every time — only the notification dedupes.
     expect(harness.logs.filter((line) => line.includes("downloaded 0.2.0"))).toHaveLength(2);
+    handle.stop();
+  });
+});
+
+describe("the last check's store (VC-294)", () => {
+  it("round-trips an answered check", () => {
+    ctx = openTestDb();
+    const check: UpdateLastCheck = {
+      at: 1_700_000,
+      result: "error",
+      version: null,
+      error: "offline",
+    };
+    writeUpdateLastCheck(ctx.db, check);
+    expect(readUpdateLastCheck(ctx.db)).toEqual(check);
+
+    const found: UpdateLastCheck = {
+      at: 1_800_000,
+      result: "available",
+      version: "0.3.0",
+      error: null,
+    };
+    writeUpdateLastCheck(ctx.db, found);
+    expect(readUpdateLastCheck(ctx.db)).toEqual(found);
+
+    const download: UpdateLastCheck = {
+      at: 1_900_000,
+      result: "download-error",
+      version: "0.3.0",
+      error: "ENOSPC",
+    };
+    writeUpdateLastCheck(ctx.db, download);
+    expect(readUpdateLastCheck(ctx.db)).toEqual(download);
+  });
+
+  it("reads never-checked when the row is absent", () => {
+    ctx = openTestDb();
+    expect(readUpdateLastCheck(ctx.db)).toBeNull();
+  });
+
+  it.each([
+    ["malformed JSON", "not-json{"],
+    ["a non-object", "42"],
+    ["null", "null"],
+    ["no timestamp", JSON.stringify({ result: "up-to-date" })],
+    ["a non-finite timestamp", '{"at":1e999,"result":"up-to-date"}'],
+    ["a result this build does not know", JSON.stringify({ at: 1, result: "rolled-back" })],
+    ["a non-string result", JSON.stringify({ at: 1, result: 3 })],
+  ])("reads never-checked from %s rather than failing", (_label, value) => {
+    ctx = openTestDb();
+    setAppState(ctx.db, UPDATE_LAST_CHECK_APP_STATE_KEY, value, 1);
+    expect(readUpdateLastCheck(ctx.db)).toBeNull();
+  });
+
+  it("fills missing or mistyped optional fields with null", () => {
+    ctx = openTestDb();
+    setAppState(
+      ctx.db,
+      UPDATE_LAST_CHECK_APP_STATE_KEY,
+      JSON.stringify({ at: 5, result: "up-to-date", version: 7, extra: true }),
+      1,
+    );
+    expect(readUpdateLastCheck(ctx.db)).toEqual({
+      at: 5,
+      result: "up-to-date",
+      version: null,
+      error: null,
+    });
+  });
+});
+
+/** An in-memory stand-in for the app_state row. */
+function memoryStore(initial: UpdateLastCheck | null = null) {
+  const store = {
+    value: initial,
+    writes: [] as UpdateLastCheck[],
+    read: () => store.value,
+    write: (check: UpdateLastCheck) => {
+      store.writes.push(check);
+      store.value = check;
+    },
+  };
+  return store;
+}
+
+describe("startAutoUpdate's last check (VC-294)", () => {
+  it("starts from the stored check — packaged or dev — so a relaunch still knows", () => {
+    vi.useFakeTimers();
+    const stored: UpdateLastCheck = { at: 9, result: "up-to-date", version: null, error: null };
+    const packaged = makeHarness().start({ lastCheck: memoryStore(stored) });
+    expect(packaged.state().lastCheck).toEqual(stored);
+    packaged.stop();
+
+    const dev = makeHarness().start({ isPackaged: false, lastCheck: memoryStore(stored) });
+    expect(dev.state().lastCheck).toEqual(stored);
+  });
+
+  it("records each answer with its time, in memory and in the store", () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const store = memoryStore();
+    let clock = 100;
+    const handle = harness.start({ lastCheck: store, now: () => clock });
+
+    harness.updater.emit("checking-for-update");
+    expect(handle.state().lastCheck).toBeNull();
+
+    harness.updater.emit("update-not-available", { version: "0.1.0" });
+    expect(handle.state().lastCheck).toEqual({
+      at: 100,
+      result: "up-to-date",
+      version: null,
+      error: null,
+    });
+
+    clock = 200;
+    harness.updater.emit("update-available", { version: "0.2.0" });
+    expect(handle.state().lastCheck).toEqual({
+      at: 200,
+      result: "available",
+      version: "0.2.0",
+      error: null,
+    });
+
+    // A failure while downloading is the download's, and names its version.
+    clock = 300;
+    harness.updater.emit("error", new Error("ENOSPC"));
+    expect(handle.state()).toMatchObject({
+      phase: "error",
+      lastCheck: { at: 300, result: "download-error", version: "0.2.0", error: "ENOSPC" },
+    });
+
+    // Any other failure is the check's.
+    clock = 400;
+    harness.updater.emit("error", new Error("feed unreachable"));
+    expect(handle.state().lastCheck).toEqual({
+      at: 400,
+      result: "error",
+      version: null,
+      error: "feed unreachable",
+    });
+
+    expect(store.writes.map((check) => check.result)).toEqual([
+      "up-to-date",
+      "available",
+      "download-error",
+      "error",
+    ]);
+    // Every recorded answer was announced, so an open pane shows it at once.
+    expect(harness.stateChanges.at(-1)?.lastCheck).toEqual(store.value);
+    handle.stop();
+  });
+
+  it("records nothing for a check that settled without an answer", async () => {
+    vi.useFakeTimers();
+    const store = memoryStore();
+    const handle = makeHarness().start({ lastCheck: store });
+
+    await handle.checkNow();
+
+    expect(handle.state()).toMatchObject({ phase: "idle", lastCheck: null });
+    expect(store.writes).toEqual([]);
+    handle.stop();
+  });
+
+  it("records a rejected check once, even when the error event reported it too", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const store = memoryStore();
+    const handle = harness.start({ lastCheck: store });
+
+    // Rejection alone (no event): still the last check.
+    harness.updater.failNextCheckWith = new Error("offline");
+    await handle.checkNow();
+    expect(store.writes).toHaveLength(1);
+    expect(handle.state().lastCheck).toMatchObject({ result: "error", error: "offline" });
+
+    // Event and rejection for the same failure: one check, one record.
+    harness.updater.checkForUpdates = () => {
+      harness.updater.emit("error", new Error("feed unreachable"));
+      return Promise.reject(new Error("feed unreachable"));
+    };
+    await handle.checkNow();
+    expect(store.writes.map((check) => check.error)).toEqual(["offline", "feed unreachable"]);
+
+    // The same failure on a LATER check is a new check, and gets a new time.
+    // (The clock moves without firing the schedule's own timers.)
+    vi.setSystemTime(Date.now() + 60_000);
+    await handle.checkNow();
+    expect(store.writes).toHaveLength(3);
+    expect(store.writes[2]?.at).toBeGreaterThan(store.writes[1]?.at ?? Infinity);
+    handle.stop();
+  });
+
+  it("a failed re-check over a staged download updates the last check but keeps the badge", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const store = memoryStore();
+    const handle = harness.start({ lastCheck: store });
+
+    harness.updater.emit("update-downloaded", { version: "0.2.0" });
+    harness.updater.failNextCheckWith = new Error("offline");
+    await handle.checkNow();
+
+    expect(handle.state()).toMatchObject({
+      phase: "downloaded",
+      targetVersion: "0.2.0",
+      error: null,
+      lastCheck: { result: "error", error: "offline" },
+    });
+    handle.stop();
+  });
+
+  it("a store that throws is logged and never reaches the updater", async () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    const handle = harness.start({
+      lastCheck: {
+        read: () => {
+          throw new Error("db closed");
+        },
+        write: () => {
+          throw new Error("disk full");
+        },
+      },
+    });
+
+    expect(handle.state().lastCheck).toBeNull();
+    harness.updater.emit("update-not-available", { version: "0.1.0" });
+
+    expect(handle.state().lastCheck).toMatchObject({ result: "up-to-date" });
+    expect(harness.logs).toContain("[updater] could not read the last check: db closed");
+    expect(harness.logs).toContain("[updater] could not record the last check: disk full");
     handle.stop();
   });
 });

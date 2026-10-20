@@ -38,6 +38,7 @@ import {
   codeModeSurfaceFor,
   errorMessage,
   mcpProviderToolName,
+  promptId,
   sessionToolIds,
   skillResourcePart,
   type AgentRuntime,
@@ -58,6 +59,19 @@ import {
   type UtilityCompletionResult,
 } from "@volli/shared";
 import type { UIMessage } from "ai";
+
+// The default runtime factory is the real Pi-backed one, which opens Pi's own
+// credential and model stores on this machine. It is spied so a test can see it
+// chosen without building it; it delegates to the real factory unless a test says otherwise.
+const { defaultRuntimeFactory } = vi.hoisted(() => ({ defaultRuntimeFactory: vi.fn() }));
+vi.mock("@volli/agent-runtime", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@volli/agent-runtime")>();
+  defaultRuntimeFactory.mockImplementation(original.createPiAgentRuntime);
+  return { ...original, createPiAgentRuntime: defaultRuntimeFactory };
+});
+
+/** What the runtime factory is handed, read off the adapter's own option type. */
+type RuntimeFactoryOptions = Parameters<NonNullable<PiAdapterOptions["createRuntime"]>>[0];
 
 const SESSION_ID = "session-1";
 const ATTACHMENT_ID = "attachment-1";
@@ -132,6 +146,8 @@ class FakeRuntime implements AgentRuntime {
   readonly modelSelections: SessionRuntimeSpec["model"][] = [];
   readonly modelSelectionOutcomes: ModelSelectionOutcome[] = [];
   modelSelectionFailure: unknown = null;
+  /** When set, Pi fails the interrupt it is asked for. */
+  interruptFailure: unknown = null;
   interrupts = 0;
   retries = 0;
   closes = 0;
@@ -146,6 +162,8 @@ class FakeRuntime implements AgentRuntime {
   reconciliationCursor: string | null = null;
   readonly reconciliationObservations: RuntimeObservation[] = [];
   readonly reconciliationReceipts: Array<{ commandId: string; acceptedAt: number }> = [];
+  /** Whether Pi's replay carries receipts at all; the port treats their absence as none. */
+  reportsReconciliationReceipts = true;
   readonly reconciledFrom: Array<string | null> = [];
   recovery: RuntimeAttachmentHandle["recovery"] = {
     runtime: "pi",
@@ -199,6 +217,7 @@ class FakeRuntime implements AgentRuntime {
         return this.modelSelectionOutcomes.shift() ?? { kind: "selected" };
       },
       interrupt: async (): Promise<void> => {
+        if (this.interruptFailure !== null) throw this.interruptFailure;
         this.interrupts += 1;
       },
       retry: async (commandId): Promise<DeliveryOutcome> => {
@@ -220,7 +239,9 @@ class FakeRuntime implements AgentRuntime {
         return {
           cursor: this.reconciliationCursor ?? cursor,
           observations: [...this.reconciliationObservations],
-          receipts: [...this.reconciliationReceipts],
+          ...(this.reportsReconciliationReceipts
+            ? { receipts: [...this.reconciliationReceipts] }
+            : {}),
         };
       },
       recovery: this.recovery,
@@ -389,6 +410,11 @@ function cancelled(occurredAt: number, interactionId = ASK_INTERACTION_ID): Runt
     interactionId,
     reason: "withdrawn",
   };
+}
+
+/** A runtime option a test injects only to watch it forwarded; ever being called is a failure. */
+function unusedRuntimeOption(name: string): never {
+  throw new Error(`${name} is never called by this test`);
 }
 
 const unusedExecutionEnvFactory: NonNullable<
@@ -564,6 +590,129 @@ describe("Pi runtime host", () => {
     expect(runtime.modelAccessInputs).toEqual([{ refresh: true }]);
     expect(runtime.specs).toHaveLength(1);
   });
+
+  it("builds the Pi-backed runtime itself when no runtime factory is injected", () => {
+    const runtime = new FakeRuntime();
+    defaultRuntimeFactory.mockClear();
+    defaultRuntimeFactory.mockReturnValueOnce(runtime);
+
+    const host = createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+    });
+
+    expect(defaultRuntimeFactory).toHaveBeenCalledOnce();
+    expect(defaultRuntimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionDataDir: "/data/pi-sessions" }),
+    );
+    expect(host.adapter.id).toBe(PI_ADAPTER_ID);
+  });
+
+  it("answers utility completions through the same runtime the host attaches sessions with", async () => {
+    const runtime = new FakeRuntime();
+    runtime.utilityReplies.push("VC-12: Host the Pi runtime");
+    const host = createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: () => runtime,
+    });
+    const completion: UtilityCompletion = {
+      model: context.model,
+      systemPrompt: "Title the ticket.",
+      user: context.brief,
+    };
+
+    expect(await host.completeUtility(completion)).toEqual({
+      text: "VC-12: Host the Pi runtime",
+      usage: null,
+    });
+    expect(runtime.utilityCompletions).toEqual([completion]);
+  });
+
+  it("reads provider usage through the platform fetch, looked up when the probe runs", async () => {
+    const seen: Array<RuntimeFactoryOptions["usageLimits"]> = [];
+    createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: (options) => {
+        seen.push(options.usageLimits);
+        return new FakeRuntime();
+      },
+    });
+
+    // Installed after the host exists: the probe must read the platform fetch
+    // at call time, not capture whichever one was global at construction.
+    const platformFetch = vi.fn(
+      async (_url: string, _init: unknown) => new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", platformFetch);
+    try {
+      const init = {
+        method: "GET" as const,
+        headers: {},
+        signal: new AbortController().signal,
+        redirect: "error" as const,
+      };
+
+      const response = await seen[0]!.fetch("https://usage.example/limits", init);
+
+      expect(platformFetch).toHaveBeenCalledWith("https://usage.example/limits", init);
+      expect(response.status).toBe(204);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("hands the rest of the injected runtime options to the Pi runtime factory unchanged", () => {
+    const credentials = { sentinel: "credentials" } as unknown as NonNullable<
+      PiAdapterOptions["credentials"]
+    >;
+    const catalogs = { sentinel: "catalogs" } as unknown as NonNullable<
+      PiAdapterOptions["catalogs"]
+    >;
+    const catalogReady = Promise.resolve();
+    const compactionPolicy: NonNullable<PiAdapterOptions["compactionPolicy"]> = () =>
+      unusedRuntimeOption("compactionPolicy");
+    const observability = { sentinel: "observability" } as unknown as NonNullable<
+      PiAdapterOptions["observability"]
+    >;
+    const connectivity = { sentinel: "connectivity" } as unknown as NonNullable<
+      PiAdapterOptions["connectivity"]
+    >;
+    const persistActivityImage: NonNullable<PiAdapterOptions["persistActivityImage"]> = () =>
+      unusedRuntimeOption("persistActivityImage");
+    const usageLimits: NonNullable<PiAdapterOptions["usageLimits"]> = {
+      fetch: async () => unusedRuntimeOption("usageLimits"),
+    };
+    const seen: RuntimeFactoryOptions[] = [];
+
+    createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: (options) => {
+        seen.push(options);
+        return new FakeRuntime();
+      },
+      credentials,
+      catalogReady,
+      catalogs,
+      compactionPolicy,
+      observability,
+      connectivity,
+      persistActivityImage,
+      usageLimits,
+    });
+
+    const options = seen[0]!;
+    expect(options.credentials).toBe(credentials);
+    expect(options.catalogReady).toBe(catalogReady);
+    expect(options.catalogs).toBe(catalogs);
+    expect(options.compactionPolicy).toBe(compactionPolicy);
+    expect(options.observability).toBe(observability);
+    expect(options.connectivity).toBe(connectivity);
+    expect(options.persistActivityImage).toBe(persistActivityImage);
+    expect(options.usageLimits).toBe(usageLimits);
+  });
 });
 
 describe("Pi native adapter context carry", () => {
@@ -636,7 +785,49 @@ describe("Pi native adapter context carry", () => {
     expect(first.runtime.spec).not.toHaveProperty("carryUnreadable");
   });
 
-  it("carries an unreadable earlier binding's reason from the engine to the runtime (VC-457 review)", async () => {
+  it("opens a fresh attach clean, whatever earlier conversation the engine handed it", async () => {
+    const opened = await attached();
+    const { runtime } = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "fresh",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: "/earlier",
+          native: opened.binding.native,
+        },
+      }),
+    );
+
+    // Only a context_replay attach continues an earlier conversation.
+    expect(runtime.spec).not.toHaveProperty("carry");
+    expect(runtime.spec).not.toHaveProperty("carryUnreadable");
+  });
+
+  it("names this attachment's directory as the carried workspace when the earlier one recorded none", async () => {
+    const opened = await attached();
+    const { runtime } = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: null,
+          native: opened.binding.native,
+        },
+      }),
+    );
+
+    expect(runtime.spec.carry).toEqual({
+      runtime: "pi",
+      sessionId: "pi-session-9",
+      sessionFilePath: "/data/pi-sessions/pi-session-9.jsonl",
+      attachmentId: "attachment-0",
+      workspacePath: attachmentSpec().directory,
+    });
+  });
+
+  it("carries an unreadable earlier binding's reason from the engine to the runtime (VC-457)", async () => {
     // The two layers end to end: the Session Engine records this attach as
     // `fresh` — which is what it is — and the reason it could not carry must
     // still reach the runtime, which is what raises the Attention.
@@ -895,57 +1086,66 @@ describe("Pi native adapter attach", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it("hands a surface frozen with the hold pair the whole port, and ends its holds when the turn does (VC-239)", async () => {
-    const turnEnded = vi.fn();
-    const { runtime, sink } = await attached({
-      resolveRuntimeContext: async () => ({
-        ...context,
-        toolSurface: [
-          "read",
-          "edit",
-          "write",
-          "execute",
-          "browser_tabs",
-          "browser_navigate",
-          "browser_snapshot",
-          "browser_act",
-          "browser_screenshot",
-          "browser_console",
-          "browser_acquire",
-          "browser_release",
-        ],
-      }),
-      resolveBrowserPort: () => ({
-        tabs: async () => ({ tabs: [] }),
-        navigate: unusedPortMethod,
-        snapshot: unusedPortMethod,
-        act: unusedPortMethod,
-        screenshot: unusedPortMethod,
-        console: unusedPortMethod,
-        acquire: async (input) => ({ kind: "held", tabId: input.tabId }),
-        release: async (input) => ({ tabId: input.tabId }),
-        find: unusedPortMethod,
-        turnEnded,
-      }),
-    });
+  it.each(["ticket", "subagent"] as const)(
+    "hands a surface frozen with the hold pair the whole port, and ends its holds when the %s turn does (VC-239)",
+    async (role) => {
+      const turnEnded = vi.fn();
+      const { runtime, sink } = await attached({
+        resolveRuntimeContext: async () => ({
+          ...context,
+          role,
+          parentSessionId: "session-parent",
+          toolSurface: [
+            "read",
+            "edit",
+            "write",
+            "execute",
+            "browser_tabs",
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_act",
+            "browser_screenshot",
+            "browser_console",
+            "browser_acquire",
+            "browser_release",
+          ],
+        }),
+        resolveBrowserPort: () => ({
+          tabs: async () => ({ tabs: [] }),
+          navigate: unusedPortMethod,
+          snapshot: unusedPortMethod,
+          act: unusedPortMethod,
+          screenshot: unusedPortMethod,
+          console: unusedPortMethod,
+          acquire: async (input) => ({ kind: "held", tabId: input.tabId }),
+          release: async (input) => ({ tabId: input.tabId }),
+          find: unusedPortMethod,
+          turnEnded,
+        }),
+      });
 
-    expect(runtime.spec.browser?.acquire).toBeDefined();
-    expect(runtime.spec.browser?.release).toBeDefined();
-    // Frozen before browser_find existed (VC-364): the port reaches the
-    // runtime without `find`, so the surface binds eight and not nine.
-    expect(runtime.spec.browser?.find).toBeUndefined();
+      expect(runtime.spec.browser?.acquire).toBeDefined();
+      expect(runtime.spec.browser?.release).toBeDefined();
+      // Frozen before browser_find existed (VC-364): the port reaches the
+      // runtime without `find`, so the surface binds eight and not nine.
+      expect(runtime.spec.browser?.find).toBeUndefined();
 
-    // A turn starting ends nothing; a turn completing or interrupted ends
-    // every hold — told BEFORE the fact reaches the sink, so no hold outlives
-    // its turn by even one write.
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    expect(turnEnded).not.toHaveBeenCalled();
-    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
-    expect(turnEnded).toHaveBeenCalledTimes(1);
-    await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-2" });
-    expect(turnEnded).toHaveBeenCalledTimes(2);
-    expect(sink.observations.filter((one) => one.kind === "turn")).toHaveLength(3);
-  });
+      // A turn starting ends nothing; a turn completing or interrupted ends
+      // every hold — told BEFORE the fact reaches the sink, so no hold outlives
+      // its turn by even one write.
+      await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
+      expect(turnEnded).not.toHaveBeenCalled();
+      await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
+      expect(turnEnded).toHaveBeenCalledTimes(1);
+      if (role === "subagent")
+        expect(turnEnded).toHaveBeenNthCalledWith(1, { closeHeadlessOwned: true });
+      else expect(turnEnded).toHaveBeenNthCalledWith(1);
+      await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-2" });
+      expect(turnEnded).toHaveBeenCalledTimes(2);
+      expect(turnEnded).toHaveBeenNthCalledWith(2);
+      expect(sink.observations.filter((one) => one.kind === "turn")).toHaveLength(3);
+    },
+  );
 
   it("hands a surface frozen with browser_find the port's find (VC-364)", async () => {
     const { runtime } = await attached({
@@ -1392,6 +1592,47 @@ describe("Pi native adapter attach", () => {
     await binding.release("requested");
   });
 
+  it("puts a sign-in question from a direct MCP call to the person, with no Code Mode scope", async () => {
+    const tool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("fixture-1", "Fixture", "echo"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, tool.providerName],
+        mcpTools: [tool],
+      }),
+      resolveMcpPort: () => ({
+        call: async (_request, signal, hostAsk) => {
+          const choice = await hostAsk!(installQuestion("confirm.mcp-sign-in"), signal);
+          return { content: [{ type: "text", text: choice }], isError: false };
+        },
+        dispose: async () => undefined,
+      }),
+    });
+
+    // No scope lent: the call's question parks on the attachment directly.
+    const result = runtime.spec.mcp!.call(
+      { serverId: "fixture-1", toolName: "echo", arguments: {}, toolCallId: "call-12" },
+      new AbortController().signal,
+    );
+    await flush();
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "opened",
+        interaction: expect.objectContaining({ id: "credential-ask:call-12" }),
+      }),
+    );
+    await binding.dispatch(answerCommand("credential-ask:call-12", ["once"]));
+    expect(await result).toEqual({ content: [{ type: "text", text: "allow" }], isError: false });
+    await binding.release("requested");
+  });
+
   it("disposes the MCP attachment host when runtime setup fails", async () => {
     const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
     const dispose = vi.fn(async () => undefined);
@@ -1555,6 +1796,89 @@ describe("Pi native adapter attach", () => {
     const attaching = adapter.attach(attachmentSpec(), new RecordingSink());
 
     await expect(attaching).rejects.toThrow(/wired no handler for them/);
+  });
+
+  it("attaches a subagent under its own Role, naming the Session it answers to", async () => {
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        role: "subagent",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        parentSessionId: "session-parent",
+        rootThreadId: sessionRootThreadId(SESSION_ID),
+        brief: "Delegated work",
+        model: context.model,
+        toolSurface: context.toolSurface,
+        promptResources: [],
+      }),
+    });
+
+    expect(runtime.spec.identity).toEqual({
+      role: "subagent",
+      sessionId: SESSION_ID,
+      rootThreadId: sessionRootThreadId(SESSION_ID),
+      attachmentId: ATTACHMENT_ID,
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      parentSessionId: "session-parent",
+    });
+  });
+
+  it("declares the multi-question shape to Pi for a Session frozen with it", async () => {
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({ ...context, askUserQuestions: true }),
+    });
+
+    expect(runtime.spec.tools.askUserQuestions).toBe(true);
+  });
+
+  it("refuses a frozen tool surface whose names are out of their canonical order", async () => {
+    // Same members, wrong order: the derivation lists coding tools first and then
+    // the Volli tools, so a record that puts `ask_user` ahead of them would be a
+    // different provider tool array from the one it was born with. Refused.
+    const { adapter } = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["ask_user", "read", "edit", "write", "execute"],
+      }),
+    });
+
+    const attaching = adapter.attach(attachmentSpec(), new RecordingSink());
+
+    await expect(attaching).rejects.toThrow(/not valid for this product version/);
+    await expect(attaching).rejects.toMatchObject({ code: "PI_CONFIGURATION_INVALID" });
+  });
+
+  it("reports the runtime setup failure, not a cleanup failure that followed it", async () => {
+    const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
+    const dispose = vi.fn(async () => {
+      throw new Error("MCP client already closed");
+    });
+    const { adapter, runtime } = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+        mcpTools: [
+          {
+            serverId: "fixture-1",
+            toolName: "echo",
+            providerName,
+            description: "Echo",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+      resolveMcpPort: () => ({
+        call: async () => ({ content: [], isError: false }),
+        dispose,
+      }),
+    });
+    runtime.startFailure = new Error("runtime setup failed");
+
+    const attaching = adapter.attach(attachmentSpec(), new RecordingSink());
+
+    await expect(attaching).rejects.toThrow(/^runtime setup failed$/);
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("passes the injected model collection and session directory to the runtime factory", async () => {
@@ -1967,6 +2291,104 @@ describe("Pi credential waiting and lifetime", () => {
 });
 
 describe("Pi native adapter dispatch", () => {
+  it.each(["message.submit", "executor.retry"] as const)(
+    "uses the persisted acceptance timestamp for %s live and replay receipts",
+    async (kind) => {
+      const { binding, runtime } = await attached();
+      runtime.outcomes.push({
+        kind: "delivered",
+        delivery: kind === "message.submit" ? "prompt" : "retry",
+        acceptedAt: 456,
+      });
+      runtime.reconciliationReceipts.push({ commandId: "same-command", acceptedAt: 456 });
+      const command: HarnessCommand =
+        kind === "message.submit"
+          ? {
+              kind,
+              commandId: "same-command",
+              sessionId: SESSION_ID,
+              attachmentId: ATTACHMENT_ID,
+              message: userMessage("Continue"),
+              delivery: "queue",
+              model: null,
+              agent: null,
+              variant: null,
+            }
+          : { kind, commandId: "same-command", sessionId: SESSION_ID, attachmentId: ATTACHMENT_ID };
+      const live = await binding.dispatch(command);
+      const replay = await binding.reconcile(null);
+      expect(live).toMatchObject({ status: "accepted", acceptedAt: 456 });
+      expect(replay.receipts).toEqual([
+        expect.objectContaining({
+          status: "accepted",
+          commandId: live.commandId,
+          acceptedAt: 456,
+          native: live.native,
+        }),
+      ]);
+      await binding.release("requested");
+    },
+  );
+
+  it("hands a turn's prepared attachments to Pi, with the note the preparer wrote", async () => {
+    const owners: unknown[] = [];
+    const { binding, runtime } = await attached({
+      prepareTurnAttachments: async (_message, owner) => {
+        owners.push(owner);
+        return { note: "\n\n[attached: screenshot.png]", images: [] };
+      },
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-with-file",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("What is this?"),
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    // Prepared against the Session's own directory, never the main checkout's.
+    expect(owners).toEqual([
+      { sessionId: SESSION_ID, ticketId: "ticket-1", workspacePath: attachmentSpec().directory },
+    ]);
+    expect(runtime.submissions).toEqual(["What is this?\n\n[attached: screenshot.png]"]);
+    expect(receipt).toMatchObject({ commandId: "command-with-file", status: "accepted" });
+    await binding.release("requested");
+  });
+
+  it("refuses a turn whose attachments could not be prepared, without delivering it", async () => {
+    const { binding, runtime } = await attached({
+      prepareTurnAttachments: async () => {
+        throw new Error("The attachment is no longer on disk.");
+      },
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-missing-file",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("What is this?"),
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    expect(receipt).toMatchObject({
+      commandId: "command-missing-file",
+      status: "rejected",
+      code: "PI_ATTACHMENT_FAILED",
+      detail: "The attachment is no longer on disk.",
+    });
+    expect(runtime.submissions).toEqual([]);
+    await binding.release("requested");
+  });
+
   it("delivers the message text and accepts it", async () => {
     const { binding, runtime } = await attached();
 
@@ -2240,6 +2662,62 @@ describe("Pi native adapter dispatch", () => {
       detail: "the ledger write failed",
       native: binding.native,
     });
+  });
+
+  it("reports an interrupt or retry Pi could not complete as unknown, never as accepted", async () => {
+    const { binding, runtime } = await attached();
+    runtime.interruptFailure = new Error("the interrupt lost the stream");
+
+    const interrupted = await binding.dispatch({
+      kind: "executor.interrupt",
+      commandId: "command-interrupt-failed",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+    });
+    expect(interrupted).toMatchObject({
+      commandId: "command-interrupt-failed",
+      status: "unknown",
+      detail: "the interrupt lost the stream",
+    });
+
+    // Pi may already have run the retry, so the answer is unknown, not refused.
+    runtime.submitFailure = new Error("the retry lost the stream");
+    const retried = await binding.dispatch({
+      kind: "executor.retry",
+      commandId: "command-retry-failed",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+    });
+    expect(retried).toMatchObject({
+      commandId: "command-retry-failed",
+      status: "unknown",
+      detail: "the retry lost the stream",
+    });
+    await binding.release("requested");
+  });
+
+  it("reports a retry Pi refuses with that refusal's own code", async () => {
+    const { binding, runtime } = await attached();
+    runtime.outcomes.push({
+      kind: "rejected",
+      reason: "retry-unavailable",
+      message: "Nothing failed to retry.",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "executor.retry",
+      commandId: "command-retry-refused",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+    });
+
+    expect(receipt).toMatchObject({
+      commandId: "command-retry-refused",
+      status: "rejected",
+      code: "PI_RETRY_UNAVAILABLE",
+      detail: "Nothing failed to retry.",
+    });
+    await binding.release("requested");
   });
 
   it("interrupts the running turn without ending the attachment", async () => {
@@ -2523,6 +3001,21 @@ describe("Pi native adapter dispatch", () => {
 });
 
 describe("Pi native adapter host permissions", () => {
+  it("titles a call the runtime refused outright as blocked, not as one to allow", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime, { overridable: false });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      kind: "interaction",
+      state: "opened",
+      interaction: { id: ASK_INTERACTION_ID, title: "Blocked this execute call" },
+    });
+    await binding.release("requested");
+    expect(await answer).toEqual(WITHDRAWN);
+  });
+
   it("never opens a live permission interaction for a retired rule-refusal request", async () => {
     const { runtime, sink } = await attached();
     expect(
@@ -3040,6 +3533,61 @@ describe("Pi native adapter host permissions", () => {
  * a tool result, and the two live under ids that cannot collide.
  */
 describe("Pi native adapter model questions", () => {
+  it("puts several model questions to the person as prompts of one card, each with its own choices", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = askUser(runtime, {
+      questions: [
+        { question: "Which path?", choices: ["spike", "migrate"] },
+        { question: "Smoke it too?", choices: [] },
+      ],
+    });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      kind: "interaction",
+      state: "opened",
+      interaction: {
+        id: ASK_USER_INTERACTION_ID,
+        kind: "question",
+        title: "Which path?",
+        prompts: [
+          {
+            id: promptId(0),
+            label: "Which path?",
+            options: [
+              { id: "choice:0", label: "spike", description: null },
+              { id: "choice:1", label: "migrate", description: null },
+            ],
+            multiple: false,
+            custom: true,
+          },
+          {
+            id: promptId(1),
+            label: "Smoke it too?",
+            options: [],
+            multiple: false,
+            custom: true,
+          },
+        ],
+      },
+    });
+    await binding.release("requested");
+    expect(await answer).toEqual(WITHDRAWN);
+  });
+
+  it("withdraws a model question whose turn gave up while the question was being recorded", async () => {
+    const { runtime, sink } = await attached();
+
+    const answer = askUser(runtime, {}, AbortSignal.abort());
+
+    // The `opened` fact committed before the signal could be read, so the card
+    // exists and has to be closed even though nobody was ever going to answer it.
+    expect(await answer).toEqual(WITHDRAWN);
+    expect(sink.observations).toHaveLength(2);
+    expect(sink.observations[1]).toEqual(cancelled(1001, ASK_USER_INTERACTION_ID));
+  });
+
   it("opens the model's question as a card of the model's own options", async () => {
     const { binding, runtime, sink } = await attached();
 
@@ -3321,6 +3869,39 @@ describe("Pi native adapter reconcile and release", () => {
 
     expect(await binding.reconcile({ entryId: "entry-7" })).toEqual({
       cursor: { entryId: "entry-7" },
+      observations: [],
+      receipts: [],
+    });
+  });
+
+  it("refuses a recovery cursor that lost its sidecar entry id rather than replaying from nowhere", async () => {
+    const { binding, runtime } = await attached();
+
+    await expect(binding.reconcile({ entryId: 7 })).rejects.toThrow(
+      "Pi recovery cursor is missing its sidecar entry id.",
+    );
+    expect(runtime.reconciledFrom).toEqual([]);
+  });
+
+  it("answers a reconcile after release with nothing, leaving Pi untouched", async () => {
+    const { binding, runtime } = await attached();
+
+    await binding.release("requested");
+
+    expect(await binding.reconcile({ entryId: "entry-9" })).toEqual({
+      cursor: { entryId: "entry-9" },
+      observations: [],
+      receipts: [],
+    });
+    expect(runtime.reconciledFrom).toEqual([]);
+  });
+
+  it("reconciles to no receipts when Pi's replay carries none", async () => {
+    const { binding, runtime } = await attached();
+    runtime.reportsReconciliationReceipts = false;
+
+    expect(await binding.reconcile({ entryId: "entry-8" })).toEqual({
+      cursor: { entryId: "entry-8" },
       observations: [],
       receipts: [],
     });

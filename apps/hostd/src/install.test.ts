@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { JSDOM } from "jsdom";
 
 import {
   currentVersion,
@@ -245,7 +246,7 @@ describe("install --system", () => {
     expect(installedReleases(layout)).toEqual(["1.0.0-abc", "1.1.0-abc"]);
   });
 
-  // B3: one version can be rebuilt; each build keeps its own directory.
+  // One version can be rebuilt; each build keeps its own directory.
   it("keeps the prior same-version revision for rollback, and moves current in one rename", () => {
     const layout = systemLayout();
     runInstall(SYSTEM, ports(layout));
@@ -448,9 +449,9 @@ describe("install --user", () => {
   });
 });
 
-// The reviewers' regressions (VC-700 final round), kept as invariants.
+// Regressions kept as invariants (VC-700).
 describe("install converges and never orphans a key", () => {
-  // B2: what the filesystem cannot show was finished still converges.
+  // An interrupted install still converges to the required filesystem state.
   it("retries daemon-reload after an install interrupted at reload", () => {
     const layout = systemLayout();
     runInstall(SYSTEM, ports(layout)); // An existing, enabled system unit: an upgrade.
@@ -504,7 +505,7 @@ describe("install converges and never orphans a key", () => {
     expect(owned).toContain(layout.keyFile);
   });
 
-  // B1: the effective configuration, not one file name, says whether a key exists.
+  // The effective configuration, not one file name, says whether a key exists.
   it("does not supersede an existing secret-key Environment in another drop-in", () => {
     const layout = systemLayout();
     mkdirSync(layout.dropInDir, { recursive: true });
@@ -656,6 +657,11 @@ describe("install --user on a Mac", () => {
     expect(fake.calls).toEqual([]);
     expect(statSync(layout.dataDir).mode & 0o777).toBe(0o700);
     const plist = readFileSync(layout.agentPlist!, "utf8");
+    // Apple may tolerate invalid comments; operator plist editors use strict XML.
+    // In particular, XML comments cannot contain a double hyphen (`--user`).
+    const xml = new JSDOM(plist, { contentType: "application/xml" });
+    expect(xml.window.document.documentElement.tagName).toBe("plist");
+    xml.window.close();
     expect(plist).toContain("<key>Label</key>\n  <string>com.volli.hostd</string>");
     expect(plist).toContain(
       [

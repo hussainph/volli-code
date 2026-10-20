@@ -39,8 +39,7 @@
  * The grant stays current while the device stays enrolled: revocation
  * (`volli-hostd devices revoke`, or the entry gone) closes its connections at
  * the door's next check. A revocation does not reach into a call already
- * past the door: VC-575's commit-boundary check (docs/plans/host-protocol.md,
- * "Enrollment over SSH").
+ * past the door: the commit-boundary check (VC-575) handles those calls.
  */
 import { createHash, createPublicKey, randomUUID, verify, type KeyObject } from "node:crypto";
 import {

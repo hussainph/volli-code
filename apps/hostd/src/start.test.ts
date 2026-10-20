@@ -269,8 +269,8 @@ describe("start --user", () => {
   });
 });
 
-describe("start, after the final review", () => {
-  // Note: the common failure, a start job failing at once, is the designed one.
+describe("start failures and same-version upgrades", () => {
+  // A start job that fails immediately returns a typed failure.
   it("types a systemctl start job failure as start-failed with journal detail", async () => {
     const fake = box({
       systemctl: (args) =>
@@ -281,7 +281,7 @@ describe("start, after the final review", () => {
     expect(error).toMatchObject({ code: "start-failed", detail: ["boot refusal details"] });
   });
 
-  // B3: one version rebuilt from another revision is a new release to run.
+  // One version rebuilt from another revision is a new release to run.
   it("restarts once for a new release of the same version, then records it as started", async () => {
     writeManaged(layout, {
       v: 1,
@@ -412,7 +412,7 @@ describe("start --user on a Mac", () => {
     expect(error).toMatchObject({ code: "start-timeout", detail: ["no status file"] });
   });
 
-  // The #812 review's B2 reproducer, inverted into the invariant it broke.
+  // A host launchd could not stop must not count as the new release (#812).
   it("never takes an old host that launchd would not stop for the new release", async () => {
     writeManaged(mac, {
       v: 1,

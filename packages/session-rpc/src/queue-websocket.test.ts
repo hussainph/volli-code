@@ -53,7 +53,10 @@ const canary = process.env.VOLLI_CANARY_CAPTURE_DIR ? null : loadCanaryPeer();
 
 /** What the Session router alone serves: every v1 feature but the board's (VC-565). */
 const SESSION_ROUTER_FEATURES = HOST_V1_FEATURES.filter(
-  (feature) => !feature.startsWith("board.") && feature !== "host.workspaces",
+  (feature) =>
+    !feature.startsWith("board.") &&
+    feature !== "host.workspaces" &&
+    feature !== "host.model-defaults",
 );
 const WORKSPACE = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
 const HOST = "b7c1d2e3-4f50-4a6b-8c7d-9e0f1a2b3c4d";
@@ -171,7 +174,9 @@ function connect(url: string): TRPCClient<AppRouter> {
 }
 
 type Emission = { id: string; data: unknown };
-const isQueue = (data: unknown): data is { kind: "queue"; revision: number; queue: unknown[] } =>
+const isQueue = (
+  data: unknown,
+): data is { kind: "queue"; revision: number; queue: unknown[]; throughSequence: number } =>
   typeof data === "object" && data !== null && (data as { kind?: unknown }).kind === "queue";
 
 describe("the host follow-up queue over the production WebSocket listener", () => {
@@ -241,10 +246,14 @@ describe("the host follow-up queue over the production WebSocket listener", () =
     expect(emission).toEqual({
       kind: "queue",
       sessionId,
-      throughSequence: read.throughSequence,
+      throughSequence: expect.any(Number),
       revision,
       queue: [row],
     });
+    // The emission names the durable head when this queue revision was
+    // published. A blocked-delivery Attention can advance the history before
+    // the projection query without changing the queue or its revision.
+    expect(emission.throughSequence).toBeLessThanOrEqual(read.throughSequence);
     exchanges.push({
       procedure: "session.subscribeQueue",
       input: { sessionId },

@@ -9,9 +9,8 @@
  * read; a mark you can catch in peripheral vision is worth more than the label.
  *
  * These are the REAL brand marks, not stand-ins. That matters more here than it
- * would elsewhere: research into this category found that the single largest
- * cluster of user complaints about agent tools is the model or agent that fires
- * silently diverging from the one that was picked. The mark is what makes the
+ * would elsewhere: the model or agent that fires must visibly match the one
+ * that was picked. The mark is what makes the
  * runtime legible at the moment of firing, so it has to be the mark the user
  * already knows from the vendor's own tools — an approximation would be a worse
  * version of the grey text it replaces. Nothing here is drawn by hand: Claude,

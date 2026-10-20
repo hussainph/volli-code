@@ -837,11 +837,11 @@ export function createCatalogBuilders<
         );
       }
       // Host-level state is often shared by both scopes (sign-ins, logs).
-      // Only project discovery/creation requires the host connection itself.
+      // Project discovery/creation and host model preferences require the host connection itself.
       if (
         !isHostScopeActor(actor) &&
         !isLocalDeviceActor(actor) &&
-        entry.key.startsWith("workspaces.")
+        (entry.key.startsWith("workspaces.") || entry.key.startsWith("hostModels."))
       ) {
         throw new HostProcedureError("verb-refused", "This operation requires a host connection.");
       }

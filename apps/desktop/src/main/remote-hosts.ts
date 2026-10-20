@@ -24,7 +24,7 @@ import { delimiter, dirname, join } from "node:path";
 
 import type { RemoteHostsPort } from "@volli/host-core/handlers";
 import type { HostFeature } from "@volli/host-protocol";
-import { createHostLink } from "@volli/host-protocol/client-link";
+import { createHostLink, createHostScopeLink } from "@volli/host-protocol/client-link";
 import {
   acceptHostKeys,
   createRemoteHosts,
@@ -199,6 +199,7 @@ export const REMOTE_SESSION_LINK_FEATURES = [
   "sessions.subscribe",
   "sessions.queue",
   "sessions.history",
+  "sessions.pictures",
   "sessions.listing",
 ] as const;
 
@@ -242,6 +243,7 @@ export function createDesktopRemoteHosts(options: DesktopRemoteHostsOptions): Re
     deviceName: hostname().replace(/\.local$/u, ""),
     tunnel: (tunnel) => createSshTunnel({ ...tunnel }),
     link: (link) => createHostLink(link),
+    hostScopeLink: createHostScopeLink,
     linkFeatures: REMOTE_HOST_LINK_FEATURES,
     ...(options.wake === undefined ? {} : { wake: desktopWakeSource(options.wake) }),
     now: Date.now,

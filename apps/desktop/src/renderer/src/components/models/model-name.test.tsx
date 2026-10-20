@@ -14,7 +14,7 @@
  * keep the name to one line — and there the second answer, "press it open",
  * is not a reveal a person can ask for while looking at the control, and is
  * not available at all while the Select is disabled. So the trigger's copy
- * carries the reveal (VC-288 re-review): a bubble with the whole identity, on
+ * carries the reveal (VC-288): a bubble with the whole identity, on
  * hover and on the keyboard's own focus, opened only when the run is
  * measurably clipped.
  *
@@ -164,7 +164,7 @@ async function settle(): Promise<void> {
 
 describe("ModelName in a closed Select trigger", () => {
   it("reveals the whole identity when the keyboard reaches the trigger", () => {
-    // The gap the re-review kept open: the trigger truncates, and the only way
+    // The gap left open: the trigger truncates, and the only way
     // to the rest of the name was to OPEN the list — a press that changes what
     // the screen is showing, to read a value that was already on it.
     mountSelect();

@@ -2,7 +2,7 @@
  * Pointer intent for the summoned sidebar panel: when a pointer at the window's
  * left edge means "show me the sidebar", and when it means anything else.
  *
- * Arc's model rather than Linear's — a sliver you can aim at, a dwell to open, a
+ * A sliver you can aim at, a dwell to open, a
  * grace corridor to leave by. Four rules, each answering a specific way an edge
  * zone becomes a trap:
  *

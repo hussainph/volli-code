@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canCreate,
   creatingLine,
+  createProjectIntent,
   failedLine,
   failureRecovery,
   SUDO_TRIES,
@@ -58,10 +59,12 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
       });
     }
     expect(listNotice(ready({ projects: [], adds: { kind: "user-install" } }), "box")).toEqual({
-      line: "box runs Volli as your login, so this Mac can’t add projects to it.",
-      recovery: { kind: "retry", label: "Refresh" },
+      line: "Update box to create projects from here",
+      recovery: { kind: "re-add", label: "Re-add" },
     });
-    expect(listNotice(ready({ adds: { kind: "user-install" } }), "box")).toBeNull();
+    expect(listNotice(ready({ adds: { kind: "user-install" } }), "box")).toEqual(
+      listNotice(ready({ projects: [], adds: { kind: "user-install" } }), "box"),
+    );
   });
 
   it("offers New project… beside a list only where the login can add one: one recovery a state", () => {
@@ -86,25 +89,36 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
     expect(projectSource("~/code/acme")).toEqual({ kind: "path", path: "~/code/acme" });
   });
 
-  it("asks a folder for a full path, and leaves the rest to the host", () => {
+  it("asks a folder for a full path and rejects unsafe clone URLs before transport", () => {
     expect(sourceProblem(null, "box")).toBeNull();
     expect(sourceProblem({ kind: "path", path: "acme" }, "box")).toBe(
       "A folder on box is a full path, like /srv/volli/app.",
     );
     expect(sourceProblem({ kind: "path", path: "/srv/acme" }, "box")).toBeNull();
     expect(sourceProblem({ kind: "path", path: "~/acme" }, "box")).toBeNull();
-    expect(sourceProblem({ kind: "git", gitUrl: "file:///x" }, "box")).toBeNull();
+    // HOST path sources are absolute paths, not shell-expanded SSH arguments.
+    expect(sourceProblem({ kind: "path", path: "~/acme" }, "box", true)).toBe(
+      "A folder on box is a full path, like /srv/volli/app.",
+    );
+    expect(sourceProblem({ kind: "path", path: "/home/me/acme" }, "box", true)).toBeNull();
+    expect(sourceProblem({ kind: "git", gitUrl: "file:///x" }, "box")).toBe(
+      "That isn't a git URL this Mac can clone: use https or ssh.",
+    );
     const plain =
       "Use the repository's plain URL: a token goes in Sign-ins on box, not in the URL.";
     for (const gitUrl of [
       "https://x.io/r.git?access_token=t",
+      "https://u@x.io/r.git",
+      "https://fixture_token@x.io/r.git",
       "https://x.io/r.git#t",
       "https://x.io/r.git%3Ft",
       "https://u:t0k@x.io/r.git",
     ]) {
       expect(sourceProblem({ kind: "git", gitUrl }, "box"), gitUrl).toBe(plain);
     }
-    expect(sourceProblem({ kind: "git", gitUrl: "https://u@x.io/r.git" }, "box")).toBeNull();
+    for (const gitUrl of ["https://x.io/r.git", "ssh://deploy@x.io/r.git", "git@x.io:r.git"]) {
+      expect(sourceProblem({ kind: "git", gitUrl }, "box", true)).toBeNull();
+    }
   });
 
   it("hints where a clone goes, and says what runs while it does", () => {
@@ -115,6 +129,7 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
     expect(sourceHint({ kind: "git", gitUrl: "u" })).toBe(
       "Cloned into /srv/volli on the host, then added.",
     );
+    expect(sourceHint({ kind: "git", gitUrl: "u" }, true)).toBe("Cloned on the host, then added.");
     expect(creatingLine({ kind: "git", gitUrl: "u" }, "box")).toBe("Cloning on box…");
     expect(creatingLine({ kind: "path", path: "/a" }, "box")).toBe("Adding it on box…");
   });
@@ -144,5 +159,40 @@ describe("Open a project on <host>…, as its sheet reads it", () => {
       label: "Sign-ins on box…",
     });
     expect(failureRecovery(refusal("clone-failed"), "box", 0)).toEqual({ kind: "retry" });
+  });
+});
+
+describe("HOST project rows and create intent", () => {
+  it("never fabricates ticket counts or prefixes for HOST rows", () => {
+    expect(
+      projectRows([{ id: "a", name: "A", path: "/a", gitRemoteUrl: null }], new Set()),
+    ).toEqual([{ id: "a", name: "A", meta: "/a", opened: false }]);
+  });
+  it("keeps one command id through retries and changes it on any edit", () => {
+    let ids = 0;
+    const intent = createProjectIntent(() => `id-${++ids}`);
+    expect(intent.accept({ kind: "path", path: "/a" }, " A ")).toBe("id-1");
+    expect(intent.accept({ kind: "path", path: "/a" }, "A")).toBe("id-1");
+    expect(intent.accept({ kind: "git", gitUrl: "https://host/r" }, "A")).toBe("id-2");
+    expect(intent.accept({ kind: "git", gitUrl: "https://host/r" }, "B")).toBe("id-3");
+    intent.edited();
+    expect(intent.accept({ kind: "git", gitUrl: "https://host/r" }, "B")).toBe("id-4");
+    expect(createProjectIntent().accept({ kind: "path", path: "/a" }, "")).toMatch(
+      /^[a-f0-9-]{36}$/u,
+    );
+  });
+  it.each([
+    "invalid-source",
+    "path-unreadable",
+    "target-exists",
+    "clone-timeout",
+    "registration-failed",
+    "still-running",
+    "interrupted",
+    "capacity",
+  ] as const)("keeps %s as a visible refusal, without sudo", (code) => {
+    expect(failureRecovery({ code, message: "failure", command: null }, "box", 0)).toEqual({
+      kind: "retry",
+    });
   });
 });

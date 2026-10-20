@@ -23,7 +23,7 @@
  * the second thing, and replaying both would fight over the same view.
  *
  * ── AND A WINDOW IS NOT A LISTENER ────────────────────────────────────────
- * Round 2's correction. A window EXISTS long before its renderer subscribes —
+ * A window EXISTS long before its renderer subscribes —
  * the listener installs after `await boot()` — and a push into that gap is
  * silently dropped: the click did nothing, and the person is left looking at
  * whatever was already on screen, with no way to know an alert had a
@@ -34,12 +34,9 @@
  * needs no renderer.
  *
  * ── THE WINDOW THAT RECEIVES IS THE WINDOW BROUGHT FORWARD ────────────────
- * Round 5's correction. Round 2 chose the two independently — the focused
- * window came forward, and a (possibly different) listening window was sent
- * the target — so with one window focused and still booting and another
- * minimized but subscribed, the click restored nothing and routed into the
- * minimized one: the person saw Volli come forward and land nowhere, while a
- * hidden window navigated on its own. A route nobody can see is a dropped
+ * Choosing focus and routing independently could bring a booting window
+ * forward while sending the target to a different, minimized listening window.
+ * The person would see Volli land nowhere while a hidden window navigated. A route nobody can see is a dropped
  * click with extra steps. So ONE window is chosen: the listening one (focused
  * first), which is restored, shown, focused AND sent to; only when none is
  * listening does the focused-or-first window come forward on its own and the

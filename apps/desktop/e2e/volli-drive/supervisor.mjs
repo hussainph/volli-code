@@ -50,9 +50,11 @@ import {
 } from "./lib/core.mjs";
 import { seedFixture } from "./lib/fixtures.mjs";
 import { serve } from "./lib/protocol.mjs";
+import { quitNativeWindow, reopenNativeWindow } from "./lib/native-window-lifecycle.mjs";
 import {
   assertAcceptanceRunner,
   acceptanceScript,
+  acceptanceWorkspaceReady,
   prepareRemoteAcceptance,
 } from "./lib/remote-acceptance.mjs";
 
@@ -91,6 +93,7 @@ const transcript = (entry) =>
   appendFileSync(L.transcript, `${JSON.stringify({ at: iso(), ...entry })}\n`);
 
 let app = null;
+let mainPage = null;
 let electronPid = null;
 /** { pid, pgid, started }: the Electron child, as ps saw it at launch. */
 let electronIdentity = null;
@@ -114,7 +117,7 @@ async function windowsList() {
   return Promise.all(
     pages.map(async (page, index) => ({
       index,
-      name: index === 0 ? "main" : `window-${index}`,
+      name: page === mainPage ? "main" : `window-${index}`,
       title: await page.title().catch(() => ""),
       url: page.url(),
     })),
@@ -122,9 +125,12 @@ async function windowsList() {
 }
 
 async function pickWindow(name) {
+  if (name === undefined || name === "main") {
+    if (!mainPage || mainPage.isClosed()) throw new Error("the instance has no bound main window");
+    return { page: mainPage, name: "main" };
+  }
   const pages = app.windows();
   if (pages.length === 0) throw new Error("the instance has no open window");
-  if (name === undefined || name === "main") return { page: pages[0], name: "main" };
   const list = await windowsList();
   const hit = list.find(
     (w) => w.name === name || w.title.toLowerCase().includes(String(name).toLowerCase()),
@@ -135,7 +141,7 @@ async function pickWindow(name) {
 
 function wireWindow(page) {
   const index = () => app.windows().indexOf(page);
-  const label = () => (index() === 0 ? "main" : `window-${index()}`);
+  const label = () => (page === mainPage ? "main" : `window-${index()}`);
   page.on("console", (message) =>
     appendFileSync(
       L.consoleLog,
@@ -613,6 +619,7 @@ async function boot() {
   });
   app.on("window", wireWindow);
   const page = await app.firstWindow();
+  mainPage = page;
   wireWindow(page);
   await page.waitForLoadState("domcontentloaded");
   mark("firstWindow");
@@ -690,32 +697,34 @@ async function handle(cmd, args) {
       await remoteFixture.configureModel();
       transcript({ cmd: "acceptance-model", setup: "operator model deployment configuration" });
       return { configured: true };
+    case "acceptance-workspace": {
+      if (!remoteFixture) throw new Error("Not a remote acceptance instance");
+      const { page } = await pickWindow("main");
+      // Read through the same preload/IPC registry door as the renderer. No
+      // store setters, injected HostLink or fixture-generated readiness.
+      const result = await page.evaluate(() =>
+        window.api.sessionRpc.request({ path: "hosts.snapshot", type: "query", input: undefined }),
+      );
+      if (!result.ok) throw new Error(result.error.message);
+      const ready = acceptanceWorkspaceReady(result.data);
+      transcript({ cmd: "acceptance-workspace", ready });
+      return { ready };
+    }
     case "native-quit": {
       // The real application's native Quit menu item, not the menu-bar test
       // controller. No injected live-work count: a local scripted turn holds it.
-      const result = await app.evaluate(({ Menu }) => {
-        // Serialized into Electron main: this cannot close over supervisor code.
-        // oxlint-disable-next-line unicorn/consistent-function-scoping
-        const walk = (menu) =>
-          menu?.items.flatMap((item) => [item, ...(walk(item.submenu) ?? [])]) ?? [];
-        const quit = walk(Menu.getApplicationMenu()).find((item) => item.role === "quit");
-        if (!quit) throw new Error("Native Quit menu item missing");
-        const label = quit.label;
-        quit.click();
-        return { label };
-      });
-      await waitUntil("all app windows closed", () => app.windows().length === 0, {
-        timeout: 10_000,
-      });
+      const { page } = await pickWindow("main");
+      const result = await quitNativeWindow(app, page);
+      mainPage = null;
       current = { generation: ++generation, window: null, refs: new Set() };
-      transcript({ cmd: "native-quit", label: result.label });
+      transcript({ cmd: "native-quit", ...result });
       return result;
     }
     case "native-reopen":
       // macOS activation is the production reopen path (also used by the
       // tray's Open Volli). Never set renderer state or inject a HostLink.
-      await app.evaluate(({ app: electronApp }) => electronApp.emit("activate"));
-      await app.firstWindow();
+      mainPage = await reopenNativeWindow(app);
+      current = { generation: ++generation, window: "main", refs: new Set() };
       transcript({ cmd: "native-reopen" });
       return snapshot();
     case "ping":

@@ -139,7 +139,7 @@ vi.mock("@dnd-kit/core", async (importActual) => {
 /* --------------------------------------------------------- the layout shim */
 
 /**
- * The owner's board in a window narrow enough to overflow, which is the
+ * A board in a window narrow enough to overflow, which is the
  * condition the loop needs: three standing columns plus the rail come to
  * 1104px of content in 1024px of canvas, so `over` has somewhere to flip.
  * jsdom's own `innerWidth`/`innerHeight` are these numbers, and dnd-kit reads
@@ -357,6 +357,13 @@ function domRect(box: Box): DOMRect {
 /** How many times dnd-kit has measured the board's horizontal scroller. */
 let canvasMeasures = 0;
 
+/**
+ * What resize delivery alone has done since it was last zeroed: how many
+ * entries were an element's FIRST report after it was (re)observed, and how
+ * many card shells and column droppables the deliveries re-rendered.
+ */
+const delivery = { initial: 0, shells: 0 };
+
 function installLayout(): () => void {
   const realRect = Element.prototype.getBoundingClientRect;
   const realStyle = window.getComputedStyle.bind(window);
@@ -445,6 +452,7 @@ class LayoutResizeObserver {
       const box = boxes.findLast(([node]) => node === element)?.[1] ?? NO_BOX;
       const size = `${box.width}:${box.height}`;
       if (size === previous) continue;
+      if (previous === null) delivery.initial += 1;
       this.sizes.set(element, size);
       entries.push({
         target: element,
@@ -482,10 +490,12 @@ async function settleBrowser(): Promise<void> {
         callback(performance.now());
       }
     });
+    const shellsBefore = renders.sortable + renders.droppable;
     await act(async () => {
       const { boxes } = boardBoxes();
       for (const observer of resizeObservers) resized = observer.deliver(boxes) || resized;
     });
+    delivery.shells += renders.sortable + renders.droppable - shellsBefore;
     if (!resized && frames.pending.size === 0 && vi.getTimerCount() === 0) return;
   }
   throw new Error("board browser work did not settle within 120 controlled frames");
@@ -995,6 +1005,54 @@ describe("a pointer move that changes nothing", () => {
       // state for a move that changed nothing, and the board rendered for it.
       expect(large.sortable).toBe(small.sortable);
       expect(small.sortable).toBeLessThanOrEqual(WIGGLES);
+    },
+    BUDGET,
+  );
+});
+
+/* ------------------------------- a scroll ancestry reported a second time */
+
+/**
+ * `sameMeasuredRects`, the patch's other guard, held by behaviour (VC-665).
+ *
+ * `dnd-kit-patch.test.ts` proves the guard ships; the cases above cannot see it
+ * go, because they count measurements and it saves a RENDER, not a
+ * measurement. When `over` moves to a droppable with a different scroll chain,
+ * `useRects` measures the new chain in a layout effect and re-observes it, and
+ * a browser answers every new observation with an initial ResizeObserver
+ * report. Nothing has moved, so `useRects` measures the same rects again.
+ * Patched, that state write hands back the same array and React bails before
+ * any child; unpatched, the fresh array is a new context value, and the report
+ * re-renders a card shell under `DndContext` for nothing.
+ *
+ * Bounded either way while `sameScrollableAncestors` keeps the chain's
+ * identity stable: the extra render does not hand `useRects` a new chain, so it
+ * does not re-arm. Removing this guard alone is a cost, not the #185 loop, and
+ * the cost is what this pins — to zero.
+ */
+describe("a scroll ancestry the browser reports again unchanged", () => {
+  it(
+    "re-renders no card or column for the first report of a re-observed chain",
+    async () => {
+      const grip = await pickUp();
+      await settleBrowser();
+      delivery.initial = 0;
+      delivery.shells = 0;
+      // Column, pill, card: the pill sits in the rail, whose scroll chain is
+      // not the standing column's, so the rounds re-observe a chain.
+      for (let round = 0; round < FEW; round += 1) {
+        await move(grip.empty);
+        await move(grip.pill);
+        await move(grip.card);
+      }
+      await endDrag();
+
+      // The premise, checked: the browser really did report a fresh
+      // observation mid-gesture…
+      expect(delivery.initial).toBeGreaterThan(0);
+      // …and a report of a chain that had not moved re-rendered nothing.
+      // Without the guard this reads 3.
+      expect(delivery.shells).toBe(0);
     },
     BUDGET,
   );

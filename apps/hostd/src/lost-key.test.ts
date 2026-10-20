@@ -1,6 +1,6 @@
 /**
- * Losing or damaging the secrets key never bricks a host (VC-641;
- * `docs/plans/sealed-credential-store.md` §7). Real boots against a real data
+ * Losing or damaging the secrets key never bricks a host (VC-641).
+ * Real boots against a real data
  * directory holding board and Session history and sealed sentinel secrets:
  * each fault boots, serves the board, reports a credential status, leaves
  * history and the sealed file alone, and never uses or leaks a stored value.

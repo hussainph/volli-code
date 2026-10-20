@@ -1,7 +1,7 @@
 /**
  * Compile-time proof (part of `pnpm typecheck`; this package's tsconfig
  * includes `src`) that the IPC exposure table is total over EVERY router it
- * covers, not only over namespaces they share (VC-608 review B1). Each
+ * covers, not only over namespaces they share (VC-608). Each
  * `@ts-expect-error` is a classification missing or invented: if the table
  * stopped catching it, the directive itself would fail to compile.
  */

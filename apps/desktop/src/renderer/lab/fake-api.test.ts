@@ -40,14 +40,30 @@ describe("Lab fake API", () => {
     expect(Object.is(window.api.harness, firstHarness)).toBe(false);
   });
 
+  it("routes captured singleton requests to the current scratch only", async () => {
+    installWindow();
+    installFakeApi({ sessionRpc: { request } });
+    const captured = window.api.sessionRpc.request;
+    installFakeApi({ sessionRpc: { request: async () => ({ ok: true, data: 2 }) } });
+    expect(window.api.sessionRpc.request).toBe(captured);
+    await expect(captured({ path: "x", type: "query", input: null })).resolves.toEqual({
+      ok: true,
+      data: 2,
+    });
+    installFakeApi();
+    await expect(captured({ path: "x", type: "query", input: null })).resolves.toMatchObject({
+      ok: false,
+    });
+  });
+
   it("keeps an overridden namespace's members when it is spread", async () => {
     installWindow();
     installFakeApi({ sessionRpc: { request } });
 
     const spread = { ...window.api.sessionRpc };
 
-    expect(spread.request).toBe(request);
-    expect(Object.keys(spread)).toEqual(["request"]);
+    expect(spread.request).toBe(window.api.sessionRpc.request);
+    expect(Object.keys(spread)).toEqual(["request", "onEvent", "cancel"]);
     // Unnamed members are still the proxy's own stubs, reached through it.
     expect(typeof window.api.sessionRpc.onEvent(() => {})).toBe("function");
     // An un-overridden namespace spreads to nothing, as before.

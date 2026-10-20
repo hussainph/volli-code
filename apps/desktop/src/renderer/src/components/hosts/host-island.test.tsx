@@ -2,6 +2,8 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { useProjectsStore } from "@renderer/stores/projects";
+
 import { useUiStore } from "@renderer/stores/ui";
 import { useRemoteHostsStore } from "@renderer/stores/remote-hosts";
 import { registryHost } from "@renderer/stores/remote-hosts.test-support";
@@ -31,6 +33,7 @@ afterEach(async () => {
   world = null;
   vi.useRealTimers();
   vi.restoreAllMocks();
+  useProjectsStore.setState({ pendingRemoteSelection: null });
   toast.mockClear();
 });
 
@@ -72,6 +75,7 @@ describe("connection Island", () => {
       hetzner: { link: { status: "offline", since: NOW, retryAt: NOW + 8_000 } },
     });
     await world.render(<HostIsland />);
+    expect(island()?.getAttribute("data-native-plane-overlay")).toBe("true");
     expect(island()?.textContent).toContain("Can’t reach hetzner-1 · Read-only");
     expect(island()?.textContent).toContain("Retrying in 8s");
 
@@ -207,7 +211,6 @@ describe("connection Island, per project and on chat pages", () => {
     });
     await world.render(<HostIsland />);
     expect(island()).toBeNull();
-    const { useProjectsStore } = await import("@renderer/stores/projects");
     act(() => useProjectsStore.setState({ selectedProjectId: "spare" }));
     expect(island()?.textContent).toContain("hetzner-1 no longer serves this project");
   });
@@ -264,4 +267,18 @@ describe("islandBottom", () => {
     // A short composer low in the card stays under the 88px resting place.
     expect(islandBottom(card, [rect(300, 860, 400, 40)])).toBe(88);
   });
+});
+
+it("pending reopen uses the saved host's connecting state, even while its host health is ready", async () => {
+  world = hostWorld({ selected: "local" });
+  act(() =>
+    useProjectsStore.setState({
+      selectedProjectId: null,
+      pendingRemoteSelection: { hostId: HETZNER_ID, projectId: "remote", hostName: "hetzner-1" },
+    }),
+  );
+  await world.render(<HostIsland />);
+  await advance(1_500);
+  expect(island()?.textContent).toContain("Connecting to hetzner-1");
+  expect(useProjectsStore.getState().selectedProjectId).toBeNull();
 });

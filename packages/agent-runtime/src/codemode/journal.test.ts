@@ -52,6 +52,32 @@ describe("finish, remember and runKey", () => {
     journal.finish(key);
     expect(journal.open(key, 5).previousRuns).toBe(0);
   });
+
+  it("keeps capture omissions per call and accepts older records without them", () => {
+    const journal = new CodeModeJournal();
+    const run = journal.open("images", 1);
+    remember(run, 1, {
+      name: "browser_screenshot",
+      argumentsDigest: "first",
+      outcome: { ok: true, value: "held" },
+      omittedImages: 1,
+    });
+    remember(run, 2, {
+      name: "read",
+      argumentsDigest: "old",
+      outcome: { ok: true, value: "legacy" },
+    });
+    remember(run, 3, {
+      name: "browser_screenshot",
+      argumentsDigest: "large",
+      outcome: { ok: true, value: "x".repeat(RUN_JOURNAL_MAX_BYTES) },
+      omittedImages: 2,
+    });
+    const replay = journal.open("images", 2);
+    expect(replay.calls.get(1)?.omittedImages).toBe(1);
+    expect(replay.calls.get(2)).not.toHaveProperty("omittedImages");
+    expect(replay.calls.get(3)).toMatchObject({ outcome: null, omittedImages: 2 });
+  });
 });
 
 describe("determinism", () => {

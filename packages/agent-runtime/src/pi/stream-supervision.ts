@@ -4,8 +4,8 @@
  * A laptop that sleeps mid-stream wakes holding a TCP connection the server
  * dropped long ago. Nothing on this side sends, so nothing on this side learns:
  * the request just stays open, silent, until some keepalive far below gives up
- * — about half an hour, on the owner's ledger, thirty times over (VC-443). No
- * error ever reaches the runtime's retry path, because nothing ever fails.
+ * (VC-443). No error reaches the runtime's retry path while the socket stays
+ * open without producing events.
  *
  * So the request is watched from outside, at the one seam every provider call
  * crosses — the `StreamFn` — and cut two ways:
