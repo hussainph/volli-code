@@ -17,20 +17,32 @@ import type {
 } from "../../../ipc/contract";
 
 import { seedAppStateCache } from "@renderer/lib/app-state-storage";
+import { boardProtocol, startBoardProtocol } from "@renderer/lib/board-protocol";
+import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
+import { toastError } from "@renderer/lib/toast";
 import { setBootNotice } from "@renderer/lib/boot-notice";
 import {
   PROJECTS_UI_APP_STATE_KEY,
   decodeProjectsUiState,
+  decodeRemoteSelection,
   encodeProjectsUiState,
   useProjectsStore,
 } from "@renderer/stores/projects";
 import { useBoardStore } from "@renderer/stores/board";
+import { isRemoteProject, useHostConnectionStore } from "@renderer/stores/host-connection";
+import { useRemoteBoardAvailabilityStore } from "@renderer/stores/remote-board-availability";
+import { followRemoteClaims, type FollowedHostStore } from "@renderer/lib/follow-remote-projects";
 import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useThemeStore } from "@renderer/stores/theme";
 import { useUiStore } from "@renderer/stores/ui";
 import { useVenueStore } from "@renderer/stores/venue";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+
+import { restoreRemoteSelection } from "./restore-remote-selection";
+import { isExperimentOn, useExperimentsStore } from "@renderer/stores/experiments";
+
+let stopSelectionRestore: (() => void) | null = null;
 
 const LEGACY_PROJECTS_KEY = "volli:projects";
 const LEGACY_UI_KEY = "volli:ui";
@@ -113,6 +125,10 @@ export async function refreshPlanningData(
   change: { ticketId?: string; projectId?: string; kind?: DataChangeKind } = {},
   gateway: Pick<BootGateway, "bootstrap" | "projectRoster"> = defaultGateway,
 ): Promise<BootResult> {
+  // With `cloud` on, the board's own change feed carries every board change
+  // (VC-565): only the list of Workspaces is still this window's to refresh.
+  const protocol = boardProtocol();
+  if (protocol !== null) return refreshWorkspaceList(change, gateway, protocol.sync);
   const movedCheckout = change.kind === "worktree";
   if (movedCheckout) useVenueStore.getState().invalidateTickets(change.ticketId);
   if (!movesBoardData(change.kind)) {
@@ -172,6 +188,141 @@ export async function refreshPlanningData(
     // whatever SQLite just said about the board.
     if (movedCheckout) void useVenueStore.getState().refreshStale();
   }
+}
+
+/**
+ * The `cloud`-on refresh: a change that names a Workspace the board already
+ * follows is the feed's (it stamped the same write), so nothing is read. An
+ * untargeted one, or one naming a Workspace this window does not hold, may
+ * have added or removed a project: the project list is re-read (the
+ * bootstrap's projects; the board slices stay the feed's), a new Workspace is
+ * opened, and a removed one forgotten.
+ */
+async function refreshWorkspaceList(
+  change: { ticketId?: string; projectId?: string },
+  gateway: Pick<BootGateway, "bootstrap">,
+  sync: { follows(projectId: string): boolean },
+): Promise<BootResult> {
+  if (change.projectId !== undefined && sync.follows(change.projectId)) return { ok: true };
+  const result = await gateway.bootstrap();
+  if (!result.ok) return result;
+  const { projects } = result.data;
+  const previousSelection = useProjectsStore.getState().selectedProjectId;
+  const selectedProjectId = projects.some(({ id }) => id === previousSelection)
+    ? previousSelection
+    : (projects[0]?.id ?? null);
+  const known = new Set(projects.map(({ id }) => id));
+  const hosts = useHostConnectionStore.getState();
+  for (const projectId of Object.keys(useBoardStore.getState().ticketsByProject)) {
+    // A remote project is never in this Mac's bootstrap (VC-711): its board
+    // stays, and leaves with its claim (`followRemoteProjects`).
+    if (!known.has(projectId) && !isRemoteProject(hosts, projectId)) {
+      useBoardStore.getState().forget(projectId);
+    }
+  }
+  useProjectsStore.getState().hydrate(projects, selectedProjectId);
+  for (const { id } of projects) useBoardStore.getState().seedProject(id);
+  useBoardStore.getState().notePlanningChange(change);
+  return { ok: true };
+}
+
+/**
+ * Follows every remote project the host-connection store claims
+ * (`./follow-remote-projects`), dropping a project's board and row when its
+ * claim goes.
+ */
+export function followRemoteProjects(
+  sync: { open(projectId: string): Promise<void>; close(projectId: string): void },
+  store: FollowedHostStore = useHostConnectionStore,
+  alive: () => boolean = () => true,
+): () => void {
+  return followRemoteClaims({
+    sync,
+    store,
+    alive,
+    availability: useRemoteBoardAvailabilityStore.getState(),
+    drop: (projectId) => {
+      useBoardStore.getState().forget(projectId);
+      useProjectsStore.getState().dropRemoteProject(projectId);
+    },
+  });
+}
+
+/** Whether the host has the `cloud` flag on: the Session router's experiments read. */
+async function readCloudFlag(signal?: AbortSignal): Promise<boolean> {
+  const experiments = await sessionRpcClient().settings.experiments.query(undefined, { signal });
+  return experiments.cloud.enabled;
+}
+
+/** A stalled flag read must not strand a fresh window before its first paint. */
+async function readBootCloudFlag(
+  read: (signal: AbortSignal) => Promise<boolean>,
+): Promise<boolean> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(() => read(controller.signal))
+        .catch(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), 1_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+/**
+ * With `cloud` on, moves the board onto the host protocol (VC-565): starts
+ * the board client and sync engine over the desktop's IPC bridge, and opens
+ * every Workspace boot hydrated, from its snapshot, following its feed. With
+ * it off (or unreadable) the board stays on the legacy IPC, exactly as before.
+ * Resolves whether the protocol path started.
+ */
+export async function startBoardProtocolIfEnabled(
+  readCloud: () => Promise<boolean> = readCloudFlag,
+): Promise<boolean> {
+  let enabled: boolean;
+  try {
+    enabled = await readCloud();
+  } catch {
+    // An unreadable flag is the default: off.
+    return false;
+  }
+  if (!enabled) return false;
+  const { sync } = startBoardProtocol({
+    view: {
+      paint: (projectId, tickets, labels, unloaded) =>
+        useBoardStore.getState().paintProtocolBoard(projectId, tickets, labels, unloaded),
+      adoptProject: (project) => useProjectsStore.getState().adoptProject(project),
+      notePlanningChange: (change) => useBoardStore.getState().notePlanningChange(change),
+      checkoutMoved: (ticketId) => {
+        useVenueStore.getState().invalidateTickets(ticketId);
+        void useVenueStore.getState().refreshStale();
+      },
+      failed: (message) => toastError(message),
+      // Not a failure: the write keeps being sent under its id until the host answers.
+      unconfirmed: (message) => toast.warning(message),
+    },
+  });
+  // A remote project's Session listing (VC-713) is registered by its one
+  // owner, the remote-Sessions binding (`bindRemoteSessionsWhileCloud`).
+  // Remote projects (VC-711): each one's board over its Workspace link, for
+  // the window's life.
+  followRemoteProjects(sync, useHostConnectionStore, () => boardProtocol()?.sync === sync);
+  await Promise.all(
+    useProjectsStore.getState().projects.map(({ id }) =>
+      sync.open(id).catch((error: unknown) => {
+        toastError(
+          `Couldn't open the board: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }),
+    ),
+  );
+  return true;
 }
 
 /** Unwraps a zustand-persist envelope (`{state,version}`) into its `state`, or `undefined` for anything else. */
@@ -301,7 +452,10 @@ async function notifyOrphanedWorktrees(): Promise<void> {
 export async function boot(
   gateway: BootGateway = defaultGateway,
   storage: BootStorage = localStorage,
+  readCloud: (signal: AbortSignal) => Promise<boolean> = readCloudFlag,
 ): Promise<BootResult> {
+  stopSelectionRestore?.();
+  stopSelectionRestore = null;
   const bootstrapResult = await gateway.bootstrap();
   if (!bootstrapResult.ok) return bootstrapResult;
 
@@ -360,8 +514,17 @@ export async function boot(
   // Resolved BEFORE hydrate (rather than hydrating with `null` and calling
   // `select` afterward) so boot never fires a redundant appState.set — the
   // value already came FROM app_state, there's nothing new to persist.
+  const cloud = await readBootCloudFlag(readCloud);
+  const remote = cloud ? decodeRemoteSelection(payload.appState[PROJECTS_UI_APP_STATE_KEY]) : null;
   const selectedProjectId = resolveSelectedProjectId(payload.appState, payload.projects);
-  useProjectsStore.getState().hydrate(payload.projects, selectedProjectId);
+  useProjectsStore.setState({ pendingRemoteSelection: null });
+  useProjectsStore
+    .getState()
+    .hydrate(
+      payload.projects,
+      remote === null ? selectedProjectId : (selectedProjectId ?? payload.projects[0]?.id ?? null),
+    );
+  if (remote !== null) useProjectsStore.getState().beginRemoteRestore(remote);
   useBoardStore.getState().hydrate(payload.ticketsByProject, payload.labelsByProject);
 
   // The theme store is deliberately absent: it has no `persist` middleware and
@@ -386,6 +549,36 @@ export async function boot(
       ),
       new Set(payload.projects.map(({ id }) => id)),
     );
+
+  if (remote !== null) {
+    const stop = restoreRemoteSelection({
+      selection: remote,
+      hosts: useHostConnectionStore,
+      projects: useProjectsStore,
+      failed: (message) => toast.warning(message),
+    });
+    // Boot owns the wait, not a component effect: StrictMode cannot restart its deadline.
+    const cleanups: (() => void)[] = [stop];
+    const dispose = () => {
+      for (const cleanup of cleanups.splice(0)) cleanup();
+      window.removeEventListener?.("pagehide", dispose);
+    };
+    cleanups.push(
+      useExperimentsStore.subscribe((state) => {
+        if (state.snapshot !== null && !isExperimentOn(state.snapshot, "cloud")) {
+          useProjectsStore.getState().cancelRemoteRestore();
+        }
+      }),
+    );
+    cleanups.push(
+      useProjectsStore.subscribe((state) => {
+        if (state.pendingRemoteSelection !== remote) dispose();
+      }),
+    );
+    stopSelectionRestore = dispose;
+    window.addEventListener?.("pagehide", dispose, { once: true });
+    if (useProjectsStore.getState().pendingRemoteSelection !== remote) dispose();
+  }
 
   // Fire-and-forget — never awaited, so it can't delay the app's first paint,
   // and its own try/catch means it can't fail boot either.

@@ -1,4 +1,4 @@
-import type { ReadImageProcessor } from "@earendil-works/pi-agent-core/node";
+import type { ReadImageProcessor } from "./harness-env";
 import { DEFAULT_MAX_IMAGE_BASE64_BYTES, DEFAULT_MAX_IMAGE_EDGE_PX, fitImage } from "./image-fit";
 
 /** The longest edge sent by `read`; beyond this vision quality falls faster than request cost. */

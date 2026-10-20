@@ -21,10 +21,14 @@
 import * as React from "react";
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/dist/csr/ArrowsClockwise";
 import { BroomIcon } from "@phosphor-icons/react/dist/csr/Broom";
+import { CheckIcon } from "@phosphor-icons/react/dist/csr/Check";
+import { CopyIcon } from "@phosphor-icons/react/dist/csr/Copy";
 import { DatabaseIcon } from "@phosphor-icons/react/dist/csr/Database";
 import { FolderOpenIcon } from "@phosphor-icons/react/dist/csr/FolderOpen";
+import { TicketIcon } from "@phosphor-icons/react/dist/csr/Ticket";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
+import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { errorMessage } from "@volli/shared";
 
 import {
@@ -49,6 +53,7 @@ import {
   describeRemovable,
   describeRunFailures,
   describeUnreadableProject,
+  dirtyOrphanRow,
   historyRows,
   isScanStale,
   orphanPolicyNote,
@@ -85,14 +90,20 @@ import {
 } from "@renderer/components/ui/alert-dialog";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import { Separator } from "@renderer/components/ui/separator";
 import { Switch } from "@renderer/components/ui/switch";
 import { toast } from "sonner";
 
 import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { RunningProcessesSection } from "./processes-section";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
+import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
+import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
+import { useProjectsStore } from "@renderer/stores/projects";
 import { useRetentionTtlStore } from "@renderer/stores/retention-ttl";
+import { useUiStore } from "@renderer/stores/ui";
+import { useWorkspaceStore } from "@renderer/stores/workspace";
 
 /** Below a week, an automatic deletion is close enough to ask about. */
 const CONFIRM_BELOW_DAYS = 7;
@@ -100,7 +111,7 @@ const CONFIRM_BELOW_DAYS = 7;
 export function StoragePane() {
   // The retention window is what every eligibility date in the orphan list was
   // measured against, so the two halves of this pane are not independent
-  // (VC-284 re-review C6): committing a new window makes the list on screen a
+  // (VC-284): committing a new window makes the list on screen a
   // statement about a policy that no longer exists. Retention says so, and the
   // orphan list refuses to act on a stale proposal until it has been scanned
   // again — main supersedes the revision from its own side at the same moment.
@@ -246,12 +257,12 @@ function BuildArtifactsSection() {
 
   React.useEffect(() => {
     let cancelled = false;
-    void window.api.worktree
-      .trimSettings()
-      .then((result) => {
-        if (cancelled) return;
-        if (result.ok) setTrimOnFinish(result.settings.trimOnFinish);
-        else toastError(`Couldn't load the trim setting: ${result.error}`);
+    // `worktree.trimSettings`, the desktop-only tier's read that replaced
+    // `volli:worktree-trim-settings-get` (VC-608).
+    void sessionRpcClient()
+      .worktree.trimSettings.query()
+      .then((settings) => {
+        if (!cancelled) setTrimOnFinish(settings.trimOnFinish);
       })
       .catch((error: unknown) => {
         if (!cancelled) toastError(`Couldn't load the trim setting: ${errorMessage(error)}`);
@@ -504,10 +515,7 @@ function TrimReportRows({ report }: { report: WorktreeTrimSweepReport }) {
         <ItemRow key={`kept:${entry.path}`} name={entry.path} meta={`Kept — ${entry.reason}`} />
       ))}
       {keptCount > kept.length ? (
-        <ItemRow
-          name={`… and ${keptCount - kept.length} more kept`}
-          meta="Ignored, but preserved as configuration."
-        />
+        <ItemRow name={`… and ${keptCount - kept.length} more kept`} meta="Ignored, but kept." />
       ) : null}
       {report.skipped.map((skipped) => (
         <ItemRow
@@ -595,6 +603,14 @@ function PiSessionLogsSection() {
       : inventory === null
         ? "Not scanned"
         : `${inventory.candidateCount} file(s), ${formatFileSize(inventory.candidateBytes)}`;
+  // Long tool results saved across every Session (VC-469), against the bound
+  // past which the oldest are removed first. Measured by the same scan.
+  const savedOutput =
+    state.status === "loading"
+      ? "Scanning…"
+      : inventory === null
+        ? "Not scanned"
+        : `${formatFileSize(inventory.toolOutput.bytes)} of ${formatFileSize(inventory.toolOutput.limitBytes)}`;
 
   return (
     <>
@@ -610,28 +626,33 @@ function PiSessionLogsSection() {
           />
         }
         before={
-          <PrefRow
-            label="Orphaned logs"
-            hint={
-              <>
-                Only logs not referenced by any Volli session are candidates. Scanning never deletes
-                files.
-              </>
-            }
-          >
-            <span className="text-ui text-muted-foreground">{summary}</span>
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={
-                inventory === null || inventory.candidateCount === 0 || scanning || cleaning
+          <>
+            <PrefRow label="Saved tool output">
+              <span className="text-ui text-muted-foreground">{savedOutput}</span>
+            </PrefRow>
+            <PrefRow
+              label="Orphaned logs"
+              hint={
+                <>
+                  Only logs not referenced by any Volli session are candidates. Scanning never
+                  deletes files.
+                </>
               }
-              onClick={() => setConfirmOpen(true)}
             >
-              <TrashIcon />
-              Clean up…
-            </Button>
-          </PrefRow>
+              <span className="text-ui text-muted-foreground">{summary}</span>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={
+                  inventory === null || inventory.candidateCount === 0 || scanning || cleaning
+                }
+                onClick={() => setConfirmOpen(true)}
+              >
+                <TrashIcon />
+                Clean up…
+              </Button>
+            </PrefRow>
+          </>
         }
         state={state}
       >
@@ -867,6 +888,20 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
   const [state, setState] = React.useState<AsyncState<OrphansScan>>({ status: "loading" });
   const [pendingDelete, setPendingDelete] = React.useState<DirtyWorktreeOrphan | null>(null);
   const [deleting, setDeleting] = React.useState(false);
+  // What went wrong on each dirty row, by path (VC-292) — held on the row, with
+  // its retry, rather than in a toast that is gone before it can be acted on.
+  const [failures, setFailures] = React.useState<ReadonlyMap<string, OrphanFailure>>(
+    () => new Map(),
+  );
+  const recordFailure = React.useCallback((path: string, failure: OrphanFailure | null) => {
+    setFailures((current) => {
+      if (failure === null && !current.has(path)) return current;
+      const next = new Map(current);
+      if (failure === null) next.delete(path);
+      else next.set(path, failure);
+      return next;
+    });
+  }, []);
   const [busy, setBusy] = React.useState(false);
   const [confirmCleanup, setConfirmCleanup] = React.useState(false);
   const [cleaning, setCleaning] = React.useState(false);
@@ -927,18 +962,26 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
 
   async function confirmDelete(): Promise<void> {
     if (!pendingDelete || deleting) return;
+    const target = pendingDelete.path;
     setDeleting(true);
+    // A refusal lands on the row it was about, with a Retry that asks again —
+    // the confirmation closes, so the reason is not hidden behind a dialog.
+    const failed = (message: string): void => {
+      setPendingDelete(null);
+      recordFailure(target, { action: "delete", message });
+    };
     try {
-      const result = await window.api.worktree.deleteOrphan(pendingDelete.path);
+      const result = await window.api.worktree.deleteOrphan(target);
       if (!result.ok) {
-        toastError(`Couldn't delete worktree: ${result.error}`);
+        failed(result.error);
         return;
       }
       setPendingDelete(null);
+      recordFailure(target, null);
       // A delete invalidates the cached scan, so this one re-scans.
       await load(true);
     } catch (error) {
-      toastError(`Couldn't delete worktree: ${errorMessage(error)}`);
+      failed(errorMessage(error));
     } finally {
       setDeleting(false);
     }
@@ -948,10 +991,10 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
    * The confirmed act. It names exactly the scan revision on screen and the
    * item ids that revision proposed — never a path — and mints a fresh
    * command id per press so a retried click after a stalled response cannot
-   * double-run (VC-284 review C1). Main re-checks each target before touching
+   * double-run (VC-284). Main re-checks each target before touching
    * it, so a skip is a normal outcome, reported rather than treated as a
    * failure — but a FAILED or indeterminate item is not: it gets a warning,
-   * never `toast.success` (review S2).
+   * never `toast.success`.
    */
   async function runCleanup(plan: CleanupPlan): Promise<void> {
     if (cleaning) return;
@@ -979,7 +1022,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
   }
 
   // The proposal describes a retention window that has since been replaced, so
-  // it may be READ but not acted on (VC-284 re-review C6).
+  // it may be READ but not acted on (VC-284).
   const stale = state.status === "ready" && isScanStale(state.data, setting);
   const plan = state.status === "ready" && !stale ? planCleanup(state.data) : null;
   // The window every eligibility date on this list was measured against, read
@@ -1054,7 +1097,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * else because it is the only row that describes an incomplete act
              * — and it says what completed, so nothing already removed reads as
              * still pending. "Scan again" is a real button here, not only a
-             * sentence, per the review's S2.
+             * sentence.
              */}
             {unfinishedRuns(report.runs).map((run) => (
               <ItemRow key={run.id} name="Interrupted cleanup" meta={describeInterrupted(run)}>
@@ -1066,9 +1109,8 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
 
             {/*
              * A cleanup that FINISHED but left a failed or indeterminate item
-             * behind — the case the old pane's `toast.success` erased (review
-             * S2). Every failed path and its reason are named, with the same
-             * recovery.
+             * behind — the case the old pane's `toast.success` erased. Every failed
+             * path and its reason are named, with the same recovery.
              */}
             {runsWithFailures(report.runs).map((run) => (
               <ItemRow
@@ -1109,34 +1151,20 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
             ))}
 
             {report.dirty.map((orphan) => (
-              <ItemRow
+              <DirtyOrphanItem
                 key={orphan.path}
-                name={truncateMiddle(orphan.path)}
-                meta={
-                  orphan.projectName ? `${orphan.projectName} — ${orphan.reason}` : orphan.reason
-                }
-                testId="orphan-row"
-              >
-                <RowAction
-                  label={`Reveal ${orphan.path} in Finder`}
-                  hint="Reveal in Finder"
-                  icon={FolderOpenIcon}
-                  onAct={() => void reveal(orphan.path)}
-                />
-                <RowAction
-                  label={`Delete ${orphan.path}`}
-                  hint="Delete worktree"
-                  icon={TrashIcon}
-                  onAct={() => setPendingDelete(orphan)}
-                />
-              </ItemRow>
+                orphan={orphan}
+                failure={failures.get(orphan.path) ?? null}
+                onFailure={(failure) => recordFailure(orphan.path, failure)}
+                onDelete={() => setPendingDelete(orphan)}
+              />
             ))}
 
             {/* Candidates: stated as proposals, with the project, date, and basis each became eligible under. */}
             {report.removable.map((entry) => (
               <ItemRow
                 key={entry.path}
-                name={truncateMiddle(entry.path)}
+                name={<PathName path={entry.path} />}
                 meta={describeRemovable(entry, { retentionDays: report.retentionDays })}
               >
                 <RowAction
@@ -1151,7 +1179,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
             {report.prunable.map((entry) => (
               <ItemRow
                 key={`prunable:${entry.id}`}
-                name={truncateMiddle(entry.path)}
+                name={<PathName path={entry.path} />}
                 meta={describeMetadata(entry)}
               />
             ))}
@@ -1160,7 +1188,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
             {report.keptMetadata.map((entry) => (
               <ItemRow
                 key={`kept-metadata:${entry.projectId}:${entry.path}`}
-                name={truncateMiddle(entry.path)}
+                name={<PathName path={entry.path} />}
                 meta={describeKeptMetadata(entry)}
               />
             ))}
@@ -1168,7 +1196,7 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
             {report.keptRecent.map((entry) => (
               <ItemRow
                 key={entry.path}
-                name={truncateMiddle(entry.path)}
+                name={<PathName path={entry.path} />}
                 meta={describeKept(entry)}
               />
             ))}
@@ -1179,16 +1207,16 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
              * removal nobody can audit is indistinguishable from work going
              * missing, and one mislabelled is worse. Includes pruned METADATA
              * records, not only removed folders, and never folds two runs'
-             * rows into one (review C6).
+             * rows into one.
              */}
             {historyRows(report.runs).map((row) => (
-              <ItemRow key={row.key} name={truncateMiddle(row.path)} meta={row.meta} />
+              <ItemRow key={row.key} name={<PathName path={row.path} />} meta={row.meta} />
             ))}
 
             {/*
              * The exact preservation policy each completed cleanup ran under,
              * rendered through the same shared vocabulary the confirmation
-             * uses — never a second, independent description (review S3).
+             * uses — never a second, independent description.
              */}
             {preservationHistoryRows(report.runs).map((row) => (
               <ItemRow key={row.key} name="Preservation applied" meta={row.meta} />
@@ -1294,10 +1322,188 @@ function OrphansSection({ retentionDays: setting }: { retentionDays: number | nu
 }
 
 async function reveal(path: string): Promise<void> {
+  const failure = await revealPath(path);
+  if (failure !== null) toastError(`Couldn't reveal in Finder: ${failure}`);
+}
+
+/** Reveals `path`, answering with why it couldn't — `null` when it did. */
+async function revealPath(path: string): Promise<string | null> {
   try {
     const result = await window.api.fs.revealInFinder(path);
-    if (!result.ok) toastError(`Couldn't reveal in Finder: ${result.error}`);
+    return result.ok ? null : result.error;
   } catch (error) {
-    toastError(`Couldn't reveal in Finder: ${errorMessage(error)}`);
+    return errorMessage(error);
   }
+}
+
+/**
+ * A clipped path that still holds the whole one (VC-292): the row shows
+ * `start…end`, and hovering it shows the path in full, so nothing on this list
+ * has to be decoded to be identified.
+ */
+function PathName({ path }: { path: string }) {
+  return (
+    <span className="min-w-0 truncate text-ui font-medium" title={path}>
+      {truncateMiddle(path)}
+    </span>
+  );
+}
+
+/** Which dirty-row act failed, and why — what its row keeps on screen until a retry lands. */
+interface OrphanFailure {
+  action: "open" | "reveal" | "copy" | "delete";
+  message: string;
+}
+
+const FAILURE_TITLES: Record<OrphanFailure["action"], string> = {
+  open: "Couldn't open the ticket",
+  reveal: "Couldn't reveal the folder",
+  copy: "Couldn't copy the path",
+  delete: "Couldn't delete this worktree",
+};
+
+/** How long the copy glyph shows a check — the one honest feedback a clipboard write has. */
+const COPIED_FLASH_MS = 900;
+
+/**
+ * One dirty orphan (VC-292): led by the ticket that still claims it, or by the
+ * folder's own name with an explicit "No ticket"; the path is secondary,
+ * whole on hover and one click from the clipboard. The ticket's own repair
+ * (Open ticket) comes first, navigation after it, and the irreversible Delete
+ * last, inked as destructive and set apart — and offered only where this list
+ * may act at all, since main refuses to delete a folder a ticket claims.
+ *
+ * A failed act stays on screen as the row under it, with a Retry, instead of
+ * a toast that is gone before it can be acted on.
+ */
+function DirtyOrphanItem({
+  orphan,
+  failure,
+  onFailure,
+  onDelete,
+}: {
+  orphan: DirtyWorktreeOrphan;
+  failure: OrphanFailure | null;
+  onFailure: (failure: OrphanFailure | null) => void;
+  onDelete: () => void;
+}) {
+  const row = dirtyOrphanRow(orphan);
+  const [copied, setCopied] = React.useState(false);
+  const timer = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => () => window.clearTimeout(timer.current), []);
+  const target = row.openTicket;
+
+  function openTicket(): void {
+    if (target === null) return;
+    const { projectId, ticketId } = target;
+    if (!useProjectsStore.getState().projects.some((project) => project.id === projectId)) {
+      onFailure({ action: "open", message: "Its project isn't open in Volli." });
+      return;
+    }
+    onFailure(null);
+    useProjectsStore.getState().select(projectId);
+    useWorkspaceStore
+      .getState()
+      .openTicketWorkspace(projectId, ticketId, { tabId: TICKET_BODY_TAB_ID });
+    useUiStore.getState().setSettingsOpen(false);
+  }
+
+  async function revealFolder(): Promise<void> {
+    const message = await revealPath(orphan.path);
+    onFailure(message === null ? null : { action: "reveal", message });
+  }
+
+  async function copyPath(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(orphan.path);
+      onFailure(null);
+      setCopied(true);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setCopied(false), COPIED_FLASH_MS);
+    } catch (error) {
+      onFailure({ action: "copy", message: errorMessage(error) });
+    }
+  }
+
+  function retry(action: OrphanFailure["action"]): void {
+    if (action === "open") openTicket();
+    else if (action === "reveal") void revealFolder();
+    else if (action === "copy") void copyPath();
+    // Delete is irreversible, so its retry asks again rather than acting.
+    else onDelete();
+  }
+
+  return (
+    <>
+      <ItemRow
+        name={
+          <span className="flex min-w-0 items-center gap-1 text-ui font-medium" title={orphan.path}>
+            {row.displayId === null ? null : (
+              <span className="shrink-0 font-mono">{row.displayId}</span>
+            )}
+            <span className="min-w-0 truncate">{row.title}</span>
+          </span>
+        }
+        badges={row.notices.map((notice) => (
+          <Badge key={notice} variant="outline">
+            {notice}
+          </Badge>
+        ))}
+        meta={row.meta}
+        testId="orphan-row"
+      >
+        {target === null ? null : (
+          <Button size="xs" variant="outline" onClick={openTicket}>
+            <TicketIcon />
+            Open ticket
+          </Button>
+        )}
+        <RowAction
+          label={`Copy ${orphan.path}`}
+          hint={copied ? "Path copied" : "Copy path"}
+          icon={copied ? CheckIcon : CopyIcon}
+          onAct={() => void copyPath()}
+        />
+        <RowAction
+          label={`Reveal ${orphan.path} in Finder`}
+          hint="Reveal in Finder"
+          icon={FolderOpenIcon}
+          onAct={() => void revealFolder()}
+        />
+        {row.deletable ? (
+          <>
+            <Separator orientation="vertical" className="data-[orientation=vertical]:h-4" />
+            <RowAction
+              label={`Delete ${orphan.path}`}
+              hint="Delete worktree"
+              icon={TrashIcon}
+              destructive
+              onAct={onDelete}
+            />
+          </>
+        ) : null}
+      </ItemRow>
+      {failure === null ? null : (
+        <ItemRow
+          name={
+            <span className="min-w-0 truncate text-ui font-medium text-destructive">
+              {FAILURE_TITLES[failure.action]}
+            </span>
+          }
+          meta={failure.message}
+          testId="orphan-failure"
+        >
+          <Button size="xs" variant="outline" onClick={() => retry(failure.action)}>
+            Retry
+          </Button>
+          <RowAction
+            label={`Dismiss: ${FAILURE_TITLES[failure.action]}`}
+            hint="Dismiss"
+            icon={XIcon}
+            onAct={() => onFailure(null)}
+          />
+        </ItemRow>
+      )}
+    </>
+  );
 }

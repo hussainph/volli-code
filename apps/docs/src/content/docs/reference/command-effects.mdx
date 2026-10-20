@@ -1,0 +1,33 @@
+---
+title: Command effects
+description: Check what a Volli command or agent tool writes, what a person sees, and what it does not do.
+---
+
+import AgentVerbEffects from "../../../components/AgentVerbEffects.astro";
+
+Check what a command changes before you run it. The entries come from the same
+Verb Registry that command help and write previews use. They cover shell
+commands and named agent tools, so an entry here does not mean you can run it
+at a terminal.
+
+## Preview a write
+
+Run `volli help <command>` to check whether a shell command supports `--dry-run`.
+A preview validates the request without applying the write, but it still reads
+the files you pass with flags such as `--body-file`.
+
+Preview a ticket move:
+
+```sh
+volli ticket move VC-12 --to needs-review --dry-run
+```
+
+Replace `VC-12` with your ticket's display ID. The real command validates
+again: a preview reserves nothing and does not guarantee the write will succeed.
+
+## Effects by command
+
+<AgentVerbEffects />
+
+See [CLI commands](/reference/cli-commands/) for syntax and
+[CLI errors](/reference/cli-errors/) for recovery.

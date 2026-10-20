@@ -9,8 +9,8 @@
  * or by the card's own requirement, and both are state written by an event.
  *
  * That state is exactly where the clipping was worst, because the notice is a
- * fourth thing on a row that already held three: at a 320px pane the footer had
- * to draw a warning, a withdrawal, a refusal and the control that retries, and
+ * further thing on a row that already held several: at a 320px pane the footer
+ * draws a warning, minimize, navigation, refusal and the retry control, and
  * the retry is the one a `nowrap` row put past the edge. So what is asserted
  * here is reachability rather than pixels — jsdom lays nothing out, but it does
  * know whether a control is in the document, inside the footer, and able to
@@ -96,7 +96,7 @@ function footer(): HTMLElement {
 
 /** Every control the footer draws, in the order the keyboard walks them. */
 function footerButtons(): readonly HTMLButtonElement[] {
-  return [...footer().querySelectorAll<HTMLButtonElement>("button")];
+  return [...footer().querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
 }
 
 /** Press the control that answers, whatever this build calls it. */
@@ -136,7 +136,8 @@ describe("the footer once a press has been refused", () => {
     );
 
     const before = footerButtons();
-    expect(before.length).toBeGreaterThanOrEqual(4);
+    expect(before.length).toBe(3);
+    expect(before.map((button) => button.textContent)).not.toContain("Withdraw question");
     expect(before.every(reachable)).toBe(true);
 
     // Nothing chosen, so the press is refused by the card's own requirement:
@@ -162,7 +163,7 @@ describe("the footer once a press has been refused", () => {
     );
 
     const before = footerButtons().map((button) => button.textContent);
-    const refusal = footer().querySelector<HTMLButtonElement>('button[data-variant="outline"]');
+    const refusal = footerButtons().find((button) => button.textContent === "Decline to answer");
     expect(refusal).not.toBeNull();
     await act(async () => {
       refusal?.click();
@@ -191,7 +192,7 @@ describe("the footer once a press has been refused", () => {
 
 /**
  * THE ACCEPTANCE WIDTHS, AND WHAT THIS ENVIRONMENT CAN HONESTLY SAY ABOUT THEM
- * (VC-288 review).
+ * (VC-288).
  *
  * The acceptance names three pane widths and four zoom levels, and the second
  * list collapses into the first: browser zoom scales the CSS pixel, so a 480px
@@ -224,9 +225,9 @@ describe("the footer at the acceptance widths", () => {
       );
 
       const buttons = footerButtons();
-      // Withdraw, minimise, Skip and the control that advances: the row that
-      // could not be drawn on one line at any of these widths.
-      expect(buttons.length).toBeGreaterThanOrEqual(4);
+      // Minimize, decline and Next are live; Previous is disabled on step one.
+      expect(buttons.length).toBe(3);
+      expect(buttons.map((button) => button.textContent)).not.toContain("Withdraw question");
       for (const button of buttons) {
         expect(reachable(button)).toBe(true);
         expect(ringed(button)).toBe(true);
@@ -241,7 +242,7 @@ describe("the footer at the acceptance widths", () => {
       expect(actions?.className).not.toContain("shrink-0");
 
       // And the break stays BETWEEN controls: `ui/button.tsx`'s global
-      // `whitespace-nowrap` is what keeps `Send answer` from hyphenating, and
+      // `whitespace-nowrap` keeps the answer controls from hyphenating, and
       // this footer's fix was deliberately local so that rule could stand.
       for (const button of buttons) {
         expect(button.className).toContain("whitespace-nowrap");

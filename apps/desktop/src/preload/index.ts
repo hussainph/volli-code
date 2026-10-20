@@ -1,4 +1,11 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { IpcEvent, IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
+import type {
+  CredentialsResult,
+  SecretReplaceInput,
+  SecretSubmitInput,
+  SecretsResult,
+} from "../ipc/secrets";
 // Type-only imports ONLY, from BOTH sources below: the pack config keeps main
 // and preload dependency-disjoint (see CAUTION in vite.config.ts) — a runtime
 // import from @volli/shared here could split a shared chunk out of preload.cjs.
@@ -27,6 +34,7 @@ import type {
   CreateTerminalSessionResult,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
+  DecisionModelSetting,
   ModelAccessSignInType,
   ModelAccessSignInUpdate,
   OverlayEdits,
@@ -40,9 +48,7 @@ import type {
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
-  SessionRpcIpcEvent,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
+  RendererLogEntry,
   TerminalBusyResult,
   TerminalCommandResult,
   TerminalDataEvent,
@@ -56,6 +62,9 @@ import type {
   ArtifactCreateInput,
   ArtifactCreateResult,
   BootstrapResult,
+  DatabaseRecoveryListResult,
+  DatabaseRecoveryFaultResult,
+  DatabaseRecoveryRestoreResult,
   BrowserPictureInput,
   BrowserPictureResult,
   BrowserTracesInput,
@@ -137,7 +146,7 @@ import type {
   FileSearchResult,
   FileWriteInput,
   FileWriteResult,
-  FirstPaintHint,
+  FirstPaintReport,
   HarnessEventNotice,
   HarnessPendingResult,
   HarnessRegisteredResult,
@@ -159,6 +168,8 @@ import type {
   McpServersResult,
   McpSetEnabledInput,
   McpSetToolsInput,
+  McpSignInInput,
+  McpSignInResult,
   PickFolderResult,
   PiSessionOrphanReclaimInput,
   PiSessionOrphanReclaimResult,
@@ -196,10 +207,12 @@ import type {
   RevealResult,
   SessionActivityNotice,
   SessionHarnessNotice,
+  SessionPeekContentInput,
+  SessionPeekContentResult,
+  SessionReadSetInput,
+  SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
-  SessionStopInput,
-  SessionStopResult,
   SessionRetitledEvent,
   SessionsInterruptedEvent,
   SessionsResult,
@@ -240,6 +253,9 @@ import type {
   WebAccessProvider,
   KeyedWebAccessProvider,
   WebAccessResult,
+  DecisionModelResult,
+  DecisionModelScope,
+  DecisionModelTestResult,
   AgentObservabilityResult,
   VolliIpcChannel,
   VolliIpcEvent,
@@ -407,6 +423,14 @@ const api = {
     chrome: process.versions.chrome,
     node: process.versions.node,
   },
+  databaseRecovery: {
+    list: (): Promise<DatabaseRecoveryListResult> => invoke("volli:database-recovery-list"),
+    restore: (): Promise<DatabaseRecoveryRestoreResult> =>
+      invoke("volli:database-recovery-restore"),
+    /** Which recovery screen to show: a damaged database, or one from a newer Volli (VC-602). */
+    fault: (): Promise<DatabaseRecoveryFaultResult> => invoke("volli:database-recovery-fault"),
+    quit: (): Promise<Result> => invoke("volli:database-recovery-quit"),
+  },
   data: {
     /** Reads the full SQLite snapshot (projects/tickets/labels/app_state) the renderer boots from. */
     bootstrap: (): Promise<BootstrapResult> => invoke("volli:data-bootstrap"),
@@ -513,6 +537,16 @@ const api = {
         ipcRenderer.removeListener("volli:shell-state" satisfies VolliIpcEvent, listener);
     },
   },
+  /** Person-only credential door. Reads return metadata, never stored values. */
+  secrets: {
+    list: (projectId?: string): Promise<SecretsResult> => invoke("volli:secrets-list", projectId),
+    submit: (input: SecretSubmitInput): Promise<Result> => invoke("volli:secret-submit", input),
+    decline: (id: string): Promise<Result> => invoke("volli:secret-decline", id),
+    revoke: (id: string): Promise<Result> => invoke("volli:secret-revoke", id),
+    replace: (input: SecretReplaceInput): Promise<Result> => invoke("volli:secret-replace", input),
+    unlock: (): Promise<CredentialsResult> => invoke("volli:secrets-unlock"),
+    reset: (): Promise<CredentialsResult> => invoke("volli:secrets-reset"),
+  },
   mcp: {
     list: (input: McpProjectInput): Promise<McpServersResult> => invoke("volli:mcp-list", input),
     test: (input: McpServerInput): Promise<McpCatalogResult> => invoke("volli:mcp-test", input),
@@ -524,11 +558,20 @@ const api = {
     setTools: (input: McpSetToolsInput): Promise<McpServerResult> =>
       invoke("volli:mcp-set-tools", input),
     remove: (input: McpServerIdInput): Promise<Result> => invoke("volli:mcp-remove", input),
+    signIn: (input: McpSignInInput): Promise<McpSignInResult> => invoke("volli:mcp-sign-in", input),
+    cancelSignIn: (input: McpServerIdInput): Promise<Result> =>
+      invoke("volli:mcp-cancel-sign-in", input),
+    signOut: (input: McpServerIdInput): Promise<Result> => invoke("volli:mcp-sign-out", input),
+    discardDraft: (input: McpServerIdInput): Promise<Result> =>
+      invoke("volli:mcp-discard-draft", input),
   },
   projects: {
     pickFolder: (): Promise<PickFolderResult> => invoke("volli:pick-project-folder"),
     syncRoots: (paths: string[]): Promise<void> => invoke("volli:sync-project-roots", paths),
-    /** Creates a project row, or (`created: false`) returns the existing one already tracked at `path`. */
+    /**
+     * Creates a project row, or (`created: false`) returns the existing one
+     * tracked at `path`, re-attaching it if it was removed (VC-822).
+     */
     create: (input: ProjectCreateInput): Promise<ProjectCreateResult> =>
       invoke("volli:project-create", input),
     /** Updates the project's pinned automation base branch and/or worktree setup command. */
@@ -560,9 +603,6 @@ const api = {
       invoke("volli:project-folder-check", { projectId }),
     /** Deletes a project; cascades its tickets/labels/events in SQLite. */
     remove: (id: string): Promise<ProjectMutationResult> => invoke("volli:project-remove", id),
-    /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
-    reorder: (orderedIds: string[]): Promise<ProjectMutationResult> =>
-      invoke("volli:project-reorder", orderedIds),
   },
   tickets: {
     create: (input: TicketCreateInput): Promise<TicketResult> =>
@@ -666,12 +706,26 @@ const api = {
     rename: (input: SessionRenameInput): Promise<SessionRenameResult> =>
       invoke("volli:session-rename", input),
     /**
-     * Stops a Session's work as the person (VC-269): the Activity Island's
-     * armed "Stop subagent". Records the stop with the `user` actor, then
-     * interrupts and releases; the row it moves arrives on `onActivity`.
+     * Marks a Session read or unread (VC-30) — `U`, the row's context menu,
+     * opening it, or answering it from a peek card.
+     *
+     * The row every window draws follows on `onActivity`: main persists the
+     * receipt and re-publishes that Session's listing row through the same
+     * broadcast the push channel uses, because this write moves no ledger fact
+     * for the activity watch to notice.
      */
-    stop: (input: SessionStopInput): Promise<SessionStopResult> =>
-      invoke("volli:session-stop", input),
+    setRead: (input: SessionReadSetInput): Promise<SessionReadSetResult> =>
+      invoke("volli:session-read-set", input),
+    /**
+     * One fold of a Session for a peek card (VC-30): its transcript tail, the
+     * question it is asking, and the counts beside them.
+     *
+     * A pull, deliberately: a peek adopts nothing and subscribes to nothing, so
+     * sweeping the pointer down a sidebar costs reads and leaves nothing to
+     * tear down. Acting on what it shows is a separate, explicit intent.
+     */
+    peekContent: (input: SessionPeekContentInput): Promise<SessionPeekContentResult> =>
+      invoke("volli:session-peek-content", input),
     /**
      * When Sessions were started, across every project, from `sinceMs` onward
      * — the Home empty chat's practice chart (VC-55). Stamps, not rows: a count
@@ -782,8 +836,8 @@ const api = {
    * called instead.
    */
   sessionRpc: {
-    /** Runs one routed procedure; `session.subscribe` acknowledges with the id its frames will carry. */
-    request: (request: SessionRpcIpcRequest): Promise<SessionRpcIpcResponse> =>
+    /** Runs one served procedure; a subscription acknowledges with the id its frames will carry. */
+    request: (request: IpcRequest): Promise<IpcResponse> =>
       invoke("volli:session-rpc" satisfies typeof SESSION_RPC_IPC_CHANNEL, request),
     /**
      * Subscribes to the frames of EVERY live subscription; returns the
@@ -791,9 +845,8 @@ const api = {
      * because the id main acknowledged with is what tells them apart, and it
      * can arrive after the first frame does.
      */
-    onEvent: (callback: (event: SessionRpcIpcEvent) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: SessionRpcIpcEvent) =>
-        callback(payload);
+    onEvent: (callback: (event: IpcEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: IpcEvent) => callback(payload);
       const channel = "volli:session-rpc-event" satisfies typeof SESSION_RPC_EVENT_CHANNEL;
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
@@ -801,6 +854,16 @@ const api = {
     /** Ends one subscription: fire-and-forget, since the frames stopping is the answer. */
     cancel: (subscriptionId: string): void => {
       send("volli:session-rpc-cancel" satisfies typeof SESSION_RPC_CANCEL_CHANNEL, subscriptionId);
+    },
+  },
+  /**
+   * The renderer's lines for main's log (VC-699): fire-and-forget. Main checks
+   * each entry, names it `renderer:<area>`, redacts it and bounds how many a
+   * window may send.
+   */
+  log: {
+    write: (entry: RendererLogEntry): void => {
+      send("volli:renderer-log", entry);
     },
   },
   /**
@@ -864,14 +927,36 @@ const api = {
     ): Promise<WebAccessResult> => invoke("volli:web-access-set-provider", provider, searxngUrl),
     /**
      * Stores one provider's key. The one outbound secret in the app after
-     * sign-in, and one-way: main encrypts it with the OS keychain and it is
-     * never read back, echoed, or put in an error string.
+     * sign-in, and one-way: it is never read back, echoed, or put in an error
+     * string. Main saves it in the profile database, in the clear (its one
+     * source of truth until VC-644), then reseals a copy (VC-643); the
+     * answer's `sealing` says whether that copy is current. Nothing here
+     * claims the key is encrypted.
      */
     setKey: (provider: KeyedWebAccessProvider, key: string): Promise<WebAccessResult> =>
       invoke("volli:web-access-set-key", provider, key),
     /** Forgets one provider's key. The provider choice, and the other key, are left alone. */
     clearKey: (provider: KeyedWebAccessProvider): Promise<WebAccessResult> =>
       invoke("volli:web-access-clear-key", provider),
+  },
+  /**
+   * Decision models (VC-478): the setting, the cloud catalog, and the
+   * connection test. Its own door beside `webAccess`; unlike that one it
+   * carries no secret and has no channel that could take one — a cloud
+   * model's key goes in through `modelAccess` sign-in.
+   */
+  decisionModel: {
+    /** The app-wide setting, the project's override when named, and the cloud catalog. */
+    get: (projectId: string | null): Promise<DecisionModelResult> =>
+      invoke("volli:decision-model-get", projectId),
+    /** Stores one scope's setting; `null` clears a project's override to inherit. */
+    set: (
+      scope: DecisionModelScope,
+      setting: DecisionModelSetting | null,
+    ): Promise<DecisionModelResult> => invoke("volli:decision-model-set", scope, setting),
+    /** Asks the given model one fixed question, end to end. */
+    test: (setting: DecisionModelSetting): Promise<DecisionModelTestResult> =>
+      invoke("volli:decision-model-test", setting),
   },
   /**
    * The opt-in agent-telemetry export switch (VC-119).
@@ -1149,6 +1234,24 @@ const api = {
     /** Upserts one `app_state` key — the async write-through the ui/workspace persist stores' storage adapter uses. */
     set: (key: string, value: string): Promise<AppStateSetResult> =>
       invoke("volli:app-state-set", key, value),
+    /**
+     * Answers main's `volli:client-state-flush` (VC-577): runs `flush` — which
+     * resolves once main has acknowledged every pending write — then acks the
+     * request, whatever the flush concluded, so main never waits on a failure
+     * the renderer has already toasted. Returns the unsubscribe function.
+     */
+    onFlushRequest: (flush: () => Promise<unknown>): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, requestId: string) => {
+        void flush()
+          .catch(() => undefined)
+          .then(() =>
+            ipcRenderer.send("volli:client-state-flushed" satisfies VolliIpcChannel, requestId),
+          );
+      };
+      ipcRenderer.on("volli:client-state-flush" satisfies VolliIpcEvent, listener);
+      return () =>
+        ipcRenderer.removeListener("volli:client-state-flush" satisfies VolliIpcEvent, listener);
+    },
   },
   /**
    * The venue a Session runs in, measured (VC-55) — its own door rather than a
@@ -1210,9 +1313,6 @@ const api = {
      */
     trimScan: (): Promise<WorktreeTrimScanResult> => invoke("volli:worktree-trim-scan"),
     trim: (): Promise<WorktreeTrimResult> => invoke("volli:worktree-trim"),
-    /** The preserved-configuration allowlist and the automatic-trim opt-out. */
-    trimSettings: (): Promise<WorktreeTrimSettingsResult> =>
-      invoke("volli:worktree-trim-settings-get"),
     setTrimSettings: (input: WorktreeTrimSettingsInput): Promise<WorktreeTrimSettingsResult> =>
       invoke("volli:worktree-trim-settings-set", input),
     /** Done flow: the finer rail status (uncommitted/sequencer/ahead-behind) for the worktree. */
@@ -1535,9 +1635,10 @@ const api = {
      * Records the mode and background this paint resolved to, so the NEXT
      * launch constructs its window with both already known. A hint, not an
      * authority: `{canvas, appearance}` stays the pair everything is derived
-     * from, and this row is overwritten on every paint.
+     * from, and this row is overwritten on every paint. The plane color
+     * (`--background`) rides along for Browser Tab planes and is not stored.
      */
-    setFirstPaint: (hint: FirstPaintHint): Promise<Result> =>
+    setFirstPaint: (hint: FirstPaintReport): Promise<Result> =>
       invoke("volli:theme-first-paint-set", hint),
     /**
      * What main resolved for THIS window before the renderer existed — the

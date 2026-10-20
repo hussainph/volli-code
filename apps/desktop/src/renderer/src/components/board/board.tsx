@@ -15,7 +15,11 @@ import {
   type DragOverEvent,
   type DragStartEvent,
   type MeasuringConfiguration,
+  KeyboardCode,
+  type KeyboardSensorOptions,
+  type PointerSensorOptions,
 } from "@dnd-kit/core";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { motion } from "motion/react";
 import {
@@ -114,6 +118,12 @@ interface DragState {
   ticketIds: string[];
   preview: Ticket[];
   hiddenAtStart: TicketStatus[];
+  /**
+   * The one column every lifted ticket already stands in, or `null` for a group
+   * drawn from several. A release there is not an arrival, so its Offered rows
+   * are drawn inert — it starts nothing whatever row the picker names.
+   */
+  originStatus: TicketStatus | null;
   /** Final slot in the preview, ready for the atomic persistence call. */
   drop: DropTarget | null;
 }
@@ -229,18 +239,34 @@ function ticketSlotElement(ticketId: string): HTMLElement | null {
  * The column under the pointer, and the picker row under it when the pointer is
  * standing on an expanded panel.
  *
- * `elementFromPoint` rather than cached rects, for the Lab rig's reason: a
+ * A live hit test rather than cached rects, for the Lab rig's reason: a
  * column list scrolls during a drag and the panel changes size when ⌥ goes
  * down, so a rect measured a frame ago is a rect for the wrong thing — and a
  * stale rect is the classic source of a drop landing one column over from where
- * it was aimed. Both facts come out of ONE read, so the hovered column and the
- * highlighted row can never disagree about where the pointer is.
+ * it was aimed. Both facts come out of ONE element, so the hovered column and
+ * the highlighted row can never disagree about where the pointer is.
+ *
+ * `elementsFromPoint` — the whole hit-test stack, topmost first — rather than
+ * `elementFromPoint`, and the first entry that sits in a column wins. Clickable
+ * chrome floats over the board by design: the armed-run countdown owns
+ * bottom-centre and must keep its Cancel live, and sonner's toasts own
+ * bottom-right. Either one under the hand used to answer "no column", so ⌥
+ * opened nothing and a drag aimed low at a column ran its default (VC-451).
+ * Anything hit-testable above a column is looked through, not only those two —
+ * which is also how dnd-kit's rect-based collision already resolves the drop,
+ * so the picker and the release agree. A modal is not looked through: Radix
+ * sets `pointer-events: none` on the body behind it, so nothing under it is in
+ * the stack. Looking through is right only mid-drag, which is the only time
+ * this runs; the chrome itself stays clickable at rest. A pure DOM read in a
+ * pointer handler — it adds no store read and no render path to the board.
  */
 function pointerLanding(
   x: number,
   y: number,
 ): { status: TicketStatus | null; target: DragPickerLanding | null } {
-  const element = document.elementFromPoint(x, y);
+  const element = document
+    .elementsFromPoint(x, y)
+    .find((hit) => hit.closest("[data-board-column]") !== null);
   const column = element?.closest<HTMLElement>("[data-board-column]");
   const status = (column?.dataset["boardColumn"] as TicketStatus | undefined) ?? null;
   const row = element?.closest<HTMLElement>(`[${OFFERED_ROW_ATTRIBUTE}]`);
@@ -378,6 +404,22 @@ function DragOverlayBody({
  * (see `TicketDialogHost`); the context menu each card must keep is the rest.
  * This is a cheap correct boundary, not the fix for either.
  */
+const POINTER_DRAG: PointerSensorOptions = { activationConstraint: { distance: 4 } };
+/** A pointer that never travels far enough: a read-only board lifts nothing. */
+const POINTER_NEVER: PointerSensorOptions = {
+  activationConstraint: { distance: Number.POSITIVE_INFINITY },
+};
+const KEYBOARD_DRAG: KeyboardSensorOptions = { coordinateGetter: sortableKeyboardCoordinates };
+/** No key starts a keyboard drag on a read-only board. */
+const KEYBOARD_NEVER: KeyboardSensorOptions = {
+  coordinateGetter: sortableKeyboardCoordinates,
+  keyboardCodes: {
+    start: [],
+    cancel: [KeyboardCode.Esc],
+    end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab],
+  },
+};
+
 export const Board = React.memo(function Board({
   projectId,
   ticketPrefix,
@@ -522,6 +564,9 @@ export const Board = React.memo(function Board({
   // pill that stands in for an EMPTY one. An empty column can be armed, so the
   // pill has to be able to grow the same picker; what a column offers is a fact
   // about the column, never about how much of it is on screen.
+  // Fixed for the whole gesture, so it is a primitive dependency rather than
+  // the drag state itself, which changes on every slot the card crosses.
+  const originStatus = drag?.originStatus ?? null;
   const offeredPanelFor = React.useCallback(
     (status: TicketStatus): ColumnOfferedPanelProps | undefined =>
       showsOfferedList(picker, status)
@@ -530,9 +575,10 @@ export const Board = React.memo(function Board({
             expanded: isPickerColumn(picker, status),
             highlighted: highlightedIndex(picker, pickerColumns, status),
             armedId: offeredByStatus.armed[status],
+            inert: status === originStatus,
           }
         : undefined,
-    [picker, pickerColumns, offeredByStatus],
+    [picker, pickerColumns, offeredByStatus, originStatus],
   );
   // One column is being aimed at, and the rest — standing or collapsed — are
   // not the question.
@@ -550,7 +596,11 @@ export const Board = React.memo(function Board({
     [aimedStatus],
   );
 
-  // Live only while a card is in the air. ⌥ is read from TWO sources for the
+  // Listen before activation, but consume input only while the synchronous
+  // picker ref says a card is in the air. Attaching from the drag-start render's
+  // passive effect loses moves and Option presses that arrive before it commits
+  // (VC-530). A stationary hand must not need a second move to recover them.
+  // ⌥ is read from TWO sources for the
   // reason the Lab rig documents: the key events alone miss a drag that STARTED
   // with ⌥ already down, and a keyup that never arrived (⌥ released while the
   // window lacked focus) would leave a column enlarged under a modifier nobody
@@ -558,8 +608,8 @@ export const Board = React.memo(function Board({
   // read from whichever event is fresher.
   const dragging = drag !== null;
   React.useEffect(() => {
-    if (!dragging) return;
     function handlePointerMove(event: PointerEvent) {
+      if (!pickerRef.current.dragging) return;
       const landing = pointerLanding(event.clientX, event.clientY);
       applyPicker({
         kind: "pointer-move",
@@ -569,6 +619,7 @@ export const Board = React.memo(function Board({
       });
     }
     function handleKey(event: KeyboardEvent) {
+      if (!pickerRef.current.dragging) return;
       if (event.key === "Alt") {
         applyPicker({ kind: "modifier", held: event.type === "keydown" });
         return;
@@ -590,7 +641,7 @@ export const Board = React.memo(function Board({
       window.removeEventListener("keydown", handleKey);
       window.removeEventListener("keyup", handleKey);
     };
-  }, [dragging, applyPicker]);
+  }, [applyPicker]);
 
   // The countdown owns bottom-centre while it is open: it has a deadline and
   // the one control, and the hint is advice. Two ephemeral surfaces on one edge
@@ -657,9 +708,15 @@ export const Board = React.memo(function Board({
   // distance: 4 keeps plain clicks (selection, context menu) working — the
   // drag only activates after pointer travel through the browser event
   // pipeline. Keyboard drags come free with the sortable coordinate getter.
+  //
+  // Read-only (VC-576): a move is a write, so no drag can start while the
+  // project's host cannot serve — the same two sensors, set never to
+  // activate (dnd-kit wants the sensor list's size fixed). Cards still open
+  // and select.
+  const canWrite = useCanWrite(projectId);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(PointerSensor, canWrite ? POINTER_DRAG : POINTER_NEVER),
+    useSensor(KeyboardSensor, canWrite ? KEYBOARD_DRAG : KEYBOARD_NEVER),
   );
 
   const tickets = drag?.preview ?? storeTickets;
@@ -895,6 +952,9 @@ export const Board = React.memo(function Board({
       ticketIds,
       preview: storeTickets,
       hiddenAtStart: hidden,
+      originStatus: selectedTickets.every((ticket) => ticket.status === activeTicket.status)
+        ? activeTicket.status
+        : null,
       drop: null,
     });
     // A drag may BEGIN with ⌥ already down, and that drag never sees a keydown.
@@ -984,6 +1044,9 @@ export const Board = React.memo(function Board({
     frozen.current = null;
     setDrag(null);
     if (drop === null) return;
+    // A drag that began before the host went away lands nowhere; the card
+    // goes back and the reason shows.
+    if (!guardWrite(projectId)) return;
 
     if (completed.ticketIds.length === 1) {
       void useBoardStore
@@ -1112,14 +1175,16 @@ export const Board = React.memo(function Board({
                 data-board-ticket-count={visible.length}
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
-                  // grab-able under them (Trello-style mouse pan). Scrollbar is
+                  // grab-able under them (mouse pan). Scrollbar is
                   // hidden — drag / shift-wheel / trackpad replace it.
                   "flex min-h-0 flex-1 items-start gap-4 overflow-x-auto px-gutter pb-4",
                   "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
                   panning ? "cursor-grabbing select-none" : "cursor-grab",
                 )}
               >
-                {boardBare ? <BoardEmpty className="min-h-0 flex-1 self-stretch" /> : null}
+                {boardBare ? (
+                  <BoardEmpty projectId={projectId} className="min-h-0 flex-1 self-stretch" />
+                ) : null}
                 {shown.map((status) => (
                   <BoardColumn
                     key={status}
@@ -1133,8 +1198,8 @@ export const Board = React.memo(function Board({
                     // column for rendering. Drag mechanics stay unchanged — a drop
                     // still writes the manual `order` (see handleDragEnd), but under
                     // a non-manual sort the displayed position is sort-driven, so the
-                    // card snaps to its sorted slot after the drop (Linear behaves the
-                    // same). "manual" remains the true drag-reorder mode.
+                    // card snaps to its sorted slot after the drop. "manual" remains
+                    // the true drag-reorder mode.
                     tickets={sortedGroups[status]}
                     projectId={projectId}
                     ticketPrefix={ticketPrefix}
@@ -1176,14 +1241,17 @@ export const Board = React.memo(function Board({
               // The lifted card is a PICTURE, never a surface: dnd-kit's own
               // wrapper is a fixed, card-sized box at `z-index: 999` that
               // follows the pointer exactly, so without this it is the topmost
-              // thing under the hand at every moment of the drag — and the
-              // picker's hit test (`pointerLanding`) reads the topmost thing
-              // under the hand. It answered "no column, no row" for any aim
-              // that ended INSIDE the lifted card's own outline, which is most
-              // of them: which aims survived depended on where the card had
-              // been grabbed. A row aimed at and not taken is the one failure
-              // this gesture cannot have, because the release then runs the
-              // column's default instead of what the hand was pointing at.
+              // thing under the hand at every moment of the drag. When the
+              // picker's hit test (`pointerLanding`) read only the topmost
+              // thing, that answered "no column, no row" for any aim that ended
+              // INSIDE the lifted card's own outline — most of them. It now
+              // looks through to the first hit inside a column (VC-451), which
+              // would skip the overlay anyway; this keeps the picture out of
+              // the hit-test stack altogether, so nothing reading it — the
+              // picker or anything later — can mistake the card for a surface.
+              // A row aimed at and not taken is the one failure this gesture
+              // cannot have: the release would run the column's default
+              // instead of what the hand was pointing at.
               className="pointer-events-none"
               dropAnimation={
                 // A picked release lands where the PICKER says, which is not

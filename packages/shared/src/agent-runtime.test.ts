@@ -8,15 +8,18 @@ import {
   REASONING_LEVELS,
   sessionToolBindings,
   sessionToolIds,
+  formatShellRuntime,
   shellCommandLine,
   shellStanding,
   UtilityCompletionError,
   type RuntimeAskRequest,
   type RuntimeBrowserPort,
   type RuntimeShellPort,
+  type RuntimeClassifyPort,
 } from "./agent-runtime";
 import type { SessionUsage } from "./session-usage";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import { codeModeSurfaceFor } from "./code-mode";
 import {
   SESSION_ESCALATION_OPTIONS,
   SESSION_ESCALATION_STOP_ID,
@@ -35,12 +38,12 @@ describe("REASONING_LEVELS", () => {
 // together does not inherit a fixture that was already contradicting itself.
 function askRequest(overrides: Partial<RuntimeAskRequest> = {}): RuntimeAskRequest {
   return {
-    cause: "path.git-internals",
+    cause: "budget.delegation-children",
     tool: "edit",
     toolCallId: "call-1",
     turnId: "turn-1",
     reason: "the sandbox refused this call",
-    trip: "consecutive",
+    trip: "budget",
     overridable: true,
     ...overrides,
   };
@@ -175,6 +178,9 @@ const browserEveryPortFixture: RuntimeBrowserPort = { ...browserHoldPortFixture,
  */
 const shellPort: RuntimeShellPort = { start: port, output: port, kill: port };
 
+/** Stands in for a wired decision port (VC-478). Presence only. */
+const classifyPort: RuntimeClassifyPort = { classify: port };
+
 /**
  * The verb port, which unlike the three above decides no membership — the
  * bundle does. Kept apart because it has a return type the others do not.
@@ -258,7 +264,7 @@ describe("sessionToolIds", () => {
       "shell_output",
       "shell_kill",
     ]);
-    expect(NON_CODING_TOOL_IDS.slice(-4, -1)).toEqual([
+    expect(NON_CODING_TOOL_IDS.slice(-7, -4)).toEqual([
       "shell_start",
       "shell_output",
       "shell_kill",
@@ -289,13 +295,31 @@ describe("sessionToolIds", () => {
       "shell_kill",
       "browser_find",
     ]);
-    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("browser_find");
+    // Followed by `classify` (VC-478) and `codemode` (VC-471), appended after it
+    // for the same reason.
+    expect(NON_CODING_TOOL_IDS.at(-4)).toBe("browser_find");
+    expect(NON_CODING_TOOL_IDS.at(-3)).toBe("classify");
+    expect(NON_CODING_TOOL_IDS.at(-2)).toBe("codemode");
+    expect(NON_CODING_TOOL_IDS.at(-1)).toBe("request_secret");
     expect(sessionToolIds({ tools: { tools: [] }, browser: browserHoldPortFixture })).not.toContain(
       "browser_find",
     );
     expect(browserFindPort(undefined)).toBeUndefined();
     expect(browserFindPort(browserPort)).toBeUndefined();
     expect(browserFindPort(browserEveryPortFixture)).toBe(browserEveryPortFixture);
+  });
+
+  it("appends classify last, exactly when the decision port is wired (VC-478)", () => {
+    // After the Browser search, so every Session frozen before decision
+    // models existed keeps every position and its Cache Prefix.
+    expect(NON_CODING_TOOL_IDS.at(-3)).toBe("classify");
+    expect(
+      sessionToolIds({ tools: { tools: [] }, classify: classifyPort, shell: shellPort }),
+    ).toEqual(["shell_start", "shell_output", "shell_kill", "classify"]);
+    expect(sessionToolIds({ tools: { tools: [] }, shell: shellPort })).not.toContain("classify");
+    expect(sessionToolBindings({ tools: { tools: [] }, classify: classifyPort })).toEqual([
+      { tool: "classify", port: classifyPort },
+    ]);
   });
 
   it("says how a shell stands in one spelling every surface shares (VC-270)", () => {
@@ -313,6 +337,21 @@ describe("sessionToolIds", () => {
     // Exited with neither: the OS told us nothing, and the text says so
     // rather than inventing a zero that would read as success.
     expect(shellStanding({ state: "exited", code: null, signal: null })).toBe("exited ?");
+  });
+
+  it("says how long a shell ran in the two units that matter (VC-495)", () => {
+    // Whole seconds under a minute; a sub-second run is `0s`, never negative
+    // when a clock steps back.
+    expect(formatShellRuntime(0)).toBe("0s");
+    expect(formatShellRuntime(900)).toBe("0s");
+    expect(formatShellRuntime(-5_000)).toBe("0s");
+    expect(formatShellRuntime(45_000)).toBe("45s");
+    // Minutes with the seconds that remain, and no `0s` tacked on.
+    expect(formatShellRuntime(60_000)).toBe("1m");
+    expect(formatShellRuntime(125_000)).toBe("2m 5s");
+    // From an hour, minutes: the seconds are noise by then.
+    expect(formatShellRuntime(3_600_000)).toBe("1h");
+    expect(formatShellRuntime(3_700_000)).toBe("1h 1m");
   });
 
   it("names a shell by the first line that says something (VC-270)", () => {
@@ -362,12 +401,29 @@ describe("sessionToolIds", () => {
     // a Snapshot built from this call cannot under-report the surface, whatever
     // the surface holds.
     const everything = sessionToolIds({
-      tools: { tools: ["read", "edit", "write", "execute"], todoWrite: true },
+      tools: {
+        tools: ["read", "edit", "write", "execute"],
+        todoWrite: true,
+        codeMode: codeModeSurfaceFor({
+          tools: sessionToolIds({
+            tools: { tools: ["read", "edit", "write", "execute"], todoWrite: true },
+            askUser: port,
+            webFetch: port,
+            webSearch: port,
+            browser: browserEveryPortFixture,
+            shell: shellPort,
+            classify: classifyPort,
+            secret: { request: async () => "still missing", redact: (text) => text },
+          }),
+        }),
+      },
       askUser: port,
       webFetch: port,
       webSearch: port,
       browser: browserEveryPortFixture,
       shell: shellPort,
+      classify: classifyPort,
+      secret: { request: async () => "still missing", redact: (text) => text },
     });
 
     for (const tool of NON_CODING_TOOL_IDS) expect(everything).toContain(tool);

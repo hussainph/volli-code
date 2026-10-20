@@ -10,8 +10,10 @@ import type { SubagentNotice } from "@volli/session-presentation";
 import {
   BrowserHoldNoticeRow,
   HostNoticeRow,
+  ShellNoticeRow,
   SubagentNoticeRow,
   UnknownHostNoticeRow,
+  WatchNoticeRow,
 } from "./host-notice-ui";
 
 const completed: SubagentNotice = {
@@ -90,6 +92,49 @@ describe("a Subagent Session notice row", () => {
   });
 });
 
+describe("a background shell notice row (VC-495)", () => {
+  const exited = {
+    kind: "background-shell",
+    event: "exited",
+    shellId: "sh-1",
+    label: "pnpm test --watch",
+    code: 1,
+    signal: null,
+    runtimeMs: 125_000,
+    byPerson: false,
+  } as const;
+  const matched = {
+    kind: "background-shell",
+    event: "matched",
+    shellId: "sh-2",
+    label: "dev server",
+    pattern: "listening on",
+    regex: false,
+  } as const;
+
+  it("draws the shell and how it ended in the transcript's quiet host register", () => {
+    const html = renderToStaticMarkup(<ShellNoticeRow notice={exited} />);
+
+    expect(html).toContain("pnpm test --watch");
+    expect(html).toContain("exited 1");
+    expect(html).toContain("Ran 2m 5s.");
+    expect(html).toContain('data-slot="separator"');
+    expect(html).not.toContain('aria-label="Copy"');
+  });
+
+  it("puts the complete label and note in the row's hover text, and says a match is a match", () => {
+    const html = renderToStaticMarkup(<ShellNoticeRow notice={matched} />);
+
+    expect(html).toContain("dev server");
+    expect(html).toContain("matched");
+    expect(html).toContain('title="dev server — matched. Printed &quot;listening on&quot;."');
+  });
+
+  it("is what the portable row model dispatches to", () => {
+    expect(renderToStaticMarkup(<HostNoticeRow notice={exited} />)).toContain("exited 1");
+  });
+});
+
 describe("other host-notice rows", () => {
   it("keeps the affected Browser Tab visible", () => {
     const html = renderToStaticMarkup(
@@ -138,5 +183,39 @@ describe("other host-notice rows", () => {
     expect(
       renderToStaticMarkup(<HostNoticeRow notice={{ kind: "unknown", text: "Future fact" }} />),
     ).toContain("Future fact");
+  });
+});
+
+describe("a watch notice row (VC-457)", () => {
+  const moved = {
+    subject: "ticket",
+    id: "t-1",
+    label: "VC-12",
+    fact: "ticket-moved",
+    detail: "Done",
+  } as const;
+
+  it("draws one change as its headline, with no second line", () => {
+    const html = renderToStaticMarkup(
+      <WatchNoticeRow notice={{ kind: "watch", events: [moved] }} />,
+    );
+    expect(html).toContain("VC-12 moved (Done)");
+    expect(html).not.toContain("<p ");
+  });
+
+  it("counts several changes and lists them underneath", () => {
+    const html = renderToStaticMarkup(
+      <HostNoticeRow
+        notice={{
+          kind: "watch",
+          events: [
+            moved,
+            { subject: "session", id: "s-1", label: "ab12cd34", fact: "stopped", detail: null },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("2 watched changes");
+    expect(html).toContain("VC-12 moved (Done) · ab12cd34 was stopped");
   });
 });

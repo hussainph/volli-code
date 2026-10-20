@@ -177,8 +177,10 @@ export interface IslandShell {
   id: string;
   command: string;
   state: "running" | "exited";
-  /** Exit code once exited. */
+  /** Exit code once exited; `null` when a signal ended it. */
   code: number | null;
+  /** The signal that ended it (VC-495), so a killed shell is not read as a clean exit. */
+  signal?: string | null;
 }
 
 /**
@@ -286,8 +288,7 @@ export interface ActivityIslandFeel {
 }
 
 /**
- * "Lively" — 0.55s / 0.25 bounce, chosen in round 3 over "Crisp" (0.35 /
- * 0.08). One spring drives everything that moves in the pill so the width
+ * A 0.55s spring with 0.25 bounce drives everything in the pill so the width
  * morph, a cluster's entrance and the drop's rise read as one material.
  */
 export const ISLAND_SPRING = { duration: 0.55, bounce: 0.25 } as const;
@@ -643,9 +644,10 @@ export function shellsHeading(shells: readonly IslandShell[]): string {
     : `Shells${FLASH_SEPARATOR}${shells.length} exited`;
 }
 
-/** `exit 137` once exited; `null` while running. */
+/** `exit 137` or `SIGTERM` once exited; `null` while running. */
 export function shellStateWord(shell: IslandShell): string | null {
-  return shell.state === "exited" ? `exit ${shell.code ?? 0}` : null;
+  if (shell.state !== "exited") return null;
+  return shell.signal ?? `exit ${shell.code ?? 0}`;
 }
 
 /* ---------------------------------------------------------------- summary */

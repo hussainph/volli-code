@@ -55,17 +55,26 @@ export function SubagentPeekDialog({
       onClose={onClose}
       returnFocus={returnFocus}
     >
-      {agent === null ? null : (
-        <SubagentConversation
-          key={agent.id}
-          sessionId={agent.id}
-          projectId={projectId}
-          ticketId={ticketId}
-          onOpenFile={onOpenFile}
-          onOpenAsTab={onOpenAsTab}
-          store={store}
-        />
-      )}
+      {(closeForNavigation) =>
+        agent === null ? null : (
+          <SubagentConversation
+            key={agent.id}
+            sessionId={agent.id}
+            projectId={projectId}
+            ticketId={ticketId}
+            onOpenFile={onOpenFile}
+            onOpenAsTab={
+              onOpenAsTab === undefined
+                ? undefined
+                : (id) => {
+                    closeForNavigation();
+                    onOpenAsTab(id);
+                  }
+            }
+            store={store}
+          />
+        )
+      }
     </SessionPeekDialog>
   );
 }

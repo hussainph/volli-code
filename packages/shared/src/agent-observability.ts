@@ -1,6 +1,9 @@
 /**
  * Metadata-only observability vocabulary for the Agent Runtime (VC-119).
  *
+ * The Agent Runtime emits almost all of it. The one exception is
+ * {@link TurnQueueEvent}, which only the Session runtime can measure (VC-455).
+ *
  * A side channel, never a participant: an {@link ObservabilitySink} may watch a
  * Session run, but nothing it does — or fails to do — can decide whether an
  * observation is persisted, whether a tool is allowed, or whether a turn
@@ -16,7 +19,7 @@
  */
 
 import type { ActivityKind } from "./session-activity";
-import { NON_CODING_TOOL_IDS, type AuthorityDenialCause } from "./authority";
+import { NON_CODING_TOOL_IDS } from "./authority";
 import type {
   CompactionReason,
   ReasoningDropCause,
@@ -112,6 +115,54 @@ export interface TurnEvent {
 }
 
 /**
+ * How long one submitted message waited before the turn it started opened
+ * (VC-455).
+ *
+ * {@link TurnEvent.durationMs} starts when the executor opens the turn, so
+ * everything in front of that — waiting behind the Session's previous message,
+ * a Session attach, the executor's own pre-turn work — was invisible. The
+ * Session runtime is the one layer that sees both ends on one clock: it
+ * receives the message into its per-Session admission queue, and it records
+ * the executor's `turn.started` fact that releases that admission. So it, not
+ * the executor, emits this.
+ *
+ * "Received" is the Session runtime receiving the Command, which is not a
+ * Receipt's `accepted` outcome, and once clients and the runtime run apart it
+ * is not the moment a person pressed send either.
+ *
+ * A separate envelope rather than a field on {@link TurnEvent} because the two
+ * are measured by different layers: the executor's reducer never sees the
+ * Command arrive, and the Session runtime never sees the executor's run id.
+ * That is also why `runId` is normally absent here — the envelope is an
+ * aggregate measurement, not a span of a specific run.
+ *
+ * Emitted only when the runtime measured it: a message that joined a turn
+ * already running, a turn replayed from recovery, or a turn nobody's admission
+ * was waiting on produces no event at all. Absent means unknown, never zero.
+ */
+export interface TurnQueueEvent {
+  kind: "turn-queue";
+  /** Message received by the Session runtime → the turn it started opened. */
+  queuedMs: number;
+  runId?: string;
+}
+
+/**
+ * The queue envelope for one measured admission, or nothing.
+ *
+ * Both readings come from one caller's clock; this function exists so the rule
+ * — a backwards clock or a non-finite reading is unmeasured, not zero — has one
+ * definition, which the Session runtime uses and the VC-441 fixture reuses.
+ */
+export function turnQueueEvent(input: {
+  receivedAt: number;
+  turnStartedAt: number;
+}): TurnQueueEvent | null {
+  const queuedMs = measuredDuration(input.turnStartedAt - input.receivedAt);
+  return queuedMs === undefined ? null : { kind: "turn-queue", queuedMs };
+}
+
+/**
  * The tools Volli is willing to name, as a closed vocabulary.
  *
  * `ActivityKind` answers "what capability class" but not "which tool" — it
@@ -167,34 +218,8 @@ export interface ToolEvent {
   outcome: "completed" | "failed";
   /** Time Pi spent executing the tool, excluding a wait for a person. */
   durationMs?: number;
-  /** Time this call was parked on an authority question, when the runtime measured it. */
-  waitDurationMs?: number;
   runId?: string;
 }
-
-/**
- * The Session's authority decided whether a call could run.
- *
- * The allowed arm is the denominator for a refusal rate. Neither arm carries
- * the model-supplied tool name or the reason prose: a refusal only carries the
- * fixed rule that made it.
- */
-export type AuthorityEvent =
-  | {
-      kind: "authority";
-      outcome: "allowed";
-      /** Time parked on a person before this decision, when the runtime measured it. */
-      waitDurationMs?: number;
-      runId?: string;
-    }
-  | {
-      kind: "authority";
-      outcome: "denied";
-      cause: AuthorityDenialCause;
-      /** Time parked on a person before this decision, when the runtime measured it. */
-      waitDurationMs?: number;
-      runId?: string;
-    };
 
 /** A context compaction that landed, or the attempt that failed to. */
 export interface CompactionEvent {
@@ -204,6 +229,17 @@ export interface CompactionEvent {
   /** Only the compacted arm measured anything. */
   tokensBefore?: number;
   tokensAfter?: number;
+  /**
+   * The reducer's first `compaction-progress` for this reason → this outcome
+   * (VC-455). Compaction is synchronous-heavy work on the same event loop as
+   * every other Session's turn, so it is worth seeing apart from the turn it
+   * sits inside. A compaction whose work threw closes its progress before its
+   * failure is recorded, so its span ends at that `finished` marker instead.
+   * Absent when no progress was seen — a `checkpoint` failure runs no work, a
+   * failure before the work started has none, and a reducer attached after the
+   * work began saw only its end.
+   */
+  durationMs?: number;
   runId?: string;
 }
 
@@ -255,8 +291,8 @@ export interface DroppedEvent {
 export type ObservabilityEvent =
   | ProviderAttemptEvent
   | TurnEvent
+  | TurnQueueEvent
   | ToolEvent
-  | AuthorityEvent
   | CompactionEvent
   | ProviderReasoningDroppedEvent
   | AttachmentEvent
@@ -290,11 +326,22 @@ export const NOOP_OBSERVABILITY_SINK: ObservabilitySink = {
 export class ObservabilityReducer {
   #turnStartedAt = new Map<string, number>();
   /**
-   * Pi's tool-call ids are local correlation only. They are used exactly long
-   * enough to subtract an approval wait from the corresponding activity, and
-   * never leave this reducer.
+   * When the first `compaction-progress` for each reason arrived. Keyed by
+   * reason because that is all a progress observation carries, and the runtime
+   * runs at most one compaction at a time.
    */
-  #authorityWaitByActivityId = new Map<string, number>();
+  #compactionStartedAt = new Map<CompactionReason, number>();
+  /**
+   * Work that ended with a `finished` progress instead of an outcome.
+   *
+   * Two runtime paths do that: Pi found nothing to compact (no outcome
+   * follows), and the work threw (the failure is recorded right after, by the
+   * caller that caught it). Only the second has an outcome to attach the span
+   * to, and it is the very next observation — so the span is offered to
+   * exactly that one and discarded by anything else, rather than being kept
+   * around for some later, unrelated failure to claim.
+   */
+  #finishedCompaction: { reason: CompactionReason; durationMs: number } | null = null;
 
   /**
    * An explicit field, not a constructor parameter property.
@@ -312,16 +359,16 @@ export class ObservabilityReducer {
   }
 
   reduce(observation: RuntimeObservation): ObservabilityEvent | null {
+    const finishedCompaction = this.#finishedCompaction;
+    this.#finishedCompaction = null;
     switch (observation.kind) {
       case "turn": {
         if (observation.state === "started") {
           this.#turnStartedAt.set(observation.turnId, this.#now());
-          this.#authorityWaitByActivityId.clear();
           return null;
         }
         const startedAt = this.#turnStartedAt.get(observation.turnId);
         this.#turnStartedAt.delete(observation.turnId);
-        this.#authorityWaitByActivityId.clear();
         // Through the same guard as every other duration: a clock that stepped
         // backwards between the two readings must not become a negative span.
         const durationMs =
@@ -339,40 +386,27 @@ export class ObservabilityReducer {
           startedAt === null || endedAt === null
             ? undefined
             : measuredDuration(endedAt - startedAt);
-        const waitDurationMs = this.#authorityWaitByActivityId.get(observation.activityId);
-        this.#authorityWaitByActivityId.delete(observation.activityId);
-        const durationMs = executionTimeExcludingWait(elapsed, waitDurationMs);
         const toolId = observedToolId(observation.descriptor.nativeToolName);
         return {
           kind: "tool",
           activityKind: observation.descriptor.kind,
           ...(toolId === undefined ? {} : { toolId }),
           outcome: observation.state,
-          ...(durationMs === undefined ? {} : { durationMs }),
-          ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
+          ...(elapsed === undefined ? {} : { durationMs: elapsed }),
         };
       }
-      case "authority": {
-        const waitDurationMs = measuredDuration(observation.waitDurationMs);
-        if (waitDurationMs !== undefined && observation.toolCallId !== undefined) {
-          this.#authorityWaitByActivityId.set(observation.toolCallId, waitDurationMs);
-        }
-        return observation.state === "allowed"
-          ? {
-              kind: "authority",
-              outcome: "allowed",
-              ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-            }
-          : {
-              kind: "authority",
-              outcome: "denied",
-              cause: observation.cause,
-              ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-            };
-      }
       case "compaction": {
+        const startedAt = this.#compactionStartedAt.get(observation.reason);
+        this.#compactionStartedAt.delete(observation.reason);
+        const durationMs =
+          startedAt !== undefined
+            ? measuredDuration(this.#now() - startedAt)
+            : finishedCompaction?.reason === observation.reason
+              ? finishedCompaction.durationMs
+              : undefined;
+        const measured = durationMs === undefined ? {} : { durationMs };
         if (observation.state === "failed") {
-          return { kind: "compaction", outcome: "failed", reason: observation.reason };
+          return { kind: "compaction", outcome: "failed", reason: observation.reason, ...measured };
         }
         return {
           kind: "compaction",
@@ -380,8 +414,26 @@ export class ObservabilityReducer {
           reason: observation.reason,
           tokensBefore: observation.tokensBefore,
           tokensAfter: observation.tokensAfter,
+          ...measured,
         };
       }
+      // Transient progress is timed, never exported: the duration rides on the
+      // compaction outcome it belongs to.
+      case "compaction-progress":
+        if (observation.state === "started") {
+          if (!this.#compactionStartedAt.has(observation.reason)) {
+            this.#compactionStartedAt.set(observation.reason, this.#now());
+          }
+        } else {
+          const startedAt = this.#compactionStartedAt.get(observation.reason);
+          this.#compactionStartedAt.delete(observation.reason);
+          const durationMs =
+            startedAt === undefined ? undefined : measuredDuration(this.#now() - startedAt);
+          if (durationMs !== undefined) {
+            this.#finishedCompaction = { reason: observation.reason, durationMs };
+          }
+        }
+        return null;
       case "attachment":
         return {
           kind: "attachment",
@@ -406,7 +458,6 @@ export class ObservabilityReducer {
         return { kind: "attention", phase: observation.state, reason: observation.reason };
       case "delta":
       case "message-settled":
-      case "compaction-progress":
       case "interaction":
         return null;
       // Usage is a Session Semantic Fact and reaches the ledger on its own
@@ -435,22 +486,4 @@ export class ObservabilityReducer {
  */
 export function measuredDuration(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-/**
- * Tool execution time with any approval wait taken back out.
- *
- * The wait is time a person spent deciding, and leaving it in would make a tool
- * that was approved slowly look like a tool that ran slowly. A wait longer than
- * the whole measured span means the two clocks disagree about a call this
- * reducer only ever saw the ends of — so the execution time is reported as
- * unmeasured rather than as a number derived from a contradiction.
- */
-function executionTimeExcludingWait(
-  elapsed: number | undefined,
-  waitDurationMs: number | undefined,
-): number | undefined {
-  if (elapsed === undefined) return undefined;
-  if (waitDurationMs === undefined) return elapsed;
-  return elapsed >= waitDurationMs ? elapsed - waitDurationMs : undefined;
 }

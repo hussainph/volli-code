@@ -48,8 +48,6 @@ describe.skipIf(process.env.PI_LIVE_SMOKE !== "1")("live Pi turn", () => {
       workspacePath: worktreePath,
       venue: "local",
       model: { providerId, modelId, reasoningLevel: "off" },
-      // No `authority`, matching the product: the point of a live smoke is the
-      // path a real Session takes, and a real Session takes the ungated one.
       brief: { text: "Smoke test: TOKEN.txt holds a single opaque token." },
       tools: { tools: ["read"] },
       observer: async (observation) => {

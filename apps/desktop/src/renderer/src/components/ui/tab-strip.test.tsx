@@ -272,7 +272,7 @@ const AFFORDANCE_WIDTH = 28;
  * a chevron takes width out of the scroller, so the scroller's `clientWidth`
  * has to be a function of how many are mounted right now rather than a fixed
  * number. Stubbing it as a constant is what let a measurement that fed itself
- * pass its own tests (VC-288 review).
+ * pass its own tests (VC-288).
  *
  * The AREA is the box that does not move — 300px of room, chevrons or not — and
  * `content` is the tabs' own width, which changes when tabs open and close.
@@ -454,8 +454,8 @@ describe("TabStrip overflow", () => {
     expect(affordance("Later")).toBeNull();
   });
 
-  /* THE TRANSITIONS, which is where the first attempt was wrong (VC-288
-     review). Every case above constructs a strip that already overflows or
+  /* THE TRANSITIONS, which is where the first attempt was wrong (VC-288).
+     Every case above constructs a strip that already overflows or
      already fits; what a person actually does is close a tab, widen a pane and
      select something — and the affordances were measured against the very box
      they shrink, so the strip could neither shed them nor keep its selected tab
@@ -594,7 +594,7 @@ describe("TabStrip overflow", () => {
   });
 
   it("shows a clipped label in full on focus, and Escape closes without moving focus", () => {
-    // VC-288 review. `aria-label` answers a screen reader; a sighted person
+    // VC-288: `aria-label` answers a screen reader; a sighted person
     // arrowing along a narrow strip was left with `Rewrite the workt…` and no
     // way to see the rest — file tabs do not even carry a `title`. The reveal
     // rides the tab itself rather than a stop of its own: a tab is already

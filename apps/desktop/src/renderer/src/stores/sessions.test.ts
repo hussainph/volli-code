@@ -889,7 +889,7 @@ describe("findTabBySessionId", () => {
 describe("findTerminalPlacement", () => {
   /**
    * Where a notification click has to go when the Session it names is a
-   * TERMINAL (VC-295 round 2). A harness that reports "waiting on a human" is
+   * TERMINAL (VC-295). A harness that reports "waiting on a human" is
    * waiting in a pane, and a pane is three facts — which container, which tab,
    * which leaf — none of which a Session id carries on its own.
    */

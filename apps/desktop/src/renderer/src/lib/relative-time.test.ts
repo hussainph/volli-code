@@ -16,6 +16,15 @@ describe("relativeTime", () => {
     expect(relativeTime(NOW + 5 * MINUTE, NOW)).toBe("just now");
   });
 
+  it("opens the minute rung at one minute, never at zero", () => {
+    expect(relativeTime(NOW - 44 * SECOND, NOW)).toBe("just now");
+    expect(relativeTime(NOW - 45 * SECOND, NOW)).toBe("1m ago");
+    expect(relativeTime(NOW - 59 * SECOND, NOW)).toBe("1m ago");
+    expect(relativeTime(NOW - 60 * SECOND, NOW)).toBe("1m ago");
+    expect(relativeTime(NOW - 119 * SECOND, NOW)).toBe("1m ago");
+    expect(relativeTime(NOW - 120 * SECOND, NOW)).toBe("2m ago");
+  });
+
   it("counts minutes, hours, days, and weeks", () => {
     expect(relativeTime(NOW - 5 * MINUTE, NOW)).toBe("5m ago");
     expect(relativeTime(NOW - 3 * HOUR, NOW)).toBe("3h ago");
@@ -42,6 +51,10 @@ describe("compactAge", () => {
     expect(compactAge(NOW, NOW)).toBe("now");
     expect(compactAge(NOW - 30 * SECOND, NOW)).toBe("now");
     expect(compactAge(NOW + 5 * MINUTE, NOW)).toBe("now");
+  });
+
+  it("inherits the minute rung's first word", () => {
+    expect(compactAge(NOW - 45 * SECOND, NOW)).toBe("1m");
   });
 
   it("drops the trailing ' ago' from every relative answer", () => {
@@ -81,7 +94,14 @@ describe("nextAgeChangeAt", () => {
   it("closes the 'just now' bucket at 45 seconds, a future stamp included", () => {
     expect(nextAgeChangeAt(NOW, NOW)).toBe(NOW + 45 * SECOND);
     expect(nextAgeChangeAt(NOW, NOW - 5 * MINUTE)).toBe(NOW + 45 * SECOND);
-    expect(straddle(NOW - 30 * SECOND, NOW)).toEqual(["now", "0m"]);
+    expect(straddle(NOW - 30 * SECOND, NOW)).toEqual(["now", "1m"]);
+  });
+
+  it("is unchanged by the minute rung's wording: the 45s bucket still closes at 60s", () => {
+    expect(nextAgeChangeAt(NOW - 45 * SECOND, NOW)).toBe(NOW - 45 * SECOND + MINUTE);
+    expect(nextAgeChangeAt(NOW - 59 * SECOND, NOW)).toBe(NOW - 59 * SECOND + MINUTE);
+    // And the rung after it: the words changed, the buckets did not.
+    expect(nextAgeChangeAt(NOW - 60 * SECOND, NOW)).toBe(NOW - 60 * SECOND + 2 * MINUTE);
   });
 
   it("closes every later bucket on its own unit", () => {

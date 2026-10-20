@@ -1,0 +1,83 @@
+---
+/**
+ * A World (BRAND.md §7.1): the frame every picture on the site floats in.
+ *
+ * The light is a real Volli canvas painted by the app's own engine at build
+ * time (`src/data/worlds.ts`): its `--canvas` background drifting slowly, the
+ * authored stops as larger pools of light on their own orbits, and a bloom of
+ * the primary behind the subject. The drift is CSS only and stops under
+ * reduced motion; nothing here needs JavaScript.
+ *
+ * `shader` opts a world into a living, WebGL light (`WorldShader.tsx`): an
+ * island over the same paint that fades in once its first frame is up and
+ * falls back to this static world wherever it cannot run.
+ */
+import { paintWorld, shaderPalette, type WorldName } from "../data/worlds";
+import WorldShader, { type WorldShaderVariant } from "./WorldShader";
+
+interface Props {
+  world: WorldName;
+  /** Where the bloom sits, as fractions of the frame. */
+  focus?: readonly [number, number];
+  class?: string;
+  as?: "div" | "section" | "figure";
+  id?: string;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
+  /** Opt in to an animated shader background. Unset: the static world. */
+  shader?: WorldShaderVariant;
+  /** Multiplies the shader's tuned pace. */
+  shaderSpeed?: number;
+  /** Rise into place once when first on screen, this many steps behind its row. */
+  reveal?: number;
+}
+
+const {
+  world,
+  focus = [0.62, 0.5],
+  class: className,
+  as: Tag = "div",
+  id,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledby,
+  shader,
+  shaderSpeed,
+  reveal,
+}: Props = Astro.props;
+const painted = paintWorld(world);
+const [fx, fy] = focus;
+---
+
+<Tag
+  class:list={["world", className]}
+  data-world={world}
+  id={id}
+  aria-label={ariaLabel}
+  aria-labelledby={ariaLabelledby}
+  data-reveal={reveal === undefined ? undefined : ""}
+  style={`--world-bloom: ${painted.bloom}; --world-fx: ${fx * 100}%; --world-fy: ${fy * 100}%;${reveal === undefined ? "" : ` --stagger: ${reveal};`}`}
+>
+  <div class="world-light" aria-hidden="true">
+    <div class="world-canvas" style={`background: ${painted.background};`}></div>
+    {
+      painted.pools.map((pool, index) => (
+        <div
+          class="world-pool"
+          style={`--pool: ${pool.hex}; --px: ${pool.x * 100}%; --py: ${pool.y * 100}%; --pool-alpha: ${pool.primary ? 0.62 : 0.46}; --pool-delay: ${index * -9}s;`}
+        />
+      ))
+    }
+    {
+      shader && (
+        <WorldShader
+          client:visible={{ rootMargin: "300px" }}
+          palette={shaderPalette(world)}
+          variant={shader}
+          speed={shaderSpeed}
+        />
+      )
+    }
+    <div class="world-bloom"></div>
+  </div>
+  <slot />
+</Tag>

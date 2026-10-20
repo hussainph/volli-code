@@ -126,7 +126,8 @@ export async function materializeFileArguments(
   invocation: CliInvocation,
   readText: ReadTextFile,
 ): Promise<CliInvocation> {
-  const path = invocation.args["bodyFile"] ?? invocation.args["file"];
+  const path =
+    invocation.args["bodyFile"] ?? invocation.args["appendFile"] ?? invocation.args["file"];
   if (typeof path !== "string") return invocation;
 
   let text: string;
@@ -138,10 +139,14 @@ export async function materializeFileArguments(
 
   const args = { ...invocation.args };
   delete args["bodyFile"];
+  delete args["appendFile"];
   delete args["file"];
   if (invocation.command === "ticket.create") args["body"] = text;
   else if (invocation.command === "ticket.update") {
-    args["bodyMutation"] = { mode: "replace", body: text };
+    args["bodyMutation"] =
+      invocation.args["appendFile"] === undefined
+        ? { mode: "replace", body: text }
+        : { mode: "append", text };
   } else if (invocation.command === "ticket.comment") args["message"] = text;
   return { ...invocation, args };
 }

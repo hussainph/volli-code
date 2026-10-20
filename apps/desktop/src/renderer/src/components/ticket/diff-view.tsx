@@ -44,6 +44,7 @@ import { toastError } from "@renderer/lib/toast";
 import { useUiStore } from "@renderer/stores/ui";
 
 import type { editor } from "monaco-editor";
+import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 type MonacoLease = DocumentLease<editor.ITextModel, editor.ICodeEditorViewState>;
 
@@ -95,7 +96,7 @@ export interface DiffViewProps {
  * One Change Set diff tab. Mount with `key={relPath}` so path switches remount.
  * Does not steal focus on open (decision #48) — never calls editor.focus().
  */
-export function DiffView({
+function LocalDiffView({
   projectId,
   ticket,
   relPath,
@@ -635,5 +636,19 @@ export function DiffView({
         onInitFailed={handleEditorInitFailed}
       />
     </div>
+  );
+}
+
+/**
+ * A Change Set diff tab, for one of This Mac's projects only: it reads, watches and
+ * writes this Mac's checkout through `window.api`. A remote project's tab
+ * (one restored from a saved layout, say) says where it is not available
+ * instead, and never mounts the view (VC-711).
+ */
+export function DiffView(props: DiffViewProps) {
+  return (
+    <LocalOnly projectId={props.projectId}>
+      <LocalDiffView {...props} />
+    </LocalOnly>
   );
 }

@@ -1,34 +1,41 @@
 /** The singular, Node-hostable Agent Runtime backed by Pi core. */
 
+import { safeStopMessage } from "./safe-diagnostic";
+
+import { ProviderStopCapture, finalStopDetail, safeProviderMessage } from "./provider-stop";
+import { decodeSessionStopDetail, type SessionStopDetail } from "@volli/shared";
+
 import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
   convertToLlm,
   DEFAULT_COMPACTION_SETTINGS,
+  type CompactionSettings,
+} from "./harness-compaction";
+import {
+  type AgentEvent,
   type AgentMessage,
   type AgentOptions,
-  type Branch,
-  type CompactionSettings,
-  type HarnessEvent,
-  type CustomEntry,
-  type Entry,
-  type JsonValue,
-  type MessageEntry,
-  type Session,
   type StreamFn,
 } from "@earendil-works/pi-agent-core";
 import {
-  Agent,
-  JsonlSessionRepo,
-  NodeExecutionEnv,
-  type ExecutionEnv,
-} from "@earendil-works/pi-agent-core/node";
+  type Branch,
+  type CustomEntry,
+  type Entry,
+  type MessageEntry,
+  type Session,
+} from "./harness-session";
+import { type JsonValue } from "@earendil-works/chord";
+import { Agent } from "@earendil-works/pi-agent-core";
+import { JsonlSessionRepo } from "./harness-session";
+import { NodeExecutionEnv, type ExecutionEnv } from "./harness-env";
 import {
   getSupportedThinkingLevels,
   type AssistantMessage,
   type CredentialStore,
   type Models,
+  type ToolResultMessage,
   type UserMessage,
 } from "@earendil-works/pi-ai";
 import {
@@ -38,6 +45,10 @@ import {
   DEFAULT_COMPACTION_POLICY,
   errorMessage,
   isActivityKind,
+  isMcpToolId,
+  isCodeCallable,
+  isDeclaredRoute,
+  routeOf,
   isPromptResource,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
@@ -46,7 +57,6 @@ import {
   SESSION_USAGE_CAUSES,
   UtilityCompletionError,
   type AgentRuntime,
-  type AuthoritySnapshot,
   type CompactionObservation,
   type CompactionPolicy,
   type CompactionWorkReason,
@@ -58,6 +68,7 @@ import {
   type ProviderReasoningDroppedObservation,
   type ReasoningDropCause,
   type RuntimeAttachmentHandle,
+  type RuntimeContextCarry,
   type RuntimeActivityObservation,
   type RuntimeActivityValue,
   type RuntimeFailure,
@@ -71,7 +82,6 @@ import {
   type UtilityCompletion,
   type UtilityCompletionResult,
 } from "@volli/shared";
-import { authorityVerdict } from "../authority/gate";
 import { composeFirstUserMessage, composeSystemPrompt } from "../prompt";
 import { mapPiActivity } from "./activity";
 import {
@@ -88,14 +98,19 @@ import {
 import { createContextTokenProjector } from "./token-counting";
 import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
+  canAnnounceToolRefresh,
+  toolRefreshId,
+  toolRefreshMessage,
+} from "./tool-refresh-announcements";
+import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
   providerCompactionFromDetails,
   projectOpenAICompaction,
   projectAnthropicCompaction,
+  readProviderCompaction,
   type NativeRequestObservation,
 } from "./provider-compaction";
-import { AuthorityEscalation } from "./escalation";
 import { piExecutionEnv } from "./execution-env";
 import {
   inspectPiModelAccess,
@@ -108,7 +123,6 @@ import { piOwnedModelAccess } from "./models";
 import {
   instrumentStreamFn,
   providerErrorClassForStatus,
-  recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
 import { failureResetsAt } from "./quota-reset";
@@ -121,8 +135,23 @@ import { providerImageGuard, withProviderSafeImages } from "./provider-images";
 import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
-import { createSessionTools } from "./tools";
-import { applyToolDispatch, SEQUENTIAL_TOOL_DISPATCH, type ToolDispatch } from "./tool-dispatch";
+import { createSessionTools, type CodeModeBuilder } from "./tools";
+import { retainOmitted, sameToolSpec } from "./refresh-tools";
+import { privateSecretExecution } from "./secrets";
+import { CodeModeJournal } from "../codemode/journal";
+import {
+  createCodeModeTool,
+  type CodeModeSandboxAssets,
+  type NestedToolEvent,
+  type SurfaceTool,
+} from "../codemode/tool";
+import {
+  savedOutputDirectoriesIn,
+  ToolOutputLedger,
+  ToolOutputStore,
+  toolOutputDirectoryFor,
+} from "./tool-output";
+import { applyToolDispatch } from "./tool-dispatch";
 import {
   assistantUsage,
   attentionReasonFor,
@@ -131,7 +160,6 @@ import {
   isUnreachedAuthFailure,
   recoveryRefFor,
   retryHintMs,
-  sanitizeDiagnostic,
   sessionUsageFrom,
 } from "./transcript";
 import { ALWAYS_ONLINE, type ConnectivityPort } from "./connectivity";
@@ -187,20 +215,12 @@ function withOpenCodeGoSessionHeader(
  * rather than a divergence nobody notices. The list is also what validates a
  * persisted marker on recovery.
  *
- * Pi 0.85.0 deleted the named `CompactionReason` type. The three words did not
- * change — they are still `manual`, `threshold` and `overflow` — but they now
- * exist only as an inline union inside the harness event payloads, so the type
- * has to be recovered from one of those rather than imported by name. Doing it
- * this way rather than restating the union keeps the check honest: it still
- * fails to compile if Pi ever drops or renames one of the three.
- *
- * The check is one-directional now, and deliberately. Volli names a fourth
- * reason — `checkpoint`, a provider-native checkpoint this Session can no
- * longer use — that Pi has no producer for and no word for, so the assertion
- * is that each of PI's reasons is still one of VOLLI's rather than that the
- * two lists are equal.
+ * Pi 1.0 removed the harness event types. These are now Volli-owned legacy
+ * sidecar reasons, not an upstream event contract. Keep their three spellings
+ * for existing observations. Volli also names `checkpoint`, a provider-native
+ * checkpoint this Session can no longer use, so the assertion stays one-way.
  */
-type PiCompactionReason = Extract<HarnessEvent, { type: "compaction_start" }>["reason"];
+type PiCompactionReason = "manual" | "threshold" | "overflow";
 const PI_COMPACTION_REASONS = [
   "manual",
   "threshold",
@@ -211,6 +231,11 @@ const COMPACTION_WORK_REASON_VALUES: readonly CompactionWorkReason[] = PI_COMPAC
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
   sessionDataDir: string;
+  /** Code Mode transcript pictures use the host's bounded screenshot store. */
+  persistActivityImage?: (
+    sessionId: string,
+    image: { data: string; mimeType: string },
+  ) => string | null;
   /**
    * The Pi model collection this host runs on.
    *
@@ -311,12 +336,35 @@ export interface PiRuntimeHostOptions {
     holder?: UsageLimitsHolder;
     fetch: UsageProbeFetch;
   };
+  /**
+   * Whether a Session's frozen, host-authored parallel-read marks may take
+   * effect (VC-454). Developer-only for now, and off unless a host says
+   * otherwise: absent, every Session dispatches its tool batches one call at a
+   * time whatever its record holds, which makes this the kill switch for
+   * Sessions already born with marks. On, a Session runs Pi's parallel mode
+   * only if its own MCP definitions carry the mark — see `tool-dispatch.ts`.
+   */
+  parallelMcpReads?: boolean;
+  /**
+   * Where Code Mode's sandbox finds its worker and its WebAssembly when this
+   * package runs bundled (VC-471). Absent, the sandbox resolves both from its
+   * own installed package, which is right for tests and for any host that
+   * runs this package from `node_modules`.
+   *
+   * This decides nothing about WHETHER a Session has Code Mode: that is the
+   * Session's frozen record, and every runtime can bind it.
+   */
+  codeModeSandbox?: CodeModeSandboxAssets;
 }
 
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
-  toolDispatch: ToolDispatch;
+  persistActivityImage: PiRuntimeHostOptions["persistActivityImage"];
+  /** One bound across every attachment's saved tool output (VC-469). */
+  toolOutputLedger: ToolOutputLedger;
+  parallelMcpReads: boolean;
+  codeModeSandbox: CodeModeSandboxAssets | undefined;
   models: Models;
   credentials: CredentialStore | null;
   catalogReady: Promise<void>;
@@ -359,41 +407,22 @@ function resolveModelAccess(options: PiRuntimeHostOptions): PiModelAccessSource 
 }
 
 /**
- * Build the one production structured executor port. Every Session it attaches
- * dispatches a model-issued tool batch sequentially.
- */
-export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
-  return createPiAgentRuntimeWithToolDispatch(options, SEQUENTIAL_TOOL_DISPATCH);
-}
-
-/**
- * Test-only opt-in (VC-444): the same runtime with a fixture-chosen
- * {@link ToolDispatch}. Parallel dispatch is never a bare flag — only MCP tools
- * whose exact `serverId:toolName` is on the fixture's allowlist may overlap,
- * and every built-in or unlisted tool is marked sequential, so a batch that
- * mixes them runs serially. Deliberately absent from `src/index.ts` and every
- * `package.json#exports` entry; a runtime test pins that.
- */
-export function createPiAgentRuntimeForFixture(
-  options: PiRuntimeHostOptions,
-  toolDispatch: ToolDispatch,
-): AgentRuntime {
-  return createPiAgentRuntimeWithToolDispatch(options, toolDispatch);
-}
-
-/**
  * Build the one structured executor port. The models are resolved once rather
  * than per attachment: the credential store behind them serializes this
  * process's writes to Pi's `auth.json`, and a fresh store per attach would not.
+ *
+ * Every Session it attaches dispatches a model-issued tool batch sequentially,
+ * unless {@link PiRuntimeHostOptions.parallelMcpReads} is on AND that Session's
+ * own frozen MCP definitions carry host-authored parallel-read marks.
  */
-function createPiAgentRuntimeWithToolDispatch(
-  options: PiRuntimeHostOptions,
-  toolDispatch: ToolDispatch,
-): AgentRuntime {
+export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntime {
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
-    toolDispatch,
+    persistActivityImage: options.persistActivityImage,
+    toolOutputLedger: new ToolOutputLedger({ dataDirectory: options.sessionDataDir }),
+    parallelMcpReads: options.parallelMcpReads === true,
+    codeModeSandbox: options.codeModeSandbox,
     models: access.models,
     credentials: access.credentials,
     catalogReady: access.catalogReady ?? Promise.resolve(),
@@ -527,6 +556,7 @@ async function runUtilityCompletion(
       // default-level request. Every other level passes through verbatim.
       ...(input.model.reasoningLevel === "off" ? {} : { reasoning: input.model.reasoningLevel }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
+      ...(input.maxOutputTokens === undefined ? {} : { maxTokens: input.maxOutputTokens }),
       // OpenCode Go requires one opaque routing identity on every physical
       // provider request. A utility completion has no attachment or sidecar
       // whose id can supply it, and it makes exactly one request, so mint one
@@ -549,7 +579,7 @@ async function runUtilityCompletion(
   );
   if (hasFailedStopReason(message)) {
     throw new UtilityCompletionError(
-      sanitizeDiagnostic(message.errorMessage ?? "The utility completion failed."),
+      safeStopMessage(message.errorMessage ?? "The utility completion failed."),
       usage,
     );
   }
@@ -795,6 +825,255 @@ function reasoningElisionRecordedAfter(
 }
 
 /**
+ * The context marker a fresh attachment writes when it continues an earlier
+ * one's conversation (VC-457). Its entries are that conversation from the
+ * newest PORTABLE compaction on (see {@link carriedConversation}), reasoning
+ * dropped and bounded in size — so the marker is the whole of what the new
+ * sidecar needs and the old one is never read again. A carry of a carry holds
+ * the earlier marker's entries expanded, never the marker itself, so repeated
+ * reattaches flatten rather than nest.
+ */
+interface ContextCarriedMarker {
+  kind: "context-carried";
+  fromAttachmentId: string;
+  entries: JsonValue;
+}
+
+const CARRIED_ENTRY_TYPES: ReadonlySet<string> = new Set([
+  "message",
+  "compaction",
+  "branch_summary",
+]);
+
+/**
+ * Every saved-output path the MCP results in `entries` recorded, carried
+ * conversations included (VC-469). A result's `details.output` is Volli's own
+ * record of where its whole text went; anything else is ignored, and what is
+ * found is checked again against the data directory before it grants a read.
+ */
+function savedOutputPathsIn(entries: readonly Entry[]): unknown[] {
+  return entries.flatMap((entry): unknown[] => {
+    // A carried conversation holds messages and summaries, never another
+    // marker: a chain is flattened as it is carried, so one level is all there is.
+    if (entry.type === "custom") return savedOutputPathsIn(carriedEntriesOf(entry) ?? []);
+    if (entry.type !== "message" || entry.message.role !== "toolResult") return [];
+    if (!isMcpToolId(entry.message.toolName)) return [];
+    // `details` is JSON on a recorded result, and an MCP result's is an object.
+    const output = (entry.message.details as Record<string, unknown> | undefined)?.["output"];
+    return [isRecord(output) ? output["fullOutputPath"] : undefined];
+  });
+}
+
+/** The entries a `context-carried` marker holds, or undefined for any other entry. */
+function carriedEntriesOf(entry: CustomEntry): readonly Entry[] | undefined {
+  if (entry.customType !== VOLLI_CONTEXT_MARKER) return undefined;
+  const data = entry.data;
+  if (!isRecord(data) || data["kind"] !== "context-carried") return undefined;
+  const entries = data["entries"];
+  // A marker that no longer validates carries nothing rather than failing the
+  // Session: the conversation it held is lost to the model, which is what a
+  // fresh attachment was anyway, and never worse.
+  if (!Array.isArray(entries)) return [];
+  return (entries as readonly unknown[]).filter(
+    (candidate): candidate is Entry =>
+      isRecord(candidate) &&
+      typeof candidate["type"] === "string" &&
+      CARRIED_ENTRY_TYPES.has(candidate["type"]) &&
+      typeof candidate["id"] === "string",
+  );
+}
+
+/**
+ * The most a carry copies into a new sidecar, in serialized characters.
+ *
+ * Far above any provider's context window (a million-token window is roughly
+ * four million characters of prose only for the densest text, and a live
+ * request compacts long before it), so a conversation that fits a model is
+ * carried whole. What it bounds is the pathological case: an uncompacted
+ * transcript heavy with tool output or images, re-copied on every reattach.
+ * Past it the OLDEST turns are left out, at a user-turn boundary, and the
+ * model is told so.
+ */
+export const CONTEXT_CARRY_MAX_CHARS = 1_500_000;
+
+/**
+ * The share of the ATTACHING model's context window a carry may fill, as
+ * that model estimates it.
+ *
+ * The character bound above protects the sidecar; this one protects the first
+ * turn. A carry sized for the model that wrote it can be far past what the
+ * model now attaching accepts (a 1M-window Session resumed on a 128k one), and
+ * the proactive compaction that would otherwise rescue it summarises over the
+ * oversized history itself — so a carry that does not fit is a first turn
+ * that may never be sendable. Half the window leaves the other half for the
+ * system prompt, the tool schemas, the new message and the reply, and keeps
+ * the carried conversation under the compaction threshold so the Session
+ * compacts normally from there.
+ */
+export const CONTEXT_CARRY_WINDOW_SHARE = 0.5;
+
+/** How a carry is priced against the attaching model; absent when its window is unknown. */
+interface CarryTokenBudget {
+  tokens: number;
+  tokensOf: (entry: Entry) => number;
+}
+
+/**
+ * An earlier attachment's conversation, read the way that attachment would
+ * have replayed it, ready to be carried into a fresh one.
+ *
+ * The same three reads a resume makes — acceptance markers become user
+ * messages, a settled reply history disagrees about is withheld, recorded
+ * reasoning drops are applied. Then four things only a carry needs:
+ *
+ * - **Cut at the newest PORTABLE compaction**, not the newest compaction. A
+ *   provider-native checkpoint is opaque state bound to one model and route;
+ *   when the new attachment cannot replay it, `compactionPathForModel` drops it
+ *   and rebuilds from the history it replaced — which a resume still has on
+ *   disk, and a carry must therefore still hold. A prose summary is portable to
+ *   any model, so everything before one is safely left behind.
+ * - **Reasoning dropped** from all of it: a fresh attachment is a new request
+ *   chain, and "every thinking block before some point" is the one removal
+ *   every provider accepts.
+ * - **Bounded**, oldest turns first, by {@link CONTEXT_CARRY_MAX_CHARS} and by
+ *   {@link CONTEXT_CARRY_WINDOW_SHARE} of the attaching model's window, so the
+ *   first turn after a reattach is one that model can accept.
+ * - **No orphaned tool results.** A withheld reply takes its tool calls with
+ *   it, and a result whose call is not in the carried history is one no
+ *   provider accepts.
+ */
+function carriedConversation(
+  entries: readonly Entry[],
+  budget: CarryTokenBudget | undefined,
+): Entry[] {
+  const markers = entries
+    .filter((entry): entry is CustomEntry => entry.type === "custom")
+    .map(recoveredObservation)
+    .filter((marker): marker is NonNullable<typeof marker> => marker !== null);
+  const settledMarkers = new Map<string, number>();
+  for (const marker of markers) {
+    if (marker.kind !== "message-settled") continue;
+    settledMarkers.set(
+      marker.message.entryId,
+      (settledMarkers.get(marker.message.entryId) ?? 0) + 1,
+    );
+  }
+  const settled = new Set(
+    entries.flatMap((entry) =>
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      classifyAssistantMessage(entry.id, entry.message as AssistantMessage).kind === "settled"
+        ? [entry.id]
+        : [],
+    ),
+  );
+  const withheld = new Set([
+    ...[...settled].filter((entryId) => settledMarkers.get(entryId) !== 1),
+    ...[...settledMarkers.keys()].filter((entryId) => !settled.has(entryId)),
+  ]);
+  const reader: ConversationReader = {
+    acceptedMessage: (entry) => {
+      const marker = recoveredObservation(entry);
+      return marker !== null &&
+        marker.kind === "command-accepted" &&
+        marker.operation === "message.submit"
+        ? marker.message
+        : undefined;
+    },
+    replayable: (entry) => recoverableMessage(entry) && !withheld.has(entry.id),
+    carriedEntries: carriedEntriesOf,
+  };
+  const path = conversationPath(withDroppedReasoning(entries), reader);
+  const portable = path.findLastIndex(
+    (entry) =>
+      entry.type === "compaction" && readProviderCompaction(entry.details).kind === "absent",
+  );
+  const carried: Entry[] = [];
+  for (const entry of portable < 0 ? path : path.slice(portable)) {
+    carried.push(
+      entry.type === "message"
+        ? Object.assign({}, entry, { message: withoutReasoning(entry.message) })
+        : entry,
+    );
+  }
+  return withoutOrphanedToolResults(boundedCarry(carried, budget));
+}
+
+/** The attaching model's share for a carry, priced as that model estimates it. */
+function carryTokenBudget(
+  model: Parameters<typeof estimatedContextTokens>[1],
+): CarryTokenBudget | undefined {
+  const window = contextWindowOf(model);
+  if (window === undefined) return undefined;
+  return {
+    tokens: Math.floor(window * CONTEXT_CARRY_WINDOW_SHARE),
+    tokensOf: (entry) => estimatedContextTokens(contextMessages([entry]), model),
+  };
+}
+
+/**
+ * The oldest turns left out until the carry fits both bounds — the sidecar's
+ * characters and the attaching model's window — cut where a user turn begins.
+ */
+function boundedCarry(entries: readonly Entry[], budget: CarryTokenBudget | undefined): Entry[] {
+  const chars = entries.map((entry) => JSON.stringify(entry).length);
+  const tokens = entries.map((entry) => budget?.tokensOf(entry) ?? 0);
+  let totalChars = chars.reduce((sum, size) => sum + size, 0);
+  let totalTokens = tokens.reduce((sum, size) => sum + size, 0);
+  const over = (): boolean =>
+    totalChars > CONTEXT_CARRY_MAX_CHARS || (budget !== undefined && totalTokens > budget.tokens);
+  if (!over()) return [...entries];
+  let start = 0;
+  while (start < entries.length && over()) {
+    totalChars -= chars[start]!;
+    totalTokens -= tokens[start]!;
+    start += 1;
+  }
+  // Begin a whole turn: a user message (or a summary, which stands in for
+  // turns), so no reply or tool result is carried without what prompted it.
+  while (start < entries.length && !beginsTurn(entries[start]!)) start += 1;
+  const omitted = start;
+  const note: Entry = {
+    type: "message",
+    id: `volli-carry-omitted-${omitted}`,
+    parentId: null,
+    seq: 0,
+    timestamp: 0,
+    message: {
+      role: "user",
+      content: `[Volli: the ${omitted} oldest entries of this Session's earlier conversation were too large to carry into this attachment and were left out. The Session's transcript in the app still has them; this notice is from Volli, not your user.]`,
+      timestamp: 0,
+    },
+  };
+  return [note, ...entries.slice(start)];
+}
+
+function beginsTurn(entry: Entry): boolean {
+  return entry.type === "compaction" || (entry.type === "message" && entry.message.role === "user");
+}
+
+/** Tool results whose call is carried; the rest would be refused by every provider. */
+function withoutOrphanedToolResults(entries: readonly Entry[]): Entry[] {
+  const calls = new Set<string>();
+  const collect = (message: AgentMessage): void => {
+    if (message.role !== "assistant") return;
+    for (const block of (message as AssistantMessage).content) {
+      if (block.type === "toolCall") calls.add(block.id);
+    }
+  };
+  for (const entry of entries) {
+    if (entry.type === "message") collect(entry.message);
+    if (entry.type === "compaction") entry.retainedTail.forEach(collect);
+  }
+  return entries.filter(
+    (entry) =>
+      entry.type !== "message" ||
+      entry.message.role !== "toolResult" ||
+      calls.has((entry.message as ToolResultMessage).toolCallId),
+  );
+}
+
+/**
  * The observations a restart can be told about again.
  *
  * {@link CompactionObservation} joins them, and the case for it is not that the
@@ -893,7 +1172,8 @@ function isRecoverableObservation(value: unknown): boolean {
     case "turn":
       return (
         isOneOf(value["state"], ["started", "completed", "interrupted"]) &&
-        typeof value["turnId"] === "string"
+        typeof value["turnId"] === "string" &&
+        validStopDetail(value["stopDetail"])
       );
     case "message-settled":
       return typeof value["turnId"] === "string" && isSettledMessage(value["message"]);
@@ -953,7 +1233,8 @@ function isRecoverableObservation(value: unknown): boolean {
           "transport",
         ]) &&
         typeof value["message"] === "string" &&
-        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"]))
+        (value["resetsAt"] === undefined || wholeNumber(value["resetsAt"])) &&
+        validStopDetail(value["stopDetail"])
       );
     case "command-accepted":
       if (typeof value["commandId"] !== "string" || typeof value["turnId"] !== "string") {
@@ -1151,6 +1432,53 @@ async function assertOwnedRecoveryPath(root: string, candidate: string): Promise
 }
 
 /**
+ * Read the conversation an earlier attachment's sidecar holds (VC-457).
+ *
+ * The same guards a resume applies before it touches a sidecar — listed under
+ * the workspace it ran in, owned by this runtime's data directory, identity
+ * naming THIS Session and the attachment that wrote it — because a carry is a
+ * read of another file into this Session's context, and "cannot tell whose
+ * this is" must never resolve to "then it is yours". Opened, read, and closed:
+ * the earlier sidecar is never written.
+ */
+async function readCarriedConversation(
+  sidecars: JsonlSessionRepo,
+  sessionDataDir: string,
+  carry: RuntimeContextCarry,
+  expected: SidecarIdentity,
+  budget: CarryTokenBudget | undefined,
+  context: Context,
+): Promise<{
+  entries: Entry[];
+}> {
+  // No legacy-sidecar migration here, unlike a resume: a closed attachment's
+  // sidecar was migrated by the attach that last opened it, or predates this
+  // build's whole Pi line and is not worth reopening a conversation from.
+  const candidates = (await sidecars.list({ cwd: carry.workspacePath }, context)).filter(
+    (candidate) => candidate.id === carry.sessionId,
+  );
+  const candidate = candidates.length === 1 ? candidates[0]! : undefined;
+  if (candidate === undefined || resolve(candidate.path) !== resolve(carry.sessionFilePath)) {
+    throw new Error("the earlier attachment's Pi sidecar is not where its record says.");
+  }
+  await assertOwnedRecoveryPath(sessionDataDir, candidate.path);
+  const opened = await sidecars.open(candidate, context);
+  try {
+    await assertSidecarIdentity(opened, expected, context);
+    const branch = await sidecarBranch(opened, context);
+    const entries = await branch.findEntries({ order: "oldestFirst" }, context);
+    return {
+      entries: carriedConversation(entries, budget),
+    };
+  } finally {
+    await opened.close(piContext()).catch(
+      /* v8 ignore next -- closing a sidecar we only read is best effort. */
+      () => undefined,
+    );
+  }
+}
+
+/**
  * The sidecar identity now lives in the shared sidecar-storage contract.
  *
  * Until Pi 0.85.0 this was the JSONL session's `metadata` field. The replacement
@@ -1278,11 +1606,6 @@ async function attachSession(
     host.observability,
     runId,
   );
-  // A permitted authority decision is a metrics denominator, not durable
-  // Session history. It therefore goes through the reducer's passive path and
-  // never awaits the Session observer or changes whether Pi can run the call.
-  const recordObservability = (observation: Parameters<SessionRuntimeSpec["observer"]>[0]) =>
-    recordObservationToSink(observabilityReducer, host.observability, runId, observation);
   if (isAborted(spec.signal)) {
     return rejectCancelledAttachment(observe);
   }
@@ -1401,6 +1724,42 @@ async function attachSession(
     // read, and every append and scan below goes through this one.
     const mainBranch = await sidecarBranch(sidecar, attachContext);
     const recovery = recoveryRefFor(sidecarMetadata.id, sidecarPath);
+    // A fresh attachment that continues an earlier one's conversation
+    // (VC-457): the earlier sidecar is read once, and what the model last saw
+    // there is written into this one as a single context marker before
+    // anything else, so every later read of THIS sidecar — this attach's
+    // replay, a compaction, a resume after a relaunch — finds it in place. A
+    // carry that cannot be read is not a failed attach: the Session opens
+    // without it, as it always did, and says so below.
+    let carryFailure: string | undefined =
+      inputRecovery === undefined && spec.carry === undefined ? spec.carryUnreadable : undefined;
+    let carried = false;
+    if (inputRecovery === undefined && spec.carry !== undefined) {
+      try {
+        const conversation = await readCarriedConversation(
+          sidecars,
+          host.sessionDataDir,
+          spec.carry,
+          { ...expectedIdentity, volliAttachmentId: spec.carry.attachmentId },
+          carryTokenBudget(model),
+          attachContext,
+        );
+        if (conversation.entries.length > 0) {
+          await mainBranch.appendCustomEntry(
+            VOLLI_CONTEXT_MARKER,
+            {
+              kind: "context-carried",
+              fromAttachmentId: spec.carry.attachmentId,
+              entries: JSON.parse(JSON.stringify(conversation.entries)) as JsonValue,
+            } satisfies ContextCarriedMarker,
+            attachContext,
+          );
+          carried = true;
+        }
+      } catch (error) {
+        carryFailure = errorMessage(error);
+      }
+    }
     // The BRANCH, not the file. Today these are the same entries — this runtime
     // writes one lane and never forks — but they stop being the same the moment
     // anything does, and what reads this now is the elision rule, which takes
@@ -1409,9 +1768,10 @@ async function attachSession(
     // same question the live path asks (`conversationBranch`) is what keeps a
     // future sibling branch from quietly resurrecting elided history — the one
     // failure this ticket exists to prevent.
-    const recoveredEntries = inputRecovery
-      ? await mainBranch.findEntries({ order: "oldestFirst" }, attachContext)
-      : [];
+    const recoveredEntries =
+      inputRecovery !== undefined || carried
+        ? await mainBranch.findEntries({ order: "oldestFirst" }, attachContext)
+        : [];
     const customEntries = recoveredEntries.filter(
       (entry): entry is CustomEntry => entry.type === "custom",
     );
@@ -1449,6 +1809,15 @@ async function attachSession(
         continue;
       }
       if (entry.type !== "custom") continue;
+      const carriedEntries = carriedEntriesOf(entry);
+      if (carriedEntries !== undefined) {
+        for (const carriedEntry of carriedEntries) {
+          if (carriedEntry.type === "message" && carriedEntry.message.role === "user") {
+            rememberResources(readPromptResourceBlocks(userMessageText(carriedEntry.message)));
+          }
+        }
+        continue;
+      }
       const marker = markersByCursor.get(entry.id);
       if (marker?.kind !== "command-accepted" || marker.operation !== "message.submit") {
         continue;
@@ -1529,6 +1898,7 @@ async function attachSession(
           : undefined;
       },
       replayable: (entry) => recoverableMessage(entry) && !disagreedSettledEntryIds.has(entry.id),
+      carriedEntries: carriedEntriesOf,
     };
     /**
      * The elided context, not the whole history — this is the landmine.
@@ -1553,6 +1923,44 @@ async function attachSession(
       nativeRoute,
     );
     const recoveredPath = replayable.path;
+    // The host can retire a question card, but the lost process cannot finish
+    // its ask_user tool call. Pair every replayable unanswered ask with a
+    // durable failed result before another provider request sees it. This is
+    // not a resolution: no choice or reply was obtained. Ordinary Pi messages
+    // keep the repair readable by older runtimes, and a second attach finds
+    // the result instead of repairing the same call again.
+    const unansweredQuestions = new Set<string>();
+    for (const message of contextMessages(recoveredPath)) {
+      if (message.role === "assistant") {
+        for (const block of (message as AssistantMessage).content) {
+          if (block.type === "toolCall" && block.name === "ask_user")
+            unansweredQuestions.add(block.id);
+        }
+      } else if (message.role === "toolResult") {
+        unansweredQuestions.delete(message.toolCallId);
+      }
+    }
+    for (const toolCallId of unansweredQuestions) {
+      const message: AgentMessage = {
+        role: "toolResult",
+        toolCallId,
+        toolName: "ask_user",
+        content: [
+          {
+            type: "text",
+            text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+          },
+        ],
+        isError: true,
+        timestamp: host.now(),
+      };
+      const entryId = await mainBranch.appendMessage(message, attachContext);
+      const entry = await sidecar.getEntry(entryId, attachContext);
+      /* v8 ignore next -- appendMessage promises the message entry it returned. */
+      if (entry?.type !== "message")
+        throw new Error("Pi question recovery result was not persisted.");
+      recoveredPath.push(entry);
+    }
     const recoveredCompaction = recoveredPath.findLast((entry) => entry.type === "compaction");
     let nativeCompactionState =
       recoveredCompaction?.type === "compaction"
@@ -1583,7 +1991,9 @@ async function attachSession(
       if (observation.state === "raised") activeAttentionReasons.add(observation.reason);
       else activeAttentionReasons.delete(observation.reason);
     }
-    const persistObservation = async <T extends RecoverableMarker>(observation: T): Promise<T> => {
+    const persistObservation = async <T extends RecoverableMarker>(
+      observation: T,
+    ): Promise<T & { occurredAt: number; recoveryCursor: string }> => {
       const durable = JSON.parse(JSON.stringify(observation)) as T;
       // Refused at the write, not discovered at the read — with the same
       // predicate recovery applies, so writer and validator cannot drift. A
@@ -1649,14 +2059,33 @@ async function attachSession(
       });
       activeAttentionReasons.add("runtime-failure");
     }
-    for (const recoveredTurnId of openTurnIds) {
-      await persistObservation({
+    // Durable like the recovery notices above, and ALSO told live once the
+    // attachment has started: a fresh attachment is never reconciled from its
+    // own sidecar, so a marker alone would reach no one until a relaunch.
+    let carryAttention: AttentionObservation | undefined;
+    if (carryFailure !== undefined) {
+      carryAttention = await persistObservation({
         kind: "attention",
         state: "raised",
-        reason: "partial-turn",
-        message: "A recovered Pi turn ended before its completion marker was committed.",
+        reason: "runtime-failure",
+        message: `This attachment could not carry the Session's earlier conversation forward, so the model starts without it: ${carryFailure}`,
       });
-      activeAttentionReasons.add("partial-turn");
+      activeAttentionReasons.add("runtime-failure");
+    }
+    for (const recoveredTurnId of openTurnIds) {
+      // Attention identity is frozen per attachment/reason, not per notice.
+      // A generic restart warning must not replace an active diagnostic (such
+      // as conflicting settled history) with a warning the host may retire.
+      // Still interrupt every open turn even when its warning is already held.
+      if (!activeAttentionReasons.has("partial-turn")) {
+        await persistObservation({
+          kind: "attention",
+          state: "raised",
+          reason: "partial-turn",
+          message: "A recovered Pi turn ended before its completion marker was committed.",
+        });
+        activeAttentionReasons.add("partial-turn");
+      }
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
     }
     // A notice that the last process was reconnecting describes a wait no
@@ -1693,7 +2122,7 @@ async function attachSession(
           kind: "compaction",
           state: "failed",
           reason: "checkpoint",
-          message: sanitizeDiagnostic(reason),
+          message: safeStopMessage(reason, spec.credentialRedaction ?? spec.secret),
         });
       }
     }
@@ -1702,12 +2131,12 @@ async function attachSession(
     // want of `sandbox-exec`, and a caller who injects a contained environment
     // gets one that is fail-closed at its own `exec`.
     toolEnv = await host.executionEnvFactory(spec.workspacePath, spec.identity);
-    const ownedToolEnv = toolEnv;
+    const credentialRedaction = spec.credentialRedaction ?? spec.secret;
+    const ownedToolEnv = privateSecretExecution(toolEnv, credentialRedaction);
     // The whole Agent Tool Surface, from the one list that names it.
     //
     // Each non-coding tool is offered only to a Session with the port that
-    // answers it, for the reason the gate below is built only for a Session with
-    // a policy: a tool that is absent cannot be called, where one wired to
+    // answers it: a tool that is absent cannot be called, where one wired to
     // nothing would be called and then fail, and the model would learn that from
     // the failure. A Session handed no web boundary is handed no way to ask for
     // one — the absent port is what makes the network unreachable from here, not
@@ -1716,19 +2145,109 @@ async function attachSession(
     // the query to a third party and a read does not, so a Session may be given
     // either, both or neither, and is offered exactly what it was given.
     //
-    // Assembled behind `sessionToolBindings` rather than pushed one by one
-    // here, and the Snapshot's list is `sessionToolIds` over those same
-    // bindings: the array Pi resolves against and the list the Snapshot records
-    // cannot disagree, which is what let the pack drop its rule about tool
-    // identity (VC-3).
-    // Sequential dispatch hands the array back untouched; the fixture-only
-    // parallel dispatch marks every tool that is not an allowlisted MCP read
-    // sequential. Names and schemas — the provider-visible half — never change.
-    const { tools, toolExecution } = applyToolDispatch(
-      createSessionTools(spec, ownedToolEnv),
-      spec.tools.mcp ?? [],
-      host.toolDispatch,
-    );
+    // Selected per Session from its own frozen record (VC-454). Sequential
+    // dispatch hands the array back untouched; a Session whose MCP definitions
+    // carry host-authored parallel-read marks — honoured only when this
+    // runtime was built to — gets every other tool marked sequential. Names
+    // and schemas, the provider-visible half, never change.
+    //
+    // Long tool results are cut for the model and saved whole beside this
+    // attachment's sidecar (VC-469), under the runtime-wide bound. The store
+    // marks reads of saved output, including directories its history names.
+    // An earlier attachment's results reach this one through a carry, after a
+    // relaunch as much as on the first attach, and through chains of carries.
+    const toolOutput = new ToolOutputStore({
+      directory: toolOutputDirectoryFor(sidecarMetadata.path),
+      namedDirectories: savedOutputDirectoriesIn(
+        savedOutputPathsIn(recoveredEntries),
+        host.sessionDataDir,
+      ),
+      dataDirectory: host.sessionDataDir,
+      ledger: host.toolOutputLedger,
+      workspacePath: spec.workspacePath,
+      ...(credentialRedaction === undefined
+        ? {}
+        : { redact: (text: string) => credentialRedaction.redact(text) }),
+    });
+    // Nested calls reach the same tools, environment and host ports as direct calls.
+    const codeModeJournal = new CodeModeJournal();
+    let callableSurface: readonly SurfaceTool[] = [];
+    let liveCodeMode: ReturnType<typeof createCodeModeTool> | undefined;
+    let codeModeSurface = spec.tools.codeMode;
+    const codeModeFor = (
+      surface: NonNullable<SessionRuntimeSpec["tools"]["codeMode"]>,
+      surfaceTools: readonly SurfaceTool[],
+      input: SessionRuntimeSpec,
+    ) =>
+      createCodeModeTool({
+        surface,
+        tools: surfaceTools,
+        observe: (event) => observeToolActivity(event),
+        journal: codeModeJournal,
+        honourParallelReads: host.parallelMcpReads,
+        output: toolOutput,
+        sandbox: host.codeModeSandbox,
+        signal: input.signal,
+        now: host.now,
+      });
+    const liveWrapper = (tool: ReturnType<typeof createCodeModeTool>) => ({
+      ...tool,
+      // The description belongs to the last cold subset, but execution always
+      // reaches the live effective registry, including additions between runs.
+      execute: async (id: string, params: unknown, signal?: AbortSignal) => {
+        await refreshTools("code-mode");
+        return liveCodeMode!.execute(id, params as { code: string }, signal);
+      },
+    });
+    const rebuildTools = (input: SessionRuntimeSpec, warm: boolean) => {
+      // Builders stage all changes locally. A declaration/dispatch failure must
+      // leave the applied spec and executable registry retryable together.
+      let stagedCallable = callableSurface;
+      let stagedSurface = codeModeSurface;
+      let stagedCodeMode = liveCodeMode;
+      const buildEffective: CodeModeBuilder = (surface, surfaceTools) => {
+        if (warm) {
+          const retained = new Map(callableSurface.map((entry) => [entry.id, entry]));
+          for (const entry of surfaceTools) {
+            if (
+              !retained.has(entry.id) &&
+              isCodeCallable(entry.id, routeOf(surface, entry.id)) &&
+              !isDeclaredRoute(routeOf(surface, entry.id))
+            )
+              retained.set(entry.id, entry);
+          }
+          stagedCallable = [...retained.values()];
+        } else {
+          stagedCallable = retainOmitted(callableSurface, surfaceTools, (entry) => entry.id);
+        }
+        stagedSurface = {
+          ...surface,
+          ...(warm && codeModeSurface !== undefined ? codeModeSurface : {}),
+          routes: warm
+            ? { ...surface.routes, ...codeModeSurface?.routes }
+            : { ...codeModeSurface?.routes, ...surface.routes },
+        };
+        stagedCodeMode = codeModeFor(stagedSurface, stagedCallable, input);
+        return liveWrapper(stagedCodeMode);
+      };
+      let declared = createSessionTools(input, ownedToolEnv, toolOutput, buildEffective);
+      if (input.declarationTools !== undefined) {
+        declared = createSessionTools(
+          input,
+          ownedToolEnv,
+          toolOutput,
+          (surface, surfaceTools) => liveWrapper(codeModeFor(surface, surfaceTools, input)),
+          input.declarationTools,
+        );
+      }
+      const rebuilt = applyToolDispatch(declared, input.tools.mcp ?? [], host.parallelMcpReads);
+      return { rebuilt, stagedCallable, stagedSurface, stagedCodeMode };
+    };
+    const initialTools = rebuildTools(spec, false);
+    callableSurface = initialTools.stagedCallable;
+    codeModeSurface = initialTools.stagedSurface;
+    liveCodeMode = initialTools.stagedCodeMode;
+    const { tools, toolExecution } = initialTools.rebuilt;
     // Composed here, once per attachment: the array is half of the Session's
     // Cache Prefix (VC-164), and a provider that orders tools ahead of the
     // system prompt throws the prompt away too when it changes. Reattachment
@@ -1737,7 +2256,10 @@ async function attachSession(
     // seam, where a host-side recomposition would actually show up.
 
     let turnId = randomUUID();
-    let failure: RuntimeFailure | undefined;
+    // Pi keeps isStreaming true while awaited agent_end observers settle, but
+    // its loop has already stopped accepting steering for that attempt.
+    let acceptingSteer = false;
+    let failure: (RuntimeFailure & { stopDetail: SessionStopDetail }) | undefined;
     let closed = false;
     let cancelled = false;
     /**
@@ -1846,6 +2368,7 @@ async function attachSession(
       delivery: AcceptedMessageCommandMarker["delivery"];
       message: UserMessage;
       resources: readonly PromptResource[];
+      accepted?: () => void;
     };
     type PendingRetryDelivery = {
       commandId: string | null;
@@ -1885,14 +2408,36 @@ async function attachSession(
      */
     const pendingQueuedDeliveries = new Map<AgentMessage, PendingMessageDelivery>();
     const acceptedUserMessages = new WeakSet<UserMessage>();
+    // Command ids are the host's immutable intent identities. A replay after
+    // acceptance must acknowledge the same marker, never open another turn.
+    const acceptedMessageCommands = new Map(
+      recoveredMarkers.flatMap((marker) =>
+        marker.kind === "command-accepted" && marker.operation === "message.submit"
+          ? [[marker.commandId, marker.delivery] as const]
+          : [],
+      ),
+    );
+    const acceptedCommandTimes = new Map(
+      recoveredMarkers.flatMap((marker) =>
+        marker.kind === "command-accepted" ? [[marker.commandId, marker.occurredAt] as const] : [],
+      ),
+    );
+    const acceptanceTime = (commandId: string | undefined): { acceptedAt?: number } => {
+      const acceptedAt = commandId === undefined ? undefined : acceptedCommandTimes.get(commandId);
+      return acceptedAt === undefined ? {} : { acceptedAt };
+    };
     const persistAcceptedDelivery = async (
       delivery: PendingDelivery | undefined,
       acceptedTurnId: string,
     ): Promise<boolean> => {
-      if (delivery?.operation === "message.submit") rememberResources(delivery.resources);
-      if (!delivery?.commandId) return false;
+      if (delivery?.operation === "message.submit") {
+        rememberResources(delivery.resources);
+      }
+      if (!delivery?.commandId) {
+        return false;
+      }
       if (delivery.operation === "message.submit") {
-        await persistObservation({
+        const marker = await persistObservation({
           kind: "command-accepted",
           commandId: delivery.commandId,
           operation: delivery.operation,
@@ -1903,14 +2448,18 @@ async function attachSession(
           // distinguish typed absence from a user-authored delimiter lookalike.
           resources: delivery.resources,
         });
+        acceptedCommandTimes.set(delivery.commandId, marker.occurredAt);
+        acceptedMessageCommands.set(delivery.commandId, delivery.delivery);
+        delivery.accepted?.();
       } else {
-        await persistObservation({
+        const marker = await persistObservation({
           kind: "command-accepted",
           commandId: delivery.commandId,
           operation: delivery.operation,
           delivery: delivery.delivery,
           turnId: acceptedTurnId,
         });
+        acceptedCommandTimes.set(delivery.commandId, marker.occurredAt);
       }
       return true;
     };
@@ -1931,75 +2480,6 @@ async function attachSession(
     // constructed, and a definite-assignment `let` says that plainly instead of
     // resting on how a temporal dead zone happens to resolve inside a closure.
     let interruptTurn!: () => void;
-
-    /**
-     * The gate, built only for a Session that was handed a policy to enforce.
-     *
-     * The Snapshot is read once here rather than off the spec per call, because
-     * a Snapshot is pinned for the life of the attachment by its own definition
-     * — the facts its rules read stay live, the policy does not.
-     */
-    const gateToolCalls = (
-      authority: AuthoritySnapshot,
-    ): NonNullable<AgentOptions["beforeToolCall"]> => {
-      const escalation = new AuthorityEscalation({
-        fallback: authority.fallback,
-        priorDenials: spec.priorAuthorityDenials,
-        ask: spec.ask,
-        signal: spec.signal,
-        now: host.now,
-      });
-      return async ({ toolCall, args }, signal) => {
-        const verdict = authorityVerdict({
-          tool: toolCall.name,
-          args,
-          authority,
-          workspacePath: spec.workspacePath,
-        });
-        // Pi's own per-call signal is passed on rather than dropped: a question
-        // this parks on has to lose to a cancelled run, and Pi re-reads that
-        // signal the instant this callback returns.
-        const disposition = await escalation.resolve({
-          verdict,
-          tool: toolCall.name,
-          toolCallId: toolCall.id,
-          turnId,
-          signal,
-        });
-        const waitDurationMs = escalation.consumeWaitDuration(toolCall.id);
-        if (disposition.outcome === "allow") {
-          recordObservability({
-            kind: "authority",
-            state: "allowed",
-            turnId,
-            toolCallId: toolCall.id,
-            ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-          });
-          return undefined;
-        }
-        // Recorded before refused, through the same ordered queue as every other
-        // observation: a refusal that overtook the turn it belongs to would be
-        // filed against the wrong turn, and one that raced the activity stream
-        // would print out of order. `commitObservation` resolves at the consumer
-        // boundary and never rejects — a ledger that cannot be written is not a
-        // reason to let the call through, and the failure it holds is consumed at
-        // the next command boundary like any other.
-        if (disposition.record) {
-          await commitObservation({
-            kind: "authority",
-            state: "denied",
-            turnId,
-            toolCallId: toolCall.id,
-            ...(waitDurationMs === undefined ? {} : { waitDurationMs }),
-            tool: toolCall.name,
-            cause: disposition.cause,
-            reason: disposition.reason,
-          });
-        }
-        if (disposition.interrupt) interruptTurn();
-        return { block: true, reason: disposition.reason };
-      };
-    };
 
     /**
      * The output ceiling this request may honestly ask for.
@@ -2036,10 +2516,29 @@ async function attachSession(
       );
     };
 
+    let providerStop = new ProviderStopCapture(credentialRedaction);
     const streamWithCompaction: StreamFn = (requestModel, context, options) => {
+      lastProviderActivity = host.now();
+      const capture = new ProviderStopCapture(credentialRedaction);
+      providerStop = capture;
       const maxTokens = outputCeiling(requestModel, context);
       return models.streamSimple(requestModel, context, {
         ...options,
+        // Google/Bedrock cannot accept custom fetch. Missing SDK fields on
+        // those routes remain unknown rather than inferred from their prose.
+        ...(!["google-generative-ai", "google-vertex", "bedrock-converse-stream"].includes(
+          requestModel.api,
+        )
+          ? { fetch: capture.fetch(options?.fetch ?? globalThis.fetch, host.now) }
+          : {}),
+        onResponse: async (response, responseModel) => {
+          capture.response(response, host.now());
+          await options?.onResponse?.(response, responseModel);
+        },
+        onProviderStreamEvent: async (event, responseModel) => {
+          capture.event(event);
+          await options?.onProviderStreamEvent?.(event, responseModel);
+        },
         ...(maxTokens === undefined ? {} : { maxTokens }),
         ...(nativeCompactionState?.kind === "anthropic-messages"
           ? {
@@ -2069,10 +2568,10 @@ async function attachSession(
     // back at the head of every array this runtime rebuilds from the sidecar
     // (compaction, model switch), so the prefix is the same bytes on every
     // request of the attachment and the projector's memo hits on it.
-    const head = systemHead(
+    let head = systemHead(
       composeSystemPrompt({
         role: spec.identity.role,
-        tools: spec.tools,
+        tools: spec.declarationTools ?? spec.tools,
         promptResources: spec.promptResources,
       }),
       tools,
@@ -2132,18 +2631,194 @@ async function attachSession(
       // message Pi's own harness sends. Every role Volli already produces
       // converts identically under both.
       convertToLlm,
-      // `terminate` is left unset on purpose: Pi only ends the run early when
-      // every finalized result in the batch asks for it, which is not what one
-      // refused call means. A `stop` answer ends the turn by aborting instead,
-      // which needs no agreement from the rest of the batch — at the cost of the
-      // reason it carries, which Pi drops on that one path because it re-reads
-      // its cancellation before it reads the block.
-      //
-      // The key is absent, not set to a callback that always allows: a Session
-      // with no Snapshot runs Pi's own default path, and the gate, the fallback
-      // thresholds and `ask` are then unreachable rather than quietly permissive.
-      ...(spec.authority === undefined ? {} : { beforeToolCall: gateToolCalls(spec.authority) }),
     });
+    // Provider caches have no reliable expiry observation. Anthropic's Pi
+    // adapter supports both 5m and 1h retention (including an environment
+    // override), so use its longest lifetime, not an assumed 5m default.
+    // OpenAI extended retention is 24h; routers/unknown providers use the same
+    // conservative window. This is an eligibility rule, never a cache-hit claim.
+    // Recovery includes the last durable activity, not the attach wall clock.
+    let lastProviderActivity =
+      recoveredEntries.length === 0
+        ? undefined
+        : recoveredEntries.reduce((latest, entry) => Math.max(latest, entry.timestamp), 0);
+    const turnRefreshTrigger = (): "cold-turn" | "warm-turn" => {
+      const ttl =
+        agent.state.model.provider === "anthropic" && agent.state.model.api === "anthropic-messages"
+          ? 60 * 60_000
+          : 24 * 60 * 60_000;
+      return lastProviderActivity === undefined || host.now() - lastProviderActivity >= ttl
+        ? "cold-turn"
+        : "warm-turn";
+    };
+    // Scan the entire durable conversation, including carried messages, not
+    // just the retained compaction window: a discovery already summarized out
+    // of context must not recur on attach.
+    const announcedRefreshIds = new Set(
+      conversationPath(recoveredEntries, conversationReader).flatMap((entry) => {
+        if (entry.type !== "message") return [];
+        const id = toolRefreshId(entry.message);
+        return id === undefined ? [] : [id];
+      }),
+    );
+    const pendingAnnouncements: AgentMessage[] = [];
+    const deferredRefreshes = new Map<
+      string,
+      NonNullable<SessionRuntimeSpec["toolRefreshAnnouncements"]>[number]
+    >();
+    // Standalone pre-ledger callers have no durable ID; do not let their legacy
+    // discovery message rewrite a warm prefix either. Production always has IDs.
+    const deferredLegacyAnnouncements: AgentMessage[] = [];
+    let announcementAppendFailed = false;
+    const announceRefreshes = async (
+      input: SessionRuntimeSpec,
+      allowed: boolean,
+    ): Promise<void> => {
+      for (const fact of input.toolRefreshAnnouncements ?? []) deferredRefreshes.set(fact.id, fact);
+      // Do not append a sidecar receipt until the message can really be sent.
+      // The host ledger re-supplies these facts on recovery; same-bundle/null
+      // refresh results must not lose the pending IDs in this attachment either.
+      if (!allowed) return;
+      while (deferredLegacyAnnouncements.length > 0) {
+        const message = deferredLegacyAnnouncements[0]!;
+        await mainBranch.appendMessage(message, piContext());
+        deferredLegacyAnnouncements.shift();
+        pendingAnnouncements.push(message);
+      }
+      if (announcementAppendFailed) {
+        // An append may reject after its commit. Re-read receipts before retrying
+        // so even that ambiguous outcome cannot produce a duplicate message.
+        const entries = await mainBranch.findEntries({ order: "oldestFirst" }, piContext());
+        for (const entry of entries) {
+          if (entry.type !== "message") continue;
+          const id = toolRefreshId(entry.message);
+          if (id === undefined || announcedRefreshIds.has(id)) continue;
+          announcedRefreshIds.add(id);
+          pendingAnnouncements.push(entry.message);
+        }
+        announcementAppendFailed = false;
+      }
+      for (const announcement of deferredRefreshes.values()) {
+        if (announcedRefreshIds.has(announcement.id)) continue;
+        const message = toolRefreshMessage(announcement.namespaces, host.now(), announcement.id);
+        try {
+          await mainBranch.appendMessage(message, piContext());
+        } catch (error) {
+          announcementAppendFailed = true;
+          throw error;
+        }
+        announcedRefreshIds.add(announcement.id);
+        pendingAnnouncements.push(message);
+      }
+      // Durable partial batches remain pending for a retry (or recovery).
+      // The caller publishes only after all writes and close checks succeeded.
+    };
+    // Replays the ledger-write/sidecar-append gap even when the effective bundle
+    // was already adopted by the previous process and therefore is unchanged.
+    await announceRefreshes(
+      spec,
+      canAnnounceToolRefresh(agent.state.model, turnRefreshTrigger() === "warm-turn"),
+    );
+    agent.state.messages.push(...pendingAnnouncements.splice(0));
+    let refreshTail: Promise<unknown> = Promise.resolve();
+    // The host revision gate returns its cached desired object on steady checks.
+    // Remember only fully applied inputs: failed builds/appends must retry even
+    // when the adapter has already cached that same object. Boundary checks still
+    // compare declarations, since a cold epoch can advance with unchanged IDs.
+    let lastSuccessfulInput: SessionRuntimeSpec | undefined;
+    const refreshTools = (
+      trigger: Parameters<NonNullable<SessionRuntimeSpec["refreshTools"]>>[0]["trigger"],
+      refreshModel: SessionRuntimeSpec["model"] = {
+        providerId: agent.state.model.provider,
+        modelId: agent.state.model.id,
+        reasoningLevel: agent.state.thinkingLevel,
+      },
+      announcementModel = agent.state.model,
+    ): Promise<boolean> => {
+      const work = refreshTail.then(async () => {
+        if (closed) return false;
+        const next = (await spec.refreshTools?.({ trigger, model: refreshModel })) ?? null;
+        if (closed) throw new Error("This attachment is closed.");
+        const warm = trigger === "warm-turn" || trigger === "code-mode";
+        const allowed = canAnnounceToolRefresh(announcementModel, warm);
+        if (next === null) {
+          if (!warm) {
+            await announceRefreshes(spec, allowed);
+            if (closed) throw new Error("This attachment is closed.");
+            agent.state.messages.push(...pendingAnnouncements.splice(0));
+          }
+          return false;
+        }
+        if (trigger === "code-mode" && next === lastSuccessfulInput) return false;
+        // Even a host returning its full durable desired state on every check
+        // must not regenerate provider declarations or reannounce additions.
+        const candidate = {
+          ...next,
+          refreshTools: next.refreshTools ?? spec.refreshTools,
+          ...(warm ? { declarationTools: spec.declarationTools ?? spec.tools } : {}),
+        };
+        if (sameToolSpec(spec, candidate)) {
+          await announceRefreshes(candidate, allowed);
+          if (closed) throw new Error("This attachment is closed.");
+          agent.state.messages.push(...pendingAnnouncements.splice(0));
+          lastSuccessfulInput = next;
+          return false;
+        }
+        const previousIds = new Set(callableSurface.map((entry) => entry.id));
+        const staged = rebuildTools(candidate, warm);
+        const additions = staged.stagedCallable.filter((entry) => !previousIds.has(entry.id));
+        const merged = warm
+          ? agent.state.tools
+          : retainOmitted(agent.state.tools, staged.rebuilt.tools, (tool) => tool.name);
+        const nextHead = warm
+          ? head
+          : systemHead(
+              composeSystemPrompt({
+                role: candidate.identity.role,
+                tools: candidate.declarationTools ?? candidate.tools,
+                promptResources: candidate.promptResources,
+              }),
+              merged,
+            );
+        await announceRefreshes(candidate, allowed);
+        // Standalone callers predating the host ledger still receive discovery.
+        // Production always supplies durable facts (including []), never fake IDs.
+        if (candidate.toolRefreshAnnouncements === undefined && warm && additions.length > 0) {
+          const namespaces = new Map<string, number>();
+          for (const entry of additions) {
+            const namespace = entry.mcp === undefined ? "volli" : `mcp:${entry.mcp.serverId}`;
+            namespaces.set(namespace, (namespaces.get(namespace) ?? 0) + 1);
+          }
+          const message = toolRefreshMessage(
+            [...namespaces].map(([name, count]) => ({ name, count })),
+            host.now(),
+          );
+          if (allowed) {
+            await mainBranch.appendMessage(message, piContext());
+            pendingAnnouncements.push(message);
+          } else deferredLegacyAnnouncements.push(message);
+        }
+        // Close drains this work before cleanup, but must never adopt its result.
+        if (closed) throw new Error("This attachment is closed.");
+        // Commit only after all builds and the durable discovery append succeed.
+        agent.state.messages.push(...pendingAnnouncements.splice(0));
+        callableSurface = staged.stagedCallable;
+        codeModeSurface = staged.stagedSurface;
+        liveCodeMode = staged.stagedCodeMode;
+        spec = candidate;
+        if (!warm) {
+          agent.state.tools = merged;
+          agent.toolExecution = staged.rebuilt.toolExecution;
+          head = nextHead;
+          agent.state.messages = withSystemHead(head, agent.state.messages.slice(1));
+        }
+        lastSuccessfulInput = next;
+        return true;
+      });
+      // Serialise parallel program starts without poisoning later attempts.
+      refreshTail = work.catch(() => undefined);
+      return work;
+    };
     // Interrupting, closing and cancelling the attachment all arrive here, which
     // is why one flag answers for all three downstream.
     interruptTurn = () => {
@@ -2313,6 +2988,7 @@ async function attachSession(
         operation: "executor.retry" as const,
         delivery: "retry" as const,
       };
+      await refreshTools(turnRefreshTrigger());
       await agent.continue();
       return { kind: "delivered", delivery: "retry" };
     };
@@ -2508,10 +3184,11 @@ async function attachSession(
       const finishProgress = () =>
         commitObservation({ kind: "compaction-progress", state: "finished", reason });
       try {
-        const outcome = await compactSession({
+        const result = await compactSession({
           sidecar,
           path,
           models,
+          credentialRedaction,
           // Compaction is part of this chat's continuity, so its summary is
           // generated by the model currently selected in the chat pane.
           model: agent.state.model,
@@ -2534,6 +3211,12 @@ async function attachSession(
           ...(signal === undefined ? {} : { signal }),
           ...(instructions === undefined ? {} : { customInstructions: instructions }),
         });
+        // Last pre-persistence boundary, shared by threshold, overflow and manual
+        // requests. Return the same redacted outcome that every durable reader sees.
+        const outcome =
+          result.kind === "failed"
+            ? { ...result, message: safeStopMessage(result.message, credentialRedaction) }
+            : result;
         // Pi found nothing to compact — an empty history, or one already ending
         // in a summary. No compaction happened, so no compaction is recorded:
         // there is no summary, no elided context and no spend to file, and a
@@ -2568,7 +3251,10 @@ async function attachSession(
           // Already whole: the summary, the restored resources and the kept
           // turns without their reasoning, all read off the entry just written
           // — behind the head, which the entry never holds.
-          agent.state.messages = withSystemHead(head, outcome.messages);
+          const messageCount = agent.state.messages.length;
+          await refreshTools("compaction");
+          const announcements = agent.state.messages.slice(messageCount);
+          agent.state.messages = withSystemHead(head, [...outcome.messages, ...announcements]);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
@@ -2603,7 +3289,12 @@ async function attachSession(
                   tokensBefore: Math.floor(outcome.entry.tokensBefore),
                   tokensAfter: estimatedContextTokens(agent.state.messages, agent.state.model),
                 }
-              : { kind: "compaction", state: "failed", reason, message: outcome.message },
+              : {
+                  kind: "compaction",
+                  state: "failed",
+                  reason,
+                  message: outcome.message,
+                },
           ),
         );
         // A compacted or failed observation is the durable terminal fact. The
@@ -2615,7 +3306,9 @@ async function attachSession(
         // nothing else here can throw — so the marker is always still open and
         // needs an explicit finish before the failure propagates.
         await finishProgress();
-        throw error;
+        // Do not retain the original cause or stack: either may echo credentials.
+        // eslint-disable-next-line preserve-caught-error -- the original exception is untrusted provider text
+        throw new Error(safeStopMessage(errorMessage(error), credentialRedaction));
       }
     };
 
@@ -2664,7 +3357,7 @@ async function attachSession(
             kind: "compaction",
             state: "failed",
             reason: "threshold",
-            message: sanitizeDiagnostic(errorMessage(error)),
+            message: safeStopMessage(errorMessage(error), credentialRedaction),
           }),
         );
         return false;
@@ -2675,8 +3368,17 @@ async function attachSession(
     // loop owns a separate context snapshot: replacing Agent.state alone would
     // appear to compact while the next request still sent the entire history.
     agent.prepareNextTurnWithContext = async ({ context }, signal) => {
+      const refreshed = await refreshTools(turnRefreshTrigger());
       const changed = await compactBeforeTurn([...pendingQueuedDeliveries.keys()], signal);
-      return changed ? { context: { ...context, messages: [...agent.state.messages] } } : undefined;
+      return changed || refreshed || spec.refreshTools !== undefined
+        ? {
+            context: {
+              ...context,
+              tools: [...agent.state.tools],
+              messages: [...agent.state.messages],
+            },
+          }
+        : undefined;
     };
 
     /**
@@ -2737,8 +3439,59 @@ async function attachSession(
       return outcome.kind === "compacted";
     };
 
+    /**
+     * One tool call's lifecycle, as durable activity: Pi's own events for a
+     * direct call, and Code Mode's for every call a program makes (VC-471),
+     * through the same mapping, the same ordered delivery and the same
+     * recovery marker — so a nested call is as visible in the activity stream,
+     * the ledger and a restart as a direct one, under its own id.
+     */
+    const observeToolActivity = async (
+      event:
+        | Extract<
+            AgentEvent,
+            { type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end" }
+          >
+        | NestedToolEvent,
+    ): Promise<void> => {
+      const observedAt = host.now();
+      const retained = activityByToolCallId.get(event.toolCallId);
+      const startedAt = retained?.startedAt ?? observedAt;
+      const persistActivityImage = host.persistActivityImage;
+      const activity = mapPiActivity(
+        event,
+        {
+          ...(event.type === "tool_execution_end"
+            ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
+            : event.type === "tool_execution_start"
+              ? { turnId, observedAt }
+              : { turnId, startedAt, observedAt }),
+          ...(persistActivityImage === undefined
+            ? {}
+            : {
+                persistImage: (image: { data: string; mimeType: string }) =>
+                  persistActivityImage(spec.identity.sessionId, image),
+              }),
+        },
+        credentialRedaction,
+      );
+
+      if (event.type !== "tool_execution_end") {
+        activityByToolCallId.set(event.toolCallId, { input: activity.input, startedAt });
+        await commitObservation(activity);
+        return;
+      }
+
+      try {
+        await commitObservation(await persistObservation(activity));
+      } finally {
+        activityByToolCallId.delete(event.toolCallId);
+      }
+    };
+
     unsubscribe = agent.subscribe(async (event, runSignal) => {
       if (event.type === "agent_start") {
+        acceptingSteer = true;
         // A resumed attempt is the same turn continuing, so it neither starts one
         // nor refreshes the budget it is spending.
         const resumed = resumingTurn;
@@ -2776,29 +3529,7 @@ async function attachSession(
         event.type === "tool_execution_update" ||
         event.type === "tool_execution_end"
       ) {
-        const observedAt = host.now();
-        const retained = activityByToolCallId.get(event.toolCallId);
-        const startedAt = retained?.startedAt ?? observedAt;
-        const activity = mapPiActivity(
-          event,
-          event.type === "tool_execution_end"
-            ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
-            : event.type === "tool_execution_start"
-              ? { turnId, observedAt }
-              : { turnId, startedAt, observedAt },
-        );
-
-        if (event.type !== "tool_execution_end") {
-          activityByToolCallId.set(event.toolCallId, { input: activity.input, startedAt });
-          await commitObservation(activity);
-          return;
-        }
-
-        try {
-          await commitObservation(await persistObservation(activity));
-        } finally {
-          activityByToolCallId.delete(event.toolCallId);
-        }
+        await observeToolActivity(event);
         return;
       }
 
@@ -2822,6 +3553,7 @@ async function attachSession(
       }
 
       if (event.type === "message_end") {
+        if (event.message.role === "assistant") lastProviderActivity = host.now();
         if (event.message.role === "user") {
           const delivery = pendingQueuedDeliveries.get(event.message);
           if (delivery !== undefined) {
@@ -2831,11 +3563,25 @@ async function attachSession(
             }
           }
         }
-        const acceptedUserMessage =
-          event.message.role === "user" && acceptedUserMessages.has(event.message);
+        // Capture raw facts privately, then scrub BEFORE any message append or
+        // observation. Downstream ledger, UI and notice consumers see only this
+        // filtered projection, never the SDK's diagnostics/envelope.
+        const providerDetail =
+          event.message.role === "assistant"
+            ? providerStop.detail(event.message as AssistantMessage)
+            : undefined;
+        const message =
+          event.message.role === "assistant"
+            ? safeProviderMessage(
+                event.message as AssistantMessage,
+                credentialRedaction,
+                providerDetail?.category === "provider-refused",
+              )
+            : event.message;
+        const acceptedUserMessage = message.role === "user" && acceptedUserMessages.has(message);
         const entryId = acceptedUserMessage
           ? null
-          : await mainBranch.appendMessage(durableMessage(event.message), piContext());
+          : await mainBranch.appendMessage(durableMessage(message), piContext());
         if (event.message.role !== "assistant") {
           return;
         }
@@ -2859,17 +3605,38 @@ async function attachSession(
         // A tool round can make several provider requests. Hold every drop and
         // publish one complete Turn fact at `agent_end`, after the reply that
         // anchors its transcript notice has settled.
-        const dropped = providerReasoningDropped(event.message as AssistantMessage, turnId);
+        const dropped = providerReasoningDropped(message as AssistantMessage, turnId);
         if (dropped !== undefined) {
           pendingReasoningDrop = mergeProviderReasoningDrop(pendingReasoningDrop, dropped);
         }
-        const outcome = classifyAssistantMessage(entryId, event.message as AssistantMessage);
+        const classified = classifyAssistantMessage(entryId, event.message as AssistantMessage);
+        // Recovery heuristics may inspect the raw sentence in memory; their
+        // output text is scrubbed before it leaves this local branch.
+        const outcome =
+          providerDetail!.category === "provider-refused"
+            ? {
+                kind: "failed" as const,
+                failure: {
+                  reason: "model" as const,
+                  message: providerDetail!.message ?? "The provider refused this turn.",
+                },
+              }
+            : classified;
         if (outcome.kind === "settled") {
           await commitObservation(
             await persistObservation({ kind: "message-settled", turnId, message: outcome.message }),
           );
         } else if (outcome.kind === "failed") {
-          failure = outcome.failure;
+          const stopDetail = providerDetail!;
+          failure = {
+            ...outcome.failure,
+            message:
+              stopDetail.message ?? safeStopMessage(outcome.failure.message, credentialRedaction),
+            stopDetail,
+          };
+          // Structured provider facts outrank recovery heuristics over prose.
+          if (stopDetail.category === "auth-failed") failure.reason = "auth";
+          if (stopDetail.category === "context-overflow") failure.reason = "context";
         }
         return;
       }
@@ -2877,11 +3644,24 @@ async function attachSession(
       if (event.type !== "agent_end") {
         return;
       }
+      acceptingSteer = false;
       activityByToolCallId.clear();
       if (pendingReasoningDrop !== undefined) {
         const dropped = await persistObservation(pendingReasoningDrop);
         pendingReasoningDrop = undefined;
         await commitObservation(dropped);
+      }
+      // A provider may finish normally after the person pressed Stop (the
+      // final chunk can race the abort, or the transport may ignore it). The
+      // runtime's own interruption is authoritative even without an error
+      // stop reason: never report that deliberately cut-short turn completed.
+      // Teardown may still drain a normal finish; this rule names a live Stop.
+      if (failure === undefined && interrupting && !closed) {
+        await clearTransportNotice();
+        await commitObservation(
+          await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+        );
+        return;
       }
       if (failure === undefined) {
         await clearTransportNotice();
@@ -2900,6 +3680,7 @@ async function attachSession(
         );
         return;
       }
+      let stopDetail: SessionStopDetail | undefined;
       // An abort Pi named as one, and an abort only this runtime knows it
       // caused, are the same fact reported two ways: the turn ended because it
       // was asked to. Neither is an unrecoverable failure, and neither deserves
@@ -2953,13 +3734,17 @@ async function attachSession(
                   holder: host.usageLimits?.holder,
                 })
               : null;
+          stopDetail = finalStopDetail(failure.stopDetail, autoRetryAttempts, resetsAt);
           const raised = await persistObservation({
             kind: "attention",
             state: "raised",
             reason,
+            stopDetail,
             message:
-              spent.length === 0 ? failure.message : `${failure.message} (${spent.join("; ")})`,
-            ...(resetsAt === null ? {} : { resetsAt }),
+              spent.length === 0
+                ? safeStopMessage(failure.message, credentialRedaction)
+                : `${safeStopMessage(failure.message, credentialRedaction)} (${spent.join("; ")})`,
+            ...(stopDetail.resetsAt === null ? {} : { resetsAt: stopDetail.resetsAt }),
           });
           activeAttentionReasons.add(reason);
           await commitObservation(raised);
@@ -2968,7 +3753,12 @@ async function attachSession(
       // A Stop during a reconnect ends the wait with the turn.
       await clearTransportNotice();
       await commitObservation(
-        await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+        await persistObservation({
+          kind: "turn",
+          state: "interrupted",
+          turnId,
+          ...(stopDetail === undefined ? {} : { stopDetail }),
+        }),
       );
     });
 
@@ -2990,6 +3780,7 @@ async function attachSession(
         images = [],
         resources = [],
         settle = "turn",
+        targetTurnId,
       ): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
@@ -3010,9 +3801,43 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
+        const accepted =
+          commandId === undefined ? undefined : acceptedMessageCommands.get(commandId);
+        if (accepted !== undefined)
+          return {
+            kind: "delivered",
+            delivery: accepted,
+            turnOpened: false,
+            ...acceptanceTime(commandId),
+          };
+        // Host queue release waits for durable acceptance, not Pi's volatile
+        // followUp array. Projected turn end arrives while agent_end observers
+        // are still awaited; wait out that closing window before prompting.
+        if (delivery === "queue" && settle === "opened") {
+          while (agent.state.isStreaming) await agent.waitForIdle();
+          if (closed || cancelled)
+            return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        }
+        // Revalidate after every wait and before touching Pi's volatile queue.
+        // A targeted command may only join that still-accepting turn; neither
+        // an idle prompt nor late-queue draining may give it another turn.
+        if (targetTurnId !== undefined && (!acceptingSteer || turnId !== targetTurnId)) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The targeted turn is no longer accepting steering.",
+          };
+        }
         const framedText = appendPromptResources(text, resources);
         if (agent.state.isStreaming) {
           const message = queuedUserMessage(framedText, images);
+          const acceptedBoundary =
+            delivery === "steer" &&
+            settle === "opened" &&
+            commandId !== undefined &&
+            targetTurnId !== undefined
+              ? Promise.withResolvers<void>()
+              : null;
           const pending = {
             commandId: commandId ?? null,
             operation: "message.submit" as const,
@@ -3020,12 +3845,23 @@ async function attachSession(
             message,
             resources,
           };
-          pendingQueuedDeliveries.set(message, pending);
+          const durablePending: PendingMessageDelivery = {
+            ...pending,
+            ...(acceptedBoundary === null ? {} : { accepted: acceptedBoundary.resolve }),
+          };
+          pendingQueuedDeliveries.set(message, durablePending);
           if (delivery === "steer") agent.steer(message);
           else agent.followUp(message);
+          if (acceptedBoundary !== null) {
+            // Host-owned steering cannot retire its durable payload on a
+            // volatile steer-array enqueue. Wait for the consumption marker.
+            await Promise.race([acceptedBoundary.promise, agent.waitForIdle()]);
+            if (!acceptedMessageCommands.has(commandId!))
+              throw new Error("Queued steering acceptance is uncertain; reconcile before retrying");
+          }
           // No `turnOpened`: this message joined a turn that was already
           // running, which is the distinction a supervisor reads (VC-324).
-          return { kind: "delivered", delivery };
+          return { kind: "delivered", delivery, ...acceptanceTime(commandId) };
         }
         consumeRunFailure();
         // Before the message is composed, not after: compaction can change what
@@ -3034,16 +3870,17 @@ async function attachSession(
         // rather than admitted onto a context this turn is already composing
         // against; everything from here to `prompt` is synchronous, so there is
         // no gap between releasing it and Pi owning the array itself.
-        await rewritingTheContext(() =>
-          compactBeforeTurn([
+        await rewritingTheContext(async () => {
+          await refreshTools(turnRefreshTrigger());
+          return compactBeforeTurn([
             queuedUserMessage(
               conversationIsEmpty(agent.state.messages)
                 ? composeFirstUserMessage(spec, framedText)
                 : framedText,
               images,
             ),
-          ]),
-        );
+          ]);
+        });
         // Asked of the conversation, not of the array: the array is never empty
         // now that the system head lives in it (see `transcript-context.ts`).
         const delivered = conversationIsEmpty(agent.state.messages)
@@ -3096,14 +3933,19 @@ async function attachSession(
           if (failed !== undefined) {
             throw failed;
           }
-          return { kind: "delivered", delivery: "prompt", turnOpened: opening.opened };
+          return {
+            kind: "delivered",
+            delivery: "prompt",
+            turnOpened: opening.opened,
+            ...acceptanceTime(commandId),
+          };
         }
         await run();
         const failed = consumeRunFailure();
         if (failed !== undefined) {
           throw failed;
         }
-        return { kind: "delivered", delivery: "prompt" };
+        return { kind: "delivered", delivery: "prompt", ...acceptanceTime(commandId) };
       },
 
       async selectModel(selection) {
@@ -3173,6 +4015,13 @@ async function attachSession(
         // reached through OAuth or an endpoint override cannot replay a
         // checkpoint the metered public API minted (VC-331).
         const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
+        const refreshTrigger =
+          selected.provider === agent.state.model.provider &&
+          selected.id === agent.state.model.id &&
+          selected.api === agent.state.model.api &&
+          selection.reasoningLevel === agent.state.thinkingLevel
+            ? turnRefreshTrigger()
+            : "model-switch";
         await rewritingTheContext(async () => {
           const { path } = compactionPathForModel(
             await conversationBranch(),
@@ -3180,11 +4029,18 @@ async function attachSession(
             selectedRoute,
           );
           const latest = path.findLast((entry) => entry.type === "compaction");
-          nativeCompactionState =
+          const nextNativeCompactionState =
             latest?.type === "compaction"
               ? providerCompactionFromDetails(latest.details)
               : undefined;
-          agent.state.messages = withSystemHead(head, contextMessages(path));
+          const messageCount = agent.state.messages.length;
+          // Stage the selected pair for the host without applying it to Pi. A
+          // rejected refresh leaves model, reasoning and opaque context intact.
+          await refreshTools(refreshTrigger, selection, selected);
+          if (closed) throw new Error("This attachment is closed.");
+          const appended = agent.state.messages.slice(messageCount);
+          agent.state.messages = withSystemHead(head, [...contextMessages(path), ...appended]);
+          nativeCompactionState = nextNativeCompactionState;
           agent.state.model = selected;
           agent.state.thinkingLevel = selection.reasoningLevel;
         });
@@ -3207,7 +4063,9 @@ async function attachSession(
         await settleRun();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
-        return outcome;
+        return outcome.kind === "delivered"
+          ? { ...outcome, ...acceptanceTime(commandId) }
+          : outcome;
       },
 
       /**
@@ -3265,14 +4123,21 @@ async function attachSession(
             message: "This context is already being compacted.",
           };
         }
-        const outcome = await rewritingTheContext(async () =>
-          compactContext({
-            reason: "manual",
-            path: await conversationBranch(),
-            signal: spec.signal,
-            ...(instructions === undefined ? {} : { instructions }),
-          }),
-        );
+        let outcome: CompactionOutcome;
+        try {
+          outcome = await rewritingTheContext(async () =>
+            compactContext({
+              reason: "manual",
+              path: await conversationBranch(),
+              signal: spec.signal,
+              ...(instructions === undefined ? {} : { instructions }),
+            }),
+          );
+        } catch (error) {
+          // Includes failures reading the branch before compactContext begins.
+          // eslint-disable-next-line preserve-caught-error -- untrusted failure text must not carry its cause or stack
+          throw new Error(safeStopMessage(errorMessage(error), credentialRedaction));
+        }
         if (outcome.kind === "compacted") return { kind: "compacted" };
         return outcome.kind === "skipped"
           ? {
@@ -3299,6 +4164,7 @@ async function attachSession(
         interruptTurn();
         await agent.waitForIdle();
         await detachedRunSettled;
+        await refreshTail;
         unsubscribe?.();
         unsubscribe = undefined;
         stopWatchingResume?.();
@@ -3385,6 +4251,7 @@ async function attachSession(
       state: spec.recovery === undefined ? "started" : "recovered",
       recovery,
     });
+    if (carryAttention !== undefined) await commitObservation(carryAttention);
     return handle;
   } catch (error) {
     if (abortListener !== undefined) {
@@ -3407,5 +4274,15 @@ async function attachSession(
       () => undefined,
     );
     throw error;
+  }
+}
+
+function validStopDetail(value: unknown): boolean {
+  if (value === undefined) return true;
+  try {
+    decodeSessionStopDetail(value, "Pi stop detail");
+    return true;
+  } catch {
+    return false;
   }
 }

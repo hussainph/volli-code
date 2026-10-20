@@ -4,8 +4,8 @@
  * A laptop that sleeps mid-stream wakes holding a TCP connection the server
  * dropped long ago. Nothing on this side sends, so nothing on this side learns:
  * the request just stays open, silent, until some keepalive far below gives up
- * — about half an hour, on the owner's ledger, thirty times over (VC-443). No
- * error ever reaches the runtime's retry path, because nothing ever fails.
+ * (VC-443). No error reaches the runtime's retry path while the socket stays
+ * open without producing events.
  *
  * So the request is watched from outside, at the one seam every provider call
  * crosses — the `StreamFn` — and cut two ways:
@@ -130,11 +130,29 @@ export function superviseStreams(
       run?.removeEventListener("abort", forwardStop);
       return true;
     };
-    const fail = (reason: "aborted" | "error", message: string): void => {
+    const fail = (reason: "aborted" | "error", message: string, cause?: unknown): void => {
       const failed: AssistantMessage = {
         ...(partial ?? emptyReply(model)),
         stopReason: reason,
         errorMessage: message,
+        rawStopReason: cause === undefined ? "volli.stream-stalled" : "volli.runtime-error",
+        ...(cause instanceof Error
+          ? {
+              diagnostics: [
+                {
+                  type: "runtime_transport_failure",
+                  timestamp: Date.now(),
+                  error: {
+                    name: cause.name,
+                    message,
+                    ...("code" in cause && typeof cause.code === "string"
+                      ? { code: cause.code }
+                      : {}),
+                  },
+                },
+              ],
+            }
+          : {}),
       };
       out.push({ type: "error", reason, error: failed });
       out.end(failed);
@@ -186,6 +204,7 @@ export function superviseStreams(
         fail(
           run?.aborted ? "aborted" : "error",
           error instanceof Error ? error.message : String(error),
+          error,
         );
       }
     })();

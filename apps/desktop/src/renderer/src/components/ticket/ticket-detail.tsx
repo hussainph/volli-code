@@ -1,7 +1,6 @@
 import * as React from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
-  activateTab as activateSplitTab,
   arrangeTabs,
   baseNameOf,
   displayTicketId,
@@ -15,7 +14,6 @@ import {
   type ResolvedSplitViewPane,
   type Ticket,
 } from "@volli/shared";
-import { BROWSER_START_URL } from "../../../../browser-start-page";
 
 import { renameChatSession } from "@renderer/chat/rename";
 import { BrowserPane } from "@renderer/components/browser/browser-pane";
@@ -70,6 +68,7 @@ import {
 } from "@renderer/hooks/use-materialized-attachments";
 import { TicketFilesPanel } from "@renderer/components/ticket/ticket-files-panel";
 import { TicketRail } from "@renderer/components/ticket/ticket-rail";
+import { openBrowserTab } from "@renderer/components/browser/open-browser-tab";
 import { PaneEmptyState } from "@renderer/components/split/pane-empty-state";
 import { SplitDnd } from "@renderer/components/split/split-dnd";
 import {
@@ -94,6 +93,7 @@ import {
   type TicketTabDescriptor,
 } from "@renderer/components/ticket/ticket-tabs";
 import { TicketTitle } from "@renderer/components/ticket/ticket-title";
+import { RunningOnLabel } from "@renderer/components/hosts/running-on-label";
 import { fileDocumentIdentity, type DocumentIdentity } from "@renderer/editor/document-identity";
 import { loadMonacoRuntime } from "@renderer/editor/monaco-runtime";
 import { useFileIndex } from "@renderer/hooks/use-file-index";
@@ -122,6 +122,11 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { useCloseGuard } from "@renderer/terminal/close-guard";
 import { closeTicketSession, renameTerminalSession } from "@renderer/terminal/session-lifecycle";
 import { getEngine } from "@renderer/terminal/registry";
+import {
+  notAvailableOn,
+  remoteHostNow,
+  remoteHostOfTicketNow,
+} from "@renderer/stores/remote-project";
 
 /** The always-present Ticket Body tab's id — the fallback every persisted/live
  * tab id resets to once it no longer names a renderable tab (body/file/session).
@@ -239,6 +244,7 @@ export function TicketDetail({
   const openTicketDiff = useWorkspaceStore((state) => state.openTicketDiff);
   const closeTicketDiff = useWorkspaceStore((state) => state.closeTicketDiff);
   const setTicketActiveTab = useWorkspaceStore((state) => state.setTicketActiveTab);
+  const recordResolvedTicketTab = useWorkspaceStore((state) => state.recordResolvedTicketTab);
   const moveTicketTab = useWorkspaceStore((state) => state.moveTicketTab);
   // The split view's own writers (VC-202). Every one of them is a no-op while
   // this workspace is unsplit, which is what keeps the unsplit path untouched.
@@ -296,18 +302,35 @@ export function TicketDetail({
       ),
     ),
   );
+  const readSplitView = React.useCallback(
+    () =>
+      useWorkspaceStore.getState().byProject[projectId]?.ticketTabs[ticket.id]?.splitView ?? null,
+    [projectId, ticket.id],
+  );
+  const claimProvisionalTab = React.useCallback(
+    (tabId: string, paneId: string, front: boolean) =>
+      useWorkspaceStore.getState().claimTicketTabInPane(projectId, ticket.id, tabId, paneId, front),
+    [projectId, ticket.id],
+  );
+  const activateClaimedDraft = React.useCallback(
+    (tabId: string) => useWorkspaceStore.getState().setTicketActiveTab(projectId, ticket.id, tabId),
+    [projectId, ticket.id],
+  );
   // Everything this workspace needs to know about its Chat Drafts, and the
   // rule about them, in one place shared with Home (VC-358).
   const {
-    activeOverride: provisionalActive,
     activeOverrideTabId: provisionalTabId,
+    overlaySplitView,
     emptyTabIds: emptyProvisionalTabIds,
     guardLayoutWrites,
     releaseActive,
-    shouldCommitActive,
     takeActive,
     titles: draftChatTitles,
-  } = useProvisionalChatTabs(ticket.id, openChatIds);
+  } = useProvisionalChatTabs(ticket.id, openChatIds, {
+    readSplitView,
+    claimTab: claimProvisionalTab,
+    activateTab: activateClaimedDraft,
+  });
   const chatStatuses = useChatSessionsStore(
     useShallow((state) =>
       (state.openTabs[ticket.id] ?? NO_OPEN_CHATS).map((sessionId) =>
@@ -384,6 +407,12 @@ export function TicketDetail({
   React.useEffect(() => {
     let cancelled = false;
     setAttachmentsLoaded(false);
+    // A remote project's ticket keeps its attachments on its host (VC-711).
+    if (remoteHostOfTicketNow(ticket.id) !== null) {
+      resetAttachments([]);
+      setAttachmentsLoaded(true);
+      return;
+    }
     void window.api.attachments.list({ ticketId: ticket.id }).then((result) => {
       if (cancelled) return;
       if (result.ok) resetAttachments(result.blobs);
@@ -756,29 +785,6 @@ export function TicketDetail({
     [releaseActive, setTicketActiveTab, projectId, takeActive, ticket.id],
   );
 
-  // Empty Draft focus is renderer-only. The first content makes the Draft a
-  // relaunchable workspace tab under the same id; promotion later changes only
-  // its kind, never its identity or pane assignment.
-  React.useEffect(() => {
-    if (provisionalTabId === null || !shouldCommitActive) return;
-    // Preserve the focused pane the renderer-only overlay used before this tab
-    // crossed into persisted workspace layout.
-    if (splitView !== null) {
-      moveTicketTabToPane(projectId, ticket.id, provisionalTabId, splitView.focusedPaneId);
-    }
-    setTicketActiveTab(projectId, ticket.id, provisionalTabId);
-    releaseActive();
-  }, [
-    projectId,
-    provisionalTabId,
-    releaseActive,
-    shouldCommitActive,
-    setTicketActiveTab,
-    moveTicketTabToPane,
-    splitView,
-    ticket.id,
-  ]);
-
   // The `@file` index + create/open wiring, shared by the Doc body editor and
   // every open markdown file tab so any of them can reference (and create) files.
   // @file chips open persistent tabs (decision #33); Files-panel glances use
@@ -932,6 +938,8 @@ export function TicketDetail({
       indexVersion: fileIndex.version,
       onOpenFile: openFile,
       createArtifact: async (name) => {
+        const host = remoteHostNow(projectId);
+        if (host !== null) return { ok: false, error: notAvailableOn(host) };
         try {
           const result = await window.api.files.createArtifact({ projectId, name });
           // A new artifact must show up in the index so its chip resolves at once.
@@ -1016,9 +1024,7 @@ export function TicketDetail({
   const split = resolveSplitView(
     splitView === null
       ? singlePaneSplitView([], activeTab.id, SPLIT_VIEW_ROOT_PANE_ID)
-      : provisionalActive === null
-        ? splitView
-        : activateSplitTab(splitView, chatTabId(provisionalActive)),
+      : overlaySplitView(splitView),
     tabs.map((tab) => tab.id),
     BODY_TAB_ID,
   );
@@ -1101,7 +1107,7 @@ export function TicketDetail({
       chat.openChatTab(ticket.id, relaunch.sessionId);
       return;
     }
-    setTicketActiveTab(projectId, ticket.id, BODY_TAB_ID);
+    recordResolvedTicketTab(projectId, ticket.id, BODY_TAB_ID);
   }, [
     activeTabId,
     activeTabIsRenderable,
@@ -1109,7 +1115,7 @@ export function TicketDetail({
     creating,
     durableChatIds,
     projectId,
-    setTicketActiveTab,
+    recordResolvedTicketTab,
     ticket.id,
   ]);
 
@@ -1174,23 +1180,11 @@ export function TicketDetail({
   // Opens the tab first and asks where to go second — see the note on Home's
   // twin. The `window.prompt` this replaces throws in Electron by definition,
   // and threw from outside the try, so the press was swallowed whole.
-  const createBrowser = React.useCallback(async () => {
-    try {
-      const result = await browserApi.open({
-        projectId,
-        ticketId: ticket.id,
-        url: BROWSER_START_URL,
-      });
-      if (!result.ok) {
-        toastError(`Could not open Browser Tab: ${result.error}`);
-        return;
-      }
-      useBrowserTabsStore.getState().receive(result.tab);
-      setActiveTab(browserTabId(result.tab.tabId));
-    } catch (reason) {
-      toastError(`Could not open Browser Tab: ${errorMessage(reason)}`);
-    }
-  }, [browserApi, projectId, setActiveTab, ticket.id]);
+  const createBrowser = React.useCallback(
+    // The shared door refuses a remote project's (VC-711).
+    () => openBrowserTab(browserApi, { projectId, ticketId: ticket.id }, setActiveTab),
+    [browserApi, projectId, setActiveTab, ticket.id],
+  );
 
   // Mints one durable chat Session on this ticket and opens its tab, through
   // the same boot guard the terminal path uses: one create per ticket at a
@@ -1419,6 +1413,7 @@ export function TicketDetail({
         <PaneEmptyState
           onNewChat={() => void createChat()}
           onNewTerminal={() => void createSession()}
+          onNewBrowser={() => void createBrowser()}
           onOpenFile={openQuickOpen}
           onClosePane={() => closeTicketPane(projectId, ticket.id, pane.id)}
         />
@@ -1445,6 +1440,9 @@ export function TicketDetail({
         {tab.kind === "body" && (
           <ContentColumn>
             <TicketTitle ticket={ticket} />
+            {/* "Running on hetzner-1" (VC-576): only for a host other than
+                This Mac, and only with the `cloud` flag on. */}
+            <RunningOnLabel projectId={projectId} className="mt-2" />
           </ContentColumn>
         )}
         {/* Positioning context for the resident terminal plane: Doc/file tabs
@@ -1527,6 +1525,10 @@ export function TicketDetail({
               visible
               api={browserApi}
               onTabState={useBrowserTabsStore.getState().receive}
+              // ⌘W from inside the page closes THIS pane's tab, and a chord
+              // from inside it starts from THIS pane (VC-301).
+              onClose={() => closeTab(tab)}
+              onFocusPane={() => focusTicketPane(projectId, ticket.id, pane.id)}
             />
           ) : null}
           {tab.kind === "session" ? (

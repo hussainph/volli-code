@@ -18,11 +18,14 @@ import {
 import { toast } from "sonner";
 
 import { runAutomationAction, type RunAutomationAction } from "./run-automation-model";
+import { guardWrite } from "@renderer/components/hosts/use-hosts";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
+import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { refuseRemote, refuseRemoteTicket } from "@renderer/stores/remote-project";
 
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
@@ -75,6 +78,8 @@ export interface TicketRunRequest extends RunRequest {
  * waiting on a Session and no other surface will tell them.
  */
 async function startRun(input: RunRequest): Promise<RunAutomationAction | null> {
+  // A remote project's ticket runs on its host, not here (VC-711).
+  if (refuseRemoteTicket(input.ticketId)) return null;
   // What a lost reply is retried AS: the WHOLE intent (`automationRunRetryKey`)
   // — the record or the Unbound Run's own words, the Ticket, and this
   // invocation's model override. Running the same work on a different model is
@@ -119,6 +124,7 @@ async function startProjectRun(input: {
   automationId: string;
   projectId: string;
 }): Promise<RunAutomationAction | null> {
+  if (refuseRemote(input.projectId)) return null;
   const retryKey = `project\u0000${input.automationId}\u0000${input.projectId}`;
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
@@ -203,9 +209,21 @@ export async function runAutomationForProject(input: {
  * for the one caller that gates a control on the launch rather than firing and
  * forgetting. Nothing about the arms themselves changed.
  */
+/** The project a ticket the board holds belongs to, `null` for one it does not hold. */
+function ticketProject(ticketId: string): string | null {
+  for (const [projectId, tickets] of Object.entries(useBoardStore.getState().ticketsByProject)) {
+    if (tickets.some((ticket) => ticket.id === ticketId)) return projectId;
+  }
+  return null;
+}
+
 export async function runAutomationOnTicket(
   input: TicketRunRequest,
 ): Promise<AutomationRunOutcome> {
+  // Every hand-run door (the card menu, the rail, the palette, the page, the
+  // New-ticket composer) lands here. A ticket whose project's host cannot
+  // serve (VC-576) starts no Run, and says why.
+  if (!guardWrite(ticketProject(input.ticketId))) return "refused";
   const action = await startRun({
     target: input.target,
     ticketId: input.ticketId,

@@ -1,0 +1,53 @@
+---
+title: Agent authority
+description: Session execution, secret handling, and actor permissions in Volli.
+sidebar:
+  label: Agent authority
+---
+
+Volli checks deterministic boundaries around a Session's tools and the host API.
+It does not review each tool call with a model or ask you to approve ordinary
+file and command calls.
+
+## Workspace and execution
+
+A Session starts in its recorded worktree or main checkout. Ordinary desktop
+Sessions use host-native file and command tools: the working directory is not
+a filesystem sandbox.
+
+The runtime also retains an injectable `ScopedExecutionEnv`, whose file checks
+resolve paths and symlink targets against the workspace. Hosts can select that
+environment; desktop Sessions do not use it by default. Neither environment
+isolates arbitrary processes running as your macOS user.
+
+## Secrets
+
+Credentials use a dedicated, person-only field rather than the chat composer.
+Secret values are kept out of prompts, transcripts, and Session events; tool
+output is redacted before it reaches the model or the transcript. Generic
+question answers cannot submit credentials.
+
+See [Local data and network access](/reference/data-and-privacy/) for storage
+and network boundaries.
+
+## Actor permissions
+
+The host derives who made a request from its authenticated connection, not an
+actor name supplied by a caller. Per-actor policy controls coordination verbs,
+which Sessions can be awaited, and how much another Session's transcript may
+be disclosed. Unauthenticated socket callers are read-only by default.
+
+A Session's frozen tool list is a separate boundary: instructions cannot grant
+a tool it does not hold. See the [agent operating
+model](/reference/agent-operating-model/).
+
+## Questions and limits
+
+Agents can still ask ordinary questions and existing confirmations. The
+subagent allowance also remains: reaching its cap can refuse further
+delegation or ask through the existing permission card. An unattended Run
+never invents an answer.
+
+[Decision models](/guides/models/#decision-model) and the `classify` tool are
+independent helpers, not permission judges. Older Session history remains
+readable, but old review records and saved grants do not authorize new calls.

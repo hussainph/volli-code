@@ -1,13 +1,5 @@
-export const FIXTURE_SCHEMA_VERSION = 1;
-/**
- * The app's latest migration version, which a generated fixture must reach.
- *
- * Unlike {@link FIXTURE_SCHEMA_VERSION}, this is not a pin: it asserts that a
- * freshly generated fixture migrated all the way up, so it has to be raised
- * whenever a migration is added. VC-8 added 047; VC-355 added 048 and 049;
- * VC-380 added 050.
- */
-export const CURRENT_DB_SCHEMA_VERSION = 50;
+// 2: timestamps are relative to a recorded generation clock (VC-415).
+export const FIXTURE_SCHEMA_VERSION = 2;
 export const DEFAULT_SEED = 353_259_855;
 export const REAL_BUSY_CORE_DEFAULT = 2;
 
@@ -27,11 +19,10 @@ export const PRESETS = Object.freeze({
     overlappingWorktrees: 3,
     maxSessionEvents: 1_200,
     transcriptMessages: 220,
-    // The owner's 373 MB file held 173 MB of session_events and ~200 MB the
-    // fixture cannot attribute row-for-row (indexes, months of churn, deleted
-    // history). We reproduce the Session Event mass exactly and reproduce the
-    // remaining physical file mass as free pages, which is what churn leaves
-    // behind; this small budget is ten percent of that captured profile.
+    // The 373 MB target includes 173 MB of session_events and ~200 MB the
+    // fixture cannot attribute row-for-row (indexes, churn, deleted history).
+    // The fixture reproduces Session Event mass and remaining physical mass as
+    // free pages; this small budget is ten percent of the large target.
     targetFileBytes: 37_300_000,
     targetSessionEventBytes: 17_300_000,
   }),
@@ -45,12 +36,10 @@ export const PRESETS = Object.freeze({
     overlappingWorktrees: 17,
     maxSessionEvents: 1_668,
     transcriptMessages: 1_600,
-    // The owner's 373 MB file held 173 MB of session_events and ~200 MB the
-    // fixture cannot attribute row-for-row (indexes, months of churn, deleted
-    // history). We reproduce the Session Event mass exactly and reproduce the
-    // remaining physical file mass as free pages, which is what churn leaves
-    // behind. This is an honest physical target, not a claim about equivalent
-    // live content.
+    // The 373 MB target includes 173 MB of session_events and ~200 MB the
+    // fixture cannot attribute row-for-row (indexes, churn, deleted history).
+    // The fixture reproduces Session Event mass and remaining physical mass as
+    // free pages. This is a physical target, not equivalent live content.
     targetFileBytes: 373_000_000,
     targetSessionEventBytes: 173_000_000,
   }),

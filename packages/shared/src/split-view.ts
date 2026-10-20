@@ -244,6 +244,26 @@ export function activateTab(state: SplitViewState, tabId: string): SplitViewStat
 }
 
 /**
+ * Assign an unclaimed tab to a pane without moving focus. A draft's first
+ * content may arrive after focus has moved elsewhere; its placement still
+ * belongs to the pane where it was composed. Only `activate` changes that
+ * pane's front tab. Already-claimed tabs and missing panes are left alone.
+ */
+export function claimTabInPane(
+  state: SplitViewState,
+  tabId: string,
+  paneId: string,
+  activate: boolean,
+): SplitViewState {
+  if (findPaneWithTab(state, tabId) !== null) return state;
+  return replacePane(state, paneId, (pane) => ({
+    ...pane,
+    tabIds: [...pane.tabIds, tabId],
+    activeTabId: activate ? tabId : pane.activeTabId,
+  }));
+}
+
+/**
  * Drop `tabId` from a pane, handing the front tab to its successor — the next
  * tab in the pane, else the previous one.
  */

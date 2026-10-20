@@ -151,6 +151,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   InMemoryModelsStore,
+  isModelType,
   type Api,
   type Model,
   type ModelCost,
@@ -361,6 +362,14 @@ export function withRefreshableCatalog(
     // over the baseline below, so a refreshed-only id the feed dropped is gone
     // and a baseline id is never missing.
     getModels: () => refreshed ?? base.getModels(),
+    // Pi 0.99 lists every model type through `getAllModels` and the spread
+    // above copied the base's, which would answer with the unrefreshed chat
+    // baseline. Chat entries are this wrapper's list; image and classifier
+    // entries are the base's own, since this catalog never carries them.
+    getAllModels: () => [
+      ...(refreshed ?? base.getModels()),
+      ...(base.getAllModels?.() ?? []).filter((model) => !isModelType(model, "chat")),
+    ],
     refreshModels: async (context: RefreshModelsContext): Promise<void> => {
       // Restore phase: pi calls this once with network disallowed before any
       // auth resolution, which is what brings a persisted list back at
@@ -372,9 +381,14 @@ export function withRefreshableCatalog(
         // require the current admission proof, so old cache bytes cannot roll
         // corrected request shape back.
         const stored = context.stored as PersistedCatalogEntry;
+        // Since 0.99 a store entry may hold every model type. This catalog
+        // only ever publishes chat models, so anything else is foreign.
         const restored = restoreStoredCatalog(
           base.getModels(),
-          stored.models.filter((model) => model.provider === base.id),
+          stored.models.filter(
+            (model): model is Model<Api> =>
+              isModelType(model, "chat") && model.provider === base.id,
+          ),
         );
         const complete = stored[CATALOG_FORMAT_FIELD] === CATALOG_FORMAT_VERSION;
         if (

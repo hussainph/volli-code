@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 /**
- * What this window tells main it is showing (VC-295 round 4), across the seam
- * that round 3 left open.
+ * What this window tells main it is showing (VC-295), including revealed items.
  *
  * Tested through the hook against the real stores and the real reveal slot,
  * because the seam IS the subject: the chat plane's blocker draws the Attention
@@ -22,6 +21,8 @@ import {
 } from "@renderer/chat/session-item-reveal";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectsStore } from "@renderer/stores/projects";
+import { useSessionsStore } from "@renderer/stores/sessions";
+import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 import { useNotificationTargetReport } from "./use-notification-target";
@@ -103,6 +104,86 @@ afterEach(() => {
   useChatSessionsStore.setState({ sessions: {} } as never);
   useWorkspaceStore.setState({ byProject: {} } as never);
   useProjectsStore.setState({ projects: [], selectedProjectId: null });
+  useSessionsStore.setState({ byOwner: {} } as never);
+  useUiStore.setState({ settingsOpen: false });
+});
+
+/** A terminal tab with a split: its root and the pane the person is typing in. */
+const terminalTab = (tabId: string, paneId: string) => ({
+  sessionId: tabId,
+  activePaneId: paneId,
+  layout: { kind: "leaf", sessionId: tabId },
+});
+
+/** Home's own tab in front, with the ticket still remembered behind it. */
+function showHomeTab(tabId: string): void {
+  useWorkspaceStore.setState((state) => ({
+    byProject: {
+      ...state.byProject,
+      [PROJECT]: { ...state.byProject[PROJECT]!, homeActiveTab: tabId },
+    },
+  }));
+}
+
+describe("useNotificationTargetReport — which surface is in front", () => {
+  it("reads a Home terminal tab from the project's strip while a ticket is remembered", async () => {
+    // Both containers hold a tab with the same id, so reading the remembered
+    // ticket's strip would name the wrong pane — the lookup has to follow the
+    // surface that is actually in front.
+    useSessionsStore.setState({
+      byOwner: {
+        [PROJECT]: { tabs: [terminalTab("term-root", "board-pane")], activeSessionId: null },
+        [TICKET]: { tabs: [terminalTab("term-root", "ticket-pane")], activeSessionId: null },
+      },
+    } as never);
+    showHomeTab("term-root");
+
+    await act(async () => {
+      root.render(<Probe />);
+    });
+
+    expect(lastReport()).toEqual({
+      kind: "session",
+      projectId: PROJECT,
+      ticketId: null,
+      sessionId: "board-pane",
+      interactionId: null,
+      attentionId: null,
+    });
+  });
+
+  it("stops naming the remembered ticket's chat once a Home Session tab is in front", async () => {
+    await act(async () => {
+      root.render(<Probe />);
+    });
+    expect(lastReport()).toMatchObject({ sessionId: SESSION });
+
+    await act(async () => {
+      showHomeTab("chat:home-session");
+    });
+
+    expect(lastReport()).toMatchObject({
+      kind: "session",
+      ticketId: null,
+      sessionId: "home-session",
+    });
+  });
+
+  it("reports nothing while Settings is open, and the chat again once it closes", async () => {
+    await act(async () => {
+      root.render(<Probe />);
+    });
+
+    await act(async () => {
+      useUiStore.setState({ settingsOpen: true });
+    });
+    expect(lastReport()).toBeNull();
+
+    await act(async () => {
+      useUiStore.setState({ settingsOpen: false });
+    });
+    expect(lastReport()).toMatchObject({ sessionId: SESSION, attentionId: NEWER });
+  });
 });
 
 describe("useNotificationTargetReport", () => {
@@ -169,7 +250,7 @@ describe("useNotificationTargetReport", () => {
     expect(lastReport()).toMatchObject({ attentionId: NEWER });
   });
 
-  it("follows a revealed question too, when several are open (round 5)", async () => {
+  it("follows a revealed question too, when several are open", async () => {
     // The plane draws the revealed question in the card slot (or scrolls to
     // its row), so the report names it — not the first open one — and an alert
     // about the first is still delivered.

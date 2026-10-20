@@ -24,6 +24,7 @@ import {
   type Ticket,
 } from "@volli/shared";
 
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { TicketAutomationMenuItems } from "@renderer/components/automations/automation-run-menu";
 import { useTicketDialogs } from "@renderer/components/board/ticket-dialog-host";
 import { resumeTicketSession } from "@renderer/components/sessions/session-create";
@@ -85,7 +86,15 @@ const PRIORITY_ICON = {
  * every card on the board holds one of these menus: rendered inside the
  * submenu's content, that subscription exists only while the submenu is open.
  */
-function TicketLabelItems({ ticket, projectId }: { ticket: Ticket; projectId: string }) {
+function TicketLabelItems({
+  ticket,
+  projectId,
+  canWrite,
+}: {
+  ticket: Ticket;
+  projectId: string;
+  canWrite: boolean;
+}) {
   const projectLabels = useBoardStore((state) => state.labelsByProject[projectId]);
   const vocabulary = useLabelVocabulary(projectId);
 
@@ -97,14 +106,16 @@ function TicketLabelItems({ ticket, projectId }: { ticket: Ticket; projectId: st
         <ContextMenuCheckboxItem
           key={name}
           checked={ticket.labels.includes(name)}
+          disabled={!canWrite}
           // Multi-select: labelling a ticket `bug` + `docs` is one gesture, so
           // a tick must not dismiss the menu it was ticked in.
           onSelect={(event) => event.preventDefault()}
-          onCheckedChange={() =>
+          onCheckedChange={() => {
+            if (!guardWrite(projectId)) return;
             void useBoardStore
               .getState()
-              .setLabels(ticket.id, withLabelToggled(ticket.labels, name))
-          }
+              .setLabels(ticket.id, withLabelToggled(ticket.labels, name));
+          }}
         >
           <span
             aria-hidden
@@ -171,6 +182,11 @@ export function TicketContextMenu({
   const rows = useTicketSessionRecordsStore((state) => state.byTicket[ticket.id] ?? NO_ROWS);
   const resumableSession = latestResumableSession(rows, launchAdapter);
 
+  // Read-only (VC-576): every write here stands down while the project's host
+  // cannot serve — shown disabled, and each handler checks again as it fires.
+  // Opening the menu and reading it stay.
+  const canWrite = useCanWrite(projectId);
+
   const resumeLastSession = () => {
     if (resumableSession === null) return;
     void resumeTicketSession(ticketScope(projectId, ticket.id), resumableSession.id).then(
@@ -200,11 +216,13 @@ export function TicketContextMenu({
               <ContextMenuItem
                 key={status}
                 icon={STATUS_ICON[status]}
-                onSelect={() =>
-                  useBoardStore
+                disabled={!canWrite}
+                onSelect={() => {
+                  if (!guardWrite(projectId)) return;
+                  void useBoardStore
                     .getState()
-                    .moveTicket(projectId, ticket.id, status, Number.MAX_SAFE_INTEGER)
-                }
+                    .moveTicket(projectId, ticket.id, status, Number.MAX_SAFE_INTEGER);
+                }}
               >
                 {TICKET_STATUS_LABELS[status]}
               </ContextMenuItem>
@@ -218,9 +236,11 @@ export function TicketContextMenu({
               <ContextMenuItem
                 key={priority}
                 icon={PRIORITY_ICON[priority]}
-                onSelect={() =>
-                  useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority)
-                }
+                disabled={!canWrite}
+                onSelect={() => {
+                  if (!guardWrite(projectId)) return;
+                  void useBoardStore.getState().setTicketPriority(projectId, ticket.id, priority);
+                }}
               >
                 {TICKET_PRIORITY_LABELS[priority]}
                 {priority === ticket.priority ? (
@@ -233,7 +253,7 @@ export function TicketContextMenu({
         <ContextMenuSub>
           <ContextMenuSubTrigger icon={TagIcon}>Labels</ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            <TicketLabelItems ticket={ticket} projectId={projectId} />
+            <TicketLabelItems ticket={ticket} projectId={projectId} canWrite={canWrite} />
           </ContextMenuSubContent>
         </ContextMenuSub>
         {/* VC-112's "run one without opening the Ticket", and the nested
@@ -248,20 +268,32 @@ export function TicketContextMenu({
         </ContextMenuSub>
         <ContextMenuSeparator />
         {resumableSession !== null ? (
-          <ContextMenuItem icon={ArrowClockwiseIcon} onSelect={resumeLastSession}>
+          <ContextMenuItem
+            icon={ArrowClockwiseIcon}
+            disabled={!canWrite}
+            onSelect={resumeLastSession}
+          >
             Resume last session
           </ContextMenuItem>
         ) : null}
         {ticket.worktreePath !== null ? (
           <ContextMenuItem
             icon={TrashIcon}
-            disabled={hasLiveTerminals}
-            onSelect={() => dialogs.requestRemoveWorktree(ticket.id)}
+            disabled={hasLiveTerminals || !canWrite}
+            onSelect={() => {
+              if (guardWrite(projectId)) dialogs.requestRemoveWorktree(ticket.id);
+            }}
           >
             Remove worktree…
           </ContextMenuItem>
         ) : null}
-        <ContextMenuItem icon={ArchiveIcon} onSelect={() => dialogs.requestArchive(ticket.id)}>
+        <ContextMenuItem
+          icon={ArchiveIcon}
+          disabled={!canWrite}
+          onSelect={() => {
+            if (guardWrite(projectId)) dialogs.requestArchive(ticket.id);
+          }}
+        >
           Archive
         </ContextMenuItem>
       </ContextMenuContent>

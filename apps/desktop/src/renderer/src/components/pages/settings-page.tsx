@@ -12,6 +12,10 @@
  */
 import * as React from "react";
 
+import { useExperimentsStore } from "@renderer/stores/experiments";
+
+import { useCloudEnabled } from "@renderer/components/hosts/use-hosts";
+import { useLogViewerEnabled } from "@renderer/components/logs/log-viewer";
 import { PrefShell } from "@renderer/components/settings/kit";
 import {
   resolveSettingsCategory,
@@ -22,9 +26,15 @@ export function SettingsPage({
   initialCategoryKey,
   initialSignInProviderId,
 }: { initialCategoryKey?: string; initialSignInProviderId?: string } = {}) {
+  const logs = useLogViewerEnabled();
+  const hosts = useCloudEnabled();
+  const experiments = useExperimentsStore((state) => state.snapshot);
+  React.useEffect(() => {
+    void useExperimentsStore.getState().ensure();
+  }, []);
   const groups = React.useMemo(
-    () => settingsGroups(initialSignInProviderId),
-    [initialSignInProviderId],
+    () => settingsGroups(initialSignInProviderId, { logs, hosts, experiments }),
+    [initialSignInProviderId, logs, hosts, experiments],
   );
 
   // Resolved once, from the deep link. `resolveSettingsCategory` maps the

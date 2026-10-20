@@ -8,8 +8,8 @@
  * Session is born with.
  *
  * THEY ARE THE CHAT COMPOSER'S OWN PILLS, imported rather than re-drawn. Press
- * Create & start and you land in a chat pane whose footer carries these exact
- * two controls, showing these exact two values; a second pair shaped slightly
+ * Create & start and the new Session's footer carries these exact two controls
+ * when you open it, showing these exact two values; a second pair shaped slightly
  * differently would be the same control drawn twice and would read as two
  * different settings. The automations lab (`lab/automation/runtime-picker.tsx`)
  * sketched effort INSIDE the model popover, and the shipped chat composer has
@@ -74,6 +74,8 @@ export interface ComposerRun {
    * recovery there is.
    */
   selection: ModelSelection | null;
+  /** Only a person's model or effort gesture names a birth override. */
+  explicit: boolean;
   setSelection(selection: ModelSelection): void;
 }
 
@@ -91,11 +93,27 @@ export interface ComposerRun {
  * over a project override would send that misreading back as an explicit
  * override, quietly defeating the very rung the project configured.
  */
-export function useComposerRun(projectDefault: ModelSelection | null = null): ComposerRun {
+export function useComposerRun(
+  projectDefault: ModelSelection | null = null,
+  projectId?: string,
+): ComposerRun {
   const access = useModelAccessClient();
   const [models, setModels] = React.useState<readonly ComposerModel[]>(NO_MODELS);
   const [tiers, setTiers] = React.useState<readonly ComposerTierRow[]>(NO_TIERS);
-  const [selection, setSelection] = React.useState<ModelSelection | null>(null);
+  const [seed, setSeed] = React.useState<ModelSelection | null>(null);
+  const [choice, setChoice] = React.useState<{
+    projectId?: string;
+    selection: ModelSelection;
+  } | null>(null);
+  React.useEffect(() => setChoice(null), [projectId]);
+  const explicit = choice !== null && choice.projectId === projectId;
+  const selection = explicit ? choice.selection : seed;
+  const setSelection = React.useCallback(
+    (picked: ModelSelection) => {
+      setChoice({ projectId, selection: picked });
+    },
+    [projectId],
+  );
   const inspect = access?.inspect;
   const hiddenModels = access?.hiddenModels;
   const defaults = access?.defaults;
@@ -113,7 +131,7 @@ export function useComposerRun(projectDefault: ModelSelection | null = null): Co
         // project's own preference first, then `resolveDefaultModel` — the
         // policy, not a guess: an unset Ticket default MEANS the project
         // default, which is what the Settings row says when it is unset.
-        setSelection(projectDefault ?? resolveDefaultModel(configured, "ticket"));
+        setSeed(projectDefault ?? resolveDefaultModel(configured, "ticket"));
       })
       .catch(() => {
         // A catalog we could not read costs the ROW, never the kickoff: with
@@ -122,14 +140,14 @@ export function useComposerRun(projectDefault: ModelSelection | null = null): Co
         if (!current) return;
         setModels(NO_MODELS);
         setTiers(NO_TIERS);
-        setSelection(null);
+        setSeed(null);
       });
     return () => {
       current = false;
     };
   }, [defaults, hiddenModels, inspect, projectDefault, revision]);
 
-  return { models, tiers, selection, setSelection };
+  return { models, tiers, selection, explicit, setSelection };
 }
 
 /**

@@ -1,5 +1,5 @@
 /**
- * The composer's draft cache — Linear-style implicit save of in-progress work,
+ * The composer's draft cache — implicit save of in-progress work,
  * so an accidental Escape / overlay click / app quit never destroys what was
  * typed. The full field state is written through {@link appStateStorage} (the
  * SQLite-backed `app_state` kv layer: synchronous cache reads, debounced

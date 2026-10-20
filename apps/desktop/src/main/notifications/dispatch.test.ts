@@ -199,7 +199,7 @@ describe("createNotificationDispatcher", () => {
   });
 
   it("still delivers a different question in the Session already on screen", () => {
-    // Round 2's correction: a person answering one question is not being shown
+    // A person answering one question is not being shown
     // the failure that just stopped the same Session.
     const { dispatcher } = harness({
       focusedTargets: [{ ...SESSION_TARGET, interactionId: null, attentionId: "a1" }],

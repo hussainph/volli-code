@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Settings → Notifications as a person uses it (VC-295 round 2).
+ * Settings → Notifications as a person uses it (VC-295).
  *
  * The static render says the switches exist; these say what they DO — which is
  * the half that was a preview for two tickets. Four behaviours carry the

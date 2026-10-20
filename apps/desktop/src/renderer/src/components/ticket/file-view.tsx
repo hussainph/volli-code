@@ -34,6 +34,7 @@ import { useDebouncedCallback } from "@renderer/lib/use-debounced-callback";
 import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 /**
  * Document Mode over REPOSITORY markdown: the live preview, and deliberately no
@@ -148,7 +149,7 @@ export function overwriteAutosaveConflict(input: {
  *
  * Mount with `key={relPath}` so switching files remounts it fresh.
  */
-export function FileView({
+function LocalFileView({
   projectId,
   ticketId,
   relPath,
@@ -886,5 +887,19 @@ export function FileView({
       <FileIcon className="size-6 text-muted-foreground" />
       <p className="text-sm text-muted-foreground">{name} can&apos;t be previewed here.</p>
     </div>
+  );
+}
+
+/**
+ * A file tab, for one of This Mac's projects only: it reads, watches and
+ * writes this Mac's checkout through `window.api`. A remote project's tab
+ * (one restored from a saved layout, say) says where it is not available
+ * instead, and never mounts the view (VC-711).
+ */
+export function FileView(props: FileViewProps) {
+  return (
+    <LocalOnly projectId={props.projectId}>
+      <LocalFileView {...props} />
+    </LocalOnly>
   );
 }

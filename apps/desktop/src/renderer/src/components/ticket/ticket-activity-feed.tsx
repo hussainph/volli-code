@@ -42,6 +42,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@renderer/components/ui/alert-dialog";
+import { ReadOnlyNote } from "@renderer/components/hosts/read-only-note";
+import { guardWrite, readOnlyMark, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { PROMPT_SURFACE } from "@renderer/components/chat/composer-chrome";
 import { Button } from "@renderer/components/ui/button";
 import { EMPTY_INLINE } from "@renderer/components/ui/empty-classes";
@@ -61,6 +63,7 @@ import { cn } from "@renderer/lib/utils";
 import { planningChangeAffects, useBoardStore } from "@renderer/stores/board";
 import { useTicketActivityStore } from "@renderer/stores/ticket-activity";
 import { writeThrough } from "@renderer/stores/mutate";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 type PhosphorIcon = typeof ChatCircleIcon;
 
@@ -90,6 +93,7 @@ const EVENT_ICON: Record<TicketEventKind, PhosphorIcon> = {
   attachment_added: PaperclipIcon,
   attachment_removed: TrashSimpleIcon,
   session_started: PlayCircleIcon,
+  session_resumed: PlayCircleIcon,
 };
 
 /** The single muted line for one property-change event: icon + sentence + time. */
@@ -190,7 +194,18 @@ function AuthorChip({ actor }: { actor: string }) {
  * human user's own comments) inline edit and a confirm-guarded delete. Every
  * mutation calls `onChanged` to refetch the authoritative feed.
  */
-function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChanged: () => void }) {
+function CommentBlock({
+  comment,
+  projectId,
+  canWrite,
+  onChanged,
+}: {
+  comment: TicketComment;
+  projectId: string;
+  /** Read-only (VC-576): the comment reads; Edit and Delete stand down. */
+  canWrite: boolean;
+  onChanged: () => void;
+}) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(comment.body);
   const isUser = comment.actor === USER_ACTOR;
@@ -202,8 +217,10 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
       setEditing(false);
       return;
     }
+    // An edit open when the host went away keeps its draft and says why.
+    if (!guardWrite(projectId)) return;
     const result = await writeThrough("edit comment", () =>
-      window.api.comments.update({ commentId: comment.id, body: trimmed }),
+      boardApi().comments.update({ commentId: comment.id, body: trimmed }),
     );
     if (!result) return; // failure already toasted — keep the editor open
     setEditing(false);
@@ -211,8 +228,9 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
   }
 
   async function remove() {
+    if (!guardWrite(projectId)) return;
     const result = await writeThrough("delete comment", () =>
-      window.api.comments.remove({ commentId: comment.id }),
+      boardApi().comments.remove({ commentId: comment.id }),
     );
     if (!result) return;
     onChanged();
@@ -234,7 +252,7 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
           {relativeTime(comment.createdAt)}
           {comment.updatedAt > comment.createdAt ? " · edited" : ""}
         </span>
-        {isUser && !editing && !optimistic ? (
+        {isUser && !editing && !optimistic && canWrite ? (
           <div className="ml-auto flex items-center gap-1">
             <Button
               variant="ghost"
@@ -278,6 +296,9 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
             aria-keyshortcuts="Meta+Enter Control+Enter Escape"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
+              // Never mid-word: an IME's Escape closes its candidate window,
+              // not the edit.
+              if (event.nativeEvent.isComposing) return;
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
                 void saveEdit();
@@ -314,13 +335,23 @@ function CommentBlock({ comment, onChanged }: { comment: TicketComment; onChange
  * (owned by the feed) does the optimistic append + refetch and resolves `false`
  * on failure, so the composer can restore the draft it optimistically cleared.
  */
-function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }) {
+function Composer({
+  projectId,
+  canWrite,
+  onSubmit,
+}: {
+  projectId: string;
+  /** Read-only (VC-576): the draft can be written; it cannot be posted. */
+  canWrite: boolean;
+  onSubmit: (body: string) => Promise<boolean>;
+}) {
   const [draft, setDraft] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
 
   async function submit() {
     const body = draft.trim();
     if (body === "" || submitting) return;
+    if (!guardWrite(projectId)) return;
     setSubmitting(true);
     setDraft("");
     const ok = await onSubmit(body);
@@ -330,6 +361,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
 
   return (
     <div className={cn(PROMPT_SURFACE, "flex flex-col overflow-hidden")}>
+      <ReadOnlyNote projectId={projectId} className="px-4 pt-3" />
       <textarea
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
@@ -348,7 +380,8 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
         <Button
           size="sm"
           className="prompt-primary"
-          disabled={draft.trim() === "" || submitting}
+          disabled={draft.trim() === "" || submitting || !canWrite}
+          {...readOnlyMark(canWrite)}
           aria-keyshortcuts="Meta+Enter Control+Enter"
           onClick={() => void submit()}
         >
@@ -379,6 +412,7 @@ function Composer({ onSubmit }: { onSubmit: (body: string) => Promise<boolean> }
  */
 export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const ticketId = ticket.id;
+  const canWrite = useCanWrite(ticket.projectId);
   const entry = useTicketActivityStore((state) => state.byTicket[ticketId]);
   const listingState = useTicketActivityStore((state) => state.listingState[ticketId]);
   const listingError = useTicketActivityStore((state) => state.listingError[ticketId] ?? null);
@@ -416,7 +450,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
   const refetchComments = React.useCallback(async () => {
     const token = activityFetch.claim();
     try {
-      const cm = await window.api.comments.list({ ticketId });
+      const cm = await boardApi().comments.list({ ticketId });
       if (!activityFetch.isCurrent(token)) return; // superseded — drop the stale result
       if (!cm.ok) {
         toastError(`Couldn't load activity: ${cm.error}`);
@@ -486,7 +520,7 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
       version: useBoardStore.getState().lastPlanningChange.version,
     });
     const result = await writeThrough("post comment", () =>
-      window.api.comments.create({ ticketId, body }),
+      boardApi().comments.create({ ticketId, body }),
     );
     if (!result) {
       const rolledBack = useTicketActivityStore.getState().byTicket[ticketId];
@@ -552,6 +586,8 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
               <CommentBlock
                 key={item.id}
                 comment={item.comment}
+                projectId={ticket.projectId}
+                canWrite={canWrite}
                 onChanged={() => void refetchComments()}
               />
             ),
@@ -559,7 +595,12 @@ export function TicketActivityFeed({ ticket }: { ticket: Ticket }) {
         </ul>
       )}
 
-      <Composer key={ticketId} onSubmit={postComment} />
+      <Composer
+        key={ticketId}
+        projectId={ticket.projectId}
+        canWrite={canWrite}
+        onSubmit={postComment}
+      />
     </section>
   );
 }

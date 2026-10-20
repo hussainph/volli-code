@@ -10,10 +10,8 @@
  * dropping. A machine that is offline spends none of it: the runtime waits for
  * the network instead (see `connectivity.ts`), for as long as that takes,
  * because a laptop closed on a train for three hours has not failed at
- * anything (VC-443). The old budget — ten attempts under an eight-second
- * ceiling, about a minute in all — assumed every outage was a blip, and the
- * owner's ledger shows 82 hours of Session time dead-ended on exactly that
- * assumption.
+ * anything (VC-443). Online recovery allows sustained provider outages rather
+ * than treating every outage as a brief connection drop.
  */
 
 /** The first wait. Short, because most drops are a single lost packet. */

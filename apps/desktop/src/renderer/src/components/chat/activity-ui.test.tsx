@@ -61,6 +61,133 @@ const failed: DynamicToolUIPart = {
 const openBundle = () =>
   renderToStaticMarkup(<ActivityBundle rows={[{ kind: "tool", part: failed, key: "read-2" }]} />);
 
+describe("collapsed live bundles", () => {
+  it("keeps thinking visible after a completed tool without duplicating it in an open bundle", () => {
+    const thought = {
+      kind: "reasoning" as const,
+      key: "thought",
+      part: {
+        type: "reasoning" as const,
+        text: "**Checking the result**",
+        state: "streaming" as const,
+      },
+      streaming: true,
+    };
+    const collapsed = renderToStaticMarkup(
+      <ActivityBundle rows={[{ kind: "tool", part: row, key: "read" }, thought]} />,
+    );
+    expect(collapsed).toContain("Checking the result");
+    expect(collapsed.match(/animate-spin/g)).toHaveLength(1);
+    const expanded = renderToStaticMarkup(
+      <ActivityBundle rows={[{ kind: "tool", part: failed, key: "read" }, thought]} />,
+    );
+    expect(expanded.match(/Checking the result/g)).toHaveLength(1);
+    // Visibility arbitration needs browser layout; mounted tests cover the
+    // single-indicator handoff once the expanded viewport is measured.
+  });
+
+  it("does not animate stale reasoning or tool rows in paused and historical bundles", () => {
+    const thought = {
+      kind: "reasoning" as const,
+      key: "thought",
+      streaming: true,
+      part: { type: "reasoning" as const, text: "Checking", state: "streaming" as const },
+    };
+    const tool = { kind: "tool" as const, key: "tool", part: { ...row, preliminary: true } };
+    for (const rows of [
+      [thought],
+      [tool],
+      [{ kind: "tool" as const, key: "failed", part: failed }, thought, tool],
+    ]) {
+      const html = renderToStaticMarkup(<ActivityBundle rows={rows} progressEnabled={false} />);
+      expect(html).not.toContain("animate-spin");
+    }
+  });
+
+  it("gives a collapsed running tool a single progress glyph", () => {
+    const html = renderToStaticMarkup(
+      <ActivityBundle
+        rows={[
+          {
+            kind: "tool",
+            key: "read",
+            part: {
+              type: "dynamic-tool",
+              toolName: "read",
+              toolCallId: "read-1",
+              toolMetadata: row.toolMetadata,
+              state: "input-available",
+              input: { path: "src/session.ts" },
+            },
+          },
+        ]}
+      />,
+    );
+    expect(html.match(/animate-spin/g)).toHaveLength(1);
+    expect(html).toContain("Reading");
+  });
+});
+
+describe("hard refusal", () => {
+  it("shows the host explanation without opening details or offering approval", () => {
+    const html = renderToStaticMarkup(
+      <ToolRow
+        part={{
+          type: "dynamic-tool",
+          toolName: "execute",
+          toolCallId: "hard-refusal",
+          state: "output-error",
+          input: { command: "curl -k https://example.com" },
+          errorText: "Volli refused this call.\nCertificate verification cannot be disabled.",
+          toolMetadata: {
+            [ACTIVITY_METADATA_KEY]: {
+              ...descriptor,
+              kind: "run-command",
+              nativeToolName: "execute",
+            },
+          } as DynamicToolUIPart["toolMetadata"],
+        }}
+      />,
+    );
+    expect(html).toContain("Certificate verification cannot be disabled.");
+    expect(html).not.toContain("Allow once");
+    expect(html).not.toContain('data-slot="approval-card"');
+  });
+});
+
+describe("legacy approval rows", () => {
+  // A row recorded before the approval machinery was removed: the call was
+  // allowed, but no execution result ever followed it.
+  const approvedNeverExecuted: DynamicToolUIPart = {
+    type: "dynamic-tool",
+    toolName: "bash",
+    toolCallId: "legacy-allowed",
+    state: "approval-responded",
+    input: { command: "pnpm test" },
+    approval: { id: "ask-1", approved: true },
+    toolMetadata: {
+      [ACTIVITY_METADATA_KEY]: {
+        ...descriptor,
+        kind: "run-command",
+        nativeToolName: "bash",
+        subject: { label: "pnpm test", path: null, lineRange: null },
+      },
+    } as DynamicToolUIPart["toolMetadata"],
+  };
+
+  it("labels a call that was allowed but never executed as not run, still and read-only", () => {
+    const html = renderToStaticMarkup(<ToolRow part={approvedNeverExecuted} />);
+
+    // The verb must not claim the work happened.
+    expect(html).toContain("Not run");
+    expect(html).not.toContain(">Ran<");
+    // Inactive: no spinner, and no approval machinery came back with it.
+    expect(html).not.toContain("animate-spin");
+    expect(html).not.toContain("Allow once");
+    expect(html).not.toContain('data-slot="approval-card"');
+  });
+});
+
 describe("ActivityBundle scroll window", () => {
   it("caps the open bundle without trapping the wheel inside it (VC-32)", () => {
     // The cap must stay — an uncapped payload shoves the feed off screen — but
@@ -285,6 +412,81 @@ describe("ToolRow expanded detail colouring (VC-125)", () => {
 
     expect(host.textContent).toContain("Typecheck passed");
     expect(host.querySelector(TOKEN_SELECTOR)).toBeNull();
+  });
+});
+
+describe("running command copy", () => {
+  it("uses present tense for live and preliminary commands, past tense for the receipt", () => {
+    const running: DynamicToolUIPart = {
+      type: "dynamic-tool",
+      toolName: "bash",
+      toolCallId: "bash-live",
+      state: "input-available",
+      input: bashRow.input,
+      toolMetadata: bashRow.toolMetadata,
+    };
+    for (const part of [running, { ...bashRow, preliminary: true }]) {
+      expect(renderToStaticMarkup(<ToolRow part={part} />)).toContain(">Running</span>");
+    }
+    expect(renderToStaticMarkup(<ToolRow part={bashRow} />)).toContain(">Ran</span>");
+  });
+});
+
+describe("moved bash receipt", () => {
+  const receipt =
+    "Moved command to background shell moved-1.\nIt keeps running. A notice will arrive when it exits; use shell_output to read it or shell_kill to end it.\nOutput so far:\nListening on localhost:5300";
+  const moved: DynamicToolUIPart = {
+    ...bashRow,
+    output: { content: [{ type: "text", text: receipt }] },
+  };
+  it("marks the collapsed settled header and preserves the original receipt on disclosure", () => {
+    act(() => root?.render(<ToolRow part={moved} />));
+    expect(container?.textContent).toContain("Moved to background");
+    expect(container?.textContent).not.toContain("It keeps running.");
+    expect(container?.querySelector("[aria-expanded]")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+    act(() => container?.querySelector<HTMLButtonElement>('[aria-label="Show details"]')?.click());
+    expect(container?.textContent).toContain(receipt);
+  });
+  it("recognizes no-output receipts from history too", () => {
+    const html = renderToStaticMarkup(
+      <ToolRow
+        part={{
+          ...moved,
+          output: {
+            content: [
+              {
+                type: "text",
+                text: receipt.replace(
+                  "Output so far:\nListening on localhost:5300",
+                  "No output so far.",
+                ),
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(html).toContain("Moved to background");
+  });
+  it("does not mark incidental, incomplete, preliminary, non-bash or malformed output", () => {
+    const cases: DynamicToolUIPart[] = [
+      {
+        ...moved,
+        output: { content: [{ type: "text", text: "Moved command to background shell moved-1." }] },
+      },
+      { ...moved, output: { content: [{ type: "text", text: `command log\n${receipt}` }] } },
+      { ...moved, preliminary: true },
+      { ...row, output: moved.output },
+      { ...moved, output: null },
+      { ...moved, output: { content: "wrong" } },
+      { ...moved, output: { content: [null] } },
+      { ...moved, output: { content: [{ type: "image", text: receipt }] } },
+    ];
+    for (const part of cases) {
+      expect(renderToStaticMarkup(<ToolRow part={part} />)).not.toContain("Moved to background");
+    }
   });
 });
 

@@ -1,5 +1,6 @@
 import { getCollection } from "astro:content";
 import type { APIRoute, GetStaticPaths } from "astro";
+import { expandGeneratedMarkdown } from "../lib/generated-markdown";
 
 /*
  * A plain-Markdown mirror of every docs page, at /<slug>.md.
@@ -10,11 +11,8 @@ import type { APIRoute, GetStaticPaths } from "astro";
  * extractor in front of it, which matters for a product whose users are mostly
  * driving coding agents.
  *
- * The body is served as authored apart from its leading `import` block, which
- * only ever names Starlight components and means nothing outside a build. The
- * component tags themselves stay: stripping them would leave holes where the
- * tabs and callouts were, and a reader can follow `<Tabs>` more easily than it
- * can follow a gap.
+ * Drop leading imports and expand the data-backed reference components. Keep
+ * authored Starlight tags, which retain the content of callouts and cards.
  */
 
 /** Drops the MDX `import` statements at the top of a page body. */
@@ -37,7 +35,10 @@ export const GET: APIRoute = async ({ params }) => {
   const { title, description } = entry.data;
   const heading = description ? `# ${title}\n\n> ${description}\n` : `# ${title}\n`;
 
-  return new Response(`${heading}\n${stripLeadingImports(entry.body ?? "")}`, {
-    headers: { "Content-Type": "text/markdown; charset=utf-8" },
-  });
+  return new Response(
+    `${heading}\n${expandGeneratedMarkdown(stripLeadingImports(entry.body ?? ""))}`,
+    {
+      headers: { "Content-Type": "text/markdown; charset=utf-8" },
+    },
+  );
 };

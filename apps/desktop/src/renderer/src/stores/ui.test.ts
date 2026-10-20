@@ -295,6 +295,26 @@ describe("setSettingsOpen", () => {
   });
 });
 
+describe("configureCategory", () => {
+  it("holds a requested Configure pane until the page spends it (VC-303)", () => {
+    const store = createUiStore(createMemoryStorage());
+    expect(store.getState().configureCategory).toBeNull();
+
+    store.getState().requestConfigureCategory("secrets");
+    expect(store.getState().configureCategory).toBe("secrets");
+
+    store.getState().consumeConfigureCategory();
+    expect(store.getState().configureCategory).toBeNull();
+  });
+
+  it("is never persisted: a relaunch opens Configure where the page itself would", () => {
+    const storage = createMemoryStorage();
+    createUiStore(storage).getState().requestConfigureCategory("secrets");
+
+    expect(createUiStore(storage).getState().configureCategory).toBeNull();
+  });
+});
+
 describe("consumeSettingsSignIn", () => {
   it("spends the request, so revisiting the pane starts no sign-in", () => {
     const store = createUiStore(createMemoryStorage());

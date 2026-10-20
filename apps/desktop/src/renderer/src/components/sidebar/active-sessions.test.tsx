@@ -19,15 +19,27 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { Project, Ticket, TicketStatus } from "@volli/shared";
+import {
+  EMPTY_SESSION_USAGE_SUMMARY,
+  PERSON_STARTED,
+  type ChatSessionRecord,
+  type Project,
+  type SessionListingRow,
+  type Ticket,
+  type TicketStatus,
+} from "@volli/shared";
 
 import { ActiveSessions } from "./active-sessions";
+import { PREVIOUS_BAND_LIMIT } from "./active-session-listing";
+import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { SidebarProvider } from "@renderer/components/ui/sidebar";
 import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useProjectSessionsStore } from "@renderer/stores/project-sessions";
+import { useRemoteSessionAvailabilityStore } from "@renderer/stores/remote-session-availability";
 import { projectScope, useSessionsStore, type SessionLaunch } from "@renderer/stores/sessions";
-import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { useSessionOrderStore } from "@renderer/stores/session-order";
+import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn(), info: vi.fn(), success: vi.fn() }),
@@ -95,6 +107,19 @@ const listSessions = vi.fn(
   }),
 );
 const latestSignals = vi.fn(async () => ({ ok: true as const, signals: [] }));
+const setRead = vi.fn(async () => ({ ok: true as const }));
+const peekContent = vi.fn(async () => ({
+  ok: true as const,
+  content: {
+    sessionId: "c1",
+    entries: [{ at: 1, role: "assistant" as const, text: "Ran the suite", tools: [] }],
+    question: null,
+    turns: 1,
+    turnDepth: 0,
+    unreadable: 0,
+    lastActivityAt: 1,
+  },
+}));
 /**
  * The board's move door. Answers with the slice as the store holds it AFTER the
  * optimistic move, which is what main would confirm — so the reconcile cannot
@@ -109,8 +134,16 @@ function installApi(): void {
   Object.defineProperty(window, "api", {
     configurable: true,
     value: {
-      sessions: { list: listSessions },
+      sessions: { list: listSessions, setRead, peekContent },
       tickets: { statusEntries, latestSignals, move },
+      // Opening a chat row adopts its Session, and adoption builds the resident
+      // client over this bridge. Absent, the activation throws before the row
+      // is ever read — which is the one thing these cases are about.
+      sessionRpc: {
+        onEvent: () => () => {},
+        request: vi.fn(async () => ({ ok: true })),
+        subscribe: vi.fn(() => () => {}),
+      },
     },
   });
 }
@@ -151,6 +184,7 @@ beforeEach(() => {
     starting: {},
   });
   useProjectSessionsStore.setState({ byProject: {}, listingState: {} });
+  useSessionOrderStore.setState({ held: {}, holds: 0 });
   useWorkspaceStore.setState({ byProject: {} });
 });
 
@@ -299,5 +333,440 @@ describe("ActiveSessions bands while the listing is read (VC-383)", () => {
     expect(bandText("previous")).not.toContain("Nothing yet");
     expect(bandText("active")).toContain("Couldn't load sessions.");
     expect(bandText("previous")).toContain("Couldn't load sessions.");
+  });
+
+  it("names a host that grants no Sessions, once, instead of either empty (VC-713, B3)", async () => {
+    const reason = "Sessions aren’t available on box — update it to use them here";
+    useRemoteSessionAvailabilityStore.setState({ unavailable: { [PROJECT.id]: reason } });
+    try {
+      await mount();
+      expect(bandText("active")).toContain(reason);
+      expect(bandText("active")).not.toContain("No active sessions");
+      expect(bandText("previous")).not.toContain(reason);
+      expect(bandText("previous")).not.toContain("Nothing yet");
+    } finally {
+      useRemoteSessionAvailabilityStore.setState({ unavailable: {} });
+    }
+  });
+});
+
+/**
+ * VC-30 — the bands as the peek's surface.
+ *
+ * These are the hook's first real exercise, and every one of them is a
+ * statement about state over time rather than about markup: a card that opens
+ * only after the pointer has come to REST, a press that dismisses without
+ * cancelling the drag it may be starting, a band that keeps still while
+ * somebody is aiming at it. Fake timers throughout, because the dwell is the
+ * subject.
+ */
+const NOW = 1_700_000_000_000;
+
+function chatRecord(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
+  return {
+    sessionId: "c1",
+    title: "Session one",
+    projectId: PROJECT.id,
+    ticketId: "t3",
+    createdAt: NOW - 60_000,
+    adapterId: null,
+    live: true,
+    activity: "idle",
+    waitingOn: null,
+    outcome: null,
+    lastActivityAt: NOW - 60_000,
+    bornTicketless: false,
+    role: "ticket",
+    parentSessionId: null,
+    model: { providerId: "anthropic", modelId: "claude", reasoningLevel: "medium" },
+    ...overrides,
+  };
+}
+
+function listingRow(
+  record: ChatSessionRecord,
+  unreadSince: number | null = null,
+): SessionListingRow {
+  return {
+    kind: "chat",
+    record,
+    usage: EMPTY_SESSION_USAGE_SUMMARY,
+    provenance: PERSON_STARTED,
+    ...(unreadSince === null ? {} : { read: { unreadSince } }),
+  };
+}
+
+function seedSessions(rows: readonly SessionListingRow[]): void {
+  listSessions.mockImplementation(async () => ({ ok: true as const, sessions: [...rows] }));
+}
+
+const rowElement = (rowId: string): HTMLElement => {
+  const found = container?.querySelector<HTMLElement>(`[data-peek-row="${rowId}"]`);
+  if (found === null || found === undefined) throw new Error(`no row ${rowId}`);
+  return found;
+};
+
+/** The row's own activation target — a `<li>`'s button, or the folder button itself. */
+const rowButton = (rowId: string): HTMLElement => {
+  const row = rowElement(rowId);
+  return row instanceof HTMLButtonElement ? row : row.querySelector<HTMLElement>("button")!;
+};
+
+const bands = (): HTMLElement => {
+  const found = container?.querySelector<HTMLElement>("[data-session-bands]");
+  if (found === null || found === undefined) throw new Error("no session bands");
+  return found;
+};
+
+const textOfBand = (band: string): string =>
+  container?.querySelector(`[data-session-band="${band}"]`)?.textContent ?? "";
+
+/** The Active band's rows, in the order it is drawing them. */
+const activeRowIds = (): string[] =>
+  [
+    ...(container?.querySelectorAll<HTMLElement>('[data-session-band="active"] [data-peek-row]') ??
+      []),
+  ].map((row) => row.dataset.peekRow ?? "");
+
+const card = (): HTMLElement | null => document.body.querySelector("[data-peek-card]");
+
+async function pointerOver(rowId: string): Promise<void> {
+  await act(async () => {
+    rowButton(rowId).dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+  });
+}
+
+async function press(rowId: string, key: string): Promise<void> {
+  await act(async () => {
+    rowButton(rowId).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key }));
+  });
+}
+
+async function tick(ms: number): Promise<void> {
+  await act(async () => {
+    vi.advanceTimersByTime(ms);
+  });
+}
+
+describe("the peek on the left bands (VC-30)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("opens a card only once the pointer has rested on a row (350ms), then switches warm (150ms)", async () => {
+    seedSessions([
+      listingRow(chatRecord()),
+      listingRow(chatRecord({ sessionId: "c2", title: "Session two" })),
+    ]);
+    await mount();
+
+    await pointerOver("chat:c1");
+    await tick(300);
+    // Passing through a row opens nothing: the dwell is the pointer AT REST.
+    expect(card()).toBeNull();
+
+    await tick(60);
+    expect(card()).not.toBeNull();
+    expect(card()?.textContent).toContain("Session one");
+
+    // Once a card is up, the neighbour opens after the shorter warm rest.
+    await pointerOver("chat:c2");
+    await tick(150);
+    expect(card()?.textContent).toContain("Session two");
+  });
+
+  it("dismisses on pointerdown without cancelling the drag that press may start", async () => {
+    seedSessions([listingRow(chatRecord())]);
+    await mount();
+    await pointerOver("chat:c1");
+    await tick(350);
+    expect(card()).not.toBeNull();
+
+    const down = new MouseEvent("pointerdown", { bubbles: true, cancelable: true });
+    await act(async () => {
+      rowButton("chat:c1").dispatchEvent(down);
+    });
+
+    expect(card()).toBeNull();
+    // The row is a drag source: a prevented default would refuse the gesture.
+    expect(down.defaultPrevented).toBe(false);
+    expect(rowButton("chat:c1").getAttribute("draggable")).toBe("true");
+  });
+
+  it("reads a Session when its row is opened", async () => {
+    seedSessions([listingRow(chatRecord(), NOW - 1_000)]);
+    await mount();
+
+    await act(async () => {
+      rowButton("chat:c1").click();
+    });
+
+    expect(setRead).toHaveBeenCalledWith({ sessionId: "c1", unread: false });
+  });
+
+  it("toggles read with U, in both directions", async () => {
+    seedSessions([listingRow(chatRecord())]);
+    await mount();
+
+    await press("chat:c1", "u");
+    expect(setRead).toHaveBeenLastCalledWith({ sessionId: "c1", unread: true });
+
+    await press("chat:c1", "u");
+    expect(setRead).toHaveBeenLastCalledWith({ sessionId: "c1", unread: false });
+  });
+
+  it("keeps an unread Session in Active however old it is", async () => {
+    // Past the 30-minute quiet window: read, it belongs to Previous; unread, it
+    // is not done with you (VC-108).
+    const old = chatRecord({ lastActivityAt: NOW - 90 * 60_000, createdAt: NOW - 90 * 60_000 });
+    seedSessions([listingRow(old)]);
+    await mount();
+
+    expect(textOfBand("active")).not.toContain("Session one");
+    // It is in Previous, behind the folder its ticket collapses onto (VC-69):
+    // the title itself is only drawn once that folder is disclosed.
+    expect(rowElement("folder:t3")).not.toBeNull();
+    expect(textOfBand("previous")).toContain("1 session");
+
+    seedSessions([listingRow(old, NOW - 60_000)]);
+    await act(async () => {
+      await useProjectSessionsStore.getState().refresh(PROJECT.id);
+    });
+
+    expect(textOfBand("active")).toContain("Session one");
+  });
+
+  it("holds the Active order while the pointer is in the band, and lands it on leave", async () => {
+    seedSessions([
+      listingRow(chatRecord({ sessionId: "c1", title: "One", lastActivityAt: NOW - 1_000 })),
+      listingRow(chatRecord({ sessionId: "c2", title: "Two", lastActivityAt: NOW - 2_000 })),
+    ]);
+    await mount();
+    expect(activeRowIds()).toEqual(["chat:c1", "chat:c2"]);
+
+    await pointerOver("chat:c1");
+    // A new question on the second row: the rule floats it to the very top.
+    seedSessions([
+      listingRow(chatRecord({ sessionId: "c1", title: "One", lastActivityAt: NOW - 1_000 })),
+      listingRow(
+        chatRecord({
+          sessionId: "c2",
+          title: "Two",
+          activity: "waiting",
+          waitingOn: "question",
+          lastActivityAt: NOW,
+        }),
+      ),
+    ]);
+    await act(async () => {
+      await useProjectSessionsStore.getState().refresh(PROJECT.id);
+    });
+
+    // Nothing moves under the pointer, even though the listing would.
+    expect(activeRowIds()).toEqual(["chat:c1", "chat:c2"]);
+
+    // React derives `onPointerLeave` from `pointerout` at its root, so the
+    // leave is dispatched as the event the browser actually sends.
+    await act(async () => {
+      bands().dispatchEvent(
+        new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
+      );
+    });
+    // The bridge's grace: whatever the dwell may have opened closes, and the
+    // hold the open card was taking goes with it.
+    await tick(600);
+
+    expect(activeRowIds()).toEqual(["chat:c2", "chat:c1"]);
+  });
+
+  it("steps folders and their open Sessions in one order, and opens them with the arrows", async () => {
+    // Two Sessions on one ticket, both past the window: the Previous band files
+    // them under a folder.
+    const past = NOW - 90 * 60_000;
+    seedSessions([
+      listingRow(chatRecord({ sessionId: "c1", title: "One", lastActivityAt: past })),
+      listingRow(chatRecord({ sessionId: "c2", title: "Two", lastActivityAt: past - 1_000 })),
+    ]);
+    await mount();
+
+    const folder = "folder:t3";
+    expect(rowElement(folder)).not.toBeNull();
+    // Closed: its children are not in the walk at all.
+    await press(folder, "ArrowDown");
+    expect(document.activeElement).toBe(rowButton(folder));
+
+    await press(folder, "ArrowRight");
+    expect(rowButton(folder).getAttribute("aria-expanded")).toBe("true");
+
+    await press(folder, "j");
+    expect(document.activeElement).toBe(rowButton("chat:c1"));
+    await press("chat:c1", "ArrowDown");
+    expect(document.activeElement).toBe(rowButton("chat:c2"));
+    await press("chat:c2", "k");
+    expect(document.activeElement).toBe(rowButton("chat:c1"));
+
+    // ← on a Session inside a folder returns to the folder that holds it.
+    await press("chat:c1", "ArrowLeft");
+    expect(document.activeElement).toBe(rowButton(folder));
+
+    await press(folder, "ArrowLeft");
+    expect(rowButton(folder).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("peeks the focused row with Space, and pins it with a second", async () => {
+    seedSessions([listingRow(chatRecord())]);
+    await mount();
+
+    await press("chat:c1", " ");
+    expect(card()).not.toBeNull();
+    // Hover leaves focus where it was; only a pin moves it.
+    expect(document.activeElement).not.toBe(card());
+
+    await press("chat:c1", " ");
+    expect(document.activeElement).toBe(card());
+  });
+});
+
+/**
+ * VC-116 — the Previous band draws its first {@link PREVIOUS_BAND_LIMIT}
+ * entries behind a "Show more" row, and never hides the tab in front of you.
+ */
+describe("the Previous band's cap (VC-116)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** `count` ticketless chats, all past the quiet window, newest first: `c0`… */
+  const seedPastChats = (count: number): void =>
+    seedSessions(
+      Array.from({ length: count }, (_, index) =>
+        listingRow(
+          chatRecord({
+            sessionId: `c${index}`,
+            title: `Past ${index}`,
+            ticketId: null,
+            role: "project",
+            bornTicketless: true,
+            lastActivityAt: NOW - 90 * 60_000 - index * 1_000,
+          }),
+        ),
+      ),
+    );
+
+  const previousRowIds = (): string[] =>
+    [
+      ...(container?.querySelectorAll<HTMLElement>(
+        '[data-session-band="previous"] [data-peek-row]',
+      ) ?? []),
+    ].map((row) => row.dataset.peekRow ?? "");
+
+  const reachButton = (label: "Show more" | "Show less"): HTMLButtonElement | null =>
+    [
+      ...(container?.querySelectorAll<HTMLButtonElement>('[data-session-band="previous"] button') ??
+        []),
+    ].find((button) => button.textContent === label) ?? null;
+
+  async function pressReach(label: "Show more" | "Show less"): Promise<void> {
+    const button = reachButton(label);
+    if (button === null) throw new Error(`no ${label} button`);
+    await act(async () => {
+      button.focus();
+      button.click();
+    });
+  }
+
+  it("draws no reach control for a band that fits", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT);
+    await mount();
+
+    expect(previousRowIds()).toHaveLength(PREVIOUS_BAND_LIMIT);
+    expect(reachButton("Show more")).toBeNull();
+    expect(reachButton("Show less")).toBeNull();
+  });
+
+  it("draws the first twenty entries and holds the rest behind Show more", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT * 2 + 5);
+    await mount();
+
+    expect(previousRowIds()).toEqual(
+      Array.from({ length: PREVIOUS_BAND_LIMIT }, (_, index) => `chat:c${index}`),
+    );
+    // The header still counts every Session back there, not the drawn ones.
+    // Its count is the band's first tabular figure; the rows' ages follow it.
+    expect(
+      container?.querySelector('[data-session-band="previous"] .tabular-nums')?.textContent,
+    ).toBe(String(PREVIOUS_BAND_LIMIT * 2 + 5));
+    expect(reachButton("Show more")).not.toBeNull();
+    expect(reachButton("Show less")).toBeNull();
+  });
+
+  it("widens a page at a time, and collapses back to the cap, keeping focus in the band", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT * 2 + 5);
+    await mount();
+
+    await pressReach("Show more");
+    expect(previousRowIds()).toHaveLength(PREVIOUS_BAND_LIMIT * 2);
+    expect(document.activeElement).toBe(reachButton("Show more"));
+    expect(reachButton("Show less")).not.toBeNull();
+
+    // The last page: nothing is left to show, so its button goes and focus
+    // moves to the one beside it rather than falling out of the sidebar.
+    await pressReach("Show more");
+    expect(previousRowIds()).toHaveLength(PREVIOUS_BAND_LIMIT * 2 + 5);
+    expect(reachButton("Show more")).toBeNull();
+    expect(document.activeElement).toBe(reachButton("Show less"));
+
+    await pressReach("Show less");
+    expect(previousRowIds()).toHaveLength(PREVIOUS_BAND_LIMIT);
+    expect(reachButton("Show less")).toBeNull();
+    expect(document.activeElement).toBe(reachButton("Show more"));
+  });
+
+  /** Puts ticketless chat `c{index}` in front of you, as Home's active tab. */
+  const selectHomeChat = (index: number): void => {
+    useWorkspaceStore.setState({
+      byProject: {
+        [PROJECT.id]: {
+          ...DEFAULT_WORKSPACE_UI,
+          nav: "home",
+          homeActiveTab: chatTabId(`c${index}`),
+        },
+      },
+    });
+  };
+
+  it("walks the arrow keys over the drawn rows, straight onto a pinned one past the cap", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT + 10);
+    const pinned = `chat:c${PREVIOUS_BAND_LIMIT + 6}`;
+    selectHomeChat(PREVIOUS_BAND_LIMIT + 6);
+    await mount();
+
+    // The next row in the band's FULL order is c20, which is behind Show more;
+    // the next DRAWN row is the pinned one.
+    await press(`chat:c${PREVIOUS_BAND_LIMIT - 1}`, "ArrowDown");
+    expect(document.activeElement).toBe(rowButton(pinned));
+  });
+
+  it("still draws the Session in front of you when it ranks past the cap", async () => {
+    seedPastChats(PREVIOUS_BAND_LIMIT + 10);
+    const selected = PREVIOUS_BAND_LIMIT + 6;
+    selectHomeChat(selected);
+    await mount();
+
+    const drawn = previousRowIds();
+    expect(drawn).toHaveLength(PREVIOUS_BAND_LIMIT + 1);
+    expect(drawn.at(-1)).toBe(`chat:c${selected}`);
+    expect(rowButton(`chat:c${selected}`).dataset.active).toBe("true");
+    expect(reachButton("Show more")).not.toBeNull();
   });
 });

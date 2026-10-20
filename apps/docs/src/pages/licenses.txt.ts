@@ -1,5 +1,7 @@
 import type { APIRoute } from "astro";
 
+import geistMonoLicense from "@fontsource-variable/geist-mono/LICENSE?raw";
+import geistMonoManifest from "@fontsource-variable/geist-mono/package.json";
 import monaSansLicense from "@fontsource-variable/mona-sans/LICENSE?raw";
 import monaSansManifest from "@fontsource-variable/mona-sans/package.json";
 import {
@@ -11,9 +13,9 @@ import {
 /*
  * /licenses.txt — the OFL notices for the fonts this site redistributes.
  *
- * Starlight's `customCss` pulls Mona Sans into the build, which emits its
- * .woff2 files into `dist/_astro/`, and OFL-1.1 only permits that when the
- * copyright notice and license text travel with them. This route is how they
+ * Starlight's `customCss` pulls Mona Sans and Geist Mono into the build, which
+ * emits their .woff2 files into `dist/_astro/`, and OFL-1.1 only permits that
+ * when the copyright notice and license text travel with them. This route is how they
  * travel: it is part of the Astro build itself, so the notice is emitted by the
  * same run that emits the fonts and cannot be skipped by a deploy that forgot a
  * step. The page footer links it, beside the plain-text docs link.
@@ -41,6 +43,12 @@ const REDISTRIBUTED_FONTS: readonly FontPackageSource[] = [
     packageName: "@fontsource-variable/mona-sans",
     manifest: monaSansManifest,
     licenseText: monaSansLicense,
+  },
+  {
+    family: "Geist Mono",
+    packageName: "@fontsource-variable/geist-mono",
+    manifest: geistMonoManifest,
+    licenseText: geistMonoLicense,
   },
 ];
 

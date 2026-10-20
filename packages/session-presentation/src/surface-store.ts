@@ -6,10 +6,7 @@
  * hands to {@link ChatSessionClient}, and the one the package's own tests run
  * the client against.
  *
- * Listeners are notified SYNCHRONOUSLY after each write that changed state,
- * as zustand does: the client's queue-release loop hangs off `subscribe`
- * from its constructor, and a store that batched or deferred would strand a
- * queued message behind the very write that made it releasable. The walk
+ * Listeners are notified synchronously after each write, as zustand does. The walk
  * itself differs from zustand's live-set iteration only at the margins —
  * see `announce`.
  */
@@ -21,19 +18,18 @@ import type {
 } from "./client";
 import {
   applyProjection,
-  dequeueSlice,
-  enqueueSlice,
+  applyQueue,
+  applySnapshotWindow,
   foldStreamBatch,
   markAttaching,
   markDelivered,
+  prependSliceHistory,
   seedSlice,
   settleSlice,
 } from "./session-slice";
-import type { QueuedMessage } from "./session-model";
 
-/** The writes, plus the queue door and the slice lifecycle the writes assume. */
+/** Host projection writes and the local slice lifecycle. */
 export interface SurfaceSessions extends ChatSessionWrites {
-  enqueue(sessionId: string, message: QueuedMessage): void;
   /** Seeds the slice a client writes into. A Session already seeded is left alone. */
   seed(sessionId: string, lifecycle: ChatSessionLifecycle): void;
   /** Drops the slice. The durable Session is untouched — this surface just stops holding it. */
@@ -84,6 +80,12 @@ export function createSurfaceStore(): SessionSurfaceStore {
         foldStreamBatch(slice, frames, overlays, progress, clearLiveCompaction),
       );
     },
+    applySnapshot(sessionId, window, projection) {
+      update(sessionId, (slice) => applySnapshotWindow(slice, window, projection));
+    },
+    prependHistory(sessionId, requested, page) {
+      update(sessionId, (slice) => prependSliceHistory(slice, requested, page));
+    },
     setProjection(sessionId, projection) {
       update(sessionId, (slice) => applyProjection(slice, projection));
     },
@@ -96,11 +98,8 @@ export function createSurfaceStore(): SessionSurfaceStore {
     settle(sessionId, error) {
       update(sessionId, (slice) => settleSlice(slice, error));
     },
-    enqueue(sessionId, message) {
-      update(sessionId, (slice) => enqueueSlice(slice, message));
-    },
-    dequeue(sessionId, id) {
-      update(sessionId, (slice) => dequeueSlice(slice, id));
+    setQueue(sessionId, queue, revision) {
+      update(sessionId, (slice) => applyQueue(slice, queue, revision));
     },
     seed(sessionId, lifecycle) {
       if (state.sessions[sessionId] !== undefined) return;

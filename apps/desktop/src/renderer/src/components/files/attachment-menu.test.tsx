@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The paperclip menu that replaced the rail's permanent chip strip (VC-406,
- * revision 06).
+ * The paperclip menu that replaced the rail's permanent chip strip (VC-406).
  *
  * Two environments on purpose. The DETAIL is a drawing and is asserted as
  * static markup — what a row says, and which verbs a read-only host does NOT

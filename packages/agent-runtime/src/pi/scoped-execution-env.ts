@@ -27,10 +27,14 @@ import {
   type ShellOutputMetadata,
   type ShellOutputUpdate,
   type ShellOutputView,
-} from "@earendil-works/pi-agent-core/node";
+} from "./harness-env";
 import type { SpawnLedgerPort } from "@volli/shared";
 import { refuseDaemonizingExecute } from "../shell/refusal";
-import { scopedEnvironment } from "./execution-env";
+import {
+  scopedEnvironment,
+  sessionCommandEnvironment,
+  type SessionCommandEnvironmentOptions,
+} from "./execution-env";
 
 const KILL_GRACE_MS = 250;
 /** Prefix and suffix of the spool a truncated command's complete output is preserved in. */
@@ -70,7 +74,10 @@ export interface ExecutionEnvOwner {
   projectId: string | null;
 }
 
-export interface ScopedExecutionEnvOptions {
+export interface ScopedExecutionEnvOptions extends Omit<
+  SessionCommandEnvironmentOptions,
+  "overrides"
+> {
   /**
    * Where each spawned command is recorded, and who it is recorded as.
    *
@@ -447,10 +454,9 @@ async function prepareSandbox(sandbox: SandboxRuntime): Promise<void> {
  * installed.
  *
  * The runtime hands Pi its own uncontained environment now, so this reaches a
- * Session only through an injected `executionEnvFactory`. It is kept whole
- * because the two-axis authority rearchitecture rebuilds the
- * boundary on it, and a boundary is a bad thing to delete and rewrite from
- * memory.
+ * Session only through an injected `executionEnvFactory`. Its native
+ * path checks and process boundary are deterministic and independent of any
+ * per-call approval policy.
  *
  * What it contains is whatever that Session's workspace is — a Ticket worktree,
  * or the project's Main checkout for a Ticket that never took one — and nothing
@@ -477,12 +483,19 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   readonly #processKill: ProcessKill;
   readonly #fileOperations: FileOperations;
   readonly #ledger: { port: SpawnLedgerPort; owner: ExecutionEnvOwner } | undefined;
+  readonly #commandEnvironment: Omit<SessionCommandEnvironmentOptions, "overrides">;
   readonly #activeChildren = new Set<ChildProcess>();
   readonly #tempDirectories = new Set<string>();
 
   private constructor(root: string, options: ScopedExecutionEnvOptions) {
     this.cwd = root;
     this.#ledger = options.ledger;
+    this.#commandEnvironment = {
+      pathPrefixes: options.pathPrefixes,
+      identity: options.identity,
+      environment: options.environment,
+      secretEnvironment: options.secretEnvironment,
+    };
     this.#delegate = new NodeExecutionEnv({ cwd: root });
     this.#sandbox = options.sandbox ?? SandboxManager;
     this.#spawn = options.spawn ?? spawn;
@@ -580,6 +593,12 @@ export class ScopedExecutionEnv implements ExecutionEnv {
   async readBinaryFile(path: string, context: Context = BACKGROUND_CONTEXT) {
     const guarded = await this.#guard(path, context);
     return guarded.ok ? this.#delegate.readBinaryFile(guarded.value, context) : guarded;
+  }
+
+  /** `read`'s bounded way in (VC-801): the same guard as {@link readBinaryFile}. */
+  async openFileReader(path: string, context: Context = BACKGROUND_CONTEXT) {
+    const guarded = await this.#guard(path, context);
+    return guarded.ok ? this.#delegate.openFileReader(guarded.value, context) : guarded;
   }
 
   async fileInfo(path: string, context: Context = BACKGROUND_CONTEXT) {
@@ -949,7 +968,10 @@ export class ScopedExecutionEnv implements ExecutionEnv {
       try {
         child = this.#spawn(descriptor.argv[0]!, descriptor.argv.slice(1), {
           cwd: commandCwd.value,
-          env: scopedEnvironment(descriptor.env),
+          env: sessionCommandEnvironment(
+            scopedEnvironment(descriptor.env),
+            this.#commandEnvironment,
+          ),
           shell: false,
           detached: process.platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],

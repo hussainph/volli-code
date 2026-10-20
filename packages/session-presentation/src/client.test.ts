@@ -15,20 +15,21 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   isDeliverable,
   isWorking,
-  queueNeedsExecutor,
   racingFlushScheduler,
   settledLifecycle,
   type ChatCommandRequest,
   type ChatSessionRpc,
   type ChatSessionSlice,
+  type ChatSessionProjection,
   type ChatStreamCursor,
+  type ChatStreamRecovery,
   type FlushHost,
   type FlushScheduler,
 } from "./client";
 import { disposeChatClient, getOrCreateChatClient } from "./registry";
 import { createSurfaceStore, type SessionSurfaceStore } from "./surface-store";
 import { EMPTY_TRANSCRIPT } from "./transcript";
-import { rejectedReceipt } from "./wire";
+import { commandRefusal } from "./wire";
 
 /* ------------------------------------------------------------------ scripts */
 
@@ -66,6 +67,33 @@ const REFUSED = {
 };
 
 /**
+ * The receipt a harness sends when it does not know whether a command ran
+ * (CONTEXT.md's `unreconciled`). It is NOT a rejection and NOT an acceptance,
+ * so it must never be read as a success: that read latches `working` for a
+ * message and clears the error band for an attach, which is the silent success
+ * this surface exists to refuse. Its words, when there are any, are the host's
+ * own.
+ */
+const unreconciledReceipt = (detail: string | null): CommandReceipt => ({
+  id: "receipt-unreconciled",
+  commandId: "command-unreconciled",
+  status: "unreconciled",
+  detail,
+  recordedAt: 0,
+  sequence: 1,
+});
+const unreconciledAnswer = (detail: string | null): CommandAnswer => ({
+  sessionId: SESSION.id,
+  receipt: unreconciledReceipt(detail),
+});
+
+/**
+ * Crosses the RPC edge as JSON, as every answer here does: a key set to
+ * `undefined` is dropped, so the reader meets it absent rather than undefined.
+ */
+const overTheWire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+/**
  * The durable policy every structured Session records before anything attaches
  * — a Board chat's from the app default, a Ticket Session's the same. A
  * projection without one is a Session whose model has not been written down,
@@ -91,7 +119,6 @@ function projectionFor(attachmentId: string | null): SessionPresentationProjecti
     // Derived from the same attachment the edge reads it from (VC-285): an
     // attached Session that saved no Snapshot is running at the runtime's own
     // defaults, which is a fact rather than a gap.
-    authority: attachmentId === null ? null : { attachmentId, snapshot: null },
     attention: { active: [], primary: null },
     interactions: { active: [], resolved: [] },
     signal: null,
@@ -261,17 +288,28 @@ class FakeRpc implements ChatSessionRpc {
   readonly commands: ChatCommandRequest[] = [];
   readonly cancels: { sessionId: string; interactionId: string }[] = [];
   readonly reconciles: { sessionId: string; attachmentId: string }[] = [];
+  readonly queueCancels: Parameters<ChatSessionRpc["session"]["cancelQueued"]["mutate"]>[0][] = [];
+  readonly queueEdits: Parameters<ChatSessionRpc["session"]["editQueued"]["mutate"]>[0][] = [];
   readonly streams: FakeStream[] = [];
   readonly attaches: Array<{ operationId: string; sessionId: string }> = [];
   projectionQueries = 0;
 
   snapshotFrames: readonly unknown[] = [];
   snapshotThrough = 0;
-  snapshotProjection = projectionFor(null);
+  /** `undefined` is a host that predates the bound and sends no cursor. */
+  snapshotBefore: number | null | undefined = undefined;
+  /** `undefined` is a host that predates the reply baseline. */
+  snapshotLatestReply: unknown = undefined;
+  snapshots = 0;
+  /** Pages by the cursor they answer; a missing cursor is a failed read. */
+  readonly pages = new Map<number, { frames: readonly unknown[]; before: number | null }>();
+  readonly historyRequests: number[] = [];
+  historyGate: Promise<unknown> = Promise.resolve();
+  snapshotProjection: ChatSessionProjection = projectionFor(null);
   snapshotGate: Promise<unknown> = Promise.resolve();
   snapshotError: Error | null = null;
 
-  liveProjection = projectionFor(null);
+  liveProjection: ChatSessionProjection = projectionFor(null);
   projectionGate: Promise<unknown> = Promise.resolve();
   projectionError: Error | null = null;
 
@@ -288,13 +326,27 @@ class FakeRpc implements ChatSessionRpc {
     this.session = {
       snapshot: {
         query: async () => {
+          this.snapshots += 1;
           await this.snapshotGate;
           if (this.snapshotError !== null) throw this.snapshotError;
           return {
             projection: this.snapshotProjection,
             frames: this.snapshotFrames,
             throughSequence: this.snapshotThrough,
+            ...(this.snapshotBefore === undefined ? {} : { before: this.snapshotBefore }),
+            ...(this.snapshotLatestReply === undefined
+              ? {}
+              : { latestReply: this.snapshotLatestReply }),
           };
+        },
+      },
+      history: {
+        query: async ({ before }) => {
+          this.historyRequests.push(before);
+          await this.historyGate;
+          const page = this.pages.get(before);
+          if (page === undefined) throw new Error("history is unavailable");
+          return page;
         },
       },
       projection: {
@@ -321,6 +373,18 @@ class FakeRpc implements ChatSessionRpc {
         mutate: async (input) => {
           this.commands.push(input);
           return this.answer(input);
+        },
+      },
+      cancelQueued: {
+        mutate: async (input) => {
+          this.queueCancels.push(input);
+          return this.answerCancel();
+        },
+      },
+      editQueued: {
+        mutate: async (input) => {
+          this.queueEdits.push(input);
+          return this.answerCancel();
         },
       },
       cancelInteraction: {
@@ -383,7 +447,10 @@ afterEach(() => {
 });
 
 /** One adopted Session, connected, with its stream ready to be driven. */
-async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
+async function adopted(
+  prepare: (rpc: FakeRpc) => void = () => undefined,
+  streamRecovery?: ChatStreamRecovery,
+) {
   const rpc = new FakeRpc();
   const scheduler = new ManualScheduler();
   prepare(rpc);
@@ -400,6 +467,7 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
   store.getState().seed(sessionId, "ready");
   const client = getOrCreateChatClient(sessionId, {
     rpc,
+    ...(streamRecovery === undefined ? {} : { streamRecovery }),
     scheduler,
     newCommandId: () => `cmd-${++commandIds}`,
     createSession: async () => {
@@ -410,7 +478,9 @@ async function adopted(prepare: (rpc: FakeRpc) => void = () => undefined) {
       const answer = await rpc.answerAttach();
       return {
         sessionId: answer.sessionId,
-        state: answer.state ?? (rejectedReceipt(answer) === null ? "ready" : "needs-recovery"),
+        // A `ready` needs a receipt that proves the start. An unreconciled one
+        // proves nothing, so the default never reads it as started.
+        state: answer.state ?? (commandRefusal(answer) === null ? "ready" : "needs-recovery"),
         receipt: answer.receipt ?? null,
         throughSequence: answer.throughSequence ?? 1,
       };
@@ -596,28 +666,6 @@ describe("session derivations", () => {
   // VC-367. `isDeliverable` answers "can this leave now", which is false for
   // both a Session coming up and a Session whose executor is gone. Only the
   // second never ends on its own, and only the second is worth a process.
-  it("tells a queue nothing is coming for from one that is merely waiting", () => {
-    const dead = { projection: projectionFor(null), queue: [{ id: "q1", text: "hi" }] };
-
-    expect(queueNeedsExecutor(sliceOf(dead))).toBe(true);
-    // An attach already in flight needs no second one.
-    expect(queueNeedsExecutor(sliceOf({ ...dead, lifecycle: "starting" }))).toBe(false);
-    // A refused attach does not become a wall: sending again asks again.
-    expect(queueNeedsExecutor(sliceOf({ ...dead, lifecycle: "error" }))).toBe(true);
-    // Nothing to attach to.
-    expect(
-      queueNeedsExecutor(
-        sliceOf({ ...dead, projection: { ...projectionFor(null), status: "archived" } }),
-      ),
-    ).toBe(false);
-    // A live executor is already the answer, and an empty queue asks nothing.
-    expect(queueNeedsExecutor(sliceOf({ ...dead, projection: projectionFor("attach-1") }))).toBe(
-      false,
-    );
-    expect(queueNeedsExecutor(sliceOf({ projection: projectionFor(null) }))).toBe(false);
-    // A client that has not read the Session yet knows nothing to act on.
-    expect(queueNeedsExecutor(sliceOf({ queue: [{ id: "q1", text: "hi" }] }))).toBe(false);
-  });
 
   it("holds starting and error against anything the stream says", () => {
     const before = sliceOf({ lifecycle: "starting" });
@@ -704,19 +752,21 @@ describe("connect", () => {
     expect(rpc.streams).toHaveLength(1);
   });
 
-  it("says so when the snapshot never answered", async () => {
-    const { slice } = await adopted((fake) => {
+  it("reports a failed snapshot even when no chat view is mounted", async () => {
+    const { slice, notifications, notificationTones } = await adopted((fake) => {
       fake.snapshotError = new Error("socket hang up");
     });
 
     expect(slice()!.lifecycle).toBe("error");
     expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up");
+    expect(notifications).toEqual(["Lost the Session stream: socket hang up"]);
+    expect(notificationTones).toEqual(["error"]);
   });
 
   it("lets only the open that still owns the stream report a failed snapshot", async () => {
     // Both attempts fail; two error rows for one fault would be the surface
     // reporting its own retry as a second thing that went wrong.
-    const { client, rpc, store, sessionId, slice } = await adopted();
+    const { client, rpc, store, sessionId, slice, notifications } = await adopted();
     const gate = deferred();
     rpc.snapshotGate = gate.promise;
     rpc.snapshotError = new Error("socket hang up");
@@ -729,6 +779,7 @@ describe("connect", () => {
 
     expect(writes).toHaveLength(1);
     expect(slice()!.sessionError).toBe("Lost the Session stream: socket hang up");
+    expect(notifications).toEqual(["Lost the Session stream: socket hang up"]);
   });
 
   it("subscribes from the start for a Session this surface no longer holds", async () => {
@@ -808,7 +859,6 @@ describe("stream folding", () => {
 
     expect(rpc.projectionQueries).toBe(1);
     expect(slice()!.projection?.liveExecutor?.id).toBe("attach-1");
-    expect(slice()!.projection?.authority?.attachmentId).toBe("attach-1");
   });
 
   it("asks for no projection on a transcript reference", async () => {
@@ -849,9 +899,126 @@ describe("stream folding", () => {
 
 /* ------------------------------------------------------------------ dropped */
 
+/** What a client host link hands a subscriber whose cursor the host can no longer resume. */
+const RESNAPSHOT = Object.assign(new Error("That cursor is gone"), {
+  data: {
+    code: "PRECONDITION_FAILED",
+    hostError: {
+      code: "PRECONDITION_FAILED",
+      reason: "subscription-resnapshot-required",
+      message: "That cursor is gone",
+    },
+  },
+});
+
+describe("stream recovery behind a client host link", () => {
+  it.each(["host-link", "resume-once"] as const)(
+    "uses the negotiated queue-aware path only for network recovery (%s)",
+    async (recovery) => {
+      let queueSubscriptions = 0;
+      const { stream, slice, sessionId } = await adopted((rpc) => {
+        const legacy = rpc.session.subscribe;
+        rpc.session.subscribeQueue = {
+          subscribe: (input, handlers) => {
+            queueSubscriptions += 1;
+            return legacy.subscribe(input, handlers);
+          },
+        };
+      }, recovery);
+      expect(queueSubscriptions).toBe(recovery === "host-link" ? 1 : 0);
+      stream().send("0", {
+        kind: "queue",
+        sessionId,
+        throughSequence: 0,
+        revision: 7,
+        queue: [
+          {
+            id: "q",
+            commandId: "queued",
+            state: "releasing",
+            message: { id: "q", role: "user", parts: [{ type: "text", text: "later" }] },
+          },
+        ],
+      });
+      expect(slice()!.queueRevision).toBe(7);
+      expect(slice()!.queue).toMatchObject([{ id: "q", text: "later", queueState: "releasing" }]);
+    },
+  );
+
+  it("retries nothing itself: a stream the link ended surfaces at once", async () => {
+    const { rpc, stream, slice, notifications } = await adopted(undefined, "host-link");
+    const started = stream();
+    started.start();
+    started.send("7", frameOf(7, "turn.started"));
+
+    started.fail(new Error("subscription-source-failed"));
+    await settle();
+
+    expect(rpc.streams).toHaveLength(1);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: subscription-source-failed");
+    expect(notifications).toEqual(["Lost the Session stream: subscription-source-failed"]);
+  });
+
+  it("surfaces a clean completion rather than resuming it", async () => {
+    const { rpc, stream, slice } = await adopted(undefined, "host-link");
+    stream().start();
+    stream().complete();
+    await settle();
+
+    expect(rpc.streams).toHaveLength(1);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: the Session stream ended");
+  });
+
+  it("reloads the snapshot on a resnapshot and subscribes from its cursor", async () => {
+    const { rpc, sessionId, stream, slice, notifications } = await adopted((fake) => {
+      fake.snapshotThrough = 4;
+    }, "host-link");
+    const first = stream();
+    first.start();
+    first.send("5", frameOf(5, "turn.started"));
+    rpc.snapshotThrough = 900;
+
+    first.fail(RESNAPSHOT);
+    await settle();
+
+    expect(first.unsubscribed).toBe(true);
+    expect(rpc.streams).toHaveLength(2);
+    expect(rpc.streams[1]!.input).toEqual({ sessionId, afterSequence: 900 });
+    expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+  });
+
+  it("stops reloading a host that refuses its own snapshot's cursor", async () => {
+    const { rpc, stream, slice } = await adopted(undefined, "host-link");
+    for (let reload = 0; reload < 3; reload++) {
+      stream().start();
+      stream().fail(RESNAPSHOT);
+      await settle();
+    }
+    expect(rpc.streams).toHaveLength(4);
+    stream().start();
+    stream().fail(RESNAPSHOT);
+    await settle();
+
+    expect(rpc.streams).toHaveLength(4);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: That cursor is gone");
+  });
+
+  it("counts reloads only while nothing arrives between them", async () => {
+    const { rpc, stream } = await adopted(undefined, "host-link");
+    for (let reload = 0; reload < 5; reload++) {
+      stream().start();
+      stream().send(`${reload + 1}`, frameOf(reload + 1, "turn.started"));
+      stream().fail(RESNAPSHOT);
+      await settle();
+    }
+    expect(rpc.streams).toHaveLength(6);
+  });
+});
+
 describe("reconnect", () => {
   it("resumes from the last cursor after a stream that had started drops", async () => {
-    const { rpc, stream } = await adopted();
+    const { rpc, stream, notifications } = await adopted();
     const dropped = stream();
     dropped.start();
     dropped.send("7", frameOf(7, "turn.started"));
@@ -862,6 +1029,7 @@ describe("reconnect", () => {
     expect(dropped.unsubscribed).toBe(true);
     expect(rpc.streams).toHaveLength(2);
     expect(rpc.streams[1]!.input.lastEventId).toBe("7");
+    expect(notifications).toEqual([]);
   });
 
   it("falls back to a fresh snapshot when the dropped stream delivered no cursor", async () => {
@@ -907,13 +1075,15 @@ describe("reconnect", () => {
   it("surfaces a stream that failed before it ever started rather than retrying", async () => {
     // One retry per healthy stream is what bounds this: a subscription that
     // never started is reporting a fault a retry would only repeat.
-    const { rpc, stream, slice } = await adopted();
+    const { rpc, stream, slice, notifications, notificationTones } = await adopted();
 
     stream().fail(new Error("Session subscription fell behind"));
     await settle();
 
     expect(rpc.streams).toHaveLength(1);
     expect(slice()!.sessionError).toBe("Lost the Session stream: Session subscription fell behind");
+    expect(notifications).toEqual(["Lost the Session stream: Session subscription fell behind"]);
+    expect(notificationTones).toEqual(["error"]);
   });
 
   it("surfaces a subscription that failed inside the subscribe call", async () => {
@@ -926,6 +1096,69 @@ describe("reconnect", () => {
 
     expect(rpc.streams).toHaveLength(1);
     expect(slice()!.sessionError).toBe("Lost the Session stream: bridge is gone");
+  });
+});
+
+describe("background connection recovery", () => {
+  it("re-arms notification when explicit recovery cannot reopen a live executor's stream", async () => {
+    const { client, rpc, stream, notifications, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+    });
+    stream().fail(new Error("snapshot unavailable"));
+    expect(notifications).toEqual(["Lost the Session stream: snapshot unavailable"]);
+    rpc.snapshotError = new Error("snapshot unavailable");
+
+    await expect(client.recover()).resolves.toBe(false);
+
+    expect(notifications).toEqual([
+      "Lost the Session stream: snapshot unavailable",
+      "Lost the Session stream: snapshot unavailable",
+    ]);
+    expect(slice()!.sessionError).toBe("Lost the Session stream: snapshot unavailable");
+    expect(rpc.reconciles).toEqual([]);
+  });
+
+  it("announces a repeated stream fault once until an explicit reconnect", async () => {
+    const { client, stream, notifications } = await adopted();
+
+    stream().fail(new Error("bridge unavailable"));
+    stream().fail(new Error("bridge unavailable"));
+    expect(notifications).toEqual(["Lost the Session stream: bridge unavailable"]);
+
+    await client.connect();
+    stream().fail(new Error("bridge unavailable"));
+    expect(notifications).toEqual([
+      "Lost the Session stream: bridge unavailable",
+      "Lost the Session stream: bridge unavailable",
+    ]);
+  });
+
+  it("announces a failed reconnect only after the automatic attempt fails", async () => {
+    const { stream, rpc, slice, notifications, notificationTones } = await adopted();
+    stream().start();
+    rpc.snapshotError = new Error("bridge unavailable");
+
+    stream().fail(new Error("temporary drop"));
+    await settle();
+
+    expect(slice()!.sessionError).toBe("Lost the Session stream: bridge unavailable");
+    expect(notifications).toEqual(["Lost the Session stream: bridge unavailable"]);
+    expect(notificationTones).toEqual(["error"]);
+  });
+
+  it("does not announce a projection failure after the surface let go", async () => {
+    const gate = deferred();
+    const { stream, rpc, close, slice, notifications } = await adopted();
+    rpc.projectionGate = gate.promise;
+    rpc.projectionError = new Error("bridge unavailable");
+
+    stream().send("1", frameOf(1, "turn.started"));
+    close();
+    gate.release();
+    await settle();
+
+    expect(slice()).toBeUndefined();
+    expect(notifications).toEqual([]);
   });
 });
 
@@ -967,6 +1200,82 @@ describe("product-owned attach", () => {
     expect(slice()!.lifecycle).toBe("error");
     expect(slice()!.sessionError).toBe("Could not start Session: Runtime recovery is required.");
   });
+
+  // The runtime answers with this when a replayed attach cannot be confirmed:
+  // its attachment recovery threw after the attachment opened, or the outcome
+  // was recorded without its receipt. The words are the runtime's own.
+  it("keeps the host's words for an unconfirmed attachment, and does not call it a failure to start", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: unreconciledReceipt("Attachment recovery failed: resume transport failed"),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: Attachment recovery failed: resume transport failed",
+    );
+  });
+
+  it("names the uncertainty itself when an unconfirmed attachment left no words", async () => {
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: unreconciledReceipt(null),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: the runtime could not confirm whether this ran",
+    );
+  });
+
+  it("does not read a ready state beside an unconfirmed receipt as a started Session", async () => {
+    // The wire permits this pairing (the attach output takes any receipt beside
+    // any state), and the client's success rule must not depend on the host
+    // never sending it: an unconfirmed receipt is not proof of a start.
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "ready",
+        receipt: unreconciledReceipt("Pi stopped answering before it attached."),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: Pi stopped answering before it attached.",
+    );
+  });
+
+  it("reads an unconfirmed attachment that crossed the edge without its words the same way", async () => {
+    // Over JSON a key set to `undefined` is simply absent. The codec reads an
+    // absent `detail` as it reads a null one: no words, so the uncertainty is
+    // still named rather than read as a missing field.
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () =>
+        overTheWire({
+          sessionId: SESSION.id,
+          state: "needs-recovery",
+          receipt: { ...unreconciledReceipt(null), detail: undefined },
+          throughSequence: 1,
+        }) as unknown as CommandAnswer;
+    });
+
+    await expect(client.retryAttach()).resolves.toBe(false);
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: the runtime could not confirm whether this ran",
+    );
+  });
 });
 
 describe("startAttach", () => {
@@ -988,7 +1297,7 @@ describe("startAttach", () => {
     // A Ticket Session's attach: a worktree that cannot be materialized is
     // recorded as Ticket Attention, which is the surface a person acts on.
     // Saying it here too would be one problem with two dismissals.
-    const { client, slice } = await adopted((fake) => {
+    const { client, slice, notifications } = await adopted((fake) => {
       fake.answerAttach = () => ({
         sessionId: SESSION.id,
         state: "needs-recovery",
@@ -999,6 +1308,30 @@ describe("startAttach", () => {
 
     await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
     expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+  });
+
+  it("keeps an unconfirmed attach on the slice even when a refusal is reported elsewhere", async () => {
+    // The elsewhere is Ticket Attention, and the runtime raises that only when an
+    // attach fails outright (a rejected receipt). An unconfirmed outcome writes
+    // no Attention, so withholding it here would leave a Ticket Session that
+    // stopped with nothing on screen at all.
+    const { client, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: unreconciledReceipt(
+          "Attachment outcome is recorded but its delivery receipt is unreconciled",
+        ),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: Attachment outcome is recorded but its delivery receipt is unreconciled",
+    );
   });
 
   it("waits for nothing when the surface dropped the Session mid-attach", async () => {
@@ -1023,17 +1356,163 @@ describe("startAttach", () => {
     expect(slice()).toBeUndefined();
   });
 
-  it("always settles a THROWN attach onto the slice, whatever the Role", async () => {
-    // Nothing reached the host, so there is no receipt and no Attention
-    // anywhere — the slice is the only surface that can carry it.
-    const { client, slice } = await adopted((fake) => {
+  it.each([false, true])(
+    "reports a thrown attach outside the chat even with durable refusal reporting=%s",
+    async (refusalIsReportedElsewhere) => {
+      const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+        fake.answerAttach = () => {
+          throw new Error("socket hang up");
+        };
+      });
+
+      await expect(client.startAttach({ refusalIsReportedElsewhere })).resolves.toBe(false);
+      expect(slice()!.sessionError).toBe("Could not start Session: socket hang up");
+      expect(notifications).toEqual(["Could not start Session: socket hang up"]);
+      expect(notificationTones).toEqual(["error"]);
+    },
+  );
+
+  it("announces repeated automatic attach failures once, but re-arms for an explicit Retry", async () => {
+    const { client, rpc, notifications } = await adopted((fake) => {
       fake.answerAttach = () => {
         throw new Error("socket hang up");
       };
     });
 
-    await expect(client.startAttach({ refusalIsReportedElsewhere: true })).resolves.toBe(false);
-    expect(slice()!.sessionError).toBe("Could not start Session: socket hang up");
+    await client.startAttach();
+    await client.startAttach();
+    expect(notifications).toEqual(["Could not start Session: socket hang up"]);
+
+    await client.retryAttach();
+    expect(notifications).toEqual([
+      "Could not start Session: socket hang up",
+      "Could not start Session: socket hang up",
+    ]);
+
+    rpc.answerAttach = () => ACCEPTED;
+    await expect(client.startAttach()).resolves.toBe(true);
+    rpc.answerAttach = () => {
+      throw new Error("socket hang up");
+    };
+    await client.startAttach();
+    expect(notifications).toHaveLength(3);
+  });
+
+  it("does not announce an attach failure after its client retired, even with a retained slice", async () => {
+    const gate = deferred();
+    const { client, slice, notifications } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        throw new Error("socket hang up");
+      };
+    });
+
+    const attaching = client.startAttach();
+    client.dispose();
+    gate.release();
+
+    await expect(attaching).resolves.toBe(false);
+    expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+  });
+
+  it("does not reconstruct a slice removed while attach was in flight", async () => {
+    const gate = deferred();
+    const { client, store, sessionId, slice } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        return ACCEPTED;
+      };
+    });
+
+    const attaching = client.startAttach();
+    store.getState().remove(sessionId);
+    gate.release();
+
+    await expect(attaching).resolves.toBe(true);
+    expect(slice()).toBeUndefined();
+  });
+
+  it("does not let an old attach failure overwrite a reopened Session", async () => {
+    const gate = deferred();
+    const { client, close, store, sessionId, slice, notifications } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        throw new Error("old attach failed");
+      };
+    });
+
+    const attaching = client.startAttach();
+    close();
+    store.getState().seed(sessionId, "ready");
+    const replacement = slice();
+    gate.release();
+
+    await expect(attaching).resolves.toBe(false);
+    expect(slice()).toBe(replacement);
+    expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+  });
+
+  it.each([ACCEPTED, REFUSED])(
+    "does not let an old attach result settle a reopened Session (%j)",
+    async (answer) => {
+      const gate = deferred();
+      const { client, close, store, sessionId, slice } = await adopted((fake) => {
+        fake.answerAttach = async () => {
+          await gate.promise;
+          return answer;
+        };
+      });
+
+      const attaching = client.startAttach();
+      close();
+      store.getState().seed(sessionId, "starting");
+      const replacement = slice();
+      gate.release();
+
+      await expect(attaching).resolves.toBe(answer === ACCEPTED);
+      expect(slice()).toBe(replacement);
+      expect(slice()!.lifecycle).toBe("starting");
+    },
+  );
+
+  it("keeps a failed-stream recovery band after an independent attach succeeds", async () => {
+    const gate = deferred();
+    const { client, rpc, slice, notifications } = await adopted();
+    rpc.snapshotError = new Error("snapshot unavailable");
+    rpc.answerAttach = async () => {
+      await gate.promise;
+      return ACCEPTED;
+    };
+
+    const attaching = client.startAttach();
+    await settle();
+    expect(slice()!.sessionError).toBe("Lost the Session stream: snapshot unavailable");
+    gate.release();
+
+    await expect(attaching).resolves.toBe(true);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe("Lost the Session stream: snapshot unavailable");
+    expect(notifications).toEqual(["Lost the Session stream: snapshot unavailable"]);
+  });
+
+  it("does not announce an attach failure after its surface let go", async () => {
+    const gate = deferred();
+    const { client, close, slice, notifications } = await adopted((fake) => {
+      fake.answerAttach = async () => {
+        await gate.promise;
+        throw new Error("socket hang up");
+      };
+    });
+
+    const attaching = client.startAttach();
+    close();
+    gate.release();
+
+    await expect(attaching).resolves.toBe(false);
+    expect(slice()).toBeUndefined();
+    expect(notifications).toEqual([]);
   });
 });
 
@@ -1205,6 +1684,40 @@ describe("recover", () => {
     await expect(client.recover()).resolves.toBe(false);
 
     expect(slice()!.sessionError).toBe("Reconcile: socket hang up");
+  });
+
+  it("clears the band on a reconcile the runtime answered with no receipt", async () => {
+    // The real answer: `session.reconcile` is a void-output procedure, so a
+    // completed reconcile resolves with nothing, and nothing on the wire is a
+    // receipt that could say otherwise. Pinned so a void answer stays a success.
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+      fake.answerReconcile = () => undefined;
+    });
+
+    await expect(client.recover()).resolves.toBe(true);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it("does not count a re-attach the runtime could not confirm as a recovery", async () => {
+    // The no-executor arm of `recover` is a re-attach. Its unconfirmed outcome
+    // must latch the band the same way a direct Retry does, not clear it.
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.answerAttach = () => ({
+        sessionId: SESSION.id,
+        state: "needs-recovery",
+        receipt: unreconciledReceipt("Pi stopped answering before it attached."),
+        throughSequence: 1,
+      });
+    });
+
+    await expect(client.recover()).resolves.toBe(false);
+    expect(rpc.attaches).toHaveLength(1);
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Session start unconfirmed: Pi stopped answering before it attached.",
+    );
   });
 });
 
@@ -1655,6 +2168,23 @@ describe("submit", () => {
     });
   }
 
+  it.each([undefined, "steer", "replace"] as const)(
+    "asks for opening acceptance for immediate delivery=%s",
+    async (delivery) => {
+      const { client, rpc } = await ready();
+      await expect(client.submit({ id: "ordinary", text: "go" }, delivery)).resolves.toBe(
+        "delivered",
+      );
+      expect(overTheWire(rpc.submissions()[0]!.command)).toMatchObject({ settle: "opened" });
+    },
+  );
+
+  it("leaves queued acceptance with the host, not opening settlement", async () => {
+    const { client, rpc } = await ready();
+    await client.submit({ id: "queued", text: "later" }, "queue");
+    expect(rpc.submissions()[0]!.command).not.toHaveProperty("settle");
+  });
+
   it("keeps model policy out of message commands", async () => {
     const { client, rpc, sessionId } = await ready();
 
@@ -1674,6 +2204,7 @@ describe("submit", () => {
             parts: [{ type: "text", text: "ship it" }],
           },
           delivery: "steer",
+          settle: "opened",
         },
       },
     ]);
@@ -1681,6 +2212,7 @@ describe("submit", () => {
       "delivery",
       "kind",
       "message",
+      "settle",
     ]);
   });
 
@@ -1838,7 +2370,7 @@ describe("submit", () => {
   it("marks the Session working once the harness took it", async () => {
     const { client, slice } = await ready();
 
-    await client.submit({ id: "m1", text: "go" }, "queue");
+    await client.submit({ id: "m1", text: "go" });
 
     expect(slice()!.lifecycle).toBe("working");
   });
@@ -1853,7 +2385,7 @@ describe("submit", () => {
   it("refuses while there is nowhere to deliver", async () => {
     const { client, rpc } = await adopted();
 
-    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("refused");
+    await expect(client.submit({ id: "m1", text: "go" })).resolves.toBe("refused");
     expect(rpc.submissions()).toHaveLength(0);
   });
 
@@ -1874,7 +2406,7 @@ describe("submit", () => {
       fake.answer = (request) => (request.command.kind === "message.submit" ? REFUSED : ACCEPTED);
     });
 
-    await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("recorded");
+    await expect(client.submit({ id: "m1", text: "go" })).resolves.toBe("recorded");
     expect(slice()!.sessionError).toBe("Message not delivered: Pi is unavailable");
   });
 
@@ -1887,6 +2419,73 @@ describe("submit", () => {
 
     await expect(client.submit({ id: "m1", text: "go" }, "queue")).resolves.toBe("refused");
     expect(slice()!.sessionError).toBe("Message not delivered: socket hang up");
+  });
+
+  it("does not call an unreconciled message delivered, and keeps the host's words visible", async () => {
+    const { client, slice, notifications } = await ready((fake) => {
+      fake.answer = (request) =>
+        request.command.kind === "message.submit"
+          ? unreconciledAnswer("Pi stopped answering before it started the turn.")
+          : ACCEPTED;
+    });
+
+    // Recorded, not delivered: the words are in the ledger, so a composer must
+    // not hand them back. The band is the visible account; no toast is owed for
+    // a message that was not queued.
+    await expect(client.submit({ id: "m1", text: "go" })).resolves.toBe("recorded");
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Message delivery unconfirmed: Pi stopped answering before it started the turn.",
+    );
+    expect(notifications).toEqual([]);
+  });
+
+  it("names the uncertainty itself when an unreconciled message left no words", async () => {
+    const { client, slice } = await ready((fake) => {
+      fake.answer = (request) =>
+        request.command.kind === "message.submit" ? unreconciledAnswer(null) : ACCEPTED;
+    });
+
+    await expect(client.submit({ id: "m1", text: "go" }, "steer")).resolves.toBe("recorded");
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Message delivery unconfirmed: the runtime could not confirm whether this ran",
+    );
+  });
+
+  it("refuses an unreconciled queued message, keeps its words, and says so in a toast", async () => {
+    const { client, rpc, slice, notifications, notificationTones } = await ready((fake) => {
+      fake.answer = (request) =>
+        request.command.kind === "message.submit"
+          ? unreconciledAnswer("Pi stopped answering before it queued the message.")
+          : ACCEPTED;
+    });
+
+    // A queue that was never confirmed admitted nothing this surface can show,
+    // so it neither refreshes the queue as if it had landed nor reads as success.
+    await expect(client.submit({ id: "q1", text: "later" }, "queue")).resolves.toBe("refused");
+    expect(slice()!.lifecycle).toBe("error");
+    expect(slice()!.sessionError).toBe(
+      "Message delivery unconfirmed: Pi stopped answering before it queued the message.",
+    );
+    expect(notifications).toEqual([
+      "Message queueing unconfirmed: Pi stopped answering before it queued the message.",
+    ]);
+    expect(notificationTones).toEqual(["error"]);
+    expect(rpc.projectionQueries).toBe(0);
+  });
+
+  it("names the uncertainty in a queued message's toast when the host left no words", async () => {
+    const { client, notifications, notificationTones } = await ready((fake) => {
+      fake.answer = (request) =>
+        request.command.kind === "message.submit" ? unreconciledAnswer(null) : ACCEPTED;
+    });
+
+    await expect(client.submit({ id: "q2", text: "later" }, "queue")).resolves.toBe("refused");
+    expect(notifications).toEqual([
+      "Message queueing unconfirmed: the runtime could not confirm whether this ran",
+    ]);
+    expect(notificationTones).toEqual(["error"]);
   });
 });
 
@@ -1986,29 +2585,10 @@ describe("auto-title on delivery", () => {
     ]);
   });
 
-  it("fires through a queue release too — the one choke point both paths share", async () => {
-    // No live executor yet, so the message queues; setProjection below is what
-    // the queue's release rule reacts to, exactly as it would off a stream
-    // frame that just brought one up.
-    const { store, sessionId, renames } = await adopted((fake) => {
-      fake.snapshotProjection = {
-        ...projectionFor(null),
-        session: { ...SESSION, title: null },
-      };
-    });
-    store.getState().enqueue(sessionId, { id: "q1", text: "Fix the parser" });
-    expect(renames).toEqual([]);
-
-    store.getState().setProjection(sessionId, projectionWithTitle(null));
-    await settle();
-
-    expect(renames).toEqual([
-      {
-        sessionId,
-        title: "Fix the parser",
-        refineFrom: "Fix the parser",
-      },
-    ]);
+  it("titles a message durably accepted before an executor exists", async () => {
+    const { client, sessionId, renames } = await adopted();
+    await client.submit({ id: "q1", text: "Fix the parser" }, "queue");
+    expect(renames).toEqual([{ sessionId, title: "Fix the parser", refineFrom: "Fix the parser" }]);
   });
 
   it("refines a composed start's seeded fallback from its opening message", async () => {
@@ -2188,429 +2768,209 @@ describe("resolveInteraction", () => {
   });
 });
 
-/* ----------------------------------------------------------------- the queue */
-
-describe("the queued message", () => {
-  async function pending(prepare: (rpc: FakeRpc) => void = () => undefined) {
-    return adopted(prepare);
-  }
-
-  it("holds a message written before an executor was live, and releases it once", async () => {
-    const { rpc, store, sessionId, slice } = await pending((fake) => {
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    store.getState().enqueue(sessionId, { id: "q1", text: "start on the parser" });
-    expect(rpc.submissions()).toHaveLength(0);
-
-    store.getState().setProjection(sessionId, projectionFor("attach-1"));
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(slice()!.queue).toEqual([]);
-    expect(slice()!.lifecycle).toBe("working");
-  });
-
-  it("releases nothing twice however much the store churns underneath it", async () => {
-    const gate = deferred();
-    const { rpc, store, sessionId } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = async () => {
-        await gate.promise;
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "once" });
-    for (let churn = 0; churn < 5; churn += 1) {
-      store.getState().setProjection(sessionId, projectionFor("attach-1"));
-    }
-    gate.release();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-  });
-
-  it("does not let an explicit steer claim the row resident drain is submitting", async () => {
-    const gate = deferred();
-    const { client, rpc, store, sessionId, slice } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = async () => {
-        await gate.promise;
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "once" });
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1"]);
-    expect(client.claimQueued("q1")).toBe(false);
-
-    gate.release();
-    await settle();
-    expect(slice()!.queue).toEqual([]);
-  });
-
-  it("stops when the Session closes mid-release", async () => {
-    const gate = deferred();
-    const { rpc, store, sessionId, close } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = async () => {
-        await gate.promise;
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    close();
-    gate.release();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-  });
-
-  it("holds the queue behind a failure rather than feeding a harness that just refused", async () => {
-    const { rpc, store, sessionId, slice } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = () => REFUSED;
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(slice()!.lifecycle).toBe("error");
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
-  });
-
-  it("keeps the current queue row recoverable when transport fails before recording", async () => {
-    let attempts = 0;
-    const { rpc, store, sessionId, slice } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.answer = () => {
-        attempts += 1;
-        if (attempts === 1) throw new Error("socket hang up");
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(rpc.submissions()[0]).toMatchObject({
-      commandId: "q1",
-      command: { message: { id: "q1" }, delivery: "queue" },
-    });
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1", "q2"]);
-
-    store.getState().settle(sessionId, null);
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(2);
-    expect(rpc.submissions()[1]).toMatchObject({
-      commandId: "q1",
-      command: { message: { id: "q1" }, delivery: "queue" },
-    });
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
-  });
-
-  it("releases the next one when the turn it started completes", async () => {
-    const { rpc, scheduler, store, sessionId, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-    expect(rpc.submissions()).toHaveLength(1);
-
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    stream().send("2", frameOf(2, "turn.completed"));
-    scheduler.paint();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(2);
-  });
-
-  it("does not auto-release a queued message while an explicit steer owns it", async () => {
-    const { client, rpc, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    await settle();
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    expect(rpc.submissions()).toHaveLength(0);
-
-    expect(client.claimQueued("q2")).toBe(true);
-    stream().send("2", frameOf(2, "turn.completed"));
-    scheduler.paint();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(0);
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1", "q2"]);
-    client.releaseQueuedClaim("q2");
-    await settle();
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
-  });
-
-  it("resumes earlier neighbors when a claimed target vanished before consumption", async () => {
-    const { client, rpc, scheduler, store, sessionId, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    await settle();
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    expect(client.claimQueued("q2")).toBe(true);
-    store.getState().dequeue(sessionId, "q2");
-    stream().send("2", frameOf(2, "turn.completed"));
-    scheduler.paint();
-    await settle();
-
-    expect(client.dequeueClaimed("q2")).toBe(false);
-    client.releaseQueuedClaim("q2");
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
-    expect(rpc.submissions()[0]!.command).toMatchObject({
-      message: { parts: [{ type: "text", text: "first" }] },
-    });
-  });
-
-  it("consumes exactly one claimed row and rejects missing or duplicate claims", async () => {
-    const { client, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    await settle();
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-
-    expect(client.claimQueued("missing")).toBe(false);
-    expect(client.claimQueued("q1")).toBe(true);
-    expect(client.claimQueued("q1")).toBe(false);
-    expect(client.dequeueClaimed("missing")).toBe(false);
-    expect(client.dequeueClaimed("q1")).toBe(true);
-    expect(slice()!.queue).toEqual([]);
-    client.releaseQueuedClaim("q1");
-  });
-
-  it("refuses queue claims after the owning surface closes", async () => {
-    const { client, scheduler, store, sessionId, stream, close } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-    stream().send("1", frameOf(1, "turn.started"));
-    scheduler.paint();
-    await settle();
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    expect(client.claimQueued("q1")).toBe(true);
-
-    close();
-
-    expect(client.claimQueued("q1")).toBe(false);
-    expect(client.dequeueClaimed("q1")).toBe(false);
-    client.releaseQueuedClaim("q1");
-  });
-
-  it("releases the next one when the whole turn arrived in a single fold", async () => {
-    // A turn can begin and end inside one batch — a fast refusal, an occluded
-    // window folding 50ms at a time, a reconnect replaying what it missed. The
-    // Session reads idle at both ends of that fold, and taking that for silence
-    // left the rest of the queue stranded behind a turn already over.
-    const { rpc, scheduler, store, sessionId, slice, stream } = await pending((fake) => {
-      fake.snapshotProjection = projectionFor("attach-1");
-      fake.liveProjection = projectionFor("attach-1");
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-    expect(rpc.submissions()).toHaveLength(1);
-
-    stream().send("1", frameOf(1, "turn.started"));
-    stream().send("2", frameOf(2, "turn.completed"));
-    scheduler.paint();
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(2);
-    expect(slice()!.queue).toEqual([]);
-  });
+const queued = (id: string) => ({
+  id,
+  commandId: id,
+  state: "queued" as const,
+  message: { id, role: "user" as const, parts: [{ type: "text" as const, text: id }] },
 });
 
-/* ------------------------------------------------- the Session that crashed */
+describe("the host-owned follow-up queue", () => {
+  it("sends observed or explicitly captured revisions, without optimistic mutation", async () => {
+    const { client, rpc, store, sessionId, slice } = await adopted();
+    store.getState().setQueue(sessionId, [queued("q1")], 4);
+    await client.editQueued({ id: "q1", text: "changed" });
+    await client.cancelQueued("q1", 2);
+    await client.editQueued({ id: "q1", text: "changed again" }, 3);
+    await client.cancelQueued("q1");
+    expect(rpc.queueEdits.map(({ expectedRevision }) => expectedRevision)).toEqual([4, 3]);
+    expect(rpc.queueCancels.map(({ expectedRevision }) => expectedRevision)).toEqual([2, 4]);
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1"]);
+  });
 
-/**
- * VC-367. A relaunch closes the attachment of every Session whose process died,
- * so `liveExecutor` reads null and the composer routes every later message to
- * the queue. Before this, nothing ever came for it: the release rule waits on
- * an executor and no path produced one, so the app accepted the words and the
- * Session simply never started. The one unacceptable outcome is the silent
- * queue — either the message brings the executor back, or the refusal is on
- * screen with the way out beside it.
- */
-describe("a message sent to a Session whose executor died", () => {
-  /** Exactly what boot recovery leaves behind: open Session, no attachment. */
-  async function crashed(prepare: (rpc: FakeRpc) => void = () => undefined) {
-    return adopted((fake) => {
-      fake.snapshotProjection = projectionFor(null);
-      fake.liveProjection = projectionFor(null);
-      prepare(fake);
+  it("omits revisions if no host queue baseline was observed", async () => {
+    const { client, rpc } = await adopted();
+    await client.cancelQueued("missing");
+    await client.editQueued({ id: "missing", text: "changed" });
+    expect(rpc.queueCancels[0]).not.toHaveProperty("expectedRevision");
+    expect(rpc.queueEdits[0]).not.toHaveProperty("expectedRevision");
+  });
+
+  it("keeps queue-only title metadata out of immediate messages", async () => {
+    const { client, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
     });
-  }
-
-  it("reattaches and delivers rather than queueing into the void", async () => {
-    const { rpc, store, sessionId, slice } = await crashed();
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "carry on where you left off" });
-    await settle();
-
-    // The send itself asked for the executor back. Nothing else in the app was
-    // ever going to.
-    expect(rpc.attaches).toEqual([{ operationId: "cmd-1", sessionId }]);
-
-    // The attachment the reattach opened, arriving the way it does in the app:
-    // off the stream frame that reports it.
-    store.getState().setProjection(sessionId, projectionFor("attach-2"));
-    await settle();
-
-    expect(rpc.submissions()).toHaveLength(1);
+    const attachments = [
+      {
+        linkId: "l1",
+        blobHash: "a".repeat(64),
+        label: "shot.png",
+        originalName: "shot.png",
+        mime: "image/png",
+        sizeBytes: 12,
+      },
+    ];
+    const resources = [{ name: "logos", text: "# Logos" }];
+    await client.submit({
+      id: "immediate",
+      text: "now",
+      autoTitleBaseline: "Chat",
+      attachments,
+      resources,
+    });
+    await client.submit(
+      { id: "later", text: "later", autoTitleBaseline: "Chat", attachments, resources },
+      "queue",
+    );
     expect(rpc.submissions()[0]).toMatchObject({
-      commandId: "q1",
-      command: { message: { parts: [{ type: "text", text: "carry on where you left off" }] } },
+      command: {
+        message: {
+          parts: [
+            { type: "text", text: "now" },
+            { type: "data-skill-resource" },
+            { type: "file", filename: "shot.png", mediaType: "image/png" },
+          ],
+        },
+      },
+    });
+    expect(rpc.submissions()[0]?.command).not.toHaveProperty("message.metadata");
+    expect(rpc.submissions()[1]).toMatchObject({
+      command: { message: { metadata: { autoTitleBaseline: "Chat", attachments } } },
+    });
+  });
+
+  it("accepts while busy without demoting or starting a turn", async () => {
+    const { client, slice, stream, scheduler, rpc } = await adopted((fake) => {
+      fake.snapshotProjection = projectionFor("attach-1");
+      fake.liveProjection = projectionFor("attach-1");
+    });
+    stream().send("1", frameOf(1, "turn.started"));
+    scheduler.paint();
+    await client.submit({ id: "q1", text: "later" }, "queue");
+    expect(slice()!.lifecycle).toBe("working");
+    expect(rpc.submissions()[0]?.command).toMatchObject({ delivery: "queue" });
+  });
+
+  it("accepts without an executor and never performs a client attach or release", async () => {
+    const { client, rpc, store, sessionId, slice, stream } = await adopted();
+    await expect(client.submit({ id: "q1", text: "later" }, "queue")).resolves.toBe("delivered");
+    stream().send("0", {
+      kind: "queue",
+      sessionId,
+      throughSequence: 0,
+      revision: 1,
+      queue: [queued("q1"), queued("q2")],
+    });
+    expect(slice()!.queue.map((row) => row.id)).toEqual(["q1", "q2"]);
+    store.getState().setProjection(sessionId, projectionFor("attach-1"));
+    store.getState().settle(sessionId, null);
+    await settle();
+    expect(rpc.attaches).toEqual([]);
+    expect(rpc.submissions()).toHaveLength(1);
+    expect(slice()!.lifecycle).toBe("ready");
+  });
+
+  it("orders queue updates by revision even at the same transcript cursor", async () => {
+    const { slice, stream, sessionId } = await adopted();
+    const emit = (revision: number, queue: ReturnType<typeof queued>[]) =>
+      stream().send("0", { kind: "queue", sessionId, throughSequence: 0, revision, queue });
+    emit(2, [queued("q2")]);
+    emit(1, [queued("q1")]);
+    emit(2, []);
+    expect(slice()!.queue.map((row) => row.id)).toEqual(["q2"]);
+    emit(3, []);
+    expect(slice()!.queue).toEqual([]);
+  });
+
+  it("keeps the projected row when cancellation loses release and surfaces the refusal", async () => {
+    const { client, rpc, slice, store, sessionId, notifications } = await adopted();
+    store.getState().setQueue(sessionId, [queued("q1")], 1);
+    rpc.answerCancel = () => REFUSED;
+    await expect(client.cancelQueued("q1")).resolves.toBe(false);
+    expect(slice()!.queue.map((row) => row.id)).toEqual(["q1"]);
+    expect(notifications).toEqual(["Message not removed: Pi is unavailable"]);
+  });
+
+  it("preserves locally recoverable words when durable queue admission is refused", async () => {
+    const { client, rpc, slice, notifications } = await adopted();
+    rpc.answer = () => REFUSED;
+    await expect(client.submit({ id: "q1", text: "later" }, "queue")).resolves.toBe("refused");
+    expect(slice()!.sessionError).toContain("Pi is unavailable");
+    expect(notifications).toEqual(["Message not queued: Pi is unavailable"]);
+    expect(rpc.projectionQueries).toBe(0);
+    rpc.answerCancel = () => REFUSED;
+    await expect(client.editQueued({ id: "q1", text: "changed" })).resolves.toBe(false);
+    expect(rpc.projectionQueries).toBe(0);
+  });
+
+  it("ignores a queue addressed to another Session", async () => {
+    const { stream, slice } = await adopted();
+    stream().send("0", {
+      kind: "queue",
+      sessionId: "other",
+      throughSequence: 0,
+      revision: 1,
+      queue: [queued("q1")],
     });
     expect(slice()!.queue).toEqual([]);
-    expect(slice()!.sessionError).toBeNull();
   });
 
-  it("refuses visibly when the reattach cannot happen, and never swallows the words", async () => {
-    const { rpc, store, sessionId, slice } = await crashed((fake) => {
-      fake.answerAttach = () => REFUSED;
+  it("steers through message.submit without cancelling or optimistically removing the row", async () => {
+    const { client, rpc, store, sessionId, slice, notifications } = await adopted((fake) => {
+      fake.snapshotProjection = { ...projectionFor("attach-1"), turnActive: true };
+      fake.liveProjection = { ...projectionFor("attach-1"), turnActive: true };
     });
+    store.getState().setQueue(sessionId, [queued("q1")], 1);
+    await expect(client.steerQueued("q1")).resolves.toBe("delivered");
+    expect(rpc.submissions()[0]).toMatchObject({
+      commandId: "cmd-1",
+      command: {
+        kind: "message.submit",
+        delivery: "steer",
+        message: queued("q1").message,
+      },
+    });
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1"]);
+    expect(rpc.projectionQueries).toBe(1);
+    expect(notifications).toEqual([]);
+  });
 
-    store.getState().enqueue(sessionId, { id: "q1", text: "are you there" });
-    await settle();
+  it("retains the row and reports a queued steering refusal or lost transport", async () => {
+    const { client, rpc, store, sessionId, slice, notifications } = await adopted((fake) => {
+      fake.snapshotProjection = { ...projectionFor("attach-1"), turnActive: true };
+    });
+    store.getState().setQueue(sessionId, [queued("q1")], 1);
+    rpc.answer = () => REFUSED;
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
+    expect(notifications.at(-1)).toBe("Message not steered: Pi is unavailable");
+    rpc.answer = () => {
+      throw new Error("transport lost");
+    };
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
+    expect(notifications.at(-1)).toBe("Message not steered: transport lost");
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1"]);
+    expect(rpc.projectionQueries).toBe(0);
+  });
 
-    expect(rpc.attaches).toHaveLength(1);
-    // Nothing was sent, and the person is told so rather than left watching a
-    // composer that looked like it worked. `recover()` behind the band is the
-    // reattach offered inline.
+  it("does not steer a claimed row or an ended turn", async () => {
+    const { client, rpc, store, sessionId } = await adopted();
+    store.getState().setQueue(sessionId, [{ ...queued("q1"), state: "releasing" }], 1);
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
+    store.getState().setQueue(sessionId, [queued("q1")], 2);
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
     expect(rpc.submissions()).toEqual([]);
-    expect(slice()!.lifecycle).toBe("error");
-    expect(slice()!.sessionError).toContain("Could not start Session");
-    // And the words are still held, so the refusal costs nothing typed.
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q1"]);
   });
 
-  it("asks again when a person sends again after a refusal", async () => {
-    const { rpc, store, sessionId } = await crashed((fake) => {
-      fake.answerAttach = () => REFUSED;
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
+  it("refreshes after host edit/cancel and refuses steering a missing row", async () => {
+    const { client, rpc, notifications } = await adopted();
+    await expect(client.editQueued({ id: "q1", text: "changed" })).resolves.toBe(true);
     await settle();
-    expect(rpc.attaches).toHaveLength(1);
-
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
+    await expect(client.cancelQueued("q1")).resolves.toBe(true);
     await settle();
-
-    // A person sending again is asking again: a latch that ignored them would
-    // be the same silence in a different place.
-    expect(rpc.attaches).toHaveLength(2);
-  });
-
-  it("spends exactly one attach on a queue however much the store churns", async () => {
-    const { rpc, store, sessionId } = await crashed();
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "once" });
-    for (let churn = 0; churn < 5; churn += 1) {
-      store.getState().setProjection(sessionId, projectionFor(null));
-    }
-    await settle();
-
-    // The drain re-enters on every store write; an unlatched arm would spend a
-    // process per frame.
-    expect(rpc.attaches).toHaveLength(1);
-  });
-
-  it("attaches nothing for a Session nobody is trying to talk to", async () => {
-    const { rpc, store, sessionId } = await crashed();
-
-    for (let churn = 0; churn < 3; churn += 1) {
-      store.getState().setProjection(sessionId, projectionFor(null));
-    }
-    await settle();
-
-    expect(rpc.attaches).toEqual([]);
-  });
-
-  it("re-arms after the executor it brought back dies again", async () => {
-    const { rpc, store, sessionId } = await crashed();
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    await settle();
-    expect(rpc.attaches).toHaveLength(1);
-
-    store.getState().setProjection(sessionId, projectionFor("attach-2"));
-    await settle();
-
-    // The second death, and the second message into it.
-    store.getState().setProjection(sessionId, projectionFor(null));
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    await settle();
-
-    expect(rpc.attaches).toHaveLength(2);
-  });
-
-  it("picks up a message typed while the reattach was still in flight", async () => {
-    const gate = deferred();
-    const { rpc, store, sessionId, slice } = await crashed((fake) => {
-      fake.answerAttach = async () => {
-        await gate.promise;
-        return ACCEPTED;
-      };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "first" });
-    await settle();
-    expect(rpc.attaches).toHaveLength(1);
-
-    // Typed while the attach is still open. The drain latch is held, so this
-    // write re-enters and is refused — it must be remembered, not dropped.
-    store.getState().enqueue(sessionId, { id: "q2", text: "second" });
-    gate.release();
-    await settle();
-
-    store.getState().setProjection(sessionId, projectionFor("attach-2"));
-    await settle();
-
-    expect(rpc.submissions().map((sent) => sent.commandId)).toEqual(["q1"]);
-    expect(slice()!.queue.map((entry) => entry.id)).toEqual(["q2"]);
-  });
-
-  it("leaves an archived Session alone — there is nothing to attach to", async () => {
-    const { rpc, store, sessionId } = await crashed((fake) => {
-      fake.snapshotProjection = { ...projectionFor(null), status: "archived" };
-    });
-
-    store.getState().enqueue(sessionId, { id: "q1", text: "hello?" });
-    await settle();
-
-    expect(rpc.attaches).toEqual([]);
+    expect(rpc.projectionQueries).toBe(2);
+    await expect(client.steerQueued("q1")).resolves.toBe("refused");
+    expect(rpc.submissions()).toEqual([]);
+    expect(notifications[0]).toContain("no longer available");
   });
 });
 
@@ -2642,5 +3002,213 @@ describe("dispose", () => {
     }).not.toThrow();
     gate.release();
     await settle();
+  });
+});
+
+/* ------------------------------------------------------- bounded history */
+
+/** The host's "read a fresh snapshot" refusal, as either link carries it. */
+function resnapshotRequired(): unknown {
+  return Object.assign(new Error("Session history moved past this cursor"), {
+    data: {
+      hostError: {
+        code: "PRECONDITION_FAILED",
+        message: "Session history moved past this cursor",
+        reason: "subscription-resnapshot-required",
+      },
+    },
+  });
+}
+
+describe("bounded history (VC-315)", () => {
+  it("keeps the host's queued follow-ups through a bounded open and a page of history", async () => {
+    // The queue is host-projected state, not transcript (VC-675): a window
+    // that holds only the newest frames shows every queued row, and paging
+    // the history above it leaves them alone.
+    const { client, slice } = await adopted((fake) => {
+      fake.snapshotFrames = [transcriptFrameOf(5, "m3"), frameOf(6, "turn.completed")];
+      fake.snapshotThrough = 6;
+      fake.snapshotBefore = 5;
+      fake.snapshotProjection = {
+        ...projectionFor("attach-1"),
+        queue: [queued("q1"), queued("q2")],
+        queueRevision: 3,
+      };
+      fake.pages.set(5, { frames: [transcriptFrameOf(4, "m2")], before: null });
+    });
+
+    expect(slice()!.transcript.before).toBe(5);
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1", "q2"]);
+    expect(slice()!.queueRevision).toBe(3);
+    await expect(client.loadOlder()).resolves.toBe(true);
+    expect(slice()!.transcript.before).toBeNull();
+    expect(slice()!.queue.map(({ id }) => id)).toEqual(["q1", "q2"]);
+  });
+
+  it("opens on the tail and pages the history above it on demand", async () => {
+    const { client, rpc, sessionId, slice } = await adopted((fake) => {
+      fake.snapshotFrames = [transcriptFrameOf(5, "m3"), frameOf(6, "turn.completed")];
+      fake.snapshotThrough = 6;
+      fake.snapshotBefore = 5;
+      fake.pages.set(5, {
+        frames: [transcriptFrameOf(3, "m1"), transcriptFrameOf(4, "m2")],
+        before: 3,
+      });
+      fake.pages.set(3, { frames: [frameOf(2, "turn.started")], before: null });
+    });
+
+    expect(slice()!.transcript.before).toBe(5);
+    expect(rpc.streams[0]!.input).toEqual({ sessionId, afterSequence: 6 });
+
+    const both = await Promise.all([client.loadOlder(), client.loadOlder()]);
+    expect(both).toEqual([true, true]);
+    expect(rpc.historyRequests).toEqual([5]);
+    expect(slice()!.transcript.messages.map(({ id }) => id)).toEqual(["m1", "m2", "m3"]);
+    expect(slice()!.transcript.before).toBe(3);
+
+    await expect(client.loadOlder()).resolves.toBe(true);
+    expect(slice()!.transcript.before).toBeNull();
+    expect(slice()!.transcript.frames.map(({ sequence }) => sequence)).toEqual([2, 3, 4, 5, 6]);
+    await expect(client.loadOlder()).resolves.toBe(false);
+    expect(rpc.historyRequests).toEqual([5, 3]);
+  });
+
+  it("reads a missing or malformed cursor as a transcript that is already whole", async () => {
+    const { client, rpc, slice } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(1, "turn.started")];
+      fake.snapshotThrough = 1;
+      fake.snapshotBefore = 0;
+    });
+
+    expect(slice()!.transcript.before).toBeNull();
+    await expect(client.loadOlder()).resolves.toBe(false);
+    expect(rpc.historyRequests).toEqual([]);
+  });
+
+  it("tells the reader a page that could not be read, and keeps the cursor for another try", async () => {
+    const { client, slice, notifications, notificationTones } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(5, "turn.started")];
+      fake.snapshotThrough = 5;
+      fake.snapshotBefore = 5;
+    });
+
+    await expect(client.loadOlder()).resolves.toBe(false);
+
+    expect(notifications).toEqual(["Earlier messages: history is unavailable"]);
+    expect(notificationTones).toEqual(["error"]);
+    expect(slice()!.transcript.before).toBe(5);
+    expect(slice()!.sessionError).toBeNull();
+  });
+
+  it.each([
+    ["a page", true],
+    ["a failure", false],
+  ])("says nothing about %s that lands after the client retired", async (_, answered) => {
+    const gate = deferred();
+    const { client, rpc, close, notifications } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(5, "turn.started")];
+      fake.snapshotThrough = 5;
+      fake.snapshotBefore = 5;
+      fake.historyGate = gate.promise;
+      if (answered) fake.pages.set(5, { frames: [frameOf(4, "turn.started")], before: null });
+    });
+
+    const pending = client.loadOlder();
+    close();
+    gate.release();
+
+    await expect(pending).resolves.toBe(false);
+    expect(rpc.historyRequests).toEqual([5]);
+    expect(notifications).toEqual([]);
+  });
+
+  it("holds the snapshot's reply baseline, and reads a malformed one as none", async () => {
+    const { rpc, slice, stream } = await adopted((fake) => {
+      fake.snapshotFrames = [frameOf(9, "turn.started")];
+      fake.snapshotThrough = 9;
+      fake.snapshotBefore = 9;
+      fake.snapshotLatestReply = { sequence: 4, text: "Current-turn reply" };
+    });
+    expect(slice()!.transcript.latestReply).toEqual({ sequence: 4, text: "Current-turn reply" });
+
+    rpc.snapshotLatestReply = { sequence: "4", text: 7 };
+    stream().fail(resnapshotRequired());
+    await settle();
+    expect(rpc.snapshots).toBe(2);
+    expect(slice()!.transcript.latestReply).toBeNull();
+  });
+
+  it("answers a resnapshot by quietly reloading the tail, not with the stream band", async () => {
+    const { rpc, sessionId, slice, stream, notifications } = await adopted((fake) => {
+      fake.snapshotFrames = [transcriptFrameOf(3, "m1")];
+      fake.snapshotThrough = 3;
+      fake.snapshotBefore = 3;
+    });
+    stream().start();
+    stream().send("3", frameOf(3, "turn.started"));
+    stream().fail(new Error("socket hang up"));
+    await settle();
+    // The resume past the host's replay bound is refused before it starts.
+    rpc.snapshotFrames = [transcriptFrameOf(40, "m9")];
+    rpc.snapshotThrough = 40;
+    rpc.snapshotBefore = 40;
+    stream().fail(resnapshotRequired());
+    await settle();
+
+    expect(rpc.snapshots).toBe(2);
+    expect(rpc.streams.at(-1)!.input).toEqual({ sessionId, afterSequence: 40 });
+    expect(slice()!.transcript.messages.map(({ id }) => id)).toEqual(["m9"]);
+    expect(slice()!.transcript.before).toBe(40);
+    expect(slice()!.sessionError).toBeNull();
+    expect(notifications).toEqual([]);
+
+    // A reloaded stream that delivered something earns another quiet reload:
+    // its replay was admitted, so the next refusal is a new one.
+    stream().start();
+    stream().send("41", frameOf(41, "turn.started"));
+    stream().fail(resnapshotRequired());
+    await settle();
+    expect(rpc.snapshots).toBe(3);
+    expect(notifications).toEqual([]);
+  });
+
+  // tRPC's WebSocket adapter answers `started` once the subscription's
+  // iterator exists, before its first `next()` runs the replay that refuses.
+  // `started` therefore proves nothing about the replay (VC-315).
+  it("reports repeated refusals even when the transport says started before the replay refuses", async () => {
+    const { rpc, slice, stream, notifications } = await adopted();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      stream().start();
+      stream().fail(resnapshotRequired());
+      await settle();
+    }
+
+    expect(rpc.snapshots).toBe(2);
+    expect(rpc.streams).toHaveLength(2);
+    expect(slice()!.sessionError).toBe(
+      "Lost the Session stream: Session history moved past this cursor",
+    );
+    expect(notifications).toHaveLength(1);
+
+    // However often the dead stream is poked, nothing reloads again.
+    stream().start();
+    stream().fail(resnapshotRequired());
+    await settle();
+    expect(rpc.snapshots).toBe(2);
+  });
+
+  it("reports a host that refuses the fresh snapshot's own cursor instead of looping", async () => {
+    const { rpc, slice, stream, notifications } = await adopted();
+
+    stream().fail(resnapshotRequired());
+    await settle();
+    stream().fail(resnapshotRequired());
+    await settle();
+
+    expect(rpc.snapshots).toBe(2);
+    expect(slice()!.sessionError).toBe(
+      "Lost the Session stream: Session history moved past this cursor",
+    );
+    expect(notifications).toHaveLength(1);
   });
 });

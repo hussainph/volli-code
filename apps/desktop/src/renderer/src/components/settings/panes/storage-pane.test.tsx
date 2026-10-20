@@ -12,7 +12,20 @@ import type {
   WorktreeTrimSweepReport,
 } from "../../../../../ipc/contract";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
+import { formatFileSize } from "@renderer/components/attachments/attachment-model";
 import { DataExportConfirmBody, StoragePane } from "./storage-pane";
+
+// The build-artifact section reads its setting on mount over the Session RPC
+// client (`worktree.trimSettings`, VC-608).
+vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
+  sessionRpcClient: () => ({
+    worktree: {
+      trimSettings: {
+        query: async () => ({ keepPatterns: [".env"], trimOnFinish: true }),
+      },
+    },
+  }),
+}));
 
 const INVENTORY: PiSessionOrphanInventory = {
   revision: "scan-revision-7",
@@ -28,6 +41,7 @@ const INVENTORY: PiSessionOrphanInventory = {
   candidateCount: 1,
   candidateBytes: 1_024,
   skipped: [],
+  toolOutput: { files: 3, bytes: 3 * 1_024 * 1_024, limitBytes: 1_024 * 1_024 * 1_024 },
 };
 
 /** One worktree carrying artifacts and one that is off limits — the two rows the table has. */
@@ -136,10 +150,6 @@ function bridge(
       deleteOrphan: vi.fn(async () => ({ ok: true as const })),
       trimScan,
       trim,
-      trimSettings: vi.fn(async () => ({
-        ok: true as const,
-        settings: { keepPatterns: [".env"], trimOnFinish: true },
-      })),
       setTrimSettings,
     },
   });
@@ -177,6 +187,15 @@ function buttonNamed(name: string): HTMLButtonElement {
   return button;
 }
 
+/** The text of the row that reports saved tool output. */
+function savedOutputRow(): string {
+  return (
+    [...document.querySelectorAll("*")].find((node) =>
+      node.textContent?.startsWith("Saved tool output"),
+    )?.textContent ?? ""
+  );
+}
+
 describe("Settings → Storage Pi session logs", () => {
   it("keeps cleanup disabled until scan, confirms exact paths, and returns the revision", async () => {
     const main = bridge();
@@ -195,6 +214,17 @@ describe("Settings → Storage Pi session logs", () => {
       scanRevision: INVENTORY.revision,
       itemIds: [INVENTORY.candidates[0]!.itemId],
     });
+  });
+
+  it("shows how much tool output is saved, against its bound, once scanned (VC-469)", async () => {
+    bridge();
+    await open();
+
+    expect(savedOutputRow()).toContain("Not scanned");
+    await act(async () => buttonNamed("Scan for orphaned Pi logs").click());
+    expect(savedOutputRow()).toContain(
+      `${formatFileSize(3 * 1_024 * 1_024)} of ${formatFileSize(1_024 ** 3)}`,
+    );
   });
 
   it("renders scan failure with an in-place retry", async () => {
@@ -257,7 +287,7 @@ describe("Settings → Storage build artifacts", () => {
     expect(text).toContain("Freed");
     expect(text).toContain("2.0 KB");
     expect(text).toContain("kept 1");
-    // Named, not just counted (review r2): a person reading "kept 1" cannot tell
+    // Named, not just counted: a person reading "kept 1" cannot tell
     // whether their .env is the one.
     expect(text).toContain(".env");
     expect(text).toContain("Kept — it matches .env");

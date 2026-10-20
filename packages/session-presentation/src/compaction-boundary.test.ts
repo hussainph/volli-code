@@ -60,6 +60,7 @@ function shape(
   return projectTranscriptRows(turns, compactions, []).map((row) => {
     if (row.kind === "turn") return row.messages.map((held) => held.id).join("+");
     if (row.kind === "host-notice") return `host:${row.notice.kind}`;
+    if (row.kind === "tool-refresh") return `tools:${row.refresh.sequence}`;
     return row.kind === "compaction" ? `—${row.compaction.sequence}—` : `!${row.drop.sequence}!`;
   });
 }
@@ -188,6 +189,7 @@ describe("projectTranscriptRows", () => {
       rows.map((row) => {
         if (row.kind === "turn") return row.messages[0]!.id;
         if (row.kind === "host-notice") return `host:${row.notice.kind}`;
+        if (row.kind === "tool-refresh") return `tools:${row.refresh.sequence}`;
         return row.kind === "compaction"
           ? `compaction:${row.compaction.sequence}`
           : `drop:${row.drop.sequence}`;
@@ -272,4 +274,22 @@ describe("compactionBoundaryCopy", () => {
       "Compaction failed — the provider refused this turn. The context was left as it was.",
     );
   });
+});
+
+it("weaves tool refreshes by durable sequence among existing context notices", () => {
+  const refresh = {
+    sequence: 4,
+    afterMessageId: "m1",
+    trigger: "cold-turn" as const,
+    added: ["write"],
+    changed: ["codemode"],
+  };
+  const rows = projectTranscriptRows([[message("m1")]], [], [], [refresh]);
+  expect(rows).toEqual([
+    { kind: "turn", messages: [message("m1")] },
+    { kind: "tool-refresh", refresh },
+  ]);
+  expect(projectTranscriptRows([], [], [], [{ ...refresh, afterMessageId: null }])).toEqual([
+    { kind: "tool-refresh", refresh: { ...refresh, afterMessageId: null } },
+  ]);
 });

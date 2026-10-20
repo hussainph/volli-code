@@ -69,6 +69,17 @@ export interface PiSignIn {
   logout(providerId: string): Promise<void>;
 }
 
+/** What a login may ask its host for, beyond the person's answers. */
+export interface PiSignInOptions {
+  /**
+   * This installation's stable id, a UUID: the same on every call, for as long
+   * as Volli is installed. Pi 0.99's "Sign in with ChatGPT" (the `openai`
+   * provider's OAuth) sends it to OpenAI as the agent host id and fails
+   * without one. Absent, that one flow fails and every other is unaffected.
+   */
+  deviceId?: () => string;
+}
+
 /**
  * The seam main drives a sign-in through.
  *
@@ -79,7 +90,7 @@ export interface PiSignIn {
  * question it could answer is whether a credential now exists, and
  * {@link inspectPiModelAccess} answers that by reading the file.
  */
-export function piSignIn(models: Models): PiSignIn {
+export function piSignIn(models: Models, options: PiSignInOptions = {}): PiSignIn {
   return {
     offers: (providerId, type) => {
       const provider = models.getProvider(providerId);
@@ -89,12 +100,17 @@ export function piSignIn(models: Models): PiSignIn {
       );
     },
     login: async (providerId, type, signal, steps) => {
-      await models.login(providerId, piAuthType(type), {
-        signal,
-        prompt: (prompt: AuthPrompt) =>
-          steps.ask(toSignInPrompt(steps.newId(), prompt), prompt.signal),
-        notify: (event: AuthEvent) => steps.say(toSignInEvent(event)),
-      });
+      await models.login(
+        providerId,
+        piAuthType(type),
+        {
+          signal,
+          prompt: (prompt: AuthPrompt) =>
+            steps.ask(toSignInPrompt(steps.newId(), prompt), prompt.signal),
+          notify: (event: AuthEvent) => steps.say(toSignInEvent(event)),
+        },
+        options.deviceId === undefined ? undefined : { getDeviceId: options.deviceId },
+      );
     },
     logout: (providerId) => models.logout(providerId),
   };

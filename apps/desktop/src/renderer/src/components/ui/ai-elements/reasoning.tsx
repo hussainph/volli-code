@@ -3,8 +3,7 @@
 /**
  * Reasoning presentation — a status verb, not a collapsible.
  *
- * The model's own first `**bold**` line is the verb (OpenCode's TUI, Codex and
- * Cursor converged on this independently); the full text stays in the durable
+ * The model's own first `**bold**` line is the verb; the full text stays in the durable
  * transcript for the inspector rather than in the feed. There is no disclosure
  * here on purpose: a caret means process you can audit, and a one-line status
  * has nothing to audit.
@@ -30,10 +29,8 @@ import { Shimmer } from "./shimmer";
  *
  * It deliberately does not tick. The duration is only ever shown once the
  * thought has settled, so an interval would re-render the row several times a
- * second to animate a number that is not on screen. Codex, Zed, OpenCode and
- * t3code all refuse to run a live counter beside reasoning text that is still
- * growing; the pulsing dot is the liveness signal, and the number is the
- * receipt.
+ * second to animate a number that is not on screen. The pulsing dot is the
+ * liveness signal, and the settled duration is the receipt.
  */
 export function useElapsed(streaming: boolean): number | null {
   const startedAt = React.useRef<number | null>(null);
@@ -66,8 +63,8 @@ export const ReasoningLine = React.memo(
     // `flex-1` matters: this row is sometimes a block child and sometimes a
     // flex item beside a caret. As a flex item it would otherwise shrink to its
     // content, which kills the `ml-auto` below and lets a growing verb shove the
-    // elapsed time rightwards across the row. Codex pins the same affordance for
-    // the same reason — the clock does not move because the label got longer.
+    // elapsed time rightwards across the row. The clock must not move because
+    // the label got longer.
     <div
       className={cn(
         "flex min-w-0 flex-1 items-center gap-1 py-1 text-ui text-muted-foreground",

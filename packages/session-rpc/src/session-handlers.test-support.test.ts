@@ -1,0 +1,258 @@
+/** The router-test adapter answers as the host's map does: the port its key reads, or unavailable. */
+import { isOperationUnavailable, type HandlerCall } from "@volli/shared";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import type { DesktopRouterHandlers } from "./desktop-router";
+import type { SessionRouterHandlers } from "./index";
+import { sessionContext, sessionHandlersFrom, type LegacySessionPorts } from "./testing";
+import { LOCAL_DESKTOP_CALLER } from "./catalog";
+import { RpcDiagnosticLog } from "./index";
+
+const CALL: HandlerCall = { actor: { kind: "user" } };
+const HOST = "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b";
+const sessionMayAct = () => true;
+const resourceWorkspace = () => null;
+type Ports = Omit<LegacySessionPorts, "caller" | "diagnostics">;
+
+/** Every legacy handler with an input its port can take. Project ports are absent here. */
+function callAll(handlers: SessionRouterHandlers & DesktopRouterHandlers) {
+  const sink = { emit: vi.fn(), fail: vi.fn() };
+  return [
+    () => handlers["sessions.create"]({} as never, CALL),
+    () => handlers["sessions.attach"]({} as never, CALL),
+    () => handlers["settings.experiments"](undefined, CALL),
+    () => handlers["settings.setExperiment"]({ id: "cloud", enabled: true }, CALL),
+    () => handlers["modelAccess.inspect"]({}, CALL),
+    () => handlers["modelAccess.defaults"](undefined, CALL),
+    () => handlers["modelAccess.setDefault"]({ purpose: "ticket", selection: null }, CALL),
+    () => handlers["modelAccess.hiddenModels"](undefined, CALL),
+    () => handlers["modelAccess.setHiddenModels"]([], CALL),
+    () => handlers["modelAccess.compactionPolicy"](undefined, CALL),
+    () => handlers["modelAccess.setCompactionPolicy"]({ autoCompaction: true }, CALL),
+    () => handlers["modelAccess.codeModePolicy"](undefined, CALL),
+    () => handlers["modelAccess.setCodeModePolicy"]({ enabled: true, models: {} }, CALL),
+    () => handlers["modelAccess.pickerView"](undefined, CALL),
+    () => handlers["modelAccess.setPickerView"]("all", CALL),
+    () => handlers["session.snapshot"]({ sessionId: "s" }, CALL),
+    () => handlers["session.history"]({ sessionId: "s", before: 2 }, CALL),
+    () => handlers["session.projection"]({ sessionId: "s" }, CALL),
+    () => handlers["session.subscribe"]({ sessionId: "s", afterSequence: 0 }, CALL, sink),
+    () => handlers["session.subscribeQueue"]({ sessionId: "s", afterSequence: 0 }, CALL, sink),
+    () => handlers["session.command"]({} as never, CALL),
+    () =>
+      handlers["session.cancelQueued"](
+        { commandId: "cancel", sessionId: "s", messageId: "m" },
+        CALL,
+      ),
+    () =>
+      handlers["session.editQueued"](
+        {
+          commandId: "edit",
+          sessionId: "s",
+          messageId: "m",
+          message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+        },
+        CALL,
+      ),
+    () => handlers["session.cancelInteraction"]({ sessionId: "s", interactionId: "i" }, CALL),
+    () => handlers["session.reconcile"]({ sessionId: "s", attachmentId: "a" }, CALL),
+    () => handlers["shells.moveToBackground"]({ sessionId: "s", toolCallId: "bash-1" }, CALL),
+    () => handlers["project.reorder"]({ orderedIds: [] }, CALL),
+    () => handlers["project.remove"]({ projectId: "p" }, CALL),
+    () => handlers["worktree.trimSettings"](undefined, CALL),
+    () => handlers["hosts.snapshot"](undefined, CALL),
+    () => handlers["hosts.subscribe"](undefined, CALL, sink),
+    () => handlers["hosts.retry"]({ hostId: HOST }, CALL),
+    () => handlers["hosts.updateHost"]({ hostId: HOST, when: "now" }, CALL),
+    () => handlers["hosts.cancelScheduledUpdate"]({ hostId: HOST }, CALL),
+    () => handlers["hosts.signIn"]({ hostId: HOST, providerId: "anthropic" }, CALL),
+    () => handlers["hosts.forget"]({ hostId: HOST }, CALL),
+    () => handlers["hostAdd.start"]({ target: "you@box" }, CALL),
+    () => handlers["hostAdd.subscribe"]({ flowId: "f" }, CALL, sink),
+    () =>
+      handlers["hostAdd.answer"](
+        { flowId: "f", questionId: "q1", answer: { kind: "adopt" } },
+        CALL,
+      ),
+    () => handlers["hostAdd.sudoPassword"]({ flowId: "f", questionId: "q1", password: "p" }, CALL),
+    () => handlers["hostAdd.retry"]({ flowId: "f" }, CALL),
+    () => handlers["hostAdd.cancel"]({ flowId: "f" }, CALL),
+    () => handlers["hosts.rename"]({ hostId: HOST, name: "Box" }, CALL),
+    () => handlers["hosts.devices"]({ hostId: HOST }, CALL),
+    () => handlers["hostAdd.facts"]({ flowId: "f" }, CALL),
+    () => handlers["hostAdd.active"](undefined, CALL),
+    () => handlers["hostScope.query"]({ hostId: HOST, path: "workspaces.list" }, CALL),
+    () => handlers["hostScope.mutate"]({ hostId: HOST, path: "workspaces.create" }, CALL),
+    () => handlers["hostScope.subscribe"]({ hostId: HOST, path: "logs.follow" }, CALL, sink),
+    () => handlers["browserShortcuts.subscribe"](undefined, CALL, sink),
+    () => handlers["browserShortcuts.focusPage"]({ tabId: "opaque-1" }, CALL),
+    () => handlers["hostLink.query"]({ workspaceId: HOST, path: "board.snapshot" }, CALL),
+    () => handlers["hostLink.mutate"]({ workspaceId: HOST, path: "board.setPriority" }, CALL),
+    () => handlers["hostLink.subscribe"]({ workspaceId: HOST, path: "board.changes" }, CALL, sink),
+  ];
+}
+
+describe("sessionHandlersFrom", () => {
+  it("reads a picture through the stated port, or returns an explicit unavailable chunk", async () => {
+    const ports: Ports = { runtime: {}, sessionMayAct, resourceWorkspace };
+    const input = { sessionId: "session", pictureId: "picture" };
+    expect(await sessionHandlersFrom(ports)["session.picture"](input, CALL)).toEqual({
+      data: null,
+      mimeType: null,
+      nextOffset: null,
+    });
+    const readPicture = vi.fn(() => ({ data: "AAAA", mimeType: "image/png", nextOffset: null }));
+    expect(
+      await sessionHandlersFrom({ ...ports, readPicture })["session.picture"](input, CALL),
+    ).toEqual({ data: "AAAA", mimeType: "image/png", nextOffset: null });
+    expect(readPicture).toHaveBeenCalledExactlyOnceWith(input, CALL);
+  });
+
+  it("answers unavailable for the host project ports absent from legacy fixtures", () => {
+    const handlers = sessionHandlersFrom({ runtime: {} });
+    expect(() => handlers["workspaces.list"](undefined, CALL)).toThrowError(
+      expect.objectContaining({ message: "Projects are unavailable in this fixture" }),
+    );
+    expect(() =>
+      handlers["workspaces.create"](
+        {
+          commandId: "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+          source: { path: "/fixture" },
+        },
+        CALL,
+      ),
+    ).toThrowError(
+      expect.objectContaining({ message: "Projects are unavailable in this fixture" }),
+    );
+  });
+
+  it("answers unavailable for every port a case left out", async () => {
+    for (const call of callAll(sessionHandlersFrom({ runtime: {} }))) {
+      const error = await Promise.resolve()
+        .then(call as () => unknown)
+        .then(
+          () => null,
+          (thrown: unknown) => thrown,
+        );
+      expect(isOperationUnavailable(error)).toBe(true);
+    }
+  });
+
+  it("calls the port each key once read, with the runtime bound", async () => {
+    const answered = vi.fn(async function (this: unknown) {
+      return this;
+    });
+    const runtime = {
+      snapshot: answered,
+      history: answered,
+      projection: answered,
+      subscribe: vi.fn(async (_input, listener, onFailure) => {
+        await listener("emission" as never);
+        onFailure?.("failure");
+        return () => {};
+      }),
+      command: answered,
+      cancelInteraction: vi.fn(async () => {}),
+      reconcile: answered,
+    } as unknown as Ports["runtime"];
+    const port = vi.fn(async () => "answer");
+    const ports: Ports = {
+      runtime,
+      createSession: port as never,
+      attachSession: port as never,
+      readExperiments: port as never,
+      writeExperiment: port as never,
+      inspectModelAccess: port as never,
+      readModelAccessDefaults: port as never,
+      writeModelAccessDefault: port as never,
+      readHiddenModels: port as never,
+      writeHiddenModels: port as never,
+      readCompactionPolicy: port as never,
+      writeCompactionPolicy: port as never,
+      readCodeModePolicy: port as never,
+      writeCodeModePolicy: port as never,
+      readModelPickerView: port as never,
+      writeModelPickerView: port as never,
+      desktop: {
+        "shells.moveToBackground": port as never,
+        "project.reorder": port as never,
+        "project.remove": port as never,
+        "worktree.trimSettings": port as never,
+        "hosts.snapshot": port as never,
+        "hosts.subscribe": port as never,
+        "hosts.retry": port as never,
+        "hosts.updateHost": port as never,
+        "hosts.cancelScheduledUpdate": port as never,
+        "hosts.signIn": port as never,
+        "hosts.forget": port as never,
+        "hostAdd.start": port as never,
+        "hostAdd.subscribe": port as never,
+        "hostAdd.answer": port as never,
+        "hostAdd.sudoPassword": port as never,
+        "hostAdd.retry": port as never,
+        "hostAdd.cancel": port as never,
+        "hosts.rename": port as never,
+        "hosts.devices": port as never,
+        "hostAdd.facts": port as never,
+        "hostAdd.active": port as never,
+        "hostLink.query": port as never,
+        "hostLink.mutate": port as never,
+        "hostLink.subscribe": port as never,
+        "hostScope.query": port as never,
+        "hostScope.mutate": port as never,
+        "hostScope.subscribe": port as never,
+        "browserShortcuts.subscribe": port as never,
+        "browserShortcuts.focusPage": port as never,
+      },
+    };
+    for (const call of callAll(sessionHandlersFrom(ports))) await call();
+    expect(port).toHaveBeenCalledTimes(44);
+    expect(port).toHaveBeenCalledWith({ flowId: "f", questionId: "q1", password: "p" }, CALL);
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "cancel",
+      sessionId: "s",
+      command: { kind: "message.cancel", messageId: "m" },
+    });
+    expect(runtime.command).toHaveBeenCalledWith({
+      commandId: "edit",
+      sessionId: "s",
+      command: {
+        kind: "message.edit",
+        messageId: "m",
+        message: { id: "m", role: "user", parts: [{ type: "text", text: "edited" }] },
+      },
+    });
+    expect(await sessionHandlersFrom(ports)["session.snapshot"]({ sessionId: "s" }, CALL)).toBe(
+      runtime,
+    );
+    expect(runtime.cancelInteraction).toHaveBeenCalledWith({
+      sessionId: "s",
+      interactionId: "i",
+      reason: "abandoned",
+      origin: { kind: "user" },
+    });
+  });
+
+  it("keeps the caller's own context beside the map", () => {
+    const context = sessionContext({
+      caller: LOCAL_DESKTOP_CALLER,
+      runtime: {},
+      diagnostics: new RpcDiagnosticLog(),
+      sessionMayAct,
+      resourceWorkspace,
+      transport: "electron-ipc",
+      performanceObserver: { record: () => {} },
+    });
+    expect(context).toMatchObject({ sessionMayAct, resourceWorkspace, transport: "electron-ipc" });
+    // 21 existing router handlers, session.history (VC-315), three queue
+    // operations, four Session reads, the desktop-only tier's two (VC-608),
+    // two log reads (VC-699), sixteen remote hosts commands (VC-700, rename,
+    // devices and an add's facts among them) and ten sign-in operations (VC-702)
+    // and eight remote sign-in commands (VC-702), the two Session listing
+    // reads (VC-713), the Workspace link relay's three (VC-711), and a host's
+    // projects' four (VC-710), the active add flows' one (VC-720), and
+    // the host-scoped projects' two and HOST relay's three (VC-722),
+    // and moving a running command to the background (VC-757).
+    expect(Object.keys(context.handlers)).toHaveLength(87);
+  });
+});

@@ -6,9 +6,8 @@
  *
  *  - **The resolved token set is never stored.** This store holds
  *    `{canvas, appearance}` per scope and derives the rest at render time (see
- *    `theme/canvas-paint.ts`). VS Code's most-complained-about theming bug is
- *    auto-switching writing the *resolved* theme back over the user's authored
- *    intent; the shape here makes that unrepresentable.
+ *    `theme/canvas-paint.ts`). Auto-switching must not write the *resolved*
+ *    theme back over the user's authored intent; this shape prevents that.
  *  - **Preview is memory-only.** `startPreview` repaints the live DOM and writes
  *    NOTHING — not to SQLite, not to `app_state`, not anywhere. Only
  *    `commitPreview` persists, and `cancelPreview` restores the pre-preview look
@@ -36,6 +35,7 @@
 import {
   APPEARANCE_APP_STATE_KEY,
   DEFAULT_CANVAS,
+  deriveCanvasTokens,
   editorThemeForAppearance,
   errorMessage,
   isAppearance,
@@ -53,6 +53,7 @@ import type {
   ShippedEditorThemeId,
 } from "@volli/shared";
 import type {
+  FirstPaintReport,
   ProjectCanvasWriteResult,
   Result,
   ThemeStatePayload,
@@ -74,6 +75,7 @@ import {
 import { beginScopeRepaint, shouldEaseScopeRepaint } from "@renderer/theme/scope-transition";
 import { refreshMonacoEditorTheme } from "@renderer/editor/monaco-theme";
 import { writeThrough } from "@renderer/stores/mutate";
+import { notAvailableOn, remoteHostNow } from "./remote-project";
 
 /** Which scope a commit writes to (#69). */
 export type ThemeScope = { kind: "global" } | { kind: "project"; projectId: string };
@@ -113,9 +115,11 @@ export interface ThemeGateway {
   /**
    * Records what was actually painted so the NEXT launch can build its window
    * with the right edge color and the right mode class before anything runs. A
-   * cache, never an authority — `{canvas, appearance}` stays the pair.
+   * cache, never an authority — `{canvas, appearance}` stays the pair. The
+   * plane color (`--background`) is the live half: Browser Tab planes paint
+   * it (VC-302).
    */
-  setFirstPaint(hint: { appearance: ResolvedAppearance; background: string }): Promise<Result>;
+  setFirstPaint(hint: FirstPaintReport): Promise<Result>;
 }
 
 /**
@@ -170,12 +174,23 @@ export interface ThemeStoreDeps {
 
 const defaultDeps: ThemeStoreDeps = {
   gateway: {
-    state: (input) => window.api.theme.state(input),
+    // A remote project's own canvas is its host's (VC-711): this Mac reads
+    // and writes the global scope's, never a project row it does not hold.
+    state: (input) => window.api.theme.state(remoteHostNow(input.projectId) === null ? input : {}),
     setGlobalCanvas: (canvas) => window.api.theme.setGlobalCanvas(canvas),
     setGlobalAppearance: (appearance) => window.api.theme.setGlobalAppearance(appearance),
-    setProjectCanvas: (projectId, canvas) => window.api.theme.setProjectCanvas(projectId, canvas),
-    setProjectAppearance: (projectId, appearance) =>
-      window.api.theme.setProjectAppearance(projectId, appearance),
+    setProjectCanvas: (projectId, canvas) => {
+      const host = remoteHostNow(projectId);
+      return host === null
+        ? window.api.theme.setProjectCanvas(projectId, canvas)
+        : Promise.resolve({ ok: false, error: notAvailableOn(host) });
+    },
+    setProjectAppearance: (projectId, appearance) => {
+      const host = remoteHostNow(projectId);
+      return host === null
+        ? window.api.theme.setProjectAppearance(projectId, appearance)
+        : Promise.resolve({ ok: false, error: notAvailableOn(host) });
+    },
     setFirstPaint: (hint) => window.api.theme.setFirstPaint(hint),
   },
   // Point-free on purpose. An arrow re-listing the parameters is how the
@@ -434,7 +449,13 @@ export function createThemeStore({ deps = defaultDeps }: { deps?: ThemeStoreDeps
      * explain.
      */
     const recordFirstPaint = (canvas: Canvas, resolved: ResolvedAppearance): void => {
-      const hint = { appearance: resolved, background: windowBackground(canvas, resolved) };
+      const hint: FirstPaintReport = {
+        appearance: resolved,
+        background: windowBackground(canvas, resolved),
+        // The `--background` plane rung, not the window edge: what a Browser
+        // Tab's plane is drawn in and has to match while the app owns it (VC-302).
+        planeBackground: deriveCanvasTokens(canvas, resolved)["--background"],
+      };
       // Started inside a promise so a SYNCHRONOUS throw lands in the same
       // `.catch` as a rejection. `window.api` is not guaranteed to exist in
       // every host this store is constructed in (the renderer's own tests run

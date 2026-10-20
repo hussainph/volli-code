@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "./session-origin";
 /**
  * The terminal-shaped view of a Session: the trace and resume seed for a
  * terminal, distinct from its live in-memory PTY state
@@ -43,6 +44,7 @@ import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { SessionTurnOutcome } from "./session-ledger";
 import type { SessionProvenance } from "./session-provenance";
+import type { SessionReadState } from "./session-read";
 import type { SessionUsageSummary } from "./session-usage";
 import type { HarnessId } from "./ticket";
 
@@ -164,6 +166,9 @@ export type ChatWaitingReason = "question" | "permission" | "auth";
  * structured adapter's own domain, read through the Session Engine directly).
  */
 export interface ChatSessionRecord {
+  /** Optional only for older clients/fixtures; main always projects these. */
+  latestTurnOrigin?: SessionOrigin | null;
+  resumedAfterStop?: boolean;
   sessionId: string;
   title: string;
   projectId: string;
@@ -269,7 +274,54 @@ export interface ChatSessionRecord {
 export type SessionListingRow = SessionListingIdentity & {
   usage: SessionUsageSummary;
   provenance: SessionProvenance;
+  /**
+   * Unread state (VC-30). OPTIONAL and sparse for the reason `provenance` is
+   * defaulted: a builder with no receipt reader must mark nothing rather than
+   * guess. Read it through `sessionReadStateOf`, which answers the resting
+   * `SESSION_READ` for a row that carries none.
+   */
+  read?: SessionReadState;
 };
+
+/**
+ * A host's Session listing over the host protocol (VC-713, feature
+ * `sessions.listing`): the rows `volli:session-list` serves, bounded so one
+ * answer fits a WebSocket frame. Every row a person must act on (waiting) or
+ * that is running now (working) is kept; past the bound, the rows with the
+ * oldest activity are left out and counted.
+ */
+export interface SessionListingPage {
+  sessions: SessionListingRow[];
+  /** Rows the host left out past its bound; 0 when the listing is whole. */
+  omitted: number;
+}
+
+/**
+ * The bounds of one `session.listing` answer (VC-713), frozen with the
+ * feature: the wire schema publishes them and the host clips to them before it
+ * answers, so a long title shortens a row rather than failing the listing.
+ *
+ * - `rows`: at most this many rows.
+ * - `bytes`: at most this much UTF-8 JSON across the rows. hostd refuses an
+ *   answer past its 2 MiB frame whole (`response-too-large`); a row's bounded
+ *   strings can still reach tens of KiB once escaped, so the row count alone
+ *   cannot keep a page inside the frame. 1.5 MiB leaves the envelope and the
+ *   frame's own allowance room.
+ * - `id`: any id a row carries (Session, project, ticket, attachment, run,
+ *   harness Session). Never clipped: ids this host mints are far shorter.
+ * - `text`: a display string (a title, an Automation's or a parent's name),
+ *   clipped with an ellipsis.
+ * - `path`: a working directory, clipped the same way.
+ * - `name`: a provider, model or harness id.
+ */
+export const SESSION_LISTING_BOUNDS = Object.freeze({
+  rows: 500,
+  bytes: 1_572_864,
+  id: 1024,
+  text: 512,
+  path: 4096,
+  name: 256,
+});
 
 /**
  * The identity half of a listing row: which kind of Session, and its record.

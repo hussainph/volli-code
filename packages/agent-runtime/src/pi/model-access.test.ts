@@ -56,6 +56,8 @@ interface Spec {
   checkAuth: (signal: AbortSignal | undefined) => Promise<AuthCheck | undefined>;
   getAvailable: (signal: AbortSignal | undefined) => Promise<readonly Model<Api>[]>;
   known?: readonly Model<Api>[];
+  /** Image or classifier models the provider also lists (Pi 0.99). */
+  other?: readonly unknown[];
 }
 
 function fakeModels(specs: readonly Spec[]): Models {
@@ -69,6 +71,7 @@ function fakeModels(specs: readonly Spec[]): Models {
     getProviders: () => specs.map((spec) => spec.provider),
     getProvider: (id: string) => byId.get(id)?.provider,
     getModels: (id?: string) => (id === undefined ? [] : (byId.get(id)?.known ?? [])),
+    getAllModels: (id: string) => [...(at(id).known ?? []), ...(at(id).other ?? [])],
     checkAuth: (id: string, options?: { signal?: AbortSignal }) =>
       at(id).checkAuth(options?.signal),
     getAvailable: (id: string, options?: { signal?: AbortSignal }) =>
@@ -125,6 +128,76 @@ function catalogs(
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+const ready = async () => ({ type: "api_key" as const });
+
+describe("inspectPiModelAccess provider list (Pi 0.99)", () => {
+  it("lists a provider that serves decision models, leaves out an image-only one, and keeps an empty one", async () => {
+    const snapshot = await inspectPiModelAccess(
+      {
+        models: fakeModels([
+          {
+            provider: provider("chat"),
+            checkAuth: ready,
+            getAvailable: async () => [model("chat", "c")],
+            known: [model("chat", "c")],
+          },
+          {
+            provider: provider("typesafe"),
+            checkAuth: async () => undefined,
+            getAvailable: async () => [],
+            other: [{ id: "jev-latest", type: "classifier" }],
+          },
+          {
+            provider: provider("pixels"),
+            checkAuth: ready,
+            getAvailable: async () => [],
+            other: [{ id: "flux", type: "image" }],
+          },
+          {
+            provider: provider("dynamic"),
+            checkAuth: async () => undefined,
+            getAvailable: async () => [],
+          },
+        ]),
+        credentials: null,
+      },
+      () => 0,
+    );
+
+    // Decision models give a classifier-only provider something to sign in
+    // for (VC-478); an image-only one still has nothing to pick here.
+    expect(snapshot.providers.map((entry) => entry.id)).toEqual(["chat", "typesafe", "dynamic"]);
+    const typesafe = providersById(snapshot.providers)["typesafe"]!;
+    expect(typesafe.state).toBe("authentication-required");
+    expect(typesafe.recovery).toEqual({ kind: "sign-in" });
+    // Its classifier never reaches the chat catalog.
+    expect(snapshot.models.map((entry) => entry.modelId)).toEqual(["c"]);
+  });
+
+  it("reads a decision-only provider with a credential as available", async () => {
+    const snapshot = await inspectPiModelAccess(
+      {
+        models: fakeModels([
+          {
+            provider: provider("typesafe"),
+            checkAuth: ready,
+            getAvailable: async () => [],
+            other: [{ id: "jev-latest", type: "classifier" }],
+          },
+        ]),
+        credentials: null,
+      },
+      () => 0,
+    );
+    expect(snapshot.providers[0]).toMatchObject({
+      id: "typesafe",
+      state: "available",
+      recovery: null,
+    });
+    expect(snapshot.models).toEqual([]);
+  });
 });
 
 describe("inspectPiModelAccess concurrency", () => {
@@ -360,6 +433,37 @@ describe("inspectPiModelAccess public/native refresh phases", () => {
 
     expect({ checkAuth, getAvailable }).toEqual({ checkAuth: 1, getAvailable: 1 });
     expect(providersById(result.providers).connected?.state).toBe("available");
+  });
+
+  it("never refreshes a decision-only provider's chat catalog, which has nothing in it (VC-478)", async () => {
+    const refresh = vi.fn<RefreshableCatalogs["refresh"]>(async () => ({
+      aborted: false,
+      errors: new Map(),
+      rejectedByProvider: new Map(),
+      refreshedProviderIds: [],
+    }));
+    const result = await inspectPiModelAccess(
+      {
+        models: fakeModels([
+          {
+            provider: provider("typesafe"),
+            checkAuth: ready,
+            getAvailable: async () => [],
+            other: [{ id: "jev-latest", type: "classifier" }],
+          },
+        ]),
+        credentials: null,
+        catalogs: catalogs(refresh, ["typesafe"]),
+      },
+      () => 0,
+      { refresh: true },
+    );
+    expect(refresh).toHaveBeenCalledWith(expect.objectContaining({ providers: [] }));
+    expect(result.providers[0]).toMatchObject({
+      id: "typesafe",
+      state: "available",
+      recovery: null,
+    });
   });
 
   it("carries a preflight credential failure into the snapshot without re-asking", async () => {

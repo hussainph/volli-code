@@ -74,6 +74,32 @@ export function lgplComponents(rows) {
   return rows.filter((row) => /\bLGPL/i.test(row.terms)).map((row) => row.library);
 }
 
+/**
+ * Apply a person-reviewed component election without rewriting upstream's table.
+ * Version and upstream terms must still match what was read, so a bump or a
+ * relicense cannot silently inherit the election.
+ * @param {Array<{ library: string, terms: string }>} rows
+ * @param {Record<string, string>} versions
+ * @param {Record<string, { version: string, readmeTerms: string, license: string, electedLicense: string, source: string }>} elections
+ */
+export function applyComponentElections(rows, versions, elections = {}) {
+  for (const [library, election] of Object.entries(elections)) {
+    const row = rows.find((candidate) => candidate.library === library);
+    if (!row || row.terms !== election.readmeTerms || versions[library] !== election.version) {
+      throw new Error(
+        `${library}: component license election needs re-review (version or README terms changed).`,
+      );
+    }
+    if (!election.license.split(/\s+OR\s+/).includes(election.electedLicense)) {
+      throw new Error(`${library}: elected license is not one of its reviewed license choices.`);
+    }
+  }
+  return rows.map((row) => ({
+    ...row,
+    terms: elections[row.library]?.electedLicense ?? row.terms,
+  }));
+}
+
 /** Markdown link syntax stripped back to its text, for a plain-text notice. */
 export function flattenMarkdownLinks(text) {
   return text.replaceAll(/\[([^\]]*)\]\(([^)]*)\)/g, "$1 <$2>");
@@ -114,12 +140,26 @@ export function renderNoticeInputs(facts) {
   // where that fact is recorded and checked. Reading it here rather than
   // hardcoding a marker means this document cannot claim the license copies
   // ship while the gate says they do not, or go on hedging after they do.
-  const licenseTexts = policy.reviewed["@img/sharp-libvips-*"].shippedCompliance.licenseTexts;
+  const libvipsReview = policy.reviewed["@img/sharp-libvips-*"];
+  const licenseTexts = libvipsReview.shippedCompliance.licenseTexts;
   const licenseTextsShipped = licenseTexts.state === "shipped";
-  const lgplNames = lgplComponents(libvips.componentLicenses);
+  const elections = libvipsReview.componentElections ?? {};
+  const lgplNames = lgplComponents(
+    applyComponentElections(
+      libvips.componentLicenses,
+      Object.fromEntries(libvips.componentVersions),
+      elections,
+    ),
+  );
 
   const lines = [];
   const push = (...text) => lines.push(...text);
+  // Sections are numbered as they are emitted rather than hardcoded, because
+  // the GSAP section below drops out entirely once gsap is not a dependency —
+  // a numbered gap ("## 2" missing) would read as a mistake, not a fact about
+  // the tree.
+  let section = 0;
+  const heading = (title) => `## ${++section}. ${title}`;
 
   push(
     "<!-- GENERATED FILE — do not edit by hand.",
@@ -142,7 +182,7 @@ export function renderNoticeInputs(facts) {
 
   // --- LGPL ---------------------------------------------------------------
   push(
-    "## 1. LGPL — libvips, shipped inside the desktop app",
+    heading("LGPL — libvips, shipped inside the desktop app"),
     "",
     `Package: \`${LIBVIPS_PACKAGE}@${libvips.version}\`  `,
     `SPDX: \`${libvips.license}\`  `,
@@ -158,7 +198,7 @@ export function renderNoticeInputs(facts) {
       ? [
           "**Nothing in this draft is conditional any more.** Both facts it asserts about the",
           "shipped artifact are true and mechanically checked: the GPL and LGPL texts §1b names are",
-          "in the bundle (hash-pinned against gnu.org), and the relink freedom has Installation",
+          "in the bundle (hash-pinned against their canonical sources), and the relink freedom has Installation",
           "Information behind it.",
         ]
       : [
@@ -179,6 +219,15 @@ export function renderNoticeInputs(facts) {
     "dependencies. libvips and several of the components it links are used under the terms of",
     "the GNU Lesser General Public License version 3 or later.",
     "",
+    ...(Object.keys(elections).length > 0
+      ? [
+          ...Object.entries(elections).map(
+            ([library, election]) =>
+              `${library} ${election.version}: ${election.license}, used under ${election.electedLicense}. Source: ${election.source}`,
+          ),
+          "",
+        ]
+      : []),
     "Components used under an LGPL license:",
     ...lgplNames.map((name) => `  - ${name}`),
     "",
@@ -187,8 +236,8 @@ export function renderNoticeInputs(facts) {
     "",
     ...(licenseTextsShipped
       ? [
-          "Copies of the GNU General Public License v3 and the GNU Lesser General Public License v3",
-          "accompany this application.",
+          "License copies accompany this application:",
+          ...licenseTexts.expected.map((text) => `  - ${text.file.replace(/^licensing\//, "")}`),
         ]
       : [
           "[ONLY IF §1b IS DONE] Copies of the GNU General Public License v3 and the GNU Lesser",
@@ -216,7 +265,7 @@ export function renderNoticeInputs(facts) {
     "",
     ...(licenseTextsShipped
       ? [
-          "**Both now ship**, downloaded verbatim from gnu.org and copied into the bundle at",
+          "**The applicable texts now ship**, obtained verbatim from their canonical sources and copied into the bundle at",
           "`Contents/Resources/licensing/`. `check:licenses` hashes them against the recorded",
           "sha256, so an edit, a truncation or a reformat fails the build rather than shipping a",
           "document that is no longer a copy of the license it names.",
@@ -257,29 +306,37 @@ export function renderNoticeInputs(facts) {
   );
 
   // --- GSAP ---------------------------------------------------------------
-  const gsap = policy.reviewed.gsap;
-  push(
-    "## 2. GSAP — bundled into the marketing website",
-    "",
-    `Package: \`gsap@${facts.gsapVersion}\`  `,
-    `License: ${gsap.license}  `,
-    "Terms read at <https://gsap.com/standard-license> (effective 2025-04-30).",
-    "",
-    "The operative notice already ships: GSAP's own `/*!` banners survive into the deployed",
-    "bundles, which is what section III.3 protects. `apps/website/scripts/check-bundled-license-notices.mjs`",
-    "holds them there. A static website notice, if one is added, needs only:",
-    "",
-    "```text",
-    `GSAP ${facts.gsapVersion} — Copyright 2008-2026, GreenSock. All rights reserved.`,
-    "Used under the GreenSock Standard License: https://gsap.com/standard-license",
-    "```",
-    "",
-  );
+  // Only rendered while gsap is actually installed somewhere in the tree. It
+  // was removed from @volli/website by VC-472 (docs/licensing/dependency-
+  // license-review.md#gsap); the section disappears with the dependency
+  // instead of describing a package nobody ships, the same way this document
+  // never grew a section for apca-w3 while it was devDependency-only and now
+  // has none for it at all.
+  if (facts.gsapVersion !== null) {
+    const gsap = policy.reviewed.gsap;
+    push(
+      heading("GSAP — bundled into the marketing website"),
+      "",
+      `Package: \`gsap@${facts.gsapVersion}\`  `,
+      `License: ${gsap.license}  `,
+      "Terms read at <https://gsap.com/standard-license> (effective 2025-04-30).",
+      "",
+      "The operative notice already ships: GSAP's own `/*!` banners survive into the deployed",
+      "bundles, which is what section III.3 protects. `apps/website/scripts/check-bundled-license-notices.mjs`",
+      "holds them there. A static website notice, if one is added, needs only:",
+      "",
+      "```text",
+      `GSAP ${facts.gsapVersion} — Copyright 2008-2026, GreenSock. All rights reserved.`,
+      "Used under the GreenSock Standard License: https://gsap.com/standard-license",
+      "```",
+      "",
+    );
+  }
 
   // --- Elected licenses ---------------------------------------------------
   const elected = Object.entries(policy.reviewed).filter(([, entry]) => entry.electedLicense);
   push(
-    "## 3. Dual-licensed dependencies — the half Volli elected",
+    heading("Dual-licensed dependencies — the half Volli elected"),
     "",
     "A notice reading only `MPL-2.0 OR Apache-2.0` leaves the reader to guess which set of terms",
     "applies. These entries state the election.",
@@ -295,7 +352,7 @@ export function renderNoticeInputs(facts) {
   // --- License read from elsewhere ----------------------------------------
   const offManifest = Object.entries(policy.reviewed).filter(([, entry]) => entry.licenseSource);
   push(
-    "## 4. Dependencies whose license is not in their manifest",
+    heading("Dependencies whose license is not in their manifest"),
     "",
     "Automated scanners report these as unlicensed. They are not — the license is simply somewhere",
     "a scanner does not look, so a notice generator must be told where to read it from.",
@@ -337,6 +394,26 @@ function findLibvipsRoot() {
   return existsSync(resolve(root, "package.json")) ? root : null;
 }
 
+/**
+ * The installed `gsap` version, or `null` when `@volli/website` no longer
+ * declares it. Mirrors `apps/website/scripts/check-bundled-license-notices.mjs`'s
+ * own `installedGsapVersion` — the same fact read the same way wherever it is
+ * needed — so this generator cannot read the dependency tree differently than
+ * the gate that already knows how to ask "is gsap still here" without an
+ * ENOENT on the package that used to be at that path.
+ */
+function installedGsapVersion() {
+  const manifest = JSON.parse(
+    readFileSync(resolve(REPO_ROOT, "apps/website/package.json"), "utf8"),
+  );
+  if (manifest.dependencies?.gsap === undefined && manifest.devDependencies?.gsap === undefined) {
+    return null;
+  }
+  return JSON.parse(
+    readFileSync(resolve(REPO_ROOT, "apps/website/node_modules/gsap/package.json"), "utf8"),
+  ).version;
+}
+
 /** Everything the document is derived from, read off disk. */
 function gatherFacts(libvipsRoot) {
   const policy = JSON.parse(readFileSync(POLICY_PATH, "utf8"));
@@ -348,9 +425,7 @@ function gatherFacts(libvipsRoot) {
 
   return {
     policy,
-    gsapVersion: JSON.parse(
-      readFileSync(resolve(REPO_ROOT, "apps/website/node_modules/gsap/package.json"), "utf8"),
-    ).version,
+    gsapVersion: installedGsapVersion(),
     libvips: {
       version: manifest.version,
       license: manifest.license,
@@ -464,6 +539,42 @@ function selfTest() {
   expect("drops the separator", !rows.some((row) => /^-+$/.test(row.library)));
   expect("keeps the terms", rows[3].terms === "MIT License");
   expect("finds the LGPL components", lgplComponents(rows).join() === "glib,libvips");
+  const cairoRow = { library: "cairo", terms: "Mozilla Public License 1.1" };
+  const cairoElection = {
+    cairo: {
+      version: "1.18.6",
+      readmeTerms: cairoRow.terms,
+      license: "LGPL-2.1 OR MPL-1.1",
+      electedLicense: "LGPL-2.1",
+      source: "https://example.invalid/COPYING",
+    },
+  };
+  expect(
+    "uses the reviewed LGPL election",
+    lgplComponents(
+      applyComponentElections([...rows, cairoRow], { cairo: "1.18.6" }, cairoElection),
+    ).includes("cairo"),
+  );
+  expect("keeps the upstream table unchanged", cairoRow.terms === "Mozilla Public License 1.1");
+  for (const [what, candidateRows, versions, elections] of [
+    ["version drift", [cairoRow], { cairo: "1.18.7" }, cairoElection],
+    ["terms drift", [{ ...cairoRow, terms: "MPL-2.0" }], { cairo: "1.18.6" }, cairoElection],
+    ["missing component", [], { cairo: "1.18.6" }, cairoElection],
+    [
+      "invalid election",
+      [cairoRow],
+      { cairo: "1.18.6" },
+      { cairo: { ...cairoElection.cairo, electedLicense: "MIT" } },
+    ],
+  ]) {
+    let rejected = false;
+    try {
+      applyComponentElections(candidateRows, versions, elections);
+    } catch {
+      rejected = true;
+    }
+    expect(`rejects ${what}`, rejected);
+  }
   expect("ignores prose lines", parseComponentLicenseTable("not a table").length === 0);
   expect("ignores a three-column table", parseComponentLicenseTable("| a | b | c |").length === 0);
 
@@ -499,6 +610,29 @@ function selfTest() {
       ],
     },
   });
+  const cairoPolicy = policyFixture("shipped");
+  cairoPolicy.reviewed["@img/sharp-libvips-*"].componentElections = cairoElection;
+  const cairoNotice = renderNoticeInputs({
+    policy: cairoPolicy,
+    libvips: {
+      version: "1.3.4",
+      license: "LGPL-3.0-or-later",
+      repository: "https://example.invalid",
+      binary: "lib/libvips-cpp.8.18.7.dylib",
+      componentLicenses: [...rows, cairoRow],
+      componentVersions: [["cairo", "1.18.6"]],
+      licensingNotes: [],
+    },
+  });
+  expect(
+    "notice names cairo's elected LGPL and upstream choices",
+    cairoNotice.includes("cairo 1.18.6: LGPL-2.1 OR MPL-1.1, used under LGPL-2.1"),
+  );
+  expect(
+    "notice retains cairo's upstream table verbatim",
+    cairoNotice.includes("| cairo | Mozilla Public License 1.1 |"),
+  );
+  expect("notice includes cairo in LGPL source scope", cairoNotice.includes("  - cairo"));
   expect("names the LGPL components in the notice", rendered.includes("  - libvips"));
   expect(
     "keeps the GPL text requirement visible",
@@ -519,12 +653,13 @@ function selfTest() {
     "states the gsap version",
     rendered.includes("GSAP 3.15.0 — Copyright 2008-2026, GreenSock."),
   );
+  expect("numbers the GSAP section 2 while gsap is installed", rendered.includes("## 2. GSAP"));
   // 4(b) is discharged, so the draft now states it outright — and the claim is
   // driven by the policy record rather than by an edit here, because the record
   // is what `check:licenses` holds to the filesystem and to the files' hashes.
   expect(
     "asserts the license copies ship once the record says they do",
-    /^Copies of the GNU General Public License/m.test(rendered),
+    /^License copies accompany this application:/m.test(rendered),
   );
   expect("drops the conditional marker", !rendered.includes("[ONLY IF \u00a71b IS DONE]"));
 
@@ -546,7 +681,7 @@ function selfTest() {
   });
   expect(
     "does not assert the license copies ship while the record says they are missing",
-    !/^Copies of the GNU General Public License/m.test(draftWhileOpen),
+    !/^License copies accompany this application:/m.test(draftWhileOpen),
   );
   expect(
     "and marks that line conditional instead",
@@ -559,6 +694,30 @@ function selfTest() {
   expect(
     "points the relink claim at the shipped instructions",
     rendered.includes("RELINK-LIBVIPS.md"),
+  );
+
+  // gsap can leave the tree entirely — VC-472 did, for @volli/website — and
+  // when it does, the section describing it must disappear rather than
+  // describe a package nobody ships or a stale version read off a manifest
+  // that no longer declares it. The section after it renumbers to fill the
+  // gap instead of leaving "## 3" with no "## 2" above it.
+  const draftWithoutGsap = renderNoticeInputs({
+    gsapVersion: null,
+    policy: policyFixture("shipped"),
+    libvips: {
+      version: "1.3.3",
+      license: "LGPL-3.0-or-later",
+      repository: "https://github.com/lovell/sharp-libvips",
+      binary: "./lib/libvips-cpp.8.18.6.dylib",
+      componentLicenses: rows,
+      componentVersions: [["vips", "8.18.6"]],
+      licensingNotes: notes,
+    },
+  });
+  expect("drops the GSAP section entirely once gsap is gone", !draftWithoutGsap.includes("GSAP"));
+  expect(
+    "renumbers the following section instead of leaving a numbering gap",
+    draftWithoutGsap.includes("## 2. Dual-licensed dependencies"),
   );
 
   // Determinism, tested as the properties that could actually break it rather

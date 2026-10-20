@@ -14,6 +14,7 @@ import {
   waitUntil,
   closeAppBounded,
 } from "./lib/smoke-kit.mjs";
+import { focusRingIsReady } from "./lib/focus-ring-probe.mjs";
 
 const baseline = process.argv.includes("--baseline");
 const parent = join(REPO, "evidence", "vc418");
@@ -140,8 +141,14 @@ try {
     await button.focus();
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
-    await page.waitForTimeout(250);
-    const focus = await read();
+    const focus = await waitUntil(
+      `${mode} focus ring to finish painting`,
+      async () => {
+        const sample = await read();
+        return focusRingIsReady(sample) ? sample : null;
+      },
+      { timeout: 4000, interval: 50 },
+    );
     const checks = {
       textRest: contrast(rest.foreground, rest.fill),
       textHover: contrast(hover.foreground, hover.fill),
@@ -150,11 +157,7 @@ try {
         focus.ring && focus.offset && parseFloat(focus.css.offsetWidth) > 0
           ? contrast(focus.ring, focus.offset)
           : null,
-      visibleFocus:
-        focus.focusVisible &&
-        focus.opacity === "1" &&
-        focus.css.boxShadow.includes("2px") &&
-        focus.css.ringShadow.includes("2px"),
+      visibleFocus: focusRingIsReady(focus),
     };
     checks.pass =
       checks.textRest >= 4.5 &&

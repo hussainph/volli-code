@@ -566,8 +566,7 @@
    * dense, and the chat feed was proving it while a ticket body two panes over
    * read at 1.7 (`typeset.css`). This names that ratio so both surfaces breathe
    * at the same rate: the transcript wears it as the `leading-prose` utility,
-   * typeset reads `var(--leading-prose)`. 1.7 on 14px is ~24px lines — the
-   * band chat products settle in (ChatGPT 1.75, Claude ~1.65). */
+   * typeset reads `var(--leading-prose)`. 1.7 on 14px is ~24px lines. */
   --leading-prose: 1.7;
 }
 
@@ -732,10 +731,17 @@
  * (`text-foreground`), so it reads a token this rule never touches; a `color`
  * declaration here would have silently killed it.
  *
- * The class pair names "the row's first line" — the meta line beneath it wears
- * `session-row-dim` too, and `text-ui` against its `text-label` is what tells
- * them apart. The working row's sweeping title is the same line in a different
- * costume, so it carries both classes and lands on the same rung. */
+ * The class pair names "the row's first line", and `text-ui` is half of the
+ * name rather than incidental. The Active row's second line used to be
+ * `text-label` and to wear `session-row-dim` as well, which is what told the
+ * two apart here; since VC-30 that line is `text-ui` (D5) and could no longer
+ * be distinguished by size, so it carries its own `session-row-meta` hook and
+ * this rule matches the title alone. Do not hand the meta line this class back:
+ * the head rung is what the title outranks it BY, and the dim/promote pair
+ * decision #74 measures lives on that hook (`sidebar/session-band-row.tsx`).
+ *
+ * The working row's sweeping title is the same line in a different costume, so
+ * it carries both classes and lands on the same rung. */
 [data-slot="sidebar"] .session-row-dim.text-ui {
   --sidebar-foreground: var(--canvas-ink);
   --muted-foreground: var(--canvas-ink);
@@ -1924,4 +1930,18 @@ input[type="range"][data-slot="wave-slider"]::-webkit-slider-thumb {
   background-position: center;
   background-size: 24px 24px;
   mask-image: radial-gradient(ellipse 76% 62% at 50% 48%, black 0%, transparent 78%);
+}
+
+/* A write control standing down while its project's host cannot serve
+ * (VC-576; the lab's #host-health read-only staging): greyed AND desaturated,
+ * so a primary orange "New ticket" reads as off, not as a quieter orange.
+ * Unlayered so it outranks a component's own `disabled:opacity-*`. The
+ * control is also `disabled`; the submission behind it re-checks. */
+[data-host-read-only] {
+  opacity: 0.4;
+  filter: saturate(0);
+  pointer-events: none;
+  transition:
+    opacity 200ms var(--ease-out),
+    filter 200ms var(--ease-out);
 }

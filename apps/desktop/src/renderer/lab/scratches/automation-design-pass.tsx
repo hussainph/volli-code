@@ -1,5 +1,5 @@
 /**
- * The owner-approved VC-222 proposal, now mounted from the real production
+ * The VC-222 automation interface, mounted from the production
  * Automations page. Fixture bridge responses keep create/edit/run controls
  * interactive without duplicating the page's layout in a second Lab-only UI.
  */

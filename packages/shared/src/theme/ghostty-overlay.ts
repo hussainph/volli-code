@@ -2,16 +2,15 @@
  * Volli's Ghostty OVERLAY files: where they live, and how a Volli write edits
  * one without destroying what the user put there by hand.
  *
- * The load-bearing rule (decision #67) is that Volli NEVER writes the user's
+ * Volli never writes the user's
  * own `~/.config/ghostty/config`. That file stays a read-only base; Volli owns
  * separate overlay files *in Ghostty's own `key = value` format*, layered on
  * top with the same last-wins precedence `mergeGhosttyConfigTexts` already
  * applies to ghostty's two config locations. Writing the real config would
- * silently restyle **Ghostty.app and cmux** because someone clicked a swatch in
- * Volli — kitty converged on this same `current-theme.conf` design for exactly
- * that reason.
+ * silently restyle other applications reading the same Ghostty config when
+ * someone changes Volli's appearance.
  *
- * Half of decision #68 lives here too: the overlay file accepts ANY ghostty
+ * The overlay file accepts any Ghostty
  * key, hand-written, and Volli honors it. That is only true if a Volli write
  * is surgical — {@link applyOverlayEdits} rewrites the keys it was asked to
  * and preserves every other key, comment, and blank line byte-for-byte. A

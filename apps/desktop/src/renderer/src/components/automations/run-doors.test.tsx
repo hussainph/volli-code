@@ -21,7 +21,7 @@
  *  - `runner.run()` → the composed Instructions delivered as the Session's
  *    FIRST turn under the Run's durable ids, and the loud failure when the
  *    attach that would have carried them is refused:
- *    `main/automations/run.test.ts`.
+ *    `packages/host-core/src/automations/run.test.ts`.
  *  - the doors that never ask the renderer to run — the agent verb, schedule
  *    timer, and main-owned armed-column expiry — reach the same runner in
  *    `agent-tool-door.test.ts`, `automations/scheduler.test.ts`, and
@@ -233,6 +233,8 @@ const MODEL_ACCESS = {
   setHiddenModels: vi.fn(),
   compactionPolicy: vi.fn(),
   setCompactionPolicy: vi.fn(),
+  codeModePolicy: vi.fn(),
+  setCodeModePolicy: vi.fn(),
   pickerView: vi.fn(),
   setPickerView: vi.fn(),
   beginSignIn: vi.fn(),
@@ -391,7 +393,7 @@ describe("every renderer hand-Run door reaches the one Run seam (VC-220)", () =>
     useWorkspaceStore.getState().openTicket("p1", "t1");
     await render(<TicketAutomationsPanel projectId="p1" ticket={TICKET} />);
 
-    // The row INSPECTS (VC-406 revision 05); the Run inside the inspection is
+    // The row INSPECTS (VC-406); the Run inside the inspection is
     // the explicit act that reaches the seam.
     await press(control("Inspect Review sweep"));
     expect(run).not.toHaveBeenCalled();

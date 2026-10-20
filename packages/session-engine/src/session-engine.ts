@@ -1,5 +1,8 @@
+import { COMMAND_INTENT_CONFLICT, type CommandIntentConflict } from "@volli/shared";
 import {
   advanceSessionProjection,
+  applyToolRefreshDelta,
+  createToolRefreshDelta,
   createSessionProjectionCheckpoint,
   observationPayload,
   pendingScheduledResume,
@@ -44,6 +47,9 @@ import type {
   LatestSessionSignal,
   UnstampedCommandReceipt,
 } from "@volli/shared";
+
+import { assertAdditiveToolRefresh, type ToolRefreshRequest } from "./tool-refresh";
+import { canonicalJson } from "./transcript-artifacts";
 
 export interface CreateSessionRequest {
   commandId: string;
@@ -112,6 +118,13 @@ export interface SessionEngine {
     input: SessionInput;
     provenance: SessionEventProvenance;
   }): Promise<SessionInput>;
+  /** Append an additive effective surface without changing the Session's birth input. */
+  recordToolRefresh(
+    request: ToolRefreshRequest & {
+      sessionId: string;
+      provenance: SessionEventProvenance;
+    },
+  ): Promise<SessionEvent | null>;
   observe(observation: SessionObservation): Promise<SessionEvent>;
   submit(request: SubmitSessionCommandRequest): Promise<SubmitSessionCommandResult>;
   /** Atomically commits an adapter-applied idle model policy and its terminal receipt. */
@@ -236,6 +249,24 @@ export class SessionEngineConflictError extends Error {
   }
 }
 
+/**
+ * A command id the ledger already holds, sent again with a different intent:
+ * the one conflict a client causes, and the one the host protocol answers
+ * `CONFLICT` / `command-conflict` (HP § Commands, VC-564). Every other
+ * {@link SessionEngineConflictError} is a fact about the ledger, not the request.
+ */
+export class SessionEngineCommandConflictError
+  extends SessionEngineConflictError
+  implements CommandIntentConflict
+{
+  readonly [COMMAND_INTENT_CONFLICT] = true as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionEngineCommandConflictError";
+  }
+}
+
 export class SessionEngineNotFoundError extends Error {
   constructor(sessionId: string) {
     super(`Session ${sessionId} was not found`);
@@ -257,6 +288,43 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
   const yieldToHost = ports.yieldToHost ?? defaultYieldToHost;
   /** Insertion-ordered, so the first key is the least recently listed Session. */
   const listingFolds = new Map<string, ListingFold>();
+  /**
+   * Each project's whole roster as its latest `all` listing counted it
+   * (VC-800): the working set {@link evictListingFolds} sizes the cache to.
+   */
+  const rosterSizes = new Map<string, number>();
+
+  /**
+   * Trims the cache to {@link SESSION_LISTING_CACHE_LIMIT} or the rosters it
+   * serves, whichever is larger (VC-800).
+   *
+   * Runs once a listing has folded its last row, never while it is folding.
+   * An LRU cache that evicts during a scan bigger than itself evicts the rows
+   * the next scan needs first. Each listing then re-folds every row and the
+   * cache does nothing. Trimming afterwards means a listing over the limit
+   * re-folds only its overflow on the next visit, not the whole roster.
+   *
+   * The limit is the sum of every project's latest `all` count, so it is
+   * never below the roster that listings walk, and nothing live is evicted
+   * once every project has been listed whole. The cache stays resident
+   * between listings with one frozen row per listed Session, so its memory
+   * grows with the roster and not with how often the roster is listed.
+   *
+   * Sessions are never deleted one by one. They go only with their project,
+   * and nothing lists a deleted project again, so that project's count and
+   * rows stay until the host restarts. The cache therefore holds at most one
+   * row for each Session that belonged to a listed project at some point
+   * since the host started, or the floor, whichever is larger.
+   */
+  const evictListingFolds = (): void => {
+    let rosters = 0;
+    for (const size of rosterSizes.values()) rosters += size;
+    const limit = Math.max(SESSION_LISTING_CACHE_LIMIT, rosters);
+    for (const oldest of listingFolds.keys()) {
+      if (listingFolds.size <= limit) break;
+      listingFolds.delete(oldest);
+    }
+  };
 
   /**
    * One listing row, from the cache when the Session has not moved.
@@ -295,10 +363,6 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
     );
     listingFolds.delete(session.id);
     listingFolds.set(session.id, { session, throughSequence: head, projection });
-    for (const oldest of listingFolds.keys()) {
-      if (listingFolds.size <= SESSION_LISTING_CACHE_LIMIT) break;
-      listingFolds.delete(oldest);
-    }
     return projection;
   };
   return {
@@ -406,6 +470,61 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       });
     },
 
+    async recordToolRefresh(request) {
+      return ports.ledger.transaction((transaction) => {
+        const session = transaction.getSession(request.sessionId);
+        if (!session) throw new SessionEngineNotFoundError(request.sessionId);
+        const events = transaction.listEvents({ sessionId: request.sessionId });
+        let current: Extract<SessionInput, { kind: "tool-surface" }> | undefined;
+        let declared: Extract<SessionInput, { kind: "tool-surface" }> | undefined;
+        for (const event of events) {
+          if (
+            event.payload.kind === "session.input.recorded" &&
+            event.payload.input.kind === "tool-surface"
+          ) {
+            current ??= event.payload.input;
+            declared ??= event.payload.input;
+          } else if (event.payload.kind === "session.tools.refreshed" && current !== undefined) {
+            current = applyToolRefreshDelta(current, event.payload);
+            if (["cold-turn", "compaction", "model-switch"].includes(event.payload.trigger))
+              declared = current;
+          }
+        }
+        if (current === undefined || declared === undefined)
+          throw new Error("Tool refresh requires a recorded birth surface");
+        const declarationOnly =
+          ["cold-turn", "compaction", "model-switch"].includes(request.trigger) &&
+          request.changed.includes("codemode") &&
+          canonicalJson(declared) !== canonicalJson(request.surface);
+        if (canonicalJson(current) === canonicalJson(request.surface) && !declarationOnly)
+          return null;
+        assertAdditiveToolRefresh(current, request, declared);
+        const payload: Extract<SessionEventPayload, { kind: "session.tools.refreshed" }> = {
+          kind: "session.tools.refreshed",
+          trigger: request.trigger,
+          delta: createToolRefreshDelta(current, request.surface),
+          added: request.added,
+          changed: request.changed,
+        };
+        // No intended change may disappear when reduced to a minimal delta.
+        if (
+          canonicalJson(applyToolRefreshDelta(current, payload)) !== canonicalJson(request.surface)
+        )
+          throw new Error("Tool refresh delta must reproduce the desired canonical surface");
+        const event: SessionEvent = {
+          id: ports.ids.next("event"),
+          sessionId: session.id,
+          sequence: transaction.latestEventSequence(session.id) + 1,
+          occurredAt: ports.clock.now(),
+          recordedAt: ports.clock.now(),
+          provenance: request.provenance,
+          payload,
+        };
+        transaction.appendEvent(event);
+        return event;
+      });
+    },
+
     async observe(observation) {
       return ports.ledger.transaction((transaction) => {
         const session = transaction.getSession(observation.sessionId);
@@ -451,6 +570,53 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
             return event;
           }
           const priorReceipts = transaction.listReceipts(observation.receipt.commandId);
+          const accepted = priorReceipts.find((receipt) => receipt.status === "accepted");
+          if (accepted?.status === "accepted" && observation.receipt.status === "accepted") {
+            // Acceptance belongs to the routed command, not the adapter's clock.
+            // Old Pi builds returned wall time live and marker time on recovery,
+            // producing different durable ids for the SAME acceptance. Keep the
+            // first stamp and event; never turn a refusal or changed result into
+            // acceptance, and still validate the adapter and attachment route.
+            assertReceiptMatchesCommand(command, session, observation.receipt);
+            assertAdapterReceiptRoute(command, observation);
+            // Only the frozen timestamp-derived Pi receipt identity is a
+            // legacy alias. An arbitrary new id remains conflicting evidence,
+            // even when its outcome and timestamp happen to be identical.
+            if (
+              command.route!.adapterId !== "pi" ||
+              accepted.id !== `native-receipt:${command.id}:accepted:${accepted.acceptedAt}` ||
+              observation.receipt.id !==
+                `native-receipt:${command.id}:accepted:${observation.receipt.acceptedAt}`
+            ) {
+              throw new SessionEngineConflictError(
+                `Receipt ${observation.receipt.id} is not a legacy Pi acceptance replay`,
+              );
+            }
+            if (
+              !sameCommandReceiptOutcome(accepted, {
+                ...observation.receipt,
+                id: accepted.id,
+                acceptedAt: accepted.acceptedAt,
+              })
+            ) {
+              throw new SessionEngineConflictError(
+                `Command ${command.id} was already accepted differently`,
+              );
+            }
+            const event = receiptEventFor(
+              transaction.listEvents({ sessionId: session.id }),
+              accepted.id,
+            );
+            if (!event) {
+              throw new SessionEngineConflictError(`Receipt ${accepted.id} has no Session event`);
+            }
+            if ((event.attachmentId ?? null) !== attachmentId) {
+              throw new SessionEngineConflictError(
+                `Receipt ${observation.receipt.id} does not match accepted attachment evidence`,
+              );
+            }
+            return event;
+          }
           const hasTerminalReceipt = priorReceipts.some(
             (receipt) => receipt.status === "rejected" || receipt.status === "completed",
           );
@@ -813,6 +979,9 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
       // Membership is decided once, in its own transaction, and the rows it
       // returns are carried to the folds below rather than re-read there.
       const rows = await ports.ledger.transaction((transaction) => transaction.listSessions(query));
+      // Only the whole roster sizes the cache. A Ticket's scope is a subset of
+      // its project's, so counting it as well would count Sessions twice.
+      if (query.scope === "all") rosterSizes.set(query.projectId, rows.length);
       const projections: SessionProjection[] = [];
       for (let from = 0; from < rows.length; from += SESSION_LISTING_FOLD_CHUNK) {
         // Between chunks, never after the last one: a turn nobody needs is
@@ -825,6 +994,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           )),
         );
       }
+      evictListingFolds();
       return projections;
     },
 
@@ -858,6 +1028,7 @@ export function createSessionEngine(ports: SessionEnginePorts): SessionEngine {
           )),
         );
       }
+      evictListingFolds();
       return projections;
     },
 
@@ -960,22 +1131,22 @@ const defaultYieldToHost = (): Promise<void> =>
   });
 
 /**
- * How many Sessions keep a folded listing row in memory (VC-388).
+ * The fewest Sessions that keep a folded listing row in memory (VC-388): a
+ * floor, not the bound (VC-800).
  *
  * The cache's whole job is to let a repeat listing skip the Sessions that did
  * not move, so a limit below a project's roster would be worse than no cache
  * at all: each listing would evict its own earliest entries before reaching
  * its last row, and every visit would pay a full fold AND the bookkeeping.
- * The number is therefore sized to clear plausible ROSTERS rather than to a
- * memory budget — and it has to clear several at once, because the listing
- * callers are not all one project's UI (`pty/manager.ts` lists every project's
- * Sessions to compute a concurrency budget).
+ * No constant clears every roster, so this number is not the bound. The
+ * limit is never below the rosters being listed (see `evictListingFolds`),
+ * and trimming happens only after a listing completes. This floor keeps the
+ * cache useful for hosts that never list a whole project, such as
+ * Ticket-scoped listings and the attached-Session budget.
  *
  * A held row measured 5.6 KB for an ordinary Session and 79.8 KB for a
  * deliberately extreme one — 450 events carrying 150 commands and their
- * receipts — so this ceiling is about 1.4 MB in the shape a real roster has
- * and about 20 MB in a shape that would need 256 such Sessions to reach
- * (VC-388).
+ * receipts (VC-388).
  */
 export const SESSION_LISTING_CACHE_LIMIT = 256;
 
@@ -1159,6 +1330,7 @@ function modelSelectedPayload(
     kind: "model.selected",
     selection: intent.selection,
     ...(intent.tier === undefined ? {} : { tier: intent.tier }),
+    ...(intent.auto === undefined ? {} : { auto: intent.auto }),
   };
 }
 
@@ -1168,7 +1340,7 @@ function replayCreate(
 ): CreateSessionResult {
   const stored = transaction.getCommand(request.commandId);
   if (!stored || !sameCreateSessionRequest(stored, request)) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${request.commandId} was already accepted with different intent`,
     );
   }
@@ -1176,7 +1348,7 @@ function replayCreate(
   // the id the command was first accepted under — a promote that replays with
   // a different client-minted id is a different intent, not the same one.
   if (request.requestedSessionId && stored.sessionId !== request.requestedSessionId) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${stored.id} was accepted for Session ${stored.sessionId}, not ${request.requestedSessionId}`,
     );
   }
@@ -1252,7 +1424,7 @@ function replaySubmit(
 ): SubmitSessionCommandResult {
   const stored = transaction.getCommand(command.id);
   if (!stored || !sameSessionCommandRequest(stored, command)) {
-    throw new SessionEngineConflictError(
+    throw new SessionEngineCommandConflictError(
       `Command ${command.id} was already accepted with different intent`,
     );
   }

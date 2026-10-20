@@ -322,7 +322,7 @@ export function launchEnvFor(dbPath, extraEnv = {}) {
  * and return its path for `extraEnv.SHELL`.
  *
  * Why any probe needs this: since VC-94 the app does not run on the PATH it was
- * launched with. At boot `main/login-path-adoption.ts` asks `$SHELL -l [-i] -c
+ * launched with. At boot `@volli/host-core`'s `login-path-adoption.ts` asks `$SHELL -l [-i] -c
  * 'printf __VOLLI_PATH__; printenv PATH'` and installs the UNION of that answer
  * and the launch PATH, with the LOGIN entries FIRST. So a smoke that prepends a
  * scratch bin dir to `extraEnv.PATH` to shadow a real binary no longer shadows
@@ -366,9 +366,13 @@ export async function writeFakeLoginShell(binDir, loginPath) {
  * `main/index.ts`), so in packaged mode the DB lands at `<userData>/volli.db`
  * — a smoke that reads `dbPath` directly cannot run in this mode unchanged.
  *
- * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>, beforeLaunch?:()=>void}} opts
+ * `extraArgs` are appended after the profile switch (volli-drive passes
+ * Chromium's keychain switches so they hold from the first instruction, not
+ * only from main's own `appendSwitch`). Absent, the argv is unchanged.
+ *
+ * @param {{dbPath:string, userDataDir:string, extraEnv?:Record<string,string>, extraArgs?:string[], beforeLaunch?:()=>void}} opts
  */
-export function launch({ dbPath, userDataDir, extraEnv = {}, beforeLaunch }) {
+export function launch({ dbPath, userDataDir, extraEnv = {}, extraArgs = [], beforeLaunch }) {
   const packagedBinary = process.env.VOLLI_SMOKE_APP_BINARY;
   const environment = launchEnvFor(dbPath, extraEnv);
   const executablePath = smokeExecutableFor(packagedBinary ?? ELECTRON, userDataDir, {
@@ -378,8 +382,8 @@ export function launch({ dbPath, userDataDir, extraEnv = {}, beforeLaunch }) {
   return _electron.launch({
     executablePath,
     args: packagedBinary
-      ? [`--user-data-dir=${userDataDir}`]
-      : [APP_DIR, `--user-data-dir=${userDataDir}`],
+      ? [`--user-data-dir=${userDataDir}`, ...extraArgs]
+      : [APP_DIR, `--user-data-dir=${userDataDir}`, ...extraArgs],
     env: environment,
   });
 }
@@ -576,6 +580,35 @@ export function summarizeTurnFrames(frames) {
   };
 }
 
+/** Select only descendants of one tracked child from `ps -axo pid=,ppid=,comm=`. */
+export function descendantProcesses(output, rootPid) {
+  const byParent = new Map();
+  for (const line of output.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const entry = { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] };
+    const siblings = byParent.get(entry.ppid) ?? [];
+    siblings.push(entry);
+    byParent.set(entry.ppid, siblings);
+  }
+  const seen = new Set([rootPid]);
+  const queue = [rootPid];
+  const descendants = [];
+  for (let index = 0; index < queue.length; index++) {
+    for (const entry of byParent.get(queue[index]) ?? []) {
+      if (seen.has(entry.pid)) continue;
+      seen.add(entry.pid);
+      descendants.push(entry);
+      queue.push(entry.pid);
+    }
+  }
+  return descendants;
+}
+
+// Playwright disposes the Electron dispatcher on exit. Keep the exact child
+// independently so a second cleanup can still inspect its exit fields.
+const boundedCloseChildren = new WeakMap();
+
 /**
  * Close Electron within bounded grace periods and return how the tracked main
  * child exited. Every successful return is backed by observed ChildProcess exit
@@ -592,7 +625,9 @@ export async function closeAppBounded(app, options = {}) {
   };
   let child;
   try {
-    child = app.process();
+    child = boundedCloseChildren.get(app) ?? app.process();
+    if (!child) throw new Error("Electron main child is unavailable");
+    boundedCloseChildren.set(app, child);
   } catch (error) {
     throw new Error("cannot inspect Electron main child before bounded close", { cause: error });
   }
@@ -966,7 +1001,8 @@ export async function seedDefaultModel(page, pin = null, purpose = "global") {
   const result = await page.evaluate(
     async ({ pinned, forPurpose }) => {
       const inspected = await window.api.sessionRpc.request({
-        procedure: "modelAccess.inspect",
+        path: "modelAccess.inspect",
+        type: "query",
         input: {},
       });
       if (!inspected.ok) return { ok: false, error: inspected };
@@ -1007,7 +1043,8 @@ export async function seedDefaultModel(page, pin = null, purpose = "global") {
         reasoningLevel,
       };
       const saved = await window.api.sessionRpc.request({
-        procedure: "modelAccess.setDefault",
+        path: "modelAccess.setDefault",
+        type: "mutation",
         // `{ purpose, selection }`, which is what the edge has taken since
         // purposes landed. Passing the bare selection made every call here a
         // BAD_REQUEST, and since a `catch`-free `evaluate` reported it as a

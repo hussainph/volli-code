@@ -1,0 +1,31 @@
+---
+title: CLI errors
+description: Look up Volli CLI exit codes, refusal codes, and the safe next action for each one.
+---
+
+import AgentErrorRecovery from "../../../components/AgentErrorRecovery.astro";
+
+In plain output, a failure starts with `error[CODE]`. With `--json`, the response
+includes `code`, `reason`, and `next`. A `null` next action means Volli cannot
+recommend a safe retry from what it knows.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | The command ran and failed |
+| `2` | Invalid command, argument, or flag |
+| `3` | The app could not be reached |
+
+For exit code `3`, open Volli and check the connection with `volli identify`.
+If a write fails and the response cannot confirm whether it landed, inspect the
+current state before you retry.
+
+## Refusal codes
+
+These entries come from the same recovery data as `volli help exit-codes`.
+
+<AgentErrorRecovery />
+
+For UI problems, see [Troubleshooting](/reference/troubleshooting/).

@@ -32,6 +32,7 @@ import { create } from "zustand";
 import { errorMessage, type TicketComment, type TicketEvent } from "@volli/shared";
 
 import { toastError } from "@renderer/lib/toast";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 /** One ticket's last landed activity, and the planning version it was read at. */
 export interface TicketActivity {
@@ -94,8 +95,8 @@ async function readActivity(
 ): Promise<{ ok: true; activity: Omit<TicketActivity, "version"> } | { ok: false; error: string }> {
   try {
     const [events, comments] = await Promise.all([
-      window.api.tickets.events({ ticketId }),
-      window.api.comments.list({ ticketId }),
+      boardApi().tickets.events({ ticketId }),
+      boardApi().comments.list({ ticketId }),
     ]);
     if (!events.ok) return { ok: false, error: events.error };
     if (!comments.ok) return { ok: false, error: comments.error };

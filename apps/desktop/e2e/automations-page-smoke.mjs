@@ -245,7 +245,7 @@ try {
       const footprint = await repoFootprint(repoDir);
 
       // And back off, because a switch that only travels one way is half a
-      // switch — the arm the first review found untested.
+      // switch. Both state transitions must persist.
       await control.click();
       await expectAriaChecked(control, "false");
       const off = await page.evaluate(async () => window.api.automations.enablement());

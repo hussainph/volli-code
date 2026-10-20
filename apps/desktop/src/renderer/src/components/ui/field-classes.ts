@@ -4,8 +4,7 @@
  * group each carried their own copy of a focus recipe, so the family could
  * drift a state at a time.
  *
- * WHY THERE IS NO FOCUS STATE HERE. The owner's decision (2026-08-14): a text
- * field gets no focus dressing at all — no border shift, no ring, no lift. The
+ * WHY THERE IS NO FOCUS STATE HERE. A text field gets no focus dressing at all — no border shift, no ring, no lift. The
  * caret is the indicator, and WCAG 2.4.7's understanding notes sanction the
  * text cursor as a sufficient focus indicator for text-entry fields, so this
  * is not an accessibility gap. The keyboard `focus-visible` ring survives only

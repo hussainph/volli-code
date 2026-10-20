@@ -1,7 +1,7 @@
 import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
+  DEFAULT_CODE_MODE_LIMITS,
   roleVerbBundle,
+  type CodeModeSurface,
   type SessionRuntimeSpec,
   type VerbToolKey,
 } from "@volli/shared";
@@ -29,17 +29,6 @@ function spec(overrides: Partial<SessionRuntimeSpec> = {}): SessionRuntimeSpec {
     workspacePath: "/worktrees/VC-12-mcp-server",
     venue: "local",
     model: { providerId: "anthropic", modelId: "claude-haiku-4-5", reasoningLevel: "medium" },
-    authority: {
-      mode: "auto",
-      location: "worktree",
-      enforcement: "enforce",
-      judgmentMode: "ask",
-      tools: ["read", "edit", "write", "execute"],
-      rulePackId: BUILTIN_RULE_PACK_ID,
-      rulePackHash: BUILTIN_RULE_PACK_HASH,
-      classifierModel: null,
-      fallback: { consecutiveDenials: 3, sessionDenials: 20 },
-    },
     brief: { text: "VC-12 — add an MCP server." },
     tools: { tools: ["read", "edit", "write", "execute"] },
     observer: async () => {},
@@ -315,15 +304,13 @@ describe("composeSystemPrompt", () => {
       "This Session's authority is bounded to the Session's execution workspace.",
     );
     expect(prompt).not.toContain("auto authority");
-    // The tool bundle is the prompt term: a Session-specific policy is enforced
-    // at the tool boundary and cannot create a fifth Cache Prefix term.
+    // The tool bundle is the stable prompt term.
     expect(prompt).toContain("The available coding tools are: read, edit, write, execute.");
   });
 
   it("never claims a confinement that no longer exists", () => {
     for (const prompt of [
       composeSystemPrompt(spec()),
-      composeSystemPrompt(spec({ authority: undefined })),
       composeSystemPrompt(spec({ tools: { tools: ["read", "edit"] } })),
       composeSystemPrompt(projectSpec()),
     ]) {
@@ -338,7 +325,7 @@ describe("composeSystemPrompt", () => {
     }
   });
 
-  it("keeps the write-side rule and the credentials carve-out until enforcement exists", () => {
+  it("keeps the write-side norm and the credentials carve-out", () => {
     // The workspace layer softened from prohibition to norm (VC-11): reads
     // elsewhere are task-anchored judgment. The write side and the credentials
     // sentence are pinned here because this instruction is currently the only
@@ -532,6 +519,60 @@ describe("the delegation paragraph", () => {
   });
 });
 
+/** When to write a program (VC-471): said only where the frozen record asks for it. */
+function codeModeSurface(nudge: boolean): CodeModeSurface {
+  return {
+    routes: { read: "both", edit: "both", write: "both", execute: "both" },
+    limits: DEFAULT_CODE_MODE_LIMITS,
+    mode: "both",
+    ...(nudge ? { nudge: true as const } : {}),
+  };
+}
+
+describe("the Code Mode paragraph", () => {
+  const CODING = ["read", "edit", "write", "execute"] as const;
+  const surface = codeModeSurface;
+
+  function execution(role: "ticket" | "subagent", codeMode?: CodeModeSurface) {
+    return systemPromptSections({
+      role,
+      tools: {
+        tools: [...CODING],
+        verbs: role === "ticket" ? roleVerbBundle("ticket") : [],
+        ...(codeMode === undefined ? {} : { codeMode }),
+      },
+    }).find((candidate) => candidate.id === "execution")!.text;
+  }
+
+  it("ends the Execution layer, after any delegation paragraph, when the record says so", () => {
+    for (const role of ["ticket", "subagent"] as const) {
+      const text = execution(role, surface(true));
+      expect(text.startsWith(execution(role))).toBe(true);
+      expect(text.slice(execution(role).length + 2)).toMatchInlineSnapshot(`
+        "Use codemode when one step needs several tool calls whose raw results you
+        would otherwise read and throw away: a loop of bash or read calls, the same
+        check across many files, several Browser pages, or a long output filtered to
+        the lines that matter. The program does the looping and returns only the
+        answer. For a single call, or a result you need to see whole, call the tool
+        directly."
+      `);
+      expect(Math.ceil((text.length - execution(role).length) / 4)).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("new Sessions invite only callable reads while legacy Cache Prefixes keep their wording", () => {
+    const modern = execution("ticket", { ...surface(true), descriptionVersion: 2 });
+    expect(modern).toContain("a loop of read calls");
+    expect(modern).not.toContain("a loop of bash");
+    expect(execution("ticket", surface(true))).toContain("a loop of bash or read calls");
+  });
+
+  it("is absent without the record's say-so, Code Mode or not", () => {
+    expect(execution("ticket", surface(false))).toBe(execution("ticket"));
+    expect(execution("ticket")).not.toContain("codemode");
+  });
+});
+
 // VC-164: the system prompt is a Cache Prefix, so it is a pure function of
 // Role, tool bundle, product version and resource set — and of nothing else a
 // Session carries.
@@ -563,7 +604,6 @@ describe("composeSystemPrompt — cache stability", () => {
   it("composes the same bytes when every session-varying input changes", () => {
     const stable = {
       tools: { tools: ["read", "edit", "write", "execute"] },
-      authority: undefined,
       promptResources: [{ name: "skills index", text: "- a (.agents/skills/a/SKILL.md)" }],
     } as const;
 
@@ -596,7 +636,6 @@ describe("composeSystemPrompt — cache stability", () => {
       brief: { text: "VC-99 — a completely different Ticket." },
       model: { providerId: "openai", modelId: "gpt-5", reasoningLevel: "high" },
       workspaceEnvironment: { dependencies: "installed", installCommand: "yarn install" },
-      priorAuthorityDenials: 7,
     });
 
     expect(composeSystemPrompt(one)).toBe(composeSystemPrompt(other));
@@ -606,21 +645,6 @@ describe("composeSystemPrompt — cache stability", () => {
     expect(composeSystemPrompt(projectSpec({ workspacePath: "/code/volli" }))).toBe(
       composeSystemPrompt(projectSpec({ workspacePath: "/elsewhere/checkout" })),
     );
-  });
-
-  it("does not turn a Session's Authority Snapshot into a fifth prompt term", () => {
-    const base = spec();
-    if (base.authority === undefined) throw new Error("fixture requires an Authority Snapshot");
-    expect(
-      composeSystemPrompt({
-        ...base,
-        authority: {
-          ...base.authority,
-          rulePackId: "session-specific-pack",
-          rulePackHash: "session-specific-hash",
-        },
-      }),
-    ).toBe(composeSystemPrompt(base));
   });
 
   // The three request-data terms that MAY move the prompt, each on its own.
@@ -890,4 +914,30 @@ describe("composeFirstUserMessage", () => {
     const delivered = spec({ brief: { text: "brief" } });
     expect(composeFirstUserMessage(delivered, "go")).toBe(composeFirstUserMessage(delivered, "go"));
   });
+});
+
+describe("first-message frozen routes", () => {
+  it.each(["direct", "both", "code", "deferred", "hidden"] as const)(
+    "describes a verb's %s route, not an imaginary direct door",
+    (route) => {
+      const text = composeToolSurfaceBlock("project", {
+        tools: ["read"],
+        verbs: ["session.start"],
+        codeMode: { limits: DEFAULT_CODE_MODE_LIMITS, routes: { "session.start": route } },
+      });
+      if (route === "code" || route === "deferred") {
+        expect(text).toContain("session.start — session_start through codemode only");
+        expect(text).not.toContain("call it as session_start");
+        expect(text).not.toContain("holds these Volli verbs as named tools");
+      } else if (route === "hidden") {
+        expect(text).toContain("session.start — hidden (unavailable)");
+        expect(text).not.toContain("call it as");
+        expect(text).not.toContain("Use the available verbs");
+      } else {
+        expect(text).toContain("session.start — call it as session_start");
+        if (route === "both") expect(text).toContain("or through codemode");
+      }
+      if (route === "deferred") expect(text).toContain("searchTools() and describeTool()");
+    },
+  );
 });
