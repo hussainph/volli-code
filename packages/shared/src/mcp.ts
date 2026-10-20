@@ -343,8 +343,8 @@ const JSON_SCHEMA_2020 = new Ajv2020(JSON_SCHEMA_OPTIONS);
  * Each draft gets its own validator, not merely an alias of the 2020-12
  * meta-schema. Newly admitted input schemas must also pass 2020-12 body
  * validation and the lossless provider subset below; old tuple `items`, for
- * example, must never enter a frozen Session's provider declarations.
- * Keep the pre-VC-621 Ajv2020 acceptance path for durable replay compatibility.
+ * example, must not enter newly discovered provider declarations. Durable replay
+ * keeps the own-dialect acceptance shipped in #733, plus the earlier Ajv2020 path.
  * This is meta-schema validation only; compiling a server's schema here would resolve its $refs
  * and retain untrusted schemas in Ajv's cache across catalog refreshes.
  */
@@ -494,8 +494,8 @@ export function isMcpToolId(value: unknown): value is McpToolId {
 
 // Pi's non-strict Anthropic adapter projects only root type/properties/required.
 // Do not expand old-draft admission to assertions this projection would drop.
-// This is deliberately NOT applied to the original Ajv2020 acceptance path:
-// changing it would invalidate already frozen Sessions, not fix their schemas.
+// This is deliberately NOT applied to durable replay or the original Ajv2020
+// acceptance path: tightening those would invalidate already frozen Sessions.
 const PROJECTED_ROOT_ASSERTIONS = [
   "additionalProperties",
   "patternProperties",
@@ -592,7 +592,11 @@ function legacyProviderFailure(schema: Record<string, unknown> | boolean): strin
  * much third-party JSON as an input schema, it is frozen into Session history
  * the same way, and the MCP specification requires both to be object schemas.
  */
-function schemaFailure(value: unknown, label: "input schema" | "output schema"): string | null {
+function schemaFailure(
+  value: unknown,
+  label: "input schema" | "output schema",
+  purpose: "discovery" | "replay",
+): string | null {
   if (value === null || Array.isArray(value) || typeof value !== "object") {
     return `${label} must be a JSON Schema object`;
   }
@@ -674,8 +678,11 @@ function schemaFailure(value: unknown, label: "input schema" | "output schema"):
           : undefined;
     if (validator === undefined) throw new Error("Unsupported JSON Schema dialect");
     if (!validator.validateSchema(value)) return `${label} must be valid JSON Schema`;
-    // Outputs never reach a model provider. Keep their own-dialect validation.
-    if (label === "output schema") return null;
+    // Frozen definitions keep the own-dialect acceptance shipped in #733,
+    // even when fresh discovery now refuses their provider semantics. Never
+    // drop, rewrite or re-admit them using today's discovery policy on attach.
+    // Outputs never reach a model provider either.
+    if (purpose === "replay" || label === "output schema") return null;
     // A validation-only shallow view chooses the 2020-12 meta-schema without
     // changing the advertised object, its declaration or any frozen bytes.
     const { $schema: _declaration, ...body } = root;
@@ -702,7 +709,11 @@ function schemaFailure(value: unknown, label: "input schema" | "output schema"):
   }
 }
 
-export function sanitizeMcpToolDefinition(input: McpToolCandidate): McpToolSanitization {
+/** Fresh discovery is strict; durable readers must explicitly retain replay acceptance. */
+export function sanitizeMcpToolDefinition(
+  input: McpToolCandidate,
+  purpose: "discovery" | "replay" = "discovery",
+): McpToolSanitization {
   if (!SERVER_ID.test(input.serverId) || input.serverId.length > MCP_SERVER_ID_MAX_CHARS) {
     return { ok: false, reason: "server id is invalid" };
   }
@@ -717,10 +728,12 @@ export function sanitizeMcpToolDefinition(input: McpToolCandidate): McpToolSanit
   if (description.length > MCP_DESCRIPTION_MAX_CHARS) {
     return { ok: false, reason: "tool description is too long" };
   }
-  const schemaError = schemaFailure(input.inputSchema, "input schema");
+  const schemaError = schemaFailure(input.inputSchema, "input schema", purpose);
   if (schemaError !== null) return { ok: false, reason: schemaError };
   const outputSchemaError =
-    input.outputSchema === undefined ? null : schemaFailure(input.outputSchema, "output schema");
+    input.outputSchema === undefined
+      ? null
+      : schemaFailure(input.outputSchema, "output schema", purpose);
   const definition: McpToolDefinition = {
     serverId: input.serverId,
     toolName: input.toolName,
@@ -1010,14 +1023,17 @@ export function validateMcpToolDefinitions(
   const identities = new Set<string>();
   const providerNames = new Set<string>();
   for (const definition of definitions) {
-    const sanitized = sanitizeMcpToolDefinition({
-      serverId: definition.serverId,
-      serverName: "recorded",
-      toolName: definition.toolName,
-      description: definition.description,
-      inputSchema: definition.inputSchema,
-      ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
-    });
+    const sanitized = sanitizeMcpToolDefinition(
+      {
+        serverId: definition.serverId,
+        serverName: "recorded",
+        toolName: definition.toolName,
+        description: definition.description,
+        inputSchema: definition.inputSchema,
+        ...(definition.outputSchema === undefined ? {} : { outputSchema: definition.outputSchema }),
+      },
+      "replay",
+    );
     if (!sanitized.ok)
       throw new Error(`Invalid MCP tool ${definition.toolName}: ${sanitized.reason}`);
     // Discovery drops an output schema it cannot accept, so a frozen one that

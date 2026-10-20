@@ -1,3 +1,6 @@
+import Ajv from "ajv";
+import Ajv2019 from "ajv/dist/2019.js";
+import Ajv2020 from "ajv/dist/2020.js";
 import { describe, expect, it } from "vite-plus/test";
 import {
   assertSession,
@@ -21,7 +24,7 @@ import {
 } from "./session-event-codec";
 import type { RendererSessionEventPayload } from "./session-event-codec";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
-import { mcpProviderToolName } from "./mcp";
+import { mcpProviderToolName, sanitizeMcpToolDefinition } from "./mcp";
 import { readInteractionPrompts, SESSION_PROJECTION_EVENT_KINDS } from "./session-ledger";
 import type {
   CommandReceipt,
@@ -794,6 +797,117 @@ const resolved = (resolution: unknown) =>
   );
 
 describe("frozen MCP dialect replay (VC-621)", () => {
+  it("preserves main's own-dialect acceptance across every new discovery restriction", () => {
+    // Frozen oracle: main a662494f3's #733 acceptance is own-dialect meta-validation,
+    // not a 2020-12 body check or today's provider-admission policy. All corpus
+    // entries are bounded JSON object schemas, so main's unchanged shape/size
+    // checks also pass. Keep this independent of the production sanitizer.
+    const options = { addUsedSchema: false, strict: false, validateFormats: false };
+    const validators = [
+      ["http://json-schema.org/draft-07/schema", new Ajv(options)],
+      ["https://json-schema.org/draft/2019-09/schema", new Ajv2019(options)],
+      ["https://json-schema.org/draft/2020-12/schema", new Ajv2020(options)],
+    ] as const;
+    const bodies = [
+      {},
+      // Every root assertion forbidden only at fresh legacy discovery.
+      { additionalProperties: false },
+      { patternProperties: { "^x": { type: "string" } } },
+      { propertyNames: { minLength: 1 } },
+      { unevaluatedProperties: false },
+      { minProperties: 1 },
+      { maxProperties: 2 },
+      { dependentRequired: { x: ["y"] } },
+      { dependentSchemas: { x: { required: ["y"] } } },
+      { allOf: [{ required: ["x"] }] },
+      { anyOf: [{ required: ["x"] }] },
+      { oneOf: [{ required: ["x"] }] },
+      { not: { required: ["x"] } },
+      { if: { required: ["x"] } },
+      // eslint-disable-next-line unicorn/no-thenable -- JSON Schema keyword, not an awaitable.
+      { then: { required: ["x"] } },
+      { else: { required: ["x"] } },
+      { const: { x: 1 } },
+      { enum: [{ x: 1 }] },
+      // Body incompatibilities: tuples and keywords unknown to older drafts.
+      {
+        properties: {
+          pair: { type: "array", items: [{ type: "string" }], additionalItems: false },
+        },
+      },
+      { $defs: { unknownInDraft07: { type: 7 } } },
+      { $recursiveAnchor: true },
+      // Every keyword rejected by the legacy provider walk, including refs
+      // that must stay opaque: no fetching, registering or resolving them.
+      { dependencies: { x: ["y"] } },
+      { properties: { list: { type: "array", prefixItems: [{ type: "string" }], items: false } } },
+      { $recursiveRef: "#" },
+      { $recursiveAnchor: "anchor" },
+      { properties: { x: { $ref: "https://example.invalid/schema" } } },
+      { $dynamicRef: "#anchor" },
+      // Single, array and map child schema positions, not just the root.
+      { properties: { x: { not: { dependencies: { a: ["b"] } } } } },
+      { properties: { x: { allOf: [{ dependencies: { a: ["b"] } }] } } },
+      { properties: { x: { dependentSchemas: { a: { $dynamicRef: "#anchor" } } } } },
+      { examples: [{ $ref: "literal", items: [1] }] },
+    ];
+    let accepted = 0;
+    let discoveryRejected = 0;
+    for (const [uri, validator] of validators) {
+      const alias = uri.replace(/^https?:/, uri.startsWith("https:") ? "http:" : "https:");
+      validator.addMetaSchema({ $ref: uri }, alias, false);
+      for (const $schema of [uri, `${uri}#`, alias, `${alias}#`]) {
+        for (const body of bodies) {
+          const inputSchema = { $schema, type: "object", ...body };
+          if (!validator.validateSchema(inputSchema)) continue;
+          accepted += 1;
+          const candidate = {
+            serverId: "fixture",
+            serverName: "Fixture",
+            toolName: "query",
+            description: "Query",
+            inputSchema,
+            outputSchema: inputSchema,
+          };
+          if (!sanitizeMcpToolDefinition(candidate).ok) discoveryRejected += 1;
+          const providerName = mcpProviderToolName("fixture", "Fixture", "query");
+          const definition = {
+            serverId: "fixture",
+            toolName: "query",
+            providerName,
+            description: "Query",
+            inputSchema,
+            outputSchema: inputSchema,
+            parallelRead: true,
+          };
+          for (const payload of [
+            {
+              kind: "session.input.recorded",
+              input: { kind: "tool-surface", tools: [providerName], mcpTools: [definition] },
+            },
+            {
+              kind: "session.tools.refreshed",
+              trigger: "cold-turn",
+              added: [providerName],
+              changed: [],
+              delta: { mcpTools: [definition] },
+            },
+          ]) {
+            const before = encodeSessionJson(payload);
+            const decoded = decodeSessionEventPayload(JSON.parse(before), "payload");
+            expect(decoded, before).toEqual(payload);
+            expect(encodeSessionJson(decoded)).toBe(before);
+            expect(encodeSessionJson(payload)).toBe(before);
+          }
+        }
+      }
+    }
+    // The oracle must exercise both accepted legacy tools and the new admission
+    // exclusions, rather than silently skipping all stricter cases.
+    expect(accepted).toBeGreaterThan(300);
+    expect(discoveryRejected).toBeGreaterThan(200);
+  });
+
   it.each([
     "",
     "https://json-schema.org/draft/2020-12/schema",

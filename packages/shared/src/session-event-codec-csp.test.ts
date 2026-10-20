@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { createContext, runInContext } from "node:vm";
 import { build } from "vite-plus";
 import { beforeAll, describe, expect, it } from "vite-plus/test";
-import { sanitizeMcpToolDefinition } from "./mcp";
+import { sanitizeMcpToolDefinition, type McpJsonObject } from "./mcp";
 import { DEFAULT_CODE_MODE_LIMITS } from "./code-mode";
 import {
   assertSessionEvent,
@@ -106,6 +106,41 @@ describe("renderer Session input under CSP", () => {
   ])("keeps the host-validated MCP tool-surface frame (%s)", (dialect) => {
     const event = shippedEvent(dialect);
     expect(parseUnderCsp(event)).toEqual({ ok: true, event: scrubSessionEvent(event) });
+  });
+
+  it.each<McpJsonObject>([
+    { additionalProperties: false },
+    {
+      properties: { pair: { type: "array", items: [{ type: "string" }], additionalItems: false } },
+    },
+    { dependencies: { id: ["title"] } },
+  ])("keeps previously frozen schemas that fresh discovery now rejects (%j)", (body) => {
+    const event = shippedEvent();
+    if (
+      event.payload.kind !== "session.input.recorded" ||
+      event.payload.input.kind !== "tool-surface"
+    ) {
+      throw new Error("Missing tool surface");
+    }
+    const inputSchema = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      ...body,
+    };
+    const definition = { ...event.payload.input.mcpTools![0]!, inputSchema };
+    expect(sanitizeMcpToolDefinition({ ...definition, serverName: "Paper" }).ok).toBe(false);
+    event.payload.input = { ...event.payload.input, mcpTools: [definition] };
+    // Existing records are decoded by the host before the renderer sees them.
+    const decoded = decodeSessionEventPayload(
+      JSON.parse(encodeSessionJson(event.payload)),
+      "payload",
+    );
+    expect(decoded).toEqual(event.payload);
+    assertSessionEvent(event, "event");
+    expect(parseUnderCsp({ ...event, payload: decoded })).toEqual({
+      ok: true,
+      event: scrubSessionEvent(event),
+    });
   });
 
   it("keeps frozen output schemas and parallel-read eligibility", () => {
