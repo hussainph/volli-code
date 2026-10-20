@@ -191,7 +191,7 @@ async function pairAtTabEdge(page, movingLabel, targetLabel, edge) {
     await page.mouse.up();
   }
   await waitUntil(
-    "paired tab chip",
+    `paired tab chip (${movingLabel} → ${edge} edge of ${targetLabel}; preview=${highlighted})`,
     async () =>
       (await readGroups(page)).some(
         (group) =>
