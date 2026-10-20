@@ -17,7 +17,7 @@ import {
   BACKGROUND_CONTEXT,
   executeShellWithCapture,
   type ShellCaptureResult,
-} from "@earendil-works/pi-agent-core";
+} from "./harness-env";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { ScopedExecutionEnv } from "./scoped-execution-env";
 

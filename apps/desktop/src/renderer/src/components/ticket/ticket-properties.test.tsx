@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The Now page's Properties block (VC-406 revision 05): the value is the
+ * The Now page's Properties block (VC-406): the value is the
  * control, the row is not a target, and the label run is additive with its own
  * per-pill Remove.
  *
@@ -224,7 +224,7 @@ describe("the property rows", () => {
 
     const row = query('[data-testid="ticket-rail-property-row-status"]');
     // Exactly one pressable thing on the line — the value. A row that hovered
-    // and opened a side picker is what revision 05 corrected.
+    // and opened a side picker would add an unwanted second target.
     expect(row.querySelectorAll("button")).toHaveLength(1);
     expect(row.tagName).toBe("LI");
     expect(row.className).not.toContain("hover:bg-accent");

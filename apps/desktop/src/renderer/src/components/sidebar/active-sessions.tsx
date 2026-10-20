@@ -1,9 +1,16 @@
 import * as React from "react";
+import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
+import { CaretUpIcon } from "@phosphor-icons/react/dist/csr/CaretUp";
 import {
+  applyHeldOrder,
   errorMessage,
   PERSON_STARTED,
+  type HarnessId,
   type LatestSessionSignal,
+  type ModelSelection,
   type Project,
+  sessionOrderPhaseOf,
+  type SessionOrderMember,
   type Ticket,
 } from "@volli/shared";
 
@@ -12,6 +19,7 @@ import { loadingRegionProps } from "@renderer/components/ui/loading-region";
 import {
   SidebarGroup,
   SidebarMenu,
+  SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
 } from "@renderer/components/ui/sidebar";
@@ -19,9 +27,11 @@ import { isHomeBoardTab } from "@renderer/components/home/home-tabs";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import {
   buildActiveSessionListing,
+  capPreviousEntries,
   groupPreviousByTicket,
   isProjectSessionRowSelected,
   listingSessionIds,
+  PREVIOUS_BAND_LIMIT,
   sessionRowRoute,
   type ActiveSessionRow,
   type PreviousSessionRow,
@@ -40,8 +50,29 @@ import {
   PreviousBandRow,
   SessionBandRowSkeleton,
   sessionGroupPanelId,
+  sessionRowVendor,
   TicketGroupRow,
+  type SessionRowVendor,
 } from "@renderer/components/sidebar/session-band-row";
+import {
+  sessionBandKeyAction,
+  sessionBandModel,
+  type SessionBandEntry,
+} from "@renderer/components/sidebar/session-band-keys";
+import { PeekConversation } from "@renderer/components/session-peek/peek-conversation";
+import { folderRowId, peekSessionId } from "@renderer/components/session-peek/peek-subject";
+import {
+  createSidebarPeekPorts,
+  usePeekHold,
+} from "@renderer/components/session-peek/sidebar-peek";
+import {
+  peekRowButton,
+  peekRowElement,
+  useSessionPeek,
+  type SessionPeekPorts,
+  type SessionPeekRow,
+} from "@renderer/components/session-peek/use-session-peek";
+import { sessionActivityDotState } from "@renderer/components/ui/session-activity-status";
 import { TICKET_BODY_TAB_ID } from "@renderer/components/ticket/ticket-body-tab";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { delayUntil } from "@renderer/lib/boundary-timer";
@@ -58,11 +89,15 @@ import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   projectSessionListingPending,
+  unreadSessionIds,
   useProjectSessionsStore,
 } from "@renderer/stores/project-sessions";
+import { useRemoteSessionsUnavailable } from "@renderer/stores/remote-session-availability";
+import { projectBandOrderKey, useHeldSessionOrder } from "@renderer/stores/session-order";
 import { type SessionContainer, useSessionsStore } from "@renderer/stores/sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 const EMPTY_TICKETS: readonly Ticket[] = [];
 const EMPTY_TICKET_TABS: Record<string, { files: string[]; active: string }> = {};
@@ -320,6 +355,8 @@ export function ActiveSessions({
   const listingState = useProjectSessionsStore((state) => state.listingState[project.id]);
   const listingPending = projectSessionListingPending(listingState);
   const listingFailed = listingState === "failed";
+  // A host that grants this window no Session features (VC-713): said in its name.
+  const sessionsUnavailable = useRemoteSessionsUnavailable(project.id);
   const records = projectRows.terminal;
   const chatSessions = projectRows.chat;
   const projectChatSessionIds = React.useMemo(
@@ -395,7 +432,19 @@ export function ActiveSessions({
   // Session arrives, so a project nobody has automated hands the same empty
   // map to every rebuild and the memo below is never defeated by it (VC-131).
   const sessionProvenance = projectRows.provenance;
+  /**
+   * Which of this project's Sessions have work nobody has looked at (VC-108).
+   *
+   * An input to the LISTING, not a decoration on it: an unread Session is not
+   * done with you, so the quiet window cannot retire it and a Previous one is
+   * pulled back (`active-session-listing.ts`). The receipts themselves are
+   * main's, pushed onto the rows through `volli:session-activity`.
+   */
+  const unread = React.useMemo(() => unreadSessionIds(projectRows), [projectRows]);
+  const setSessionRead = useProjectSessionsStore((state) => state.setSessionRead);
   const refreshProjectSessions = useProjectSessionsStore((state) => state.refresh);
+  /** The Session whose whole conversation is open over the app, if any (D3). */
+  const [viewedSessionId, setViewedSessionId] = React.useState<string | null>(null);
   const [signalsByTicket, setSignalsByTicket] = React.useState<Record<string, LatestSessionSignal>>(
     {},
   );
@@ -415,6 +464,16 @@ export function ActiveSessions({
   // through is a question about this glance, not a preference. It resets with
   // the window, like every other view-local narrowing in the app.
   const [filter, setFilter] = React.useState<SessionBandFilter>(DEFAULT_SESSION_BAND_FILTER);
+  // How deep into Previous this glance reaches (VC-116). Ephemeral for the
+  // filter's reason, and tied to the project it was widened for: switching
+  // projects reuses this component, and another project's history starts at
+  // the cap again.
+  const [previousReach, setPreviousReach] = React.useState({
+    projectId: project.id,
+    limit: PREVIOUS_BAND_LIMIT,
+  });
+  const previousLimit =
+    previousReach.projectId === project.id ? previousReach.limit : PREVIOUS_BAND_LIMIT;
   // Bumped to force a re-read on the coarse timer below, without pretending
   // anything about the inputs changed.
   const [refreshTick, setRefreshTick] = React.useState(0);
@@ -459,8 +518,8 @@ export function ActiveSessions({
   const statusFetch = useLatestAsync();
   React.useEffect(() => {
     const token = statusFetch.claim();
-    window.api.tickets
-      .statusEntries({ projectId: project.id })
+    boardApi()
+      .tickets.statusEntries({ projectId: project.id })
       .then((result) => {
         if (!statusFetch.isCurrent(token)) return;
         if (!result.ok) {
@@ -491,8 +550,8 @@ export function ActiveSessions({
       setSignalsByTicket({});
       return;
     }
-    window.api.tickets
-      .latestSignals({ projectId: project.id })
+    boardApi()
+      .tickets.latestSignals({ projectId: project.id })
       .then((result) => {
         if (!signalsFetch.isCurrent(token)) return;
         if (!result.ok) {
@@ -603,6 +662,7 @@ export function ActiveSessions({
         harness,
         statusEnteredAt,
         provenance: sessionProvenance,
+        unreadSessionIds: unread,
         filter: sessionListingFilter(filter),
         now: listingNow,
       }),
@@ -618,10 +678,50 @@ export function ActiveSessions({
       harness,
       statusEnteredAt,
       sessionProvenance,
+      unread,
       filter,
       listingNow,
     ],
   );
+
+  /**
+   * The Active band's held order (D7).
+   *
+   * The rule is `@volli/shared`'s and the state is `stores/session-order.ts`'s;
+   * what belongs here is only the membership it reads — this band's Sessions,
+   * in the shipped order, each with the one phase the rule cares about. The
+   * key is the surface's, not the project's, because the ticket rail holds a
+   * SUBSET of this membership and a shared key would let each overwrite the
+   * other's commit on every build (amendment A2).
+   *
+   * The phase is read off the row's own MARK through `sessionOrderPhaseOf`,
+   * which is the rail's reading too: this band used to count only `working`
+   * while the rail also counted a Session coming up, so one event moved a row
+   * on one sidebar and left it standing on the other.
+   */
+  const members = React.useMemo<readonly SessionOrderMember[]>(
+    () =>
+      listing.active.map((row) => ({
+        id: row.id,
+        phase: sessionOrderPhaseOf(
+          sessionActivityDotState(row.activity, { attention: row.attention !== null }),
+        ),
+      })),
+    [listing.active],
+  );
+  const heldOrder = useHeldSessionOrder(projectBandOrderKey(project.id), members);
+  /**
+   * That order by its CONTENT, because its identity is not stable: the hook
+   * rebuilds the array on every render (it is a pure derivation of the last
+   * commit and this build's membership), and an `activeRows` that changed
+   * identity with it would take every derivation below it along — the row
+   * maps, the peek's `ports`, `rowOf`. `usePeekContent` re-reads whenever
+   * `readContent` changes, and its own `setState` re-renders this band: an
+   * open card would read the Session again on every one of them, forever.
+   */
+  const heldOrderKey = heldOrder.join("\u0000");
+  const latestHeldOrder = React.useRef(heldOrder);
+  latestHeldOrder.current = heldOrder;
 
   /**
    * The Previous band as it is DRAWN: one entry per ticket, plus the ticketless
@@ -663,9 +763,15 @@ export function ActiveSessions({
       ];
     });
   }, [filter.kinds.chat, filter.scopes, provisionalDrafts, tickets]);
+  /**
+   * Chat Drafts stay AHEAD of the listing and out of the held order: a Draft is
+   * renderer-owned, has no Session to hold a place for, and is never peekable.
+   * Everything below it is drawn in the order this band last committed to.
+   */
   const activeRows = React.useMemo(
-    () => [...provisionalRows, ...listing.active],
-    [listing.active, provisionalRows],
+    () => [...provisionalRows, ...applyHeldOrder(latestHeldOrder.current, listing.active)],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `heldOrderKey` is the content of `latestHeldOrder`.
+    [heldOrderKey, listing.active, provisionalRows],
   );
 
   /**
@@ -805,6 +911,38 @@ export function ActiveSessions({
   }, [selectedGroupId, project.id, setSessionGroupExpanded]);
 
   /**
+   * The entry the cap must never hide: the ticket group above, or a ticketless
+   * Session that is itself the tab in front of you. Settled to an id so the
+   * slice below re-derives only when the selection or the band moves.
+   */
+  let selectedEntryId = selectedGroupId;
+  if (selectedEntryId === null) {
+    for (const entry of previousEntries) {
+      if (entry.kind !== "session" || !isSelected(entry.row)) continue;
+      selectedEntryId = entry.id;
+      break;
+    }
+  }
+
+  /**
+   * The Previous entries actually MOUNTED (VC-116): the first `previousLimit`,
+   * plus the selected entry wherever it ranks. Everything downstream that walks
+   * drawn rows — the keyboard order, the folders a card lists — reads this, so
+   * an arrow key can never land on a row that is not on screen.
+   */
+  const previousSlice = React.useMemo(
+    () =>
+      capPreviousEntries(previousEntries, previousLimit, (entry) => entry.id === selectedEntryId),
+    [previousEntries, previousLimit, selectedEntryId],
+  );
+  const showMorePrevious = React.useCallback(() => {
+    setPreviousReach({ projectId: project.id, limit: previousLimit + PREVIOUS_BAND_LIMIT });
+  }, [previousLimit, project.id]);
+  const showLessPrevious = React.useCallback(() => {
+    setPreviousReach({ projectId: project.id, limit: PREVIOUS_BAND_LIMIT });
+  }, [project.id]);
+
+  /**
    * Opens or closes one ticket's group. Stable, and handed to every entry AS IS
    * for the same reason `activate` is: `TicketGroupRow` is memoised, and a
    * fresh `() => toggle(id)` per entry per render is exactly the prop that
@@ -917,6 +1055,231 @@ export function ActiveSessions({
     [project.id, openHome, openTicketSession, openTicketWorkspace],
   );
 
+  /* ------------------------------------------------------------- the peek */
+
+  /**
+   * Every row this band draws, by its row id — the two listings, joined.
+   *
+   * The peek is addressed by row id (it finds a row in the DOM by
+   * `data-peek-row`), and so are its ports: opening one has to reach the same
+   * `activate` a click does, which takes the listing row itself.
+   */
+  const listingRows = React.useMemo(() => {
+    const rows = new Map<string, ActiveSessionRow | PreviousSessionRow>();
+    for (const row of activeRows) rows.set(row.id, row);
+    for (const row of listing.previous) rows.set(row.id, row);
+    return rows;
+  }, [activeRows, listing.previous]);
+
+  /** Which model a chat Session runs — the provider its mark is drawn from (D4). */
+  const chatModels = React.useMemo(() => {
+    const models = new Map<string, ModelSelection | null>();
+    for (const record of chatSessions) models.set(record.sessionId, record.model);
+    return models;
+  }, [chatSessions]);
+
+  const vendorOf = React.useCallback(
+    (row: {
+      id: string;
+      kind: "chat" | "terminal";
+      harnessId: HarnessId | null;
+      /**
+       * What the listing resolved a companion to be running (`Shell` for a bare
+       * shell) — the label its mark takes where there is no vendor logo, since
+       * the mark's name is the only place the row still says its source (D1).
+       * Active rows have one; Previous rows carry none.
+       */
+      source?: string;
+    }): SessionRowVendor => {
+      if (row.kind !== "chat") return sessionRowVendor(row);
+      const sessionId = peekSessionId(row.id);
+      const model = sessionId === null ? null : (chatModels.get(sessionId) ?? null);
+      if (model === null) return sessionRowVendor(row);
+      // The provider's own id is the label. There is no catalog to ask here —
+      // `providerLabelOf` needs the model-access client, which this band does
+      // not hold — and the id IS that function's own fallback, so the mark
+      // names the vendor rather than inventing a display name for it.
+      return { providerId: model.providerId, providerLabel: model.providerId };
+    },
+    [chatModels],
+  );
+
+  /** What the card needs about a row, for both bands and for a folder's Sessions. */
+  const peekRows = React.useMemo(() => {
+    const rows = new Map<string, SessionPeekRow>();
+    const add = (
+      row: ActiveSessionRow | PreviousSessionRow,
+      kind: "chat" | "terminal",
+      state: ReturnType<typeof sessionActivityDotState> | null,
+      at: number | null,
+    ): void => {
+      const sessionId = peekSessionId(row.id);
+      if (sessionId === null) return;
+      // …with the row's own source where it has one, so a Session's card and
+      // its row cannot name the same shell two different things.
+      const vendor = vendorOf({
+        id: row.id,
+        kind,
+        harnessId: row.harnessId,
+        ...("source" in row ? { source: row.source } : {}),
+      });
+      rows.set(row.id, {
+        rowId: row.id,
+        sessionId,
+        title: row.title,
+        ticket: row.ticket,
+        kind,
+        state,
+        providerId: vendor.providerId,
+        providerLabel: vendor.providerLabel,
+        at,
+        unread: unread.has(sessionId),
+        model: chatModels.get(sessionId) ?? null,
+        provenance: row.provenance,
+      });
+    };
+    for (const row of activeRows) {
+      add(
+        row,
+        row.target?.kind === "chat" ? "chat" : "terminal",
+        sessionActivityDotState(row.activity, { attention: row.attention !== null }),
+        row.lastActivityAt,
+      );
+    }
+    for (const row of listing.previous) {
+      add(
+        row,
+        row.kind,
+        row.activity === "interrupted" ? "interrupted" : "idle",
+        row.endedOrQuietAt > 0 ? row.endedOrQuietAt : null,
+      );
+    }
+    return rows;
+  }, [activeRows, chatModels, listing.previous, unread, vendorOf]);
+
+  /**
+   * The band's own keyboard order and its folders (D8), from what it is about
+   * to draw. The folder map is what a folder's card lists, so it holds a
+   * ticket's Sessions whether or not the folder is disclosed.
+   */
+  const band = React.useMemo(
+    () =>
+      sessionBandModel({
+        active: activeRows.map((row) => row.id),
+        previous: previousSlice.entries.map((entry): SessionBandEntry =>
+          entry.kind === "session"
+            ? { kind: "session", rowId: entry.id }
+            : { kind: "folder", ticketId: entry.id, rowIds: entry.rows.map((row) => row.id) },
+        ),
+        expanded: expandedGroups,
+      }),
+    [activeRows, expandedGroups, previousSlice],
+  );
+
+  /**
+   * Opening a row READS it (D6). One function rather than a port and a click
+   * handler, so a row opened from its card and a row opened by clicking it
+   * cannot come to disagree about whether that counts as reading.
+   */
+  const openRow = React.useCallback(
+    (row: ActiveSessionRow | PreviousSessionRow) => {
+      activate(row);
+      const sessionId = peekSessionId(row.id);
+      if (sessionId !== null) void setSessionRead(project.id, sessionId, false);
+    },
+    [activate, project.id, setSessionRead],
+  );
+
+  const toggleRead = React.useCallback(
+    (row: ActiveSessionRow | PreviousSessionRow) => {
+      const sessionId = peekSessionId(row.id);
+      if (sessionId === null) return;
+      void setSessionRead(project.id, sessionId, !unread.has(sessionId));
+    },
+    [project.id, setSessionRead, unread],
+  );
+
+  /**
+   * The peek's ports — `session-peek/sidebar-peek.tsx`'s, which is the rail's
+   * too. What this band answers for is only what is genuinely its own: which
+   * row activation a row id names, where a ticket opens, the conversation
+   * overlay this component mounts, and its own read store. The pull door, the
+   * adopt-then-shipped-client answer and send paths, and which acts read a
+   * Session are one implementation for both sidebars.
+   */
+  const ports = React.useMemo<SessionPeekPorts>(
+    () =>
+      createSidebarPeekPorts({
+        // Activation ALONE: the port adds the read, so a row opened from its
+        // card and a row clicked in the band cannot disagree about it.
+        openRow(rowId) {
+          const row = listingRows.get(rowId);
+          if (row !== undefined) activate(row);
+        },
+        openTicket(ticketId) {
+          openTicketWorkspace(project.id, ticketId);
+        },
+        showConversation(sessionId) {
+          setViewedSessionId(sessionId);
+        },
+        setRead(sessionId, nowUnread) {
+          void setSessionRead(project.id, sessionId, nowUnread);
+        },
+      }),
+    [activate, listingRows, openTicketWorkspace, project.id, setSessionRead],
+  );
+
+  const rowOf = React.useCallback((rowId: string) => peekRows.get(rowId), [peekRows]);
+  const ticketOf = React.useCallback(
+    (ticketId: string) => tickets.find((candidate) => candidate.id === ticketId),
+    [tickets],
+  );
+
+  const peek = useSessionPeek({
+    ticketPrefix: project.ticketPrefix,
+    now: ageNow,
+    rowOf,
+    ticketOf,
+    folders: band.folders,
+    // Pressing the caret asks for the rows inline; a card describing them
+    // beside the rows themselves would be the same list twice (D2).
+    onFolderToggle: toggleGroup,
+    ports,
+  });
+
+  /**
+   * The hold (D7): while the pointer is in this band or a card is open, no row
+   * may move — anywhere. Released on leave, and on unmount, which is what lands
+   * the pending moves in one step. Taken in a LAYOUT effect by the shared hook,
+   * so it beats this band's own commit in the same render.
+   */
+  usePeekHold(peek.holding);
+
+  /**
+   * The band's own keys, answered before the peek's (D8). The peek has a blind
+   * folder fallback for surfaces that register none; this band knows whether a
+   * folder is open, so it answers — and consumes — every arrow on one.
+   */
+  const registerRowKeys = peek.registerRowKeys;
+  React.useEffect(() => {
+    registerRowKeys((event, target) => {
+      if (target.surface !== "nav") return false;
+      const action = sessionBandKeyAction(event.key, target.rowId, band);
+      if (action === null) return false;
+      event.preventDefault();
+      if (action.kind === "toggle-folder") toggleGroup(action.ticketId);
+      if (action.kind === "focus-row") {
+        peekRowButton(peekRowElement({ rowId: action.rowId, surface: "nav" }))?.focus();
+      }
+      if (action.kind === "focus-folder") {
+        peekRowButton(
+          peekRowElement({ rowId: folderRowId(action.ticketId), surface: "nav" }),
+        )?.focus();
+      }
+      return true;
+    });
+  }, [band, registerRowKeys, toggleGroup]);
+
   const activeBand = (
     <SidebarGroup data-session-band="active" className="gap-1">
       <SessionBandHeader label="Active" count={activeRows.length} />
@@ -928,6 +1291,10 @@ export function ActiveSessions({
           <SessionBandRowSkeleton primaryWidth="w-3/4" />
           <SessionBandRowSkeleton primaryWidth="w-1/2" />
         </SidebarMenu>
+      ) : activeRows.length === 0 && sessionsUnavailable !== null ? (
+        <p className={EMPTY_INLINE} data-testid="sessions-unavailable">
+          {sessionsUnavailable}
+        </p>
       ) : activeRows.length === 0 && listingFailed ? (
         // A failed baseline cannot establish that the Project is quiet. Keep
         // this terse — the toast owns the bridge detail — but never let an
@@ -945,7 +1312,16 @@ export function ActiveSessions({
               ticketPrefix={project.ticketPrefix}
               now={ageNow}
               selected={isSelected(row)}
-              onSelect={activate}
+              unread={unreadRow(row.id, unread)}
+              vendor={vendorOf({
+                id: row.id,
+                kind: row.target?.kind === "chat" ? "chat" : "terminal",
+                harnessId: row.harnessId,
+                source: row.source,
+              })}
+              onSelect={openRow}
+              // A companion has no turns, so nothing about it is unread (A4 Q2).
+              onToggleRead={row.target?.kind === "chat" ? toggleRead : null}
             />
           ))}
         </SidebarMenu>
@@ -964,13 +1340,14 @@ export function ActiveSessions({
         <SidebarMenu {...loadingRegionProps("sessions")}>
           <SessionBandRowSkeleton primaryWidth="w-2/3" />
         </SidebarMenu>
-      ) : previousEntries.length === 0 && listingFailed ? (
+      ) : previousEntries.length === 0 &&
+        sessionsUnavailable !== null ? null : previousEntries.length === 0 && listingFailed ? (
         <p className={EMPTY_INLINE}>Couldn&apos;t load sessions.</p>
       ) : previousEntries.length === 0 ? (
         <p className={EMPTY_INLINE}>Nothing yet</p>
       ) : (
         <SidebarMenu>
-          {previousEntries.map((entry) =>
+          {previousSlice.entries.map((entry) =>
             entry.kind === "session" ? (
               <PreviousBandRow
                 key={entry.id}
@@ -979,7 +1356,10 @@ export function ActiveSessions({
                 ticketPrefix={project.ticketPrefix}
                 now={ageNow}
                 selected={isSelected(entry.row)}
-                onSelect={activate}
+                unread={unreadRow(entry.id, unread)}
+                vendor={vendorOf(entry.row)}
+                onSelect={openRow}
+                onToggleRead={entry.row.kind === "chat" ? toggleRead : null}
               />
             ) : (
               <SidebarMenuItem key={entry.id}>
@@ -1003,7 +1383,10 @@ export function ActiveSessions({
                         ticketPrefix={project.ticketPrefix}
                         now={ageNow}
                         selected={isSelected(row)}
-                        onSelect={activate}
+                        unread={unreadRow(row.id, unread)}
+                        vendor={vendorOf(row)}
+                        onSelect={openRow}
+                        onToggleRead={row.kind === "chat" ? toggleRead : null}
                         // The id is what the reader just expanded; repeating
                         // it on every child costs ink and ~45px of title.
                         showIdentity={false}
@@ -1014,26 +1397,128 @@ export function ActiveSessions({
               </SidebarMenuItem>
             ),
           )}
+          <PreviousBandReach
+            canShowMore={previousSlice.hiddenCount > 0}
+            canShowLess={
+              previousLimit > PREVIOUS_BAND_LIMIT && previousEntries.length > PREVIOUS_BAND_LIMIT
+            }
+            onShowMore={showMorePrevious}
+            onShowLess={showLessPrevious}
+          />
         </SidebarMenu>
       )}
     </SidebarGroup>
   );
 
-  if (onProfile === undefined)
-    return (
-      <>
-        {activeBand}
-        {previousBand}
-      </>
-    );
+  /**
+   * ONE surface for the peek, wrapping both bands.
+   *
+   * The handlers go on the element that holds every row, because the peek finds
+   * a row from the event's target and clamps the card to this box — and because
+   * a pointer crossing from Active into Previous must not read as leaving the
+   * sidebar. Nothing here consumes `pointerdown`: these rows are drag sources.
+   */
+  const bands = (
+    <div data-session-bands="" {...peek.rowProps("nav")} {...peek.scrollProps}>
+      {onProfile === undefined ? (
+        <>
+          {activeBand}
+          {previousBand}
+        </>
+      ) : (
+        <>
+          <React.Profiler id="ActiveSessions.active" onRender={onProfile}>
+            {activeBand}
+          </React.Profiler>
+          <React.Profiler id="ActiveSessions.previous" onRender={onProfile}>
+            {previousBand}
+          </React.Profiler>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <>
-      <React.Profiler id="ActiveSessions.active" onRender={onProfile}>
-        {activeBand}
-      </React.Profiler>
-      <React.Profiler id="ActiveSessions.previous" onRender={onProfile}>
-        {previousBand}
-      </React.Profiler>
+      {bands}
+      {peek.card}
+      {/* Viewing a conversation is the one peek action that opens a surface of
+          its own — the shared overlay, which adopts the Session and mounts the
+          real plane. It reads the Session; the port above marks it. */}
+      <PeekConversation sessionId={viewedSessionId} onClose={() => setViewedSessionId(null)} />
     </>
   );
+}
+
+/**
+ * The Previous band's last row (VC-116): "Show more" while entries sit past the
+ * cap, "Show less" once the band has been widened. Plain buttons in the tab
+ * order, so Tab reaches them and Enter or Space presses them; they are not
+ * Session rows, so the band's arrow-key walk does not stop on them.
+ *
+ * Pressing one can unmount it — the last "Show more" leaves nothing to show,
+ * "Show less" leaves nothing to collapse — and focus would then fall to the
+ * document, dropping a keyboard reader out of the sidebar. So when the button
+ * that held focus is gone, its sibling takes it.
+ */
+function PreviousBandReach({
+  canShowMore,
+  canShowLess,
+  onShowMore,
+  onShowLess,
+}: {
+  canShowMore: boolean;
+  canShowLess: boolean;
+  onShowMore(): void;
+  onShowLess(): void;
+}) {
+  const moreRef = React.useRef<HTMLButtonElement>(null);
+  const lessRef = React.useRef<HTMLButtonElement>(null);
+  const pressed = React.useRef(false);
+  // Every commit, not keyed on the two flags: a press that changes neither must
+  // still be consumed here, or a later, unrelated commit would act on it.
+  React.useLayoutEffect(() => {
+    if (!pressed.current) return;
+    pressed.current = false;
+    const focused = document.activeElement;
+    if (focused !== null && focused !== document.body) return;
+    (moreRef.current ?? lessRef.current)?.focus();
+  });
+  if (!canShowMore && !canShowLess) return null;
+  const press = (action: () => void) => () => {
+    pressed.current = true;
+    action();
+  };
+  return (
+    <SidebarMenuItem className="flex gap-1">
+      {canShowMore ? (
+        <SidebarMenuButton
+          ref={moreRef}
+          size="sm"
+          onClick={press(onShowMore)}
+          className="h-6 w-auto gap-1.5 text-ui text-muted-foreground"
+        >
+          <CaretDownIcon weight="bold" aria-hidden className="size-3 shrink-0" />
+          <span>Show more</span>
+        </SidebarMenuButton>
+      ) : null}
+      {canShowLess ? (
+        <SidebarMenuButton
+          ref={lessRef}
+          size="sm"
+          onClick={press(onShowLess)}
+          className="h-6 w-auto gap-1.5 text-ui text-muted-foreground"
+        >
+          <CaretUpIcon weight="bold" aria-hidden className="size-3 shrink-0" />
+          <span>Show less</span>
+        </SidebarMenuButton>
+      ) : null}
+    </SidebarMenuItem>
+  );
+}
+
+/** Whether a row's Session is unread. A Draft names no Session, so it never is. */
+function unreadRow(rowId: string, unread: ReadonlySet<string>): boolean {
+  const sessionId = peekSessionId(rowId);
+  return sessionId !== null && unread.has(sessionId);
 }

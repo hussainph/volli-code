@@ -609,13 +609,12 @@ export const RAIL_FOOTER_ROW = cn(
 
 /**
  * The checkout row: ONE row, TWO targets, and every pixel of it belongs to one
- * of them (VC-406, revision 05).
+ * of them (VC-406).
  *
  * The row answers two questions — which tree is this, and what is going on in
- * it — so it is two buttons rather than one with two jobs. What the review
- * caught was the geometry around them: the identity read as though it were
- * indented from the page titles above it, and the strip between the two targets
- * was a dead band that looked pressable and was not.
+ * it — so it is two buttons rather than one with two jobs. The geometry must
+ * keep the identity aligned with page titles and leave no dead band that
+ * looks pressable between the two targets.
  *
  * So the rule is EDGE-ALIGNED TARGETS. The identity starts at the rail's own
  * content gutter, exactly where a page title starts (16px, 12px at the narrow
@@ -905,11 +904,24 @@ export function RailPanelSkeleton({ label, testId }: { label: string; testId: st
  * the row menu carries the rest, and two adjacent plus-glyphs read as one
  * control that someone drew twice.
  */
-export function NewFileRailAction({ onNewFile }: { onNewFile(): void }) {
+export function NewFileRailAction({
+  disabled = false,
+  onNewFile,
+}: {
+  /** Read-only (VC-576): the project's host cannot take a new file. */
+  disabled?: boolean;
+  onNewFile(): void;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button size="icon-sm" variant="ghost" aria-label="New file" onClick={onNewFile}>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="New file"
+          disabled={disabled}
+          onClick={onNewFile}
+        >
           <FilePlusIcon />
         </Button>
       </TooltipTrigger>

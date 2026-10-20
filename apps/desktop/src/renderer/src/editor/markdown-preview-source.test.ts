@@ -45,7 +45,7 @@ describe("previewSegments — ordinary markdown", () => {
   it("only ever CUTS: every segment is a verbatim slice of the file, in order", () => {
     // The observable form of "Preview reads and nothing else". Comparing the
     // input string with itself afterwards proves nothing — JavaScript strings
-    // are immutable (review round 1) — so this walks the output back onto the
+    // are immutable — so this walks the output back onto the
     // input and insists each piece is found where it should be, with nothing
     // rewritten, reordered or invented.
     const text = "---\ntitle: x\n---\n\n# Real\n\n<script>alert(1)</script>\n\nAfter *it*.\n";
@@ -133,11 +133,10 @@ describe("previewSegments — HTML that cannot be rendered safely", () => {
   });
 
   /*
-   * Review round 2 found both of these rendering with NO marker: the gate
-   * walked the parsed document's descendants and never its roots, and it made
-   * an allow decision about CSS from a regular expression. They are asserted
-   * here, at the surface, rather than only against the gate — what the ticket
-   * promises is a marker on the page, not a `false` in a predicate.
+   * Authored document roots and escaped CSS requests must leave a marker.
+   * Checking only parsed descendants misses roots, and a literal CSS pattern
+   * misses escapes. These cases are asserted at the surface, not only against
+   * the gate: the contract is a marker on the page, not a `false` in a predicate.
    */
   it("marks a block that authors a document root, handler or not", () => {
     expect(previewSegments('<body onload="alert(1)">body</body>\n')).toEqual([

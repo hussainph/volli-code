@@ -102,6 +102,7 @@ describe("WorktreeStateStrip", () => {
         status={{
           uncommitted: true,
           sequencerActive: false,
+          unmergedPaths: 0,
           aheadOfBase: 3,
           behindBase: 0,
           unpushed: 1,
@@ -221,7 +222,7 @@ describe("TicketChangesList markup", () => {
     expect(html).not.toContain('data-testid="ticket-changes-truncated"');
   });
 
-  // VC-406 review: a filter that matched none of the files it COULD see, over a
+  // VC-406: a filter that matched none of the files it COULD see, over a
   // snapshot that is already cut, was drawing "No files match" and dropping the
   // truncation notice with the list — a page claiming it had searched files it
   // never held.
@@ -855,7 +856,7 @@ describe("TicketChangesPanel reads", () => {
     expect(drawn('[data-testid="ticket-changes-empty"]')).toHaveLength(0);
   });
 
-  // VC-406 review: the filter can only run over the files this snapshot carries,
+  // VC-406: the filter can only run over the files this snapshot carries,
   // so over a CUT one an empty result is not evidence about the rest — and the
   // truncation notice used to disappear along with the list it rode in.
   it("does not claim to have searched the files the cap left out", async () => {

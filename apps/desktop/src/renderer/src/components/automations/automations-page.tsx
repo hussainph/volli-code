@@ -43,9 +43,11 @@ import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react/dist/csr/ClockCounterClockwise";
 import { TrashIcon } from "@phosphor-icons/react/dist/csr/Trash";
 
+import { effortLabel } from "@volli/session-presentation";
 import {
   TICKET_STATUS_LABELS,
   displayTicketId,
+  isAutomationRuntimePin,
   type Automation,
   type AutomationRun,
   type AutomationSkippedOccurrence,
@@ -58,9 +60,7 @@ import {
   historyEmptyCopy,
   listingRunTarget,
   runAutomationLabel,
-  runModelLabel,
   runStartLabel,
-  runModelTitle,
   runtimeLabel,
   skipCountLabel,
   skipReasonLabel,
@@ -80,6 +80,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@renderer/components/ui/alert-dialog";
+import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import {
@@ -604,8 +605,20 @@ function AutomationRail({
                     )}
                   />
                 </span>
-                <span className="w-full truncate text-label text-muted-foreground">
-                  {triggerLabel(automation.trigger)} · {runtimeLabel(automation.runtime)}
+                <span className="flex w-full min-w-0 flex-wrap items-center gap-x-1 text-label text-muted-foreground">
+                  {triggerLabel(automation.trigger)} ·{" "}
+                  {/* Only pins name a model. Inherited, tier and invalid
+                      runtimes keep their own labels. Effort carries its noun
+                      so `High` cannot read as an adjective on the model. */}
+                  {isAutomationRuntimePin(automation.runtime) ? (
+                    <ResolvedModelName
+                      selection={automation.runtime}
+                      className="max-w-full"
+                      trailing={`${effortLabel(automation.runtime.reasoningLevel)} effort`}
+                    />
+                  ) : (
+                    runtimeLabel(automation.runtime)
+                  )}
                 </span>
               </button>
             ))
@@ -975,7 +988,7 @@ function RunRow({
       }
       leading={<LightningIcon className="size-4 text-muted-foreground" />}
       primary={
-        <span className="flex min-w-0 items-center gap-1 text-ui" title={runModelTitle(run)}>
+        <span className="flex min-w-0 items-center gap-1 text-ui">
           <span className="shrink-0 text-foreground">{runAutomationLabel(run)}</span>
           {ticketNumber === undefined ? null : (
             <>
@@ -990,9 +1003,17 @@ function RunRow({
           <span aria-hidden className="text-muted-foreground">
             ·
           </span>
-          {/* The RESOLVED model this Session was born with, printed from the
-              Run's own row — never re-labelled through today's catalogue. */}
-          <span className="truncate text-muted-foreground">{runModelLabel(run)}</span>
+          {/* The Run's stored model is immutable; the catalogue supplies only
+              its display name. Unknown models retain their IDs. Let the shared
+              caption wrap rather than clipping it in an ancestor its reveal
+              cannot measure. */}
+          <span className="min-w-0 text-muted-foreground">
+            <ResolvedModelName
+              selection={run.model}
+              className="max-w-full"
+              trailing={`${effortLabel(run.model.reasoningLevel)} effort`}
+            />
+          </span>
           <span aria-hidden className="text-muted-foreground">
             ·
           </span>

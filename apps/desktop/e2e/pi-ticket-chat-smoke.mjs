@@ -1,14 +1,10 @@
 /**
  * E2e proof of the Pi-backed native adapter attaching a real TICKET chat,
- * against the BUILT app. New ticket chats attach the `pi` manifest
- * (`apps/desktop/src/main/session-runtime/pi-adapter.ts`) instead of OpenCode —
- * see that file's module doc comment. Nothing about the MODEL is pinned there:
- * the adapter runs whatever the Session recorded, so the model under test is
- * this file's own {@link MODEL_PIN} and nothing else. There is no fake server
- * anywhere in this probe (the retired `session-chat-smoke.mjs` had one): Pi
- * runs in-process in Electron main and this smoke drives ONE real
- * turn against a real provider, billed to a ChatGPT subscription ($0
- * marginal — keep it to one short prompt, never loop turns speculatively).
+ * against the BUILT app. Ticket chats attach the `pi` manifest through
+ * `packages/host-core/src/session-runtime/pi-adapter.ts`. The adapter runs the
+ * Session's recorded model; this probe explicitly chooses {@link MODEL_PIN}.
+ * Pi runs in Electron main with no fake server. Keep the real provider turn
+ * to one short prompt and never loop turns speculatively.
  *
  * One thing makes a real Pi turn possible at all, and it is set up before the
  * app ever launches: **credentials**. This smoke isolates `HOME` into a
@@ -435,7 +431,8 @@ async function installLiveActivityProbe(page, sessionId) {
       };
       probe.detach = window.api.sessionRpc.onEvent(receive);
       const reply = await window.api.sessionRpc.request({
-        procedure: "session.subscribe",
+        path: "session.subscribe",
+        type: "subscription",
         input: { sessionId: id, afterSequence: 0 },
       });
       if (!reply.ok || typeof reply.subscriptionId !== "string") {
@@ -520,7 +517,8 @@ function durableUserTextParts(frame) {
 async function readSessionEvidence(page, sessionId) {
   const response = await page.evaluate(async (id) => {
     return window.api.sessionRpc.request({
-      procedure: "session.snapshot",
+      path: "session.snapshot",
+      type: "query",
       input: { sessionId: id },
     });
   }, sessionId);
@@ -595,7 +593,8 @@ async function hasDurableUserMessage(page, sessionId, text) {
   return page.evaluate(
     async ({ id, expected }) => {
       const response = await window.api.sessionRpc.request({
-        procedure: "session.snapshot",
+        path: "session.snapshot",
+        type: "query",
         input: { sessionId: id },
       });
       if (!response.ok) throw new Error(`Session snapshot failed: ${JSON.stringify(response)}`);

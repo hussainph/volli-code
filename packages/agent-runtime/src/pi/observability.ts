@@ -157,10 +157,8 @@ export function providerErrorClassForStatus(status: number): ProviderErrorClass 
 /**
  * Reduces and records one observation without delivering it to the Session.
  *
- * This is the observability-only path for a fact that must not become durable
- * history, such as an allowed authority decision. It shares the reducer with
- * the normal tee so ephemeral local correlation can join it to a later tool
- * result, but it never awaits or calls the runtime observer.
+ * The normal tee uses this passive path, and fixture benchmarks can use it
+ * without a durable consumer. It never awaits or calls the runtime observer.
  */
 export function recordObservationToSink(
   reducer: ObservabilityReducer,
@@ -172,7 +170,7 @@ export function recordObservationToSink(
     const event = reducer.reduce(observation);
     if (event !== null) sink.record({ ...event, runId });
   } catch {
-    // A lost measurement, never a lost observation or authority decision.
+    // A lost measurement, never a lost observation.
   }
 }
 

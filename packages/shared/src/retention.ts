@@ -1,7 +1,7 @@
 /**
  * The archive-readiness verdict (CONCEPT #16, issue #76) — pure,
  * dependency-free domain logic. Lives here rather than
- * `apps/desktop/src/main/worktree/retention.ts` per the repo's convention
+ * `packages/host-core/src/worktree/retention.ts` per the repo's convention
  * (pure domain computations belong in `@volli/shared`); that main-process
  * module re-exports everything below so the merge-watch and its IPC surface
  * need no changes.
@@ -42,9 +42,8 @@ export interface ArchiveReadiness {
 
 /**
  * The pure retention verdict. Precedence:
- *  1. Keep pin — a HARD exemption from both paths (`reason: null`). This is the
- *     Vibe-Kanban anti-pattern encoded as a guarantee: their TTL sweep ignores
- *     its own pin; ours must not, so the pin short-circuits before any path.
+ *  1. Keep pin — a hard exemption from both paths (`reason: null`).
+ *     Short-circuit before either merge or TTL eligibility is evaluated.
  *  2. Merge path — a MERGED PR is archive-ready in any column.
  *  3. TTL path — a Done ticket whose Done entry is at least `ttlMs` old, whose
  *     PR isn't open, AND whose PR isn't UNKNOWN. A PR reads as unknown when

@@ -8,7 +8,7 @@
 # macOS will load it.
 #
 #     ./relink-libvips.sh --app "/Applications/Volli Code.app" \
-#                         --dylib ~/build/libvips-cpp.8.18.6.dylib
+#                         --dylib ~/build/libvips-cpp.8.18.7.dylib
 #
 #     ./relink-libvips.sh --app "/Applications/Volli Code.app" --verify
 #

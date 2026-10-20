@@ -14,7 +14,10 @@
  * own and then re-assert the prepend. This is VS Code's shell-integration
  * mechanism, and it is chosen here for the same reason: it is the only hook
  * that runs after arbitrary user startup without editing a single user file.
- * Nothing is written to the user's dotfiles — these scripts READ them.
+ * Nothing is written to the user's dotfiles — these scripts READ them. Like
+ * VS Code's, each script hands `ZDOTDIR` back to the user for exactly as long
+ * as their file runs, so `$ZDOTDIR`-relative startup (sibling files, history,
+ * completion dumps) finds their directory rather than ours.
  *
  * Two files re-assert, not one. A login shell reads `.zshrc` then `.zlogin`, so
  * `.zlogin` is the last word there; but a nested interactive `zsh` reads
@@ -50,12 +53,41 @@ const HEADER = "# Volli shell integration. Generated — edits are overwritten."
  * Sources the user's own file of the same name, if they have one. Quoted and
  * existence-checked: a missing file is the common case (few people have all
  * four), and an unquoted path breaks on the first user whose home has a space.
+ *
+ * `ZDOTDIR` is the user's own while their file runs, and ours again after it.
+ * Their file reads it the way their own terminal sets it — a sibling sourced
+ * from `$ZDOTDIR`, a plugin manager's default list, compinit's dump — and with
+ * ours in place every one of those lands in Volli's userData instead. Ours goes
+ * back afterwards so zsh keeps reading the rest of this chain. `afterSource`
+ * runs between the two, while the user's value is still visible.
  */
-function sourceUserFile(name: ZshInitFilename): string[] {
+function sourceUserFile(name: ZshInitFilename, afterSource: string[] = []): string[] {
   return [
+    "volli_own_zdotdir=${ZDOTDIR:-}",
     `if [ -r "$${VOLLI_USER_ZDOTDIR_ENV}/${name}" ]; then`,
+    `  ZDOTDIR="$${VOLLI_USER_ZDOTDIR_ENV}"`,
     `  . "$${VOLLI_USER_ZDOTDIR_ENV}/${name}"`,
+    ...afterSource.map((line) => `  ${line}`),
     "fi",
+    "ZDOTDIR=$volli_own_zdotdir",
+    "unset volli_own_zdotdir",
+  ];
+}
+
+/**
+ * macOS `/etc/zshrc` sets `HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history` before the
+ * user's `.zshrc` runs — while `ZDOTDIR` is still ours — and oh-my-zsh and
+ * friends only set it when it is empty. Left alone, the user's history would be
+ * kept in Volli's userData, out of reach of their own terminal. A `HISTFILE`
+ * the user pointed anywhere else is theirs, and stays. The pattern is quoted so
+ * a glob character in our directory matches literally.
+ */
+function restoreUserHistfile(): string[] {
+  return [
+    "# History set from our ZDOTDIR before the user's .zshrc ran goes back to theirs.",
+    'case "${HISTFILE:-}" in',
+    `  "$ZDOTDIR"/*) HISTFILE="$${VOLLI_USER_ZDOTDIR_ENV}/.zsh_history" ;;`,
+    "esac",
   ];
 }
 
@@ -87,22 +119,18 @@ function zshenv(): string[] {
   return [
     HEADER,
     "",
-    "# Where zsh found this file — restored below, so the rest of the chain runs.",
-    "volli_own_zdotdir=${ZDOTDIR:-}",
     `: \${${VOLLI_USER_ZDOTDIR_ENV}:=$HOME}`,
     `export ${VOLLI_USER_ZDOTDIR_ENV}`,
     "",
-    ...sourceUserFile(".zshenv"),
-    "",
     "# The user's .zshenv is the only file that can legitimately repoint ZDOTDIR.",
     "# If it did, that is where the rest of their startup lives.",
-    'if [ -n "${ZDOTDIR:-}" ] && [ "$ZDOTDIR" != "$volli_own_zdotdir" ]; then',
-    `  ${VOLLI_USER_ZDOTDIR_ENV}=$ZDOTDIR`,
-    `  export ${VOLLI_USER_ZDOTDIR_ENV}`,
-    "fi",
-    "ZDOTDIR=$volli_own_zdotdir",
+    ...sourceUserFile(".zshenv", [
+      'if [ -n "${ZDOTDIR:-}" ] && [ "$ZDOTDIR" != "$volli_own_zdotdir" ]; then',
+      `  ${VOLLI_USER_ZDOTDIR_ENV}=$ZDOTDIR`,
+      `  export ${VOLLI_USER_ZDOTDIR_ENV}`,
+      "fi",
+    ]),
     "export ZDOTDIR",
-    "unset volli_own_zdotdir",
     "",
   ];
 }
@@ -111,6 +139,7 @@ function zshenv(): string[] {
 export function renderZshInitFile(name: ZshInitFilename): string {
   if (name === ".zshenv") return zshenv().join("\n");
   const lines = [HEADER, "", ...sourceUserFile(name)];
+  if (name === ".zshrc") lines.push("", ...restoreUserHistfile());
   // `.zshrc` covers a nested interactive shell, which never reaches `.zlogin`;
   // `.zlogin` is the last word in the login shell every Volli PTY spawns.
   if (name === ".zshrc" || name === ".zlogin") {

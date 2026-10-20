@@ -1,5 +1,5 @@
 /**
- * What a clicked alert actually does to this window (VC-295 rule 6, round 2).
+ * What a clicked alert actually does to this window (VC-295 rule 6).
  *
  * The surface is a port so the ORDER can be asserted: "select the Session
  * first, then reveal the item" is the whole of the rule, and a test that only

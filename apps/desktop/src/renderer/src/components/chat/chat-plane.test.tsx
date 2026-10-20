@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The transcript half of VC-49's contract, rendered.
  *
@@ -12,14 +13,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 import type { UIMessage } from "ai";
 
-import { ChatTranscriptRow, ChatTurn, SessionBlocker, type TurnContext } from "./chat-plane";
+import {
+  ChatTranscriptRow,
+  ChatTurn,
+  PendingMessage,
+  SessionBlocker,
+  type TurnContext,
+} from "./chat-plane";
 
 const context: TurnContext = {
   onOpenFile: () => undefined,
   interactions: new Map(),
-  open: [],
-  resolving: new Set(),
-  onResolve: () => Promise.resolve(true),
 };
 
 const SKILL_BODY = "# Hussain Sol\n\nThe fifteen kilobytes the chip stands for.";
@@ -29,6 +33,33 @@ function turn(message: UIMessage): string {
 }
 
 describe("the desktop transcript-row mapping", () => {
+  it("draws the portable refresh fact as a quiet expandable system row", () => {
+    const [row] = projectTranscriptRows(
+      [],
+      [],
+      [],
+      [
+        {
+          sequence: 8,
+          afterMessageId: null,
+          trigger: "cold-turn",
+          added: ["write"],
+          changed: ["codemode"],
+        },
+      ],
+    );
+    if (row === undefined) throw new Error("expected a refresh row");
+    const html = renderToStaticMarkup(
+      <ChatTranscriptRow row={row} context={context} live={false} />,
+    );
+    expect(html).toContain("Tools updated: 1 added");
+    expect(html).toContain("Cold turn");
+    expect(html).toContain("codemode (updated)");
+    expect(html).toContain("<details");
+    expect(html).not.toContain("is-user");
+    expect(html).not.toContain('role="alert"');
+  });
+
   it("draws a projected host notice without entering the user-message component", () => {
     const modelText =
       '[Subagent Session child-1 ("Review tests") completed its task. Read its answer.]';
@@ -79,7 +110,9 @@ describe("a user turn that delivered a skill", () => {
     const html = turn(message);
 
     expect(html).toContain("can you tell me what /hussain-sol does?");
-    expect(html).toContain('aria-label="Skills delivered with this message"');
+    // A labelled generic div is ignored by assistive tech; the role makes the
+    // label count (VC-516).
+    expect(html).toContain('role="group" aria-label="Skills delivered with this message"');
     // The chip is the file's one vocabulary for a skill name: a Badge.
     expect(html).toMatch(/data-slot="badge"[^>]*>hussain-sol</);
     expect(html).not.toContain("fifteen kilobytes");
@@ -142,5 +175,125 @@ describe("SessionBlocker hit testing", () => {
       /^<div class="pointer-events-none"><div\b[^>]*\bdata-slot="session-blocker"[^>]*\bclass="[^"]*\bpointer-events-auto\b/,
     );
     expect(html).toContain('aria-label="Dismiss"');
+  });
+});
+
+describe("VC-758 message and work status rows", () => {
+  it("does not add a delivery footer to historical or interaction-answer messages", () => {
+    const html = turn({ id: "old", role: "user", parts: [{ type: "text", text: "old words" }] });
+    expect(html).not.toContain("message-delivery");
+    expect(html).not.toContain("Recorded");
+  });
+  it("does not flash committed steering state during server rendering", () => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[{ id: "steer", role: "user", parts: [{ type: "text", text: "focus" }] }]}
+        context={{
+          ...context,
+          deliveryLabels: new Map([["steer", "Pending"]]),
+          steeringMessages: new Set(["steer"]),
+        }}
+        live={false}
+      />,
+    );
+    expect(html).not.toContain("message-delivery");
+  });
+  it.each(["send", "steer", "queue"] as const)(
+    "renders %s words immediately without pending state before the delay",
+    (delivery) => {
+      const html = renderToStaticMarkup(
+        <PendingMessage
+          message={{ id: "pending", text: "my words", state: "sending", delivery }}
+          context={context}
+        />,
+      );
+      expect(html).toContain("my words");
+      expect(html).not.toContain("message-delivery");
+      expect(html).not.toContain("Delivered");
+    },
+  );
+  it("keeps durable non-delivered states visible", () => {
+    for (const label of ["Not delivered", "Delivery unconfirmed"] as const) {
+      const html = renderToStaticMarkup(
+        <ChatTurn
+          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+          context={{ ...context, deliveryLabels: new Map([["user", label]]) }}
+          live={false}
+        />,
+      );
+      expect(html).toContain(`>${label}</span>`);
+    }
+  });
+  it.each(["Delivery unconfirmed", "Not delivered"])(
+    "keeps the explicit %s explanation immediately visible",
+    (label) => {
+      const html = renderToStaticMarkup(
+        <ChatTurn
+          messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+          context={context}
+          live={false}
+          deliveryLabel={label}
+        />,
+      );
+      expect(html).toContain(`>${label}</span>`);
+    },
+  );
+  it.each(["Delivered", "Recorded"])("does not draw a successful %s footer", (label) => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+        context={{ ...context, deliveryLabels: new Map([["user", "Delivered"]]) }}
+        live={false}
+        deliveryLabel={label}
+      />,
+    );
+    expect(html).not.toContain("message-delivery");
+    expect(html).not.toContain(label);
+  });
+  it.each(["send", "steer"] as const)(
+    "keeps accepted held %s quiet even before durable proof arrives",
+    (delivery) => {
+      const html = renderToStaticMarkup(
+        <PendingMessage
+          message={{
+            id: "user",
+            text: "hello",
+            state: "sending",
+            delivery,
+            deliveryAccepted: true,
+          }}
+          context={{ ...context, deliveryLabels: new Map([["user", "Pending"]]) }}
+        />,
+      );
+      expect(html).toContain("hello");
+      expect(html).not.toContain("message-delivery");
+      expect(html).not.toContain("Delivered");
+      expect(html).not.toContain("Pending");
+    },
+  );
+  it("does not flash accepted held queue ownership before the delay", () => {
+    const html = renderToStaticMarkup(
+      <PendingMessage
+        message={{
+          id: "queued",
+          text: "later",
+          state: "sending",
+          delivery: "queue",
+          deliveryAccepted: true,
+        }}
+        context={context}
+      />,
+    );
+    expect(html).not.toContain("message-delivery");
+  });
+  it("does not draw a durable Delivered footer without a local override", () => {
+    const html = renderToStaticMarkup(
+      <ChatTurn
+        messages={[{ id: "user", role: "user", parts: [{ type: "text", text: "hello" }] }]}
+        context={{ ...context, deliveryLabels: new Map([["user", "Delivered"]]) }}
+        live={false}
+      />,
+    );
+    expect(html).not.toContain("message-delivery");
   });
 });

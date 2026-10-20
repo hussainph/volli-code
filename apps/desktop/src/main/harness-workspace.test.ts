@@ -15,7 +15,7 @@ import { getHarnessAdapter } from "@volli/shared";
 import type { HarnessAdapter, HarnessId } from "@volli/shared";
 
 import { ensureHarnessWorkspaceFiles, excludeWithBlock } from "./harness-workspace";
-import { runGitCapturingAsync } from "./worktree";
+import { runGitCapturingAsync } from "@volli/host-core/worktree";
 
 let scratchRoot: string | null = null;
 

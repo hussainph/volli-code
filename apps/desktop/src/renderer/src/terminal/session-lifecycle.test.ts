@@ -13,8 +13,7 @@ import {
   closeTerminalPane,
   closeTerminalSession,
   closeTicketSession,
-  killProjectSessions,
-  killProjectTicketSessions,
+  forgetProjectSessions,
   killTicketSessions,
   renameTerminalSession,
 } from "./session-lifecycle";
@@ -153,41 +152,6 @@ describe("closeTerminalPane", () => {
 
     expect(vi.mocked(disposeEngine)).not.toHaveBeenCalled();
     expect(killMock).not.toHaveBeenCalled();
-  });
-});
-
-describe("killProjectSessions", () => {
-  it("kills live tabs, skips exited ones, disposes every engine, and forgets the project", () => {
-    useSessionsStore.getState().addSession(projectScope("p"), "s1", shellLaunch("Terminal 1"));
-    useSessionsStore.getState().addSession(projectScope("p"), "s2", shellLaunch("Terminal 2"));
-    useSessionsStore.getState().markExited("s1", 130);
-    useSessionsStore.getState().addSession(projectScope("other"), "o1", shellLaunch("Terminal 1"));
-
-    killProjectSessions("p");
-
-    expect(killMock).toHaveBeenCalledTimes(1);
-    expect(killMock).toHaveBeenCalledWith("s2");
-    expect(vi.mocked(disposeEngine)).toHaveBeenCalledWith("s1");
-    expect(vi.mocked(disposeEngine)).toHaveBeenCalledWith("s2");
-    expect(useSessionsStore.getState().byOwner["p"]).toBeUndefined();
-    expect(useSessionsStore.getState().byOwner["other"]?.tabs).toHaveLength(1);
-  });
-
-  it("tears down every pane inside split tabs", () => {
-    useSessionsStore.getState().addSession(projectScope("p"), "s1", shellLaunch("Terminal 1"));
-    useSessionsStore.getState().addSplit("p", "s1", "s1", "s2", "horizontal");
-
-    killProjectSessions("p");
-
-    expect(vi.mocked(disposeEngine)).toHaveBeenCalledTimes(2);
-    expect(killMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("is a no-op for a project with no sessions", () => {
-    killProjectSessions("never-added");
-
-    expect(killMock).not.toHaveBeenCalled();
-    expect(vi.mocked(disposeEngine)).not.toHaveBeenCalled();
   });
 });
 
@@ -335,32 +299,41 @@ describe("renameTerminalSession", () => {
   });
 });
 
-describe("killProjectTicketSessions", () => {
-  it("kills a project's ticket sessions (including ones the board no longer lists) and leaves other projects and Board Sessions alone", () => {
+// VC-796: the host ends a removed project's PTYs before its delete, for every
+// window; the renderer only forgets the views that drew them.
+describe("forgetProjectSessions", () => {
+  it("disposes and forgets the project's Board and ticket sessions, archived tickets' too, killing nothing", () => {
+    useSessionsStore.getState().addSession(projectScope("p"), "sp", shellLaunch("Terminal 1"));
+    useSessionsStore.getState().addSplit("p", "sp", "sp", "sp2", "horizontal");
     useSessionsStore.getState().addSession(ticketScope("p", "t1"), "s1", shellLaunch("Session 1"));
     useSessionsStore.getState().addSession(ticketScope("p", "t2"), "s2", shellLaunch("Session 1"));
+    useSessionsStore.getState().markExited("s2", 0);
     useSessionsStore.getState().addSession(ticketScope("q", "t3"), "s3", shellLaunch("Session 1"));
-    useSessionsStore.getState().addSession(projectScope("p"), "sp", shellLaunch("Terminal 1"));
+    useSessionsStore.getState().addSession(projectScope("q"), "sq", shellLaunch("Terminal 1"));
 
-    killProjectTicketSessions("p");
+    forgetProjectSessions("p");
 
-    expect(useSessionsStore.getState().byOwner["t1"]).toBeUndefined();
-    expect(useSessionsStore.getState().byOwner["t2"]).toBeUndefined();
-    // A ticket under a different project is untouched, as is p's Board Session.
+    for (const ownerId of ["p", "t1", "t2"]) {
+      expect(useSessionsStore.getState().byOwner[ownerId]).toBeUndefined();
+    }
+    expect(
+      vi
+        .mocked(disposeEngine)
+        .mock.calls.map(([sessionId]) => sessionId)
+        .toSorted(),
+    ).toEqual(["s1", "s2", "sp", "sp2"]);
+    // Another project's sessions are untouched, and no PTY is killed from here.
     expect(useSessionsStore.getState().byOwner["t3"]?.tabs).toHaveLength(1);
-    expect(useSessionsStore.getState().byOwner["p"]?.tabs).toHaveLength(1);
-    expect(killMock).toHaveBeenCalledWith("s1");
-    expect(killMock).toHaveBeenCalledWith("s2");
-    expect(killMock).not.toHaveBeenCalledWith("s3");
-    expect(killMock).not.toHaveBeenCalledWith("sp");
+    expect(useSessionsStore.getState().byOwner["q"]?.tabs).toHaveLength(1);
+    expect(killMock).not.toHaveBeenCalled();
   });
 
-  it("is a no-op when the project has no ticket sessions", () => {
-    useSessionsStore.getState().addSession(projectScope("p"), "sp", shellLaunch("Terminal 1"));
+  it("is a no-op for a project with no sessions", () => {
+    useSessionsStore.getState().addSession(projectScope("q"), "sq", shellLaunch("Terminal 1"));
 
-    killProjectTicketSessions("p");
+    forgetProjectSessions("never-added");
 
-    expect(killMock).not.toHaveBeenCalled();
-    expect(useSessionsStore.getState().byOwner["p"]?.tabs).toHaveLength(1);
+    expect(vi.mocked(disposeEngine)).not.toHaveBeenCalled();
+    expect(useSessionsStore.getState().byOwner["q"]?.tabs).toHaveLength(1);
   });
 });

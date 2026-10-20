@@ -18,7 +18,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { BootstrapResult, VolliIpcChannel } from "../../ipc/contract";
 import type { BindingHandle, NativeAttachmentSpec, ObservationSink } from "@volli/session-engine";
 import { sessionRootThreadId } from "@volli/session-engine";
-import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 import type {
   AgentRuntime,
   RuntimeAttachmentHandle,
@@ -40,14 +39,18 @@ vi.mock("electron", () => ({
   app: { getPath: () => "/tmp/volli-secrecy" },
 }));
 
-import { openTestDb, type TestDb } from "../db/test-helpers";
-import { readSecret } from "../db/secrets-repo";
-import { registerDataIpcHandlers } from "../data-ipc";
-import { createPiNativeAdapter, type PiRuntimeContext } from "../session-runtime/pi-adapter";
-import { BRAVE_SEARCH_KEY_SECRET, EXA_SEARCH_KEY_SECRET, WebCredentialStore } from "./credential";
+import { openTestDb, type TestDb, createTestSessionEngine } from "@volli/host-core/testing";
+import { readSecret } from "@volli/host-core/db";
+import { registerDataIpcHandlers } from "../data-ipc.test-support";
+import { createPiNativeAdapter, type PiRuntimeContext } from "@volli/host-core/session-runtime";
+import {
+  BRAVE_SEARCH_KEY_SECRET,
+  EXA_SEARCH_KEY_SECRET,
+  WebCredentialStore,
+  webPortsFor,
+  WebAccessSettings,
+} from "@volli/host-core/integrations";
 import { registerWebAccessIpcHandlers } from "./ipc";
-import { webPortsFor } from "./ports";
-import { WebAccessSettings } from "./settings";
 
 const KEY = "BSA-super-secret-brave-key-42";
 const EXA_KEY = "exa-super-secret-second-key-77";
@@ -93,9 +96,6 @@ class RecordingSink implements ObservationSink {
 const context: PiRuntimeContext = {
   role: "project",
   ticketId: null,
-  location: "main-checkout",
-  authorityPolicy: DEFAULT_AUTHORITY_POLICY,
-  priorAuthorityDenials: 0,
   projectId: "project-1",
   rootThreadId: sessionRootThreadId("session-1"),
   brief: "Find out how people test Electron main.",
@@ -105,6 +105,7 @@ const context: PiRuntimeContext = {
 };
 
 let ctx: TestDb;
+let fixtureSessionEngine: ReturnType<typeof createTestSessionEngine>;
 let settings: WebAccessSettings;
 
 async function invoke(channel: VolliIpcChannel, ...args: unknown[]): Promise<unknown> {
@@ -138,6 +139,7 @@ async function attach(): Promise<{ runtime: SpecRecordingRuntime; sink: Recordin
 beforeEach(() => {
   handlers.clear();
   ctx = openTestDb();
+  fixtureSessionEngine = createTestSessionEngine(ctx.db);
   settings = new WebAccessSettings({
     db: ctx.db,
     credentials: {
@@ -146,7 +148,7 @@ beforeEach(() => {
     },
   });
   registerWebAccessIpcHandlers(settings);
-  registerDataIpcHandlers({ ok: true, db: ctx.db }, {});
+  registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
 });
 
 afterEach(() => {

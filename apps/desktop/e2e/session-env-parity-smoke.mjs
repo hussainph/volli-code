@@ -145,7 +145,8 @@ async function waitForInteractiveEnv(socketPath, cwd) {
 async function chooseLowCostModel(page) {
   const choice = await page.evaluate(async () => {
     const inspected = await window.api.sessionRpc.request({
-      procedure: "modelAccess.inspect",
+      path: "modelAccess.inspect",
+      type: "query",
       input: {},
     });
     if (!inspected.ok) return { ok: false, error: inspected };
@@ -178,7 +179,8 @@ async function chooseLowCostModel(page) {
 async function createStructuredSession(page, projectId) {
   const started = await page.evaluate(async (pid) => {
     const created = await window.api.sessionRpc.request({
-      procedure: "sessions.create",
+      path: "sessions.create",
+      type: "mutation",
       input: {
         operationId: crypto.randomUUID(),
         projectId: pid,
@@ -188,7 +190,8 @@ async function createStructuredSession(page, projectId) {
     });
     if (!created.ok) return { ok: false, step: "create", error: created.error };
     const attached = await window.api.sessionRpc.request({
-      procedure: "sessions.attach",
+      path: "sessions.attach",
+      type: "mutation",
       input: { operationId: crypto.randomUUID(), sessionId: created.data.sessionId },
     });
     if (!attached.ok) return { ok: false, step: "attach", error: attached.error };
@@ -234,7 +237,8 @@ async function submitStructuredProbe(page, sessionId, command) {
   const submitted = await page.evaluate(
     async ({ id, text }) =>
       window.api.sessionRpc.request({
-        procedure: "session.command",
+        path: "session.command",
+        type: "mutation",
         input: {
           commandId: crypto.randomUUID(),
           sessionId: id,
@@ -261,7 +265,8 @@ async function submitStructuredProbe(page, sessionId, command) {
 async function completedStructuredBash(page, sessionId) {
   return page.evaluate(async (id) => {
     const snapshot = await window.api.sessionRpc.request({
-      procedure: "session.snapshot",
+      path: "session.snapshot",
+      type: "query",
       input: { sessionId: id },
     });
     if (!snapshot.ok) return { ok: false, error: snapshot.error };

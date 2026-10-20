@@ -7,10 +7,10 @@ import "./typeset.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { errorMessage } from "@volli/shared";
-import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 import { toast } from "sonner";
 
 import App from "./App";
+import { BootErrorPanel } from "./components/boot-error-panel";
 import {
   announcePendingArmedRunSettlement,
   receivePendingArmedRuns,
@@ -21,12 +21,18 @@ import { activateNotificationTarget } from "./lib/notification-activation";
 import { desktopNotificationSurface } from "./lib/notification-surface";
 import { sessionStartToastModel } from "./components/sessions/session-start-toast";
 import { chatTabId } from "./components/ticket/ticket-chat-tab";
-import { boot, refreshPlanningData } from "./lib/boot";
+import { boot, refreshPlanningData, startBoardProtocolIfEnabled } from "./lib/boot";
+import { installRendererLogForwarding } from "./lib/renderer-log";
+import { bindRemoteSessionsWhileCloud } from "@renderer/lib/remote-sessions";
 import { toastError } from "./lib/toast";
 import { useBoardStore } from "./stores/board";
 import { useChatSessionsStore } from "./stores/chat-sessions";
 import { useProjectsStore } from "./stores/projects";
 import { useThemeStore } from "./stores/theme";
+import { useExperimentsStore } from "./stores/experiments";
+import { attachThisMacWhileCloud } from "./stores/host-sources";
+import { attachRemoteHostsWhileCloud } from "./stores/remote-host-source";
+import { attachRemoteLogSourcesForPage } from "./components/logs/remote-log-sources";
 import { useUpdateStore } from "./stores/update";
 import { useWorkspaceStore } from "./stores/workspace";
 import { watchSystemAppearance } from "./theme/canvas-paint";
@@ -36,18 +42,9 @@ import { initTerminalAppearance } from "./terminal/appearance";
  *  must be seen, not glimpsed (same reasoning as `toastError`'s longer window). */
 const INTERRUPT_TOAST_DURATION_MS = 8000;
 
-/** Full-window failure panel — mirrors the app's empty-state styling (see main-content.tsx's EmptyProjectsState). */
-function BootErrorPanel({ error }: { error: string }) {
-  return (
-    <div className="flex h-svh w-full flex-col items-center justify-center gap-2 bg-background text-center">
-      <WarningCircleIcon className="size-8 text-muted-foreground" />
-      <h2 className="text-heading font-semibold text-foreground">Volli couldn't load its data</h2>
-      <p className="max-w-md text-sm text-muted-foreground">{error}</p>
-    </div>
-  );
-}
-
 async function main() {
+  // This window's warnings and errors join main's log (VC-699).
+  installRendererLogForwarding();
   const root = createRoot(document.getElementById("root")!);
 
   // Kick off the Ghostty-config fetch immediately, CONCURRENT with boot() —
@@ -97,6 +94,13 @@ async function main() {
       <App />
     </StrictMode>,
   );
+
+  // With the `cloud` flag on, the board moves onto the host protocol: the
+  // board router over this window's IPC bridge, its change feed, and the
+  // pending layer (VC-565). The board boot painted stays on screen until each
+  // Workspace's snapshot lands. With the flag off this reads the flag and
+  // does nothing else.
+  void startBoardProtocolIfEnabled();
 
   // Auto-title landings (VC-81). A retitle main performed itself has no
   // renderer behind it to move labels the way a rename does, and
@@ -200,6 +204,23 @@ async function main() {
     .catch(() => {
       // A failed boot read leaves the icon unrendered; the next push heals it.
     });
+
+  // The host's experiment flags (VC-576): what flagged surfaces such as the
+  // title bar's host chip read. Off until the answer lands; a failure stays off.
+  void useExperimentsStore.getState().ensure();
+  // This Mac, the in-process host, feeds the host-connection store while
+  // `cloud` is on, and nothing is attached while it is off; VC-700's registry
+  // attaches remote hosts beside it. Only flagged surfaces read it.
+  attachThisMacWhileCloud();
+  attachRemoteHostsWhileCloud();
+  // Sessions on a remote host (VC-713): their chat, listing and re-reads go
+  // over each project's Workspace link while `cloud` is on; off, nothing is
+  // registered and every Session is This Mac's.
+  bindRemoteSessionsWhileCloud();
+  // Each connected remote host's log, in the one log viewer (VC-712): only
+  // hosts that store lists, so nothing registers while `cloud` is off. The
+  // page owns it: pagehide unregisters every source and stops its readings.
+  attachRemoteLogSourcesForPage({ shown: () => useProjectsStore.getState().selectedProjectId });
 
   // Main owns one durable armed-column countdown per move (VC-226). Subscribe
   // before priming so a window opened mid-countdown cannot miss a replacement

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
- * The loud gate over one raw HTML block (VC-307, review round 2).
+ * The loud gate over one raw HTML block (VC-307).
  *
- * Round 1 scanned the block with regular expressions and round 1's review broke
- * that with valid HTML: `<div title=">" onclick=…>` hid the handler behind a
- * quoted delimiter, and `href="java&#x73;cript:…"` hid the scheme behind an
- * entity. Both are now judged on the PARSED document, which is the only reading
+ * Valid HTML can hide unsafe content from regular expressions:
+ * `<div title=">" onclick=…>` hides the handler behind a quoted delimiter,
+ * and `href="java&#x73;cript:…"` hides the scheme behind an entity. Both are
+ * judged on the PARSED document, which is the only reading
  * of untrusted markup that agrees with the browser's.
  */
 import { describe, expect, it } from "vite-plus/test";
@@ -42,8 +42,8 @@ describe("renderableHtmlBlock", () => {
     expect(renderableHtmlBlock('<svg>\n<image href="https://evil.example/x.png"/>\n</svg>')).toBe(
       false,
     );
-    // The gap review round 1 found by widening the sanitizer's own schema: a
-    // list derived from it would have followed it. This one does not.
+    // The gate's allowlist is independent of the sanitizer's schema, so
+    // widening that schema must not admit MathML here.
     expect(renderableHtmlBlock("<math>\n<mtext>x</mtext>\n</math>")).toBe(false);
   });
 
@@ -51,8 +51,7 @@ describe("renderableHtmlBlock", () => {
     expect(renderableHtmlBlock('<div onclick="steal()">hi</div>')).toBe(false);
     expect(renderableHtmlBlock("<img src='x.png' ONERROR=alert(1)>")).toBe(false);
     expect(renderableHtmlBlock('<p\n  onmouseover = "x()"\n>hi</p>')).toBe(false);
-    // A `>` inside a quoted value ends no tag. The regex scan this replaced
-    // stopped there and never saw the handler (review round 1).
+    // A `>` inside a quoted value ends no tag; the handler must still be seen.
     expect(renderableHtmlBlock('<div title=">" onclick="alert(1)">safe</div>')).toBe(false);
   });
 
@@ -103,8 +102,8 @@ describe("renderableHtmlBlock", () => {
 
   it("refuses a block that authors a document root, with or without a handler", () => {
     // A parser gives every fragment an html/head/body of its own, so the tree
-    // cannot tell an authored root from an invented one — which is how
-    // `<body onload>` reached the page unmarked (review round 2).
+    // cannot tell an authored root from an invented one. The source scan must
+    // detect `<body onload>` even when the parsed tree hides it.
     expect(renderableHtmlBlock('<body onload="alert(1)">body</body>')).toBe(false);
     expect(renderableHtmlBlock('<html onclick="alert(1)"><body>html</body></html>')).toBe(false);
     expect(renderableHtmlBlock("<body>plain</body>")).toBe(false);
@@ -116,6 +115,75 @@ describe("renderableHtmlBlock", () => {
 
   it("still reads a root named inside a comment as a comment", () => {
     expect(renderableHtmlBlock("<div>\n<!-- <body onload=x> -->\n<b>hi</b>\n</div>")).toBe(true);
+  });
+
+  // CodeQL #25. The comment pass used to be `/<!--[\s\S]*?-->/g`, which is not
+  // how a parser ends a comment: `<!-->` and `<!--->` are complete (empty)
+  // comments, `--!>` closes one too, and an unclosed `<!--` runs to the end.
+  // So the regex swallowed a root the parser then built, and the raw scan for
+  // `<body` never saw it — the round-2 `<body onload>` hole, reopened.
+  describe("a comment the parser ends somewhere a regular expression would not", () => {
+    const hidden = [
+      '<body onload="alert(1)">',
+      '<html onclick="alert(1)">',
+      "<script>alert(1)</script>",
+    ];
+
+    it.each(hidden)("refuses an abruptly closed `<!-->` with %s behind it", (markup) => {
+      expect(renderableHtmlBlock(`<!--> ${markup} -->`)).toBe(false);
+    });
+
+    it.each(hidden)("refuses an abruptly closed `<!--->` with %s behind it", (markup) => {
+      expect(renderableHtmlBlock(`<!---> ${markup} -->`)).toBe(false);
+    });
+
+    it.each(hidden)("refuses a comment closed by `--!>` with %s behind it", (markup) => {
+      expect(renderableHtmlBlock(`<!-- note --!> ${markup} -->`)).toBe(false);
+    });
+
+    it.each(hidden)("refuses an unterminated `<!--` with %s inside it", (markup) => {
+      expect(renderableHtmlBlock(`<p>hi</p>\n<!-- ${markup}`)).toBe(false);
+      expect(renderableHtmlBlock(`${markup}\n<!-- unterminated`)).toBe(false);
+    });
+
+    it.each(hidden)("refuses overlapping `<!<!---->--` with %s behind it", (markup) => {
+      // Deleting the inner `<!---->` joins `<!` and `--` into a fresh opener.
+      expect(renderableHtmlBlock(`<!<!---->-- ${markup} -->`)).toBe(false);
+      expect(renderableHtmlBlock(`<!-- <!-- --> ${markup} -->`)).toBe(false);
+    });
+
+    it("refuses an unterminated comment even with nothing hidden in it", () => {
+      // The parser draws nothing from the opener to the end of the block, and
+      // that silent hole is what the marker exists to announce.
+      expect(renderableHtmlBlock("<p>hi</p>\n<!-- TODO")).toBe(false);
+    });
+
+    it("refuses an opener that only looks like a comment inside an attribute value", () => {
+      // No comment pass over raw text can see quoting; the parsed roots can.
+      expect(
+        renderableHtmlBlock('<div title="<!--"><body onload="alert(1)"><div title="-->">x</div>'),
+      ).toBe(false);
+      expect(
+        renderableHtmlBlock('<div title="<!--"><html onclick="alert(1)"><div title="-->">x</div>'),
+      ).toBe(false);
+      expect(renderableHtmlBlock('<div title="<!--"><frameset><div title="-->">x</div>')).toBe(
+        false,
+      );
+    });
+
+    it("refuses comment text the standard rules out, even with nothing behind it", () => {
+      expect(renderableHtmlBlock("<p>x</p>\n<!-- a <!-- b -->")).toBe(false);
+      expect(renderableHtmlBlock("<p>x</p>\n<!-- a <!--->")).toBe(false);
+      expect(renderableHtmlBlock("<p>x</p>\n<!-- a --!> b -->")).toBe(false);
+      expect(renderableHtmlBlock("<p>x</p>\n<!-->")).toBe(false);
+    });
+
+    it("still reads well-formed comments, empty ones included", () => {
+      expect(renderableHtmlBlock("<!---->")).toBe(true);
+      expect(renderableHtmlBlock("<div>\n<!-- a -- b -->\n<b>hi</b>\n</div>")).toBe(true);
+      expect(renderableHtmlBlock("<!-- one -->\n<p>x</p>\n<!-- two -->")).toBe(true);
+      expect(renderableHtmlBlock('<div title="-->">x</div>')).toBe(true);
+    });
   });
 
   it("refuses a doctype, a processing instruction and CDATA", () => {
@@ -165,8 +233,8 @@ describe("renderableHtmlBlock", () => {
   });
 
   it("refuses a style with any structure in it, rather than reading the CSS", () => {
-    // The escape below is what review round 2 walked past a `url(` pattern: a
-    // regular expression cannot read CSS, so nothing structural is admitted.
+    // An escaped function name bypasses a literal `url(` pattern. A regular
+    // expression cannot read CSS, so nothing structural is admitted.
     expect(
       renderableHtmlBlock(
         '<div style="background-image:u\\72l(https://tracker.invalid/x.png)">c</div>',

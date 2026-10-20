@@ -1,98 +1,36 @@
 name: Release
 
-# Release lane (VC-25): a `v*` tag produces a Developer ID-signed, notarized,
-# stapled build published to GitHub Releases, where the in-app updater (VC-24,
-# electron-updater) picks it up.
+# Release lane (VC-25): v* tags and explicit non-dry-run dispatches produce
+# signed, notarized desktop releases and verified hostd artifacts.
 #
-# There are two doors into this workflow, and they end in the same place:
+# Dispatch defaults to a dry run: build all four hostd targets and desktop
+# with the generated pin, publishing workflow artifacts only. Dry runs never
+# bump versions, tag, sign desktop, or publish a release. Real dispatches bump
+# root and desktop versions together; tag pushes require that bump beforehand.
+# A tag pushed with GITHUB_TOKEN cannot trigger another workflow. Switching to
+# a PAT or deploy key would trigger both publishing paths and must be reviewed.
 #
-#   1. BUTTON (workflow_dispatch) — the default. Actions -> Release -> Run
-#      workflow, pick patch/minor/major, or `gh workflow run release.yml -f
-#      bump=patch`. The `prepare` job bumps both package.json files on a
-#      runner, commits, tags and pushes, then hands off to the build job.
-#      Nothing is built, tested or tagged on a developer machine.
+# Build, staple, verify, then upload: uploading while the staple hook writes
+# can corrupt the distributed DMG even when the local file passes validation.
+# Keep the build and publication steps separate and verify uploaded artifacts.
+# Signing uses a workflow-owned keychain via CSC_KEYCHAIN, not CSC_LINK, to
+# avoid electron-builder 26.x passing the certificate password as the keychain
+# password. This explicit setup remains valid after the upstream fix.
 #
-#   2. TAG PUSH — the original path, still supported for a hand-made tag:
-#      git tag v0.x.y && git push origin v0.x.y
-#      This skips `prepare` entirely and goes straight to the build job, so
-#      the version bump has to already be committed.
+# Required repository secrets:
+#   MAC_CERT_P12_BASE64: password-protected Developer ID certificate and key
+#   MAC_CERT_PASSWORD: certificate password
+#   APPLE_API_KEY_P8: App Store Connect API key
+#   APPLE_API_KEY_ID: API key identifier
+#   APPLE_API_ISSUER: API issuer identifier
+# Missing credentials fail preflight rather than falling back to ad-hoc signing.
 #
-# Why the button does the bump AND the build in ONE run, rather than pushing a
-# tag and letting door 2 catch it: a tag pushed with GITHUB_TOKEN does not
-# trigger further workflow runs (GitHub's loop-prevention rule). A `prepare`
-# job that only tagged would therefore sit there having released nothing. The
-# same rule is what stops this workflow from re-entering itself, so exactly
-# one release happens per press. IF ANYONE EVER SWAPS THE PUSH TO A PAT OR A
-# DEPLOY KEY, door 2 starts firing on the pushed tag and every button press
-# produces TWO release runs racing for the same release — see the header of
-# the pre-create step for what that race does.
-#
-# All signing/notarization/publish mechanics live in
-# apps/desktop/electron-builder.yml (VC-23) and scripts/staple-dmg.mjs; this
-# workflow only supplies credentials, runs the dist pipeline with --publish,
-# and gates the result.
-#
-# The signing certificate is imported into a workflow-owned keychain HERE and
-# handed to electron-builder as CSC_KEYCHAIN, not as CSC_LINK. Since the
-# macos-26 runner image of 2026-08-31 (Darwin 25.6.0), `security` verifies
-# the password given to `set-key-partition-list -k`, and electron-builder
-# 26.15.x passes the .p12 import password there instead of its temporary
-# keychain's own password (electron-userland/electron-builder#10066). Every
-# CSC_LINK release failed at "SecKeychainUnlock: The user name or passphrase
-# you entered is not correct" from v0.2.0-canary.4's first attempt onward.
-# With CSC_KEYCHAIN set and CSC_LINK unset, electron-builder never builds a
-# keychain of its own: it runs `security find-identity` against ours (the
-# documented CI setup) and signs with the Developer ID Application identity
-# it finds. The upstream fix (#10101, backported to release/v26 in #10172)
-# had not shipped in any 26.x at the time; this arrangement stays correct
-# after it does, so there is nothing to retire.
-#
-# Required repo secrets (Settings -> Secrets and variables -> Actions):
-#   MAC_CERT_P12_BASE64  "Developer ID Application: Hussain Phalasiya
-#                        (Y54F649NH4)" cert + private key, exported from the
-#                        login keychain as a password-protected .p12, then
-#                        base64-encoded (`base64 -i cert.p12`).
-#   MAC_CERT_PASSWORD    Password on that .p12.
-#   APPLE_API_KEY_P8     Contents of the App Store Connect API key
-#                        (~/.appstoreconnect/private_keys/AuthKey_Volli.p8 on
-#                        the dev machine).
-#   APPLE_API_KEY_ID     Key ID of that API key.
-#   APPLE_API_ISSUER     Issuer ID of that API key.
-# A preflight step fails the run if any are missing: electron-builder would
-# otherwise fall back to ad-hoc signing and the dmg staple hook would skip
-# silently, shipping a build Gatekeeper rejects and Squirrel.Mac refuses to
-# apply as an update.
-#
-# Channels and release states (plan agreed on VC-24):
-#   - Canary: prerelease-suffixed tags (e.g. v0.2.0-canary.3). The version
-#     guard step sets EP_PRE_RELEASE=true for hyphenated tags, so these
-#     publish live immediately as GitHub pre-releases — only allowPrerelease
-#     installs (the dogfood build) follow them. (electron-builder does NOT
-#     infer this from the version: without EP_PRE_RELEASE everything defaults
-#     to draft, and its publisher reuses an existing draft as-is, so a
-#     drafted canary can never go live automatically — learned from the
-#     v0.1.0-canary.3 run.)
-#
-# The release itself is pre-created in a workflow step rather than left to
-# electron-builder: electron-publish races its own concurrent publisher
-# instances on release creation, which produced duplicate drafts with the
-# artifacts split across them (v0.1.0-canary.3) and 422 already_exists
-# failures for live prereleases (v0.1.0-canary.4). With the release seeded,
-# every publisher instance finds and reuses it and only uploads assets.
-# (Prerelease reuse has a 2h published_at window in electron-publish —
-# re-running a failed job later than that needs the release + tag deleted
-# and the tag re-pushed anyway.)
-#   - Stable: bare tags (e.g. v0.2.0). These land as drafts: edit the release
-#     notes, then publish the draft to put it on the updater feed
-#     (electron-updater ignores draft releases).
-#
-# Cadence (dogfooding-solo policy): tag whenever something meaningful merges,
-# roughly weekly, on a green main. Add real beta/stable discipline only when
-# someone besides the owner runs the app.
-#
-# The updater hits the feed unauthenticated, so releases must stay publicly
-# readable (the repo is public today; if it ever goes private, every update
-# check 404s until that is revisited).
+# Hyphenated tags are prereleases (EP_PRE_RELEASE=true); only canary-enabled
+# installs follow them. Bare tags produce drafts; publish the draft after
+# reviewing its release notes to put it on the updater feed. Pre-create the
+# release once, then upload into it to avoid races between publisher instances.
+# Reruns replace owned assets and remove stale ones.
+# The updater reads the release feed unauthenticated: keep it publicly readable.
 
 on:
   push:
@@ -113,19 +51,22 @@ on:
         description: "Refuse to release unless CI passed on the commit being released"
         type: boolean
         default: true
+      dry_run:
+        description: "Defaults to dry-run (no tag/sign/publish). Set false for a real button release."
+        type: boolean
+        default: true
 
 permissions:
-  # electron-builder creates the GitHub Release and uploads dmg + zip +
-  # latest-mac.yml using GH_TOKEN. `prepare` additionally pushes the release
-  # commit and tag to main with it.
-  contents: write
+  contents: read
 
 jobs:
   # Door 1 only. Cheap ubuntu runner: everything here is a guard, and a guard
   # that fails should not have cost a macOS runner first.
   prepare:
     name: Bump, tag, push
-    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -231,13 +172,424 @@ jobs:
           git push origin HEAD:main
           git push origin "$TAG"
 
+  # Resolve once, so every hostd target and desktop use exactly the same ref.
+  # Dry runs always use the selected branch; they never enter prepare/release.
+  hostd-ref:
+    name: Resolve hostd release ref
+    needs: [prepare]
+    if: >-
+      always() && !cancelled() &&
+      (needs.prepare.result == 'success' ||
+       (needs.prepare.result == 'skipped' &&
+        (github.event_name == 'push' || inputs.dry_run)))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - name: Resolve ref
+        id: resolve
+        env:
+          RELEASE_REF: ${{ needs.prepare.outputs.tag || github.sha }}
+        run: echo "ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+
+  # VC-727: advisory capture, never a dependency of packaging/publication.
+  # A broken recorder leaves a visible failed step, not a broken release.
+  canary-peer:
+    name: Record public release peer (advisory)
+    needs: [prepare, hostd-ref]
+    if: always() && !cancelled() && needs.hostd-ref.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions:
+      contents: read
+    outputs:
+      captured: ${{ steps.upload.outputs.artifact-id != '' && 'true' || '' }}
+      tag: ${{ steps.scope.outputs.tag }}
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve peer provenance
+        id: scope
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag || github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = true ]; then
+            tag="dry-run-$(git rev-parse HEAD)"
+          elif [[ "$RELEASE_TAG" == v*-* ]]; then
+            tag="$RELEASE_TAG"
+          else
+            echo "Stable release: no prerelease peer capture"
+            exit 0
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Setup Vite+
+        if: steps.scope.outputs.tag != ''
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Capture public peer through real adapters
+        id: capture
+        if: steps.scope.outputs.tag != ''
+        env:
+          PEER_TAG: ${{ steps.scope.outputs.tag }}
+          VOLLI_CONCURRENCY_HINT: "2"
+        run: |
+          set -euo pipefail
+          node scripts/record-canary-peer.mjs --tag "$PEER_TAG" --commit "$(git rev-parse HEAD)" --out "$RUNNER_TEMP/canary-peer.json"
+          echo "captured=true" >> "$GITHUB_OUTPUT"
+      - name: Upload public peer bundle
+        id: upload
+        if: steps.capture.outputs.captured == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: canary-peer-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-peer.json
+          if-no-files-found: error
+          retention-days: 90
+
+  # Attach only AFTER desktop publishing, whose cleanup owns other assets.
+  # Neither this job nor capture can block the release; dry runs only upload
+  # an Actions artifact and have no release-write job enabled.
+  canary-peer-asset:
+    name: Attach public peer release asset (advisory)
+    needs: [canary-peer, release]
+    if: >-
+      always() && !cancelled() && needs.release.result == 'success' &&
+      needs.canary-peer.outputs.captured == 'true' &&
+      (github.event_name != 'workflow_dispatch' || !inputs.dry_run)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - name: Download public peer bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: canary-peer-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canary-peer
+      - name: Attach without changing the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PEER_TAG: ${{ needs.canary-peer.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Immutable release peer: never delete a previous asset to replace it.
+          # In particular, --clobber can lose it if the replacement upload fails.
+          existing=$(gh release view "$PEER_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[] | select(.name == "canary-peer.json") | .name')
+          if [ -n "$existing" ]; then
+            echo "Keeping the peer already captured for $PEER_TAG"
+            exit 0
+          fi
+          gh release upload "$PEER_TAG" "$RUNNER_TEMP/canary-peer/canary-peer.json" --repo "$GITHUB_REPOSITORY"
+
+  hostd:
+    name: Package hostd (linux-${{ matrix.arch }})
+    needs: [prepare, hostd-ref]
+    if: always() && !cancelled() && needs.hostd-ref.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+      - name: Guard release version
+        env:
+          RELEASE_REF: ${{ needs.prepare.outputs.tag || github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version package.json)"
+          pkg="$(jq -r .version apps/desktop/package.json)"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::root package.json is $version but apps/desktop/package.json is $pkg — bump both together."
+            exit 1
+          fi
+          if [ "$DRY_RUN" != true ] && [ "$RELEASE_REF" != "v$pkg" ]; then
+            echo "::error::Tag $RELEASE_REF does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
+            exit 1
+          fi
+      # Native runners + the same multi-arch bookworm image as CI: no QEMU,
+      # cross-compilation, Electron rebuild or glibc baseline change.
+      - name: Build host image
+        run: docker build --file .devcontainer/host/Dockerfile --tag volli-host-dev .
+      - name: Package and probe hostd
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hostd"
+          chmod 0777 "$RUNNER_TEMP/hostd"
+          docker run --rm -e EXPECTED_ARCH="$ARCH" volli-host-dev sh -ec \
+            'test "$(node -p process.arch)" = "$EXPECTED_ARCH"'
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/hostd:/out" volli-host-dev \
+            bash /src/apps/hostd/scripts/ci-build-artifact.sh
+          docker run --rm -i -v "$RUNNER_TEMP/hostd:/out:ro" volli-host-dev \
+            bash -s < apps/hostd/scripts/ci-boot-artifact.sh
+      - name: Upload architecture assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hostd-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/hostd/*.tar.gz
+            ${{ runner.temp }}/hostd/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # macOS hostd (VC-700): no container image exists for macOS, so each
+  # architecture builds natively on its own runner (macos-15 is Apple
+  # silicon, macos-15-intel is the x64 label), under nodejs.org's Node at
+  # exactly .nvmrc, with the same host-only install, integration test,
+  # packager and boot probe as the Linux image runs.
+  hostd-darwin:
+    name: Package hostd (darwin-${{ matrix.arch }})
+    needs: [prepare, hostd-ref]
+    if: always() && !cancelled() && needs.hostd-ref.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Corepack fetches the pinned pnpm below; never stop to ask first.
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+      - name: Guard release version
+        env:
+          RELEASE_REF: ${{ needs.prepare.outputs.tag || github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version package.json)"
+          pkg="$(jq -r .version apps/desktop/package.json)"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::root package.json is $version but apps/desktop/package.json is $pkg — bump both together."
+            exit 1
+          fi
+          if [ "$DRY_RUN" != true ] && [ "$RELEASE_REF" != "v$pkg" ]; then
+            echo "::error::Tag $RELEASE_REF does not match apps/desktop/package.json version $pkg — bump the version (or fix the tag) and re-tag."
+            exit 1
+          fi
+      # The exact host pin, as ci.yml's host lanes use, not the engines range:
+      # the packager copies this Node into the archive and refuses any other.
+      # No dependency cache: a release build installs from the lockfile alone.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: .nvmrc
+          run-install: false
+      # The packager and the integration test call `pnpm` itself, which
+      # setup-vp does not put on PATH. Enable it the way the Linux host image
+      # does (corepack, at package.json's packageManager), from the corepack
+      # shipped with this exact Node.
+      - name: Enable pinned pnpm
+        run: |
+          set -euo pipefail
+          node_bin="$(dirname "$(node -p process.execPath)")"
+          mkdir -p "$RUNNER_TEMP/pnpm-bin"
+          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
+          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
+          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+          test "$(pnpm --version)" = "$expected"
+      - name: Check runner architecture
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          test "$(node -p process.platform)" = darwin
+          test "$(node -p process.arch)" = "$ARCH"
+          test "$(node -p process.versions.node)" = "$(cat .nvmrc)"
+      # The host-only install docs/development/host-linux.md describes (the
+      # same line as apps/hostd/scripts/ci-build-artifact.sh): root tooling,
+      # every package and hostd, never desktop (no Electron rebuild).
+      - name: Host-only install
+        run: pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile
+      # VC-622's real hostd/Pi/SQLite/socket run, as the Linux image runs it
+      # before packaging, so a darwin-only runtime fault fails here.
+      - name: Hostd integration test
+        run: >-
+          pnpm --filter @volli/hostd exec vp test run src/session-runtime.integration.test.ts
+          --maxWorkers="$(sysctl -n hw.ncpu)"
+      - name: Package and probe hostd
+        run: |
+          set -euo pipefail
+          node apps/hostd/scripts/package.mjs --out "$RUNNER_TEMP/hostd"
+          bash apps/hostd/scripts/ci-boot-artifact.sh "$RUNNER_TEMP/hostd"
+      - name: Upload architecture assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hostd-darwin-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/hostd/*.tar.gz
+            ${{ runner.temp }}/hostd/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  hostd-assets:
+    name: Verify hostd checksums and generate desktop pin
+    needs: [hostd-ref, hostd, hostd-darwin]
+    if: >-
+      always() && !cancelled() &&
+      needs.hostd.result == 'success' && needs.hostd-darwin.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout resolved ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.hostd-ref.outputs.ref }}
+          persist-credentials: false
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          run-install: false
+      # Two explicit patterns rather than hostd-*, which would also match
+      # hostd-release-assets on a re-run.
+      - name: Download Linux architecture assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: hostd-linux-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/hostd-assets
+      - name: Download macOS architecture assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: hostd-darwin-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/hostd-assets
+      - name: Generate verified manifest and SHA256SUMS
+        run: |
+          node scripts/hostd-release-manifest.mjs --assets "$RUNNER_TEMP/hostd-assets"
+          cd "$RUNNER_TEMP/hostd-assets"
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          cat hostd-release-manifest.json >> "$GITHUB_STEP_SUMMARY"
+      # Developer ID signs and notarizes the Mac app only. No hostd tarball
+      # is Developer ID-signed or notarized, the darwin ones included: the
+      # desktop uploads them to the host over SSH, so they never carry a
+      # quarantine attribute and Gatekeeper never assesses them. Their
+      # integrity root, like Linux's, is the desktop's signed pin plus this
+      # provenance, signed for all four tarballs, SHA256SUMS and the pin with
+      # GitHub OIDC (no new private key).
+      - name: Sign hostd provenance
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+        id: provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/hostd-assets/*.tar.gz
+            ${{ runner.temp }}/hostd-assets/SHA256SUMS
+            ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
+      - name: Collect signature bundle
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" "$RUNNER_TEMP/hostd-assets/hostd-provenance.sigstore.json"
+      - name: Upload complete hostd release asset set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hostd-release-assets
+          path: ${{ runner.temp }}/hostd-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  dry-run-desktop:
+    name: Dry-run desktop build with hostd pin (no signing or publishing)
+    needs: [hostd-assets]
+    if: >-
+      always() && !cancelled() && needs.hostd-assets.result == 'success' &&
+      github.event_name == 'workflow_dispatch' && inputs.dry_run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Download verified hostd assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hostd-release-assets
+          path: ${{ runner.temp }}/hostd-assets
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Build desktop with verified hostd pin
+        env:
+          VOLLI_HOSTD_MANIFEST: ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
+        run: |
+          vp run --filter @volli/desktop build
+          cmp "$VOLLI_HOSTD_MANIFEST" apps/desktop/dist-electron/hostd-release-manifest.json
+      - name: Upload desktop pin
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-hostd-manifest
+          path: apps/desktop/dist-electron/hostd-release-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
   release:
     name: Sign, notarize, publish
+    permissions:
+      contents: write
     # Door 1 arrives via prepare; door 2 skips it. `always()` is what lets a
     # skipped dependency still run this job, so the two results are
     # distinguished explicitly rather than by truthiness.
-    needs: [prepare]
-    if: always() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
+    # A hostd-assets failure blocks desktop release by design: the signed pin
+    # requires same-release assets. After a failure use "Re-run all jobs", not
+    # "re-run failed jobs" (actions/download-artifact#486, cross-attempt 404s).
+    # Button-mode prepare is not idempotent: it may bump again on a full rerun.
+    needs: [prepare, hostd-assets]
+    if: >-
+      always() && !cancelled() && needs.hostd-assets.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || !inputs.dry_run) &&
+      (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
     # arm64, matching the arm64-only target list in electron-builder.yml.
     runs-on: macos-latest
     env:
@@ -360,6 +712,28 @@ jobs:
           fi
           echo "CSC_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
+      # Download and verify before creating a live canary pre-release: missing
+      # or corrupt hostd inputs must not leave an empty release behind.
+      - name: Download verified hostd release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: hostd-release-assets
+          path: ${{ runner.temp }}/hostd-assets
+
+      - name: Verify hostd release asset set
+        working-directory: ${{ runner.temp }}/hostd-assets
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # 4 tarballs (linux and darwin, each x64 and arm64), their 4
+          # sidecars, SHA256SUMS, the manifest and the provenance bundle.
+          hostdFiles=(volli-hostd-*.tar.gz volli-hostd-*.tar.gz.sha256 SHA256SUMS hostd-release-manifest.json hostd-provenance.sigstore.json)
+          [ "${#hostdFiles[@]}" -eq 11 ] || { echo "::error::hostd asset set incomplete: expected 11 files, found ${#hostdFiles[@]}"; exit 1; }
+          for f in "${hostdFiles[@]}"; do
+            [ -s "$f" ] || { echo "::error::hostd release asset missing or empty: $f"; exit 1; }
+          done
+          shasum -a 256 -c SHA256SUMS
+
       # Seed the release for this tag before electron-builder runs, so its
       # racing publisher instances all find and reuse one release instead of
       # each trying to create it (see header). Hyphenated tag = live
@@ -393,31 +767,46 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Build desktop pipeline
-        run: vp run --filter @volli/desktop build
+      # electron-builder downloads its own Electron distribution, but our
+      # extraResources reads Chromium's notice from the installed package.
+      # Prefetch that package too (as CI does), or packaging silently omits it.
+      - name: Build desktop pipeline and fetch Electron
+        env:
+          VOLLI_HOSTD_MANIFEST: ${{ runner.temp }}/hostd-assets/hostd-release-manifest.json
+        run: |
+          vp run --filter @volli/desktop build
+          cmp "$VOLLI_HOSTD_MANIFEST" apps/desktop/dist-electron/hostd-release-manifest.json
+          vp run --filter @volli/desktop ensure:electron
+          test -s apps/desktop/node_modules/electron/dist/LICENSES.chromium.html
 
       # The dist script minus its build half (done above): electron-builder
       # finds the Developer ID Application identity in CSC_KEYCHAIN (set by
       # the step above; CSC_LINK deliberately absent — see the header), signs
       # with hardened runtime, notarizes the .app (mac.notarize) and the dmg
-      # (afterAllArtifactBuild staple hook), and uploads dmg + zip +
-      # latest-mac.yml to the GitHub Release for this tag.
-      - name: Package, sign, notarize, publish
+      # (afterAllArtifactBuild staple hook), and writes latest-mac.yml.
+      #
+      # --publish never is load-bearing, not caution — see the header. Upload
+      # is the separate step below, after the gate. latest-mac.yml is still
+      # written here: PublishManager builds the update-info file whenever a
+      # publish provider is configured, independently of the --publish mode
+      # (artifactCreatedWithoutExplicitPublishConfig in app-builder-lib).
+      - name: Package, sign, notarize, staple
         working-directory: apps/desktop
         env:
           APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # vp exec (ci.yml's pattern for workspace binaries) resolves
         # electron-builder from the install's bin dirs regardless of hoisting.
-        run: vp exec electron-builder --publish always
+        run: vp exec electron-builder --publish never
+
+      - name: "Gate: no e2e files in packaged app"
+        run: node apps/desktop/scripts/check-packaged-e2e.mjs --app "apps/desktop/release/mac-arm64/Volli Code.app"
 
       # mac.notarize and the staple hook both degrade to a skip when
       # credentials are absent or wrong-shaped, so trust nothing: prove the
-      # artifacts exist and that Gatekeeper accepts them before calling the
-      # run green. (The release is already uploaded at this point — a failure
-      # here means: fix, delete the bad release + tag, re-tag.)
+      # artifacts and required notices exist and that Gatekeeper accepts them
+      # before calling the run green. Upload happens only after this gate.
       - name: "Gate: artifacts complete and notarized"
         run: |
           cd apps/desktop/release
@@ -427,15 +816,119 @@ jobs:
           [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected exactly one dmg, found: ${dmgs[*]:-none}"; exit 1; }
           [ "${#zips[@]}" -eq 1 ] || { echo "::error::expected exactly one auto-update zip, found: ${zips[*]:-none}"; exit 1; }
           [ -f latest-mac.yml ] || { echo "::error::latest-mac.yml missing — the updater feed was not generated"; exit 1; }
+          # stapler validate reads the ticket, not the image; a dmg whose UDIF
+          # trailer was clobbered passes it. hdiutil is what proves the file is
+          # a disk image at all, which is the failure this gate missed once.
           echo "stapler validate: ${dmgs[0]}"
           xcrun stapler validate "${dmgs[0]}"
+          echo "hdiutil verify: ${dmgs[0]}"
+          hdiutil verify "${dmgs[0]}"
           app="mac-arm64/Volli Code.app"
           [ -d "$app" ] || { echo "::error::$app missing"; exit 1; }
+          # A valid signature does not prove extraResources was copied:
+          # electron-builder only warns when a notice source is absent.
+          resources="$app/Contents/Resources"
+          for notice in LICENSE.txt THIRD-PARTY-NOTICES.txt LICENSES.chromium.html \
+            licensing/GPL-3.0.txt licensing/LGPL-3.0.txt licensing/LGPL-LIBVIPS.md \
+            licensing/RELINK-LIBVIPS.md licensing/relink-libvips.sh; do
+            [ -s "$resources/$notice" ] || { echo "::error::required notice missing or empty: $resources/$notice"; exit 1; }
+          done
           spctl -a -vv --type execute "$app" 2>&1 | tee spctl-assessment.txt
           if ! grep -q "source=Notarized Developer ID" spctl-assessment.txt; then
             echo "::error::app is not notarized — spctl did not report 'Notarized Developer ID'"
             exit 1
           fi
+
+      # Uploading is ours rather than electron-builder's (see the package
+      # step). By now the gate has proved the dmg is a valid, stapled image and
+      # nothing is still writing to apps/desktop/release.
+      - name: Publish artifacts to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd apps/desktop/release
+          shopt -s nullglob
+
+          # electron-builder names the local mac artifacts after productName
+          # ("Volli Code-...") but writes latest-mac.yml with the sanitized
+          # "Volli-Code-..." url, and GitHub turns a space in an asset name into
+          # a dot. Rename to the dash form so the asset name matches the url the
+          # updater reads. It also retires the "Volli.Code-...mac.zip.blockmap"
+          # spelling, which is what made publishing a second time into an
+          # existing release 422 with already_exists: electron-builder's own
+          # overwrite matches asset names exactly, so it could not delete the
+          # dotted one.
+          for f in *" "*; do mv "$f" "${f// /-}"; done
+
+          dmgs=(*.dmg); dmgMaps=(*.dmg.blockmap)
+          zips=(*-mac.zip); zipMaps=(*-mac.zip.blockmap)
+          [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected exactly one dmg, found: ${dmgs[*]:-none}"; exit 1; }
+          [ "${#dmgMaps[@]}" -eq 1 ] || { echo "::error::expected exactly one dmg blockmap, found: ${dmgMaps[*]:-none}"; exit 1; }
+          [ "${#zips[@]}" -eq 1 ] || { echo "::error::expected exactly one auto-update zip, found: ${zips[*]:-none}"; exit 1; }
+          [ "${#zipMaps[@]}" -eq 1 ] || { echo "::error::expected exactly one zip blockmap, found: ${zipMaps[*]:-none}"; exit 1; }
+          [ -f latest-mac.yml ] || { echo "::error::latest-mac.yml missing — the updater feed was not generated"; exit 1; }
+          files=("${dmgs[0]}" "${dmgMaps[0]}" "${zips[0]}" "${zipMaps[0]}" latest-mac.yml)
+          # Own the complete set in this one upload: the cleanup below must not
+          # remove hostd assets from a canary or a re-run of an existing draft.
+          cp "$RUNNER_TEMP/hostd-assets/"* .
+          hostdFiles=(volli-hostd-*.tar.gz volli-hostd-*.tar.gz.sha256 SHA256SUMS hostd-release-manifest.json hostd-provenance.sigstore.json)
+          files+=("${hostdFiles[@]}")
+
+          # latest-mac.yml must describe the dmg about to be uploaded, but
+          # electron-builder builds that entry while it builds the dmg, and the
+          # staple hook rewrites the file afterwards (adding the ticket and the
+          # UDIF trailer that goes with it) — so the feed it wrote carries the
+          # pre-staple checksum and size. Stapling earlier does not help:
+          # electron-builder hashes the dmg inside the DMG target, before any
+          # per-artifact hook runs. Correct the entry here, from the file we are
+          # about to upload. (The zip entry is the one electron-updater installs
+          # from on macOS, and it is written before anything touches the zip.)
+          dmgEntryLine=$(grep -n '^  - url: .*\.dmg$' latest-mac.yml | cut -d: -f1 || true)
+          [ -n "$dmgEntryLine" ] || { echo "::error::latest-mac.yml has no dmg entry"; exit 1; }
+          ymlDmg=$(sed -n "${dmgEntryLine}p" latest-mac.yml | awk '{print $3}')
+          [ "$ymlDmg" = "${dmgs[0]}" ] || { echo "::error::latest-mac.yml dmg entry names '$ymlDmg', not '${dmgs[0]}'"; exit 1; }
+          realSha=$(openssl dgst -sha512 -binary "${dmgs[0]}" | base64 | tr -d '\n')
+          realSize=$(stat -f%z "${dmgs[0]}")
+          awk -v shaLine="$((dmgEntryLine + 1))" -v sizeLine="$((dmgEntryLine + 2))" \
+              -v sha="$realSha" -v size="$realSize" '
+            NR == shaLine  { sub(/sha512:.*/, "sha512: " sha) }
+            NR == sizeLine { sub(/size:.*/, "size: " size) }
+            { print }
+          ' latest-mac.yml > latest-mac.yml.stapled
+          mv latest-mac.yml.stapled latest-mac.yml
+          # Read it back, so an electron-builder that ever lays the entry out
+          # differently fails the run instead of publishing a feed that
+          # misdescribes its own dmg (which is what this used to do silently).
+          ymlSha=$(sed -n "$((dmgEntryLine + 1))p" latest-mac.yml | awk '{print $2}')
+          ymlSize=$(sed -n "$((dmgEntryLine + 2))p" latest-mac.yml | awk '{print $2}')
+          if [ "$ymlSha" != "$realSha" ] || [ "$ymlSize" != "$realSize" ]; then
+            echo "::error::could not sync the latest-mac.yml dmg entry — feed says sha512=$ymlSha size=$ymlSize, ${dmgs[0]} is sha512=$realSha size=$realSize"
+            exit 1
+          fi
+          echo "latest-mac.yml dmg entry synced to ${dmgs[0]}"
+
+          # Drop anything already on this release that is not part of the set
+          # about to go up, so re-running a job — or refreshing a draft whose
+          # assets predate the rename above — replaces assets instead of
+          # colliding with them.
+          while read -r name; do
+            [ -n "$name" ] || continue
+            # VC-727's advisory job attaches this after publication. Preserve
+            # a prior capture if that job fails on a re-run.
+            [ "$name" != canary-peer.json ] || continue
+            keep=false
+            for f in "${files[@]}"; do
+              if [ "$name" = "$f" ]; then keep=true; break; fi
+            done
+            if [ "$keep" = false ]; then
+              echo "removing asset not in this build: $name"
+              gh release delete-asset "$REF_NAME" "$name" --yes
+            fi
+          done < <(gh release view "$REF_NAME" --json assets -q '.assets[].name')
+
+          gh release upload "$REF_NAME" "${files[@]}" --clobber
+          echo "published to $REF_NAME: ${files[*]}"
 
       - name: Scrub credentials
         if: always()

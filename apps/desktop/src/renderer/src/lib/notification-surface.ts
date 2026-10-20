@@ -1,6 +1,6 @@
 /**
  * The real notification surface: the stores this window already drives
- * (VC-295 round 2).
+ * (VC-295).
  *
  * Split from `notification-activation.ts` on purpose. That module owns the
  * DECISION — which route, in which order, and what to say about an item that

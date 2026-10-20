@@ -1,3 +1,4 @@
+import { safeStopMessage } from "./safe-diagnostic";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
@@ -14,7 +15,7 @@ import {
   superviseStreams,
   WAKE_STREAM_GRACE_MS,
 } from "./stream-supervision";
-import { classifyDiagnostic, isTransientTransportFailure, sanitizeDiagnostic } from "./transcript";
+import { classifyDiagnostic, isTransientTransportFailure } from "./transcript";
 
 type RequestModel = Parameters<StreamFn>[0];
 type RequestContext = Parameters<StreamFn>[1];
@@ -89,7 +90,7 @@ describe("superviseStreams", () => {
 
   it("reports each cut as a transient transport failure", () => {
     for (const message of [STREAM_IDLE_MESSAGE, STREAM_WAKE_MESSAGE]) {
-      const sanitized = sanitizeDiagnostic(message);
+      const sanitized = safeStopMessage(message);
       expect(
         isTransientTransportFailure({ reason: classifyDiagnostic(sanitized), message: sanitized }),
       ).toBe(true);
@@ -367,4 +368,20 @@ describe("superviseStreams", () => {
     await vi.advanceTimersByTimeAsync(0);
     await expect(out.result()).resolves.toMatchObject({ errorMessage: STREAM_IDLE_MESSAGE });
   });
+});
+
+it("preserves a thrown transport's code instead of confusing it with the host's idle cut", async () => {
+  for (const code of ["ECONNRESET", 42]) {
+    const error = Object.assign(new Error("connection failed"), { code });
+    const inner: StreamFn = () => {
+      throw error;
+    };
+    const out = superviseStreams(inner, TIMING).streamFn(
+      MODEL,
+      CONTEXT,
+    ) as AssistantMessageEventStream;
+    const message = await out.result();
+    expect(message.rawStopReason).toBe("volli.runtime-error");
+    expect(message.diagnostics?.[0]?.error?.code).toBe(typeof code === "string" ? code : undefined);
+  }
 });

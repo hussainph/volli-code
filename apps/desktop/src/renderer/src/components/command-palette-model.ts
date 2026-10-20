@@ -47,6 +47,14 @@ interface CommandPaletteSessionBase {
   ticketDisplayId: string | null;
   ticketTitle: string | null;
   /**
+   * Epoch ms of the Session's newest durable fact, the record's own
+   * `lastActivityAt` (VC-303). The palette's recency order within a project:
+   * the Session you were just in is the one you are most likely looking for.
+   * An open terminal tab reads its durable record's value; a tab whose record
+   * has not landed yet was opened moments ago, so it reads as now.
+   */
+  lastActivityAt: number;
+  /**
    * Who started this Session (VC-131). The palette is the app's one GLOBAL
    * Session listing — every project's, in one list — so it is the surface where
    * a Run's Session is most easily mistaken for one a person opened, and
@@ -119,6 +127,8 @@ export function buildCommandPaletteItems(
    * kinds is left out.
    */
   terminalSessions: readonly SessionRecord[] = [],
+  /** The recency of an open tab that has no durable record yet — see `lastActivityAt`. */
+  now: number = Date.now(),
 ): CommandPaletteItems {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const ticketById = new Map<string, { ticket: Ticket; project: Project }>();
@@ -148,6 +158,9 @@ export function buildCommandPaletteItems(
       a.displayId.localeCompare(b.displayId),
   );
 
+  const terminalActivityAt = new Map(
+    terminalSessions.map((record) => [record.id, record.lastActivityAt]),
+  );
   const sessions: CommandPaletteSessionItem[] = [];
   for (const container of Object.values(sessionsByOwner)) {
     if (container === undefined) continue;
@@ -170,6 +183,7 @@ export function buildCommandPaletteItems(
             ? null
             : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
         ticketTitle: linked?.ticket.title ?? null,
+        lastActivityAt: terminalActivityAt.get(tab.sessionId) ?? now,
         provenance: sessionProvenanceOf(provenance, tab.sessionId),
         destination: "tab",
       });
@@ -211,6 +225,7 @@ export function buildCommandPaletteItems(
           ? null
           : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
       ticketTitle: linked?.ticket.title ?? null,
+      lastActivityAt: record.lastActivityAt,
       provenance: sessionProvenanceOf(provenance, record.id),
       destination: "detail",
     });
@@ -239,14 +254,20 @@ export function buildCommandPaletteItems(
           ? null
           : displayTicketId(linked.project.ticketPrefix, linked.ticket.ticketNumber),
       ticketTitle: linked?.ticket.title ?? null,
+      lastActivityAt: record.lastActivityAt,
       provenance: sessionProvenanceOf(provenance, record.sessionId),
       destination: "tab",
     });
   }
 
+  // Current project first, then most recently active (VC-303) — the order
+  // tickets already take by `updatedAt`. Title only breaks a tie, so two
+  // Sessions of one name list the newer one first instead of whichever the
+  // alphabet happened to pick.
   sessions.sort(
     (a, b) =>
       currentProjectFirst(a.projectId) - currentProjectFirst(b.projectId) ||
+      b.lastActivityAt - a.lastActivityAt ||
       a.title.localeCompare(b.title),
   );
 
@@ -324,6 +345,166 @@ export function buildEditorCommandItems(editorOpen: boolean): CommandPaletteEdit
       id: "go-to-line",
       title: "Go to Line…",
       hint: "In the editor you were last in",
+    },
+  ];
+}
+
+/* ------------------------------------------------------------ navigation */
+
+/**
+ * The palette's page rows (VC-303): Home, its Board and List views, Configure
+ * and each of its panes, and Settings — each reachable by typing its name.
+ */
+export type CommandPaletteNavigationItem =
+  | {
+      kind: "navigation";
+      id: "home" | "board" | "list" | "configure" | "settings";
+      title: string;
+      hint: string;
+      keywords: string[];
+    }
+  | {
+      kind: "navigation";
+      id: "configure-pane";
+      /** The Configure category key the row opens. */
+      paneKey: string;
+      title: string;
+      hint: string;
+      keywords: string[];
+    };
+
+/** A Configure pane as the palette names it — the rail's own key, label and search terms. */
+interface PaletteConfigurePane {
+  readonly key: string;
+  readonly label: string;
+  readonly keywords?: readonly string[];
+}
+
+/**
+ * The navigation rows. Every page but Settings belongs to the selected
+ * project, so with none selected Settings is the only row rather than rows
+ * that would navigate a project nobody chose.
+ */
+export function buildNavigationCommandItems(
+  selectedProject: Pick<Project, "name"> | null,
+  configurePanes: readonly PaletteConfigurePane[] = [],
+): CommandPaletteNavigationItem[] {
+  const settings: CommandPaletteNavigationItem = {
+    kind: "navigation",
+    id: "settings",
+    title: "Settings",
+    hint: "App-wide",
+    keywords: ["settings", "preferences", "models", "appearance", "notifications"],
+  };
+  if (selectedProject === null) return [settings];
+  const hint = selectedProject.name;
+  return [
+    { kind: "navigation", id: "home", title: "Home", hint, keywords: ["home", "tabs"] },
+    {
+      kind: "navigation",
+      id: "board",
+      title: "Board view",
+      hint,
+      keywords: ["board", "kanban", "columns"],
+    },
+    { kind: "navigation", id: "list", title: "List view", hint, keywords: ["list", "table"] },
+    {
+      kind: "navigation",
+      id: "configure",
+      title: "Configure",
+      hint,
+      keywords: ["configure", "project settings"],
+    },
+    ...configurePanes.map((pane): CommandPaletteNavigationItem => ({
+      kind: "navigation",
+      id: "configure-pane",
+      paneKey: pane.key,
+      title: `Configure → ${pane.label}`,
+      hint,
+      keywords: [pane.label, ...(pane.keywords ?? [])],
+    })),
+    settings,
+  ];
+}
+
+/* ----------------------------------------------------------------- hosts */
+
+/**
+ * "Add a host…" and "Manage hosts…" (VC-700): the palette's way to more
+ * machines; and, per remote host (VC-710), "Open a project on <host>…" and
+ * "Sign-ins on <host>…".
+ */
+export type CommandPaletteHostItem =
+  | {
+      kind: "host-command";
+      id: "add-host" | "manage-hosts";
+      title: string;
+      hint: string;
+      keywords: string[];
+    }
+  | {
+      kind: "host-command";
+      id: "open-project" | "sign-ins";
+      hostId: string;
+      hostName: string;
+      title: string;
+      hint: string;
+      keywords: string[];
+    };
+
+/** A remote host as the palette names it. */
+export interface PaletteRemoteHost {
+  readonly id: string;
+  readonly name: string;
+}
+
+/**
+ * The host rows, only with the `cloud` experiment on: off, the palette is
+ * unchanged. A read-only hosts file (`writable` false) offers no Add. Each
+ * remote host this Mac added gets its two rows (VC-710).
+ */
+export function buildHostCommandItems(
+  cloud: boolean,
+  writable = true,
+  remote: readonly PaletteRemoteHost[] = [],
+): CommandPaletteHostItem[] {
+  if (!cloud) return [];
+  const perHost = remote.flatMap((host): CommandPaletteHostItem[] => [
+    {
+      kind: "host-command",
+      id: "open-project",
+      hostId: host.id,
+      hostName: host.name,
+      title: `Open a project on ${host.name}…`,
+      hint: "Its projects, or a new one from a git URL or a folder",
+      keywords: ["open project", "remote", "host", "new project", "clone", host.name],
+    },
+    {
+      kind: "host-command",
+      id: "sign-ins",
+      hostId: host.id,
+      hostName: host.name,
+      title: `Sign-ins on ${host.name}…`,
+      hint: "Model providers and git push tokens on the host",
+      keywords: ["sign in", "api key", "token", "git", "remote", host.name],
+    },
+  ]);
+  const add: CommandPaletteHostItem = {
+    kind: "host-command",
+    id: "add-host",
+    title: "Add a host…",
+    hint: "Install Volli host on a machine over SSH",
+    keywords: ["add host", "remote", "server", "ssh", "machine", "box"],
+  };
+  return [
+    ...perHost,
+    ...(writable ? [add] : []),
+    {
+      kind: "host-command",
+      id: "manage-hosts",
+      title: "Manage hosts…",
+      hint: "Settings → Hosts",
+      keywords: ["hosts", "remote", "rename host", "forget host", "devices", "settings"],
     },
   ];
 }

@@ -98,7 +98,7 @@ function CollapsedColumnTarget({
 
   return (
     <div
-      // Read by the picker's one `elementFromPoint` per pointer move, exactly
+      // Read by the picker's hit test on every pointer move, exactly
       // as a standing column's root is (board.tsx's `pointerLanding`). On a
       // wrapper rather than on the button so the panel floating over the pill
       // still reads as this column.

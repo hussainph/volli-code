@@ -1,0 +1,3409 @@
+/**
+ * Hand-rolled migration runner (`PRAGMA user_version`, no ORM): all pending
+ * migrations run in one transaction that also bumps `user_version`, and
+ * migrating an existing (non-fresh) database — `user_version > 0` — first
+ * checks source integrity, checkpoints the WAL and verifies a staged copy
+ * before publishing `<dbPath>.backup-v<from>` as a rollback point. A brand-new
+ * database (`user_version` starts at `0`) skips the backup step — there is
+ * nothing to protect yet. After success, an existing database may be compacted
+ * before exact-name retention deletes older migration copies while preserving
+ * the new rollback point.
+ *
+ * A database NEWER than this build is not migrated at all: `openVolliDb`
+ * checks it first (`schema-compatibility.ts`), and this runner finds nothing
+ * pending. Read "Breaking an older reader" above {@link MIGRATIONS} before
+ * adding a migration.
+ */
+import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
+import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
+import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
+import type Database from "better-sqlite3";
+import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
+import { assertDatabaseIntegrity } from "./backup-integrity";
+import { MIGRATION_RECOVERY_ACTION, publishRollbackPoint } from "./database-file";
+import {
+  compactMigrationDatabase,
+  logMigrationCompaction,
+  skippedMigrationCompaction,
+} from "./migration-compaction";
+import { raiseMinReaderVersion } from "./schema-compatibility";
+import {
+  assertSessionStorageContentUnchanged,
+  computeSessionStorageContentDigest,
+} from "./session-storage-digest.ts";
+
+export interface Migration {
+  version: number;
+  name: string;
+  /**
+   * The migration as plain SQL — what the runner execs when no `apply`
+   * overrides it, and what a from-scratch test fixture may exec directly.
+   */
+  sql: string;
+  /**
+   * Code, for the rare migration whose work must PROBE the schema it lands on
+   * before deciding what to run (024, the parallel-023 reconciler, is the
+   * only one). The runner calls this INSTEAD of `sql`; the surrounding
+   * transaction, the backup and the `user_version` bump stay the runner's.
+   */
+  apply?(db: Database.Database): void;
+  /**
+   * Whether this migration breaks builds whose schema head is below it (VC-602).
+   * `true` raises the database's minimum reader version to this migration's
+   * own version, in the same transaction, so an older build refuses the file
+   * instead of running against a schema it cannot use. Omit it for anything
+   * additive — see "Breaking an older reader" above {@link MIGRATIONS}.
+   *
+   * Part of the migration's lock fingerprint once it is `true`: a shipped
+   * migration cannot gain or lose it.
+   */
+  raisesMinReader?: true;
+}
+
+/**
+ * Migration 001: the v1 schema. A
+ * SNAPSHOT, not the current schema: applied migrations are immutable, so later
+ * evolution lives in the migrations below it (002 adds `tickets.archived_at`
+ * and replaces `tickets_project_status` with the two partial indexes).
+ */
+const MIGRATION_001_INITIAL_SCHEMA = `
+CREATE TABLE projects (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  path          TEXT NOT NULL UNIQUE,
+  ticket_prefix TEXT NOT NULL,
+  color_index   INTEGER NOT NULL,
+  sort_order    INTEGER NOT NULL,
+  row_version   INTEGER NOT NULL DEFAULT 1,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+CREATE TABLE tickets (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ticket_number INTEGER NOT NULL,
+  title         TEXT NOT NULL,
+  body          TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL CHECK (status IN ('backlog','todo','doing','needs_review','done')),
+  priority      TEXT NOT NULL CHECK (priority IN ('low','medium','high')),
+  uses_worktree INTEGER NOT NULL DEFAULT 1,
+  harness_id    TEXT NOT NULL,
+  position      INTEGER NOT NULL,
+  row_version   INTEGER NOT NULL DEFAULT 1,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  UNIQUE (project_id, ticket_number)
+);
+CREATE INDEX tickets_project_status ON tickets(project_id, status, position);
+
+CREATE TABLE labels (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  color       TEXT,
+  row_version INTEGER NOT NULL DEFAULT 1,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  UNIQUE (project_id, name)
+);
+
+CREATE TABLE ticket_labels (
+  ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  label_id  TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+  PRIMARY KEY (ticket_id, label_id)
+);
+
+CREATE TABLE ticket_events (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,
+  actor      TEXT NOT NULL DEFAULT 'user',
+  payload    TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX ticket_events_ticket ON ticket_events(ticket_id, created_at);
+
+CREATE TABLE app_state (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`;
+
+/**
+ * Migration 002: ticket archival (CONCEPT #16/#92). `archived_at` (nullable
+ * epoch ms) is the lifecycle marker, orthogonal to `status` — an archived
+ * ticket keeps its column (Done stays Done) but leaves the board. It is NOT a
+ * soft-delete flag smeared across every query: only the board reads filter it,
+ * and they do so through a PARTIAL index that doesn't even contain archived
+ * rows, so the hot path stays lean. The old full board index is replaced by
+ * that partial one; a second partial index backs the on-demand Archive view.
+ * The sole destructive act, delete-from-archive, is a real `DELETE` — no flag.
+ */
+const MIGRATION_002_TICKET_ARCHIVAL = `
+ALTER TABLE tickets ADD COLUMN archived_at INTEGER;
+
+DROP INDEX tickets_project_status;
+CREATE INDEX tickets_board ON tickets(project_id, status, position)
+  WHERE archived_at IS NULL;
+CREATE INDEX tickets_archived ON tickets(project_id, archived_at)
+  WHERE archived_at IS NOT NULL;
+`;
+
+/**
+ * Migration 003: the ticket-detail MVP (decisions #14/#18/#22). Three
+ * additions, all additive/nullable — no
+ * existing column is touched:
+ *  - `sessions`: a durable trace + resume seed for a terminal session,
+ *    distinct from its live in-memory PTY state. `ticket_id NULL` means a
+ *    Board Session (no card on the board); `ON DELETE
+ *    CASCADE` off `project_id` and `ON DELETE SET NULL` off `ticket_id` mean
+ *    a session outlives an archived-then-deleted ticket, purely as
+ *    project-level history.
+ *  - `ticket_comments`: the ticket's work log (content), kept separate from
+ *    the append-only `ticket_events` audit trail; a comment also fires a
+ *    `commented` event so it's discoverable from the event log without
+ *    duplicating its body there. `session_id ON DELETE SET NULL` keeps an
+ *    agent-posted comment after its session record is gone.
+ *  - `tickets.worktree_path/branch/base_branch`: first-class worktree
+ *    identity (vision anchor: worktrees are pure code isolation, settable
+ *    now even though creation automation lands later). All three start
+ *    `NULL` on every existing row.
+ */
+const MIGRATION_003_TICKET_DETAIL = `
+CREATE TABLE sessions (
+  id                 TEXT PRIMARY KEY,
+  project_id         TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ticket_id          TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+  harness_id         TEXT NOT NULL,
+  harness_session_id TEXT,
+  title              TEXT NOT NULL,
+  cwd                TEXT NOT NULL,
+  created_at         INTEGER NOT NULL,
+  ended_at           INTEGER
+);
+CREATE INDEX sessions_ticket ON sessions(ticket_id, created_at);
+CREATE INDEX sessions_project ON sessions(project_id, created_at);
+
+CREATE TABLE ticket_comments (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  actor      TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX ticket_comments_ticket ON ticket_comments(ticket_id, created_at);
+
+ALTER TABLE tickets ADD COLUMN worktree_path TEXT;
+ALTER TABLE tickets ADD COLUMN branch TEXT;
+ALTER TABLE tickets ADD COLUMN base_branch TEXT;
+`;
+
+/**
+ * Migration 004: harness identity moves to sessions only. A ticket is no
+ * longer itself bound to a single agent harness — `sessions.harness_id`
+ * (added in migration 003) already records which harness drove each session,
+ * and that's the only place harness identity belongs now. Drops the
+ * now-unused `tickets.harness_id` column (SQLite's `ALTER TABLE ... DROP
+ * COLUMN` is supported by the bundled better-sqlite3/SQLite build).
+ */
+const MIGRATION_004_DROP_TICKET_HARNESS = `
+ALTER TABLE tickets DROP COLUMN harness_id;
+`;
+
+/**
+ * Migration 005: a durable per-project ticket-number counter (found during
+ * PR #34 review — commit 83a7298 introduced real hard-delete from the
+ * archive). `nextTicketNumberForProject` used to be `MAX(ticket_number) + 1`
+ * over the table's *remaining* rows, so deleting a project's highest-numbered
+ * ticket freed its number: the next ticket created reused a dead ticket's
+ * display id, and its worktree branch `volli/<PREFIX>-<n>-<slug>` could
+ * collide with the deleted ticket's still-live worktree (worktrees are
+ * archived, never deleted). `projects.next_ticket_number` fixes this — an
+ * ever-increasing counter that only ever moves forward, bumped atomically
+ * with every ticket insert, so a hard-delete can no longer roll it back.
+ * `DEFAULT 1` covers every project created after this migration (its INSERT
+ * never sets the column); the backfill below seeds it for every existing
+ * project from its current tickets, so an upgrade never hands out a number
+ * already used by a live, archived, or since-deleted row.
+ */
+const MIGRATION_005_TICKET_NUMBER_COUNTER = `
+ALTER TABLE projects ADD COLUMN next_ticket_number INTEGER NOT NULL DEFAULT 1;
+
+UPDATE projects
+   SET next_ticket_number = (
+     SELECT COALESCE(MAX(t.ticket_number), 0) + 1
+       FROM tickets t
+      WHERE t.project_id = projects.id
+   );
+`;
+
+/**
+ * Migration 006: truthful session-history metadata. Before this migration a
+ * bare shell (including every split) inherited `claude-code` as its
+ * `harness_id`, so the ticket rail presented every terminal as Claude Code.
+ * `launch_kind` separates agent launches from shells; `placement` records the
+ * renderer intent (top-level tab or split). Existing rows are deliberately
+ * `unknown` for both fields because their original launch/layout intent cannot
+ * be reconstructed safely from the old columns.
+ */
+const MIGRATION_006_SESSION_METADATA = `
+ALTER TABLE sessions ADD COLUMN launch_kind TEXT NOT NULL DEFAULT 'unknown'
+  CHECK (launch_kind IN ('agent','shell','unknown'));
+ALTER TABLE sessions ADD COLUMN placement TEXT NOT NULL DEFAULT 'unknown'
+  CHECK (placement IN ('tab','split','unknown'));
+`;
+
+/**
+ * Migration 007: execution preferences from the agent-surface contract. The
+ * preferred harness is distinct from durable session identity: it chooses a
+ * future kickoff default, while each actual run still records its harness on
+ * `sessions`. A nullable project base branch pins automation independently of
+ * whichever branch the root checkout happens to have active.
+ */
+const MIGRATION_007_EXECUTION_PREFERENCES = `
+ALTER TABLE tickets ADD COLUMN preferred_harness_id TEXT NOT NULL DEFAULT 'claude-code';
+ALTER TABLE projects ADD COLUMN base_branch TEXT;
+`;
+
+/**
+ * Migration 008: per-project worktree setup command (worktree-support §6/§8).
+ * When set, `projects.setup_command` is typed into a fresh ticket worktree's
+ * terminal — sentinel-gated (`worktree/setup.ts`) — before the harness command
+ * runs, so a checkout is prepared (deps installed, env built) in-band with the
+ * session it belongs to. Nullable and set independently of durable session
+ * identity, mirroring the `base_branch` precedent (migration 007): a project
+ * that never configures one simply skips the setup phase. Additive; every
+ * existing row starts `NULL`.
+ */
+const MIGRATION_008_WORKTREE_SETUP = `
+ALTER TABLE projects ADD COLUMN setup_command TEXT;
+`;
+
+/**
+ * Migration 009: durable pull-request truth (done-flow §"Persistence, IPC,
+ * events", decision #5). `tickets.pr_url` (nullable) records the draft PR the
+ * push flow opened — or re-discovered — for the ticket's branch. It is the
+ * foundation the merge-watch (#76) and Archive (#16) features build on and the
+ * value the Details rail's "Open PR" affordance reads. Additive and nullable,
+ * like the migration-003 worktree identity it sits beside; every existing row
+ * starts `NULL`.
+ */
+const MIGRATION_009_TICKET_PR_URL = `
+ALTER TABLE tickets ADD COLUMN pr_url TEXT;
+`;
+
+/**
+ * Migration 010: the retention "Keep" pin (CONCEPT #16, issue #76).
+ * `tickets.retention_keep` (0/1, default 0) is an EXPLICIT per-ticket exemption
+ * from BOTH retention paths — the PR-merge archive prompt AND the Done-TTL sweep
+ * (Vibe Kanban's source-verified bug is a TTL sweep that ignores its own pinned
+ * flag; the keep pin here must be honored by both). Unlike the transient
+ * merge/conflict/archive-ready state (computed, never stored — decision #42),
+ * the pin is durable user intent, so it is a real column. Additive; every
+ * existing row starts `0` (not kept).
+ */
+const MIGRATION_010_RETENTION_KEEP = `
+ALTER TABLE tickets ADD COLUMN retention_keep INTEGER NOT NULL DEFAULT 0;
+`;
+
+/**
+ * Migration 011: ticket attachments (issue #77). `ticket_attachments` is spec
+ * material — a file or URL — attached to a ticket, materialized into the
+ * agent's worktree at session boot (a later PR; this migration is storage
+ * only). One row shape covers both variants (`kind` discriminates, like
+ * `ticket_comments`' single-table shape): a `file` row sets `file_name` (the
+ * original basename, bytes stored separately under Electron `userData` —
+ * `apps/desktop/src/main/attachment-store.ts`) and leaves `url` NULL; a `url`
+ * row sets `url` and leaves `file_name` NULL. `label` is always non-empty —
+ * the repo layer defaults it before insert and the CHECK enforces it at rest.
+ * `ON DELETE CASCADE` off `ticket_id` mirrors `ticket_comments`: an
+ * attachment cannot outlive its ticket.
+ */
+const MIGRATION_011_TICKET_ATTACHMENTS = `
+CREATE TABLE ticket_attachments (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('file','url')),
+  label      TEXT NOT NULL CHECK (label <> ''),
+  file_name  TEXT,
+  url        TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_ticket_attachments_ticket ON ticket_attachments(ticket_id);
+`;
+
+/**
+ * Migration 012: `sessions.exit_code` — the shell's exit code, stamped by the
+ * PTY exit path in the same transaction as `ended_at`. Backs the sidebar's
+ * honest outcome labels for concluded sessions ("Done"/"Failed" only when the
+ * code was actually observed). NULL while live, for boot-sweep ends (the
+ * process outcome was never seen), and for every historical row — readers must
+ * treat NULL as "unknown", never as success.
+ */
+const MIGRATION_012_SESSION_EXIT_CODE = `
+ALTER TABLE sessions ADD COLUMN exit_code INTEGER;
+`;
+
+/**
+ * Migration 013: per-project theming (decisions #69/#72). Four nullable columns
+ * on `projects`, one per surface plus the auto-tint seed — additive, every
+ * existing row starts `NULL`, and `NULL` means *inherit the global theme*,
+ * which is what makes "per-project theming is off by default" (#72) the
+ * literal storage state rather than a UI convention.
+ *
+ * Deliberately FOUR columns rather than one JSON blob: resolution is per
+ * surface, never per token (#69), so "what is overridden" must be answerable
+ * by looking at the row. It also keeps a future `WHERE theme_app_slug IS NOT
+ * NULL` sweep (find every project that overrides the app surface) an index-able
+ * question instead of a JSON scan.
+ *
+ * What is NOT here: the resolved token set. `{global theme, project override}`
+ * is authoritative and the tokens are derived at render time — VS Code's
+ * most-complained-about theming bug is auto-switching persisting the resolved
+ * theme over the user's authored intent. The global half lives in `app_state`
+ * under the `theme` key (see `db/theme-repo.ts`), not in a column here.
+ */
+const MIGRATION_013_PROJECT_THEME_OVERRIDE = `
+ALTER TABLE projects ADD COLUMN theme_app_slug TEXT;
+ALTER TABLE projects ADD COLUMN theme_terminal_name TEXT;
+ALTER TABLE projects ADD COLUMN theme_editor_id TEXT;
+ALTER TABLE projects ADD COLUMN theme_seed TEXT;
+`;
+
+/**
+ * Migration 014: per-project canvas + appearance (the arc theming migration).
+ * Two nullable columns, replacing what 013's four columns meant rather than
+ * what they held: a project now overrides the CANVAS (the authored gradient)
+ * and/or the APPEARANCE, independently, and `NULL` still means *inherit*.
+ *
+ * Three shapes worth naming, because each one is a road not taken:
+ *
+ *  - **`theme_canvas` is JSON, where 013 deliberately used flat columns.** A
+ *    canvas is a gradient — a variable-length list of `{hex, x, y}` stops plus
+ *    two scalars — so there is no column set that describes it, and no
+ *    `WHERE theme_canvas = ?` question anyone asks. 013's argument (per-surface
+ *    resolution must be answerable from the row) does not apply: the canvas
+ *    resolves whole or not at all.
+ *  - **There is no `canvases` table.** One canvas per scope, edited in place;
+ *    a named, reusable library was considered and rejected. Nothing here
+ *    references a row elsewhere, so a project's canvas cannot be orphaned or
+ *    shared into a surprise.
+ *  - **013's four columns stay.** SQLite's `DROP COLUMN` is unavailable on the
+ *    versions this ships against, and the export document carries every
+ *    `projects` column by construction (`db/export.ts`), so dropping them is
+ *    neither safe nor free. They stop being READ (see `projects-repo.ts`) —
+ *    dead data, not live data, which is decision 7's "reset to Ember, no
+ *    seed→canvas conversion" expressed in the schema.
+ *
+ * The `CHECK` follows `tickets.status`'s precedent: the appearance vocabulary
+ * is closed, and a hand-edited db that says `theme_appearance = 'sepia'` should
+ * fail at the write, not paint something arbitrary three layers up. SQLite does
+ * not re-validate existing rows when a checked column is added, which is exactly
+ * right here — every existing row gets `NULL`, which the check admits.
+ */
+const MIGRATION_014_PROJECT_CANVAS = `
+ALTER TABLE projects ADD COLUMN theme_canvas TEXT;
+ALTER TABLE projects ADD COLUMN theme_appearance TEXT
+  CHECK (theme_appearance IS NULL OR theme_appearance IN ('light','dark','auto'));
+`;
+
+/**
+ * Migration 015: the trust verdict for a registered harness (harness-events,
+ * "Bring your own harness"). A manifest at
+ * `~/.agents/harnesses/<slug>/harness.json` is the DECLARATION — the author's
+ * file, editable at any moment, and no business of ours. What belongs here is
+ * only what Volli itself decided about it.
+ *
+ * Which is why `manifest_sha256` is stored and the manifest's CONTENTS are not.
+ * Mirroring command, argv and surfaces into columns would create a second copy
+ * the author cannot edit, and "drop a file in and it works" would stop being
+ * true the moment the two disagreed. The hash is enough to answer the only
+ * question this table exists for: are these the bytes somebody actually ruled
+ * on? Anything else is re-read from disk.
+ *
+ * `declared_events` and `verified_events` are both JSON arrays of canonical
+ * event names, and the asymmetry between them is the point. Declared is a claim
+ * and gates nothing; verified is a fact, written on first real delivery, and it
+ * alone drives automatic board moves and notifications. A verdict recorded
+ * against new bytes resets verified, because the old evidence was about a
+ * command line that no longer exists.
+ *
+ * No `harness_id` foreign key anywhere: a slug is registered here BEFORE any
+ * session has ever used it, and sessions keep their `harness_id` as free text
+ * (migration 003) precisely so an unregistered harness still records history.
+ *
+ * Deliberately absent from `db/export.ts`, which otherwise carries every table:
+ * a verdict is a decision about the files on THIS machine, and permission to
+ * execute a command line is not something an export document should carry.
+ */
+const MIGRATION_015_REGISTERED_HARNESSES = `
+CREATE TABLE registered_harnesses (
+  slug            TEXT PRIMARY KEY,
+  manifest_path   TEXT NOT NULL,
+  manifest_sha256 TEXT NOT NULL,
+  decision        TEXT NOT NULL CHECK (decision IN ('trusted','blocked')),
+  declared_events TEXT NOT NULL DEFAULT '[]',
+  verified_events TEXT NOT NULL DEFAULT '[]',
+  decided_at      INTEGER NOT NULL,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+`;
+
+/**
+ * Migration 016: what is RUNNING in a session's terminal, beside what that
+ * session was launched with.
+ *
+ * `harness_id` is written once at INSERT and never updated, which is correct —
+ * it is the launch, and the launch does not change. What was missing is the
+ * other half: a terminal outlives the agent that opened it, so a user who quits
+ * opencode and runs claude in the same pane leaves the row describing a process
+ * that is gone. Additive and nullable rather than a rewrite of `harness_id`,
+ * because both facts are wanted and `NULL` is the honest state of every row that
+ * predates the announce — nothing has said what it is running, so the launch
+ * harness remains the best available answer.
+ */
+const MIGRATION_016_SESSION_ACTIVE_HARNESS = `
+ALTER TABLE sessions ADD COLUMN active_harness_id TEXT;
+`;
+
+/**
+ * Migration 017: whether a harness's event channel is working *now*.
+ *
+ * `registered_harnesses.verified_events` (015) is monotonic on purpose — one
+ * delivery pins a capability forever — which makes it structurally unable to
+ * say that automation STOPPED working. A harness upgrade that renames a hook
+ * field, a `volli doctor --fix` never run after a path change, a wrapper
+ * removed by a dotfile sync: every one of those reads as perfectly healthy for
+ * the rest of the install's life.
+ *
+ * So freshness gets its own two integers rather than a rewrite of a working
+ * ledger. `last_launch_at` is stamped by the `session harness` announce — the
+ * wrapper calling in one step before it execs, which is the only event that
+ * proves Volli's configuration was in the loop; a PTY spawn would also count a
+ * user running `/opt/homebrew/bin/claude` by hand and manufacture a false
+ * accusation out of it. `last_event_at` is stamped by an arriving hook.
+ *
+ * No third column. The state — reporting / silent / unproven — is the
+ * comparison of the two, computed at read time, and that is exactly what makes
+ * it forget: a harness whose latest launch said nothing is silent on that
+ * launch, whatever the previous hundred did. Storing the verdict would make it
+ * monotonic again by the back door.
+ *
+ * Both columns are nullable and there is no row until something happens: a
+ * harness nobody has launched has nothing to say about itself, and `NULL` is
+ * that, distinct from zero.
+ *
+ * Absent from `db/export.ts` for migration 015's reason — this is an
+ * observation about THIS machine's install, not domain data a document should
+ * carry.
+ */
+const MIGRATION_017_HARNESS_CHANNEL = `
+CREATE TABLE harness_channel (
+  harness_id     TEXT PRIMARY KEY,
+  last_launch_at INTEGER,
+  last_event_at  INTEGER
+);
+`;
+
+/**
+ * Migration 018: Sessions become an identity-only durable ledger.
+ *
+ * Versions 003–017 treated a Session as a terminal row.  That made a PTY's
+ * launch configuration, exit status, and the Session itself one mutable
+ * thing.  The control plane now owns the latter as immutable facts; a terminal
+ * is simply one attachment to that Session.  This is an explicitly authorised
+ * pre-release reset, so old terminal-shaped rows and the ticket lifecycle
+ * facts derived from them are removed rather than invented into a new history.
+ * Planner rows, comment bodies, and every non-Session ticket fact survive.
+ */
+const MIGRATION_018_SESSION_LEDGER = `
+-- A comment is planner content, not a Session fact.  Preserve it while
+-- deliberately clearing legacy session provenance before the old table goes.
+UPDATE ticket_comments SET session_id = NULL WHERE session_id IS NOT NULL;
+DELETE FROM ticket_events
+ WHERE kind IN (
+   'session_started',
+   'session_ended',
+   'session_resumed',
+   'sessions_interrupted',
+   'session_signal'
+ );
+
+CREATE TABLE sessions_v18 (
+  id         TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ticket_id  TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+  title      TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE ticket_comments_v18 (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions_v18(id) ON DELETE SET NULL,
+  actor      TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+INSERT INTO ticket_comments_v18 (id, ticket_id, session_id, actor, body, created_at, updated_at)
+  SELECT id, ticket_id, NULL, actor, body, created_at, updated_at
+    FROM ticket_comments;
+DROP TABLE ticket_comments;
+DROP TABLE sessions;
+ALTER TABLE sessions_v18 RENAME TO sessions;
+ALTER TABLE ticket_comments_v18 RENAME TO ticket_comments;
+CREATE INDEX ticket_comments_ticket ON ticket_comments(ticket_id, created_at);
+
+CREATE INDEX sessions_project_created ON sessions(project_id, created_at DESC, id DESC);
+CREATE INDEX sessions_ticket_created ON sessions(ticket_id, created_at DESC, id DESC);
+
+CREATE TABLE session_attachments (
+  id                 TEXT PRIMARY KEY,
+  session_id         TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  adapter_id         TEXT NOT NULL CHECK (adapter_id <> ''),
+  venue_id           TEXT NOT NULL CHECK (venue_id <> ''),
+  venue_kind         TEXT NOT NULL CHECK (venue_kind IN ('local','cloud','remote','unknown')),
+  continuity         TEXT NOT NULL CHECK (continuity IN ('fresh','native_resume','context_replay','recreate')),
+  native_id          TEXT,
+  native_detail      TEXT CHECK (native_detail IS NULL OR json_valid(native_detail)),
+  observed_kind      TEXT NOT NULL CHECK (observed_kind IN ('opened','failed')),
+  failure            TEXT CHECK (failure IS NULL OR json_valid(failure)),
+  created_sequence   INTEGER NOT NULL CHECK (created_sequence > 0),
+  UNIQUE (session_id, id)
+);
+CREATE INDEX session_attachments_session ON session_attachments(session_id, created_sequence, id);
+
+CREATE TABLE session_commands (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  intent     TEXT NOT NULL CHECK (json_valid(intent)),
+  route      TEXT CHECK (route IS NULL OR json_valid(route)),
+  UNIQUE (session_id, id)
+);
+CREATE INDEX session_commands_session ON session_commands(session_id, created_at, id);
+
+CREATE TABLE session_events (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  sequence      INTEGER NOT NULL CHECK (sequence > 0),
+  occurred_at   INTEGER NOT NULL,
+  recorded_at   INTEGER NOT NULL,
+  provenance    TEXT NOT NULL CHECK (json_valid(provenance)),
+  attachment_id TEXT,
+  command_id    TEXT,
+  payload       TEXT NOT NULL CHECK (json_valid(payload)),
+  UNIQUE (session_id, sequence),
+  UNIQUE (session_id, id),
+  FOREIGN KEY (session_id, attachment_id)
+    REFERENCES session_attachments(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_events_session_sequence ON session_events(session_id, sequence);
+CREATE INDEX session_events_command ON session_events(command_id);
+CREATE INDEX session_events_attachment ON session_events(attachment_id);
+
+CREATE TABLE session_command_receipts (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  command_id  TEXT NOT NULL REFERENCES session_commands(id) ON DELETE CASCADE,
+  sequence    INTEGER NOT NULL CHECK (sequence > 0),
+  recorded_at INTEGER NOT NULL,
+  receipt     TEXT NOT NULL CHECK (json_valid(receipt)),
+  receipt_event_id TEXT,
+  UNIQUE (command_id, sequence),
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, receipt_event_id)
+    REFERENCES session_events(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_receipts_command_sequence ON session_command_receipts(command_id, sequence);
+CREATE INDEX session_receipts_session_sequence ON session_command_receipts(session_id, sequence);
+`;
+
+/**
+ * Migration 019: per-project runtime preferences — the project half of what
+ * `app_state` holds globally under `volli:runtime-preferences:<adapterId>`.
+ * One nullable JSON column, `NULL` = inherit, taking 014's shape rather than
+ * 013's flat columns for 014's reason: the payload is a map keyed by adapter id
+ * whose values are variable-shaped blobs, so no column set describes it and
+ * nobody asks `WHERE runtime_preferences = ?`.
+ *
+ * **The value under each adapter key is the FULL stored record** —
+ * `{recordVersion, preferences, observedAt, models, agents}` — not the user's
+ * intent alone, and that is the part worth writing down. `resolve` (in the
+ * since-deleted `main/runtime-catalog.ts`) answered chat out of the stored
+ * record and never discovered, and a global `save` pre-filtered `models` down
+ * to the GLOBALLY enabled set. An override that stored intent alone would
+ * therefore resolve
+ * against a global snapshot that need not contain a model this project enabled
+ * — the project's own chosen model missing from the project's own picker. That
+ * is a wrong answer, not a degraded one. Carrying the snapshot the project's
+ * save actually observed costs a few KB per project and makes the override
+ * answerable on its own.
+ *
+ * The `CHECK` follows 014's `theme_appearance`: a column whose whole contract
+ * is "this is JSON" should fail at the write, not several layers up inside a
+ * parser that then has to invent a policy for the corpse.
+ */
+const MIGRATION_019_PROJECT_RUNTIME_PREFERENCES = `
+ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
+  CHECK (runtime_preferences IS NULL OR json_valid(runtime_preferences));
+`;
+
+/**
+ * Migration 020: Blobs (VC-50) — the bytes behind
+ * every user-supplied file, and the links naming where each one is attached.
+ * Replaces migration 011's `ticket_attachments`, which owned both at once:
+ * ticket-keyed, id-keyed, no deduplication, and structurally unable to be
+ * referenced from a chat message. Dropping it costs nothing — `createAttachment`
+ * never had a caller, so the table has never held a row in any build that
+ * shipped. (Vibe Kanban shipped that same owner-keyed shape and had to migrate
+ * off it for exactly this reason; we get to skip the migration.)
+ *
+ * `blobs` is content-addressed: the sha256 IS the primary key, so re-attaching
+ * a file the user has already attached is an INSERT OR IGNORE rather than a
+ * second copy, and the file store needs no traversal guard beyond "is this a
+ * hash". `width`/`height` are NULL for anything that is not an image we could
+ * measure — readers must treat NULL as "unknown", never as zero.
+ *
+ * `blob_links` is the thin row naming where a Blob hangs: exactly one of
+ * `ticket_id` (spec material on the Ticket) or `session_id` (a file handed to
+ * the agent mid-chat), enforced by CHECK rather than convention. Two explicit
+ * nullable owners, not a generic owner_kind/owner_id pair — there are two
+ * surfaces, and a third should be a schema change somebody reviews rather than
+ * a new string value that slips in. `ON DELETE CASCADE` on both owners and on
+ * `blob_hash` mirrors `ticket_comments`: a link never outlives either end.
+ *
+ * Note what is NOT cascaded: deleting the last link to a Blob leaves the Blob
+ * row and its bytes, to be collected deliberately. An attachment removed by a
+ * misclick should not take the bytes with it while an undo is still plausible.
+ */
+const MIGRATION_020_BLOBS = `
+CREATE TABLE blobs (
+  hash          TEXT PRIMARY KEY CHECK (length(hash) = 64),
+  mime          TEXT NOT NULL CHECK (mime <> ''),
+  size_bytes    INTEGER NOT NULL CHECK (size_bytes >= 0),
+  original_name TEXT NOT NULL CHECK (original_name <> ''),
+  width         INTEGER,
+  height        INTEGER,
+  created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE blob_links (
+  id         TEXT PRIMARY KEY,
+  blob_hash  TEXT NOT NULL REFERENCES blobs(hash) ON DELETE CASCADE,
+  ticket_id  TEXT REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  label      TEXT NOT NULL CHECK (label <> ''),
+  created_at INTEGER NOT NULL,
+  CHECK ((ticket_id IS NULL) <> (session_id IS NULL))
+);
+CREATE INDEX idx_blob_links_ticket ON blob_links(ticket_id, created_at);
+CREATE INDEX idx_blob_links_session ON blob_links(session_id, created_at);
+CREATE INDEX idx_blob_links_blob ON blob_links(blob_hash);
+
+DROP TABLE ticket_attachments;
+`;
+
+/**
+ * Migration 021: the two homes Web Access needs, deliberately apart.
+ *
+ * **`secrets` holds ciphertext and nothing else.** One row per named secret,
+ * the name being Volli's own constant rather than anything a caller composes,
+ * and the payload being whatever the OS keychain handed back through Electron's
+ * `safeStorage`. It is its own table for one reason worth stating: the settings
+ * beside it are read by surfaces that answer the renderer, and a secret sharing
+ * their row is a secret one careless `SELECT *` puts on screen. Nothing here is
+ * readable without the key material the OS holds, so a copied `volli.db` is not
+ * a copied credential.
+ *
+ * (Migration 023 retired the ciphertext half of that: the payload is now the key
+ * itself, and the reason this table is separate from `app_state` is the whole of
+ * what keeps it off the renderer's wire. The paragraph above is left as written
+ * because it is what this statement did on the day it ran.)
+ *
+ * **`app_state` was the obvious home for the settings and is the wrong one.**
+ * Every row of it rides the `volli:data-bootstrap` payload to the renderer, and
+ * `volli:app-state-set` lets the renderer write any key it likes with any string
+ * it likes. A provider endpoint that could be written that way would be an
+ * endpoint that never passed `admitSearchEndpoint`, which is the check that
+ * makes a self-hosted URL safe to have at all. So the settings live in their own
+ * main-owned table, reachable only through the validating channel.
+ *
+ * One row, pinned by the `id = 1` check: this is a profile-wide setting, and a
+ * table that could hold two of them is a table someone has to write a
+ * tie-breaker for.
+ */
+const MIGRATION_021_WEB_ACCESS = `
+CREATE TABLE secrets (
+  name       TEXT PRIMARY KEY,
+  ciphertext BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE web_access_settings (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  provider    TEXT NOT NULL CHECK (provider IN ('off', 'brave', 'searxng')),
+  searxng_url TEXT,
+  updated_at  INTEGER NOT NULL
+);
+`;
+
+/**
+ * Widen the provider CHECK to admit Exa.
+ *
+ * The table is rebuilt because SQLite cannot alter a CHECK constraint in place.
+ * The constraint is kept rather than dropped: it is what stops a provider name
+ * this version cannot resolve from being written, and the read side already
+ * falls back to `off` for a name it does not know, so the two together mean a
+ * downgrade reads Exa as Off instead of failing.
+ *
+ * Nothing here touches `secrets`. A key stored under `web-access.exa.api-key`
+ * is its own row and survives independently of which provider is selected.
+ */
+const MIGRATION_022_WEB_ACCESS_EXA = `
+CREATE TABLE web_access_settings_new (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  provider    TEXT NOT NULL CHECK (provider IN ('off', 'brave', 'searxng', 'exa')),
+  searxng_url TEXT,
+  updated_at  INTEGER NOT NULL
+);
+
+INSERT INTO web_access_settings_new (id, provider, searxng_url, updated_at)
+  SELECT id, provider, searxng_url, updated_at FROM web_access_settings;
+
+DROP TABLE web_access_settings;
+
+ALTER TABLE web_access_settings_new RENAME TO web_access_settings;
+`;
+
+/**
+ * Migration 024: per-project agent configuration (VC-111) — the Configure
+ * surface's own three columns.
+ *
+ * 024, not the 023 it was written as — and RECONCILING, because two lineages
+ * both wrote a migration 23 in parallel and both populations exist:
+ *
+ *  - **main lineage**: `user_version = 23` means VC-158's web-keys migration
+ *    ran; these three columns are missing.
+ *  - **branch lineage** (the VC-111 dogfood profile): `user_version = 23`
+ *    means THIS migration's DDL ran under its original number; the columns
+ *    exist, and the web-keys rebuild never happened — `secrets` still holds
+ *    `ciphertext` while every reader now expects `value`.
+ *
+ * A plain-SQL 024 picks one population and breaks the other — re-adding an
+ * existing column is the exact "duplicate column name: skill_modes" boot
+ * failure the dogfood profile hit. So this is the runner's one `apply`
+ * migration: it probes `table_info` and runs only what the database in front
+ * of it is missing — the column adds, the secrets rebuild, both, or (for a
+ * fully-reconciled copy) neither. Probing over renumbering because a probe
+ * answers the database's actual shape; a version number here answers only
+ * which branch wrote it.
+ *
+ * Columns rather than an `app_state` blob keyed by project id, which is what
+ * Model Access does globally and what this nearly became. The deciding
+ * difference is ownership: these values describe ONE project and die with it,
+ * and `app_state` has no foreign key, so a `volli:agent-config:<projectId>`
+ * row would outlive the project it configured — a leak nothing ever collects,
+ * and a stale answer waiting for the next project that happens to reuse the id.
+ * On the row they cascade for free.
+ *
+ * `NULL` is inherit on all three, exactly as 013, 014 and 019 mean it, so a
+ * project upgraded across this migration behaves precisely as it did before.
+ *
+ * The shapes:
+ *  - `skill_modes` — a JSON object mapping a skill slug to `"auto"`,
+ *    `"manual"` or `"off"`. Only DEPARTURES are stored: an absent slug means the skill's own
+ *    frontmatter decides, so a skill installed after this was last written is
+ *    governed by its author rather than silently hidden — which is what an
+ *    allow list would have done.
+ *
+ *    A map rather than the deny-list array this started as, because there are
+ *    three states and the middle one is the valuable one. `manual` withholds a
+ *    skill from the model's metadata index while leaving it invokable by name,
+ *    and that index is ~94% of a fresh Session's Volli-composed prompt, re-sent
+ *    as the stable prefix of every turn. A two-state switch could only ask
+ *    "delete this?" when the question worth asking is "pay for this on every
+ *    turn?".
+ *  - `session_harness` — a harness id. Unconstrained by CHECK on purpose:
+ *    harnesses are user-registrable (migration 015), so the legal set is a
+ *    table, not a literal, and a CHECK here would refuse a harness the user
+ *    installed.
+ *  - `session_model` — a JSON `ModelSelection`. `json_valid` for 019's reason:
+ *    a column whose whole contract is "this is JSON" should fail at the write
+ *    rather than several layers up in a parser that then has to invent a
+ *    policy for the corpse.
+ */
+const MIGRATION_024_PROJECT_AGENT_CONFIG = `
+ALTER TABLE projects ADD COLUMN skill_modes TEXT
+  CHECK (skill_modes IS NULL OR json_valid(skill_modes));
+ALTER TABLE projects ADD COLUMN session_harness TEXT;
+ALTER TABLE projects ADD COLUMN session_model TEXT
+  CHECK (session_model IS NULL OR json_valid(session_model));
+`;
+
+/**
+ * Migration 023: the two search keys stop being keychain material.
+ *
+ * `safeStorage` was the app's only tie to the macOS Keychain, and it guarded the
+ * least sensitive secret Volli holds while producing its loudest interruption:
+ * macOS binds a keychain item's ACL to the code identity that created it, so
+ * every differently-signed build — a dev Electron, a local `release/`, an
+ * updated `/Applications` copy — raised "Volli Code wants to access key … in
+ * your keychain", on every Session attach, forever. Meanwhile the credentials
+ * that actually matter (the provider OAuth tokens) sit in Pi's 0600
+ * `~/.pi/agent/auth.json`, the same plain-file model opencode and Codex use.
+ * This schema follows the secret that matters rather than the one that shouted.
+ *
+ * So `secrets.ciphertext BLOB` becomes `secrets.value TEXT`, holding the key as
+ * typed. What is given up is the one property the ciphertext bought: a copied
+ * `volli.db` is now a copied key. What is kept is the property that was doing
+ * the work all along — this table is not `app_state`, so nothing here rides the
+ * bootstrap payload to the renderer, and the file itself lives in a user-only
+ * `Application Support` directory beside the auth.json that already made this
+ * trade.
+ *
+ * The old rows are moved rather than dropped, because only `safeStorage` can
+ * open them and only the machine that wrote them can ask it to. They wait in
+ * `legacy_safe_storage_secrets` for exactly one attempt at that
+ * (`web/legacy-safe-storage.ts`), which is also the last time this app touches a
+ * keychain. The table is named for what it is so the next reader does not have
+ * to guess why a second secrets table exists; it empties itself and is expected
+ * to stay empty. The user's "Volli Code Safe Storage" keychain item is left
+ * alone — another profile may still be using it, and deleting a keychain entry
+ * is not this migration's business.
+ */
+const MIGRATION_023_WEB_KEYS_LEAVE_THE_KEYCHAIN = `
+CREATE TABLE legacy_safe_storage_secrets (
+  name       TEXT PRIMARY KEY,
+  ciphertext BLOB NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+INSERT INTO legacy_safe_storage_secrets (name, ciphertext, updated_at)
+  SELECT name, ciphertext, updated_at FROM secrets;
+
+DROP TABLE secrets;
+
+CREATE TABLE secrets (
+  name       TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`;
+
+/**
+ * Migration 027: `session_usage` — the read model for what Sessions consumed.
+ *
+ * A fact INDEX, not an aggregate. One row per metered model operation, keyed
+ * by the `usage.recorded` event that proves it, so the table can be dropped
+ * and rebuilt from the ledger at any time and no total is ever stored where a
+ * later write could disagree with the facts under it.
+ *
+ * Every measured column is nullable and none defaults to zero. A provider that
+ * reported no cost and a provider that charged nothing are different facts, and
+ * `DEFAULT 0` here would erase the difference at the storage layer where no
+ * reader could recover it.
+ *
+ * `project_id` and `ticket_id` are copied from the *event* at write time and
+ * carry no foreign key to `tickets`. `sessions.ticket_id` is ON DELETE SET
+ * NULL, so joining live would move a deleted Ticket's whole bill into
+ * unticketed Project spend — a quieter lie than an id that no longer resolves.
+ * Attribution therefore rides in the immutable `usage.recorded` event, which is
+ * what lets a rebuild reproduce this table row for row. The Session reference
+ * does cascade: a Session that is gone has no history for these rows to index.
+ *
+ * `session_usage_coverage` records HOW FAR BACK this profile can answer, and it
+ * is the difference between a partial total and a wrong one. A database that
+ * existed before this migration has real spend in its past that was never
+ * evented, so the index starts empty and the first total a reader saw would
+ * otherwise be “no metered model calls yet”, followed later by a complete-
+ * looking figure covering only what happened after the upgrade.
+ *
+ * NOT BACKFILLED, and the choice is deliberate rather than deferred. The only
+ * historical source is the settled transcript artifacts, and settled messages
+ * are a biased sample of spend: a tool-use-only reply, a reply that failed
+ * after its prompt was billed, a Context Compaction and the auto-title utility
+ * call each cost money and settle no transcript row. A backfill from that
+ * source would produce a number that is systematically low and
+ * indistinguishable from a complete one — which is precisely the sentence this
+ * whole feature exists to prevent. A boundary a reader can see beats a total
+ * nobody can check.
+ *
+ * `metered_from` is the newest fact already in history rather than a wall
+ * clock: a migration must be a deterministic function of the database it is
+ * handed, and everything at or before that instant demonstrably predates
+ * metering. `0` — the value a fresh profile gets — means there is no boundary
+ * and every window is complete.
+ */
+const MIGRATION_027_SESSION_USAGE = `
+CREATE TABLE session_usage_coverage (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  metered_from INTEGER NOT NULL
+);
+
+INSERT INTO session_usage_coverage (id, metered_from)
+VALUES (1, COALESCE((SELECT MAX(occurred_at) FROM session_events), 0));
+
+CREATE TABLE session_usage (
+  event_id           TEXT PRIMARY KEY,
+  session_id         TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  project_id         TEXT NOT NULL,
+  ticket_id          TEXT,
+  occurred_at        INTEGER NOT NULL,
+  cause              TEXT NOT NULL,
+  provider_id        TEXT NOT NULL,
+  model_id           TEXT NOT NULL,
+  input_tokens       INTEGER,
+  output_tokens      INTEGER,
+  cache_read_tokens  INTEGER,
+  cache_write_tokens INTEGER,
+  cost_usd           REAL,
+  cost_basis         TEXT NOT NULL
+);
+
+CREATE INDEX session_usage_project_time ON session_usage(project_id, occurred_at);
+CREATE INDEX session_usage_ticket_time ON session_usage(ticket_id, occurred_at);
+CREATE INDEX session_usage_session_time ON session_usage(session_id, occurred_at);
+CREATE INDEX session_usage_model_time ON session_usage(provider_id, model_id, occurred_at);
+`;
+
+/**
+ * Migration 025: the durable authority policy store (VC-44, slice 7 of the
+ * two-axis authority rearchitecture).
+ *
+ * One nullable JSON column, `NULL` = inherit every built-in default, taking
+ * 019's shape for 019's reason: the payload is a variable-shaped document, no
+ * column set describes it, and nobody asks `WHERE authority_policy = ?`.
+ *
+ * **The column stores DEPARTURES, never the resolved policy.** That is the one
+ * decision here worth reading twice, and it is the opposite of what migration
+ * 019 chose — 019 stores the full observed record because a project's picker had
+ * to stay answerable against a global snapshot that might no longer contain its
+ * model. Authority has no such coupling and the opposite hazard: a project that
+ * stored its resolved policy would freeze today's defaults into every project
+ * that ever opened a settings pane, so tightening a default later would silently
+ * skip exactly the projects someone had touched. `resolveAuthorityPolicy` splices
+ * the defaults in at read time, which is what makes a changed default reach
+ * every project that never disagreed with it.
+ *
+ * **Why the database and not a file in the repo.** This is the ticket's
+ * non-negotiable. A policy store the agent can write is a privilege-escalation
+ * loop: the thing being governed would author its own permissions. Claude Code's
+ * classifier refuses to read `autoMode` out of repo-local settings for exactly
+ * this reason, because a checked-in file — or a build step that writes one —
+ * arrives with the repository. The database is under Electron's `userData`,
+ * outside every Session workspace and outside every worktree, so no file tool
+ * reaches it. Say the limit honestly: the capability axis is off and no rule
+ * judges command operands, so a Session's `execute` tool can still reach this
+ * file through an ordinary shell command. `writableRoots` in VC-45 is what
+ * closes that. What this placement buys today is that policy is never *sourced*
+ * from the tree the agent is editing.
+ *
+ * `json_valid` follows 019 and 024: a column whose whole contract is "this is
+ * JSON" should fail at the write, not several layers up inside a parser that
+ * then has to invent a policy for the corpse.
+ */
+const MIGRATION_025_PROJECT_AUTHORITY_POLICY = `
+ALTER TABLE projects ADD COLUMN authority_policy TEXT
+  CHECK (authority_policy IS NULL OR json_valid(authority_policy));
+`;
+
+/**
+ * Migration 026: Automations V1's durable command ledger and projections
+ * (VC-112, tracer VC-126).
+ *
+ * `automations` and `automation_runs` are projections: every product write
+ * arrives first as a command, is recorded as an immutable event, then changes
+ * one of these readable rows in the same transaction. This is deliberately
+ * the same acceptance shape as Sessions, rather than another Electron-only
+ * collection of SQLite mutations.
+ *
+ * A Run snapshots both `automation_id` and `automation_name`. The id has no
+ * foreign key on purpose: deleting an Automation removes its editable
+ * projection, not the historical reference from a Run. `automation_name`
+ * means the later history can still name the deleted Automation; `NULL` for
+ * both is reserved for a future Unbound Run.
+ *
+ * `automation_run_deliveries` is the idempotent first-message intent. It is
+ * committed with the Run before the caller gets success, so an attach that
+ * needs recovery (or a process crash) cannot leave a durable Run/Session with
+ * its Instructions silently lost. Its fixed Session command and message ids
+ * make a later delivery replay safe.
+ */
+const MIGRATION_026_AUTOMATIONS = `
+CREATE TABLE IF NOT EXISTS automations (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL CHECK (name <> ''),
+  instructions TEXT NOT NULL CHECK (instructions <> ''),
+  runtime      TEXT CHECK (runtime IS NULL OR json_valid(runtime)),
+  row_version  INTEGER NOT NULL DEFAULT 1,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automations_project ON automations(project_id, name);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id              TEXT PRIMARY KEY,
+  automation_id   TEXT,
+  automation_name TEXT,
+  ticket_id       TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+  session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  provider_id     TEXT NOT NULL CHECK (provider_id <> ''),
+  model_id        TEXT NOT NULL CHECK (model_id <> ''),
+  reasoning_level TEXT NOT NULL CHECK (reasoning_level <> ''),
+  created_at      INTEGER NOT NULL,
+  CHECK (
+    (automation_id IS NULL AND automation_name IS NULL) OR
+    (automation_id IS NOT NULL AND automation_name IS NOT NULL AND automation_name <> '')
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_ticket ON automation_runs(ticket_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_automation ON automation_runs(automation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_session ON automation_runs(session_id);
+
+CREATE TABLE IF NOT EXISTS automation_commands (
+  id         TEXT PRIMARY KEY,
+  intent     TEXT NOT NULL CHECK (json_valid(intent)),
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS automation_events (
+  id         TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL REFERENCES automation_commands(id) ON DELETE RESTRICT,
+  kind       TEXT NOT NULL,
+  payload    TEXT NOT NULL CHECK (json_valid(payload)),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_events_command ON automation_events(command_id, created_at, id);
+
+CREATE TABLE IF NOT EXISTS automation_command_receipts (
+  id         TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL REFERENCES automation_commands(id) ON DELETE RESTRICT,
+  status     TEXT NOT NULL CHECK (status IN ('accepted', 'completed', 'rejected')),
+  result     TEXT NOT NULL CHECK (json_valid(result)),
+  recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_receipts_command
+  ON automation_command_receipts(command_id, recorded_at, id);
+
+CREATE TABLE IF NOT EXISTS automation_run_deliveries (
+  run_id                TEXT PRIMARY KEY REFERENCES automation_runs(id) ON DELETE CASCADE,
+  session_id            TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  automation_command_id TEXT NOT NULL REFERENCES automation_commands(id) ON DELETE RESTRICT,
+  message_command_id    TEXT NOT NULL,
+  message_id            TEXT NOT NULL,
+  text                  TEXT NOT NULL,
+  resources             TEXT NOT NULL CHECK (json_valid(resources)),
+  created_at            INTEGER NOT NULL,
+  delivered_at          INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_automation_deliveries_session
+  ON automation_run_deliveries(session_id, delivered_at);
+
+CREATE TRIGGER IF NOT EXISTS automation_commands_immutable_update
+BEFORE UPDATE ON automation_commands
+BEGIN
+  SELECT RAISE(ABORT, 'automation commands are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_commands_immutable_delete
+BEFORE DELETE ON automation_commands
+BEGIN
+  SELECT RAISE(ABORT, 'automation commands are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_events_immutable_update
+BEFORE UPDATE ON automation_events
+BEGIN
+  SELECT RAISE(ABORT, 'automation events are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_events_immutable_delete
+BEFORE DELETE ON automation_events
+BEGIN
+  SELECT RAISE(ABORT, 'automation events are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_receipts_immutable_update
+BEFORE UPDATE ON automation_command_receipts
+BEGIN
+  SELECT RAISE(ABORT, 'automation receipts are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_receipts_immutable_delete
+BEFORE DELETE ON automation_command_receipts
+BEGIN
+  SELECT RAISE(ABORT, 'automation receipts are immutable');
+END;
+`;
+
+/**
+ * Migration 028: `ticket_signals` — the typed verdict channel (VC-85).
+ *
+ * Shaped after `ticket_comments` (migration 003) because it is the same kind
+ * of thing: durable content about a ticket, written by one actor, paired with
+ * a ticket event recorded in the same transaction. What differs is what a
+ * reader may assume. A comment is prose and its meaning is whatever it says; a
+ * signal is a fact with a fixed vocabulary, and the whole reason it exists is
+ * that a machine can read it without parsing anybody's sentence.
+ *
+ * So the vocabulary is a CHECK, following `tickets.status` rather than
+ * `ticket_comments.actor`. A kind or verdict outside the fixed list is not a
+ * value this product has an opinion about — it is a writer disagreeing with the
+ * schema, and the database is the last place that can say no. Widening the
+ * vocabulary later costs one migration, which is the correct price for
+ * changing what a verdict can mean.
+ *
+ * No UPDATE or DELETE path exists and none is intended: signals are
+ * append-only, and a later signal of the same kind supersedes an earlier one by
+ * being newer. The index is what makes "latest per kind" one read rather than a
+ * fold over a ticket's whole signal history.
+ */
+const MIGRATION_028_TICKET_SIGNALS = `
+CREATE TABLE ticket_signals (
+  id         TEXT PRIMARY KEY,
+  ticket_id  TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  actor      TEXT NOT NULL,
+  kind       TEXT NOT NULL CHECK (kind IN ('validate','implement','review','merge','human-gate','budget')),
+  verdict    TEXT NOT NULL CHECK (verdict IN ('pass','fail','blocked')),
+  detail     TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX ticket_signals_latest ON ticket_signals(ticket_id, kind, created_at);
+`;
+
+/**
+ * Migration 029: a durable total order for Ticket Events (VC-85 review).
+ *
+ * `created_at` is metadata, not a cursor: two commits can share one
+ * millisecond, clocks can move, and imported events can arrive out of timestamp
+ * order. SQLite's implicit `rowid` distinguishes local inserts but may be
+ * reused after a cascading delete, so it cannot back the public "miss
+ * nothing" promise either.
+ *
+ * This sidecar gives every appended event an AUTOINCREMENT sequence. The
+ * sequence remains host-private — `ticket.await` exposes an opaque encoded
+ * cursor — so a future cloud event store may replace it without changing the
+ * tool contract. Ticket and kind are repeated deliberately to make a
+ * multi-ticket/kind replay one indexed, bounded query rather than a fold over
+ * each Ticket's history. The trigger keeps every existing event writer on the
+ * invariant without making each mutation door remember a second insert.
+ */
+const MIGRATION_029_TICKET_EVENT_SEQUENCE = `
+CREATE TABLE ticket_event_sequence (
+  sequence  INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id  TEXT NOT NULL UNIQUE REFERENCES ticket_events(id) ON DELETE CASCADE,
+  ticket_id TEXT NOT NULL,
+  kind      TEXT NOT NULL
+);
+INSERT INTO ticket_event_sequence (event_id, ticket_id, kind)
+SELECT id, ticket_id, kind FROM ticket_events ORDER BY rowid ASC;
+CREATE INDEX ticket_event_sequence_match
+  ON ticket_event_sequence(ticket_id, kind, sequence);
+CREATE TRIGGER ticket_event_sequence_insert
+AFTER INSERT ON ticket_events
+BEGIN
+  INSERT INTO ticket_event_sequence (event_id, ticket_id, kind)
+  VALUES (NEW.id, NEW.ticket_id, NEW.kind);
+END;
+CREATE TRIGGER ticket_event_sequence_identity_immutable
+BEFORE UPDATE OF id, ticket_id, kind ON ticket_events
+BEGIN
+  SELECT RAISE(ABORT, 'ticket event identity is immutable');
+END;
+`;
+
+/**
+ * Migration 030: durable, birth-frozen grants for Ticket Session delegation.
+ *
+ * A Role bundle names what every Session of that Role carries. This is not one:
+ * `session_verb_grants` is a per-Session record whose only v1 entry is the
+ * canonical Registry key `session.start`, paired with the separate
+ * `own-ticket` scope and recursion limits the tool door enforces. Keeping the
+ * scope out of `verb` avoids inventing a second vocabulary key such as
+ * `session.start@own-ticket` that the Agent Tool Surface could not resolve.
+ *
+ * `session_delegations` records the ancestry and frozen limits at birth. A
+ * child at its inherited depth cap has an ancestry row but no grant row, which
+ * is the availability-as-enforcement result: it is never handed a start tool
+ * merely to be refused later. Claims are durable before a start opens its
+ * child, keyed by the runtime tool-call id, so a replay spends one fan-out slot
+ * and concurrent calls cannot exceed the parent grant's fixed limit. Each claim
+ * also stores the Session Engine create-command id its start will write, so the
+ * crash-recovery sweep reads durable evidence out of the row instead of
+ * re-deriving the tool door's private operation-id convention.
+ *
+ * `session_delegations.ticket_id` detaches rather than cascades, and that is a
+ * load-bearing difference: `sessions.ticket_id` is itself `ON DELETE SET NULL`,
+ * so deleting a Ticket turns its Ticket Sessions into ticketless ones whose
+ * frozen tool surface still names `session.start`. The ancestry row outliving
+ * the Ticket is what lets the tool door still recognise such a caller as
+ * born-scoped and refuse it, instead of reading a bare `project` Role and
+ * handing it the project-wide bound.
+ *
+ * These tables live in the app-owned database beside VC-44's policy store, not
+ * in the worktree. They deliberately do not offer a general product write path:
+ * the only writer is the Session-birth composition path. The update triggers
+ * make a later hot edit fail rather than silently changing a frozen grant,
+ * while still permitting the one write a foreign key action performs: detaching
+ * a deleted row's id to NULL.
+ */
+const MIGRATION_030_SESSION_DELEGATION_GRANTS = `
+CREATE TABLE session_delegations (
+  session_id        TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  ticket_id         TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+  parent_session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  depth             INTEGER NOT NULL CHECK (depth >= 0),
+  CHECK (
+    (parent_session_id IS NULL AND depth = 0) OR
+    (parent_session_id IS NOT NULL AND depth > 0)
+  )
+);
+CREATE INDEX session_delegations_parent ON session_delegations(parent_session_id, depth);
+
+CREATE TABLE session_verb_grants (
+  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  verb         TEXT NOT NULL CHECK (verb = 'session.start'),
+  scope        TEXT NOT NULL CHECK (scope = 'own-ticket'),
+  max_depth    INTEGER NOT NULL CHECK (max_depth = 1),
+  max_children INTEGER NOT NULL CHECK (max_children BETWEEN 1 AND 3),
+  PRIMARY KEY (session_id, verb),
+  FOREIGN KEY (session_id) REFERENCES session_delegations(session_id) ON DELETE CASCADE
+);
+
+CREATE TABLE session_delegation_claims (
+  parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id      TEXT NOT NULL CHECK (tool_call_id <> ''),
+  ticket_id         TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  create_command_id TEXT NOT NULL CHECK (create_command_id <> ''),
+  child_session_id  TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (parent_session_id, tool_call_id),
+  UNIQUE (child_session_id)
+);
+CREATE INDEX session_delegation_claims_parent
+  ON session_delegation_claims(parent_session_id, created_at);
+
+CREATE TRIGGER session_delegations_immutable_update
+BEFORE UPDATE ON session_delegations
+WHEN NEW.session_id IS NOT OLD.session_id
+  OR NEW.parent_session_id IS NOT OLD.parent_session_id
+  OR NEW.depth IS NOT OLD.depth
+  OR NEW.ticket_id IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'session delegation is immutable');
+END;
+CREATE TRIGGER session_verb_grants_immutable_update
+BEFORE UPDATE ON session_verb_grants
+BEGIN
+  SELECT RAISE(ABORT, 'session verb grant is immutable');
+END;
+CREATE TRIGGER session_delegation_claims_only_complete_child
+BEFORE UPDATE ON session_delegation_claims
+WHEN NEW.parent_session_id IS NOT OLD.parent_session_id
+  OR NEW.tool_call_id IS NOT OLD.tool_call_id
+  OR NEW.ticket_id IS NOT OLD.ticket_id
+  OR NEW.create_command_id IS NOT OLD.create_command_id
+  OR NEW.created_at IS NOT OLD.created_at
+  OR (
+    OLD.child_session_id IS NOT NULL
+    AND NEW.child_session_id IS NOT NULL
+    AND NEW.child_session_id IS NOT OLD.child_session_id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'session delegation claim is immutable once completed');
+END;
+`;
+
+/**
+ * Migration 031: the column Trigger and the column's own Arming (VC-112,
+ * VC-128).
+ *
+ * Two different things land here on purpose.
+ *
+ * `automations.trigger_spec` is part of the RECORD: which columns this
+ * Automation is offered in. It is JSON for the same reason `runtime` is — the
+ * Trigger is a small closed union today and gains a schedule arm in VC-130,
+ * and a union is a value, not a column per arm. `NULL` is "Nothing else", which
+ * is the default for a new Automation and a complete answer rather than an
+ * inert one. The column is `trigger_spec` and not `trigger` because `TRIGGER`
+ * is SQL's own keyword and every future hand-written query would have to quote
+ * it.
+ *
+ * `automation_column_arming` is NOT part of the record. It is the column's
+ * machine-local choice of which offered Automation it fires on its own — the
+ * PROJECTION half of an ordinary Automation command (`automation.set-arming`),
+ * exactly as `app_state`'s enabled set is the projection half of
+ * `automation.set-enabled`. The intent rides the ledger like every other write;
+ * what stays here is the answer, and it never travels: a project directory
+ * cannot carry it, and when the record moves to an account this does not go
+ * with it. A composite PRIMARY KEY is how "a column arms at most one
+ * Automation, or none" is a schema fact rather than a convention — the write is
+ * an upsert on `(project_id, status)` and there is no shape in which a second
+ * row could exist to disagree with the first. Both foreign keys cascade, so a
+ * deleted Automation or a forgotten project leaves no arming behind to point at
+ * a corpse.
+ *
+ * Nothing here is retroactive, and nothing here could be: an arming row records
+ * that a column is armed FROM NOW, and the only thing that ever starts a Run is
+ * an arrival observed afterwards. There is no sweep of what is already sitting
+ * in the column, and no column in this table from which one could be written.
+ */
+const MIGRATION_031_TRIGGER_COLUMN = `
+ALTER TABLE automations ADD COLUMN trigger_spec TEXT
+  CHECK (trigger_spec IS NULL OR json_valid(trigger_spec));
+`;
+
+const MIGRATION_031_COLUMN_ARMING = `
+CREATE TABLE IF NOT EXISTS automation_column_arming (
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status        TEXT NOT NULL CHECK (status <> ''),
+  automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  armed_at      INTEGER NOT NULL,
+  PRIMARY KEY (project_id, status)
+);
+CREATE INDEX IF NOT EXISTS idx_automation_arming_automation
+  ON automation_column_arming(automation_id);
+`;
+
+const MIGRATION_031_AUTOMATION_TRIGGERS = `${MIGRATION_031_TRIGGER_COLUMN}${MIGRATION_031_COLUMN_ARMING}`;
+
+/**
+ * Migration 033: a Run's attendance (VC-112's "Notification rule", VC-133).
+ *
+ * One nullable column, because the question it answers is one a person can only
+ * be asked at the moment of the invocation: was somebody there? VC-112 rules
+ * that attendance follows the Trigger and withdraws the per-Automation switch
+ * that would have made this a property of the record, so it belongs on the RUN
+ * and nowhere else.
+ *
+ * NULLABLE with no default rather than `NOT NULL DEFAULT 'attended'`, matching
+ * `automations.trigger_spec` beside it. A backfilled default would be a claim
+ * about historical Runs that nothing observed; NULL is the honest "this build
+ * did not record it", and `parseAutomationRunAttendance` turns that into
+ * `attended` on read — the answer that stays silent. The distinction is not
+ * academic: it keeps the column's meaning and the read's degrade rule in one
+ * place instead of freezing a guess into the rows.
+ *
+ * The CHECK admits only the two words the vocabulary has, so a hand-edited
+ * database cannot introduce a third that the reader would then have to
+ * interpret.
+ */
+const MIGRATION_033_RUN_ATTENDANCE = `
+ALTER TABLE automation_runs ADD COLUMN attendance TEXT
+  CHECK (attendance IS NULL OR attendance IN ('attended', 'unattended'));
+`;
+
+/**
+ * Migration 033's reconciler, for the reason 031's doc gives at length:
+ * `ALTER TABLE … ADD COLUMN` cannot be written idempotently in SQL, and this
+ * table is the one several automations branches have been landing against, so a
+ * developer database can hold a `user_version` that says it is current while
+ * missing this column. Probing converges every lineage.
+ */
+function applyMigration033RunAttendance(db: Database.Database): void {
+  const columns = db.pragma("table_info(automation_runs)") as { name: string }[];
+  if (columns.some((column) => column.name === "attendance")) return;
+  db.exec(MIGRATION_033_RUN_ATTENDANCE);
+}
+
+/**
+ * Migration 032: Skipped occurrences (VC-112, VC-130).
+ *
+ * A due time that passed without a Run, recorded. It is a TABLE rather than a
+ * log line because VC-112 requires a skip to offer "Run now" from the Run
+ * history afterwards — so it has to be something a surface can list, name and
+ * act on — and because "a skip and a silence must never look the same" is only
+ * true if the skip survives the process that noticed it.
+ *
+ * It is part of the RECORD's history, filed beside `automation_runs` and
+ * scoped the same way: by the project the Run would have happened in. It is
+ * therefore NOT the scheduler's machine-local operating state — that is the
+ * cursor in `app_state` (`automations/schedule-cursor.ts`), which says only how
+ * far THIS host has evaluated and never travels. The two are deliberately
+ * different tiers: what was missed is history, how far a machine got is not.
+ *
+ * `automation_id` cascades because a skip names a live schedule to re-run; with
+ * the record deleted there is no schedule left to run now, and the Runs that
+ * did happen keep their own snapshot rows. `due_at` holds the LATEST due time a
+ * gap covered and `missed_count` how wide it was — one row per gap, because an
+ * hourly schedule and a closed weekend would otherwise bury the history in
+ * fifty rows offering fifty buttons that must not all be pressed.
+ *
+ * `reason` is JSON for the reason `runtime` and `trigger_spec` are: it is a
+ * small closed union today (the app was closed; the Run door refused) and a
+ * union is a value, not a column per arm.
+ */
+const MIGRATION_032_SCHEDULE_SKIPS = `
+CREATE TABLE IF NOT EXISTS automation_skipped_occurrences (
+  id              TEXT PRIMARY KEY,
+  automation_id   TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+  automation_name TEXT NOT NULL CHECK (automation_name <> ''),
+  project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  due_at          INTEGER NOT NULL,
+  missed_count    INTEGER NOT NULL CHECK (missed_count >= 1),
+  reason          TEXT NOT NULL CHECK (json_valid(reason)),
+  recorded_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_skips_project
+  ON automation_skipped_occurrences(project_id, due_at);
+CREATE INDEX IF NOT EXISTS idx_automation_skips_automation
+  ON automation_skipped_occurrences(automation_id, due_at);
+`;
+
+/**
+ * Migration 034: the column's own ORDER for its Offered list (VC-112, VC-132).
+ *
+ * The third table under one pattern, and the pattern is worth restating because
+ * this is the row that most looks like part of the record and is not. What a
+ * column offers is the Automation's Trigger — that travels with the record.
+ * Which of those reads as `1` when a card is dragged over the column is the
+ * column's own arrangement, and it is MACHINE-LOCAL for a reason sharper than
+ * "so is the arming": the drag pins the column's armed Automation to digit `1`,
+ * the arming never travels, and an order that travelled would print one digit
+ * here and mean another on the next machine.
+ *
+ * `ranked_ids` is a JSON array of Automation ids, best rank first, stored whole
+ * rather than as a row per rank: a rank has no identity of its own, the whole
+ * list is rewritten by every drop, and a per-row table would need a second
+ * column just to say what an array already says. `json_valid` keeps a row this
+ * build cannot read out of the table in the first place.
+ *
+ * Deliberately NOT foreign-keyed to `automations`: the list is stale-tolerant
+ * by design (`@volli/shared`'s `offeredAutomationsForColumn` filters it against
+ * the Offered list on every read), so a deleted Automation leaves an inert id
+ * rather than a dangling reference — and a JSON array cannot cascade anyway.
+ * The project key does cascade, like the arming beside it.
+ *
+ * Renumbered from 32, then from 33: VC-130's Skipped occurrences reached main
+ * first, and then VC-133's Run attendance did — the fourth time this file has
+ * recorded that (025, 027, 032). A version is a position in an already-applied
+ * history, not a name: two migrations claiming one number would leave whichever
+ * profile ran the other silently missing this table, at a `user_version` that
+ * says it is up to date.
+ */
+const MIGRATION_034_COLUMN_ORDER = `
+CREATE TABLE IF NOT EXISTS automation_column_order (
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL CHECK (status <> ''),
+  ranked_ids  TEXT NOT NULL CHECK (json_valid(ranked_ids)),
+  ordered_at  INTEGER NOT NULL,
+  PRIMARY KEY (project_id, status)
+);
+`;
+
+/**
+ * Migration 035: the `blobs` reconciler (VC-220).
+ *
+ * Migration 020 created `blobs` + `blob_links` and dropped `ticket_attachments`.
+ * A profile that ran a PARALLEL branch's version 20 took that number without
+ * that schema, and the runner only ever offers a version once — so such a
+ * database sits at `user_version` 34 saying it is current while the two tables
+ * are simply absent. The same fork 024, 026, 031 and 033 each had to reconcile,
+ * one number further along.
+ *
+ * It is filed under VC-220 because that is where the cost showed up. Worktree
+ * preparation reads `blob_links`, so on such a profile EVERY attach was
+ * rejected `location_unavailable` — "no such table: blob_links" — which meant
+ * every Automation Run opened a Session it could never deliver Instructions to.
+ * The Run doors were innocent; the schema underneath them was not.
+ *
+ * Landed OBJECT BY OBJECT rather than after a two-table probe, because the fork
+ * did not stop at all-or-nothing. A branch that wrote its own version 20 could
+ * leave `blobs` without `blob_links`, either table without 020's three indexes,
+ * or both tables beside the legacy `ticket_attachments` it never dropped — and
+ * a probe that returned as soon as it saw two table names would leave every one
+ * of those profiles diverged forever, since a version is only ever offered
+ * once. Every statement below says `IF NOT EXISTS`, so what is already there is
+ * kept (dropping and recreating `blobs` would take a person's attachments with
+ * it) and only what is missing is created. A table that exists in some OTHER
+ * shape is left exactly as it is: this reconciles an absence, it does not
+ * rewrite a table whose rows it cannot vouch for.
+ *
+ * `ticket_attachments` is dropped only when it is still present AND empty:
+ * 020's own note says it never had a caller and so has never held a row, and a
+ * row would mean this is some other database whose data is worth more than this
+ * convergence.
+ */
+function applyMigration035BlobsReconcile(db: Database.Database): void {
+  const has = (table: string): boolean =>
+    (db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(table) as unknown) !== undefined;
+  db.exec(MIGRATION_020_BLOBS_RECONCILE);
+  if (!has("ticket_attachments")) return;
+  const rows = db.prepare("SELECT COUNT(*) AS count FROM ticket_attachments").get() as {
+    count: number;
+  };
+  if (rows.count === 0) db.exec("DROP TABLE ticket_attachments;");
+}
+
+/**
+ * Migration 020's schema, restated so {@link applyMigration035BlobsReconcile}
+ * can land it on a lineage that skipped it.
+ *
+ * A copy rather than a reuse of {@link MIGRATION_020_BLOBS}: an applied
+ * migration is immutable and 020's statements are what ran on the day they ran,
+ * `DROP TABLE ticket_attachments` included. This one has to be safe on a
+ * database where that table may be gone already, so it says the same tables
+ * with `IF NOT EXISTS` and leaves the drop to the probe above. The two are
+ * pinned to each other by `migrations.test.ts`, which asserts a reconciled
+ * database has the same schema as one that ran 020 in its proper place.
+ */
+const MIGRATION_020_BLOBS_RECONCILE = `
+CREATE TABLE IF NOT EXISTS blobs (
+  hash          TEXT PRIMARY KEY CHECK (length(hash) = 64),
+  mime          TEXT NOT NULL CHECK (mime <> ''),
+  size_bytes    INTEGER NOT NULL CHECK (size_bytes >= 0),
+  original_name TEXT NOT NULL CHECK (original_name <> ''),
+  width         INTEGER,
+  height        INTEGER,
+  created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS blob_links (
+  id         TEXT PRIMARY KEY,
+  blob_hash  TEXT NOT NULL REFERENCES blobs(hash) ON DELETE CASCADE,
+  ticket_id  TEXT REFERENCES tickets(id) ON DELETE CASCADE,
+  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  label      TEXT NOT NULL CHECK (label <> ''),
+  created_at INTEGER NOT NULL,
+  CHECK ((ticket_id IS NULL) <> (session_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_blob_links_ticket ON blob_links(ticket_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_blob_links_session ON blob_links(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_blob_links_blob ON blob_links(blob_hash);
+`;
+
+/**
+ * Migration 036: the durable pre-mint half of Automation Session provenance
+ * (VC-225).
+ *
+ * A Project Run has no Ticket timeline on which `session_started` can record
+ * its Automation actor. Its accepted plan nevertheless knows the stable
+ * Session-create operation before mint. This narrow projection indexes that
+ * relation by the exact Session command id: after the Session transaction
+ * lands, provenance can join `session_commands` to it without scanning either
+ * immutable JSON ledger.
+ *
+ * Existing accepted plans are backfilled. The `:create` suffix is a shipped
+ * durable id derivation (`sessionCreateCommandId`); migrations are immutable,
+ * so its literal spelling is intentionally frozen here.
+ */
+const MIGRATION_036_AUTOMATION_SESSION_MINT_INTENTS = `
+CREATE TABLE IF NOT EXISTS automation_session_mint_intents (
+  session_create_command_id TEXT PRIMARY KEY CHECK (session_create_command_id <> ''),
+  automation_command_id     TEXT NOT NULL UNIQUE
+    REFERENCES automation_commands(id) ON DELETE RESTRICT,
+  recorded_at               INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO automation_session_mint_intents
+  (session_create_command_id, automation_command_id, recorded_at)
+SELECT json_extract(command.intent, '$.plan.sessionOperationId') || ':create',
+       command.id,
+       command.created_at
+  FROM automation_commands AS command
+ WHERE json_extract(command.intent, '$.kind') = 'automation.run'
+   AND json_type(command.intent, '$.plan.sessionOperationId') = 'text'
+   AND EXISTS (
+     SELECT 1
+       FROM automation_command_receipts AS receipt
+      WHERE receipt.command_id = command.id
+        AND json_extract(receipt.result, '$.kind') IN (
+          'automation.run.accepted',
+          'automation.run.completed'
+        )
+   );
+
+CREATE TRIGGER IF NOT EXISTS automation_session_mint_intents_immutable_update
+BEFORE UPDATE ON automation_session_mint_intents
+BEGIN
+  SELECT RAISE(ABORT, 'automation Session mint intents are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS automation_session_mint_intents_immutable_delete
+BEFORE DELETE ON automation_session_mint_intents
+BEGIN
+  SELECT RAISE(ABORT, 'automation Session mint intents are immutable');
+END;
+`;
+
+/**
+ * Migration 037: main-owned pending arrivals for armed columns (VC-226).
+ *
+ * Numbered 037 rather than its branch's 036: VC-225's mint-intents migration
+ * landed first on main, and migration versions are a total order.
+ *
+ * The renderer used to own both the countdown and its timer. That made the
+ * record disappear with the last window and multiply with every additional
+ * one. This table is main's durable operating projection instead: one row per
+ * Ticket, replaced by a later Deliberate move of that Ticket, while every
+ * renderer merely lists and cancels the same row.
+ *
+ * `id` identifies the exact move so a late Cancel from a replaced countdown
+ * cannot cancel the newer arrival. `ticket_id` is the primary key because a
+ * Ticket cannot be arriving in two columns at once. The Automation id is not a
+ * foreign key on purpose: deleting or editing the Automation during the delay
+ * leaves enough snapshot evidence for expiry to classify the window as
+ * abandoned rather than erasing it behind the timer's back.
+ *
+ * There is deliberately no Run command id here. Expiry mints one only when it
+ * calls the existing Run door; retaining and retrying that id belongs to
+ * VC-228, not this migration.
+ */
+const MIGRATION_037_PENDING_ARMED_RUNS = `
+CREATE TABLE IF NOT EXISTS automation_pending_armed_runs (
+  ticket_id         TEXT PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+  id                TEXT NOT NULL UNIQUE,
+  project_id        TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ticket_display_id TEXT NOT NULL CHECK (ticket_display_id <> ''),
+  automation_id     TEXT NOT NULL,
+  automation_name   TEXT NOT NULL CHECK (automation_name <> ''),
+  status             TEXT NOT NULL CHECK (status IN ('backlog', 'todo', 'doing', 'needs_review', 'done')),
+  origin             TEXT NOT NULL CHECK (origin IN ('armed', 'chosen')),
+  opened_at          INTEGER NOT NULL,
+  start_at           INTEGER NOT NULL CHECK (start_at >= opened_at)
+);
+CREATE INDEX IF NOT EXISTS idx_pending_armed_runs_start ON automation_pending_armed_runs(start_at, id);
+`;
+
+/**
+ * Migration 038: the retained Run command behind an expired armed arrival (VC-228).
+ *
+ * Expiry moves the countdown snapshot here and mints its Run command id in the
+ * same transaction. The row is deleted only after a typed Run answer arrives;
+ * a throw or process exit therefore leaves the exact command available to
+ * Retry without reopening the countdown or minting a second Session.
+ *
+ * These are historical attempts, not planning children, so they deliberately
+ * have no Ticket or Project foreign keys. A Run may have reached the durable
+ * Automation core before its reply was lost; deleting the Ticket afterwards
+ * must not erase the only key that can recover that reply idempotently.
+ */
+const MIGRATION_038_ARMED_RUN_ATTEMPTS = `
+CREATE TABLE IF NOT EXISTS automation_pending_armed_run_attempts (
+  id                TEXT PRIMARY KEY,
+  command_id        TEXT NOT NULL UNIQUE,
+  ticket_id         TEXT NOT NULL,
+  project_id        TEXT NOT NULL,
+  ticket_display_id TEXT NOT NULL CHECK (ticket_display_id <> ''),
+  automation_id     TEXT NOT NULL,
+  automation_name   TEXT NOT NULL CHECK (automation_name <> ''),
+  status            TEXT NOT NULL CHECK (status IN ('backlog', 'todo', 'doing', 'needs_review', 'done')),
+  origin            TEXT NOT NULL CHECK (origin IN ('armed', 'chosen')),
+  opened_at         INTEGER NOT NULL,
+  start_at          INTEGER NOT NULL CHECK (start_at >= opened_at),
+  error             TEXT NOT NULL CHECK (error <> '')
+);
+`;
+
+/**
+ * Person-approved slots past the in-ticket delegation allowance (VC-204).
+ * Authored as 031 and renumbered 039 after main's automations series took
+ * 031–038 — a version is a position in an ordered, already-applied history,
+ * not a name.
+ *
+ * Migration 030's `CHECK (max_children BETWEEN 1 AND 3)` stays exactly as it
+ * is: the stored grant remains the allowance a Session is BORN with, and no
+ * runtime path may widen it — a fan-out bound a caller could raise would not
+ * be a bound. What softened is the end of the allowance: each row here is one
+ * "once" a person answered when a Ticket Session asked to start one more child
+ * than its grant allows, and the claims ledger counts these rows on top of
+ * `max_children` when it judges the next claim.
+ *
+ * Keyed by the asking tool call so a replayed call finds its extension already
+ * recorded rather than asking twice. A slot is granted to the PARENT, not the
+ * call: an extension whose start later failed before the create command stays,
+ * and the next attempt consumes it without asking again — the person granted
+ * one more Session, and one more Session is what they get. No trigger guards
+ * these rows because they are append-only by construction: nothing updates an
+ * extension, and deleting one only narrows what a Session may do.
+ *
+ * `IF NOT EXISTS` for the reason 038 carries it: the convergence suites replay
+ * pending migrations over lineages whose `user_version` was walked back, and a
+ * re-run must find its own work rather than fail on it.
+ */
+const MIGRATION_039_SESSION_DELEGATION_EXTENSIONS = `
+CREATE TABLE IF NOT EXISTS session_delegation_extensions (
+  parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id      TEXT NOT NULL CHECK (tool_call_id <> ''),
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (parent_session_id, tool_call_id)
+);
+`;
+
+/**
+ * Migration 040: the Session's Role becomes a column (VC-9).
+ *
+ * Until this migration `ticket_id IS NULL` WAS the Role — a Session on a Ticket
+ * was a Ticket Session and any other was a project one. A Subagent Session
+ * breaks that reading: it inherits its parent's Ticket and is not a Ticket
+ * Session, so the Role has to be stated rather than inferred.
+ *
+ * The backfill reads each Session's Role off its own `session.created` event
+ * rather than off the live column, because the live column is not the birth
+ * fact: `sessions.ticket_id` is `ON DELETE SET NULL`, so a Ticket Session whose
+ * Ticket was since deleted reads null today and would be backfilled as a
+ * Board Session — the exact orphan `SessionProjection.bornTicketless` exists
+ * to tell apart. The column default is the second rung, for a row with no
+ * birth event, which no post-018 lineage has.
+ *
+ * The CHECK pins the vocabulary to what this build knows. A Role added later is
+ * a migration, which is the point: what a stored Session may claim to be is a
+ * schema fact, not a string a caller happens to write.
+ */
+const MIGRATION_040_SESSION_ROLE_COLUMN = `
+ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'project'
+  CHECK (role IN ('project', 'ticket', 'subagent'));
+`;
+
+const MIGRATION_040_SESSION_ROLE_BACKFILL = `
+UPDATE sessions
+   SET role = 'ticket'
+ WHERE id IN (
+   SELECT session_id
+     FROM session_events
+    WHERE json_extract(payload, '$.kind') = 'session.created'
+      AND json_extract(payload, '$.session.ticketId') IS NOT NULL
+ );
+UPDATE sessions
+   SET role = 'ticket'
+ WHERE ticket_id IS NOT NULL
+   AND role = 'project'
+   AND id NOT IN (
+     SELECT session_id
+       FROM session_events
+      WHERE json_extract(payload, '$.kind') = 'session.created'
+   );
+`;
+
+const MIGRATION_040_SESSION_ROLE = `${MIGRATION_040_SESSION_ROLE_COLUMN}${MIGRATION_040_SESSION_ROLE_BACKFILL}`;
+
+/**
+ * Migration 041: the Session's parent becomes a column (VC-9 review).
+ *
+ * The parent link is the fact the `subagent` Role MEANS, and it lives on the
+ * `session.create` intent and the Session itself, not in a host table
+ * (docs/BOUNDARIES.md: a host's SQLite is a private materialization of the
+ * ledger, so every fact a host needs must be rebuildable from events). The
+ * backfill reads the link off `session_delegations`, which is where the first
+ * VC-9 build recorded it for the subagents it minted; a root Session stays
+ * null. Probe-gated like 040, for the same ADD COLUMN reason.
+ */
+const MIGRATION_041_SESSION_PARENT_COLUMN = `
+ALTER TABLE sessions ADD COLUMN parent_session_id TEXT NULL REFERENCES sessions(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
+`;
+
+const MIGRATION_041_SESSION_PARENT_BACKFILL = `
+UPDATE sessions
+   SET parent_session_id = (
+     SELECT d.parent_session_id
+       FROM session_delegations d
+      WHERE d.session_id = sessions.id
+   )
+ WHERE role = 'subagent'
+   AND parent_session_id IS NULL;
+`;
+
+const MIGRATION_041_SESSION_PARENT = `${MIGRATION_041_SESSION_PARENT_COLUMN}${MIGRATION_041_SESSION_PARENT_BACKFILL}`;
+
+/**
+ * Migration 042: compact replay-stable native observation ids and intern event
+ * provenance (VC-326).
+ *
+ * The implementation is code because the id derivation is the exact pure
+ * function used by the runtime and because logical before/after digests must be
+ * compared inside the runner's transaction. `sql` remains a truthful marker
+ * for schema inventories; the runner invokes `apply` instead.
+ */
+const MIGRATION_042_SESSION_EVENT_STORAGE = `
+-- Applied by applyMigration042SessionEventStorage: verified id rewrite and table rebuild.
+`;
+
+const MIGRATION_042_CREATE_PROVENANCES = `
+CREATE TABLE session_provenances (
+  id         INTEGER PRIMARY KEY,
+  provenance TEXT NOT NULL CHECK (json_valid(provenance))
+);
+CREATE INDEX session_provenances_value ON session_provenances(provenance);
+
+INSERT INTO session_provenances (id, provenance)
+SELECT ROW_NUMBER() OVER (ORDER BY provenance COLLATE BINARY), provenance
+  FROM (SELECT DISTINCT provenance FROM session_events)
+ ORDER BY provenance COLLATE BINARY;
+`;
+
+const MIGRATION_042_CREATE_SESSION_EVENTS = `
+CREATE TABLE session_events (
+  id            TEXT PRIMARY KEY,
+  session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  sequence      INTEGER NOT NULL CHECK (sequence > 0),
+  occurred_at   INTEGER NOT NULL,
+  recorded_at   INTEGER NOT NULL,
+  provenance_id INTEGER NOT NULL REFERENCES session_provenances(id) ON DELETE RESTRICT,
+  attachment_id TEXT,
+  command_id    TEXT,
+  payload       TEXT NOT NULL CHECK (json_valid(payload)),
+  UNIQUE (session_id, sequence),
+  UNIQUE (session_id, id),
+  FOREIGN KEY (session_id, attachment_id)
+    REFERENCES session_attachments(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_events_command ON session_events(command_id);
+CREATE INDEX session_events_attachment ON session_events(attachment_id);
+`;
+
+const MIGRATION_042_CREATE_SESSION_COMMAND_RECEIPTS = `
+CREATE TABLE session_command_receipts (
+  id          TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  command_id  TEXT NOT NULL REFERENCES session_commands(id) ON DELETE CASCADE,
+  sequence    INTEGER NOT NULL CHECK (sequence > 0),
+  recorded_at INTEGER NOT NULL,
+  receipt     TEXT NOT NULL CHECK (json_valid(receipt)),
+  receipt_event_id TEXT,
+  UNIQUE (command_id, sequence),
+  FOREIGN KEY (session_id, command_id)
+    REFERENCES session_commands(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+  FOREIGN KEY (session_id, receipt_event_id)
+    REFERENCES session_events(session_id, id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX session_receipts_command_sequence ON session_command_receipts(command_id, sequence);
+CREATE INDEX session_receipts_session_sequence ON session_command_receipts(session_id, sequence);
+`;
+
+/**
+ * Migration 043: the orphan CLEANUP command ledger (VC-284 review S1/C3).
+ *
+ * Deleting a worktree directory is a destructive product act, so it takes the
+ * shape every other product write takes (docs/BOUNDARIES.md rule 5): a command
+ * carrying the caller's UUID and the exact plan a person confirmed, immutable
+ * facts for what each item did, and receipts for local acceptance. Nothing here
+ * is ever UPDATEd — the previous design replaced one `app_state` JSON blob
+ * after every item, which is how an app that died mid-removal could come back
+ * and describe an already-deleted folder as work it never attempted.
+ *
+ * Three tables rather than one row because the fold needs order and identity:
+ * `rowid` is this ledger's provisional local order (rule 2, single writer at
+ * `cleanup-ledger.ts`) and is what the reads sort by — two facts can share a
+ * millisecond, and the fold's rules (a start before an outcome, the FIRST
+ * outcome wins) are about the order they were appended in. Every durable id is
+ * a UUID the core mints; the indexes below are for the filter, not the order.
+ *
+ * `ON DELETE RESTRICT` on both children, not CASCADE: a command that removed a
+ * directory must not become erasable by deleting its own row. Projects are NOT
+ * referenced at all — a cleanup's record has to outlive the project it ran in,
+ * and the plan already carries the project's id, path and name as they read at
+ * the moment of confirmation.
+ */
+const MIGRATION_043_WORKTREE_CLEANUP = `
+CREATE TABLE IF NOT EXISTS worktree_cleanup_commands (
+  id         TEXT PRIMARY KEY,
+  intent     TEXT NOT NULL CHECK (json_valid(intent)),
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS worktree_cleanup_facts (
+  id         TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL REFERENCES worktree_cleanup_commands(id) ON DELETE RESTRICT,
+  kind       TEXT NOT NULL CHECK (kind <> ''),
+  payload    TEXT NOT NULL CHECK (json_valid(payload)),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_facts_command
+  ON worktree_cleanup_facts(command_id, created_at);
+
+CREATE TABLE IF NOT EXISTS worktree_cleanup_receipts (
+  id          TEXT PRIMARY KEY,
+  command_id  TEXT NOT NULL REFERENCES worktree_cleanup_commands(id) ON DELETE RESTRICT,
+  status      TEXT NOT NULL CHECK (status IN ('accepted', 'completed', 'rejected')),
+  code        TEXT,
+  detail      TEXT,
+  recorded_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_worktree_cleanup_receipts_command
+  ON worktree_cleanup_receipts(command_id, recorded_at);
+`;
+
+/**
+ * Migration 044: durable opaque cursors for lossless waits on a SESSION.
+ *
+ * Migration 029's argument, one ledger over. `session_events` is unique on
+ * `(session_id, sequence)` only: the Session Engine assigns that sequence per
+ * Session, so it orders one Session's history and says nothing about the order
+ * two Sessions' facts were committed in. A wait over a fleet needs exactly
+ * that missing total order — "the first matching event after X, across these
+ * handles" is one question, not one question per handle.
+ *
+ * `occurred_at` cannot supply it, for migration 029's reasons verbatim: two
+ * commits can share a millisecond and a timestamp is metadata rather than
+ * ledger order (CONTEXT.md's Await entry says so in as many words). `rowid`
+ * cannot either — it may be reused after a cascading delete, and a Session
+ * delete cascades this whole table.
+ *
+ * So the same sidecar: an AUTOINCREMENT sequence per appended Session Event,
+ * host-private behind {@link encodeSessionEventCursor}'s opaque prefix, with
+ * session and kind repeated so a multi-handle/multi-kind replay is one
+ * indexed, bounded query rather than a fold over each Session's log. The
+ * trigger is what keeps `session-control/sqlite-ledger.ts` — the one durable
+ * Session Event writer — from having to remember a second insert.
+ *
+ * The backfill orders by `(session_id, sequence)` rather than by `rowid`.
+ * Ledger order between two Sessions that were interleaved before this table
+ * existed is not recoverable from anything in the schema, so the honest
+ * choice is a deterministic one: every Session's own history stays in its own
+ * order, which is the order any reader of one Session already believes. New
+ * appends are in true commit order from here on, and a cursor only ever
+ * promises "nothing after this point is missed".
+ *
+ * `session_events` has no `kind` column — the kind lives inside the JSON
+ * payload — so both the backfill and the trigger read it with `json_extract`.
+ * The immutability trigger guards `id` and `session_id`, the two values the
+ * sidecar copies verbatim, and deliberately NOT `payload`: nothing in the
+ * product ever updates a `session_events` row, and `sqlite-ledger.test.ts`
+ * rewrites a payload on purpose to prove the read path tolerates corruption.
+ * Originally the `kind` copy was what the event was COMMITTED as. Migration
+ * 057 supersedes that policy: repairs synchronize this derived kind with the
+ * canonical payload without changing the event's cursor.
+ */
+const MIGRATION_044_SESSION_EVENT_SEQUENCE = `
+CREATE TABLE session_event_sequence (
+  sequence   INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id   TEXT NOT NULL UNIQUE REFERENCES session_events(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  kind       TEXT NOT NULL
+);
+INSERT INTO session_event_sequence (event_id, session_id, kind)
+SELECT id, session_id, json_extract(payload, '$.kind')
+  FROM session_events
+ ORDER BY session_id ASC, sequence ASC;
+CREATE INDEX session_event_sequence_match
+  ON session_event_sequence(session_id, kind, sequence);
+CREATE TRIGGER session_event_sequence_insert
+AFTER INSERT ON session_events
+BEGIN
+  INSERT INTO session_event_sequence (event_id, session_id, kind)
+  VALUES (NEW.id, NEW.session_id, json_extract(NEW.payload, '$.kind'));
+END;
+CREATE TRIGGER session_event_sequence_identity_immutable
+BEFORE UPDATE OF id, session_id ON session_events
+BEGIN
+  SELECT RAISE(ABORT, 'session event identity is immutable');
+END;
+`;
+
+/**
+ * Migration 045: the SPAWN LEDGER — every child Volli starts on a Session's
+ * behalf, written at spawn (VC-341).
+ *
+ * The leak this answers is not a missing kill; it is missing knowledge. Once a
+ * Session's executor releases, nothing on the machine knew that the `next dev`
+ * still holding 2.9 GB was ever that Session's, so no sweep could reason about
+ * it. Command lines cannot supply the answer — grepping argv for `node` finds
+ * JavaScript and misses a Gradle daemon or a `uvicorn --reload` — and a
+ * working directory only says where a process is standing. A row written at
+ * spawn says whose it is.
+ *
+ * `started_at` is beside `pid` for one reason: pids recycle. The pair is the
+ * identity every reap re-checks against the live process table before it
+ * signals anything (`ledgerEntryMatches`), so a row whose number has since been
+ * handed to the user's editor names a process this app will not touch.
+ *
+ * No foreign key to `sessions`. A row is a fact about a process that existed,
+ * and it has to outlive both the Session record and the launch that wrote it —
+ * a crash mid-turn is precisely the case the ledger is read after.
+ *
+ * THREE KINDS, AND NO `browser`. A CHECK constraint is frozen the moment it
+ * ships, so it lists only what something can actually write: the `execute`
+ * environment, background shells, and terminal PTYs. A Browser Tab is a
+ * `WebContentsView` inside this process (`browser/tab-host.ts`) — there is no
+ * child pid to record — so a fourth value would be dead vocabulary nothing
+ * could ever insert and nothing could later remove.
+ */
+const MIGRATION_045_SPAWN_LEDGER = `
+CREATE TABLE IF NOT EXISTS spawned_processes (
+  id         TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  ticket_id  TEXT,
+  project_id TEXT,
+  kind       TEXT NOT NULL CHECK (kind IN ('execute', 'shell', 'terminal')),
+  pid        INTEGER NOT NULL,
+  pgid       INTEGER,
+  started_at INTEGER NOT NULL,
+  cwd        TEXT NOT NULL,
+  command    TEXT NOT NULL,
+  exited_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS spawned_processes_open ON spawned_processes(exited_at, started_at);
+CREATE INDEX IF NOT EXISTS spawned_processes_session ON spawned_processes(session_id);
+`;
+
+/**
+ * Migration 046: one live Label identity per SQLite-NOCASE name (VC-310).
+ *
+ * Case variants are merged before the index is created. A merged-away row is
+ * retained as an alias so the old name keeps resolving to the survivor and a
+ * zero-Ticket merge remains a durable, attributed fact. The partial index
+ * admits retired aliases while refusing a second live spelling.
+ *
+ * NOCASE folds ASCII, leaves non-ASCII case distinct, and stops at NUL.
+ * `labelNameKey`, lookup, migration grouping, and this index use that same
+ * identity so a Client Surface and its host cannot disagree.
+ */
+const MIGRATION_046_LABEL_MERGE_COLUMNS = `
+ALTER TABLE labels ADD COLUMN merged_into_id TEXT REFERENCES labels(id) ON DELETE CASCADE;
+ALTER TABLE labels ADD COLUMN merged_at INTEGER;
+ALTER TABLE labels ADD COLUMN merged_by TEXT CHECK (merged_by IS NULL OR json_valid(merged_by));
+`;
+
+const MIGRATION_046_LABEL_CASE_IDENTITY = `
+CREATE UNIQUE INDEX IF NOT EXISTS labels_project_name_nocase
+  ON labels(project_id, name COLLATE NOCASE)
+  WHERE merged_into_id IS NULL;
+`;
+
+/** App-owned, per-project MCP configuration and its last successful discovery. */
+const MIGRATION_047_MCP_SERVERS = `
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name         TEXT NOT NULL CHECK (name <> ''),
+  enabled      INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  transport    TEXT NOT NULL CHECK (json_valid(transport)),
+  catalog      TEXT NOT NULL CHECK (json_valid(catalog)),
+  stale        INTEGER NOT NULL CHECK (stale IN (0, 1)),
+  error        TEXT,
+  refreshed_at INTEGER,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_servers_project_order ON mcp_servers(project_id, created_at, id);
+`;
+
+/**
+ * Migration 050: where a server came from, and what was done to it (VC-380).
+ *
+ * Two additions that answer two different questions a person asks after an
+ * agent has been managing MCP servers.
+ *
+ * `mcp_servers` gains four nullable provenance columns. They are RECORDED, not
+ * enforced: Volli fetches no package and checks no digest, so a stored
+ * `version` is what an install asked for and a stored `digest` is what it
+ * claimed, never what ran. Verifying either needs the download step, which is
+ * VC-379's. Nullable because the honest answer for a server a person typed in
+ * by hand is that nobody said.
+ *
+ * `mcp_operations` is an append-only log of MANAGEMENT operations — VC-8's
+ * activity path records MCP tool CALLS inside a transcript and nothing records
+ * installs. It deliberately holds `server_id` as plain text with NO foreign
+ * key: the record that matters most is the removal, and a row that cascaded
+ * away with the server it named would delete exactly the evidence a person
+ * came looking for. The project reference does cascade, because a record
+ * belonging to no project is unreachable by construction.
+ */
+const MIGRATION_050_MCP_PROVENANCE = `
+ALTER TABLE mcp_servers ADD COLUMN source TEXT;
+ALTER TABLE mcp_servers ADD COLUMN registry_type TEXT;
+ALTER TABLE mcp_servers ADD COLUMN version TEXT;
+ALTER TABLE mcp_servers ADD COLUMN digest TEXT;
+`;
+
+const MIGRATION_050_MCP_OPERATIONS = `
+CREATE TABLE IF NOT EXISTS mcp_operations (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  server_id     TEXT NOT NULL,
+  server_name   TEXT NOT NULL,
+  operation     TEXT NOT NULL CHECK (operation IN ('install', 'remove')),
+  outcome       TEXT NOT NULL CHECK (outcome IN ('applied', 'failed')),
+  summary       TEXT NOT NULL,
+  detail        TEXT,
+  source        TEXT,
+  registry_type TEXT,
+  version       TEXT,
+  digest        TEXT,
+  session_id    TEXT,
+  ticket_id     TEXT,
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mcp_operations_project_order ON mcp_operations(project_id, created_at DESC, id DESC);
+`;
+
+/**
+ * Migration 050 as one from-scratch statement.
+ *
+ * `Migration.sql` is what a from-scratch test fixture may exec directly, so it
+ * has to be the WHOLE migration, not the half that needs no probe. 040 and 041
+ * compose their two pieces the same way; `apply` below then re-runs the column
+ * half only when the schema does not already carry it.
+ */
+const MIGRATION_050 = `${MIGRATION_050_MCP_PROVENANCE}${MIGRATION_050_MCP_OPERATIONS}`;
+
+/**
+ * Migration 051: an indexed mark for "this attachment is still open" (VC-403).
+ *
+ * `session_attachments` records that an attachment was OPENED; that it later
+ * CLOSED lives only in an `attachment.closed` event, so the one question the
+ * concurrency budget asks — who is attached right now — could previously be
+ * answered only by folding every Session's whole log. This adds the closure
+ * back as a rebuildable read model beside the fact, exactly as `session_usage`
+ * projects `usage.recorded`: the event stays canonical, this column is derived
+ * from it in the same transaction that appends it, and the backfill below is
+ * the derivation — re-running it over the same immutable events reproduces the
+ * same marks, which is what makes the column a cache rather than a second
+ * opinion.
+ *
+ * The partial index is the point. Open attachments are a handful on any
+ * machine while closed ones are the entire history, so an index that holds
+ * only the open rows is the size of the answer rather than the size of the
+ * ledger — which is what turns a fleet fold into a lookup.
+ */
+const MIGRATION_051_SESSION_ATTACHMENT_CLOSURE = `
+ALTER TABLE session_attachments ADD COLUMN closed_sequence INTEGER;
+
+-- Backfill from the canonical facts, once: every attachment named by an
+-- attachment.closed event carries that event's sequence. An attachment whose
+-- close was never recorded stays NULL, which is the same thing the fold says
+-- about it -- a terminal left open by a crash reads as open, and the budget has
+-- always counted it.
+UPDATE session_attachments
+   SET closed_sequence = (
+     SELECT MAX(e.sequence)
+       FROM session_events e
+      WHERE e.session_id = session_attachments.session_id
+        AND json_extract(e.payload, '$.kind') = 'attachment.closed'
+        AND json_extract(e.payload, '$.attachmentId') = session_attachments.id
+   );
+
+CREATE INDEX IF NOT EXISTS session_attachments_open
+    ON session_attachments(session_id)
+ WHERE closed_sequence IS NULL AND observed_kind = 'opened';
+`;
+
+/**
+ * Migration 048: rebuildable per-Session projection checkpoints (VC-355).
+ *
+ * The immutable event log remains canonical. This table is an additive cache:
+ * a missing, stale-ahead, unsupported, or malformed row is ignored and the
+ * Session refolds from event one. `ON DELETE CASCADE` keeps the cache's lifetime
+ * no longer than the immutable Session row it summarizes.
+ */
+const MIGRATION_048_SESSION_PROJECTION_CHECKPOINTS = `
+CREATE TABLE IF NOT EXISTS session_projection_checkpoints (
+  session_id       TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  schema_version   INTEGER NOT NULL CHECK (schema_version > 0),
+  through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
+  checkpoint       TEXT NOT NULL CHECK (json_valid(checkpoint)),
+  digest           TEXT NOT NULL CHECK (length(digest) = 64),
+  updated_at       INTEGER NOT NULL
+);
+`;
+
+/**
+ * Migration 049: canonical-prefix repair invalidates projection checkpoints.
+ *
+ * These triggers briefly lived inside the checkpoint migration itself while
+ * it was unreleased. Keeping them in their own follow-up migration converges
+ * profiles that opened after the checkpoint table landed but before its
+ * repair invalidation did.
+ */
+const MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION = `
+-- App writes append immutable facts, so inserts are handled as checkpoint
+-- tails. If repair tooling changes a canonical prefix out of band, invalidate
+-- its derived row instead of allowing the cache to hide that change.
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_event_updated
+AFTER UPDATE ON session_events
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id = OLD.session_id OR session_id = NEW.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_event_deleted
+AFTER DELETE ON session_events
+BEGIN
+  DELETE FROM session_projection_checkpoints WHERE session_id = OLD.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_provenance_updated
+AFTER UPDATE ON session_provenances
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id IN (
+     SELECT session_id FROM session_events WHERE provenance_id = NEW.id OR provenance_id = OLD.id
+   );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_projection_checkpoint_session_updated
+AFTER UPDATE ON sessions
+BEGIN
+  DELETE FROM session_projection_checkpoints
+   WHERE session_id = OLD.id OR session_id = NEW.id;
+END;
+`;
+
+/**
+ * Migration 053: a project's own decision model (VC-478).
+ *
+ * One nullable JSON column beside `session_model`, on 024's terms: `NULL` is
+ * "inherit the app-wide decision model", and a stored `{ "kind": "none" }` is
+ * a project that turned decision models off for itself — a choice, not an
+ * absence. The document is variable-shaped (none, a local server, a cloud
+ * model with its opt-in), so `json_valid` guards it and the reader re-checks
+ * it through `parseDecisionModelSetting`; a row that fails reads as NO decision model (never as
+ * inherit; see `readDecisionModelColumn`).
+ *
+ * No credential is or can be stored here: a cloud setting names a provider and
+ * a model, and the key stays in Pi's own `auth.json`.
+ */
+const MIGRATION_053_PROJECT_DECISION_MODEL = `
+ALTER TABLE projects ADD COLUMN decision_model TEXT
+  CHECK (decision_model IS NULL OR json_valid(decision_model));
+`;
+
+/**
+ * Migration 052: unread is its own axis, durable across relaunch (VC-30 × VC-108).
+ *
+ * A read receipt is not work, so it is deliberately NOT a Session ledger fact.
+ * Marking a Session read would otherwise append to `session_events`, churn the
+ * projection checkpoints beside it, and move `lastActivityAt` — a Session would
+ * climb its own listing because somebody LOOKED at it. So the receipt is a
+ * per-Session row of its own, on the shape `session_provenances` already
+ * established for a fact about a Session that the ledger does not own.
+ *
+ * One nullable column carries the whole state: a stamp is "unread since then"
+ * and `NULL` is read. A Session with no row at all is read too, which is what
+ * makes the resting case cost nothing — a machine where nobody has ever left an
+ * agent running unattended stores nothing here.
+ *
+ * The partial index holds only the unread rows, for `session_attachments`'
+ * reason one migration up: the unread set is a handful while the table grows
+ * with every Session, so the index is the size of the answer.
+ *
+ * Losing this table costs one wrong dot and nothing else, which is why it has
+ * no backfill: there is no durable evidence of what somebody had already read.
+ */
+const MIGRATION_052_SESSION_READ_RECEIPTS = `
+CREATE TABLE IF NOT EXISTS session_read_receipts (
+  session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  unread_since INTEGER
+);
+CREATE INDEX IF NOT EXISTS session_read_receipts_unread
+  ON session_read_receipts(unread_since)
+  WHERE unread_since IS NOT NULL;
+`;
+
+/**
+ * Migration 054: `authority_approvals` — the remembered approvals of VC-480.
+ *
+ * One row per "allow for this Session" or "always allow in this project", with
+ * where it came from. App-owned like `projects.authority_policy` and for the
+ * same reason: no verb or tool exposes it, so the Session it governs cannot
+ * write it. Revoking is a soft delete (`revoked_at`), so Undo restores the same
+ * row with the same provenance. A Session row dies with its Session.
+ */
+const MIGRATION_054_AUTHORITY_APPROVALS = `
+CREATE TABLE IF NOT EXISTS authority_approvals (
+  id                   TEXT PRIMARY KEY,
+  project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  scope                TEXT NOT NULL CHECK (scope IN ('session', 'project')),
+  session_id           TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  operation            TEXT NOT NULL,
+  key                  TEXT NOT NULL,
+  rule                 TEXT NOT NULL,
+  provenance           TEXT NOT NULL CHECK (json_valid(provenance)),
+  created_at           INTEGER NOT NULL,
+  use_count            INTEGER NOT NULL DEFAULT 0,
+  last_used_at         INTEGER,
+  last_used_session_id TEXT,
+  revoked_at           INTEGER,
+  CHECK ((scope = 'session') = (session_id IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS authority_approvals_project
+  ON authority_approvals(project_id)
+  WHERE revoked_at IS NULL;
+
+-- Who authorised every gated call, written before the call ran (VC-480). The
+-- activity log's raw material: append-only, one row per decision.
+CREATE TABLE IF NOT EXISTS authority_decisions (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  tool         TEXT NOT NULL,
+  authoriser   TEXT NOT NULL,
+  rule         TEXT NOT NULL,
+  summary      TEXT NOT NULL,
+  asked        TEXT NOT NULL,
+  approval_id  TEXT,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS authority_decisions_session
+  ON authority_decisions(session_id, created_at);
+`;
+
+/** Successful calls and user mutation history are separate from per-grant counters. */
+const MIGRATION_055_APPROVAL_HISTORY = `
+CREATE TABLE IF NOT EXISTS authority_approval_completions (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  tool_call_id TEXT NOT NULL,
+  approval_ids TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, tool_call_id)
+);
+CREATE TABLE IF NOT EXISTS authority_approval_commands (
+  command_id TEXT PRIMARY KEY,
+  command TEXT NOT NULL,
+  receipt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS authority_approval_events (
+  id TEXT PRIMARY KEY,
+  command_id TEXT NOT NULL UNIQUE REFERENCES authority_approval_commands(command_id),
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`;
+
+/**
+ * Migration 057: the await kind index follows canonical event repairs (VC-513).
+ *
+ * Like 049's checkpoints, the kind is a projection, not a second opinion on
+ * the log. Repair existing drift and synchronize future payload updates in
+ * the same transaction, including updates made by later repair migrations.
+ * Only the derived kind is rebuilt: the fleet sequence and AUTOINCREMENT
+ * high-water mark are durable cursor identity and must never be reassigned.
+ */
+const MIGRATION_057_SESSION_EVENT_KIND_REPAIR = `
+UPDATE session_event_sequence
+   SET kind = (SELECT json_extract(e.payload, '$.kind')
+                 FROM session_events e
+                WHERE e.id = session_event_sequence.event_id)
+ WHERE kind IS NOT (SELECT json_extract(e.payload, '$.kind')
+                     FROM session_events e
+                    WHERE e.id = session_event_sequence.event_id);
+
+CREATE TRIGGER IF NOT EXISTS session_event_sequence_kind_updated
+AFTER UPDATE OF payload ON session_events
+WHEN json_extract(OLD.payload, '$.kind') IS NOT json_extract(NEW.payload, '$.kind')
+BEGIN
+  UPDATE session_event_sequence
+     SET kind = json_extract(NEW.payload, '$.kind')
+   WHERE event_id = NEW.id;
+END;
+`;
+
+/**
+ * Every migration, in order. Append only; a shipped entry is frozen by
+ * `migrations.lock.json`.
+ *
+ * ## Breaking an older reader (VC-602)
+ *
+ * A canary or newer build migrates a profile; the person then runs an older
+ * build against it (a channel switch, a manual DMG install). That older build
+ * finds `user_version` above its own head and opens the file anyway, running
+ * no migration, unless the file's minimum reader version is above its head
+ * (`schema-compatibility.ts`). So every migration answers one question: **can
+ * a build that knows nothing about this migration still read, write and back
+ * up a database that has run it, without harm to either build?**
+ *
+ * Yes (the default, leave `raisesMinReader` off):
+ *  - a new table older builds never touch, a new performance (non-UNIQUE)
+ *    index;
+ *  - a new nullable column, or one with a default that older inserts satisfy;
+ *  - a trigger or constraint that every older write still satisfies;
+ *  - AND the newer build tolerates what an older build leaves behind: rows it
+ *    inserts without the new column, a new table it does not maintain, and a
+ *    backup bundle stamped with ITS head that omits the new tables and
+ *    columns (a newer build restores that bundle by migrating it up, so the
+ *    new data must be expendable or rebuilt on open);
+ *  - AND the newer build HEALS what an older build leaves behind, not merely
+ *    survives it. An older build on the compatible path writes rows into the
+ *    tables you did not change, and no migration will ever see them:
+ *    `user_version` never rewinds, so your backfill and your CREATE TABLE ran
+ *    once, before those rows existed. Anything derived (a projection, a
+ *    counter, a closure mark, a backfilled column) must be recomputed at read
+ *    time, or rebuilt on open by code that ships with your migration, or be
+ *    expendable. A one-shot migration backfill is not healing. If an older
+ *    build's action should have produced an append-only ledger row that
+ *    cannot be reconstructed, healing is impossible: raise the floor.
+ *
+ * No (set `raisesMinReader: true`):
+ *  - dropping or renaming a table or column an older build reads or writes;
+ *  - a NOT NULL column without a default on a table older builds insert into;
+ *  - a CHECK, foreign key or trigger that an older build's writes can break;
+ *  - a UNIQUE index or constraint (including a partial or collation-sensitive
+ *    one, like 046's NOCASE label index) over columns an older build writes:
+ *    its INSERTs and UPDATEs can collide and fail;
+ *  - a foreign key, cascade, or any path by which an older build's DELETE (or
+ *    `INSERT OR REPLACE`, which deletes first) silently discards the newer
+ *    schema's rows;
+ *  - changing what an existing column, `app_state` value or JSON payload means,
+ *    or a value older builds parse strictly (Session Events are exempt: they
+ *    are tolerant on read by rule);
+ *  - moving data so an older build reads half of it, or writes where the newer
+ *    build no longer looks;
+ *  - new state a newer build must never find empty, after restoring an older
+ *    build's backup or live while an older build runs, such as epoch or fence
+ *    history (`host-identity.md`).
+ *
+ * Expand → switch → contract keeps older writers compatible: in the expand
+ * phase, trigger-synced dual writes are the preferred way to keep an older
+ * writer's rows flowing into the new shape, and the contract step that drops
+ * the old shape is the one that raises the floor.
+ *
+ * When unsure, raise it: a refusal names itself and the remedy, while a wrong
+ * "compatible" corrupts silently. `app_state` and its
+ * `volli:min-reader-version` key are permanent; no migration may remove them.
+ */
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, name: "initial schema", sql: MIGRATION_001_INITIAL_SCHEMA },
+  { version: 2, name: "ticket archival", sql: MIGRATION_002_TICKET_ARCHIVAL },
+  {
+    version: 3,
+    name: "ticket detail: sessions, comments, worktree identity",
+    sql: MIGRATION_003_TICKET_DETAIL,
+  },
+  {
+    version: 4,
+    name: "drop tickets.harness_id — harness identity lives on sessions only",
+    sql: MIGRATION_004_DROP_TICKET_HARNESS,
+  },
+  {
+    version: 5,
+    name: "projects.next_ticket_number — monotonic ticket-number counter",
+    sql: MIGRATION_005_TICKET_NUMBER_COUNTER,
+  },
+  {
+    version: 6,
+    name: "sessions launch-kind and placement metadata",
+    sql: MIGRATION_006_SESSION_METADATA,
+  },
+  {
+    version: 7,
+    name: "ticket harness and project base-branch execution preferences",
+    sql: MIGRATION_007_EXECUTION_PREFERENCES,
+  },
+  {
+    version: 8,
+    name: "projects.setup_command — per-project worktree setup command",
+    sql: MIGRATION_008_WORKTREE_SETUP,
+  },
+  {
+    version: 9,
+    name: "tickets.pr_url — durable draft-PR url for the Done flow",
+    sql: MIGRATION_009_TICKET_PR_URL,
+  },
+  {
+    version: 10,
+    name: "tickets.retention_keep — per-ticket retention Keep pin",
+    sql: MIGRATION_010_RETENTION_KEEP,
+  },
+  {
+    version: 11,
+    name: "ticket_attachments — file/url attachments on a ticket",
+    sql: MIGRATION_011_TICKET_ATTACHMENTS,
+  },
+  {
+    version: 12,
+    name: "sessions.exit_code — observed shell exit code for concluded sessions",
+    sql: MIGRATION_012_SESSION_EXIT_CODE,
+  },
+  {
+    version: 13,
+    name: "projects theme override — per-surface app/terminal/editor slugs + auto-tint seed",
+    sql: MIGRATION_013_PROJECT_THEME_OVERRIDE,
+  },
+  {
+    version: 14,
+    name: "projects theme canvas + appearance — the per-project half of the Arc canvas",
+    sql: MIGRATION_014_PROJECT_CANVAS,
+  },
+  {
+    version: 15,
+    name: "registered_harnesses — the trust verdict and event ledger for a manifest",
+    sql: MIGRATION_015_REGISTERED_HARNESSES,
+  },
+  {
+    version: 16,
+    name: "sessions.active_harness_id — the harness actually running, beside the launch one",
+    sql: MIGRATION_016_SESSION_ACTIVE_HARNESS,
+  },
+  {
+    version: 17,
+    name: "harness_channel — is this harness's event channel working right now",
+    sql: MIGRATION_017_HARNESS_CHANNEL,
+  },
+  {
+    version: 18,
+    name: "session control plane ledger — terminal attachments are evidence, not Session state",
+    sql: MIGRATION_018_SESSION_LEDGER,
+  },
+  {
+    version: 19,
+    name: "projects.runtime_preferences — the per-project override of the global runtime record",
+    sql: MIGRATION_019_PROJECT_RUNTIME_PREFERENCES,
+  },
+  {
+    version: 20,
+    name: "blobs + blob_links — content-addressed attachment bytes, replacing ticket_attachments",
+    sql: MIGRATION_020_BLOBS,
+  },
+  {
+    version: 21,
+    name: "web access — the BYO search provider setting, and ciphertext kept apart from it",
+    sql: MIGRATION_021_WEB_ACCESS,
+  },
+  {
+    version: 22,
+    name: "web access — Exa as a second keyed search provider",
+    sql: MIGRATION_022_WEB_ACCESS_EXA,
+  },
+  {
+    version: 23,
+    name: "web access — search keys leave the OS keychain for the profile's own store",
+    sql: MIGRATION_023_WEB_KEYS_LEAVE_THE_KEYCHAIN,
+  },
+  {
+    version: 24,
+    name: "projects agent config — the per-project skills, harness and model Configure writes",
+    sql: MIGRATION_024_PROJECT_AGENT_CONFIG,
+    apply: applyMigration024ProjectAgentConfig,
+  },
+  {
+    version: 25,
+    name: "projects.authority_policy — the per-project authority departures, app-owned",
+    sql: MIGRATION_025_PROJECT_AUTHORITY_POLICY,
+  },
+  {
+    version: 26,
+    name: "automations — command ledger, projections and durable first-message intents",
+    sql: MIGRATION_026_AUTOMATIONS,
+    apply: applyMigration026Automations,
+  },
+  // Renumbered twice — 025 when VC-44's authority policy store reached main
+  // first, 027 when VC-118's automations took 026. A version is a position in
+  // an ordered, already-applied history, not a name: two migrations claiming
+  // one number would leave whichever profile ran the other one silently
+  // missing this table, at a `user_version` that says it is up to date.
+  {
+    version: 27,
+    name: "session_usage — the rebuildable index of what each model operation consumed",
+    sql: MIGRATION_027_SESSION_USAGE,
+  },
+  {
+    version: 28,
+    name: "ticket_signals — typed verdicts, queryable where a comment convention was not",
+    sql: MIGRATION_028_TICKET_SIGNALS,
+  },
+  {
+    version: 29,
+    name: "ticket_event_sequence — durable opaque cursors for lossless waits",
+    sql: MIGRATION_029_TICKET_EVENT_SEQUENCE,
+  },
+  {
+    version: 30,
+    name: "session delegation grants — birth-frozen scoped control grants and fan-out claims",
+    sql: MIGRATION_030_SESSION_DELEGATION_GRANTS,
+  },
+  {
+    version: 31,
+    name: "automations — the column Trigger on the record, and the column's machine-local arming",
+    sql: MIGRATION_031_AUTOMATION_TRIGGERS,
+    apply: applyMigration031AutomationTriggers,
+  },
+  {
+    version: 32,
+    name: "automations — Skipped occurrences, the record of a due time that passed without a Run",
+    sql: MIGRATION_032_SCHEDULE_SKIPS,
+  },
+  {
+    version: 33,
+    name: "automations — whether a person was at the door that asked for a Run",
+    sql: MIGRATION_033_RUN_ATTENDANCE,
+    apply: applyMigration033RunAttendance,
+  },
+  {
+    version: 34,
+    name: "automations — the column's machine-local order for its Offered list",
+    sql: MIGRATION_034_COLUMN_ORDER,
+  },
+  {
+    version: 35,
+    name: "blobs + blob_links — reconcile a lineage that took 020's number without its schema",
+    sql: MIGRATION_020_BLOBS_RECONCILE,
+    apply: applyMigration035BlobsReconcile,
+  },
+  {
+    version: 36,
+    name: "automations — durable Session mint intents for pre-Run provenance",
+    sql: MIGRATION_036_AUTOMATION_SESSION_MINT_INTENTS,
+  },
+  {
+    version: 37,
+    name: "automations — main-owned pending armed-column arrivals",
+    sql: MIGRATION_037_PENDING_ARMED_RUNS,
+  },
+  {
+    version: 38,
+    name: "automations — retained armed-Run command ids for idempotent Retry",
+    sql: MIGRATION_038_ARMED_RUN_ATTEMPTS,
+  },
+  {
+    version: 39,
+    name: "session delegation extensions — person-approved slots past the in-ticket allowance",
+    sql: MIGRATION_039_SESSION_DELEGATION_EXTENSIONS,
+    apply: applyMigration039SessionDelegationExtensions,
+  },
+  {
+    version: 40,
+    name: "sessions.role — the Role as data, backfilled from each Session's birth event",
+    sql: MIGRATION_040_SESSION_ROLE,
+    apply: applyMigration040SessionRole,
+  },
+  {
+    version: 41,
+    name: "sessions.parent_session_id — the parent link as ledger data, backfilled from session_delegations",
+    sql: MIGRATION_041_SESSION_PARENT,
+    apply: applyMigration041SessionParent,
+  },
+  {
+    version: 42,
+    name: "session event storage — compact native ids and interned provenance",
+    sql: MIGRATION_042_SESSION_EVENT_STORAGE,
+    apply: applyMigration042SessionEventStorage,
+  },
+  {
+    version: 43,
+    name: "worktree cleanup — command ledger, immutable per-item facts, acceptance receipts",
+    sql: MIGRATION_043_WORKTREE_CLEANUP,
+  },
+  {
+    version: 44,
+    name: "session_event_sequence — durable opaque cursors for lossless waits on a Session",
+    sql: MIGRATION_044_SESSION_EVENT_SEQUENCE,
+    apply: applyMigration044SessionEventSequence,
+  },
+  {
+    version: 45,
+    name: "spawned_processes — the spawn ledger behind the orphan process sweep",
+    sql: MIGRATION_045_SPAWN_LEDGER,
+  },
+  {
+    version: 46,
+    name: "labels — one live identity per NOCASE name, with retained merge aliases",
+    sql: `${MIGRATION_046_LABEL_MERGE_COLUMNS}${MIGRATION_046_LABEL_CASE_IDENTITY}`,
+    apply: applyMigration046LabelCaseIdentity,
+  },
+  {
+    version: 47,
+    name: "mcp_servers — per-project configuration and last working tool catalog",
+    sql: MIGRATION_047_MCP_SERVERS,
+  },
+  {
+    version: 48,
+    name: "session_projection_checkpoints — rebuildable per-Session read models",
+    sql: MIGRATION_048_SESSION_PROJECTION_CHECKPOINTS,
+  },
+  {
+    version: 49,
+    name: "session projection checkpoints — invalidate on canonical-prefix repair",
+    sql: MIGRATION_049_SESSION_PROJECTION_CHECKPOINT_INVALIDATION,
+  },
+  {
+    version: 50,
+    name: "mcp — recorded provenance and an append-only management audit trail",
+    sql: MIGRATION_050,
+    apply: applyMigration050McpProvenance,
+  },
+  {
+    version: 51,
+    name: "session_attachments — an indexed closure mark, so asking who is attached costs no fold",
+    sql: MIGRATION_051_SESSION_ATTACHMENT_CLOSURE,
+    apply: applyMigration051AttachmentClosure,
+  },
+  {
+    version: 52,
+    name: "session_read_receipts — unread is its own axis, durable across relaunch (VC-30 × VC-108)",
+    sql: MIGRATION_052_SESSION_READ_RECEIPTS,
+  },
+  {
+    version: 53,
+    name: "projects.decision_model — a project's own decision model, NULL = inherit (VC-478)",
+    sql: MIGRATION_053_PROJECT_DECISION_MODEL,
+    apply: applyMigration053ProjectDecisionModel,
+  },
+  {
+    version: 54,
+    name: "authority_approvals — remembered approvals, app-owned (VC-480)",
+    sql: MIGRATION_054_AUTHORITY_APPROVALS,
+    apply: applyMigration054AuthorityApprovals,
+  },
+  {
+    version: 55,
+    name: "approval completion and command history (VC-480)",
+    sql: MIGRATION_055_APPROVAL_HISTORY,
+  },
+  {
+    version: 56,
+    name: "host notice outbox — persist sanitized delivery before submission (VC-495)",
+    sql: HOST_NOTICE_OUTBOX_MIGRATION,
+  },
+  {
+    version: 57,
+    name: "session event kind index — synchronize canonical-prefix repairs (VC-513)",
+    sql: MIGRATION_057_SESSION_EVENT_KIND_REPAIR,
+  },
+  {
+    version: 58,
+    name: "cloud identity — host, workspace epochs, workers, checkout leases, devices (VC-550)",
+    sql: CLOUD_IDENTITY_MIGRATION,
+  },
+];
+
+/**
+ * Migration 053's column addition, probe-gated like 051's: `ADD COLUMN` throws
+ * on a column that is already there, and a lineage can be re-offered a version
+ * it already ran.
+ */
+/** This build's schema head: the newest migration it knows. */
+export const SCHEMA_HEAD: number = MIGRATIONS.at(-1)?.version ?? 0;
+
+function applyMigration053ProjectDecisionModel(db: Database.Database): void {
+  const columns = db.pragma("table_info(projects)") as { name: string }[];
+  if (columns.some(({ name }) => name === "decision_model")) return;
+  db.exec(MIGRATION_053_PROJECT_DECISION_MODEL);
+}
+
+/**
+ * VC-478 keeps 053; VC-480 dogfood already stamped that same number for the
+ * approval ledger. Both lineages therefore enter 054 with different schemas.
+ * Repair the skipped decision-model column before creating any missing ledger
+ * tables, without rewinding user_version or rebuilding populated tables.
+ */
+function applyMigration054AuthorityApprovals(db: Database.Database): void {
+  applyMigration053ProjectDecisionModel(db);
+  const tableExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+  const hasApprovals = tableExists.get("authority_approvals") !== undefined;
+  const hasDecisions = tableExists.get("authority_decisions") !== undefined;
+  if (!hasApprovals || !hasDecisions) db.exec(MIGRATION_054_AUTHORITY_APPROVALS);
+}
+
+/**
+ * Migration 050's column additions, probe-gated like 040's and 041's.
+ *
+ * `ADD COLUMN` throws on a column that is already there, and a lineage can be
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — so the probe is what makes
+ * convergence the outcome rather than a duplicate-column failure. All four
+ * columns are added together or not at all, so one probe covers the block.
+ *
+ * The audit table is executed here too rather than left to `sql`, because
+ * `migrate` treats `apply` as a REPLACEMENT for the declared statement, not as
+ * a step beside it. `CREATE TABLE IF NOT EXISTS` needs no probe of its own.
+ *
+ * `MIGRATION_050` still composes both halves, because `sql` is also what a
+ * from-scratch fixture execs directly; this function and that constant must
+ * describe the same migration, and a fixture that got only the audit table
+ * would build an `mcp_servers` with no provenance columns and fail far from
+ * here.
+ */
+function applyMigration050McpProvenance(db: Database.Database): void {
+  const columns = db.pragma("table_info(mcp_servers)") as { name: string }[];
+  if (!columns.some(({ name }) => name === "registry_type")) {
+    db.exec(MIGRATION_050_MCP_PROVENANCE);
+  }
+  db.exec(MIGRATION_050_MCP_OPERATIONS);
+}
+
+/**
+ * Migration 051's column addition, probe-gated like 040's, 041's and 050's.
+ *
+ * `ADD COLUMN` throws on a column that is already there, and a lineage can be
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — so the probe is what makes
+ * convergence the outcome rather than a duplicate-column failure. The backfill
+ * and the partial index are idempotent on their own, so the probe covers only
+ * the column: re-running the `UPDATE` derives the same closure marks from the
+ * same immutable events.
+ */
+function applyMigration051AttachmentClosure(db: Database.Database): void {
+  const columns = db.pragma("table_info(session_attachments)") as { name: string }[];
+  if (columns.some(({ name }) => name === "closed_sequence")) return;
+  db.exec(MIGRATION_051_SESSION_ATTACHMENT_CLOSURE);
+}
+
+/**
+ * Migration 044's reconciler, probe-gated like 040's and 041's.
+ *
+ * `CREATE TABLE` is as un-idempotent as `ADD COLUMN` here: a database that is
+ * re-offered a version it already ran — a rewound `user_version`, a restore, a
+ * sibling branch that took the number first — must converge rather than fail
+ * on a duplicate object, and this file's own tests re-offer every version.
+ * One probe covers the whole block, because the table, its index and both
+ * triggers are created together or not at all.
+ */
+function applyMigration044SessionEventSequence(db: Database.Database): void {
+  const exists =
+    (db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_event_sequence'",
+      )
+      .get() as unknown) !== undefined;
+  if (exists) return;
+  db.exec(MIGRATION_044_SESSION_EVENT_SEQUENCE);
+}
+
+function ensureLabelMergeColumns(db: Database.Database): void {
+  const columns = db.pragma("table_info(labels)") as { name: string }[];
+  const names = new Set(columns.map((column) => column.name));
+  if (!names.has("merged_into_id")) {
+    db.exec(
+      "ALTER TABLE labels ADD COLUMN merged_into_id TEXT REFERENCES labels(id) ON DELETE CASCADE",
+    );
+  }
+  if (!names.has("merged_at")) db.exec("ALTER TABLE labels ADD COLUMN merged_at INTEGER");
+  if (!names.has("merged_by")) {
+    db.exec(
+      "ALTER TABLE labels ADD COLUMN merged_by TEXT CHECK (merged_by IS NULL OR json_valid(merged_by))",
+    );
+  }
+}
+
+/**
+ * Migration 046's Label merge and compatibility step.
+ *
+ * Live Board use chooses the survivor before archived use, then age and id make
+ * ties deterministic. That guarantees the audited 77× `UI` spelling survives
+ * the 1× `ui` variant even if the Archive favors lowercase. Associations move
+ * before the loser is retired; a Ticket wearing both variants keeps one row.
+ *
+ * The first two calls reconcile profiles that ran this Ticket's pre-release
+ * migrations under versions 43/44 before main assigned those numbers to the
+ * worktree cleanup and Session Event cursor schemas. Both upstream migrations
+ * are idempotent, so ordinary v45 profiles pay only their probes.
+ */
+function applyMigration046LabelCaseIdentity(db: Database.Database): void {
+  db.exec(MIGRATION_043_WORKTREE_CLEANUP);
+  applyMigration044SessionEventSequence(db);
+  ensureLabelMergeColumns(db);
+
+  // Group with the index's collation itself. `lower(name)` differs at NUL and
+  // can leave a pair that the unique index then refuses during startup.
+  const duplicateGroups = db
+    .prepare(
+      `SELECT project_id, name AS representative
+         FROM labels
+        WHERE merged_into_id IS NULL
+        GROUP BY project_id, name COLLATE NOCASE
+       HAVING COUNT(*) > 1`,
+    )
+    .all() as { project_id: string; representative: string }[];
+  const variantsOf = db.prepare(
+    `SELECT l.id,
+            (SELECT COUNT(*)
+               FROM ticket_labels tl
+               JOIN tickets t ON t.id = tl.ticket_id
+              WHERE tl.label_id = l.id AND t.archived_at IS NULL) AS live_tickets,
+            (SELECT COUNT(*) FROM ticket_labels tl WHERE tl.label_id = l.id) AS tickets
+       FROM labels l
+      WHERE l.project_id = ?
+        AND l.name = ? COLLATE NOCASE
+        AND l.merged_into_id IS NULL
+      ORDER BY live_tickets DESC, tickets DESC, l.created_at ASC, l.id ASC`,
+  );
+  const repointAssociations = db.prepare(
+    "INSERT OR IGNORE INTO ticket_labels (ticket_id, label_id) SELECT ticket_id, ? FROM ticket_labels WHERE label_id = ?",
+  );
+  const removeRetiredAssociations = db.prepare("DELETE FROM ticket_labels WHERE label_id = ?");
+  const repointAliases = db.prepare(
+    "UPDATE labels SET merged_into_id = ? WHERE merged_into_id = ?",
+  );
+  const retireVariant = db.prepare(
+    `UPDATE labels
+        SET merged_into_id = ?, merged_at = 0, merged_by = '{"kind":"automation"}',
+            row_version = row_version + 1
+      WHERE id = ?`,
+  );
+
+  for (const group of duplicateGroups) {
+    const variants = variantsOf.all(group.project_id, group.representative) as { id: string }[];
+    const [survivor, ...losers] = variants;
+    if (survivor === undefined) continue;
+    for (const loser of losers) {
+      repointAssociations.run(survivor.id, loser.id);
+      removeRetiredAssociations.run(loser.id);
+      repointAliases.run(survivor.id, loser.id);
+      retireVariant.run(survivor.id, loser.id);
+    }
+  }
+
+  // A pre-release profile can already carry the earlier full index. Rebuild it
+  // so retired aliases may coexist while a second live spelling remains barred.
+  db.exec("DROP INDEX IF EXISTS labels_project_name_nocase");
+  db.exec(MIGRATION_046_LABEL_CASE_IDENTITY);
+}
+
+function countRows(db: Database.Database, sql: string): number {
+  return (db.prepare(sql).get() as { count: number }).count;
+}
+
+interface SessionUsageReferenceProblems {
+  missingEvents: number;
+  mismatchedSessions: number;
+}
+
+function sessionUsageReferenceProblems(db: Database.Database): SessionUsageReferenceProblems {
+  return db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN e.id IS NULL THEN 1 ELSE 0 END), 0) AS missingEvents,
+              COALESCE(SUM(CASE
+                WHEN e.id IS NOT NULL AND e.session_id <> u.session_id THEN 1 ELSE 0
+              END), 0) AS mismatchedSessions
+         FROM session_usage u
+         LEFT JOIN session_events e ON e.id = u.event_id`,
+    )
+    .get() as SessionUsageReferenceProblems;
+}
+
+/** Migration 042's verified rewrite, run inside migrate's existing transaction. */
+function applyMigration042SessionEventStorage(db: Database.Database): void {
+  const eventColumns = db.pragma("table_info(session_events)") as { name: string }[];
+  const hasLegacyProvenance = eventColumns.some(({ name }) => name === "provenance");
+  const hasInternedProvenance = eventColumns.some(({ name }) => name === "provenance_id");
+  const provenanceTableExists =
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_provenances'")
+      .get() !== undefined;
+  // Probe-gated so a deliberately rewound user_version converges rather than
+  // trying to rebuild an already-v42 schema.
+  if (hasInternedProvenance && provenanceTableExists && !hasLegacyProvenance) return;
+  if (!hasLegacyProvenance || hasInternedProvenance || provenanceTableExists) {
+    throw new Error("Migration 42 found a partial Session event storage schema");
+  }
+
+  const before = computeSessionStorageContentDigest(db);
+  const usageReferencesBefore = sessionUsageReferenceProblems(db);
+  db.function(
+    "compact_native_observation_event_id_v42",
+    { deterministic: true },
+    compactNativeObservationEventId,
+  );
+  db.exec(`
+    CREATE TEMP TABLE session_event_id_map_v42 (
+      old_id TEXT PRIMARY KEY,
+      new_id TEXT NOT NULL
+    );
+    INSERT INTO session_event_id_map_v42 (old_id, new_id)
+    SELECT id, compact_native_observation_event_id_v42(id)
+      FROM session_events
+     WHERE id LIKE 'native-event:%'
+       AND id <> compact_native_observation_event_id_v42(id);
+  `);
+
+  const unverifiable = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_event_id_map_v42
+      WHERE new_id <> compact_native_observation_event_id_v42(old_id)`,
+  );
+  if (unverifiable !== 0) {
+    throw new Error(`Migration 42 found ${unverifiable} unverifiable compact event id(s)`);
+  }
+  const duplicate = db
+    .prepare(
+      `SELECT new_id
+         FROM session_event_id_map_v42
+        GROUP BY new_id
+       HAVING COUNT(*) > 1
+        LIMIT 1`,
+    )
+    .get() as { new_id: string } | undefined;
+  if (duplicate !== undefined) {
+    throw new Error(`Migration 42 compact event id collision: ${duplicate.new_id}`);
+  }
+  const collision = db
+    .prepare(
+      `SELECT ids.kind, ids.id
+         FROM session_event_id_map_v42 m
+         JOIN (
+           SELECT 'session' AS kind, id FROM sessions
+           UNION ALL SELECT 'attachment', id FROM session_attachments
+           UNION ALL SELECT 'command', id FROM session_commands
+           UNION ALL SELECT 'event', e.id
+             FROM session_events e
+            WHERE NOT EXISTS (
+              SELECT 1 FROM session_event_id_map_v42 mapped WHERE mapped.old_id = e.id
+            )
+           UNION ALL SELECT 'receipt', id FROM session_command_receipts
+         ) ids ON ids.id = m.new_id
+        LIMIT 1`,
+    )
+    .get() as { kind: string; id: string } | undefined;
+  if (collision !== undefined) {
+    throw new Error(
+      `Migration 42 compact event id collision with ${collision.kind} ${collision.id}`,
+    );
+  }
+
+  db.exec(MIGRATION_042_CREATE_PROVENANCES);
+  // Copy both sides of the receipt FK to SQLite's TEMP database, then drop the
+  // child before its parent. Creating the compact main tables only after the
+  // old ones are gone lets SQLite reuse their pages instead of permanently
+  // growing the profile by the size of a second event ledger. better-sqlite3's
+  // SQLITE_TEMP_STORE=1 compile default keeps the copy outside the main
+  // database and bounds heap use on large profiles; every object is still
+  // covered by migrate's one transaction.
+  db.exec(`
+    CREATE TEMP TABLE session_events_v41_copy AS
+    SELECT id, session_id, sequence, occurred_at, recorded_at, provenance,
+           attachment_id, command_id, payload
+      FROM session_events;
+    CREATE TEMP TABLE session_command_receipts_v41_copy AS
+    SELECT id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id
+      FROM session_command_receipts;
+    DROP TABLE session_command_receipts;
+    DROP TABLE session_events;
+  `);
+  db.exec(MIGRATION_042_CREATE_SESSION_EVENTS);
+  db.exec(`
+    INSERT INTO session_events
+      (id, session_id, sequence, occurred_at, recorded_at, provenance_id,
+       attachment_id, command_id, payload)
+    SELECT COALESCE(m.new_id, e.id), e.session_id, e.sequence, e.occurred_at, e.recorded_at,
+           p.id, e.attachment_id, e.command_id, e.payload
+      FROM session_events_v41_copy e
+      JOIN session_provenances p ON p.provenance = e.provenance
+      LEFT JOIN session_event_id_map_v42 m ON m.old_id = e.id
+     ORDER BY e.session_id COLLATE BINARY, e.sequence;
+  `);
+  db.exec(MIGRATION_042_CREATE_SESSION_COMMAND_RECEIPTS);
+  db.exec(`
+    INSERT INTO session_command_receipts
+      (id, session_id, command_id, sequence, recorded_at, receipt, receipt_event_id)
+    SELECT r.id, r.session_id, r.command_id, r.sequence, r.recorded_at, r.receipt,
+           COALESCE(m.new_id, r.receipt_event_id)
+      FROM session_command_receipts_v41_copy r
+      LEFT JOIN session_event_id_map_v42 m ON m.old_id = r.receipt_event_id
+     ORDER BY r.command_id COLLATE BINARY, r.sequence;
+
+    UPDATE session_usage
+       SET event_id = (
+         SELECT m.new_id FROM session_event_id_map_v42 m WHERE m.old_id = session_usage.event_id
+       )
+     WHERE event_id IN (SELECT old_id FROM session_event_id_map_v42);
+
+    DROP TABLE session_command_receipts_v41_copy;
+    DROP TABLE session_events_v41_copy;
+  `);
+
+  const failedRewrites = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_event_id_map_v42 m
+       LEFT JOIN session_events e ON e.id = m.new_id
+      WHERE m.new_id <> compact_native_observation_event_id_v42(m.old_id)
+         OR e.id IS NULL`,
+  );
+  if (failedRewrites !== 0) {
+    throw new Error(`Migration 42 failed to verify ${failedRewrites} compact event id rewrite(s)`);
+  }
+  const usageReferencesAfter = sessionUsageReferenceProblems(db);
+  if (
+    usageReferencesAfter.missingEvents > usageReferencesBefore.missingEvents ||
+    usageReferencesAfter.mismatchedSessions > usageReferencesBefore.mismatchedSessions
+  ) {
+    throw new Error(
+      `Migration 42 increased broken usage references: missing events ${usageReferencesBefore.missingEvents}→${usageReferencesAfter.missingEvents}, mismatched Sessions ${usageReferencesBefore.mismatchedSessions}→${usageReferencesAfter.mismatchedSessions}`,
+    );
+  }
+  const danglingReceipts = countRows(
+    db,
+    `SELECT COUNT(*) AS count
+       FROM session_command_receipts r
+       LEFT JOIN session_events e
+         ON e.id = r.receipt_event_id AND e.session_id = r.session_id
+      WHERE r.receipt_event_id IS NOT NULL AND e.id IS NULL`,
+  );
+  if (danglingReceipts !== 0) {
+    throw new Error(`Migration 42 left ${danglingReceipts} dangling receipt event reference(s)`);
+  }
+  const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
+  if (foreignKeyViolations.length > 0) {
+    throw new Error(
+      `Migration 42 foreign-key check failed: ${JSON.stringify(foreignKeyViolations.slice(0, 3))}`,
+    );
+  }
+
+  const after = computeSessionStorageContentDigest(db);
+  assertSessionStorageContentUnchanged(before, after);
+  db.exec("DROP TABLE session_event_id_map_v42");
+}
+
+/** Migration 041's reconciler, probe-gated like 040's. */
+function applyMigration041SessionParent(db: Database.Database): void {
+  const columns = db.pragma("table_info(sessions)") as { name: string }[];
+  if (columns.some((column) => column.name === "parent_session_id")) return;
+  db.exec(MIGRATION_041_SESSION_PARENT_COLUMN);
+  db.exec(MIGRATION_041_SESSION_PARENT_BACKFILL);
+}
+
+/**
+ * Migration 040's reconciler, probe-gated like 031's for the same reason: an
+ * `ALTER TABLE … ADD COLUMN` cannot be written idempotently in SQL, and a
+ * lineage re-offered this version (a rewound `user_version`, a sibling branch
+ * that took the number first) must converge rather than fail on a duplicate
+ * column. The backfill runs only with the column, so a database that already
+ * holds Roles keeps them.
+ */
+function applyMigration040SessionRole(db: Database.Database): void {
+  const columns = db.pragma("table_info(sessions)") as { name: string }[];
+  if (columns.some((column) => column.name === "role")) return;
+  db.exec(MIGRATION_040_SESSION_ROLE_COLUMN);
+  db.exec(MIGRATION_040_SESSION_ROLE_BACKFILL);
+}
+
+/**
+ * Migration 039's reconciler — the VC-204 branch shipped this table as its own
+ * 031 before main's automations series claimed 031–038, so a database from
+ * that lineage says `user_version = 31` while holding the extension table and
+ * MISSING main's 031 schema entirely. The runner will never offer that
+ * database 031 again — 032–039 are all it has left — so main's 031 rides
+ * here, exactly the way 024 carries 023's web-keys rebuild: probe-gated on the
+ * schema facts it changes (`trigger_spec` by column probe, the arming table by
+ * IF NOT EXISTS), a no-op on every lineage that ran main's own 031. Both
+ * halves converge on one schema whichever parallel 031 a database ran first.
+ */
+function applyMigration039SessionDelegationExtensions(db: Database.Database): void {
+  applyMigration031AutomationTriggers(db);
+  db.exec(MIGRATION_039_SESSION_DELEGATION_EXTENSIONS);
+}
+
+/**
+ * Migration 031's reconciler. `ALTER TABLE … ADD COLUMN` is the one statement
+ * in this file that cannot be written idempotently in SQL, and three sibling
+ * automations branches (VC-127, VC-128, VC-130) are in flight against the same
+ * table — exactly the situation the 026 comment above describes, where a
+ * developer database ran a parallel branch's version 31 and would otherwise
+ * carry a `user_version` that says it is up to date while missing half this
+ * schema. Probing per half converges every lineage on the same schema.
+ */
+function applyMigration031AutomationTriggers(db: Database.Database): void {
+  const columns = db.pragma("table_info(automations)") as { name: string }[];
+  if (!columns.some((column) => column.name === "trigger_spec")) {
+    db.exec(MIGRATION_031_TRIGGER_COLUMN);
+  }
+  db.exec(MIGRATION_031_COLUMN_ARMING);
+}
+
+/**
+ * Migration 024's reconciler — see the doc on
+ * {@link MIGRATION_024_PROJECT_AGENT_CONFIG} for why this one migration is
+ * code. Each half probes before it runs, so every lineage converges on the
+ * same schema and `user_version = 24` regardless of which parallel 23 a
+ * database ran first.
+ */
+function applyMigration024ProjectAgentConfig(db: Database.Database): void {
+  const projectColumns = db.pragma("table_info(projects)") as { name: string }[];
+  if (!projectColumns.some((column) => column.name === "skill_modes")) {
+    db.exec(MIGRATION_024_PROJECT_AGENT_CONFIG);
+  }
+  // The branch-lineage database sat at 23 without ever running the web-keys
+  // rebuild, and the runner will never offer it 23 again — so the rebuild
+  // rides here, gated on the schema fact it changes.
+  const secretsColumns = db.pragma("table_info(secrets)") as { name: string }[];
+  if (secretsColumns.some((column) => column.name === "ciphertext")) {
+    db.exec(MIGRATION_023_WEB_KEYS_LEAVE_THE_KEYCHAIN);
+  }
+}
+
+interface LegacyAutomationRunRow {
+  id: string;
+  automation_id: string | null;
+  ticket_id: string | null;
+  session_id: string;
+  provider_id: string;
+  model_id: string;
+  reasoning_level: string;
+  created_at: number;
+}
+
+/**
+ * Migration 026 began life on this branch as a conflicting migration 025.
+ * Main's real 025 is `projects.authority_policy`, so current installations at
+ * user_version 25 need the whole Automation schema here. The probe also makes
+ * a developer database that ran the short-lived branch schema converge: its
+ * old Run table gets rebuilt to preserve the Automation id and snapshot a
+ * name, instead of retaining `ON DELETE SET NULL` and losing provenance on
+ * the next delete.
+ */
+function applyMigration026Automations(db: Database.Database): void {
+  // A developer database that ran this branch's original migration 025 already
+  // reports version 25, so main's real authority-policy migration would be
+  // skipped by the normal version gate. Converge that fork here before adding
+  // the corrected Automation schema.
+  const projectColumns = db.pragma("table_info(projects)") as { name: string }[];
+  if (!projectColumns.some((column) => column.name === "authority_policy")) {
+    db.exec(MIGRATION_025_PROJECT_AUTHORITY_POLICY);
+  }
+  const hasRuns =
+    (db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'automation_runs'")
+      .get() as unknown) !== undefined;
+  const runColumns = hasRuns
+    ? (db.pragma("table_info(automation_runs)") as { name: string }[]).map((column) => column.name)
+    : [];
+  if (hasRuns && !runColumns.includes("automation_name")) {
+    const legacyRuns = db
+      .prepare(
+        `SELECT id, automation_id, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at
+           FROM automation_runs`,
+      )
+      .all() as LegacyAutomationRunRow[];
+    const names = new Map(
+      (
+        db.prepare("SELECT id, name FROM automations").all() as Array<{ id: string; name: string }>
+      ).map((automation) => [automation.id, automation.name]),
+    );
+    // The old table owns its indexes, so drop it before the new schema creates
+    // identically named projection indexes. This is still inside migrate's one
+    // transaction; an error restores the old table and its rows.
+    db.exec("DROP TABLE automation_runs");
+    db.exec(MIGRATION_026_AUTOMATIONS);
+    const insert = db.prepare(
+      `INSERT INTO automation_runs
+        (id, automation_id, automation_name, ticket_id, session_id, provider_id, model_id, reasoning_level, created_at)
+       VALUES (@id, @automation_id, @automation_name, @ticket_id, @session_id, @provider_id, @model_id, @reasoning_level, @created_at)`,
+    );
+    for (const run of legacyRuns) {
+      insert.run({
+        ...run,
+        // A legacy deleted Automation had already lost its name under the old
+        // FK. Preserve the id and make that historical limitation explicit;
+        // every 026-written row stores the true snapshot.
+        automation_name:
+          run.automation_id === null
+            ? null
+            : (names.get(run.automation_id) ?? "Deleted Automation"),
+      });
+    }
+    return;
+  }
+  db.exec(MIGRATION_026_AUTOMATIONS);
+}
+
+export interface MigrateOptions {
+  /**
+   * Stop after this `user_version` instead of walking to the newest migration.
+   *
+   * The one caller is a restore (VC-283), and the reason is that a bundle's
+   * rows are shaped for the schema they were read out of: a v39 bundle poured
+   * into a v41 database would be poured into columns that did not exist when
+   * it was written. Restore migrates a fresh database TO the bundle's version,
+   * writes the rows, and only then walks the remaining migrations — which is
+   * also what makes an app upgrade testable, since the second walk is the same
+   * one a real upgrade performs.
+   *
+   * A version newer than this build knows is not clamped silently; the caller
+   * checks compatibility first, because a bundle from a future build is a
+   * refusal, not a truncation.
+   */
+  toVersion?: number;
+  /** Tests only: a migration list other than {@link MIGRATIONS}. */
+  migrations?: readonly Migration[];
+}
+
+/**
+ * Applies every migration whose `version` is greater than the db's current
+ * `user_version`, in order. Returns whether any migration ran.
+ */
+export function migrate(
+  db: Database.Database,
+  dbPath: string,
+  options: MigrateOptions = {},
+): boolean {
+  const recovery = MIGRATION_RECOVERY_ACTION;
+  let currentVersion: number;
+  try {
+    currentVersion = db.pragma("user_version", { simple: true }) as number;
+  } catch (error) {
+    throw new Error(`Migration refused: source database could not be read. ${recovery}`, {
+      cause: error,
+    });
+  }
+  const ceiling = options.toVersion ?? Number.POSITIVE_INFINITY;
+  const pending = (options.migrations ?? MIGRATIONS)
+    .filter((migration) => migration.version > currentVersion && migration.version <= ceiling)
+    .toSorted((a, b) => a.version - b.version);
+  if (pending.length === 0) {
+    logMigrationCompaction(skippedMigrationCompaction(dbPath, "no pending migrations"));
+    return false;
+  }
+
+  // Only an already-populated database needs a safety copy — a fresh
+  // `user_version = 0` db has nothing pre-migration to protect.
+  if (currentVersion > 0) {
+    try {
+      assertDatabaseIntegrity(db);
+    } catch (error) {
+      throw new Error(
+        `Migration refused: source database failed integrity verification. ${recovery}`,
+        { cause: error },
+      );
+    }
+    // The rollback point is a published database file: durable, verified,
+    // and never torn behind the migration it protects (VC-628).
+    publishRollbackPoint(db, dbPath, currentVersion);
+  }
+
+  const applyPendingMigrations = db.transaction(() => {
+    for (const migration of pending) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+      // Interpolated, not bound: PRAGMA statements don't accept `?`
+      // parameters, and `migration.version` is an internal integer literal
+      // from MIGRATIONS above, never renderer-supplied input.
+      db.pragma(`user_version = ${migration.version}`);
+      // In the same transaction as the schema change: an older build must never
+      // see this version without the floor that keeps it out.
+      if (migration.raisesMinReader === true) {
+        raiseMinReaderVersion(db, migration.version, Date.now());
+      }
+    }
+
+    const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
+    if (foreignKeyViolations.length > 0) {
+      throw new Error(
+        `Foreign-key check failed after migrations: ${JSON.stringify(foreignKeyViolations)}`,
+      );
+    }
+  });
+  applyPendingMigrations();
+
+  // VACUUM cannot run inside the all-or-nothing migration transaction. Keep
+  // the starting version check here as well: a batch that began at version 0
+  // is fresh even though it now reports the final version. The safety copy for
+  // an existing database remains in place throughout this attempt.
+  const compactionReport =
+    currentVersion === 0
+      ? skippedMigrationCompaction(dbPath, "fresh database")
+      : compactMigrationDatabase(db, dbPath);
+  logMigrationCompaction(compactionReport);
+
+  // Retention is deliberately last, after the transaction committed, its
+  // foreign-key check passed, and compaction returned (including a reported
+  // failure). Fresh databases made no copy, so they do not participate.
+  if (currentVersion > 0) {
+    const retentionReport = pruneMigrationBackups(dbPath, currentVersion);
+    logMigrationBackupRetention(retentionReport);
+  }
+  return true;
+}

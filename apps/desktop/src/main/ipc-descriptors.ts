@@ -33,6 +33,7 @@ import type {
   CliIpcChannel,
   SupportIpcChannel,
   DataIpcChannel,
+  DecisionModelIpcChannel,
   FileIpcChannel,
   HarnessIpcChannel,
   IpcArgs,
@@ -409,6 +410,26 @@ export const ORPHAN_PROCESS_CHANNELS = Object.keys(
   ORPHAN_PROCESS_IPC,
 ) as readonly OrphanProcessIpcChannel[];
 
+// Recovery deliberately remains callable while every DB-backed surface is degraded.
+export const DATABASE_RECOVERY_IPC = {
+  "volli:database-recovery-list": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+  "volli:database-recovery-restore": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+  "volli:database-recovery-fault": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+  "volli:database-recovery-quit": {
+    guard: (args: unknown[]): args is [] => args.length === 0,
+    invalidError: "Invalid database recovery request",
+  },
+};
+
 // ---- data-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliDataIpcContract channel (exhaustiveness is
 // compile-checked in both directions). `DATA_CHANNELS` derives from its keys,
@@ -517,7 +538,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       args.length === 1 &&
       isRecord(args[0]) &&
       typeof args[0]["projectId"] === "string" &&
-      isRecord(args[0]["server"]),
+      isRecord(args[0]["server"]) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
     invalidError: "Invalid MCP server test",
   },
   "volli:mcp-save": {
@@ -526,7 +548,8 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       isRecord(args[0]) &&
       typeof args[0]["projectId"] === "string" &&
       isRecord(args[0]["server"]) &&
-      isStringArray(args[0]["enabledTools"]),
+      isStringArray(args[0]["enabledTools"]) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
     invalidError: "Invalid MCP server save",
   },
   "volli:mcp-refresh": {
@@ -562,6 +585,39 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
       typeof args[0]["projectId"] === "string" &&
       typeof args[0]["serverId"] === "string",
     invalidError: "Invalid MCP server removal",
+  },
+  "volli:mcp-sign-in": {
+    guard: (args): args is IpcArgs<"volli:mcp-sign-in"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      (typeof args[0]["serverId"] === "string" || isRecord(args[0]["server"])) &&
+      (args[0]["secrets"] === undefined || isStringRecord(args[0]["secrets"])),
+    invalidError: "Invalid MCP sign-in",
+  },
+  "volli:mcp-cancel-sign-in": {
+    guard: (args): args is IpcArgs<"volli:mcp-cancel-sign-in"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP sign-in cancellation",
+  },
+  "volli:mcp-sign-out": {
+    guard: (args): args is IpcArgs<"volli:mcp-sign-out"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP sign-out",
+  },
+  "volli:mcp-discard-draft": {
+    guard: (args): args is IpcArgs<"volli:mcp-discard-draft"> =>
+      args.length === 1 &&
+      isRecord(args[0]) &&
+      typeof args[0]["projectId"] === "string" &&
+      typeof args[0]["serverId"] === "string",
+    invalidError: "Invalid MCP draft",
   },
   "volli:project-update": {
     guard: (args): args is IpcArgs<"volli:project-update"> => {
@@ -608,11 +664,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     guard: (args): args is IpcArgs<"volli:project-remove"> =>
       args.length === 1 && typeof args[0] === "string",
     invalidError: "Invalid project id",
-  },
-  "volli:project-reorder": {
-    guard: (args): args is IpcArgs<"volli:project-reorder"> =>
-      args.length === 1 && isStringArray(args[0]),
-    invalidError: "Invalid project order",
   },
 
   "volli:ticket-create": {
@@ -933,17 +984,33 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     },
     invalidError: "Invalid session title",
   },
-  "volli:session-stop": {
-    guard: (args): args is IpcArgs<"volli:session-stop"> => {
+  "volli:session-read-set": {
+    guard: (args): args is IpcArgs<"volli:session-read-set"> => {
+      if (args.length !== 1) return false;
+      const [input] = args;
+      return (
+        isRecord(input) &&
+        typeof input["sessionId"] === "string" &&
+        input["sessionId"].length > 0 &&
+        typeof input["unread"] === "boolean"
+      );
+    },
+    invalidError: "Invalid session read state",
+  },
+  "volli:session-peek-content": {
+    guard: (args): args is IpcArgs<"volli:session-peek-content"> => {
       if (args.length !== 1) return false;
       const [input] = args;
       if (!isRecord(input)) return false;
-      if (typeof input["sessionId"] !== "string" || input["sessionId"].length === 0) return false;
-      // The reason is the durable why: absent, or a non-blank sentence.
-      const reason = input["reason"];
-      return reason === undefined || (typeof reason === "string" && reason.trim().length > 0);
+      // Depth stays host-owned. Refinement is a separate, explicit demand;
+      // ordinary reads (including pinned-card refreshes) buy no model work.
+      return (
+        typeof input["sessionId"] === "string" &&
+        input["sessionId"].length > 0 &&
+        (input["refine"] === undefined || typeof input["refine"] === "boolean")
+      );
     },
-    invalidError: "Invalid session stop",
+    invalidError: "Invalid session peek",
   },
   "volli:label-set-color": {
     guard: (args): args is IpcArgs<"volli:label-set-color"> => {
@@ -1002,12 +1069,12 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
   "volli:worktree-orphan-cleanup": {
     // A command id, the scan revision it was confirmed against, and at least
     // one item id from that scan's plan. NO PATHS: main resolves ids against
-    // the proposal it minted itself (VC-284 review C1), so this guard only has
+    // the proposal it minted itself (VC-284), so this guard only has
     // to say the shape is a cleanup command — whether the revision is current
     // and the ids are real is a question only the plan can answer.
     //
     // The command id is held to UUID syntax like every other command channel
-    // (VC-284 re-review S1). It is the identity a destructive act is replayed
+    // (VC-284). It is the identity a destructive act is replayed
     // under: a caller that may pick `"cmd-1"` can collide with another caller's
     // id and be answered with somebody else's deletion.
     guard: (args): args is IpcArgs<"volli:worktree-orphan-cleanup"> => {
@@ -1039,10 +1106,6 @@ export const DATA_IPC: { readonly [C in DataIpcChannel]: IpcRequestDescriptor<C>
     // input, so there is no shape to get wrong.
     guard: (args): args is IpcArgs<"volli:worktree-trim"> => args.length === 0,
     invalidError: "Invalid trim request",
-  },
-  "volli:worktree-trim-settings-get": {
-    guard: (args): args is IpcArgs<"volli:worktree-trim-settings-get"> => args.length === 0,
-    invalidError: "Invalid request",
   },
   "volli:worktree-trim-settings-set": {
     guard: (args): args is IpcArgs<"volli:worktree-trim-settings-set"> => {
@@ -1186,7 +1249,7 @@ export const DATA_CHANNELS = Object.keys(DATA_IPC) as readonly DataIpcChannel[];
 
 // ---- file-IPC descriptor table ------------------------------------------
 // Exactly one entry per VolliFileIpcContract channel (the file, artifact, and
-// external-app channels `src/main/volli-fs.ts` owns). Every one of that module's
+// external-app channels `src/main/volli-fs-ipc.ts` owns). Every one of that module's
 // handlers falls back to the same "Invalid request" string on a bad shape.
 
 /**
@@ -1499,6 +1562,10 @@ export const THEME_IPC: { readonly [C in ThemeIpcChannel]: IpcRequestDescriptor<
       const [input] = args;
       if (!isRecord(input)) return false;
       if (input["appearance"] !== "light" && input["appearance"] !== "dark") return false;
+      // The live plane color is the handler's to check, never this guard's: a
+      // bad one is dropped there, and must not refuse the hint it rides with.
+      const plane = input["planeBackground"];
+      if (plane !== undefined && typeof plane !== "string") return false;
       return typeof input["background"] === "string" && isHexColor(input["background"]);
     },
     invalidError: "Invalid first-paint hint",
@@ -1545,8 +1612,8 @@ function isModelSelectionShape(value: unknown): boolean {
  * rule 1). The renderer mints one so a retry can carry the exact same intent
  * through another host without deriving an id from this machine.
  *
- * Shared by every command channel rather than copied per feature (VC-284
- * re-review S1): the orphan cleanup transports a DELETION under this id, and a
+ * Shared by every command channel rather than copied per feature (VC-284):
+ * the orphan cleanup transports a DELETION under this id, and a
  * transport that accepts `"cmd-1"` accepts an id another writer could mint too,
  * which is exactly the cross-writer collision the rule exists to prevent.
  */
@@ -1965,6 +2032,57 @@ export const WEB_ACCESS_IPC: { readonly [C in WebAccessIpcChannel]: IpcRequestDe
 
 /** Every channel the Web Access surface owns, derived — never hand-synced. */
 export const WEB_ACCESS_CHANNELS = Object.keys(WEB_ACCESS_IPC) as readonly WebAccessIpcChannel[];
+
+// ---- decision model descriptor table (VC-478) -----------------------------
+// The guards check SHAPE only. Whether a setting is one this build can honour
+// — a loopback URL, a cloud model with its opt-in, a model in the catalog — is
+// `parseDecisionModelSetting`'s and the owner's call, and its refusals are
+// sentences a person reads in Settings, not "Invalid request".
+
+function isDecisionModelScope(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const scope = value as Record<string, unknown>;
+  return (
+    scope["scope"] === "global" ||
+    (scope["scope"] === "project" && typeof scope["projectId"] === "string")
+  );
+}
+
+function isDecisionModelSettingShape(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as Record<string, unknown>)["kind"] === "string"
+  );
+}
+
+export const DECISION_MODEL_IPC: {
+  readonly [C in DecisionModelIpcChannel]: IpcRequestDescriptor<C>;
+} = {
+  "volli:decision-model-get": {
+    guard: (args): args is IpcArgs<"volli:decision-model-get"> =>
+      args.length === 1 && (args[0] === null || typeof args[0] === "string"),
+    invalidError: "Invalid request",
+  },
+  "volli:decision-model-set": {
+    guard: (args): args is IpcArgs<"volli:decision-model-set"> =>
+      args.length === 2 &&
+      isDecisionModelScope(args[0]) &&
+      (args[1] === null || isDecisionModelSettingShape(args[1])),
+    invalidError: "Invalid decision model setting",
+  },
+  "volli:decision-model-test": {
+    guard: (args): args is IpcArgs<"volli:decision-model-test"> =>
+      args.length === 1 && isDecisionModelSettingShape(args[0]),
+    invalidError: "Invalid decision model setting",
+  },
+};
+
+/** Every channel the decision model surface owns, derived — never hand-synced. */
+export const DECISION_MODEL_CHANNELS = Object.keys(
+  DECISION_MODEL_IPC,
+) as readonly DecisionModelIpcChannel[];
 
 // ---- agent observability descriptor table (VC-119) ------------------------
 // The endpoint is deliberately NOT validated here, for the reason the Web

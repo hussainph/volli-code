@@ -14,7 +14,9 @@
  *   06-choose-default.png      — board again: "Choose a default model to start."
  *   07-board-ready.png         — default set: "Use Create & start…".
  *   08-new-ticket-composer.png — the composer, filled, Create & Start visible.
- *   09-kickoff-workspace.png   — after ⇧⌘↵: the ticket workspace, chat tab.
+ *   09-kickoff-workspace.png   — after ⇧⌘↵ the composer closes and the board
+ *                                stays put (VC-491); the created ticket's card
+ *                                is then opened explicitly — chat tab in front.
  *   10-kickoff-settled.png     — the same pane once the first turn settles.
  *
  * DOCUMENTED SKIPS (the two steps Playwright cannot drive):
@@ -51,14 +53,18 @@ import {
   makeGitRepo,
   makeScratch,
   pathExists,
+  readSeededProjects,
   seedDefaultModel,
   seedProjects,
   sleep,
-  tabStrip,
-  TICKET_TAB_STRIP,
   typeIntoMonaco,
   waitUntil,
 } from "./lib/smoke-kit.mjs";
+import {
+  openTicketCard,
+  preparedChatSelected,
+  ticketWorkspaceOpen,
+} from "./lib/kickoff-support.mjs";
 
 /**
  * Where the numbered PNGs land. An explicit argument wins; otherwise a
@@ -265,16 +271,67 @@ try {
   });
 
   // ---- 09: ⇧⌘↵ — the kickoff moment ---------------------------------------
-  await attempt(10, "09 kickoff — ticket workspace opens on the chat tab", async () => {
-    await page.keyboard.press("Meta+Shift+Enter");
-    await waitUntil(
-      "ticket workspace",
-      async () => (await tabStrip(page, TICKET_TAB_STRIP).getByRole("tab").count()) >= 1,
-      { timeout: 30000 },
-    );
-    await sleep(2500);
-    return capture(page, "09-kickoff-workspace.png");
-  });
+  await attempt(
+    10,
+    "09 kickoff — composer closes, board stays put, then the card opens on its chat",
+    async () => {
+      await page.keyboard.press("Meta+Shift+Enter");
+      // VC-491: the kickoff no longer teleports into the ticket workspace — the
+      // composer closes and the board the user was on stays in front. The
+      // walkthrough still wants the workspace shot, so drive the open the way
+      // the user now does: find the created ticket and double-click its card.
+      // (The close lands once the create and the Session start resolve, hence
+      // the generous window.)
+      await waitUntil(
+        "the composer to close",
+        async () => (await page.locator('[data-testid="new-ticket-composer"]').count()) === 0,
+        { timeout: 30000 },
+      );
+      if (
+        !(await page.getByRole("button", { name: "New ticket", exact: true }).isVisible()) ||
+        (await ticketWorkspaceOpen(page))
+      ) {
+        throw new Error("kickoff navigated away from the Board before explicit open");
+      }
+      const { byName } = await readSeededProjects(page);
+      const project = byName[PROJECT.name];
+      if (!project) throw new Error("seeded project missing after import");
+      const created = await page.evaluate(
+        async ({ projectId, title, prefix }) => {
+          const boot = await window.api.data.bootstrap();
+          if (!boot.ok) return null;
+          const ticket = (boot.data.ticketsByProject?.[projectId] ?? []).find(
+            (t) => t.title === title,
+          );
+          return ticket ? { id: ticket.id, displayId: `${prefix}-${ticket.ticketNumber}` } : null;
+        },
+        { projectId: project.id, title: TICKET_TITLE, prefix: project.ticketPrefix },
+      );
+      if (!created) throw new Error("created ticket not found after kickoff");
+      const sessionId = await waitUntil(
+        "the created ticket's chat Session id",
+        async () => {
+          const listed = await page.evaluate(
+            (id) => window.api.sessions.listForTicket({ ticketId: id }),
+            created.id,
+          );
+          if (!listed.ok) throw new Error(`Session listing failed: ${JSON.stringify(listed)}`);
+          return listed.sessions.find((row) => row.kind === "chat")?.record.sessionId;
+        },
+        { timeout: 20000 },
+      );
+      if (!(await openTicketCard(page, created.displayId))) {
+        throw new Error("ticket workspace did not open after double-click");
+      }
+      await waitUntil(
+        "the expected Session's prepared chat to be selected",
+        () => preparedChatSelected(page, sessionId),
+        { timeout: 8000 },
+      );
+      await sleep(2500);
+      return capture(page, "09-kickoff-workspace.png");
+    },
+  );
 
   // ---- 10: the first turn settles ------------------------------------------
   await attempt(11, "10 the first turn settles (reply, or the honest error)", async () => {

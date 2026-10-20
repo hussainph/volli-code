@@ -136,6 +136,8 @@ import {
 } from "@renderer/components/ticket/ticket-rail-model";
 import { appStateStorage } from "@renderer/lib/app-state-storage";
 
+export const UI_APP_STATE_KEY = "volli:ui";
+
 export const SIDEBAR_DEFAULT_WIDTH = 318;
 export const SIDEBAR_MIN_WIDTH = 280;
 export const SIDEBAR_MAX_WIDTH = 640;
@@ -316,6 +318,12 @@ function sanitizeWordWrap(wordWrap: unknown): boolean {
 }
 
 /**
+ * A persisted hint-visibility choice. Anything but an explicit `false` keeps
+ * the hints on screen — the same discipline `costVisible`, `sidebarPinned` and
+ * `sanitizeWordWrap` follow: a missing key or corrupt JSON lands on the visible
+ * default rather than silently silencing a feed the reader never silenced.
+ */
+/**
  * A persisted preference may only name an app this build knows how to launch.
  * A later successful Launch Services listing reconciles an uninstalled known
  * app through `reconcileDefaultExternalApp` below.
@@ -382,6 +390,15 @@ interface UiState {
    * nobody asked for the second time. One press, one launch.
    */
   settingsSignInProviderId: string | null;
+  /**
+   * A Configure pane someone asked for by name, or null (VC-303).
+   *
+   * Configure owns its own selected pane, so this is a REQUEST rather than a
+   * mirror of it: ⌘K sets it, the page takes it — on mount, or while already
+   * on screen — and spends it ({@link UiState.consumeConfigureCategory}), so
+   * a later visit opens wherever the page itself would. Session-only.
+   */
+  configureCategory: string | null;
   /** Session-only — never persisted; see module doc. */
   newTicketOpen: boolean;
   /** Project switcher rail hidden? Persisted app-wide (see module doc). */
@@ -469,6 +486,10 @@ interface UiState {
    * anyway — not an auth flow.
    */
   consumeSettingsSignIn(): void;
+  /** Ask Configure to show one pane; the page spends it on arrival. */
+  requestConfigureCategory(key: string): void;
+  /** Spend {@link UiState.configureCategory} — the Configure page took it. */
+  consumeConfigureCategory(): void;
   setNewTicketOpen(open: boolean): void;
   /** Show one closed Session's saved record. Replaces whichever was open. */
   openSessionDetail(projectId: string, sessionId: string): void;
@@ -571,6 +592,7 @@ export function createUiStore(storage?: StateStorage) {
         settingsOpen: false,
         settingsCategory: null,
         settingsSignInProviderId: null,
+        configureCategory: null,
         newTicketOpen: false,
         sessionDetail: null,
         workspaceRailHidden: false,
@@ -599,6 +621,8 @@ export function createUiStore(storage?: StateStorage) {
             settingsSignInProviderId: signInProviderId ?? null,
           }),
         consumeSettingsSignIn: () => set({ settingsSignInProviderId: null }),
+        requestConfigureCategory: (key) => set({ configureCategory: key }),
+        consumeConfigureCategory: () => set({ configureCategory: null }),
         setNewTicketOpen: (open) => set({ newTicketOpen: open }),
         openSessionDetail: (projectId, sessionId) =>
           set({ sessionDetail: { projectId, sessionId } }),
@@ -665,7 +689,7 @@ export function createUiStore(storage?: StateStorage) {
           ),
       }),
       {
-        name: "volli:ui",
+        name: UI_APP_STATE_KEY,
         version: 1,
         storage: createJSONStorage(() => storage ?? appStateStorage),
         skipHydration: storage === undefined,

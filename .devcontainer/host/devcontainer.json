@@ -1,0 +1,19 @@
+{
+  "name": "Volli host (Linux Node)",
+  "build": { "dockerfile": "Dockerfile", "context": "../.." },
+  "remoteUser": "node",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
+  "mounts": ["source=volli-host-node-modules,target=/workspace/node_modules,type=volume"],
+  "postCreateCommand": [
+    "pnpm",
+    "--filter",
+    "volli-code",
+    "--filter",
+    "./packages/*",
+    "--filter",
+    "./apps/hostd",
+    "install",
+    "--frozen-lockfile"
+  ]
+}

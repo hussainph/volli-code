@@ -47,7 +47,7 @@ describe("reportSessionUsage", () => {
       entry({ sessionId: "b", costUsd: 2 }),
       entry({ sessionId: "b", costUsd: 4 }),
     ];
-    for (const groupBy of ["ticket", "session", "model", "day"] as const) {
+    for (const groupBy of ["ticket", "session", "model", "day", "cause"] as const) {
       expect(reportSessionUsage(entries, { groupBy }).total.knownCostUsd).toBe(7);
     }
   });
@@ -98,6 +98,21 @@ describe("reportSessionUsage", () => {
     );
     expect(report.groups.map((group) => group.key)).toEqual([null, "ticket-1"]);
     expect(report.groups.reduce((sum, group) => sum + (group.usage.knownCostUsd ?? 0), 0)).toBe(7);
+  });
+
+  it("breaks decision-model spend out from the chat turns beside it (VC-478)", () => {
+    const report = reportSessionUsage(
+      [
+        entry({ cause: "assistant", costUsd: 0.5 }),
+        entry({ cause: "decision", costUsd: 0.001 }),
+        entry({ cause: "decision", costUsd: 0.002 }),
+      ],
+      { groupBy: "cause" },
+    );
+    expect(report.groups.map((group) => [group.key, group.usage.requestCount])).toEqual([
+      ["assistant", 1],
+      ["decision", 2],
+    ]);
   });
 
   it("buckets time by UTC day, so a report does not move when the reader does", () => {

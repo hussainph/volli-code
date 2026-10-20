@@ -37,11 +37,19 @@
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { Automation, Ticket, TicketStatus } from "@volli/shared";
+import type { Automation, PendingArmedRun, Ticket, TicketStatus } from "@volli/shared";
 
+import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
+import {
+  receivePendingArmedRuns,
+  useArmedRunStore,
+} from "@renderer/components/automations/armed-run";
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { useAutomationsStore } from "@renderer/stores/automations";
 import { useBoardStore } from "@renderer/stores/board";
+import { useExperimentsStore } from "@renderer/stores/experiments";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
+import { createFakeHostSource, hostSnapshot, remoteHost } from "@renderer/stores/host-sources";
 import { DEFAULT_WORKSPACE_UI, useWorkspaceStore } from "@renderer/stores/workspace";
 
 import { Board } from "./board";
@@ -163,6 +171,10 @@ function columnBoxes(root: Element, left: number, canvas: Box, out: [Element, Bo
       width: COLUMN_W - LIST_PAD_X * 2,
       height: CARD_H,
     };
+    // The slot is what the multi-drop FLIP measures and animates
+    // (`board.tsx#ticketSlotElement`), so it stands where its card does.
+    const slot = card.closest("[data-board-ticket-slot]");
+    if (slot !== null) out.push([slot, box]);
     const sortable = card.parentElement;
     if (sortable !== null) out.push([sortable, box]);
     out.push([card, box]);
@@ -188,6 +200,65 @@ function boardBoxes(): [Element, Box][] {
   return boxes;
 }
 
+/**
+ * The armed countdown stack, where `armed-run-window.tsx` puts it: fixed to
+ * the window, `bottom-6`, centred, `w-80` cards stacking UP from the bottom
+ * edge with `gap-2`, painted over the board at `z-50`. Invented pixels again,
+ * but the geometry is the product's: three windows still counting down reach
+ * up over the bottom of the middle columns, which is exactly where a hand
+ * aiming low at a column ends up.
+ */
+const COUNTDOWN_W = 320;
+const COUNTDOWN_H = 48;
+const COUNTDOWN_GAP = 8;
+const COUNTDOWN_BOTTOM = 24;
+
+function countdownBoxes(): [Element, Box][] {
+  const cards = [...document.querySelectorAll("[data-armed-run-window]")];
+  const stack = cards[0]?.parentElement;
+  if (stack == null) return [];
+  const height = cards.length * COUNTDOWN_H + (cards.length - 1) * COUNTDOWN_GAP;
+  const top = VIEWPORT.height - COUNTDOWN_BOTTOM - height;
+  const boxes: [Element, Box][] = [[stack, { left: 0, top, width: VIEWPORT.width, height }]];
+  cards.forEach((card, index) => {
+    boxes.push([
+      card,
+      {
+        left: (VIEWPORT.width - COUNTDOWN_W) / 2,
+        top: top + index * (COUNTDOWN_H + COUNTDOWN_GAP),
+        width: COUNTDOWN_W,
+        height: COUNTDOWN_H,
+      },
+    ]);
+  });
+  return boxes;
+}
+
+/** Everything laid out, in paint order: the board, then the chrome over it. */
+function layoutBoxes(): [Element, Box][] {
+  return [...boardBoxes(), ...countdownBoxes()];
+}
+
+/**
+ * What a browser's hit test reports at (x, y), topmost first. An element
+ * styled `pointer-events-none` is not hit-testable and never appears — the
+ * countdown's full-width wrapper is one, and its cards opt back in with
+ * `pointer-events-auto` because Cancel must stay clickable.
+ */
+function hitsAt(x: number, y: number): Element[] {
+  return layoutBoxes()
+    .filter(
+      ([node, box]) =>
+        !classesOf(node).includes("pointer-events-none") &&
+        x >= box.left &&
+        x <= box.left + box.width &&
+        y >= box.top &&
+        y <= box.top + box.height,
+    )
+    .map(([node]) => node)
+    .toReversed();
+}
+
 const NO_BOX: Box = { left: 0, top: 0, width: 0, height: 0 };
 
 function domRect(box: Box): DOMRect {
@@ -204,6 +275,16 @@ function domRect(box: Box): DOMRect {
   } as DOMRect;
 }
 
+/** One `element.animate(keyframes, options)` call, as the stub received it. */
+interface AnimateCall {
+  element: Element;
+  keyframes: Keyframe[];
+  options: KeyframeAnimationOptions;
+}
+
+/** Every `animate` call since the layout was installed, in order. */
+let animateCalls: AnimateCall[] = [];
+
 /**
  * The Web Animations stub is what the Escape-cancel gestures next door never
  * needed: a committed release runs dnd-kit's DROP ANIMATION, which calls
@@ -211,12 +292,22 @@ function domRect(box: Box): DOMRect {
  * Web Animations API at all, so without this the commit path throws before the
  * interleaving under test can happen. It resolves on the next task, which is
  * the same ordering a real 200ms animation has relative to the IPC reply.
+ *
+ * It also records what it was asked to play, because the board's own
+ * multi-drop slide (VC-665) is only proven in the e2e smoke by waiting for it
+ * to finish — a wait that cannot tell 200ms from 3s.
  */
 function installAnimations(): () => void {
   const element = Element.prototype as unknown as Record<string, unknown>;
   const had = Object.prototype.hasOwnProperty.call(element, "animate");
   const real = element["animate"];
-  element["animate"] = function (this: Element) {
+  animateCalls = [];
+  element["animate"] = function (
+    this: Element,
+    keyframes: Keyframe[],
+    options: KeyframeAnimationOptions,
+  ) {
+    animateCalls.push({ element: this, keyframes, options });
     const animation = {
       onfinish: null as null | (() => void),
       oncancel: null as null | (() => void),
@@ -240,6 +331,9 @@ function installAnimations(): () => void {
   };
 }
 
+/** `--ease-swift` as `globals.css` ships it. */
+const EASE_SWIFT = "cubic-bezier(0.32, 0.72, 0, 1)";
+
 function installLayout(): () => void {
   const realRect = Element.prototype.getBoundingClientRect;
   const realStyle = window.getComputedStyle.bind(window);
@@ -247,7 +341,7 @@ function installLayout(): () => void {
   for (const name of ["scrollBy", "scrollTo", "scrollIntoView"]) element[name] = () => {};
 
   Element.prototype.getBoundingClientRect = function measured(this: Element) {
-    return domRect(boardBoxes().findLast(([node]) => node === this)?.[1] ?? NO_BOX);
+    return domRect(layoutBoxes().findLast(([node]) => node === this)?.[1] ?? NO_BOX);
   };
 
   window.getComputedStyle = ((node: Element, pseudo?: string | null) => {
@@ -256,6 +350,12 @@ function installLayout(): () => void {
     const y = scrolls(node, "y");
     return new Proxy(style, {
       get(target, key) {
+        // jsdom never applies `globals.css`, so the motion token the slide
+        // reads off its slot is answered here, with the shipped value.
+        if (key === "getPropertyValue") {
+          return (name: string) =>
+            name === "--ease-swift" ? EASE_SWIFT : target.getPropertyValue(name);
+        }
         if (key === "overflowX") return x ? "auto" : "visible";
         if (key === "overflowY") return y ? "auto" : "visible";
         if (key === "overflow") return x && y ? "auto" : "visible";
@@ -265,13 +365,11 @@ function installLayout(): () => void {
     });
   }) as typeof window.getComputedStyle;
 
-  document.elementFromPoint = ((x: number, y: number) => {
-    const hit = boardBoxes().findLast(
-      ([, box]) =>
-        x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height,
-    );
-    return hit?.[0] ?? null;
-  }) as typeof document.elementFromPoint;
+  // jsdom ships neither hit test; a browser always ships both, and they agree.
+  document.elementFromPoint = ((x: number, y: number) =>
+    hitsAt(x, y)[0] ?? null) as typeof document.elementFromPoint;
+  document.elementsFromPoint = ((x: number, y: number) =>
+    hitsAt(x, y)) as typeof document.elementsFromPoint;
 
   const restoreAnimations = installAnimations();
   return () => {
@@ -282,6 +380,7 @@ function installLayout(): () => void {
       Reflect.deleteProperty(element, name);
     }
     Reflect.deleteProperty(document, "elementFromPoint");
+    Reflect.deleteProperty(document, "elementsFromPoint");
   };
 }
 
@@ -346,6 +445,10 @@ async function mountBoard(): Promise<void> {
         <BoardBoundary projectId="p1">
           <Board projectId="p1" ticketPrefix="PRB" />
         </BoardBoundary>
+        {/* Beside the board, as app-shell mounts it: floating chrome that
+            outlives the board and paints over it. Renders nothing until a
+            countdown is pending. */}
+        <ArmedRunWindows />
       </TooltipProvider>,
     );
   });
@@ -367,7 +470,7 @@ interface Point {
   y: number;
 }
 
-function pointerEvent(type: string, at: Point): PointerEvent {
+function pointerEvent(type: string, at: Point, alt = false): PointerEvent {
   return new PointerEvent(type, {
     bubbles: true,
     cancelable: true,
@@ -376,12 +479,14 @@ function pointerEvent(type: string, at: Point): PointerEvent {
     isPrimary: true,
     clientX: at.x,
     clientY: at.y,
+    altKey: alt,
   });
 }
 
-async function move(at: Point): Promise<void> {
+/** A pointer move, seen by dnd-kit's sensor and by the board's own hit test alike. */
+async function move(at: Point, alt = false): Promise<void> {
   await act(async () => {
-    document.dispatchEvent(pointerEvent("pointermove", at));
+    document.dispatchEvent(pointerEvent("pointermove", at, alt));
   });
 }
 
@@ -394,6 +499,15 @@ function columnNamed(status: TicketStatus): Element {
   const found = document.querySelector(`[data-board-column="${status}"]`);
   if (found === null) throw new Error(`no column for ${status}`);
   return found;
+}
+
+/** Whether `status` is drawing its Offered list at landing-target size (⌥ held). */
+function grown(status: TicketStatus): boolean {
+  return (
+    columnNamed(status)
+      .querySelector("[data-offered-panel]")
+      ?.getAttribute("data-offered-panel") === "expanded"
+  );
 }
 
 function ticketSlots(status: TicketStatus): string[] {
@@ -549,6 +663,14 @@ function moveGateway(input: {
   return Promise.resolve({ ok: true, tickets: moved });
 }
 
+/** A group move, answered with the slice the store already painted for it. */
+function moveManyGateway(input: { projectId: string }): Promise<{ ok: true; tickets: Ticket[] }> {
+  return Promise.resolve({
+    ok: true,
+    tickets: useBoardStore.getState().ticketsByProject[input.projectId] ?? [],
+  });
+}
+
 beforeEach(() => {
   triggered = [];
   reactErrors = [];
@@ -588,7 +710,7 @@ beforeEach(() => {
         columnOrders: vi.fn(async () => ({ ok: true, orders: [] })),
         enablement: vi.fn(async () => ({ ok: true, enabledAutomationIds: ["a1"] })),
       },
-      tickets: { move: vi.fn(moveGateway) },
+      tickets: { move: vi.fn(moveGateway), moveMany: vi.fn(moveManyGateway) },
     },
   });
   useBoardStore.setState({
@@ -598,6 +720,7 @@ beforeEach(() => {
     selectedByProject: {},
     unloadedTicketBodies: {},
   });
+  useArmedRunStore.setState({ pending: {} });
   useAutomationsStore.setState({
     byProject: {},
     armingByProject: {},
@@ -634,6 +757,121 @@ function loopErrors(): string[] {
 const BUDGET = 60_000;
 
 describe("a released card whose landing column runs an automation", () => {
+  it.each([false, true])(
+    "retains pointer and Option input before drag-start commits (already held: %s)",
+    async (alreadyHeld) => {
+      await mountBoard();
+      const card = columnNamed("todo").querySelector("article")!;
+      const from = centre(card);
+      const doing = centre(columnNamed("doing"));
+      await act(async () => {
+        card.parentElement!.dispatchEvent(pointerEvent("pointerdown", from, alreadyHeld));
+        // One browser task: activation, arrival and Option all precede React's
+        // passive effects for the newly active drag. No compensating nudge.
+        document.dispatchEvent(
+          pointerEvent("pointermove", { x: from.x, y: from.y + 6 }, alreadyHeld),
+        );
+        document.dispatchEvent(pointerEvent("pointermove", doing, alreadyHeld));
+        if (!alreadyHeld) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", bubbles: true }));
+        }
+      });
+      expect(document.querySelector("[data-board-drag]")).not.toBeNull();
+      expect(grown("doing")).toBe(true);
+      // Doing is not where the card came from, so its rows are live targets.
+      expect(columnNamed("doing").querySelector("[data-offered-inert]")).toBeNull();
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent("keyup", { key: "Alt", bubbles: true }));
+      });
+      expect(grown("doing")).toBe(false);
+      expect(columnNamed("doing").querySelector("[data-offered-panel]")).not.toBeNull();
+      await act(async () => {
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+        );
+      });
+      expect(document.querySelector("[data-board-drag]")).toBeNull();
+      // The permanently mounted listeners must do no hit test or consume
+      // digits at rest, and must never revive the just-ended picker.
+      const hitTest = vi.spyOn(document, "elementsFromPoint");
+      const digit = new KeyboardEvent("keydown", {
+        key: "1",
+        code: "Digit1",
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        document.dispatchEvent(pointerEvent("pointermove", doing, true));
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", bubbles: true }));
+        window.dispatchEvent(digit);
+      });
+      expect(hitTest).not.toHaveBeenCalled();
+      expect(digit.defaultPrevented).toBe(false);
+      expect(columnNamed("doing").querySelector("[data-offered-panel]")).toBeNull();
+      expect(loopErrors()).toEqual([]);
+    },
+  );
+
+  it("draws the card's own column inert under ⌥, since a release there is no arrival", async () => {
+    await mountBoard();
+    const card = columnNamed("doing").querySelector("article")!;
+    const from = centre(card);
+    await act(async () => {
+      card.parentElement!.dispatchEvent(pointerEvent("pointerdown", from, true));
+    });
+    await move({ x: from.x, y: from.y + 6 }, true);
+    await move({ x: from.x, y: 500 }, true);
+    expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe("t3");
+    expect(grown("doing")).toBe(true);
+
+    const panel = columnNamed("doing").querySelector("[data-offered-panel]")!;
+    expect(panel.getAttribute("data-offered-inert")).toBe("true");
+    // The armed row is drawn but is no target; the lit row is Move only.
+    expect(panel.querySelector('[data-offered-row-inert="true"]')?.textContent).toContain(
+      AUTOMATION.name,
+    );
+    expect(panel.querySelector('[data-offered-row="0"]')).toBeNull();
+    expect(panel.querySelector('[aria-current="true"]')?.textContent).toContain("Move only");
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+      );
+    });
+    expect(document.querySelector("[data-board-drag]")).toBeNull();
+    expect(loopErrors()).toEqual([]);
+  });
+
+  it("draws no column inert for a group lifted from two columns, since some of it arrives", async () => {
+    useBoardStore.setState({ selectedByProject: { p1: ["t1", "t3"] } });
+    await mountBoard();
+    const card = columnNamed("doing").querySelector("article")!;
+    const from = centre(card);
+    await act(async () => {
+      card.parentElement!.dispatchEvent(pointerEvent("pointerdown", from, true));
+    });
+    await move({ x: from.x, y: from.y + 6 }, true);
+    await move({ x: from.x, y: 500 }, true);
+    expect(document.querySelector("[data-board-drag]")).not.toBeNull();
+    expect(grown("doing")).toBe(true);
+
+    // The Todo card would arrive in Doing, so Doing's rows stay live targets.
+    const panel = columnNamed("doing").querySelector("[data-offered-panel]")!;
+    expect(panel.getAttribute("data-offered-inert")).toBeNull();
+    expect(panel.querySelector("[data-offered-row-inert]")).toBeNull();
+    expect(panel.querySelector('[aria-current="true"]')?.getAttribute("data-offered-row")).toBe(
+      "0",
+    );
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }),
+      );
+    });
+    expect(document.querySelector("[data-board-drag]")).toBeNull();
+    expect(loopErrors()).toEqual([]);
+  });
+
   it(
     "lands in the destination column, triggers the automation once, and logs no render loop",
     async () => {
@@ -651,6 +889,70 @@ describe("a released card whose landing column runs an automation", () => {
       expect(ticketSlots("todo")).not.toContain(DRAGGED);
       // One release is one Run. A re-entrant drop path would raise this.
       expect(triggered).toEqual([{ ticketId: DRAGGED, toStatus: "doing" }]);
+    },
+    BUDGET,
+  );
+});
+
+function slotNamed(ticketId: string): Element {
+  const found = document.querySelector(`[data-board-ticket-slot="${ticketId}"]`);
+  if (found === null) throw new Error(`no slot for ${ticketId}`);
+  return found;
+}
+
+/**
+ * The multi-drop slide (VC-665). The e2e smoke's 8.5 proves a dropped group
+ * lands and its slide FINISHES, but its readiness wait is a generous bound, so
+ * it would pass a slide that took 3s. This pins what the board asks the
+ * browser to play: from where each slot was picked up, back to rest, in 200ms.
+ */
+describe("a group of cards released into another column", () => {
+  it(
+    "slides every landed slot home from where it was picked up, in 200ms",
+    async () => {
+      // A third Todo card keeps Todo standing once the pair leaves it, so the
+      // journey is the sideways one a person sees rather than a column
+      // collapsing out from under it.
+      useBoardStore.setState({
+        ticketsByProject: { p1: [...TICKETS, ticket("t5", 5, "todo")] },
+        selectedByProject: { p1: ["t1", "t2"] },
+      });
+      await mountBoard();
+      expect(ticketSlots("todo")).toEqual(["t1", "t2", "t5"]);
+      const pickedUp = new Map(
+        ["t1", "t2"].map((id) => [id, slotNamed(id).getBoundingClientRect()] as const),
+      );
+
+      await dragTodoCardIntoDoing();
+      // The board defers the group write by one animation frame so dnd-kit can
+      // tear its observers down first; the slide is played in the layout
+      // effect of the commit that write causes.
+      const slides = (): AnimateCall[] =>
+        animateCalls.filter((call) => call.element.hasAttribute("data-board-ticket-slot"));
+      for (let wait = 0; wait < 50 && slides().length < 2; wait += 1) {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+      }
+
+      expect(ticketSlots("doing")).toEqual(expect.arrayContaining(["t1", "t2"]));
+      expect(slides().map((call) => call.element.getAttribute("data-board-ticket-slot"))).toEqual([
+        "t1",
+        "t2",
+      ]);
+      for (const slide of slides()) {
+        const id = slide.element.getAttribute("data-board-ticket-slot")!;
+        const from = pickedUp.get(id)!;
+        const to = slide.element.getBoundingClientRect();
+        // A real cross-column journey, not a no-op the board would skip.
+        expect(from.left - to.left).toBe(-(COLUMN_W + COLUMN_GAP));
+        expect(slide.keyframes).toEqual([
+          { transform: `translate3d(${from.left - to.left}px, ${from.top - to.top}px, 0)` },
+          { transform: "translate3d(0, 0, 0)" },
+        ]);
+        expect(slide.options).toEqual({ duration: 200, easing: EASE_SWIFT });
+      }
+      expect(loopErrors()).toEqual([]);
     },
     BUDGET,
   );
@@ -788,6 +1090,167 @@ describe("a store write that lands while a card is in the air", () => {
       // And the moved ticket actually arrived, which only a live read can show.
       expect(ticketSlots("todo")).toContain("t4");
       expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+});
+
+/** One countdown still running, as main projects it to every window. */
+function pendingRun(ticketId: string, openedAt: number): PendingArmedRun {
+  return {
+    id: `arrival-${ticketId}`,
+    ticketId,
+    projectId: "p1",
+    ticketDisplayId: `PRB-${ticketId}`,
+    automationId: AUTOMATION.id,
+    automationName: AUTOMATION.name,
+    status: "doing",
+    origin: "armed",
+    openedAt,
+    startAt: Date.now() + 60_000,
+  };
+}
+
+/**
+ * The countdown is floating chrome that must stay clickable — its Cancel is
+ * the only way to stop a Run about to start — so it is painted over the board
+ * and wins the browser's hit test wherever it sits. The ⌥ picker reads the
+ * column under the hand from that same hit test, so a drag aimed low at a
+ * column could land "in no column" and the picker never opened (VC-451).
+ */
+describe("a card in the air over a running countdown", () => {
+  it(
+    "opens the column's picker when ⌥ is held with the pointer over a countdown card",
+    async () => {
+      await mountBoard();
+      // Three drops in quick succession, all still counting down: the stack
+      // reaches up over the bottom of the middle columns.
+      await act(async () => {
+        receivePendingArmedRuns([pendingRun("t2", 1), pendingRun("t3", 2), pendingRun("t4", 3)]);
+      });
+      await liftTodoCardAndSettle();
+
+      const doing = columnNamed("doing").getBoundingClientRect();
+      const aim = { x: Math.round(doing.left + doing.width / 2), y: doing.bottom - 10 };
+      // The premise, checked rather than assumed: the topmost thing under the
+      // hand is a countdown card, not anything inside the column.
+      expect(
+        document.elementFromPoint(aim.x, aim.y)?.closest("[data-armed-run-window]"),
+      ).not.toBeNull();
+
+      await move(aim, true);
+
+      expect(grown("doing")).toBe(true);
+      expect(loopErrors()).toEqual([]);
+    },
+    BUDGET,
+  );
+});
+
+function cloud(enabled: boolean): void {
+  useExperimentsStore.setState({ snapshot: { cloud: { enabled, source: "storage" } } });
+}
+
+function writeControls(): HTMLButtonElement[] {
+  return [...document.querySelectorAll<HTMLButtonElement>("[data-board-column] button")].filter(
+    (button) => button.textContent?.trim() === "New" || button.hasAttribute("data-column-arming"),
+  );
+}
+/**
+ * Read-only (VC-576): while the project's host cannot serve, a move is a
+ * write like any other — no card lifts, and the column's create and arm
+ * controls stand down, greyed as in the lab. Reading still works.
+ */
+describe("a read-only board", () => {
+  let detach: (() => void) | null = null;
+  const remote = createFakeHostSource(
+    hostSnapshot(
+      [remoteHost("h1", "hetzner-1", { link: { status: "offline", since: 0, retryAt: null } })],
+      { p1: "h1" },
+    ),
+  );
+
+  beforeEach(() => {
+    detach = useHostConnectionStore.getState().attach(remote);
+  });
+
+  afterEach(() => {
+    act(() => remote.setHost("h1", { link: { status: "offline", since: 0, retryAt: null } }));
+    detach?.();
+    detach = null;
+    useExperimentsStore.setState({ snapshot: null });
+  });
+
+  async function pressAndTravel(): Promise<void> {
+    const card = columnNamed("todo").querySelector("article");
+    const grip = card?.parentElement;
+    if (!card || !grip) throw new Error("no card in Todo");
+    const from = centre(card);
+    await act(async () => {
+      grip.dispatchEvent(pointerEvent("pointerdown", from));
+    });
+    await move({ x: from.x, y: from.y + 6 });
+  }
+
+  it(
+    "lifts no card, moves nothing, and stands New and Arm down",
+    async () => {
+      cloud(true);
+      await mountBoard();
+      await pressAndTravel();
+      expect(document.querySelector("[data-board-drag]")).toBeNull();
+      await act(async () => {
+        document.dispatchEvent(pointerEvent("pointerup", { x: 400, y: 500 }));
+      });
+      expect(window.api.tickets.move).not.toHaveBeenCalled();
+      expect(ticketSlots("todo")).toEqual(["t1", "t2"]);
+
+      const controls = writeControls();
+      expect(controls.length).toBeGreaterThan(0);
+      for (const control of controls) {
+        expect(control.disabled).toBe(true);
+        expect(control.hasAttribute("data-host-read-only")).toBe(true);
+      }
+    },
+    BUDGET,
+  );
+
+  it(
+    "drags again, with every control back, once the host serves",
+    async () => {
+      cloud(true);
+      await mountBoard();
+      act(() => remote.setHost("h1", { link: { status: "open" } }));
+      for (const control of writeControls()) {
+        expect(control.hasAttribute("data-host-read-only")).toBe(false);
+      }
+      await pressAndTravel();
+      expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+        DRAGGED,
+      );
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+    },
+    BUDGET,
+  );
+
+  it(
+    "changes nothing with the flag off, whatever the host is doing",
+    async () => {
+      cloud(false);
+      await mountBoard();
+      for (const control of writeControls()) {
+        expect(control.hasAttribute("data-host-read-only")).toBe(false);
+        expect(control.disabled).toBe(false);
+      }
+      await pressAndTravel();
+      expect(document.querySelector("[data-board-drag]")?.getAttribute("data-board-drag")).toBe(
+        DRAGGED,
+      );
+      await act(async () => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
     },
     BUDGET,
   );

@@ -11,6 +11,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   type ModelAccessSnapshot,
@@ -63,6 +64,8 @@ function testClient(inspect: ModelAccessClient["inspect"]): ModelAccessClient {
     setHiddenModels: async (hidden) => hidden,
     compactionPolicy: async () => DEFAULT_COMPACTION_POLICY,
     setCompactionPolicy: async (policy) => policy,
+    codeModePolicy: async () => DEFAULT_CODE_MODE_POLICY,
+    setCodeModePolicy: async (policy) => policy,
     pickerView: async () => "all" as const,
     setPickerView: async (view) => view,
     beginSignIn: async () => {

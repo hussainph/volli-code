@@ -7,6 +7,7 @@
 
 import { REASONING_LEVELS, type ModelSelection } from "./agent-runtime";
 import type { AuthorityPolicyOverride } from "./authority-config";
+import type { DecisionModelSetting } from "./decision-model";
 import type { SkillModes } from "./skill";
 import type { Appearance, Canvas } from "./theme/canvas/types";
 import type { ProjectThemeOverride } from "./theme/project-override";
@@ -62,6 +63,12 @@ export interface Project {
    * app-wide per-purpose default.
    */
   sessionModel?: ModelSelection | null;
+  /**
+   * This project's decision model (migration 053, VC-478), or `null`/absent
+   * to inherit the app-wide one. `{ kind: "none" }` is a stated choice — this
+   * project turns decision models off — and is not the same as inheriting.
+   */
+  decisionModel?: DecisionModelSetting | null;
   /**
    * What this project says about the authority its Sessions run under
    * (migration 025, VC-44) — or `null`/absent to be governed entirely by

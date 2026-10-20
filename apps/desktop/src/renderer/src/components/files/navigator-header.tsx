@@ -1,6 +1,6 @@
 /**
  * The Files header: ONE compact line that says where the listing is and what
- * can be done to it (VC-406, revision 06).
+ * can be done to it (VC-406).
  *
  * THE DEFECT THIS REPLACES. The page used to open with its own name —
  * `Ticket files` / `Project files` — under a Files tab that had just said the

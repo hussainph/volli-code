@@ -318,11 +318,9 @@ export function modelOverrideRows(models: readonly ComposerModel[]): readonly Mo
 /**
  * What a row's Run control is doing, as one value.
  *
- * The rail's press used to BE the Run: a click started work, and the only way
- * to read an Automation's saved instructions before spending a Session on it
- * was to open the Automations page. Revision 05 splits the two — the row opens
- * an anchored inspection, and the Run inside it is an explicit, labelled act —
- * which gives the launch three states worth drawing rather than none.
+ * The row opens an anchored inspection so the saved instructions can be read
+ * before spending a Session on them. Run is an explicit, labelled act inside
+ * that inspection, with three launch states.
  */
 export type RunLaunchState = "idle" | "pending" | "failed";
 

@@ -73,23 +73,15 @@ import {
   type SessionPane,
   type SessionTab,
 } from "../../stores/sessions";
+import {
+  ACTIVE_QUIET_WINDOW_MS,
+  DONE_LINGER_MS,
+  PREVIOUS_MAX_AGE_MS,
+} from "./session-band-windows";
 
-/**
- * How long a Session that has gone quiet stays in Active. Long enough that
- * stepping away from a running agent does not reshuffle the list under you,
- * short enough that Active still means "recent".
- */
-export const ACTIVE_QUIET_WINDOW_MS = 30 * 60_000;
-
-/**
- * How long a ticket's Sessions linger in Previous after it lands in Done. The
- * ticket is finished; its Sessions are the trace of finishing it, and stay
- * reachable for one hour of "wait, what did it actually do".
- */
-export const DONE_LINGER_MS = 60 * 60_000;
-
-/** How old a Previous row gets before it counts as concluded business. */
-export const PREVIOUS_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+// The windows live in a dependency-free leaf so the performance fixture can
+// read the same values (VC-415); this module stays their door for the app.
+export { ACTIVE_QUIET_WINDOW_MS, DONE_LINGER_MS, PREVIOUS_MAX_AGE_MS };
 
 /**
  * Where a row's click lands — and, because a row is selected exactly when its
@@ -477,6 +469,52 @@ export function groupPreviousByTicket(rows: readonly PreviousSessionRow[]): Prev
 }
 
 /**
+ * How many Previous entries the band draws before its "Show more" control, and
+ * how many each press of it adds (VC-116).
+ *
+ * Counted in ENTRIES — a ticket folder or a ticketless Session, the band's top
+ * level — not in Sessions: a collapsed folder is one row however many Sessions
+ * it holds, and the Sessions inside one the reader has opened are rows they
+ * asked for by name.
+ */
+export const PREVIOUS_BAND_LIMIT = 20;
+
+/** What the Previous band draws once its cap has had its say. */
+export interface PreviousBandSlice {
+  /** The entries to mount, in the band's own order. */
+  entries: PreviousListingEntry[];
+  /** Entries held behind "Show more" — 0 once the band fits or is fully shown. */
+  hiddenCount: number;
+}
+
+/**
+ * Caps the Previous band at its first `limit` entries (VC-116).
+ *
+ * The band is unbounded by design: everything a project ever ran that cleanup
+ * has not retired sits here, and drawing all of it costs the render and puts
+ * the rows a reader came for a long scroll behind the ones they did not.
+ *
+ * **The cap never hides where you are.** An entry `isPinned` answers for — the
+ * one holding the Session in front of you — stays drawn wherever it ranks, at
+ * its own place in the order, so the highlight the sidebar marks the current
+ * tab with cannot vanish behind "Show more". Nothing else needs that exemption:
+ * the Active band is never capped, and a Session asking for a person is pinned
+ * to Active for as long as it asks ({@link PreviousListingEntry}).
+ *
+ * A pure filter over {@link groupPreviousByTicket}'s output, so it cannot
+ * reorder the band or change which entries exist — only which are mounted.
+ */
+export function capPreviousEntries(
+  entries: readonly PreviousListingEntry[],
+  limit: number,
+  isPinned: (entry: PreviousListingEntry) => boolean,
+): PreviousBandSlice {
+  if (entries.length <= limit) return { entries: [...entries], hiddenCount: 0 };
+  const shown = entries.filter((entry, index) => index < limit || isPinned(entry));
+  return { entries: shown, hiddenCount: entries.length - shown.length };
+}
+
+/**
  * Where a row's click actually GOES — {@link ActiveSessionTarget} resolved
  * against the row's ticket, which is the other half of the address.
  *
@@ -615,12 +653,25 @@ export interface BuildActiveSessionListingInput {
    * Sessions. Defaults to empty.
    */
   statusEnteredAt?: ReadonlyMap<string, number>;
+  /**
+   * Sessions with unread work, by bare Session id (VC-30 × VC-108). An unread
+   * Session is not done with you, so the clock cannot retire it:
+   * {@link activeGroup} short-circuits on it exactly as it does on
+   * `attention`, which also exempts it from Previous cleanup and from naming
+   * an {@link ACTIVE_QUIET_WINDOW_MS} boundary — its membership does not
+   * change on the clock, only when somebody reads it.
+   *
+   * OPTIONAL, and absent is the resting case: a caller with no receipt reader
+   * keeps every row exactly where it is today.
+   */
+  unreadSessionIds?: ReadonlySet<string>;
   /** Defaults to every kind, cleaned rows hidden. */
   filter?: SessionListingFilter;
   now: number;
 }
 
 const EMPTY_STATUS_ENTERED_AT: ReadonlyMap<string, number> = new Map();
+const NO_UNREAD: ReadonlySet<string> = new Set<string>();
 const NO_PROVENANCE: Readonly<Record<string, SessionProvenance>> = {};
 const DEFAULT_FILTER: SessionListingFilter = { kinds: null, scopes: null, showCleaned: false };
 
@@ -926,15 +977,21 @@ function delegationActivity(
  * whole needs-you signal now), and the window is the last thing asked — so a
  * Session that asked a question stays up whatever its age, and every other row
  * leaves on the clock.
+ *
+ * `unread` is asked just before the window, and that position is the rule: an
+ * unread Session that is working is still a working row, but no unread row
+ * ages out. Previous means "seen, or nothing to see" — never merely "old".
  */
 function activeGroup(
   row: ActiveSessionRow,
   quietAt: number | null,
   attached: boolean,
   now: number,
+  unread: boolean,
 ): ActiveGroup | null {
   if (row.attention !== null) return ACTIVE_GROUP.waiting;
   if (row.activity === "working" && attached) return ACTIVE_GROUP.working;
+  if (unread) return ACTIVE_GROUP.recent;
   // Nothing can date this row — the post-relaunch live terminal — so it stays
   // rather than vanishing on the strength of a stamp we never had.
   if (quietAt === null) return ACTIVE_GROUP.recent;
@@ -977,6 +1034,15 @@ export function buildActiveSessionListing(
    */
   const provenanceOf = (sessionId: string): SessionProvenance =>
     sessionProvenanceOf(input.provenance ?? NO_PROVENANCE, sessionId);
+  const unreadSessionIds = input.unreadSessionIds ?? NO_UNREAD;
+  /**
+   * Whether a row's Session has unread work. Asked by ROW id, because that is
+   * the one identifier every band, boundary and cleanup rule below has in
+   * hand; the receipts are keyed by bare Session id, which is what a row id
+   * carries after its `session:` / `chat:` prefix.
+   */
+  const isUnread = (rowId: string): boolean =>
+    unreadSessionIds.has(rowId.slice(rowId.indexOf(":") + 1));
 
   const activeEntries: ActiveEntry[] = [];
   const previousById = new Map<string, PreviousCandidate>();
@@ -1015,7 +1081,7 @@ export function buildActiveSessionListing(
     const quietAt = quietStamp(subject.paneId);
     const attached = subject.activity !== "exited";
     const recency = quietAt ?? recencyFallback(ticket, subject.paneId);
-    const group = activeGroup(row, quietAt, attached, now);
+    const group = activeGroup(row, quietAt, attached, now, isUnread(row.id));
     if (group !== null) {
       activeEntries.push({ row, group, recency, quietAt });
       return;
@@ -1245,7 +1311,13 @@ export function buildActiveSessionListing(
     // `live` is the parent's own attachment. A busy child keeps the row in the
     // working group without one, because the work is running in main whether
     // or not this parent is bound to an executor right now.
-    const group = activeGroup(row, activityAt, record.live || (delegation?.busy ?? false), now);
+    const group = activeGroup(
+      row,
+      activityAt,
+      record.live || (delegation?.busy ?? false),
+      now,
+      isUnread(row.id),
+    );
     if (group !== null) {
       activeEntries.push({
         row,
@@ -1313,6 +1385,9 @@ export function buildActiveSessionListing(
     // Only the two groups the window actually holds can age out of Active on
     // their own; an attention row leaves when its agent moves, not on a clock.
     if (entry.group !== ACTIVE_GROUP.working && entry.group !== ACTIVE_GROUP.recent) continue;
+    // An unread row does not leave Active on the clock either, so there is no
+    // instant its membership changes with no new input.
+    if (isUnread(entry.row.id)) continue;
     if (entry.quietAt !== null) considerBoundary(entry.quietAt + ACTIVE_QUIET_WINDOW_MS);
   }
 
@@ -1323,23 +1398,30 @@ export function buildActiveSessionListing(
     // not a row whose cleanup boundary anyone is waiting on, so skipping here
     // keeps `nextBoundaryAt` about the list actually on screen.
     if (filter.scopes !== null && !filter.scopes.has(sessionRowScope(candidate))) continue;
-    const cleaned = isConcludedBusiness({
-      ticketId: candidate.ticketId,
-      ticket: candidate.row.ticket,
-      createdAt: candidate.createdAt,
-      endedOrQuietAt: candidate.row.endedOrQuietAt,
-      attached: candidate.attached,
-      bornTicketless: candidate.bornTicketless,
-      statusEnteredAt,
-      now,
-    });
+    // Unread is not concluded business, whatever the cleanup rules say: the
+    // person has not seen it yet, and a row cleaned away before it was read is
+    // the one disappearance the whole axis exists to prevent.
+    const unread = isUnread(candidate.row.id);
+    const cleaned =
+      !unread &&
+      isConcludedBusiness({
+        ticketId: candidate.ticketId,
+        ticket: candidate.row.ticket,
+        createdAt: candidate.createdAt,
+        endedOrQuietAt: candidate.row.endedOrQuietAt,
+        attached: candidate.attached,
+        bornTicketless: candidate.bornTicketless,
+        statusEnteredAt,
+        now,
+      });
     if (cleaned) {
       if (filter.showCleaned) previous.push({ ...candidate.row, cleaned: true });
       continue;
     }
     const ticket = candidate.row.ticket;
-    // Only a row cleanup can reach has a cleanup boundary to wait for.
-    if (ticket !== null && !isCleanupExempt(candidate)) {
+    // Only a row cleanup can reach has a cleanup boundary to wait for — and an
+    // unread row is not one of them until somebody reads it.
+    if (ticket !== null && !unread && !isCleanupExempt(candidate)) {
       const enteredAt = statusEnteredAt.get(ticket.id);
       if (ticket.status === "done" && enteredAt !== undefined) {
         considerBoundary(enteredAt + DONE_LINGER_MS);

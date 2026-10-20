@@ -1,0 +1,3 @@
+{
+  "@earendil-works/pi-codemode": "Code Mode's sandbox worker (VC-471): main starts dist/runtime/worker.js from the unpacked tree, and the host half is bundled"
+}

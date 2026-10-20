@@ -48,6 +48,7 @@ import {
   TrashIcon,
 } from "@phosphor-icons/react";
 
+import { readOnlyMark } from "@renderer/components/hosts/use-hosts";
 import {
   PromptInput,
   PromptInputBody,
@@ -98,7 +99,7 @@ import {
   type SessionContextUsage,
   type TakenQueued,
 } from "@volli/session-presentation";
-import type { BlobLinkView } from "@volli/shared";
+import type { BlobLinkView, ModelAutoPick } from "@volli/shared";
 import {
   AttachmentStrip,
   AttachmentThumbRow,
@@ -152,6 +153,11 @@ import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { toastError } from "@renderer/lib/toast";
 import { cn } from "@renderer/lib/utils";
 
+type QueuedChange = (
+  next: readonly QueuedMessage[],
+  options?: { restoreAttachments?: readonly BlobLinkView[]; restoreDraft?(): void },
+) => boolean | void | Promise<boolean | void>;
+
 export interface SessionComposerProps {
   value: string;
   onValueChange(value: string): void;
@@ -172,6 +178,12 @@ export interface SessionComposerProps {
    * model this Session sends to.
    */
   selectionTier?: string | null;
+  /**
+   * Present when a decision model chose this Session's model at birth
+   * (VC-432): the pill says so and its list offers the alternatives it passed
+   * over. Absent for every model a person or a caller named.
+   */
+  selectionAuto?: ModelAutoPick | null;
   onSelectionChange(next: ComposerModelSelection): void;
   /** Model policy is immutable during an active turn. */
   modelChoiceDisabled?: boolean;
@@ -179,9 +191,17 @@ export interface SessionComposerProps {
   working: boolean;
   /** Something is attached and a model is chosen. False makes the box inert. */
   ready: boolean;
+  /**
+   * The project's host cannot serve (VC-576): Send greys and desaturates like
+   * every other write control, rather than reading as a quieter orange. Only
+   * this state; an empty draft keeps the ordinary disabled look.
+   */
+  hostReadOnly?: boolean;
   queued: readonly QueuedMessage[];
-  /** `false` means resident delivery already owns the row; leave its UI untouched. */
-  onQueuedChange(next: readonly QueuedMessage[]): boolean | void;
+  /** A queued payload is owned by an in-flight steer, not a second submission. */
+  steeringMessages?: ReadonlySet<string>;
+  /** `false` means the host refused the mutation; leave its UI untouched. */
+  onQueuedChange: QueuedChange;
   onSteerQueued(id: string): void;
   /**
    * `resources` is the message-scoped half of the submission: the skill
@@ -248,6 +268,18 @@ export interface SessionComposerProps {
   modelPickerOpen?: boolean;
   /** The other half of a controlled model picker — the popover's own close travels back through here. */
   onModelPickerOpenChange?(open: boolean): void;
+  /**
+   * The Session runs on this remote host (VC-713): its model is the host's
+   * default, so the model and effort pills give way to a label naming it.
+   * Absent or null, the pills are exactly as before.
+   */
+  hostModelOnly?: string | null;
+  /**
+   * Why nothing can be attached here ("Not available on hetzner-1 yet",
+   * VC-713): the `+` menu's attach row says so, and a drop or paste attaches
+   * nothing.
+   */
+  attachUnavailable?: string | null;
   className?: string;
 }
 
@@ -305,31 +337,32 @@ function fallbackVerbs(working: boolean, hasModels: boolean): readonly ComposerV
   return FALLBACK_VERBS[working ? "working" : "idle"][hasModels ? "withModels" : "none"];
 }
 
-/**
- * One row out of the queue and back into the box, in the ONE order that keeps
- * its files (VC-137).
- *
- * The attachments rejoin the strip BEFORE the row leaves the queue, because
- * the plane reads the strip to tell "this row came back" (keep its links) from
- * "this row was deleted" (detach them) — see `detachableRowAttachments`.
- * Restoring after the removal would read as a delete and drop the very links
- * the edit needs.
- *
- * Both ways back — the row's Edit action and `⌫` on an empty box — go through
- * here rather than each spelling the order out, because two copies of an
- * order-critical rule is one copy too many for the next person to reorder.
- *
- * `false` when the queue refused the change, so the caller leaves the text be.
- */
-function takeRowBack(
+/** Wait for host cancellation before restoring words/files. The edit flag tells
+ * the parent to preserve file links; a refusal must leave the draft untouched. */
+async function takeRowBack(
   taken: TakenQueued,
   onRestoreAttachments: ((attachments: readonly BlobLinkView[]) => void) | undefined,
-  onQueuedChange: (next: readonly QueuedMessage[]) => boolean | void,
-): boolean {
-  if (taken.attachments !== undefined && taken.attachments.length > 0) {
-    onRestoreAttachments?.(taken.attachments);
-  }
-  return onQueuedChange(taken.queue) !== false;
+  onQueuedChange: QueuedChange,
+  restoreText: () => void,
+): Promise<boolean> {
+  let restored = false;
+  const restoreDraft = () => {
+    if (restored) return;
+    restored = true;
+    if (taken.attachments !== undefined && taken.attachments.length > 0)
+      onRestoreAttachments?.(taken.attachments);
+    restoreText();
+  };
+  if (
+    (await onQueuedChange(taken.queue, {
+      restoreAttachments: taken.attachments ?? [],
+      restoreDraft,
+    })) === false
+  )
+    return false;
+  // Hosts invoke this before retiring recovery. Other callers can simply acknowledge.
+  restoreDraft();
+  return true;
 }
 
 /**
@@ -354,11 +387,14 @@ export const SessionComposer = React.memo(function SessionComposer({
   selection,
   selectionProviderLabel,
   selectionTier = null,
+  selectionAuto = null,
   onSelectionChange,
   modelChoiceDisabled = false,
   working,
   ready,
+  hostReadOnly = false,
   queued,
+  steeringMessages,
   onQueuedChange,
   onSteerQueued,
   onSubmit,
@@ -377,6 +413,8 @@ export const SessionComposer = React.memo(function SessionComposer({
   imagesUnsupported = false,
   modelPickerOpen,
   onModelPickerOpenChange,
+  hostModelOnly = null,
+  attachUnavailable = null,
   className,
 }: SessionComposerProps) {
   // An attachment makes an otherwise-empty message a real one (VC-50): a
@@ -414,15 +452,31 @@ export const SessionComposer = React.memo(function SessionComposer({
   // the strip (VC-137) — unqueue must never be a way to lose a screenshot the
   // message still needs, and ⏎ will carry them again exactly as before. Both
   // ways back share that order through {@link takeRowBack}.
-  const editQueued = (id: string) => {
+  const latestValue = React.useRef(value);
+  latestValue.current = value;
+  const editing = React.useRef(new Set<string>());
+  const editQueued = async (id: string) => {
+    if (editing.current.has(id)) return;
     const taken = takeQueued(queued, id);
     if (!taken) return;
     editedQueueId = id;
-    if (!takeRowBack(taken, onRestoreAttachments, onQueuedChange)) return;
-    // Prepending keeps whatever is already typed rather than trading one draft
-    // for another — unqueue must never be a way to lose a sentence.
-    onValueChange(value.trim().length > 0 ? `${taken.text}\n${value}` : taken.text);
-    onComposerFocusRequest?.();
+    editing.current.add(id);
+    try {
+      if (
+        !(await takeRowBack(taken, onRestoreAttachments, onQueuedChange, () => {
+          // Include typing added while the host cancellation was in flight.
+          onValueChange(
+            latestValue.current.trim().length > 0
+              ? `${taken.text}\n${latestValue.current}`
+              : taken.text,
+          );
+        }))
+      )
+        return;
+      onComposerFocusRequest?.();
+    } finally {
+      editing.current.delete(id);
+    }
   };
 
   return (
@@ -461,7 +515,13 @@ export const SessionComposer = React.memo(function SessionComposer({
         onSubmit={() => send(composerIntent({ working, steer: false }))}
         // Capture-phase, and that is load-bearing — see `file-drop.ts` for why
         // this composer must take the drop before `PromptInput`'s own listener.
-        {...fileAttachHandlers(onAttachFiles)}
+        // Where nothing can be attached (a remote host, VC-713), a dropped or
+        // pasted file is still TAKEN here — so the vendored `PromptInput`'s own
+        // listener never stages it in its hidden attachment state — and the
+        // person is told why, rather than the gesture vanishing.
+        {...fileAttachHandlers(
+          attachUnavailable === null ? onAttachFiles : () => toastError(attachUnavailable),
+        )}
       >
         {queued.length > 0 ? (
           // `flex-nowrap`, AND IT IS LOAD-BEARING RATHER THAN TIDY-UP.
@@ -490,6 +550,15 @@ export const SessionComposer = React.memo(function SessionComposer({
                     (VC-273). */}
                 <AttachmentThumbRow attachments={entry.attachments ?? []} />
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{entry.text}</span>
+                <span data-slot="queue-status" className="shrink-0 text-muted-foreground">
+                  {steeringMessages?.has(entry.id) || entry.afterCurrentStep
+                    ? "Sends after this step"
+                    : entry.localUnsent
+                      ? "Not sent"
+                      : entry.queueState === "releasing"
+                        ? "Sending"
+                        : "Queued"}
+                </span>
                 <span className="flex shrink-0 items-center gap-1">
                   {working ? (
                     <Button
@@ -497,6 +566,13 @@ export const SessionComposer = React.memo(function SessionComposer({
                       size="xs"
                       variant="ghost"
                       aria-label={`Steer queued message: ${entry.text}`}
+                      // A release already claimed this identity; only the
+                      // host's cancel can take it back, so Steer stays off.
+                      disabled={
+                        entry.queueState === "releasing" ||
+                        steeringMessages?.has(entry.id) === true ||
+                        entry.afterCurrentStep === true
+                      }
                       onClick={() => {
                         onSteerQueued(entry.id);
                         onComposerFocusRequest?.();
@@ -511,8 +587,14 @@ export const SessionComposer = React.memo(function SessionComposer({
                     size="icon-xs"
                     variant="ghost"
                     aria-label={`Remove queued message: ${entry.text}`}
-                    onClick={() => {
-                      if (onQueuedChange(queued.filter((item) => item.id !== entry.id)) === false)
+                    // Enabled while releasing: the host cancels a release it has
+                    // no proof of delivery for and refuses one in flight. The
+                    // row only leaves once the host accepts.
+                    onClick={async () => {
+                      if (
+                        (await onQueuedChange(queued.filter((item) => item.id !== entry.id))) ===
+                        false
+                      )
                         return;
                       onComposerFocusRequest?.();
                     }}
@@ -605,31 +687,47 @@ export const SessionComposer = React.memo(function SessionComposer({
           <ComposerAddMenu
             {...(onAttachFiles === undefined ? {} : { onFiles: onAttachFiles })}
             imagesUnsupported={imagesUnsupported === true}
+            attachUnavailable={attachUnavailable}
           />
           <PromptInputTools
             className={cn("min-w-0 flex-1 flex-wrap", working && "composer-live-config")}
           >
-            <ModelPill
-              models={models}
-              tiers={tiers}
-              selection={selection}
-              selectionProviderLabel={selectionProviderLabel}
-              selectionTier={selectionTier}
-              disabled={modelChoiceDisabled}
-              onChange={onSelectionChange}
-              open={modelPickerOpen}
-              onOpenChange={onModelPickerOpenChange}
-              compactEffort={
-                effortStops.length > 1
-                  ? {
-                      levels: effortStops,
-                      value: selection.reasoningLevel,
-                      onChange: (reasoningLevel) =>
-                        onSelectionChange({ ...selection, reasoningLevel }),
-                    }
-                  : undefined
-              }
-            />
+            {hostModelOnly !== null ? (
+              // A remote Session runs the host's default model (VC-713): this
+              // Mac's catalog names models the box may not have, so there is
+              // no choice to offer, only the fact.
+              <span
+                data-slot="host-model"
+                className="truncate px-2 text-ui text-muted-foreground"
+                title={`${hostModelOnly}'s default model`}
+              >
+                {hostModelOnly}'s default model
+              </span>
+            ) : null}
+            {hostModelOnly !== null ? null : (
+              <ModelPill
+                models={models}
+                tiers={tiers}
+                selection={selection}
+                selectionProviderLabel={selectionProviderLabel}
+                selectionTier={selectionTier}
+                selectionAuto={selectionAuto}
+                disabled={modelChoiceDisabled}
+                onChange={onSelectionChange}
+                open={modelPickerOpen}
+                onOpenChange={onModelPickerOpenChange}
+                compactEffort={
+                  effortStops.length > 1
+                    ? {
+                        levels: effortStops,
+                        value: selection.reasoningLevel,
+                        onChange: (reasoningLevel) =>
+                          onSelectionChange({ ...selection, reasoningLevel }),
+                      }
+                    : undefined
+                }
+              />
+            )}
             {/* A peer of the model pill, not a property of it. Effort is the
                 per-task decision and model is the set-and-forget one, so the
                 volatile choice is the one that is readable without opening
@@ -637,7 +735,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                 model with one level has no decision, and a control naming one
                 option is worse than no control — the same rule the pill itself
                 follows when nothing is pickable. */}
-            {effortStops.length > 1 ? (
+            {hostModelOnly === null && effortStops.length > 1 ? (
               <EffortPill
                 levels={effortStops}
                 value={selection.reasoningLevel}
@@ -660,9 +758,9 @@ export const SessionComposer = React.memo(function SessionComposer({
                 that sends. Outline rather than the muted fill because on the
                 dark canvases `--muted` is two steps off `--card` and a muted
                 disc on the card simply vanished; the hairline is what holds it
-                as a shape. Not destructive red, though T3 Code draws it so —
-                ending a turn is an outcome the person chose, not an error, and
-                this app keeps red for the latter. */}
+                as a shape. Not destructive red: ending a turn is an outcome the
+                person chose, not an error, and this app keeps red for the
+                latter. */}
             {working ? (
               <ComposerHint label="Stop turn">
                 <Button
@@ -699,6 +797,7 @@ export const SessionComposer = React.memo(function SessionComposer({
                 className="prompt-primary rounded-control"
                 size={COMPOSER_PRIMARY_SIZE}
                 disabled={!canSubmit}
+                {...readOnlyMark(!hostReadOnly)}
                 aria-label={working ? "Queue" : "Send"}
                 aria-keyshortcuts="Enter"
               >
@@ -819,6 +918,7 @@ export function ComposerPickerStack({
       {layout === "overlay" ? (
         <div
           data-slot="composer-picker-overlay"
+          data-native-plane-overlay
           className="pointer-events-none absolute inset-x-0 top-10 z-10 min-w-0 max-w-full"
         >
           {card}
@@ -848,11 +948,14 @@ function ComposerTextarea({
   onValueChange(value: string): void;
   onSteer(): void;
   queued: readonly QueuedMessage[];
-  onQueuedChange(next: readonly QueuedMessage[]): boolean | void;
+  onQueuedChange: QueuedChange;
   /** The row's files return to the strip — see {@link SessionComposerProps.onRestoreAttachments}. */
   onRestoreAttachments?(attachments: readonly BlobLinkView[]): void;
 }) {
   const caret = React.useContext(ComposerCaretContext);
+  const latestValue = React.useRef(value);
+  latestValue.current = value;
+  const takingBack = React.useRef(false);
   return (
     <PromptInputTextarea
       ref={caret.ref}
@@ -897,8 +1000,15 @@ function ComposerTextarea({
           event.preventDefault();
           const taken = unqueueLast(queued);
           if (!taken) return;
-          if (!takeRowBack(taken, onRestoreAttachments, onQueuedChange)) return;
-          onValueChange(taken.text);
+          if (takingBack.current) return;
+          takingBack.current = true;
+          void takeRowBack(taken, onRestoreAttachments, onQueuedChange, () => {
+            onValueChange(
+              latestValue.current.length > 0 ? `${taken.text}\n${latestValue.current}` : taken.text,
+            );
+          }).finally(() => {
+            takingBack.current = false;
+          });
         }
       }}
     />
@@ -1085,6 +1195,10 @@ function useComposerPicker(input: {
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
     if (state === null) return false;
+    // Never mid-word: while an IME composes, Enter accepts its candidate, the
+    // arrows walk its list and Escape closes it. Those keys are the IME's, and
+    // `PromptInputTextarea` runs this before its own composition guard.
+    if (event.nativeEvent.isComposing) return false;
     if (event.key === "Escape") {
       event.preventDefault();
       // The app's Esc guard would read this as "leave the surface". Closing a
@@ -1665,6 +1779,7 @@ export function ModelPill({
   selection,
   selectionProviderLabel,
   selectionTier = null,
+  selectionAuto = null,
   disabled,
   onChange,
   open: openProp,
@@ -1677,6 +1792,8 @@ export function ModelPill({
   selectionProviderLabel?: string;
   /** The tier the selection resolved from, as its label, or null — see {@link SessionComposerProps}. */
   selectionTier?: string | null;
+  /** The decision model's pick and the options it passed over, or null — see {@link SessionComposerProps}. */
+  selectionAuto?: ModelAutoPick | null;
   disabled: boolean;
   onChange(next: ComposerModelSelection): void;
   /** Controlled open, for the caller that opens this list by typing (`/model`). */
@@ -1730,7 +1847,7 @@ export function ModelPill({
   // offers nothing to switch to.
   const frozen = disabled || models.length === 0;
 
-  // READING IS NOT CHOOSING (VC-288 review). `disabled` took the pill out of
+  // READING IS NOT CHOOSING (VC-288). `disabled` took the pill out of
   // the tab order, and the enabled pill's reveal is the list it opens — so in
   // the one state a person is most likely to ask what they are talking to,
   // mid-turn, the answer was a `title` and nothing else. A frozen pill draws
@@ -1865,6 +1982,17 @@ export function ModelPill({
           />
           <span className="min-w-0 break-words">{identity}</span>
         </div>
+        {selectionAuto === null ? null : (
+          <AutoPickLine
+            models={models}
+            selection={selection}
+            auto={selectionAuto}
+            onPick={(next) => {
+              onChange(next);
+              setOpen(false);
+            }}
+          />
+        )}
         {compact && compactEffort !== undefined ? (
           <div
             data-testid="combined-model-effort"
@@ -1980,6 +2108,51 @@ export function ModelPill({
         </PromptInputCommand>
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * "Auto-picked Opus · high", and the options the decision model passed over, as
+ * one press each to override it (VC-432). The same facts the Session recorded
+ * at birth; nothing here asks the decision model again.
+ */
+function AutoPickLine({
+  models,
+  selection,
+  auto,
+  onPick,
+}: {
+  models: readonly ComposerModel[];
+  selection: ComposerModelSelection;
+  auto: ModelAutoPick;
+  onPick(next: ComposerModelSelection): void;
+}) {
+  const name = (value: ComposerModelSelection) =>
+    `${selectedModel(models, value)?.label ?? value.modelId} · ${value.reasoningLevel}`;
+  return (
+    <div
+      data-testid="model-pill-auto"
+      className="flex flex-col gap-1 border-b px-2 py-1 text-ui text-muted-foreground"
+    >
+      <span>Auto-picked {name(selection)}</span>
+      {auto.alternatives.length === 0 ? null : (
+        <span className="flex flex-wrap gap-1">
+          {auto.alternatives.map((alternative) => (
+            <Button
+              key={`${alternative.selection.providerId}/${alternative.selection.modelId}/${alternative.selection.reasoningLevel}`}
+              type="button"
+              size="xs"
+              variant="outline"
+              data-testid="model-pill-auto-alternative"
+              title={`${Math.round(alternative.probability * 100)}%`}
+              onClick={() => onPick(alternative.selection)}
+            >
+              {name(alternative.selection)}
+            </Button>
+          ))}
+        </span>
+      )}
+    </div>
   );
 }
 

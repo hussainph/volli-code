@@ -1,0 +1,125 @@
+---
+/**
+ * One feature card in the bento (BRAND.md §9): a World with the words at the
+ * top — a headline and a few plain sentences saying what the picture shows —
+ * and a still of the real app floating in the light below them, running off
+ * the bottom edge. `span` is its width in the bento's twelve columns; a card
+ * of five or more wears the 16:9 still, a small one the 9:16 one; on a phone
+ * every card wears the 9:16 one.
+ *
+ * The stills are the release film's frames with the film's own frame taken
+ * out — no supers, no grade, no backdrop — captured with a transparent
+ * background by `apps/desktop/scripts/film/web-stills.mjs`. Wide screens get
+ * the 16:9 composition, narrow ones the film's 9:16 recomposition.
+ *
+ * A card may bring its own Window in the `window` slot instead of a still
+ * (the activity feed, `Feed.astro`); it takes the still's place and floats in
+ * the same light.
+ */
+import type { Still } from "../data/stills";
+import type { WorldName } from "../data/worlds";
+import type { WorldShaderVariant } from "./WorldShader";
+import Super from "./Super.astro";
+import World from "./World.astro";
+
+interface Beat {
+  text: string;
+  bold?: boolean;
+}
+
+interface Props {
+  world: WorldName;
+  /** Undefined while the still has not been captured: the chapter is left out
+      (unless the card brings its own Window in the `window` slot). */
+  still?: Still | undefined;
+  alt?: string;
+  beats: readonly Beat[];
+  /** What the picture shows, in a sentence or three. */
+  body?: string;
+  /** Where the still's subject sits, as a CSS object-position. */
+  position?: string;
+  focus?: readonly [number, number];
+  /** Columns of the bento's twelve this card spans on wide screens. */
+  span?: 3 | 5 | 6 | 7;
+  /** The world's living light; unset paints the static world. */
+  shader?: WorldShaderVariant;
+  /** Its place in its bento row (0, 1, 2), so a row arrives as a stagger. */
+  order?: number;
+  id?: string;
+}
+
+const {
+  world,
+  still,
+  alt,
+  beats,
+  body,
+  position = "0% 0%",
+  focus = [0.5, 0.7],
+  span = 7,
+  shader = "mesh",
+  order = 0,
+  id,
+} = Astro.props;
+const titleId = `${id ?? world}-title`;
+const landscape = span >= 5;
+const primary = still && (landscape ? still.wide : still.tall);
+const tall = still?.tall;
+const hasWindow = Astro.slots.has("window");
+---
+
+{
+  (hasWindow || (primary && tall)) && (
+
+<World
+  as="section"
+  world={world}
+  focus={focus}
+  shader={shader}
+  shaderSpeed={3}
+  reveal={order}
+  class:list={["chapter", `chapter--span-${span}`, { "chapter--small": span === 3 }]}
+  id={id}
+  aria-labelledby={titleId}
+>
+  <div class="chapter-text" data-reveal>
+    <Super
+      class="chapter-super"
+      beats={beats}
+      id={titleId}
+      size={span === 3 ? "small" : "chapter"}
+      level={3}
+    />
+    {body && <p class="chapter-body">{body}</p>}
+  </div>
+  {/* A soft light that follows the pointer across the card (Base.astro). */}
+  <div class="chapter-glow" aria-hidden="true"></div>
+  {hasWindow ? (
+  <div class="chapter-still chapter-still--window">
+    <slot name="window" />
+  </div>
+  ) : primary && tall && (
+  <picture class="chapter-still" data-tilt style={`--still-position: ${position}`}>
+    {
+      landscape && (
+        <source
+          media="(max-width: 720px)"
+          srcset={tall.src}
+          width={tall.width}
+          height={tall.height}
+        />
+      )
+    }
+    <img
+      src={primary.src}
+      width={primary.width}
+      height={primary.height}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+    />
+  </picture>
+  )}
+</World>
+  )
+}

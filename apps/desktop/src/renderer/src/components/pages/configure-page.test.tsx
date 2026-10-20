@@ -92,7 +92,7 @@ function railSearch(query: string): readonly string[] {
  * to CI. This is the same rule stated where it costs milliseconds.
  */
 describe("the Configure rail's search index", () => {
-  it.each(["skills", "commands", "mcp", "authority", "sessions", "worktrees"])(
+  it.each(["skills", "commands", "mcp", "sessions", "worktrees"])(
     "finds the %s pane from every section title it draws",
     (key) => {
       // The rail matches a lowercased substring, so the stored terms are
@@ -120,18 +120,22 @@ describe("Configure rail", () => {
     // while nothing failed. Pin it here: a category added or removed should
     // make someone reread the sentence that describes the rail.
     expect(allCategories()).toHaveLength(7);
+    expect(categoryFor("authority")).toBeUndefined();
+    expect(html).not.toContain("Protection");
     expect(html).toContain("Agent");
     expect(html).toContain("Project");
     for (const category of [
       "Skills",
       "Commands",
       "MCP Servers",
+      "Secrets",
       "Sessions",
       "Appearance",
       "Worktrees",
     ]) {
       expect(html).toContain(category);
     }
+    expect(html).not.toContain("Authority");
   });
 
   /**

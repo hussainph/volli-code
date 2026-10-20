@@ -1,6 +1,6 @@
 /**
- * The task shapes VC-245 asks the baseline to be established on, plus the two
- * shapes that decide whether the optimisation survives contact with Volli.
+ * Scripted task shapes for comparing sequential and parallel tool execution
+ * under batching, single-call and long-wait workloads (VC-245).
  *
  * Every scenario is a script of assistant replies. That is the honest place to
  * put the variable, because Pi can only overlap what arrived in one reply:
@@ -37,10 +37,8 @@ export interface LatencyProfile {
   /**
    * `ticket.await` — parked until another Session moves a Ticket.
    *
-   * Unbounded in principle. The real-Session audit measured a mean of ~131s
-   * over 241 calls, which is the value used: modelling it at network latency
-   * (as this file first did) made the `session-fanout` scenario look like a
-   * fan-out of fast calls when it is really a fan-out of long parks.
+   * Unbounded in principle. The baseline uses ~131s to model a long parked
+   * wait, rather than treating Session completion as a fast network call.
    */
   ticketAwait: number;
   /** One provider round trip. */

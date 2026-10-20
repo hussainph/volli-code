@@ -8,9 +8,9 @@
  * get the full split tree, activity tracking, and rename.
  *
  * A split leaf is the ownership boundary: exactly one renderer engine and one
- * main-process PTY session. Layout nodes own geometry only. This mirrors
- * Ghostty/cmux, where a split inserts a fresh terminal surface instead of
- * asking one renderer instance to paint the same PTY into another canvas.
+ * main-process PTY session. Layout nodes own geometry only. A split inserts a
+ * fresh terminal surface instead of asking one renderer instance to paint the
+ * same PTY into another canvas.
  *
  * Containers live in `byOwner`, keyed by the scope's OWNER id — a projectId for
  * a Board Session, a ticketId for ticket sessions (distinct UUID spaces, so one flat
@@ -83,6 +83,12 @@ export interface SessionSplit {
 }
 
 export type SessionLayout = SessionPane | SessionSplit;
+
+/**
+ * The share either side of a terminal split is clamped to. Exported so the
+ * divider can tell AT, and step within, the same range this store enforces.
+ */
+export const TERMINAL_SPLIT_RATIO_RANGE = [0.1, 0.9] as const;
 
 export interface SessionTab {
   /** The root pane's session id is also the stable tab id and the durable record id. */
@@ -293,7 +299,7 @@ export function findTabBySessionId(
 
 /**
  * Where a Session lives in the terminal strips: its container, its TAB, and the
- * pane inside that tab — or null when no strip holds it (VC-295 round 2).
+ * pane inside that tab — or null when no strip holds it (VC-295).
  *
  * The null answer is load-bearing: it is how a caller tells a terminal Session
  * from a chat one without a second registry to consult. A harness alert names a
@@ -653,7 +659,8 @@ export function createSessionsStore() {
         const tabIndex = current.tabs.findIndex((tab) => tab.sessionId === tabId);
         const tab = current.tabs[tabIndex];
         if (tab === undefined) return state;
-        const clamped = Math.min(0.9, Math.max(0.1, ratio));
+        const [min, max] = TERMINAL_SPLIT_RATIO_RANGE;
+        const clamped = Math.min(max, Math.max(min, ratio));
         const layout = updateSplitRatio(tab.layout, splitId, clamped);
         if (layout === tab.layout) return state;
         const tabs = current.tabs.slice();

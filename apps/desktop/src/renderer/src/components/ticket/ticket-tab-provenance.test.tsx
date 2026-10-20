@@ -31,7 +31,11 @@ import { TicketTabStrip, type TicketTabDescriptor } from "./ticket-tabs";
 
 const noop = (): void => {};
 
-const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+const RUN: SessionProvenance = {
+  kind: "automation",
+  automationRunId: null,
+  automationName: "Nightly sweep",
+};
 const CHILD: SessionProvenance = {
   kind: "session",
   parentSessionId: "session-parent",
@@ -118,15 +122,14 @@ afterEach(async () => {
 });
 
 describe("a ticket Session tab's provenance", () => {
-  it("carries the bolt and the Automation's name on a chat tab", async () => {
+  it("carries only the bolt on a renamed Run's chat tab", async () => {
     seed({ "session-run": RUN });
 
     const html = await mount([BODY, CHAT]);
 
     expect(html).toContain('aria-label="Started by the Automation Nightly sweep"');
-    // The tab's own label is the Session title, so the name is printed beside
-    // the bolt here rather than repeated from it.
-    expect(tab("Fix the flaky worktree test").textContent).toContain("Nightly sweep");
+    // Provenance never adds a second title, even when the Session was renamed.
+    expect(tab("Fix the flaky worktree test").textContent).toBe("Fix the flaky worktree test");
   });
 
   // The tab's own accessible NAME stays the label alone: it is read out on
@@ -154,7 +157,7 @@ describe("a ticket Session tab's provenance", () => {
     const html = await mount([BODY, TERMINAL]);
 
     expect(html).toContain('aria-label="Started by the Automation Nightly sweep"');
-    // The label already IS the Automation, so the mark declines to repeat it.
+    // The mark draws no text, whether or not the title names the Automation.
     expect(tab("Nightly sweep").textContent).toBe("Nightly sweep");
   });
 
@@ -173,7 +176,7 @@ describe("a ticket Session tab's provenance", () => {
   // The pre-Run window: the launch event says `automation` and the Run record
   // that would name it has not landed. The bolt still draws.
   it("says an Automation started it even when nothing can name which", async () => {
-    seed({ "session-run": { kind: "automation", automationName: null } });
+    seed({ "session-run": { kind: "automation", automationRunId: null, automationName: null } });
 
     const html = await mount([BODY, CHAT]);
 

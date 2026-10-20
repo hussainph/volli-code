@@ -1,8 +1,8 @@
 import type { SessionRole } from "./agent-runtime";
-import { AGENT_ERROR_CODES } from "./agent-surface";
+import { AGENT_ERROR_CODES, AGENT_RESPONSE_LIMIT_LABEL } from "./agent-surface";
 import type { AgentError, AgentErrorCode } from "./agent-surface";
 
-/** The source revision owner-approved as the beginning of the agent capability record. */
+/** The source revision that begins the agent capability record. */
 export const AGENT_CAPABILITY_BASELINE = "8e8a17c0";
 
 /** Identity embedded in one built CLI bundle. Release versions remain promotion markers. */
@@ -30,6 +30,12 @@ export interface AgentHelpSurface {
   sessionId: string;
   role: SessionRole;
   tools: readonly string[];
+  /** Frozen routes, keyed by canonical tool id. Optional on older hosts.
+   * Output vocabulary is open: clients must treat an unrecognized route as unknown.
+   * Known values: direct, both, code, deferred, hidden. */
+  routes?: Readonly<Record<string, string>>;
+  /** Minimal frozen MCP identity map; no descriptions, schemas, or live Settings. */
+  mcpServerIds?: Readonly<Record<string, string>>;
 }
 
 export interface AgentConceptSection {
@@ -121,6 +127,49 @@ export interface AgentCapabilityChange {
 
 /** Newest-first agent capability record. It intentionally has no pre-baseline backfill. */
 export const AGENT_CAPABILITY_CHANGES: readonly AgentCapabilityChange[] = [
+  {
+    baseline: "VC-478",
+    build: "VC-824",
+    added: [
+      "volli ticket list --no-body omits each ticket's body from the --json rows; every other field stays. volli ticket show <id> reads one body. Without the flag, --json rows keep their body. An app build older than this one ignores the flag and still sends bodies.",
+      `RESPONSE_TOO_LARGE — the app answered, but the answer exceeded the CLI's ${AGENT_RESPONSE_LIMIT_LABEL} response limit. The refusal names the verb; narrow the request with its filters and retry.`,
+    ],
+    changed: [
+      "The volli ticket list table no longer asks the app for ticket bodies, which it never printed. The table itself is unchanged.",
+    ],
+    fixed: [
+      "An answer past the CLI's response limit no longer fails as SOCKET_PROTOCOL with a build-compatibility hint.",
+    ],
+    removed: [],
+  },
+  {
+    baseline: "VC-457",
+    build: "VC-478",
+    added: [
+      "classify — ask the configured decision model typed questions about a JSON state: choice (one option key of several), score (a level on a scale, lowest first) or bool (yes or no). It answers with probabilities and a confidence from 0 to 1, never text, as structured content beside a short text line, so a script can read answers.<name>. Use it for decisions that repeat — labelling or triaging many items, checking which state a page or element is in, filtering inside a loop — and not for anything needing open-ended reasoning or written output. A Session has it only when a person configured a decision model before the Session was created, and a cloud one only with their opt-in. When it reports no decision (the model was turned off, is slow, or failed), decide yourself.",
+    ],
+    changed: [],
+    fixed: [],
+    removed: [],
+  },
+  {
+    baseline: "VC-364",
+    build: "VC-457",
+    added: [
+      "watch, a named tool in the Board and Ticket bundles that arms notices on Sessions and tickets and returns at once. A watched Session reports its next turn ending (with what it said last), its done or blocked signal, and its stop; a watched ticket reports moves, comments and signals made by anyone but the watcher, until action unwatch ends it. Changes that land together arrive as one notice, read mid-turn or opening a new turn.",
+    ],
+    changed: [
+      "A subagent's completion notice now carries its final message, quoted as the subagent's own prose inside an untrusted-prose envelope; a very long answer is cut, and volli session answer prints all of it. The notice is read mid-turn if the parent is working and opens a turn if it is idle.",
+      "session_start, automation_run and session_send watch the Session they open or steer: a notice arrives when its next turn ends, when it signals done or blocked, or if it is stopped. Their receipts no longer carry a Session cursor.",
+      "A stopped Session that a person sends a message to continues its conversation: the new attachment carries the earlier one's context forward instead of starting blank. A subagent resumed that way notifies its parent again when it finishes.",
+    ],
+    fixed: [
+      "A subagent is no longer stopped after 20 minutes. Delegated work has no time limit; it ends when the subagent answers or someone stops it, and a notice about a stop names who made it.",
+    ],
+    removed: [
+      "session_await and ticket_await left every Role bundle: waiting inside a tool call left the person's chat unusable until it resolved. Sessions created before this build keep the tools, and calling one now arms the equivalent watch and returns at once.",
+    ],
+  },
   {
     baseline: "VC-324",
     build: "VC-364",
@@ -392,6 +441,10 @@ export const ERROR_RECOVERY: Readonly<Record<AgentErrorCode, ErrorRecoveryGuidan
   MUTATION_FAILED: {
     why: "The operation failed without enough durable outcome evidence for an automatic retry.",
     next: null,
+  },
+  RESPONSE_TOO_LARGE: {
+    why: `The app answered, but the answer exceeded the CLI's ${AGENT_RESPONSE_LIMIT_LABEL} response limit, so the CLI stopped reading it.`,
+    next: "Narrow the request with the verb's own filters (see `volli help <verb>`) and retry.",
   },
   SOCKET_PROTOCOL: {
     why: "The CLI connected to the app but the versioned request or response exchange was invalid.",

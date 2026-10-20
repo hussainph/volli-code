@@ -96,6 +96,9 @@ function useScratchSetup(active: Scratch | null, reapplyTheme: () => void): void
  * "after" it in the DOM would end up beneath it.
  */
 function WindowStage({ scratch, theme }: { scratch: Scratch; theme: LabThemeController }) {
+  // A clean preview keeps lab overlays off the product's own controls when
+  // demonstrating a flow in a short browser panel. The normal lab keeps them.
+  const clean = new URLSearchParams(window.location.search).has("clean");
   return (
     <>
       {/* Keyed on the slug for the same reason the stage below is: switching
@@ -103,18 +106,20 @@ function WindowStage({ scratch, theme }: { scratch: Scratch; theme: LabThemeCont
       <div key={scratch.slug} className="h-svh w-full">
         <scratch.default />
       </div>
-      <LabThemeToolbar controller={theme} floating />
+      {clean ? null : <LabThemeToolbar controller={theme} floating />}
       {/* Bottom-RIGHT: the app's own bottom-left is the sidebar's pinned
           Settings row, and a lab control sitting on top of a real affordance
           is a control you will eventually mistake for one. */}
-      <a
-        href="#"
-        className="fixed right-3 bottom-3 z-[9999] flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-label text-muted-foreground shadow-overlay backdrop-blur transition-colors hover:text-foreground"
-      >
-        <span aria-hidden>←</span>
-        <span>Lab</span>
-        <span className="text-foreground">{scratch.title}</span>
-      </a>
+      {clean ? null : (
+        <a
+          href="#"
+          className="fixed right-3 bottom-3 z-[9999] flex items-center gap-2 rounded-full border border-border bg-background/90 px-3 py-1.5 text-label text-muted-foreground shadow-overlay backdrop-blur transition-colors hover:text-foreground"
+        >
+          <span aria-hidden>←</span>
+          <span>Lab</span>
+          <span className="text-foreground">{scratch.title}</span>
+        </a>
+      )}
     </>
   );
 }

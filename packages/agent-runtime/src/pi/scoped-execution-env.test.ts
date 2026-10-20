@@ -23,8 +23,8 @@ import {
   type ShellOutputCaptureOptions,
   type ShellOutputUpdate,
   type ShellOutputView,
-} from "@earendil-works/pi-agent-core";
-import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
+} from "./harness-env";
+import { NodeExecutionEnv } from "./harness-env";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ScopedExecutionEnv, type ScopedExecutionEnvOptions } from "./scoped-execution-env";
 

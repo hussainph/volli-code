@@ -57,4 +57,27 @@ export const opencodeAdapter: HarnessAdapter = {
   // Empty until a marker is observed on a real opencode session — a guessed name
   // is a variable deleted from the user's environment for no reason.
   sessionMarkers: [],
+  // Read off `opencode --help`. `run`, `serve`, `web`, `acp`, `attach` and `pr`
+  // run sessions, so they are launches and stay off this list.
+  nonSessionArgv: {
+    flags: ["--version", "-v", "--help", "-h"],
+    subcommands: [
+      "completion",
+      "mcp",
+      "debug",
+      "providers",
+      "auth",
+      "agent",
+      "upgrade",
+      "uninstall",
+      "models",
+      "stats",
+      "export",
+      "import",
+      "session",
+      "plugin",
+      "plug",
+      "db",
+    ],
+  },
 };

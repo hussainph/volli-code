@@ -27,7 +27,7 @@
  * No Electron import here on purpose — the fan-out is the caller's sink, which
  * is what lets this file be a plain unit under the coverage gate.
  */
-import type { DataChangedEvent } from "../ipc/contract";
+import type { DataChangeScope } from "@volli/shared";
 
 /**
  * One half-frame at 60Hz: long enough to fold a synchronous mutation burst into
@@ -38,7 +38,7 @@ import type { DataChangedEvent } from "../ipc/contract";
 export const DATA_CHANGED_BATCH_WINDOW_MS = 8;
 
 /** The best scope a caller can name; `entity` is stamped by the fan-out. */
-export type DataChangeScope = Omit<DataChangedEvent, "entity">;
+export type { DataChangeScope };
 
 /** Where a coalesced invalidation is delivered. */
 export interface DataChangeSink {

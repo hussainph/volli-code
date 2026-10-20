@@ -90,6 +90,7 @@ import {
   type TicketRailMode,
 } from "@renderer/components/ticket/ticket-rail-model";
 import { RAIL_NARROW_MAX_WIDTH, useUiStore } from "@renderer/stores/ui";
+import { LocalOnly } from "@renderer/components/hosts/local-only";
 
 const MODE_ICONS: Record<TicketRailMode, RailModeTab<TicketRailMode>["icon"]> = {
   now: ChatCircleDotsIcon,
@@ -225,17 +226,23 @@ export function TicketRail({
                   listed where Sessions are — in the roster above, wearing the
                   bolt — not under this block. The rail never authors: it runs,
                   and links to the page. */}
-              <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
+              <LocalOnly projectId={projectId} fallback={null}>
+                <TicketAutomationsPanel projectId={projectId} ticket={ticket} />
+              </LocalOnly>
             </div>
             {/* What this Ticket cost (VC-87), pinned under the scroller and
                 folding open above its row. Absent — not empty — when cost is
                 turned off or nothing was metered. */}
-            <TicketUsageRailFooter ticketId={ticket.id} />
+            <LocalOnly projectId={projectId} fallback={null}>
+              <TicketUsageRailFooter ticketId={ticket.id} />
+            </LocalOnly>
           </>
         ) : null}
-        {mode === "changes" ? changesContent : null}
-        {mode === "files" ? filesContent : null}
-        {mode === "search" ? searchContent : null}
+        {/* This Mac's worktree, files and search: a remote project's are on
+            its host (VC-711), and none of them is asked about its ticket. */}
+        {mode === "changes" ? <LocalOnly projectId={projectId}>{changesContent}</LocalOnly> : null}
+        {mode === "files" ? <LocalOnly projectId={projectId}>{filesContent}</LocalOnly> : null}
+        {mode === "search" ? <LocalOnly projectId={projectId}>{searchContent}</LocalOnly> : null}
       </section>
       {/* The worktree, under EVERY page (VC-406): one pinned row — the branch
           and the one fact about it that the reader would act on next — with
@@ -245,7 +252,9 @@ export function TicketRail({
           is the only window in which the worktree/main-checkout scoping is
           still changeable, and its control lives in this row's identity
           popover (VC-16). */}
-      <TicketRepositorySummary projectId={projectId} ticket={ticket} />
+      <LocalOnly projectId={projectId} fallback={null}>
+        <TicketRepositorySummary projectId={projectId} ticket={ticket} />
+      </LocalOnly>
     </div>
   );
 }

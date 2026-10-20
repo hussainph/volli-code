@@ -35,7 +35,7 @@ const GROUPS = [
 ];
 const props: ComponentProps<typeof ComposerFooter> = {
   projectId: "p1",
-  run: { models: [], tiers: [], selection: null, setSelection: () => {} },
+  run: { models: [], tiers: [], selection: null, explicit: false, setSelection: () => {} },
   launch: { kind: "kickoff" },
   onLaunchChange: () => {},
   onCreate: () => {},
@@ -230,6 +230,7 @@ it("wires kickoff model and effort into the shared responsive control", () => {
       ],
       tiers: [],
       selection: { providerId: "anthropic", modelId: "sonnet", reasoningLevel: "high" },
+      explicit: false,
       setSelection: () => undefined,
     },
   });

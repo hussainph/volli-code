@@ -1,0 +1,63 @@
+---
+/**
+ * The Super (BRAND.md §3, §7.3): the site's only headline shape, shared with
+ * the release film. Two beats — one light, one bold, in either order — and one
+ * optional quiet line below. Nothing ever sits above the headline.
+ *
+ * Each beat is its own line and rises into place once when the super enters
+ * view (`data-reveal`, driven by the page's one observer). The heading reads as
+ * one sentence to assistive technology.
+ *
+ * `speed` is the hero's alone: the bold beat is set in italic, whooshes in
+ * from the left instead of rising, trailing two afterimages, and then speed
+ * lines race through its letters for as long as it is on screen (BRAND.md §8).
+ * The afterimages are generated content with empty alt text, so the heading
+ * still reads once.
+ */
+interface Beat {
+  text: string;
+  bold?: boolean;
+}
+
+interface Props {
+  beats: readonly Beat[];
+  sub?: string;
+  level?: 1 | 2 | 3;
+  id?: string;
+  size?: "hero" | "chapter" | "small";
+  speed?: boolean;
+  class?: string;
+}
+
+const { beats, sub, level = 2, id, size = "chapter", speed = false, class: className } =
+  Astro.props;
+const Heading = `h${level}` as "h1" | "h2" | "h3";
+---
+
+<div class:list={["super", `super--${size}`, className]} data-reveal>
+  <Heading class="super-title" id={id}>
+    {
+      beats.map((beat, index) => (
+        <>
+          <span
+            class:list={[
+              "super-beat",
+              { "super-beat--bold": beat.bold, "super-beat--speed": speed && beat.bold },
+            ]}
+            style={`--beat: ${index}`}
+          >
+            {speed && beat.bold ? (
+              <span data-text={beat.text}>
+                <span class="super-speed-fill">{beat.text}</span>
+              </span>
+            ) : (
+              <span>{beat.text}</span>
+            )}
+          </span>
+          {index < beats.length - 1 ? " " : null}
+        </>
+      ))
+    }
+  </Heading>
+  {sub && <p class="super-sub">{sub}</p>}
+</div>

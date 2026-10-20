@@ -11,6 +11,7 @@
  */
 import { errorMessage, type HarnessId, type ModelSelection, type Project } from "@volli/shared";
 
+import { guardWrite } from "@renderer/components/hosts/use-hosts";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
 import { useBoardStore } from "@renderer/stores/board";
@@ -29,6 +30,8 @@ import {
 } from "@renderer/stores/sessions";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
 import { disposeEngine, getOrCreateEngine } from "@renderer/terminal/registry";
+import { refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
+import { useHostConnectionStore } from "@renderer/stores/host-connection";
 
 /** Initial PTY grid; the engine re-measures and resizes the shell within a frame. */
 const INITIAL_COLS = 80;
@@ -178,6 +181,10 @@ async function bootSession(
   kickoff?: SessionKickoff,
   resume?: SessionResume,
 ): Promise<string | null> {
+  // Terminals too: a new or resumed Session is a write to the project's host.
+  if (!guardWrite(scope.projectId)) return null;
+  // A terminal runs on this Mac: a remote project's is not available yet (VC-711).
+  if (refuseRemote(scope.projectId)) return null;
   return underOwnerGuard(scope, terminalStarting, async (project) => {
     try {
       const result = await window.api.terminal.create(
@@ -303,6 +310,8 @@ export interface ChatBoot {
    * configured default — every surface but the composer's Create & start.
    */
   model?: ModelSelection;
+  /** Request offered to the birth decision, without changing the opening turn. */
+  autoSelect?: { request: string };
   /**
    * Skips the Chat Draft and creates a Session immediately (VC-358).
    *
@@ -450,6 +459,8 @@ export interface TicketChatStart {
   refineTitle?: true;
   /** The model policy to record; absent leaves the Ticket default. */
   model?: ModelSelection;
+  /** Ticket task text for immediate birth's optional model decision. */
+  autoSelect?: { request: string };
   /**
    * An opening turn, queued the moment the Session is addressable.
    *
@@ -477,12 +488,13 @@ export interface TicketChatStart {
 export async function startTicketChat(
   projectId: string,
   ticketId: string,
-  { skills, title, refineTitle, model, message }: TicketChatStart = {},
+  { skills, title, refineTitle, model, message, autoSelect }: TicketChatStart = {},
 ): Promise<string | null> {
   const sessionId = await bootChatSession(ticketScope(projectId, ticketId), {
     skills,
     title,
     model,
+    autoSelect,
     // A kickoff carries its opening message, so it is a Session from the start.
     createsSessionNow: message !== undefined,
     land: (booted, isSession) => {
@@ -508,7 +520,7 @@ export async function startTicketChat(
   // whose client was disposed, and an opening turn queued onto it would be
   // words nothing will ever release.
   if (sessionId !== null && message !== undefined) {
-    useChatSessionsStore.getState().enqueue(sessionId, {
+    await useChatSessionsStore.getState().enqueue(sessionId, {
       id: newMessageId(),
       text: message,
       ...(refineTitle === true && typeof title === "string" ? { autoTitleBaseline: title } : {}),
@@ -524,8 +536,21 @@ function newMessageId(): string {
 
 export async function bootChatSession(
   scope: SessionScope,
-  { skills, title, model, land, createsSessionNow = false }: ChatBoot,
+  { skills, title, model, land, createsSessionNow = false, autoSelect }: ChatBoot,
 ): Promise<string | null> {
+  // Every chat door — the strips, an empty pane, ⌘T, a kickoff — comes through
+  // here. A project whose host cannot serve (VC-576) starts none, and says why.
+  if (!guardWrite(scope.projectId)) return null;
+  // VC-713 owns create/attach/send on the box, including draft promotion.
+  // Only this project's validated Workspace grant opens these chat doors:
+  // HOST health, another project's welcome, and unknown old DTOs grant nothing.
+  if (
+    remoteHostNow(scope.projectId) !== null &&
+    !useHostConnectionStore.getState().projects[scope.projectId]?.granted?.includes("sessions")
+  ) {
+    refuseRemote(scope.projectId);
+    return null;
+  }
   return underOwnerGuard(scope, chatStarting, async () => {
     try {
       if (!createsSessionNow) {
@@ -558,6 +583,7 @@ export async function bootChatSession(
         title: title ?? null,
         ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
         ...(model === undefined ? {} : { model }),
+        ...(autoSelect === undefined ? {} : { autoSelect }),
       });
       if (sessionId === null) return null;
       // The owner may have been removed while `session.create` was in flight;

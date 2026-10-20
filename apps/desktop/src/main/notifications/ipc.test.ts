@@ -24,7 +24,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { openTestDb, type TestDb } from "../db/test-helpers";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
 import { createNotificationSettings, type NotificationSettings } from "./settings";
 import { registerNotificationIpcHandlers } from "./ipc";
 
@@ -145,7 +145,7 @@ describe("registerNotificationIpcHandlers", () => {
       target: { kind: "update" },
     });
     expect(pending.calls).toBe(1);
-    // The ask IS the subscription (round 2): the renderer registers its
+    // The ask IS the subscription: the renderer registers its
     // listener and then collects, so this is the one moment main can know a
     // window can actually receive a click.
     expect(ready).toEqual([7]);
@@ -170,7 +170,7 @@ describe("registerNotificationIpcHandlers", () => {
   it("still hands over a clicked target with the database degraded", async () => {
     // Alerts keep working without a database (the all-on default), so a click
     // on one has to keep working too — refusing this channel would strand the
-    // one launch where a deep link matters most. Round 2.
+    // one launch where a deep link matters most.
     pending = pendingPort({ kind: "update" });
     registerNotificationIpcHandlers({
       settings: null,

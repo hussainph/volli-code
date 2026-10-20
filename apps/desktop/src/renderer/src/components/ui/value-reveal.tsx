@@ -31,8 +31,8 @@
  * The second shape has a variant, for a value the focusable control does not
  * itself render: a Select trigger draws the selected ITEM's children, so the
  * value is a descendant of a control it knows nothing about. `within` names
- * that host, and the hook then listens where the focus actually lands (VC-288
- * re-review). It also answers the state that has no host at all — a host that
+ * that host, and the hook then listens where the focus actually lands (VC-288).
+ * It also answers the state that has no host at all — a host that
  * is `disabled` takes no focus and its subtree gets no pointer events, so the
  * value has to carry its own stop for exactly as long as that lasts.
  */

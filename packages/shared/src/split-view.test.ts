@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   activateTab,
   activeTabInSplitView,
+  claimTabInPane,
   closePane,
   focusAdjacentPane,
   focusPane,
@@ -186,6 +187,57 @@ describe("activateTab", () => {
   it("leaves a state whose focus names no pane alone", () => {
     const state = view(branch("s1", "row", pane("p1", ["a"]), pane("p2", ["c"])), "gone");
     expect(activateTab(state, "fresh")).toBe(state);
+  });
+});
+
+describe("claimTabInPane", () => {
+  it("claims and fronts an unclaimed tab without moving unrelated focus", () => {
+    const state = twoPanes();
+    const next = claimTabInPane(state, "fresh", "p1", true);
+
+    expect(drawn(next)).toEqual([["a", "b", "fresh"], ["c"]]);
+    expect(splitViewPanes(next)[0]?.activeTabId).toBe("fresh");
+    expect(next.focusedPaneId).toBe("p2");
+    expect(activeTabInSplitView(next)).toBe("c");
+    expect(splitViewPanes(next)[1]).toBe(splitViewPanes(state)[1]);
+    expect(drawn(state)).toEqual([["a", "b"], ["c"]]);
+  });
+
+  it("claims an inactive tab without replacing its pane's front", () => {
+    const next = claimTabInPane(twoPanes(), "fresh", "p2", false);
+
+    expect(drawn(next)).toEqual([
+      ["a", "b"],
+      ["c", "fresh"],
+    ]);
+    expect(next.focusedPaneId).toBe("p2");
+    expect(activeTabInSplitView(next)).toBe("c");
+  });
+
+  it("keeps an empty pane's front null for an inactive claim", () => {
+    const state = view(branch("s1", "row", pane("p1", ["a"]), pane("p2")), "p1");
+    const next = claimTabInPane(state, "fresh", "p2", false);
+
+    expect(splitViewPanes(next)[1]).toEqual(pane("p2", ["fresh"], null));
+    expect(next.focusedPaneId).toBe("p1");
+  });
+
+  it("fronts a claim in the focused pane when requested", () => {
+    const next = claimTabInPane(twoPanes(), "fresh", "p2", true);
+    expect(activeTabInSplitView(next)).toBe("fresh");
+    expect(next.focusedPaneId).toBe("p2");
+  });
+
+  it("returns by identity for a tab already claimed here or elsewhere", () => {
+    const state = twoPanes();
+    expect(claimTabInPane(state, "b", "p1", true)).toBe(state);
+    expect(claimTabInPane(state, "b", "p2", true)).toBe(state);
+    expect(claimTabInPane(state, "c", "p2", false)).toBe(state);
+  });
+
+  it("returns by identity for a target pane that does not exist", () => {
+    const state = twoPanes();
+    expect(claimTabInPane(state, "fresh", "gone", true)).toBe(state);
   });
 });
 

@@ -3,7 +3,7 @@
  * What an empty pane offers, and what it deliberately does not say.
  *
  * The rows are asserted by ROLE and NAME rather than by markup: they are the
- * same four verbs the chords beside them run, and an accessible name that
+ * surface-opening verbs, with chords where available, and an accessible name that
  * swallowed its own shortcut hint ("New chat ⌘T") would be the failure nobody
  * looking at the screen could see.
  */
@@ -37,6 +37,7 @@ function render(handlers: Partial<React.ComponentProps<typeof PaneEmptyState>> =
       <PaneEmptyState
         onNewChat={vi.fn()}
         onNewTerminal={vi.fn()}
+        onNewBrowser={vi.fn()}
         onOpenFile={vi.fn()}
         onClosePane={vi.fn()}
         {...handlers}
@@ -50,12 +51,13 @@ function rows(): HTMLButtonElement[] {
 }
 
 describe("PaneEmptyState", () => {
-  it("offers the four verbs, in the order the surface answers them", () => {
+  it("offers the five verbs, in the order the surface answers them", () => {
     render();
 
     expect(rows().map((row) => row.getAttribute("aria-label"))).toEqual([
       "New chat",
       "New terminal",
+      "New browser",
       "Open file…",
       "Close pane",
     ]);
@@ -72,6 +74,13 @@ describe("PaneEmptyState", () => {
     expect(chat?.getAttribute("aria-keyshortcuts")).toBe("Meta+T");
   });
 
+  it("gives Browser no chord, because there is none", () => {
+    render();
+    const browser = rows().find((row) => row.getAttribute("aria-label") === "New browser");
+    expect(browser?.getAttribute("aria-keyshortcuts")).toBeNull();
+    expect(browser?.textContent).toBe("New browser");
+  });
+
   it("gives Close pane no chord, because there is none", () => {
     render();
 
@@ -83,9 +92,10 @@ describe("PaneEmptyState", () => {
   it("runs the surface's own callbacks", () => {
     const onNewChat = vi.fn();
     const onNewTerminal = vi.fn();
+    const onNewBrowser = vi.fn();
     const onOpenFile = vi.fn();
     const onClosePane = vi.fn();
-    render({ onNewChat, onNewTerminal, onOpenFile, onClosePane });
+    render({ onNewChat, onNewTerminal, onNewBrowser, onOpenFile, onClosePane });
 
     for (const row of rows()) {
       act(() => {
@@ -95,6 +105,7 @@ describe("PaneEmptyState", () => {
 
     expect(onNewChat).toHaveBeenCalledTimes(1);
     expect(onNewTerminal).toHaveBeenCalledTimes(1);
+    expect(onNewBrowser).toHaveBeenCalledTimes(1);
     expect(onOpenFile).toHaveBeenCalledTimes(1);
     expect(onClosePane).toHaveBeenCalledTimes(1);
   });
@@ -102,8 +113,10 @@ describe("PaneEmptyState", () => {
   it("says nothing else at all — no heading, no prose", () => {
     render();
 
-    // CLAUDE.md: let controls talk. The only text on this surface is the four
+    // CLAUDE.md: let controls talk. The only text on this surface is the five
     // labels and their three chords.
-    expect(container?.textContent).toBe("New chat⌘TNew terminal⌥⌘TOpen file…⌘PClose pane");
+    expect(container?.textContent).toBe(
+      "New chat⌘TNew terminal⌥⌘TNew browserOpen file…⌘PClose pane",
+    );
   });
 });

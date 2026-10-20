@@ -1,17 +1,17 @@
 ---
 title: Agent capability changes
-description: Agent-facing CLI, tool-surface, effect, and recovery changes by the first build that can serve them.
+description: How each CLI, tool, effect, and recovery change reaches agents, listed by the first build that serves it.
 sidebar:
   label: Agent capability changes
 ---
 
 import AgentCapabilityChanges from "../../../components/AgentCapabilityChanges.astro";
 
-This is the capability record for agents and automation. It is not a commit log
-or the app's user-facing release changelog.
+This page records capability changes for agents and automation. It is not a
+commit log, and not the app's user-facing release changelog.
 
-Run `volli help changes` to see the source revision and unique build ID of the
-CLI bundle answering now, plus the running app version when the optional local
-read succeeds. Release semver remains a separate promotion marker.
+Run `volli help changes` to see the source revision and build ID of the CLI
+bundle answering now, plus the running app version when the optional local read
+succeeds. The release version is a separate promotion marker.
 
 <AgentCapabilityChanges />

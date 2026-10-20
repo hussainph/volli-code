@@ -1,6 +1,6 @@
 {
   "name": "volli-code",
-  "version": "0.2.0",
+  "version": "0.2.3-canary.3",
   "private": true,
   "description": "A local-first macOS workspace for tickets, coding sessions, worktrees, and review.",
   "license": "Apache-2.0",
@@ -28,8 +28,9 @@
     "check:excluded-dependencies": "node scripts/check-excluded-dependencies.mjs --self-test && node scripts/check-excluded-dependencies.mjs",
     "check:workspace-licenses": "node scripts/check-workspace-licenses.mjs --self-test && node scripts/check-workspace-licenses.mjs",
     "check:notices": "node scripts/generate-third-party-notices.mjs --self-test && node scripts/generate-third-party-notices.mjs --check",
-    "check:merged-ticket-time": "node scripts/merged-ticket-time-to-merge.mjs --self-test",
-    "generate:notices": "node scripts/generate-third-party-notices.mjs"
+    "generate:notices": "node scripts/generate-third-party-notices.mjs",
+    "generate:protocol-schema": "node scripts/protocol-schema/generate.mjs",
+    "check:protocol-schema": "node --test scripts/protocol-schema/compatibility.test.mjs && node scripts/protocol-schema/generate.mjs --check"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "catalog:",
@@ -38,7 +39,7 @@
     "yaml": "2.9.0"
   },
   "engines": {
-    "node": "^24.13.0"
+    "node": "^24.16.0"
   },
   "packageManager": "pnpm@11.10.0"
 }

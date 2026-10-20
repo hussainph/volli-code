@@ -2,7 +2,7 @@
  * E2e smoke for backward-move interrupt + resume-on-re-entry.
  *
  * Two behaviors, both wired at the CLI/socket "agent-commands" choke point
- * (`apps/desktop/src/main/agent-commands.ts`'s `ticket.move` handler, shared
+ * (`packages/host-core/src/agent-commands.ts`'s `ticket.move` handler, shared
  * with the renderer's own drag-drop IPC path via
  * `ticket-commands.ts#interruptOnBackwardMove`):
  *
@@ -24,10 +24,13 @@
  *         `sessionId: { kind: "reported" | "none" }` (opencode, codex), since
  *         an `argv`-tier one always has a minted seed;
  *       – the harness's own wrapper minted one for THAT LAUNCH (`volli session
- *         harness <slug> --mint`, `sessionId: { kind: "argv" }`) → check 5,
- *         which asserts the resume comes back with that exact id.
+ *         harness <slug> --mint`, `sessionId: { kind: "argv" }`) and the
+ *         launch's own SessionStart confirmed it (the fake `claude` fires one,
+ *         as a real one does at boot) → check 5, which asserts the resume comes
+ *         back with that exact id.
  *     Resume opens a new attachment on the same durable Volli Session; it does
- *     not mint a second Session or write terminal lifecycle into ticket events.
+ *     not mint a second Session. Ticket history names the successful reattachment
+ *     and its user origin, while process lifecycle evidence stays in the ledger.
  *
  * The terminal renders to a WebGPU canvas (no text in the DOM), so — exactly
  * like composer-kickoff-smoke.mjs — the "agent" is the FAKE harness
@@ -182,6 +185,24 @@ async function sessionsForTicket(page, ticketId) {
 async function eventsFor(page, ticketId) {
   const res = await page.evaluate((tid) => window.api.tickets.events({ ticketId: tid }), ticketId);
   return res.ok ? res.events : [];
+}
+
+async function hasAttributedResumption(page, ticketId, sessionId) {
+  return waitUntil(
+    "Ticket history attributes the successful terminal reattachment",
+    async () => {
+      const resumed = (await eventsFor(page, ticketId)).filter(
+        (event) =>
+          event.payload.kind === "session_resumed" && event.payload.sessionId === sessionId,
+      );
+      return resumed.length === 1 &&
+        typeof resumed[0].payload.attachmentId === "string" &&
+        resumed[0].payload.origin?.kind === "user"
+        ? true
+        : null;
+    },
+    { timeout: 10000 },
+  ).catch(() => false);
 }
 
 async function busy(page, sessionId) {
@@ -589,10 +610,7 @@ async function main() {
             detail: `linkOk=${linkOk} killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-        await sleep(250);
-        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
-          (event) => event.payload.kind === "session_resumed",
-        );
+        const resumeAttributed = await hasAttributedResumption(page, ticketId, session.id);
 
         const probeText = await waitUntil(
           "resume probe records claude --resume <uuid>",
@@ -612,12 +630,12 @@ async function main() {
           killOk &&
           transition.ended !== null &&
           transition.resumedSameSession !== null &&
-          plannerHistoryClean &&
+          resumeAttributed &&
           probeText;
         return {
           ok,
           detail:
-            `linkOk=${linkOk} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} ` +
+            `linkOk=${linkOk} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} sameSession=${transition.resumedSameSession !== null} resumeAttributed=${resumeAttributed} ` +
             `resumeProbe=${probeText}`,
         };
       },
@@ -666,10 +684,7 @@ async function main() {
             detail: `killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-        await sleep(250);
-        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
-          (event) => event.payload.kind === "session_resumed",
-        );
+        const resumeAttributed = await hasAttributedResumption(page, ticketId, session.id);
 
         const probeText = await waitUntil(
           "resume probe records opencode --continue (and never a by-id resume)",
@@ -691,13 +706,13 @@ async function main() {
           killOk &&
           transition.ended !== null &&
           transition.resumedSameSession !== null &&
-          plannerHistoryClean &&
+          resumeAttributed &&
           probeText;
         return {
           ok,
           detail:
             `noSeed=${noSeed}${noSeed ? "" : `(seed=${seed})`} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} ` +
-            `sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeText}`,
+            `sameSession=${transition.resumedSameSession !== null} resumeAttributed=${resumeAttributed} resumeProbe=${probeText}`,
         };
       },
     );
@@ -706,8 +721,9 @@ async function main() {
     //
     // The other half of what check 4 stopped covering. An `argv`-tier harness
     // gets a fresh UUIDv4 from its own wrapper's synchronous `volli session
-    // harness --mint` call on every launch, written to `harness_session_id`,
-    // and a resume must come back with THAT id — not merely some uuid, and
+    // harness --mint` call on every launch, written to `harness_session_id`
+    // once the launch's SessionStart names it (VC-807: the fake fires one, as
+    // a real claude does at boot), and a resume must come back with THAT id — not merely some uuid, and
     // emphatically not `VOLLI_SESSION` (reusing the PTY's own id per launch is
     // the collision this path replaced). Check 3 proves the `volli session
     // link` seed; this proves the minted one, which nothing else here reaches.
@@ -754,10 +770,7 @@ async function main() {
             detail: `minted=${minted} killOk=${killOk} resume trigger failed: ${transition.error}`,
           };
         }
-        await sleep(250);
-        const plannerHistoryClean = !(await eventsFor(page, ticketId)).some(
-          (event) => event.payload.kind === "session_resumed",
-        );
+        const resumeAttributed = await hasAttributedResumption(page, ticketId, session.id);
 
         const probeOk = await waitUntil(
           "resume probe records claude --resume <the minted uuid>",
@@ -777,13 +790,13 @@ async function main() {
           killOk &&
           transition.ended !== null &&
           transition.resumedSameSession !== null &&
-          plannerHistoryClean &&
+          resumeAttributed &&
           probeOk;
         return {
           ok,
           detail:
             `minted=${minted} freshUuid=${freshUuid} killOk=${killOk} ended=${transition.ended !== null} surface=${transition.surface} ` +
-            `sameSession=${transition.resumedSameSession !== null} plannerHistoryClean=${plannerHistoryClean} resumeProbe=${probeOk}`,
+            `sameSession=${transition.resumedSameSession !== null} resumeAttributed=${resumeAttributed} resumeProbe=${probeOk}`,
         };
       },
     );

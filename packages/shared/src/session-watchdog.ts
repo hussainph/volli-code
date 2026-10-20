@@ -20,7 +20,8 @@
  * ## What deliberately does not count
  *
  * - **No open turn** — a quiet Session between turns is idle, and idleness is
- *   the orchestrator's business (`ticket.await` timeouts), not a malfunction.
+ *   the orchestrator's business (it hears about the Sessions it watches
+ *   through notices, VC-457), not a malfunction.
  * - **Stopped** — its work was ended on purpose; there is nothing to rescue.
  * - **Awaiting a person** — a permission prompt or question can sit for an
  *   hour legitimately, and it already self-reports through Attention. Calling
@@ -29,7 +30,7 @@
  * - **A tool that is slow, not stuck** — silence inside an open turn is most
  *   often a long tool call, not a wedge. Measured: of 1,066 in-turn silences
  *   over five minutes on ticket Sessions, 1,034 resumed on their own, and the
- *   silences were `ticket_await` waits, `gh pr checks --watch`, `sleep` poll
+ *   silences were `ticket_await` waits (retired by VC-457), `gh pr checks --watch`, `sleep` poll
  *   loops, coverage runs and e2e smokes. So while a tool is in flight the
  *   allowance is the TOOL's, not the turn's: a tool that waits on another
  *   Session or on a person by design never trips; one that declared its own
@@ -51,7 +52,6 @@ import type { RuntimeActivityValue, RuntimeObservation } from "./agent-runtime";
 import type { NonCodingToolId } from "./authority";
 import { sessionAwaitsUser } from "./session-ledger";
 import type { SessionProjection } from "./session-ledger";
-import { verbToolWireName } from "./verb-registry";
 
 /**
  * How long an open turn may be silent before the watchdog speaks: one
@@ -90,33 +90,27 @@ export const SESSION_WATCHDOG_IN_FLIGHT_CEILING_MS = 60 * 60_000;
  * the call named its own limit, which then bounds it like any other declared
  * timeout (see {@link DECLARED_TIMEOUT_SECONDS_FIELD}).
  *
- * - `ticket_await` / `session_await` park on OTHER Sessions and tickets, and
- *   every Session they can wait on has a watchdog of its own: a wedge there
- *   reports itself, and reporting it again from every waiter is noise.
  * - `ask_user` parks on a person. The open interaction already exempts the
  *   Session (`awaiting-user`); naming the tool too covers the instant between
  *   the call starting and its interaction becoming durable.
  *
- * The await names are read from the verb registry rather than retyped, so a
- * rename there cannot silently turn a by-design wait back into a wedge.
+ * `ticket_await` and `session_await` once sat here too. VC-457 retired them:
+ * a call to either now arms a watch and returns at once, so no tool in the
+ * product waits on another Session any more, and the change it waited for
+ * arrives as a notice between turns, where the watchdog does not look.
  */
 export const SESSION_WATCHDOG_WAITING_TOOLS: ReadonlySet<string> = new Set([
-  verbToolWireName("ticket.await")!,
-  verbToolWireName("session.await")!,
   "ask_user" satisfies NonCodingToolId,
 ]);
 
 /**
  * The tools that declare their own limit, and the input field that carries it
- * in seconds: `bash` (Pi's name for the `execute` coding tool), and the two
- * awaits, whose `timeoutSeconds` the verb registry documents. Nothing else — a
+ * in seconds: `bash` (Pi's name for the `execute` coding tool). Nothing else — a
  * generic `timeout` on an arbitrary MCP tool could be in any unit, and a wrong
  * guess there would either mute a hung call or trip a healthy one.
  */
 const DECLARED_TIMEOUT_SECONDS_FIELD: Readonly<Record<string, string>> = {
   bash: "timeout",
-  [verbToolWireName("ticket.await")!]: "timeoutSeconds",
-  [verbToolWireName("session.await")!]: "timeoutSeconds",
 };
 
 /** One tool call the runtime has started and not yet finished, as the watchdog sees it. */

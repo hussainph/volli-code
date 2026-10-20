@@ -2,11 +2,9 @@
  * What a worktree cleanup promises to leave alone — one typed vocabulary
  * (VC-284).
  *
- * The review's S3: the policy existed twice, as two independent lists of
- * English sentences — one recorded with each run in main, one shown in the
- * renderer's confirmation — and they had already drifted, the dialog quietly
- * dropping unpushed commits, in-progress git operations and submodule drift.
- * A preservation policy that is two lists is two policies wearing one name.
+ * One shared policy covers unpushed commits, in-progress git operations and
+ * submodule drift. Independent lists in main and the renderer could make the
+ * confirmation omit safeguards that the recorded run promises.
  *
  * So the RULES are ids, and the sentences are derived from them. Main records
  * the ids it ran under with every durable cleanup, the confirmation renders the

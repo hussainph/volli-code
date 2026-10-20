@@ -6,12 +6,13 @@
  *   1. the model's call raises an interaction card ABOVE the composer
  *      mid-turn (`interaction.opened`, `kind:"question"`, the model's own
  *      options) while the turn stays blocked on it;
- *   2. clicking an option resolves it (`interaction.resolved` emitted BEFORE
- *      the parked call settles — the d39143f8 ordering); the card leaves;
- *   3. the SAME turn then finishes, and the reply carries the chosen option
- *      id back out of the tool result.
+ *   2. selecting a choice then pressing Answer resolves it
+ *      (`interaction.resolved` emitted BEFORE the parked call settles — the
+ *      d39143f8 ordering); the card leaves;
+ *   3. the SAME turn then finishes, and the reply carries the chosen string
+ *      back out of the tool result.
  *
- * A reply echoing the id without the card ever appearing would mean the model
+ * A reply echoing the choice without the card ever appearing would mean the model
  * answered itself; a card that appears but never clears would mean the
  * resolution nobody recorded; both fail loudly here.
  *
@@ -50,10 +51,9 @@ import {
 } from "./lib/smoke-kit.mjs";
 
 const PROJECT = { id: "pi-ask-user-project", name: "Pi Ask User", prefix: "AU" };
-// The ids are the contract: the model may word the labels however it likes,
-// but the id it reads back from the tool result is the one the click chose.
+// New births take string choices and return the chosen string, not model IDs.
 const PROMPT_TEXT =
-  'Use the ask_user tool to ask me which color to paint the rover, offering exactly two options with ids "red" and "blue". After I answer, reply with only the id I chose.';
+  'Use the ask_user tool with questions:[{question:"Which color should we paint the rover?",choices:["red","blue"]}]. After I answer, reply with only the chosen color string.';
 
 const { scratch, userDataDir, dbPath, cleanup } = await makeScratch("pi-ask-user-smoke-");
 const fakeHome = join(scratch, "home");
@@ -187,18 +187,10 @@ async function main() {
       };
     });
 
-    await attempt(3, "clicking the red option resolves the card away", async () => {
+    await attempt(3, "selecting red and pressing Answer resolves the card away", async () => {
       await redOptionRow(page).click();
-      // Single-select submits on click; if this card's vocabulary said
-      // otherwise, the explicit submit control is the same resolution.
       const form = questionCardForm(page);
-      await sleep(400);
-      if ((await form.count()) > 0) {
-        const submit = form.first().locator('button[type="submit"]');
-        if ((await submit.count()) > 0 && (await submit.first().isEnabled())) {
-          await submit.first().click();
-        }
-      }
+      await form.first().getByRole("button", { name: "Answer", exact: true }).click();
       const gone = await waitUntil(
         "the question card to leave",
         async () => (await form.count()) === 0,
@@ -214,7 +206,7 @@ async function main() {
       return { ok: gone, detail: `cardGone=${gone}` };
     });
 
-    await attempt(4, "the same turn settles with the chosen id in the reply", async () => {
+    await attempt(4, "the same turn settles with the chosen color in the reply", async () => {
       const texts = await waitUntil(
         "the turn to settle with a reply",
         async () => {

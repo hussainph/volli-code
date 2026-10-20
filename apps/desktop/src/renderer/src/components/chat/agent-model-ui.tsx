@@ -12,7 +12,8 @@
  * and the overlay header are the two places the ticket names, they are a press
  * apart, and a reader who sees `sonnet-4.5` in one and `Sonnet 4.5` in the
  * other has learned that the two surfaces are reporting different things. The
- * words come from {@link agentModelFacts}; this is the typesetting.
+ * model name and mark resolve through the same catalogue as other captions;
+ * {@link agentModelFacts} supplies the shared effort label.
  *
  * THE EFFORT WEARS A GAUGE, never a separator. `sonnet-4.5 · High` reads as a
  * claim about the MODEL — the exact misreading that moved effort out of the
@@ -31,9 +32,10 @@ import { GaugeIcon } from "@phosphor-icons/react";
 import { agentModelFacts, type IslandAgent } from "@volli/session-presentation";
 
 import { cn } from "@renderer/lib/utils";
+import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 
 /**
- * `sonnet-4.5  ⌾ High`, or nothing at all for a child whose policy has not
+ * Mark + `Sonnet 4.5  ⌾ High`, or nothing for a child whose policy has not
  * been recorded yet.
  *
  * NOTHING, rather than a placeholder: the gap is one beat long — between a
@@ -59,11 +61,9 @@ export function AgentModelLine({
         className,
       )}
     >
-      {/* The model is the term that can be long, so it is the one that gives:
-          it truncates and the effort keeps its width. A reader who can see
-          only half of `claude-sonnet-4-5-2026…` still knows which family it
-          is; an effort clipped to `Ext…` says nothing at all. */}
-      <span className="min-w-0 truncate">{facts.model}</span>
+      {/* Catalogue names and marks match the parent composer. The name may
+          wrap; the effort remains a distinct setting beside its gauge. */}
+      {agent.model === null ? null : <ResolvedModelName selection={agent.model} />}
       <GaugeIcon aria-hidden weight="bold" className="size-3 shrink-0" />
       {/* WHAT THE GAUGE SAYS, SAID. The glyph is what stops `High` reading as
           an adjective on the model beside it, and a glyph says nothing to a

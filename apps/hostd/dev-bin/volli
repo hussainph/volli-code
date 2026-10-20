@@ -1,0 +1,8 @@
+#!/bin/sh
+# The `volli` a source-booted hostd puts first on its Sessions' PATH (VC-563):
+# the workspace's CLI bundle, under the `node` on PATH. The artifact ships its
+# own bin/volli beside its own Node instead. Build the bundle first:
+#   pnpm --filter @volli/hostd --filter @volli/cli run build
+# apps/hostd/src/runtime-paths.ts; README.md, "Running from source".
+here=$(dirname "$(readlink -f "$0")")
+exec node "$here/../../../packages/cli/dist/volli.cjs" "$@"

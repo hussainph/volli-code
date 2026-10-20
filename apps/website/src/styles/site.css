@@ -1,0 +1,1560 @@
+/*
+ * volli.app — the whole stylesheet (BRAND.md).
+ *
+ * One night, one ink, one ember; colour comes from the worlds, never from the
+ * chrome. The component vocabulary is closed: World, Window, Super, Essay,
+ * Button, Header/Footer. Anything else is argued in BRAND.md first.
+ */
+
+:root {
+  color-scheme: dark;
+  --night: #07070a;
+  --ink: #f5f2ee;
+  --ink-2: rgb(245 242 238 / 0.64);
+  --ink-3: rgb(245 242 238 / 0.42);
+  --hairline: rgb(245 242 238 / 0.1);
+  --ember: #e8652a;
+  --ember-hi: #f2773f;
+  --ember-ink: #1c0b03;
+
+  --sans: "Mona Sans Variable", "Mona Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SF Mono", monospace;
+
+  --page-max: 1376px;
+  --gutter: clamp(16px, 3.2vw, 40px);
+  --radius-world: clamp(18px, 2vw, 28px);
+  --reel-gap: clamp(12px, 1.6vw, 24px);
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  font-family: var(--sans);
+  font-synthesis: none;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--night);
+  scroll-behavior: smooth;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  background: var(--night);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ember-hi);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+main:focus {
+  outline: none;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+p,
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+.skip-link {
+  position: absolute;
+  z-index: 100;
+  top: 12px;
+  left: 12px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--night);
+  font-size: 14px;
+  font-weight: 560;
+  transform: translateY(-200%);
+  transition: transform 180ms var(--ease-out);
+}
+
+.skip-link:focus-visible {
+  transform: none;
+}
+
+/* ─── Header / Footer ─────────────────────────────────────────────────── */
+
+.site-header,
+.site-footer,
+main > section,
+.page {
+  width: min(100% - 2 * var(--gutter), var(--page-max));
+  margin-inline: auto;
+}
+
+.site-header {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 640;
+  font-stretch: 104%;
+  letter-spacing: -0.02em;
+}
+
+.brand .mark {
+  display: block;
+}
+
+.site-header nav,
+.site-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.site-header nav {
+  gap: clamp(18px, 2.4vw, 32px);
+}
+
+.site-header nav a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--ink-2);
+  font-size: 14.5px;
+  font-weight: 480;
+  transition: color 160ms ease;
+}
+
+.site-header nav a:hover,
+.site-header .site-header-download {
+  color: var(--ink);
+}
+
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 72px 0 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px 40px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+.site-footer .brand {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.site-footer nav {
+  gap: 8px 24px;
+  margin-inline-start: auto;
+}
+
+.site-footer nav a {
+  transition: color 160ms ease;
+}
+
+.site-footer nav a:hover {
+  color: var(--ink);
+}
+
+.site-footer-note {
+  flex-basis: 100%;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* ─── Button ──────────────────────────────────────────────────────────── */
+
+.button {
+  display: inline-flex;
+  min-height: 48px;
+  padding: 0 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--ember);
+  color: var(--ember-ink);
+  font-size: 15.5px;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.22) inset,
+    0 10px 30px -10px rgb(232 101 42 / 0.6);
+  transition:
+    background-color 160ms ease,
+    transform 160ms var(--ease-out);
+}
+
+.button:hover {
+  background: var(--ember-hi);
+}
+
+.button:active {
+  transform: scale(0.97);
+}
+
+/* The primary button's light: on hover or keyboard focus, one soft band of
+   warm light crosses the pill and is gone — never an idle loop. It sits under
+   the label (z-index -1 inside the button's own stacking context). Adapted
+   from Magic UI's Shimmer Button (MIT, Copyright (c) Magic UI) as a single
+   pass. */
+.button:not(.button--ghost) {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.button:not(.button--ghost)::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: "";
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgb(255 226 200 / 0.5) 48%,
+    rgb(255 246 236 / 0.62) 50%,
+    rgb(255 226 200 / 0.5) 52%,
+    transparent 70%
+  );
+  opacity: 0;
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+
+@keyframes button-shine {
+  from {
+    opacity: 1;
+    transform: translateX(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .button:not(.button--ghost):focus-visible::before {
+    animation: button-shine 1000ms var(--ease-in-out) 1;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .button:not(.button--ghost):hover::before {
+    animation: button-shine 1000ms var(--ease-in-out) 1;
+  }
+}
+
+/* The quiet partner to the ember button: glass on the night, never a second
+   colour. */
+.button--ghost {
+  gap: 10px;
+  padding: 0 20px;
+  background: rgb(245 242 238 / 0.07);
+  color: var(--ink);
+  box-shadow:
+    0 0 0 1px rgb(245 242 238 / 0.12) inset,
+    0 1px 0 rgb(255 255 255 / 0.06) inset;
+  backdrop-filter: blur(12px);
+}
+
+.button--ghost:hover {
+  background: rgb(245 242 238 / 0.12);
+}
+
+.button--ghost .github-icon {
+  opacity: 0.9;
+}
+
+.link-quiet {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 160ms ease;
+}
+
+.link-quiet span {
+  transition: transform 200ms var(--ease-out);
+}
+
+.link-quiet:hover {
+  color: var(--ink);
+}
+
+.link-quiet:hover span {
+  transform: translateX(3px);
+}
+
+/* ─── Super ───────────────────────────────────────────────────────────── */
+
+.super-title {
+  font-size: var(--super-size);
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+
+.super-beat {
+  display: block;
+  /* Room for descenders inside the clip the beat rises through. */
+  padding-bottom: 0.1em;
+  margin-bottom: -0.1em;
+  overflow: hidden;
+}
+
+.super-beat > span {
+  display: inline-block;
+}
+
+.super-beat--bold {
+  font-weight: 780;
+  font-stretch: 108%;
+  letter-spacing: -0.04em;
+}
+
+.super-sub {
+  max-width: 30em;
+  margin-top: 1em;
+  color: var(--ink-2);
+  font-size: var(--super-sub-size, 17px);
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.super--hero {
+  --super-size: clamp(42px, 6.2vw, 92px);
+  --super-sub-size: clamp(17px, 1.5vw, 20px);
+}
+
+/* Small phones: scale with the screen so "a team of twenty." stays on one line. */
+@media (max-width: 420px) {
+  .super--hero {
+    --super-size: clamp(32px, 10.6vw, 42px);
+  }
+}
+
+.super--chapter {
+  --super-size: clamp(32px, 4.4vw, 66px);
+  --super-sub-size: clamp(15px, 1.25vw, 18px);
+}
+
+.super--small {
+  --super-size: clamp(26px, 2.4vw, 36px);
+}
+
+/* The one entrance: each beat rises through its own clip, a beat apart, and
+   the bold beat lands a beat later still (BRAND.md §8). Inside a card the
+   words wait for the card's own lift (`--stagger`). */
+.reveal-ready [data-reveal] .super-beat > span {
+  --super-delay: 0ms;
+  transform: translateY(105%);
+  transition: transform 380ms var(--ease-out);
+  transition-delay: calc(var(--super-delay) + var(--beat) * 90ms);
+}
+
+.reveal-ready [data-reveal] .super-beat--bold > span {
+  transition-delay: calc(var(--super-delay) + var(--beat) * 90ms + 90ms);
+}
+
+.reveal-ready .chapter [data-reveal] .super-beat > span {
+  --super-delay: calc(160ms + var(--stagger, 0) * 110ms);
+}
+
+.reveal-ready [data-reveal] .super-sub,
+.reveal-ready [data-reveal] .chapter-body {
+  opacity: 0;
+  transition: opacity 700ms ease 260ms;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-beat > span {
+  transform: none;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-sub,
+.reveal-ready [data-reveal].is-revealed .chapter-body {
+  opacity: 1;
+}
+
+/* The hero's bold beat is italic and fast. It slides in leaning forward,
+   rocks back as it brakes, and two blurred afterimages catch up behind it.
+   Then speed lines never stop racing through the letters: dark slits and one
+   ember stripe, right to left, clipped to the type. Each lane is its own
+   repeating tile moving whole tiles per cycle, so the loop has no seam.
+   Without JS or under reduced motion the lines hold still and the ghosts
+   never show (no `.reveal-ready`). */
+.super-beat--speed {
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+  font-style: italic;
+}
+
+.super-beat--speed > span[data-text] {
+  position: relative;
+  transform-origin: 50% 100%;
+}
+
+.super-beat--speed > span[data-text]::before,
+.super-beat--speed > span[data-text]::after {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: attr(data-text) / "";
+  opacity: 0;
+  pointer-events: none;
+}
+
+.super-beat--speed > span[data-text]::before {
+  filter: blur(4px);
+}
+
+.super-beat--speed > span[data-text]::after {
+  color: var(--ember);
+  filter: blur(10px);
+}
+
+.super-speed-fill {
+  --lane-a: 7em;
+  --lane-b: 4.5em;
+  --lane-c: 9em;
+  --lane-d: 5.5em;
+}
+
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .super-speed-fill {
+    color: transparent;
+    background:
+      linear-gradient(90deg, transparent 0, var(--night) 6%, transparent 58%) 0 34% / var(--lane-a)
+        0.05em repeat-x,
+      linear-gradient(90deg, transparent 0, var(--night) 5%, transparent 44%) 0 49% / var(--lane-b)
+        0.04em repeat-x,
+      linear-gradient(90deg, transparent 0, var(--ember) 4%, transparent 52%) 0 61% / var(--lane-c)
+        0.065em repeat-x,
+      linear-gradient(90deg, transparent 0, var(--night) 7%, transparent 50%) 0 74% / var(--lane-d)
+        0.045em repeat-x,
+      var(--ink);
+    -webkit-background-clip: text;
+    background-clip: text;
+    /* If the line wraps (narrow phones), each line gets its own lanes. */
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+
+  .reveal-ready [data-reveal].is-revealed .super-speed-fill {
+    animation: speed-lines 1.4s linear 700ms infinite;
+  }
+}
+
+@keyframes speed-lines {
+  to {
+    background-position-x:
+      calc(-2 * var(--lane-a)), calc(-3 * var(--lane-b)), calc(-2 * var(--lane-c)),
+      calc(-3 * var(--lane-d)), 0;
+  }
+}
+
+.reveal-ready [data-reveal] .super-beat--speed > span[data-text] {
+  opacity: 0;
+  transform: none;
+  transition: none;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-beat--speed > span[data-text] {
+  animation: speed-in 760ms var(--ease-out) 240ms both;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-beat--speed > span[data-text]::before {
+  animation: speed-ghost-near 760ms var(--ease-out) 240ms both;
+}
+
+.reveal-ready [data-reveal].is-revealed .super-beat--speed > span[data-text]::after {
+  animation: speed-ghost-far 900ms var(--ease-out) 240ms both;
+}
+
+@keyframes speed-in {
+  0% {
+    opacity: 0;
+    transform: translateX(-32%) skewX(-18deg);
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  68% {
+    transform: translateX(0.8%) skewX(4deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes speed-ghost-near {
+  0% {
+    opacity: 0.5;
+    transform: translateX(-14%);
+  }
+
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+@keyframes speed-ghost-far {
+  0% {
+    opacity: 0.55;
+    transform: translateX(-30%);
+  }
+
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+/* ─── Hero ────────────────────────────────────────────────────────────── */
+
+.hero {
+  padding-top: clamp(28px, 5vh, 64px);
+}
+
+.hero-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px 48px;
+}
+
+.hero-action {
+  display: flex;
+  padding-bottom: 6px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.hero-words {
+  display: grid;
+  gap: clamp(16px, 1.6vw, 22px);
+}
+
+.hero-lede {
+  max-width: 34em;
+  color: rgb(245 242 238 / 0.78);
+  font-size: clamp(17px, 1.45vw, 20px);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.hero-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* The hero arrives in order on load: the headline's beats rise (Super, done
+   by ~560ms), then the words, the buttons, and the product, each a beat
+   behind. */
+.reveal-ready .hero-rise {
+  animation: hero-rise 700ms var(--ease-out) both;
+  animation-delay: calc(160ms + var(--rise) * 90ms);
+}
+
+.reveal-ready .hero-film.hero-rise {
+  animation-name: hero-film-rise;
+  animation-duration: 1200ms;
+}
+
+@keyframes hero-rise {
+  from {
+    opacity: 0;
+    translate: 0 18px;
+  }
+}
+
+@keyframes hero-film-rise {
+  from {
+    opacity: 0;
+    translate: 0 64px;
+    scale: 0.97;
+  }
+}
+
+.hero-note {
+  max-width: 22em;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: right;
+}
+
+.hero-film {
+  position: relative;
+  margin-top: clamp(28px, 4vw, 48px);
+  overflow: hidden;
+  border-radius: var(--radius-world);
+  background: var(--night);
+  aspect-ratio: 16 / 9;
+  box-shadow: 0 40px 120px -40px rgb(123 92 255 / 0.35);
+}
+
+.hero-poster,
+.hero-video {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The poster is the loop's first frame and where the intro ends, so the hand-
+   offs are invisible: poster → intro while it plays → loop once it has begun. */
+.hero-video {
+  opacity: 0;
+}
+
+[data-playing] .hero-intro,
+[data-looping] .hero-loop {
+  opacity: 1;
+}
+
+[data-looping] .hero-intro {
+  opacity: 0;
+}
+
+/* With motion allowed the film opens on the intro's own first frame, not on
+   the poster (its end); the poster comes back only if autoplay is refused. */
+.reveal-ready .hero-film:not([data-still]) .hero-poster {
+  opacity: 0;
+}
+
+/* ─── Essay ───────────────────────────────────────────────────────────── */
+
+.essay {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 48px clamp(40px, 6vw, 96px);
+  padding-block: clamp(96px, 14vw, 200px);
+  align-items: start;
+}
+
+.essay-lockup {
+  position: sticky;
+  top: 48px;
+  display: grid;
+  justify-items: start;
+  gap: 20px;
+}
+
+.essay-name {
+  font-size: clamp(64px, 8vw, 120px);
+  font-weight: 800;
+  font-stretch: 110%;
+  line-height: 0.9;
+  letter-spacing: -0.05em;
+}
+
+.essay-heading {
+  font-size: clamp(30px, 3.4vw, 48px);
+  font-weight: 760;
+  font-stretch: 106%;
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.essay--compare {
+  padding-block: clamp(80px, 11vw, 160px);
+}
+
+.essay-body {
+  display: grid;
+  max-width: 34em;
+  gap: 1.1em;
+  font-size: clamp(19px, 1.65vw, 23px);
+  font-weight: 360;
+  line-height: 1.55;
+  letter-spacing: -0.008em;
+  text-wrap: pretty;
+}
+
+/* Reading light: each sentence brightens as it crosses into the reading line,
+   on the scroll timeline (off the main thread). Without scroll timelines the
+   paragraph is simply lit. */
+@supports (animation-timeline: view()) {
+  .reveal-ready .essay-read .read {
+    animation: read-in linear both;
+    animation-timeline: view();
+    animation-range: entry 40% cover 42%;
+  }
+}
+
+@keyframes read-in {
+  from {
+    opacity: 0.2;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.essay-read .read {
+  display: inline;
+}
+
+.essay-body > p:first-child {
+  color: var(--ink);
+}
+
+.essay-body > p {
+  color: rgb(245 242 238 / 0.82);
+}
+
+.essay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 1.4em;
+  align-items: center;
+  gap: 12px 28px;
+}
+
+/* ─── World ───────────────────────────────────────────────────────────── */
+
+.world {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-world);
+  background: var(--night);
+  isolation: isolate;
+}
+
+.world-light,
+.world-light > * {
+  position: absolute;
+  pointer-events: none;
+}
+
+.world-light {
+  z-index: -1;
+  inset: 0;
+}
+
+.world-canvas {
+  inset: -12%;
+  animation: world-drift 64s var(--ease-in-out) infinite alternate;
+}
+
+.world-pool {
+  inset: -18%;
+  background: radial-gradient(ellipse 48% 44% at var(--px) var(--py), var(--pool), transparent 70%);
+  opacity: var(--pool-alpha);
+  animation: world-orbit 46s var(--ease-in-out) var(--pool-delay) infinite alternate;
+}
+
+.world-bloom {
+  inset: 0;
+  background: radial-gradient(
+    ellipse 50% 44% at var(--world-fx) var(--world-fy),
+    color-mix(in oklab, var(--world-bloom) 50%, transparent),
+    transparent 70%
+  );
+}
+
+/* A vignette, so the light pools toward the subject rather than the edge. */
+.world-light::after {
+  inset: 0;
+  content: "";
+  background: radial-gradient(ellipse 90% 85% at 50% 50%, transparent 55%, rgb(0 0 0 / 0.42));
+}
+
+@keyframes world-drift {
+  from {
+    transform: translate(-2%, 1.5%) rotate(-2deg) scale(1.02);
+  }
+  to {
+    transform: translate(2%, -1.5%) rotate(2deg) scale(1.08);
+  }
+}
+
+@keyframes world-orbit {
+  from {
+    transform: translate(-6%, 4%) scale(0.96);
+  }
+  to {
+    transform: translate(6%, -5%) scale(1.06);
+  }
+}
+
+/* ─── Release chapters ────────────────────────────────────────────────── */
+
+/* The features are a bento: cards of different widths in a twelve-column
+   grid, so no single picture takes the whole screen. */
+.features {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--reel-gap);
+  scroll-margin-top: 24px;
+}
+
+.chapter {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  scroll-margin-top: 24px;
+}
+
+.chapter--span-7 {
+  grid-column: span 7;
+}
+
+.chapter--span-6 {
+  grid-column: span 6;
+}
+
+.chapter--span-5 {
+  grid-column: span 5;
+}
+
+.chapter--span-3 {
+  grid-column: span 3;
+}
+
+/* The words sit at the top of the world, where its light is quietest: a
+   headline, then a few plain sentences about the picture. */
+.chapter-text {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  padding: clamp(24px, 3vw, 44px) clamp(24px, 3vw, 44px) 0;
+  gap: clamp(12px, 1.2vw, 18px);
+  text-shadow: 0 1px 20px rgb(0 0 0 / 0.28);
+}
+
+.chapter .super--chapter {
+  --super-size: clamp(28px, 2.9vw, 44px);
+}
+
+.chapter .super--small {
+  --super-size: clamp(22px, 1.9vw, 28px);
+}
+
+.chapter-body {
+  max-width: 34em;
+  color: rgb(245 242 238 / 0.82);
+  font-size: clamp(15px, 1.15vw, 17px);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.chapter--small .chapter-body {
+  font-size: 15px;
+}
+
+/* A shade from the top edge, so white words hold on the brightest worlds. */
+.chapter::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0 0 auto;
+  height: 46%;
+  content: "";
+  background: linear-gradient(rgb(4 4 8 / 0.42), transparent);
+  pointer-events: none;
+}
+
+/* The still fills the rest of the card and runs off its bottom edge: the app
+   floats up out of the world rather than sitting in a frame. */
+.chapter-still {
+  position: relative;
+  display: block;
+  min-height: clamp(300px, 30vw, 460px);
+  margin-top: 4px;
+  flex: 1 1 auto;
+  overflow: hidden;
+  /* The crop never shows as an edge: the picture fades into the world under
+     the words and at its left, where a still can run past its window. */
+  mask-image: linear-gradient(transparent, #000 14%), linear-gradient(90deg, transparent, #000 8%);
+  mask-composite: intersect;
+}
+
+.chapter--small .chapter-still {
+  min-height: clamp(240px, 22vw, 320px);
+  mask-image: linear-gradient(transparent, #000 14%);
+}
+
+/* A small card's still is a crop of a whole app window: it runs edge to edge. */
+.chapter--small .chapter-still img {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  object-position: 0% 0%;
+}
+
+/* Anchored top-left with a margin, so every app window starts inside its card
+   and runs off the right and bottom edges. */
+.chapter-still img {
+  position: absolute;
+  inset: clamp(20px, 2.2vw, 32px) 0 0 clamp(20px, 2.6vw, 40px);
+  display: block;
+  width: calc(100% - clamp(20px, 2.6vw, 40px));
+  height: calc(100% - clamp(20px, 2.2vw, 32px));
+  border-top-left-radius: 14px;
+  object-fit: cover;
+  object-position: var(--still-position);
+}
+
+/* ─── Feed ────────────────────────────────────────────────────────────── */
+
+/* A card's own Window (Feed.astro): the sidebar's session rows on a strip of
+   dark glass, anchored where a still's window would start, the world's light
+   open beside it, running off the card's bottom edge. */
+.chapter-still--window {
+  mask-image: linear-gradient(transparent, #000 10%);
+}
+
+.feed {
+  position: absolute;
+  top: clamp(28px, 3vw, 44px);
+  bottom: 0;
+  left: clamp(20px, 2.6vw, 40px);
+  display: flex;
+  width: min(100% - 2 * clamp(20px, 2.6vw, 40px), 30rem);
+  margin: 0;
+  padding: clamp(14px, 1.4vw, 20px) clamp(12px, 1.2vw, 18px);
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 16px 16px 0 0;
+  background: rgb(9 10 16 / 0.62);
+  box-shadow:
+    0 0 0 1px rgb(245 242 238 / 0.08) inset,
+    0 1px 0 rgb(255 255 255 / 0.06) inset,
+    0 40px 90px -30px rgb(0 0 0 / 0.6);
+  backdrop-filter: blur(20px) saturate(1.2);
+  list-style: none;
+}
+
+.feed-row {
+  display: flex;
+  padding: 10px 12px;
+  align-items: center;
+  gap: 14px;
+  border-radius: 10px;
+}
+
+/* The first row is the one in view in the app. */
+.feed-row:first-child {
+  background: rgb(245 242 238 / 0.05);
+}
+
+.feed-glyph {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  border-radius: 9px;
+  background: rgb(245 242 238 / 0.1);
+  color: var(--ink);
+}
+
+/* The working ring: an arc that turns slowly, as a live session's does. */
+.feed-ring {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgb(245 242 238 / 0.28);
+  border-top-color: var(--ink);
+  border-right-color: var(--ink);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5px rgb(14 15 24);
+  background: rgb(14 15 24);
+  animation: feed-ring 2400ms linear infinite;
+}
+
+@keyframes feed-ring {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.feed-text {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.feed-title {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: clamp(15px, 1.15vw, 16.5px);
+  font-weight: 540;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-meta {
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+/* Arrival: the pane lifts with the card; the rows come in one by one, then
+   every ring appears at once — started in turn, all running together. */
+.reveal-ready .chapter[data-reveal] .feed {
+  opacity: 0;
+  translate: 0 48px;
+  transition:
+    opacity 700ms var(--ease-out),
+    translate 1100ms var(--ease-out);
+  transition-delay: calc(140ms + var(--stagger, 0) * 110ms);
+}
+
+.reveal-ready .chapter[data-reveal] .feed-row {
+  opacity: 0;
+  transform: translateY(10px) scale(0.97);
+  transition:
+    opacity 360ms var(--ease-out),
+    transform 420ms var(--ease-out);
+  transition-delay: calc(520ms + var(--row) * 100ms);
+}
+
+.reveal-ready .chapter[data-reveal] .feed-ring {
+  opacity: 0;
+  transition: opacity 400ms var(--ease-out);
+  transition-delay: calc(560ms + var(--feed-count) * 100ms + 200ms);
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed .feed {
+  opacity: 1;
+  translate: none;
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed .feed-row {
+  opacity: 1;
+  transform: none;
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed .feed-ring {
+  opacity: 1;
+}
+
+/* ─── Card motion ─────────────────────────────────────────────────────── */
+
+/* A row of cards arrives as a stagger: each card lifts in, and the app inside
+   it rises a beat later and further, so the picture floats up out of its
+   world. */
+.reveal-ready .chapter[data-reveal] {
+  opacity: 0;
+  translate: 0 56px;
+  transition:
+    opacity 900ms var(--ease-out),
+    translate 1100ms var(--ease-out),
+    transform 600ms var(--ease-out);
+  transition-delay: calc(var(--stagger, 0) * 110ms), calc(var(--stagger, 0) * 110ms), 0ms;
+}
+
+.reveal-ready .chapter[data-reveal] .chapter-still img {
+  translate: 0 80px;
+  transition: translate 1500ms var(--ease-out);
+  transition-delay: calc(140ms + var(--stagger, 0) * 110ms);
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed {
+  opacity: 1;
+  translate: none;
+}
+
+.reveal-ready .chapter[data-reveal].is-revealed .chapter-still img {
+  translate: none;
+}
+
+/* Depth while scrolling: the app drifts a little slower than its card. */
+@supports (animation-timeline: view()) {
+  .reveal-ready .chapter-still img {
+    animation: still-drift linear both;
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+  }
+}
+
+@keyframes still-drift {
+  from {
+    transform: translateY(-3%);
+  }
+  to {
+    transform: translateY(5%);
+  }
+}
+
+/* The pointer's light: a soft glow that follows it across a card (Base.astro
+   moves it; only on devices that hover). */
+.chapter-glow {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  width: 560px;
+  height: 560px;
+  margin: -280px 0 0 -280px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgb(255 244 232 / 0.16), transparent);
+  mix-blend-mode: plus-lighter;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 400ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chapter:hover .chapter-glow {
+    opacity: 1;
+  }
+}
+
+/* ─── Why ─────────────────────────────────────────────────────────────── */
+
+.why {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 48px clamp(40px, 6vw, 96px);
+  padding-block: clamp(96px, 13vw, 190px) clamp(64px, 8vw, 120px);
+}
+
+.why-head {
+  position: sticky;
+  top: 48px;
+  align-self: start;
+}
+
+.why .super--chapter {
+  --super-size: clamp(38px, 4.6vw, 68px);
+}
+
+.why-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.why-item {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  padding: 26px 0;
+  align-items: baseline;
+  gap: 6px 32px;
+  border-top: 1px solid var(--hairline);
+}
+
+.why-item:last-child {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.why-item h3 {
+  font-size: clamp(20px, 1.7vw, 24px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.why-item p {
+  max-width: 36em;
+  color: var(--ink-2);
+  font-size: clamp(16px, 1.25vw, 18px);
+  line-height: 1.5;
+}
+
+.reveal-ready .why-item[data-reveal] {
+  opacity: 0;
+  translate: 0 8px;
+  transition:
+    opacity 380ms var(--ease-out),
+    translate 420ms var(--ease-out);
+  transition-delay: calc(var(--stagger, 0) * 70ms);
+}
+
+.reveal-ready .why-item[data-reveal].is-revealed {
+  opacity: 1;
+  translate: none;
+}
+
+/* ─── Close ───────────────────────────────────────────────────────────── */
+
+.close {
+  display: grid;
+  min-height: clamp(520px, 62vw, 760px);
+  margin-top: var(--reel-gap);
+  padding: 48px var(--gutter);
+  place-items: center;
+  text-align: center;
+}
+
+.close-inner {
+  display: grid;
+  justify-items: center;
+  gap: 28px;
+}
+
+.close .super-sub {
+  margin-inline: auto;
+}
+
+.close-actions {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px 28px;
+}
+
+.close .link-quiet {
+  color: var(--ink);
+  opacity: 0.8;
+}
+
+.close .mark {
+  filter: drop-shadow(0 24px 48px rgb(0 0 0 / 0.35));
+}
+
+/* The mark builds the way a board fills: bars rise, then the card lands. */
+.mark-bar,
+.mark-card {
+  transform-box: fill-box;
+}
+
+.mark-bar {
+  transform-origin: 50% 0;
+}
+
+.reveal-ready .mark--build .mark-bar {
+  transform: scaleY(0);
+  transition: transform 900ms var(--ease-out);
+}
+
+.reveal-ready .mark--build .mark-bar--2 {
+  transition-delay: 90ms;
+}
+
+.reveal-ready .mark--build .mark-bar--3 {
+  transition-delay: 180ms;
+}
+
+.reveal-ready .mark--build .mark-card {
+  opacity: 0;
+  transform: translateY(-60%);
+  transition:
+    opacity 300ms ease 620ms,
+    transform 700ms cubic-bezier(0.34, 1.56, 0.64, 1) 620ms;
+}
+
+.reveal-ready .is-revealed .mark--build .mark-bar,
+.reveal-ready .is-revealed .mark--build .mark-card {
+  opacity: 1;
+  transform: none;
+}
+
+/* ─── Download ────────────────────────────────────────────────────────── */
+
+.dl {
+  display: flex;
+  min-height: clamp(460px, 56vw, 620px);
+  margin-top: clamp(16px, 3vh, 40px);
+  padding: clamp(32px, 6vw, 88px);
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 48px;
+}
+
+/* The close's building mark, standing in the ember bloom. */
+.dl-mark {
+  align-self: center;
+  padding-inline-end: clamp(0px, 4vw, 64px);
+}
+
+.dl-mark .mark {
+  width: auto;
+  height: clamp(150px, 20vw, 260px);
+  filter: drop-shadow(0 24px 48px rgb(0 0 0 / 0.35));
+}
+
+.dl-inner {
+  display: grid;
+  max-width: 40rem;
+  gap: 36px;
+}
+
+.dl-build {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+}
+
+.dl-version {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.dl-version span:first-child {
+  color: var(--ink);
+}
+
+.dl-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 28px;
+}
+
+.dl-artifacts .button {
+  gap: 12px;
+}
+
+.dl-meta {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.dl-status,
+.dl-platform {
+  color: var(--ink-2);
+  font-size: 15px;
+}
+
+.dl-status a,
+.terms a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--ink-3);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 160ms ease;
+}
+
+.dl-status a:hover,
+.terms a:hover {
+  text-decoration-color: var(--ink);
+}
+
+.terms {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 32px clamp(40px, 6vw, 96px);
+  padding-block: clamp(80px, 10vw, 140px) 0;
+}
+
+.terms h2 {
+  font-size: clamp(28px, 3vw, 40px);
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.terms dl {
+  display: grid;
+  margin: 0;
+}
+
+.terms dl > div {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  gap: 8px 24px;
+  padding: 18px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.terms dt {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.9;
+}
+
+.terms dd {
+  margin: 0;
+  color: rgb(245 242 238 / 0.82);
+  font-size: 16.5px;
+  line-height: 1.55;
+}
+
+/* ─── Narrow ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 960px) {
+  .hero-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hero-action {
+    align-items: flex-start;
+  }
+
+  .hero-note {
+    text-align: left;
+  }
+
+  .essay,
+  .why {
+    grid-template-columns: 1fr;
+  }
+
+  .why-head {
+    position: static;
+  }
+
+  .why-item {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-buttons {
+    justify-content: flex-start;
+  }
+
+  .essay-lockup {
+    position: static;
+  }
+
+  .chapter--span-7,
+  .chapter--span-6,
+  .chapter--span-5 {
+    grid-column: 1 / -1;
+  }
+
+  .chapter--span-3 {
+    grid-column: span 6;
+  }
+
+  .terms {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .dl {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    justify-content: flex-end;
+  }
+
+  .dl-mark {
+    align-self: flex-start;
+    padding-inline-end: 0;
+  }
+
+  .dl-mark .mark {
+    height: 112px;
+  }
+
+  .dl-inner {
+    max-width: 100%;
+  }
+
+  /* The version line and the file size drop under the label, not off the card. */
+  .dl-artifacts .button {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding-block: 10px;
+    white-space: normal;
+  }
+
+  .site-header nav a:not(.site-header-download):last-of-type {
+    display: none;
+  }
+
+  .terms dl > div {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .chapter--span-3 {
+    grid-column: 1 / -1;
+  }
+
+  .chapter-text {
+    padding: 26px 22px 0;
+  }
+
+  .chapter-still {
+    min-height: 0;
+    aspect-ratio: 4 / 5;
+  }
+
+  .chapter--small .chapter-still {
+    aspect-ratio: 1 / 1;
+  }
+
+  .chapter-still.chapter-still--window {
+    min-height: 400px;
+    aspect-ratio: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .world-canvas,
+  .world-pool,
+  .chapter-still img,
+  .feed-ring {
+    animation: none;
+  }
+}

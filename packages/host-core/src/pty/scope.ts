@@ -1,0 +1,298 @@
+import type Database from "better-sqlite3";
+import type { SessionEngine } from "@volli/session-engine";
+import {
+  buildHarnessCommand,
+  buildHarnessResumeCommand,
+  composeAttachmentsSection,
+  DEFAULT_HARNESS_ID,
+  displayTicketId,
+  effectiveHarnessId,
+  errorMessage,
+  harnessLabel,
+  projectSessionEnv,
+  ticketSessionEnv,
+} from "@volli/shared";
+import type {
+  CreateTerminalSessionRequest,
+  HarnessAdapterLookup,
+  HarnessId,
+  HarnessWrapperLookup,
+} from "@volli/shared";
+import { materializeBlobs } from "../blob-materialize";
+import { getProjectById, isProjectRemoved } from "../db/projects-repo";
+import { getTicketSessionContext } from "../db/tickets-repo";
+import { terminalSessionRecord } from "../session-control";
+
+/** The db-resolved shape a PTY is spawned + persisted from (ticket- or project-scoped). */
+export interface SessionScope {
+  projectId: string;
+  ticketId: string | null;
+  harnessId: HarnessId;
+  /** Truthful initial launch: a harness command was written, or this is a bare shell. */
+  launchKind: "agent" | "shell";
+  /** App-owned layout intent supplied by the renderer. */
+  placement: "tab" | "split";
+  cwd: string;
+  /** Extra env layered over the inherited environment (VOLLI_TICKET/VOLLI_ARTIFACTS_DIR, or just the artifacts dir). */
+  env: Record<string, string>;
+  title: string;
+  /**
+   * The MAIN-repo path whose `.volli/artifacts` to ensure before spawn (so an
+   * agent can write artifacts the instant its shell is live), or `null` when the
+   * project can't be resolved. Also the root-exists guard's stat target.
+   */
+  artifactsRoot: string | null;
+  /**
+   * The harness launch command line to feed the freshly-spawned shell (from a
+   * ticket request's `kickoff`), or `null` for a bare shell OR any worktree
+   * ticket session — those defer command composition to {@link
+   * PtyManager.create}, because the orientation preamble the prompt opens with
+   * needs the worktree identity `ensure` only resolves at boot. Written into
+   * the PTY exactly once, only after the session is fully persisted, so a
+   * failed persist never leaves a harness running.
+   */
+  launchCommand: string | null;
+  /**
+   * Present ONLY for a worktree-backed ticket session (`uses_worktree`). Carries
+   * everything `create` needs to (a) materialize the worktree via `ensure`
+   * before spawn, and (b) compose the launch command afterwards — the raw
+   * `kickoff` (harness + prompt, prefixed with the orientation preamble), the
+   * project's `setupCommand` (sentinel-gated after a FRESH create), and the
+   * main `projectPath` for the preamble. `launchCommand` is `null` in this case.
+   *
+   * `resumeCommand` is the pre-built harness resume line for a RESUME launch
+   * (issue #78): it needs no worktree identity (a resume carries no orientation
+   * preamble), so it is composed up front in {@link resolveScope} and
+   * simply written after `ensure` — through the same setup-sentinel gate when a
+   * fresh worktree runs a setup command. Mutually exclusive with `kickoff`.
+   */
+  worktree: {
+    ticketId: string;
+    projectPath: string;
+    setupCommand: string | null;
+    kickoff: { harnessId: HarnessId; prompt: string } | null;
+    resumeCommand: string | null;
+  } | null;
+  /**
+   * Present ONLY for native resume. It reuses the durable Session and opens a
+   * new terminal attachment; history never becomes a fabricated new Session.
+   */
+  resume: { sessionId: string; harnessSessionId: string | null } | null;
+}
+
+/** A resolved scope, or the one failure: a ticket request naming a ticket that does not exist. */
+export type ScopeResolution = { ok: true; scope: SessionScope } | { ok: false; error: string };
+
+/** Why a terminal does not open in a removed project (VC-822). */
+const PROJECT_REMOVED = "This project was removed from Volli. Add its folder again to use it.";
+
+/**
+ * Resolves a request to its session scope from the db: a ticket session
+ * (VOLLI_TICKET env, MAIN-repo-root cwd, the ticket's harness, `Session N`
+ * title) or a Board Session (default harness, `Terminal N`).
+ * A ticket request naming a ticket that does not exist fails, and so does a
+ * request in a removed project (VC-822): it keeps its Sessions for a re-add,
+ * and nothing runs in it until then.
+ *
+ * `wrapperFor` and `adapterFor` travel together for the same reason: both
+ * answers belong to main's harness runtime, and a launch line built from one
+ * without the other would name the right binary while getting its flags wrong.
+ */
+export async function resolveScope(
+  db: Database.Database,
+  sessionEngine: SessionEngine,
+  request: CreateTerminalSessionRequest,
+  blobsRootPath: string,
+  wrapperFor: HarnessWrapperLookup,
+  adapterFor: HarnessAdapterLookup,
+): Promise<ScopeResolution> {
+  // Presentation metadata is non-security-sensitive, but still normalize the
+  // IPC value so an untyped caller cannot persist arbitrary vocabulary.
+  const placement = request.placement === "split" ? "split" : "tab";
+  if (request.ticket !== undefined) {
+    const ctx = getTicketSessionContext(db, request.ticket.ticketId);
+    if (ctx === undefined) return { ok: false, error: "Unknown ticket" };
+    if (isProjectRemoved(db, ctx.projectId)) return { ok: false, error: PROJECT_REMOVED };
+    const displayId = displayTicketId(ctx.ticketPrefix, ctx.ticketNumber);
+    const kickoff = request.ticket.kickoff;
+    const resume = request.ticket.resume;
+    const usesWorktree = ctx.usesWorktree;
+    const sessionCount = await sessionEngine.countSessions({
+      projectId: ctx.projectId,
+      scope: "ticket",
+      ticketId: request.ticket.ticketId,
+    });
+    const title = `Session ${sessionCount + 1}`;
+    // Resume launch (issue #78, CONCEPT #21): pick up an ENDED agent session
+    // of this same ticket. Kickoff and resume are mutually exclusive — reject
+    // both present outright rather than silently preferring one.
+    if (resume !== undefined) {
+      if (kickoff !== undefined) {
+        return { ok: false, error: "A session cannot both start a kickoff and resume another" };
+      }
+      const priorProjection = await sessionEngine.getSession({ sessionId: resume.sessionId });
+      if (priorProjection === null) return { ok: false, error: "Cannot resume an unknown session" };
+      const prior = terminalSessionRecord(priorProjection);
+      // A structured-only Session has no terminal record to resume from. It
+      // used to reach the same refusal through a fabricated `launchKind`.
+      if (prior === null) return { ok: false, error: "Only an agent session can be resumed" };
+      if (prior.ticketId !== request.ticket.ticketId) {
+        return { ok: false, error: "Cannot resume a session that belongs to another ticket" };
+      }
+      if (prior.launchKind !== "agent") {
+        return { ok: false, error: "Only an agent session can be resumed" };
+      }
+      if (prior.endedAt === null) {
+        return { ok: false, error: "Cannot resume a session that is still live" };
+      }
+      // Resume the harness that was RUNNING, not the one that opened the
+      // terminal. A session's `harnessId` is its launch and never moves, so a
+      // user who quit opencode and worked in claude for an hour used to be
+      // resumed into opencode — the right session id handed to the wrong
+      // binary, with that binary's flags.
+      const priorHarnessId = effectiveHarnessId(prior);
+      // The resume line needs no worktree identity (no orientation preamble),
+      // so it composes up front. A harness with no resume support yields null.
+      const resumeCommand = buildHarnessResumeCommand(
+        priorHarnessId,
+        prior.harnessSessionId,
+        wrapperFor(priorHarnessId),
+        adapterFor,
+      );
+      if (resumeCommand === null) {
+        return {
+          ok: false,
+          error: `The ${harnessLabel(priorHarnessId)} harness does not support resuming a session`,
+        };
+      }
+      return {
+        ok: true,
+        scope: {
+          projectId: ctx.projectId,
+          ticketId: request.ticket.ticketId,
+          // The new session's own LAUNCH harness is what it is being launched
+          // with — the resumed one — which is why this is the effective id and
+          // not the prior record's launch field.
+          harnessId: priorHarnessId,
+          launchKind: "agent",
+          placement,
+          cwd: ctx.projectPath,
+          env: ticketSessionEnv(ctx.projectPath, displayId),
+          title: prior.title,
+          artifactsRoot: ctx.projectPath,
+          // Non-worktree resumes launch the resume line directly; a worktree
+          // resume defers the write to create() (post-`ensure`, setup-gated).
+          launchCommand: usesWorktree ? null : resumeCommand,
+          worktree: usesWorktree
+            ? {
+                ticketId: request.ticket.ticketId,
+                projectPath: ctx.projectPath,
+                setupCommand: ctx.setupCommand,
+                kickoff: null,
+                resumeCommand,
+              }
+            : null,
+          resume: {
+            sessionId: prior.id,
+            harnessSessionId: prior.harnessSessionId,
+          },
+        },
+      };
+    }
+    // A non-worktree kickoff builds its harness command up front and
+    // launches it directly (unchanged). A worktree session defers this to
+    // create() — the preamble needs the resolved identity — so its command
+    // is null here and the raw kickoff rides on `worktree` instead.
+    //
+    // A worktree-opt-out ticket never runs `ensure`, so THIS is the one
+    // place its attachments materialize (CONCEPT decision #19) — into the
+    // PROJECT root, since that root IS the session's checkout. The composed
+    // "## Attachments" section is appended after the ticket prompt. A
+    // materialize failure (a stored attachment's bytes are missing) must
+    // surface as the create-path error the caller toasts, not be swallowed.
+    let launchCommand: string | null = null;
+    if (!usesWorktree && kickoff !== undefined) {
+      let prompt = kickoff.prompt;
+      try {
+        const materialized = await materializeBlobs(
+          db,
+          blobsRootPath,
+          null,
+          request.ticket.ticketId,
+          ctx.projectPath,
+        );
+        const attachmentsSection = composeAttachmentsSection(materialized);
+        if (attachmentsSection.length > 0) prompt = `${prompt}\n\n${attachmentsSection}`;
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+      launchCommand = buildHarnessCommand(
+        kickoff.harnessId,
+        prompt,
+        wrapperFor(kickoff.harnessId),
+        adapterFor,
+      );
+    }
+    return {
+      ok: true,
+      scope: {
+        projectId: ctx.projectId,
+        ticketId: request.ticket.ticketId,
+        // An explicit kickoff choice wins; later sessions resume with the
+        // ticket's persisted preference. Launch kind separately preserves
+        // whether this session actually invoked that harness or opened a shell.
+        harnessId: kickoff?.harnessId ?? ctx.preferredHarnessId,
+        launchKind: kickoff === undefined ? "shell" : "agent",
+        placement,
+        // The MAIN repo root stands in as cwd here; a worktree session
+        // overrides it with the `ensure`-resolved worktree path in create().
+        // VOLLI_ARTIFACTS_DIR always points at the main .volli either way (#9).
+        cwd: ctx.projectPath,
+        env: ticketSessionEnv(ctx.projectPath, displayId),
+        title,
+        artifactsRoot: ctx.projectPath,
+        launchCommand,
+        worktree: usesWorktree
+          ? {
+              ticketId: request.ticket.ticketId,
+              projectPath: ctx.projectPath,
+              setupCommand: ctx.setupCommand,
+              kickoff: kickoff ?? null,
+              resumeCommand: null,
+            }
+          : null,
+        resume: null,
+      },
+    };
+  }
+  // Board Session: resolve the project's MAIN path so VOLLI_ARTIFACTS_DIR is
+  // injected the same way a ticket session gets it (decision #9). A project
+  // that can't be resolved still spawns (no artifacts env) rather than failing;
+  // a removed one does not.
+  if (isProjectRemoved(db, request.workspaceId)) return { ok: false, error: PROJECT_REMOVED };
+  const project = getProjectById(db, request.workspaceId);
+  const sessionCount = await sessionEngine.countSessions({
+    projectId: request.workspaceId,
+    scope: "project",
+  });
+  return {
+    ok: true,
+    scope: {
+      projectId: request.workspaceId,
+      ticketId: null,
+      harnessId: DEFAULT_HARNESS_ID,
+      launchKind: "shell",
+      placement,
+      cwd: request.cwd,
+      env: project ? projectSessionEnv(project.path) : {},
+      title: `Terminal ${sessionCount + 1}`,
+      artifactsRoot: project?.path ?? null,
+      // Board Sessions never auto-launch a harness — just a bare shell.
+      launchCommand: null,
+      // Never worktree-backed — Board Sessions run in the renderer's cwd.
+      worktree: null,
+      // Board Sessions are never a resume.
+      resume: null,
+    },
+  };
+}

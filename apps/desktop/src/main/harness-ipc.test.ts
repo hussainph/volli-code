@@ -34,10 +34,13 @@ import {
   decideRegisteredHarnesses,
   recordHarnessDelivery,
   scanHarnessManifests,
-} from "./harness-registry";
-import { recordHarnessChannelEvent, recordHarnessLaunch } from "./db/harness-channel-repo";
-import { getRegisteredHarness } from "./db/harness-registry-repo";
-import { openTestDb, type TestDb } from "./db/test-helpers";
+} from "@volli/host-core/agents";
+import {
+  recordHarnessChannelEvent,
+  recordHarnessLaunch,
+  getRegisteredHarness,
+} from "@volli/host-core/db";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
 
 let root: string;
 let fixture: TestDb;

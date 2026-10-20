@@ -18,6 +18,22 @@ function artifact(message: UIMessage): SessionTranscriptArtifact {
 }
 
 describe("in-memory transcript artifacts", () => {
+  it("says an artifact's canonical size, and null for one it does not hold (VC-315)", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const value = artifact({
+      id: "sized",
+      role: "assistant",
+      parts: [{ type: "text", text: "é" }],
+    });
+    const reference = await artifacts.write(value);
+    await expect(artifacts.byteLength!(reference)).resolves.toBe(
+      new TextEncoder().encode(canonicalJson(value)).length,
+    );
+    await expect(
+      artifacts.byteLength!({ ...reference, id: "fnv1a64:0000000000000000" }),
+    ).resolves.toBeNull();
+  });
+
   it("returns independent values and validates content-addressed references", async () => {
     const artifacts = createInMemoryTranscriptArtifactStore();
     const reference = await artifacts.write(
@@ -65,6 +81,23 @@ describe("in-memory transcript artifacts", () => {
 
     expect(second).toEqual(first);
     await expect(artifacts.read(first)).resolves.toEqual(canonicalEquivalent);
+  });
+
+  it("rejects non-plain objects nested in message parts", async () => {
+    const artifacts = createInMemoryTranscriptArtifactStore();
+    const badValues = [new Date("2025-01-01T00:00:00.000Z"), new Map([["key", "value"]])];
+
+    for (const [index, value] of badValues.entries()) {
+      const message = {
+        id: `message-${index}`,
+        role: "user",
+        parts: [{ type: "data-example", data: { nested: value } }],
+      } as unknown as UIMessage;
+
+      await expect(artifacts.write(artifact(message))).rejects.toThrowError(
+        new TypeError("Cannot serialize a non-plain object in a transcript artifact"),
+      );
+    }
   });
 
   it("uses JSON-compatible undefined and key-order semantics", () => {

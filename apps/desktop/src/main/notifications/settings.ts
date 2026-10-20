@@ -17,7 +17,7 @@
  * This record is neither: it is machine-local host configuration (the read
  * beside it says so — "it names a host"), it does not travel with a Session or
  * a Ticket, and no other client will ever need to replay how it got its value.
- * `observability/settings.ts` (VC-119) is the same shape for the same reason,
+ * `@volli/host-core`'s `observability/settings.ts` (VC-119) is the same shape for the same reason,
  * and this follows it rather than inventing a preference event stream with one
  * reader.
  *
@@ -41,7 +41,7 @@
  * The failure latch is PROCESS-LOCAL on purpose. It describes this launch's
  * delivery, not a preference, and a stored one would outlive the state that
  * caused it — a person who fixed their System Settings would be told forever
- * about a refusal from last week. And it is CURRENT on purpose (round 5): a
+ * about a refusal from last week. And it is CURRENT on purpose: a
  * later alert the OS reports as shown retires it, because the fault it
  * described is demonstrably not the state of things any more, and a Settings
  * page still showing it would be asking the person to fix what already works.

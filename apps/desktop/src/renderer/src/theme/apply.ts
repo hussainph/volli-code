@@ -8,9 +8,8 @@
  *  - **The resolved token set is never persisted.** This module takes an
  *    authored {@link Canvas} in and writes CSS out; nothing it produces is
  *    storable, because everything it produces is recomputed from
- *    `{canvas, appearance}` at render time. (VS Code's most-complained-about
- *    theming bug is auto-switching writing the *resolved* theme back over the
- *    user's authored intent.)
+ *    `{canvas, appearance}` at render time. Auto-switching must not write the
+ *    *resolved* theme back over the user's authored intent.
  *  - **Resolution is per surface, never per token.** A workspace overrides the
  *    canvas, the appearance, or the terminal as whole units, so "what is
  *    overridden here" is always answerable — and {@link ResolvedThemeSurface}

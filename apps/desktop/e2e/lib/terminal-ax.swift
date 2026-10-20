@@ -1,6 +1,6 @@
 // Native, PID-bound AX evidence for VC-344. Never queries another app or
 // toggles VoiceOver. System Events may re-resolve Electron windows by name,
-// which is ambiguous when the owner has another Electron process open.
+// which is ambiguous when another Electron process is open.
 import ApplicationServices
 import Foundation
 

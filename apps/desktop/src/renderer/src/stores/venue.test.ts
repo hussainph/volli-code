@@ -2,6 +2,7 @@ import type { VenueSnapshot } from "@volli/shared";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { createVenueStore, useVenueStore, venueKey } from "./venue";
+import { remoteProject } from "./remote-project.test-support";
 
 function snapshot(over: Partial<VenueSnapshot> = {}): VenueSnapshot {
   return {
@@ -382,5 +383,24 @@ describe("refreshStale", () => {
 describe("the app-wide singleton", () => {
   it("starts empty", () => {
     expect(useVenueStore.getState().byScope).toEqual({});
+  });
+});
+
+// VC-711: a remote project's checkout is on its host; this Mac measures none.
+describe("a remote project", () => {
+  it("says where its venue is not available, asking this Mac nothing", async () => {
+    const read = stubSnapshot(measured());
+    const undo = remoteProject("r1");
+    try {
+      const store = createVenueStore();
+      await store.getState().refresh("r1", "t1");
+      expect(store.getState().byScope[venueKey("r1", "t1")]).toEqual({
+        status: "error",
+        error: "Not available on box yet",
+      });
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      undo();
+    }
   });
 });

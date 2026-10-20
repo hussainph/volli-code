@@ -21,7 +21,7 @@
  * Pure by design — no `node:os`, no `process.env` — so the rules are unit
  * testable against a stated environment. Who counts the Sessions and who reads
  * the core count lives with the caller
- * (`apps/desktop/src/main/session-concurrency.ts`).
+ * (`packages/host-core/src/session-concurrency.ts`).
  */
 
 /**
@@ -67,7 +67,7 @@ function clampToPositiveInteger(value: number): number {
 /**
  * A project's own worker cap, LOWERED by an ambient budget and never raised by
  * one — the rule this repository's `vitest.workers.ts` resolves its
- * `maxWorkers` through, and the correction VC-339's review demanded.
+ * `maxWorkers` through (VC-339).
  *
  * A budget is a ceiling on what one Session may take, not a licence to take it.
  * Written naively the two collide and the wrong one wins: vitest re-reads
