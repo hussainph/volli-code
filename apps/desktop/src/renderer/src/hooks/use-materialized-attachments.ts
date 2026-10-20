@@ -14,6 +14,7 @@
  */
 import * as React from "react";
 import type { NamedBlobLink } from "@volli/shared";
+import { remoteHostOfTicketNow } from "@renderer/stores/remote-project";
 
 export interface MaterializedAttachmentsOwner {
   ticketId?: string | undefined;
@@ -58,6 +59,11 @@ export function useMaterializedAttachments(
     // Nothing is painted and nothing is read; the effect re-runs when the
     // real revision lands.
     if (revision === null) return;
+    // A remote project's ticket has nothing materialized on this Mac (VC-711).
+    if (remoteHostOfTicketNow(ticketId) !== null) {
+      setLinks(NONE);
+      return;
+    }
     let cancelled = false;
     void window.api.attachments
       .materialized({ ticketId, sessionId })

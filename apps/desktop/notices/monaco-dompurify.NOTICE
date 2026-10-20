@@ -1,0 +1,17 @@
+Monaco Editor 0.57.0 embeds DOMPurify 3.4.15 in
+esm/vs/base/browser/dompurify/dompurify.js, imported by domSanitize.js.
+This source is part of Volli Code's bundled Monaco renderer. It is separate
+from Monaco's npm DOMPurify dependency, which resolves to 3.4.16.
+
+The embedded source carries this notice:
+
+/*! @license DOMPurify 3.4.15 | (c) Cure53 and other contributors | Released under the Apache license 2.0 and Mozilla Public License 2.0 | github.com/cure53/DOMPurify/blob/3.4.15/LICENSE */
+
+Volli elects Apache-2.0 for this dual-licensed source, as for the npm
+DOMPurify dependency. The full Apache-2.0 and MPL-2.0 license texts are
+reproduced in the DOMPurify license group of THIRD-PARTY-NOTICES; those
+texts are identical in DOMPurify 3.4.15 and 3.4.16.
+
+Upstream: https://github.com/cure53/DOMPurify/tree/3.4.15
+Security follow-up: VC-600. The npm version override does not patch this
+embedded source. Refresh this notice when Monaco's embedded source changes.

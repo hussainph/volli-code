@@ -1,0 +1,66 @@
+import { writeFileSync } from 'node:fs';
+import { once } from 'node:events';
+import { it, expect } from 'vite-plus/test';
+import { sealTestHandlers } from '../../host-core/src/testing';
+import { WebSocket } from 'ws';
+import { startHostdProtocolListener } from '../../../apps/hostd/src/host-protocol';
+
+it('records committed pre-VC-722 hostd host-scope refusal', async () => {
+  const hello = { scope: 'host', protocol: { min: 1, max: 1 }, client: { kind: 'desktop', version: '1' }, features: ['host.workspaces'], credential: 'fixture-not-a-secret', nonce: 'AAAAAAAAAAAAAAAAAAAAAA' };
+  const sent = [
+    { method: 'connectionParams', data: { 'volli-hello': JSON.stringify(hello) } },
+    { id: 1, method: 'query', params: { path: 'protocol.welcome' } },
+  ];
+  let verified = false;
+  const listener = await startHostdProtocolListener({
+    db: {} as never, hostId: '0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f', version: 'pre-vc722-fixture', bind: { host: '127.0.0.1', port: 5381 },
+    verifier: { verify: async () => { verified = true; return null; } }, handlers: sealTestHandlers({}),
+    sessionEngine: {} as never, logger: { debug() {}, info() {}, warn() {}, error() {} },
+  });
+  try {
+    const socket = new WebSocket(listener.url + '?connectionParams=1');
+    const received: unknown[] = [];
+    socket.on('message', data => received.push(JSON.parse(data.toString())));
+    const closed = once(socket, 'close');
+    await once(socket, 'open');
+    for (const frame of sent) socket.send(JSON.stringify(frame));
+    const [code, reason] = await closed;
+    expect(verified).toBe(false);
+    const recording = { sourceRevision: '2323b19dac96eea3a9d77e512c1fadbccdc8f34c', api: 'apps/hostd/src/host-protocol.ts:startHostdProtocolListener', sent, received, close: { code, reason: reason.toString() } };
+    writeFileSync('../../../pre-vc722-host-refusal.raw.json', JSON.stringify(recording, null, 2) + '\n');
+    console.log(JSON.stringify(recording));
+  } finally { await listener.close(); }
+});
+
+import { createHostLink } from './client-link';
+it('records the actual old Workspace client handshake and feature grants', async () => {
+  const workspaceId = '2f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f';
+  const deviceId = '1f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f';
+  const db = { prepare(sql: string) { return { get() { return sql.includes('MAX(epoch)') ? { epoch: 0 } : new Proxy({ id: workspaceId }, { get(target, key) { return key === 'id' ? target.id : null; } }); } }; } };
+  const listener = await startHostdProtocolListener({
+    db: db as never, hostId: '0f6a3a8e-2b1c-4d5e-8f90-1a2b3c4d5e6f', version: 'pre-vc722-fixture', bind: { host: '127.0.0.1', port: 5382 },
+    verifier: { verify: async () => ({ actor: { kind: 'device', deviceId, workspaceId }, current: () => true }) }, handlers: sealTestHandlers({}),
+    sessionEngine: {} as never, logger: { debug() {}, info() {}, warn() {}, error() {} }, offerLogs: true,
+  });
+  const sent: unknown[] = [], received: unknown[] = [];
+  class RecordedSocket extends WebSocket {
+    constructor(url: string) {
+      super(url);
+      this.on('message', data => received.push(JSON.parse(data.toString())));
+      const send = this.send.bind(this);
+      this.send = ((data: unknown) => { sent.push(JSON.parse(String(data))); send(data as string); }) as typeof this.send;
+    }
+  }
+  const features = ['sessions', 'board.read', 'sign-ins', 'host.logs', 'future.feature'];
+  const link = createHostLink({ url: listener.url, workspaceId, client: { kind: 'desktop', version: '1' }, credential: async () => 'fixture-not-a-secret', features, WebSocket: RecordedSocket as never });
+  try {
+    await new Promise<void>((resolve, reject) => link.subscribeState(state => {
+      if (state.status === 'ready') resolve();
+      else if (state.status === 'refused' || state.status === 'unreachable') reject(new Error(JSON.stringify(state)));
+    }));
+    expect(link.getState().status).toBe('ready');
+    const recording = { sourceRevision: '2323b19dac96eea3a9d77e512c1fadbccdc8f34c', api: 'startHostdProtocolListener + createHostLink', requestedFeatures: features, sent, received };
+    writeFileSync('../../../pre-vc722-workspace.raw.json', JSON.stringify(recording, null, 2) + '\n');
+    console.log(JSON.stringify(recording));
+  } finally { link.close(); await listener.close(); }
+});

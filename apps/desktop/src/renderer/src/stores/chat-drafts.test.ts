@@ -313,6 +313,38 @@ describe("provisional chat", () => {
     expect(store.getState().drafts["draft-1"]?.provisional?.model).toEqual(model);
   });
 
+  it("marks a model frozen from the default, and a person's pick replaces the mark (VC-432)", () => {
+    const store = createChatDraftsStore(createMemoryStorage());
+    const model = { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" } as const;
+    store.getState().openProvisional("draft-1", PROVISIONAL);
+
+    store.getState().setProvisionalModel("draft-1", model, { fromDefault: true });
+    expect(store.getState().drafts["draft-1"]?.provisional?.modelIsDefault).toBe(true);
+
+    store.getState().setProvisionalModel("draft-1", { ...model, modelId: "opus" });
+    expect(store.getState().drafts["draft-1"]?.provisional).toMatchObject({
+      model: { ...model, modelId: "opus" },
+    });
+    expect(store.getState().drafts["draft-1"]?.provisional).not.toHaveProperty("modelIsDefault");
+  });
+
+  it("keeps the default-frozen mark across a relaunch", async () => {
+    const storage = createMemoryStorage();
+    const first = createChatDraftsStore(storage);
+    first.getState().openProvisional("draft-1", PROVISIONAL);
+    first.getState().setDraft("draft-1", "half typed");
+    first
+      .getState()
+      .setProvisionalModel(
+        "draft-1",
+        { providerId: "acme", modelId: "sonnet", reasoningLevel: "high" },
+        { fromDefault: true },
+      );
+    const reloaded = createChatDraftsStore(storage);
+    await reloaded.persist.rehydrate();
+    expect(reloaded.getState().drafts["draft-1"]?.provisional?.modelIsDefault).toBe(true);
+  });
+
   it("amends only the named held message while a captured import finishes", () => {
     const store = createChatDraftsStore(createMemoryStorage());
     store.getState().holdMessage("draft-1", { id: "m1", text: "first" });
@@ -522,108 +554,6 @@ describe("holdMessage", () => {
     expect(store.getState().drafts.s2).toEqual(
       expect.objectContaining({ text: "typing" }) as unknown as ChatDraft,
     );
-  });
-});
-
-describe("beginQueuedSteer", () => {
-  it("persists the visible strip in order without clearing what is being typed", () => {
-    const store = createChatDraftsStore(createMemoryStorage());
-    store.getState().setDraft("s1", "new thought");
-
-    store.getState().beginQueuedSteer(
-      "s1",
-      [
-        { id: "q1", text: "first" },
-        { id: "q2", text: "second" },
-        { id: "q3", text: "third" },
-      ],
-      "q2",
-    );
-
-    expect(store.getState().drafts.s1).toEqual(
-      expect.objectContaining({
-        text: "new thought",
-        held: [
-          { id: "q1", text: "first", state: "queued" },
-          { id: "q2", text: "second", state: "sending" },
-          { id: "q3", text: "third", state: "queued" },
-        ],
-      }),
-    );
-  });
-
-  it("keeps existing source states while updating text and never duplicates ids", () => {
-    const store = createChatDraftsStore(createMemoryStorage());
-    store.getState().holdMessage("s1", { id: "q1", text: "old copy" });
-    store.getState().holdMessage("s1", { id: "hidden", text: "already sending" });
-    store.getState().markHeld("s1", "q1", "unsent");
-    store.getState().setDraft("s1", "new thought");
-
-    store.getState().beginQueuedSteer(
-      "s1",
-      [
-        { id: "q1", text: "latest copy" },
-        { id: "q2", text: "neighbor" },
-      ],
-      "q2",
-    );
-
-    expect(store.getState().drafts.s1).toEqual(
-      expect.objectContaining({
-        text: "new thought",
-        held: [
-          { id: "q1", text: "latest copy", state: "unsent" },
-          { id: "hidden", text: "already sending", state: "sending" },
-          { id: "q2", text: "neighbor", state: "sending" },
-        ],
-      }),
-    );
-  });
-
-  it("marks an existing held target sending without restating its neighbors", () => {
-    const store = createChatDraftsStore(createMemoryStorage());
-    store.getState().holdMessage("s1", { id: "q1", text: "old target" });
-    store.getState().holdMessage("s1", { id: "q2", text: "old neighbor" });
-    store.getState().markHeld("s1", "q1", "unsent");
-    store.getState().markHeld("s1", "q2", "queued");
-
-    store.getState().beginQueuedSteer(
-      "s1",
-      [
-        { id: "q1", text: "latest target" },
-        { id: "q2", text: "latest neighbor" },
-      ],
-      "q1",
-    );
-
-    expect(store.getState().drafts.s1?.held).toEqual([
-      { id: "q1", text: "latest target", state: "sending" },
-      { id: "q2", text: "latest neighbor", state: "queued" },
-    ]);
-  });
-
-  // The displayed row is what this action persists back, so its files must
-  // survive the round trip exactly as its words do (VC-137) — otherwise the
-  // steer that follows would deliver a message that lost its screenshot.
-  it("carries the displayed rows' attachments onto the persisted held copies", () => {
-    const store = createChatDraftsStore(createMemoryStorage());
-    store.getState().holdMessage("s1", { id: "q1", text: "old copy" });
-    store.getState().markHeld("s1", "q1", "unsent");
-    const attachments = [blobView()];
-
-    store.getState().beginQueuedSteer(
-      "s1",
-      [
-        { id: "q1", text: "latest copy" },
-        { id: "q2", text: "neighbor", attachments },
-      ],
-      "q2",
-    );
-
-    expect(store.getState().drafts.s1?.held).toEqual([
-      { id: "q1", text: "latest copy", state: "unsent" },
-      { id: "q2", text: "neighbor", attachments, state: "sending" },
-    ]);
   });
 });
 
@@ -1187,4 +1117,26 @@ describe("persistence", () => {
       s2: { text: "typing", attachments: [], held: [], touchedAt: 1000 },
     });
   });
+});
+
+it("VC-758 hydrates acceptance hints conservatively without losing identity, resources or files", async () => {
+  const storage = createMemoryStorage();
+  const store = createChatDraftsStore(storage);
+  const resources = [{ name: "review", text: "Review notes" }];
+  const attachments = [blobView()];
+  store.getState().holdMessage("s1", {
+    id: "message",
+    text: "keep me",
+    resources,
+    attachments,
+    delivery: "steer",
+  });
+  store
+    .getState()
+    .amendHeldMessage("s1", "message", (message) => ({ ...message, deliveryAccepted: true }));
+  const reloaded = createChatDraftsStore(storage);
+  await reloaded.persist.rehydrate();
+  expect(reloaded.getState().drafts.s1?.held).toEqual([
+    { id: "message", text: "keep me", resources, attachments, state: "unsent" },
+  ]);
 });

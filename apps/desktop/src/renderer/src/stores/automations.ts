@@ -26,17 +26,20 @@ import {
   isValidAutomationRuntime,
   offeredAutomationsForColumn,
   offeredAutomationsInDigitOrder,
+  offeredAutomationsInPinnedOrder,
   type Automation,
   type AutomationRun,
   type AutomationSkippedOccurrence,
   type ColumnArming,
   type ColumnAutomationOrder,
+  type OfferedAutomationsInput,
   type TicketStatus,
 } from "@volli/shared";
 
 import type { AutomationCreateInput, AutomationUpdateInput } from "../../../ipc/contract";
 import { duplicateName } from "@renderer/components/automations/automations-page-model";
 import { toastError } from "@renderer/lib/toast";
+import { notAvailableOn, refuseRemote, remoteHostNow } from "@renderer/stores/remote-project";
 
 type AutomationDraftInput = Omit<AutomationCreateInput, "commandId"> & {
   /** Kept by a caller across a transport retry; generated here when omitted. */
@@ -89,14 +92,23 @@ interface AutomationsState {
    */
   skipsByProject: Record<string, readonly AutomationSkippedOccurrence[]>;
   /**
-   * ticketId → the Runs on that Ticket, newest first (VC-129's rail).
+   * {@link automationHistoryKey} → ONE Automation's Runs in ONE project,
+   * newest first (VC-297) — what the editor's history draws.
    *
    * Its own slice rather than a filter over {@link AutomationsState.runsByProject}:
-   * the rail opens on one Ticket and reads one Ticket, and deriving it from a
-   * project-wide history would make a Ticket's rail depend on a page nobody
-   * visited. Main answers each question with its own indexed read.
+   * the editor opens on one record and reads one record, and main answers each
+   * question with its own indexed read. Deriving it by filtering
+   * {@link AutomationsState.runsByProject} would make one Automation's history
+   * depend on having fetched every Run in the project — which is the read a
+   * client that is not this process should not have to make.
+   *
+   * Keyed by the PAIR, never by the Automation alone: a global Automation is
+   * listable in every project, and the Runs it made in one are not the Runs it
+   * made in another.
    */
-  runsByTicket: Record<string, readonly AutomationRun[]>;
+  runsByAutomation: Record<string, readonly AutomationRun[]>;
+  /** The same key → that Automation's Skipped occurrences, newest due first. */
+  skipsByAutomation: Record<string, readonly AutomationSkippedOccurrence[]>;
   /**
    * Which Automations are switched on ON THIS MACHINE. Not keyed by project:
    * a global Automation is one record with one switch, and the set is a
@@ -157,8 +169,12 @@ interface AutomationsState {
   refreshRuns(projectId: string): Promise<void>;
   /** Re-fetches one project's Skipped occurrences, newest due first. Toasts on failure. */
   refreshSkips(projectId: string): Promise<void>;
-  /** Re-fetches one Ticket's Runs, newest first. Toasts on failure. */
-  refreshTicketRuns(ticketId: string): Promise<void>;
+  /**
+   * Re-fetches ONE Automation's Runs and Skipped occurrences in one project
+   * (VC-297). Both doors at once, because the editor draws one interleaved
+   * list and two sequential round trips would show it half-built.
+   */
+  refreshAutomationHistory(projectId: string, automationId: string): Promise<void>;
   /** Re-reads the machine-local enabled set. Resolves whether it landed. */
   refreshEnablement(): Promise<boolean>;
   /** Re-fetches one project's armed columns. Resolves whether the read landed. */
@@ -243,7 +259,8 @@ export function createAutomationsStore() {
     orderByProject: {},
     runsByProject: {},
     skipsByProject: {},
-    runsByTicket: {},
+    runsByAutomation: {},
+    skipsByAutomation: {},
     enabledIds: [],
     enablementRead: false,
     railReadAt: {},
@@ -281,6 +298,12 @@ export function createAutomationsStore() {
     },
 
     async refresh(projectId) {
+      // A remote project's Automations are its host's, not this Mac's (VC-711):
+      // none listed here, and nothing asked of this Mac's database.
+      if (remoteHostNow(projectId) !== null) {
+        set((state) => ({ byProject: { ...state.byProject, [projectId]: [] } }));
+        return true;
+      }
       try {
         const result = await window.api.automations.list({ projectId });
         if (!result.ok) {
@@ -296,6 +319,10 @@ export function createAutomationsStore() {
     },
 
     async refreshArming(projectId) {
+      if (remoteHostNow(projectId) !== null) {
+        set((state) => ({ armingByProject: { ...state.armingByProject, [projectId]: [] } }));
+        return true;
+      }
       try {
         const result = await window.api.automations.armings({ projectId });
         if (!result.ok) {
@@ -313,6 +340,10 @@ export function createAutomationsStore() {
     },
 
     async refreshOrder(projectId) {
+      if (remoteHostNow(projectId) !== null) {
+        set((state) => ({ orderByProject: { ...state.orderByProject, [projectId]: [] } }));
+        return true;
+      }
       try {
         const result = await window.api.automations.columnOrders({ projectId });
         if (!result.ok) {
@@ -330,6 +361,8 @@ export function createAutomationsStore() {
     },
 
     async setColumnOrder(input) {
+      const host = remoteHostNow(input.projectId);
+      if (host !== null) return notAvailableOn(host);
       try {
         const result = await window.api.automations.setColumnOrder({
           // Durable intent, like every other write here: the projection this
@@ -352,6 +385,8 @@ export function createAutomationsStore() {
     },
 
     async arm(input) {
+      const host = remoteHostNow(input.projectId);
+      if (host !== null) return notAvailableOn(host);
       try {
         const result = await window.api.automations.arm({
           // Durable intent, like every other write here: the projection this
@@ -372,6 +407,7 @@ export function createAutomationsStore() {
     },
 
     async refreshRuns(projectId) {
+      if (remoteHostNow(projectId) !== null) return;
       try {
         const result = await window.api.automations.runsForProject({ projectId });
         if (!result.ok) {
@@ -384,7 +420,35 @@ export function createAutomationsStore() {
       }
     },
 
+    async refreshAutomationHistory(projectId, automationId) {
+      const key = automationHistoryKey(projectId, automationId);
+      if (remoteHostNow(projectId) !== null) return;
+      try {
+        const [runs, skips] = await Promise.all([
+          window.api.automations.runsForAutomation({ projectId, automationId }),
+          window.api.automations.skipsForAutomation({ projectId, automationId }),
+        ]);
+        if (!runs.ok) {
+          toastError(`Couldn't load run history: ${runs.error}`);
+          return;
+        }
+        if (!skips.ok) {
+          toastError(`Couldn't load skipped occurrences: ${skips.error}`);
+          return;
+        }
+        // One write for both halves: the editor interleaves them by time, and a
+        // render between two writes would draw a list that was never true.
+        set((state) => ({
+          runsByAutomation: { ...state.runsByAutomation, [key]: runs.runs },
+          skipsByAutomation: { ...state.skipsByAutomation, [key]: skips.skips },
+        }));
+      } catch (error) {
+        toastError(`Couldn't load run history: ${errorMessage(error)}`);
+      }
+    },
+
     async refreshSkips(projectId) {
+      if (remoteHostNow(projectId) !== null) return;
       try {
         const result = await window.api.automations.skipsForProject({ projectId });
         if (!result.ok) {
@@ -396,19 +460,6 @@ export function createAutomationsStore() {
         }));
       } catch (error) {
         toastError(`Couldn't load skipped occurrences: ${errorMessage(error)}`);
-      }
-    },
-
-    async refreshTicketRuns(ticketId) {
-      try {
-        const result = await window.api.automations.runsForTicket({ ticketId });
-        if (!result.ok) {
-          toastError(`Couldn't load this ticket's runs: ${result.error}`);
-          return;
-        }
-        set((state) => ({ runsByTicket: { ...state.runsByTicket, [ticketId]: result.runs } }));
-      } catch (error) {
-        toastError(`Couldn't load this ticket's runs: ${errorMessage(error)}`);
       }
     },
 
@@ -466,6 +517,8 @@ export function createAutomationsStore() {
     },
 
     async save(input) {
+      const host = remoteHostNow(input.projectId ?? get().editor?.projectId);
+      if (host !== null) return notAvailableOn(host);
       try {
         const { commandId, ...draft } = input;
         const result = await window.api.automations.create({
@@ -513,6 +566,7 @@ export function createAutomationsStore() {
     },
 
     async duplicate(projectId, automation) {
+      if (refuseRemote(projectId)) return;
       const listed = get().byProject[projectId] ?? [];
       try {
         const result = await window.api.automations.create({
@@ -557,6 +611,7 @@ export function createAutomationsStore() {
     },
 
     async remove(projectId, automation) {
+      if (refuseRemote(projectId)) return;
       try {
         const result = await window.api.automations.delete({
           commandId: crypto.randomUUID(),
@@ -600,13 +655,36 @@ const NO_ARMINGS: readonly ColumnArming[] = [];
 const NO_ORDERS: readonly ColumnAutomationOrder[] = [];
 const NO_RANK: readonly string[] = [];
 const NO_RUNS: readonly AutomationRun[] = [];
+const NO_SKIPS: readonly AutomationSkippedOccurrence[] = [];
 
-/** One Ticket's Runs, newest first — a frozen empty array before its first read. */
-export function selectTicketRuns(
+/**
+ * The cache key for one Automation's history IN one project (VC-297).
+ *
+ * Both ids, because a global Automation is one record listable everywhere
+ * while each Run it produced happened in ONE project. Keying by the Automation
+ * alone would let a project show a neighbour project's Runs — the same fault
+ * VC-297 fixed one scope up.
+ */
+export function automationHistoryKey(projectId: string, automationId: string): string {
+  return `${projectId}:${automationId}`;
+}
+
+/** One Automation's Runs in one project — frozen empty before its first read. */
+export function selectAutomationRuns(
   state: AutomationsState,
-  ticketId: string,
+  projectId: string,
+  automationId: string,
 ): readonly AutomationRun[] {
-  return state.runsByTicket[ticketId] ?? NO_RUNS;
+  return state.runsByAutomation[automationHistoryKey(projectId, automationId)] ?? NO_RUNS;
+}
+
+/** That Automation's Skipped occurrences — frozen empty before its first read. */
+export function selectAutomationSkips(
+  state: AutomationsState,
+  projectId: string,
+  automationId: string,
+): readonly AutomationSkippedOccurrence[] {
+  return state.skipsByAutomation[automationHistoryKey(projectId, automationId)] ?? NO_SKIPS;
 }
 
 /** One project's listable Automations — a frozen empty array before its first read. */
@@ -774,12 +852,28 @@ export function offeredInDigitOrder(
   slices: OfferedListSlices,
   status: TicketStatus,
 ): readonly Automation[] {
-  return offeredAutomationsInDigitOrder({
+  return offeredAutomationsInDigitOrder(offeredInput(slices, status));
+}
+
+/**
+ * The same pinned list UNCAPPED: what the lane draws, so a row ranked past the
+ * ninth stays on screen (without a digit) and can be dragged back up. Its first
+ * nine rows are {@link offeredInDigitOrder}, by construction.
+ */
+export function offeredInPinnedOrder(
+  slices: OfferedListSlices,
+  status: TicketStatus,
+): readonly Automation[] {
+  return offeredAutomationsInPinnedOrder(offeredInput(slices, status));
+}
+
+function offeredInput(slices: OfferedListSlices, status: TicketStatus): OfferedAutomationsInput {
+  return {
     automations: slices.automations,
     status,
     rankedAutomationIds: rankFor(slices.orders, status),
     effectiveArmedAutomationId: effectiveArmedIn(slices, status)?.id ?? null,
-  });
+  };
 }
 
 /**

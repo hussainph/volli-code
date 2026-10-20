@@ -3,9 +3,11 @@ import * as React from "react";
 import { ArmedRunWindows } from "@renderer/components/automations/armed-run-window";
 import { hasVisibleNativePlane } from "@renderer/components/browser/browser-plane-freeze";
 import { ChromeBar } from "@renderer/components/chrome-bar";
+import { HostIsland } from "@renderer/components/hosts/host-island";
 import { HarnessTrustDialog } from "@renderer/components/harness/harness-trust-dialog";
 import { NewTicketDialog } from "@renderer/components/board/new-ticket-dialog";
 import { MainContent } from "@renderer/components/pages/main-content";
+import { FolderClaimDialog } from "@renderer/components/rail/folder-claim-dialog";
 import { ProjectRail } from "@renderer/components/rail/project-rail";
 import { SessionDetailDialog } from "@renderer/components/sessions/session-detail-dialog";
 import {
@@ -29,6 +31,7 @@ import {
 import { Sidebar, SidebarInset, SidebarProvider } from "@renderer/components/ui/sidebar";
 import { Toaster } from "@renderer/components/ui/sonner";
 import { UpdateInstallDialog } from "@renderer/components/update/update-install-dialog";
+import { useBrowserAppShortcuts } from "@renderer/hooks/use-browser-app-shortcuts";
 import { useFullScreen } from "@renderer/hooks/use-fullscreen";
 import { useNavHistory } from "@renderer/hooks/use-nav-history";
 import { useNewTicketShortcut } from "@renderer/hooks/use-new-ticket-shortcut";
@@ -343,6 +346,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
   useNavHistory();
   useProjectRootsSync();
   useZoomCommands();
+  useBrowserAppShortcuts();
   useBootNotice();
   useCliLaunchNotice();
   // What this window is showing, reported to main so an alert for a Session or
@@ -707,6 +711,10 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           )}
         >
           {content}
+          {/* The connection Island (VC-576): floats over the card's foot while
+              the project's host has something blocking to say. Nothing with
+              the `cloud` flag off. */}
+          <HostIsland />
         </SidebarInset>
 
         {/* THE WALL. A box that does not move, holding a clip that therefore
@@ -859,7 +867,7 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
             standing the remaining strip is thin enough that the user has to
             aim, and this is what they aim at. With the rail down the target is
             the zone below, which widens by one shell inset to answer the aiming
-            problem itself; the owner's call is that a hint there is not worth
+            problem itself; a hint there is not worth
             the ink. A hint, not a handle. */}
         {!pinned && !terminalFocused && !workspaceRailHidden ? (
           <div
@@ -910,6 +918,12 @@ export function AppShell({ mainContent }: { mainContent?: React.ReactNode } = {}
           what a terminal did must not cost you the tab you were in. */}
       <SessionDetailDialog />
       <HarnessTrustDialog />
+      {/* Window-level for the same reason, and NOT inside the rail (VC-430):
+          both doors into adding a project raise the same "is this one you
+          already have?" question, the claim that holds it lives in the store,
+          and the rail itself goes inert when it is hidden. Renders nothing
+          until there is a question to answer. */}
+      <FolderClaimDialog />
       <UpdateInstallDialog />
     </SidebarProvider>
   );

@@ -119,6 +119,8 @@ export interface SearchHighlight {
   readonly after: string;
 }
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /**
  * Splits a match's preview into the three pieces a row draws.
  *
@@ -128,17 +130,27 @@ export interface SearchHighlight {
  * smart-case matched a different capitalisation.
  *
  * Leading whitespace goes first: a match 20 spaces into an indented line would
- * otherwise draw as an empty row, and the offsets move with the trim.
+ * otherwise draw as an empty row, and the offsets move with the trim. A preview
+ * can be only 100 characters and still be far wider than a 240px rail. Window
+ * the display around the hit regardless of main's 240-character transport cap;
+ * the original column remains untouched for reveal. Slice context at grapheme
+ * boundaries so a composed character at the window edge remains intact.
  */
 export function searchHighlight(match: FileSearchMatch): SearchHighlight {
   const indent = match.preview.length - match.preview.trimStart().length;
   const trimmed = match.preview.slice(indent);
   const start = Math.max(0, match.start - indent);
   const end = Math.max(start, match.end - indent);
+  const before = Array.from(graphemes.segment(trimmed.slice(0, start)), ({ segment }) => segment);
+  const after = Array.from(graphemes.segment(trimmed.slice(end)), ({ segment }) => segment);
+  // The visible hit gets first claim on a narrow row; context is deliberately
+  // short, and the row's flex layout clips it further if the token needs room.
+  const lead = 12;
+  const trail = 60;
   return {
-    before: trimmed.slice(0, start),
+    before: `${before.length > lead ? "…" : ""}${before.slice(-lead).join("")}`,
     hit: trimmed.slice(start, end),
-    after: trimmed.slice(end),
+    after: `${after.slice(0, trail).join("")}${after.length > trail ? "…" : ""}`,
   };
 }
 

@@ -9,7 +9,7 @@ import { cn } from "@renderer/lib/utils";
 import { useUiStore } from "@renderer/stores/ui";
 
 /**
- * The globally reachable Linear-style New-ticket composer: opened by the board
+ * The globally reachable New-ticket composer: opened by the board
  * header's "New ticket" button or the plain "c" hotkey (see
  * hooks/use-new-ticket-shortcut.ts), from anywhere a project is selected — not
  * just the board page. Controlled by the ui store's `newTicketOpen` flag; `open`

@@ -28,7 +28,7 @@ import {
   AGENT_MODEL_TIERS,
   isAutomationRuntimePin,
   isAutomationRuntimeTier,
-  isModelTier,
+  isAgentModelTier,
   isValidAutomationRuntime,
   modelTierRow,
   NO_AUTOMATION_TRIGGER,
@@ -56,6 +56,7 @@ import {
 import { composerModelSelection } from "@renderer/components/chat/chat-plane-model";
 import { ComposerAddMenu } from "@renderer/components/chat/composer-add-menu";
 import { ModelName } from "@renderer/components/models/model-identity";
+import { ResolvedModelName } from "@renderer/components/models/resolved-model-name";
 import { Button } from "@renderer/components/ui/button";
 import { Input } from "@renderer/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
@@ -74,7 +75,12 @@ import { useModelAccessClient } from "@renderer/lib/model-access-client";
 import { cn } from "@renderer/lib/utils";
 import { useAutomationsStore } from "@renderer/stores/automations";
 
-import { INSTRUCTIONS_PLACEHOLDER, MANUAL_TRIGGER_LABEL } from "./automations-page-model";
+import {
+  INSTRUCTIONS_PLACEHOLDER,
+  MANUAL_TRIGGER_LABEL,
+  nextScheduledRun,
+  SCHEDULE_SKIPPED_OCCURRENCE_POLICY,
+} from "./automations-page-model";
 import {
   clearEditorDraft,
   loadEditorDraft,
@@ -189,6 +195,38 @@ function TimeField({
       </PopoverContent>
     </Popover>
   );
+}
+
+/**
+ * "Next: …" at the schedule control (VC-298), for a schedule this machine will
+ * actually fire. Its own component so the clock it keeps re-renders this line
+ * rather than the editor, and its answer is memoized so the editor's renders
+ * do not recompute it. Once the shown occurrence passes it reads the next one,
+ * and it looks again at least once a minute so a slept laptop or a moved clock
+ * corrects itself, like the host timer it mirrors.
+ */
+function NextScheduledRun({
+  schedule,
+  automationId,
+}: {
+  schedule: AutomationSchedule;
+  automationId: string;
+}) {
+  const [now, setNow] = React.useState(() => Date.now());
+  // Memoized on its real inputs: the editor re-renders this line on every
+  // keystroke elsewhere in the form, and none of those change the answer.
+  const next = React.useMemo(
+    () => nextScheduledRun({ schedule, automationId, now, timeZone: hostTimeZone() }),
+    [schedule, automationId, now],
+  );
+  React.useEffect(() => {
+    const timer = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.max(0, Math.min(next.at - Date.now(), 60_000)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [next.at, now]);
+  return <p className="text-ui text-foreground tabular-nums">{next.label}</p>;
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -346,7 +384,9 @@ function RuntimeFields({
           }
           if (next.startsWith(TIER_VALUE_PREFIX)) {
             const tier = next.slice(TIER_VALUE_PREFIX.length);
-            if (isModelTier(tier)) onChange({ kind: "tier", tier });
+            // The same set the options below are built from (VC-431): a Run
+            // starts a Session, and no Session runs on the Utility row.
+            if (isAgentModelTier(tier)) onChange({ kind: "tier", tier });
             return;
           }
           const model = models.find((candidate) => candidate.id === next);
@@ -384,12 +424,7 @@ function RuntimeFields({
               name alone is ambiguous. */}
           {unavailableValue === null || pin === null ? null : (
             <SelectItem value={unavailableValue}>
-              <ModelName
-                model={{ providerId: pin.providerId, modelId: pin.modelId, label: pin.modelId }}
-                models={models}
-                providerLabel={pin.providerId}
-                alwaysProvider
-              />
+              <ResolvedModelName selection={pin} alwaysProvider />
             </SelectItem>
           )}
           {models.map((model) => (
@@ -509,6 +544,11 @@ export function AutomationEditorPanel({
   const update = useAutomationsStore((state) => state.update);
   const commandId = React.useRef(crypto.randomUUID());
   const automationId = automation?.id ?? null;
+  // Switched on HERE, read live: turning automatic triggers off clears the
+  // next-run line in the same render the switch moves (VC-298).
+  const firesHere = useAutomationsStore(
+    (state) => automationId !== null && state.enabledIds.includes(automationId),
+  );
   // Edits and new drafts both survive navigation. A refreshed saved record
   // never replaces unsaved words; its updatedAt key remounts from this cache.
   const [restored] = React.useState<AutomationEditorDraft | null>(() =>
@@ -912,6 +952,12 @@ export function AutomationEditorPanel({
                   onChange={setTimeZone}
                   className="w-full max-w-none"
                 />
+                {firesHere && automationId !== null && scheduleProblem === null ? (
+                  <NextScheduledRun schedule={schedule} automationId={automationId} />
+                ) : null}
+                <p className="text-ui text-muted-foreground">
+                  {SCHEDULE_SKIPPED_OCCURRENCE_POLICY}
+                </p>
               </div>
             ) : null}
             {scheduleProblem === null ? null : (

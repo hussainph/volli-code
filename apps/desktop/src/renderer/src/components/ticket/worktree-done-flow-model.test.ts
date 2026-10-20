@@ -1,9 +1,6 @@
-import type { DiffStat } from "@volli/shared";
-import { changeSetToDiffStat } from "@volli/shared";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  formatChangeSetSummary,
   formatWorktreeState,
   resolveDoneFlow,
   type DoneFlowStage,
@@ -14,15 +11,12 @@ function status(overrides: Partial<WorktreeStatusSnapshot> = {}): WorktreeStatus
   return {
     uncommitted: false,
     sequencerActive: false,
+    unmergedPaths: 0,
     aheadOfBase: null,
     behindBase: null,
     unpushed: null,
     ...overrides,
   };
-}
-
-function diff(overrides: Partial<DiffStat> = {}): DiffStat {
-  return { files: [], insertions: 0, deletions: 0, ...overrides };
 }
 
 const PR = "https://github.com/x/y/pull/1";
@@ -151,6 +145,42 @@ describe("resolveDoneFlow — sequencer rule", () => {
   });
 });
 
+// VC-838: a stash-pop or `merge --squash` conflict leaves unmerged paths with no
+// sequencer marker; the commit stack must still refuse to run over them.
+describe("resolveDoneFlow — unmerged-paths rule", () => {
+  const REASON = "Unresolved conflicts. Resolve them in the terminal.";
+
+  it("disables 'Commit & create draft PR' while the index holds unmerged paths", () => {
+    const { primary } = view(status({ uncommitted: true, unmergedPaths: 1 }), null);
+    expect(primary.kind).toBe("commit-pr");
+    expect(primary.disabled).toBe(true);
+    expect(primary.reason).toBe(REASON);
+  });
+
+  it("disables 'Commit & push updates' while the index holds unmerged paths", () => {
+    const { primary } = view(status({ uncommitted: true, unmergedPaths: 2 }), PR);
+    expect(primary.kind).toBe("commit-push-updates");
+    expect(primary.disabled).toBe(true);
+    expect(primary.reason).toBe(REASON);
+  });
+
+  it("disables the menu Commit verb but leaves Push enabled", () => {
+    const { menu } = view(status({ uncommitted: true, aheadOfBase: 2, unmergedPaths: 1 }), null);
+    expect(menu.commit.disabled).toBe(true);
+    expect(menu.commit.reason).toBe(REASON);
+    expect(menu.push.disabled).toBe(false);
+  });
+
+  it("keeps the sequencer reason when both a sequencer op and unmerged paths are present", () => {
+    const { primary, menu } = view(
+      status({ uncommitted: true, sequencerActive: true, unmergedPaths: 1 }),
+      null,
+    );
+    expect(primary.reason).toBe("Merge in progress. Finish it in the terminal.");
+    expect(menu.commit.reason).toBe("Merge in progress. Finish it in the terminal.");
+  });
+});
+
 describe("resolveDoneFlow — busy stage", () => {
   it("disables the primary and shows 'Committing…' while committing", () => {
     const { primary } = view(status({ uncommitted: true }), null, "committing");
@@ -252,83 +282,5 @@ describe("formatWorktreeState", () => {
       local: "Unknown",
       remote: "Unknown",
     });
-  });
-});
-
-describe("formatChangeSetSummary", () => {
-  it("returns null when there are no changes vs base", () => {
-    expect(formatChangeSetSummary(diff())).toBeNull();
-  });
-
-  it("summarizes file count and line deltas", () => {
-    const summary = formatChangeSetSummary(
-      diff({
-        files: [
-          { path: "a.ts", insertions: 10, deletions: 2, untracked: false },
-          { path: "b.ts", insertions: 1, deletions: 0, untracked: false },
-        ],
-        insertions: 11,
-        deletions: 2,
-      }),
-    );
-    expect(summary).toBe("2 files · +11 −2");
-  });
-
-  it("uses singular 'file' for exactly one file", () => {
-    const summary = formatChangeSetSummary(
-      diff({
-        files: [{ path: "a.ts", insertions: 1, deletions: 0, untracked: false }],
-        insertions: 1,
-        deletions: 0,
-      }),
-    );
-    expect(summary).toBe("1 file · +1 −0");
-  });
-
-  it("calls out binary/untracked files separately since they carry no line counts", () => {
-    const summary = formatChangeSetSummary(
-      diff({
-        files: [
-          { path: "a.ts", insertions: 1, deletions: 0, untracked: false },
-          { path: "image.png", insertions: null, deletions: null, untracked: false },
-          { path: "new.txt", insertions: null, deletions: null, untracked: true },
-        ],
-        insertions: 1,
-        deletions: 0,
-      }),
-    );
-    expect(summary).toBe("3 files · +1 −0 · +2 binary/untracked");
-  });
-
-  it("agrees with a Change Set snapshot projected through changeSetToDiffStat", () => {
-    // Properties and Changes must share one composed model (#108 AC).
-    const summary = formatChangeSetSummary(
-      changeSetToDiffStat({
-        baseRevision: "base",
-        headRevision: "head",
-        revision: "rev",
-        insertions: 11,
-        deletions: 2,
-        files: [
-          {
-            path: "a.ts",
-            status: "modified",
-            insertions: 10,
-            deletions: 2,
-            binary: false,
-          },
-          {
-            path: "b.ts",
-            status: "added",
-            insertions: 1,
-            deletions: 0,
-            binary: false,
-          },
-        ],
-        truncated: false,
-        totalCount: 2,
-      }),
-    );
-    expect(summary).toBe("2 files · +11 −2");
   });
 });

@@ -18,6 +18,8 @@ import {
   UPDATE_IPC,
   AGENT_OBSERVABILITY_CHANNELS,
   AGENT_OBSERVABILITY_IPC,
+  DECISION_MODEL_CHANNELS,
+  DECISION_MODEL_IPC,
   WEB_ACCESS_CHANNELS,
   WEB_ACCESS_IPC,
   BROWSER_CHANNELS,
@@ -66,6 +68,7 @@ describe("BROWSER_IPC descriptor table", () => {
       "volli:browser-toggle-devtools",
       "volli:browser-set-presentation",
       "volli:browser-picture",
+      "volli:browser-traces",
       "volli:browser-take-over",
       "volli:browser-hand-back",
       "volli:browser-ask-to-leave",
@@ -80,6 +83,14 @@ describe("BROWSER_IPC descriptor table", () => {
     expect(guard([{ tabId: "opaque-1", presentation: "visible" }])).toBe(false);
     expect(guard([{ tabId: "opaque-1" }])).toBe(false);
     expect(guard([{ tabId: 1, presentation: "tab" }])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("requires one Session id for a trace read, and nothing looser (VC-453)", () => {
+    const { guard } = BROWSER_IPC["volli:browser-traces"];
+    expect(guard([{ sessionId: "session-1" }])).toBe(true);
+    expect(guard([{ sessionId: 1 }])).toBe(false);
+    expect(guard([{}])).toBe(false);
     expect(guard([])).toBe(false);
   });
 
@@ -512,6 +523,54 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
+  describe("volli:project-relink", () => {
+    const { guard, invalidError } = DATA_IPC["volli:project-relink"];
+
+    it("accepts an id and an absolute replacement folder", () => {
+      expect(guard([{ id: "p1", path: "/Users/me/code/volli" }])).toBe(true);
+    });
+
+    // The handler resolves the path against main's own cwd, so a relative one
+    // would silently re-home the project somewhere nobody named.
+    it("rejects a path that is not absolute", () => {
+      expect(guard([{ id: "p1", path: "code/volli" }])).toBe(false);
+      expect(guard([{ id: "p1", path: "" }])).toBe(false);
+    });
+
+    it("rejects a missing id or path", () => {
+      expect(guard([{ path: "/Users/me/code/volli" }])).toBe(false);
+      expect(guard([{ id: "p1" }])).toBe(false);
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ id: "p1", path: "/a" }, "extra"])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project folder");
+    });
+  });
+
+  describe("volli:project-folder-check", () => {
+    const { guard, invalidError } = DATA_IPC["volli:project-folder-check"];
+
+    it("accepts a project id", () => {
+      expect(guard([{ projectId: "p1" }])).toBe(true);
+    });
+
+    it("rejects anything that is not one", () => {
+      expect(guard([{ projectId: 1 }])).toBe(false);
+      expect(guard([null])).toBe(false);
+      expect(guard([])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid project id");
+    });
+  });
+
   describe("volli:project-remove", () => {
     const { guard, invalidError } = DATA_IPC["volli:project-remove"];
 
@@ -530,34 +589,6 @@ describe("DATA_IPC descriptor table", () => {
 
     it("carries the handler's exact invalid-input message", () => {
       expect(invalidError).toBe("Invalid project id");
-    });
-  });
-
-  describe("volli:project-reorder", () => {
-    const { guard, invalidError } = DATA_IPC["volli:project-reorder"];
-
-    it("accepts a string array", () => {
-      expect(guard([["p1", "p2"]])).toBe(true);
-    });
-
-    it("accepts an empty array", () => {
-      expect(guard([[]])).toBe(true);
-    });
-
-    it("rejects a non-array", () => {
-      expect(guard(["p1"])).toBe(false);
-    });
-
-    it("rejects an array with a non-string entry", () => {
-      expect(guard([["p1", 2]])).toBe(false);
-    });
-
-    it("rejects a wrong arity", () => {
-      expect(guard([])).toBe(false);
-    });
-
-    it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid project order");
     });
   });
 
@@ -1456,26 +1487,68 @@ describe("DATA_IPC descriptor table", () => {
     });
   });
 
-  // VC-269: the person's stop.
-  describe("volli:session-stop", () => {
-    const { guard, invalidError } = DATA_IPC["volli:session-stop"];
+  // VC-30: the read receipt a person marks, and the peek card's one pull.
+  describe("volli:session-read-set", () => {
+    const { guard, invalidError } = DATA_IPC["volli:session-read-set"];
 
-    it("accepts an id alone, and an id with a non-blank reason", () => {
-      expect(guard([{ sessionId: "s1" }])).toBe(true);
-      expect(guard([{ sessionId: "s1", reason: "Runaway" }])).toBe(true);
+    it("accepts a mark in either direction", () => {
+      expect(guard([{ sessionId: "s1", unread: true }])).toBe(true);
+      expect(guard([{ sessionId: "s1", unread: false }])).toBe(true);
     });
 
-    it("rejects a missing or empty id, a blank or non-string reason, and a wrong arity", () => {
-      expect(guard([{ sessionId: "" }])).toBe(false);
-      expect(guard([{ sessionId: 1 }])).toBe(false);
-      expect(guard([{ sessionId: "s1", reason: "   " }])).toBe(false);
-      expect(guard([{ sessionId: "s1", reason: 1 }])).toBe(false);
-      expect(guard([null])).toBe(false);
+    it("rejects a wrong arity", () => {
       expect(guard([])).toBe(false);
+      expect(guard([{ sessionId: "s1", unread: true }, "extra"])).toBe(false);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard([null])).toBe(false);
+    });
+
+    it("rejects a missing or empty sessionId", () => {
+      expect(guard([{ sessionId: 1, unread: true }])).toBe(false);
+      expect(guard([{ sessionId: "", unread: true }])).toBe(false);
+    });
+
+    it("rejects an unread that is not a boolean", () => {
+      expect(guard([{ sessionId: "s1", unread: "yes" }])).toBe(false);
+      expect(guard([{ sessionId: "s1" }])).toBe(false);
     });
 
     it("carries the handler's exact invalid-input message", () => {
-      expect(invalidError).toBe("Invalid session stop");
+      expect(invalidError).toBe("Invalid session read state");
+    });
+  });
+
+  describe("volli:session-peek-content", () => {
+    const { guard, invalidError } = DATA_IPC["volli:session-peek-content"];
+
+    it("accepts local reads and explicit refinement demand", () => {
+      expect(guard([{ sessionId: "s1" }])).toBe(true);
+      expect(guard([{ sessionId: "s1", refine: false }])).toBe(true);
+      expect(guard([{ sessionId: "s1", refine: true }])).toBe(true);
+    });
+
+    it.each([null, "true", 1, {}])("rejects non-boolean refinement demand (%j)", (refine) => {
+      expect(guard([{ sessionId: "s1", refine }])).toBe(false);
+    });
+
+    it("rejects a wrong arity", () => {
+      expect(guard([])).toBe(false);
+      expect(guard([{ sessionId: "s1" }, "extra"])).toBe(false);
+    });
+
+    it("rejects a non-object payload", () => {
+      expect(guard(["s1"])).toBe(false);
+    });
+
+    it("rejects a missing or empty sessionId", () => {
+      expect(guard([{ sessionId: 1 }])).toBe(false);
+      expect(guard([{ sessionId: "" }])).toBe(false);
+    });
+
+    it("carries the handler's exact invalid-input message", () => {
+      expect(invalidError).toBe("Invalid session peek");
     });
   });
 
@@ -1632,7 +1705,7 @@ describe("DATA_IPC descriptor table", () => {
       ).toBe(true);
     });
 
-    // The id a destructive command is REPLAYED under (VC-284 re-review S1).
+    // The id a destructive command is REPLAYED under (VC-284).
     // `"cmd-1"` is an id a second writer could mint too, and cross-writer
     // string equality has to mean "the same logical fact"
     // (docs/BOUNDARIES.md rule 1) — here, the same deletion.
@@ -2024,6 +2097,34 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_IPC["volli:mcp-remove"].guard([{ ...project, serverId: "server-1" }])).toBe(true);
     });
 
+    it("accepts sign-in for a saved server or a draft, with typed secrets as strings only (VC-470)", () => {
+      const secrets = { "header:authorization": "typed" };
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, serverId: "server-1" }])).toBe(
+        true,
+      );
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, server, secrets }])).toBe(true);
+      expect(DATA_IPC["volli:mcp-sign-in"].guard([{ ...project }])).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-sign-in"].guard([{ ...project, server, secrets: { slot: 1 } }]),
+      ).toBe(false);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server, secrets }])).toBe(true);
+      expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server, secrets: "x" }])).toBe(false);
+      expect(
+        DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: [], secrets }]),
+      ).toBe(true);
+      expect(
+        DATA_IPC["volli:mcp-save"].guard([{ ...project, server, enabledTools: [], secrets: [1] }]),
+      ).toBe(false);
+      for (const channel of [
+        "volli:mcp-cancel-sign-in",
+        "volli:mcp-sign-out",
+        "volli:mcp-discard-draft",
+      ] as const) {
+        expect(DATA_IPC[channel].guard([{ ...project, serverId: "server-1" }])).toBe(true);
+        expect(DATA_IPC[channel].guard([{ ...project, serverId: 1 }])).toBe(false);
+      }
+    });
+
     it("rejects malformed operation-specific fields", () => {
       expect(DATA_IPC["volli:mcp-list"].guard([])).toBe(false);
       expect(DATA_IPC["volli:mcp-test"].guard([{ ...project, server: null }])).toBe(false);
@@ -2050,9 +2151,15 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toEqual(Object.keys(DATA_IPC));
     });
 
-    it("covers all 76 data channels", () => {
-      expect(DATA_CHANNELS).toHaveLength(76);
+    it("covers all 81 data channels", () => {
+      expect(DATA_CHANNELS).toHaveLength(81);
       expect(DATA_CHANNELS).toContain("volli:data-bootstrap");
+      // The relink pair (VC-430): looking at a registered folder, and pointing
+      // the project at the one it moved to. Renderer channels with no agent verb
+      // behind them, and none may ever be added — re-homing a project decides
+      // where every Session it starts will run.
+      expect(DATA_CHANNELS).toContain("volli:project-folder-check");
+      expect(DATA_CHANNELS).toContain("volli:project-relink");
       // The steady-state refresh pair (VC-387): one project's board without
       // bodies, and one ticket's body for the ticket that is open.
       expect(DATA_CHANNELS).toContain("volli:data-project-roster");
@@ -2065,6 +2172,11 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:mcp-list");
       expect(DATA_CHANNELS).toContain("volli:mcp-save");
       expect(DATA_CHANNELS).toContain("volli:mcp-remove");
+      // Sign-in is a person's act (VC-470), and lives only on this app door.
+      expect(DATA_CHANNELS).toContain("volli:mcp-sign-in");
+      expect(DATA_CHANNELS).toContain("volli:mcp-cancel-sign-in");
+      expect(DATA_CHANNELS).toContain("volli:mcp-sign-out");
+      expect(DATA_CHANNELS).toContain("volli:mcp-discard-draft");
       expect(DATA_CHANNELS).toContain("volli:database");
       expect(DATA_CHANNELS).toContain("volli:worktree-recreate");
       expect(DATA_CHANNELS).toContain("volli:blob-attach");
@@ -2083,12 +2195,14 @@ describe("DATA_IPC descriptor table", () => {
       expect(DATA_CHANNELS).toContain("volli:worktree-change-unwatch");
       expect(DATA_CHANNELS).toContain("volli:session-starts");
       expect(DATA_CHANNELS).toContain("volli:venue-snapshot");
-      // Build artifacts (VC-340): one read, one destructive action, and the two
-      // settings that govern both.
+      // Build artifacts (VC-340): one read, one destructive action, and the
+      // settings write. The settings read is `worktree.trimSettings` on the
+      // bridge (VC-608), as the rail order is `project.reorder`.
       expect(DATA_CHANNELS).toContain("volli:worktree-trim-scan");
       expect(DATA_CHANNELS).toContain("volli:worktree-trim");
-      expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-get");
+      expect(DATA_CHANNELS).not.toContain("volli:worktree-trim-settings-get");
       expect(DATA_CHANNELS).toContain("volli:worktree-trim-settings-set");
+      expect(DATA_CHANNELS).not.toContain("volli:project-reorder");
     });
   });
 
@@ -2100,18 +2214,16 @@ describe("DATA_IPC descriptor table", () => {
       const { guard, invalidError } = DATA_IPC["volli:worktree-trim"];
       expect(guard([])).toBe(true);
       // There is nothing to vary, so anything at all is a caller that does not
-      // know what this channel is (review r2 removed an unused dry-run input).
+      // know what this channel is; even a dry-run option is invalid.
       expect(guard([{}])).toBe(false);
       expect(guard([{ dryRun: true }])).toBe(false);
       expect(guard(["nope"])).toBe(false);
       expect(invalidError).toBe("Invalid trim request");
     });
 
-    it("takes no argument for either read", () => {
+    it("takes no argument for the scan", () => {
       expect(DATA_IPC["volli:worktree-trim-scan"].guard([])).toBe(true);
       expect(DATA_IPC["volli:worktree-trim-scan"].guard([{}])).toBe(false);
-      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([])).toBe(true);
-      expect(DATA_IPC["volli:worktree-trim-settings-get"].guard([{}])).toBe(false);
     });
 
     it("requires a settings patch to actually patch something", () => {
@@ -2760,13 +2872,23 @@ describe("THEME_IPC descriptor table", () => {
 
     it("refuses an unresolved first-paint appearance, and a background that is not a color", () => {
       const { guard, invalidError } = THEME_IPC["volli:theme-first-paint-set"];
+      const plane = { planeBackground: "#1c1310" };
 
-      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(true);
-      expect(guard([{ appearance: "light", background: "#f4efe9" }])).toBe(true);
+      expect(guard([{ appearance: "dark", background: "#141210", ...plane }])).toBe(true);
+      expect(guard([{ appearance: "light", background: "#f4efe9", ...plane }])).toBe(true);
       // `auto` is the one value main cannot act on at window construction.
-      expect(guard([{ appearance: "auto", background: "#141210" }])).toBe(false);
-      expect(guard([{ appearance: "dark", background: "rebeccapurple" }])).toBe(false);
-      expect(guard([{ appearance: "dark" }])).toBe(false);
+      expect(guard([{ appearance: "auto", background: "#141210", ...plane }])).toBe(false);
+      expect(guard([{ appearance: "dark", background: "rebeccapurple", ...plane }])).toBe(false);
+      expect(guard([{ appearance: "dark", ...plane }])).toBe(false);
+      // The live plane color (VC-302) is the handler's to vet: absent, or a
+      // string that is not a color, still lets the hint through.
+      expect(guard([{ appearance: "dark", background: "#141210" }])).toBe(true);
+      expect(
+        guard([{ appearance: "dark", background: "#141210", planeBackground: "transparent" }]),
+      ).toBe(true);
+      expect(guard([{ appearance: "dark", background: "#141210", planeBackground: 7 }])).toBe(
+        false,
+      );
       expect(guard([])).toBe(false);
       expect(invalidError).toBe("Invalid first-paint hint");
     });
@@ -2998,6 +3120,48 @@ describe("WEB_ACCESS_IPC descriptor table", () => {
         "volli:web-access-clear-key",
       ]);
     });
+  });
+});
+
+describe("DECISION_MODEL_IPC descriptor table (VC-478)", () => {
+  it("takes a project id or null to read", () => {
+    const { guard } = DECISION_MODEL_IPC["volli:decision-model-get"];
+    expect(guard([null])).toBe(true);
+    expect(guard(["project-1"])).toBe(true);
+    expect(guard([])).toBe(false);
+    expect(guard([7])).toBe(false);
+  });
+
+  it("takes a scope and a setting-shaped value or null to write, and leaves policy to the owner", () => {
+    const { guard, invalidError } = DECISION_MODEL_IPC["volli:decision-model-set"];
+    expect(guard([{ scope: "global" }, { kind: "none" }])).toBe(true);
+    expect(guard([{ scope: "project", projectId: "p" }, null])).toBe(true);
+    // A URL off this Mac is the owner's sentence to say, not the guard's.
+    expect(
+      guard([{ scope: "global" }, { kind: "local", baseUrl: "http://10.0.0.1", modelId: "m" }]),
+    ).toBe(true);
+    expect(guard([{ scope: "project" }, null])).toBe(false);
+    expect(guard([{ scope: "everywhere" }, null])).toBe(false);
+    expect(guard([null, null])).toBe(false);
+    expect(guard([{ scope: "global" }, "none"])).toBe(false);
+    expect(guard([{ scope: "global" }, []])).toBe(false);
+    expect(guard([{ scope: "global" }])).toBe(false);
+    expect(invalidError).toBe("Invalid decision model setting");
+  });
+
+  it("tests a setting-shaped value", () => {
+    const { guard } = DECISION_MODEL_IPC["volli:decision-model-test"];
+    expect(guard([{ kind: "local" }])).toBe(true);
+    expect(guard([{}])).toBe(false);
+    expect(guard([])).toBe(false);
+  });
+
+  it("derives the channel list from the table", () => {
+    expect(DECISION_MODEL_CHANNELS).toEqual([
+      "volli:decision-model-get",
+      "volli:decision-model-set",
+      "volli:decision-model-test",
+    ]);
   });
 });
 
@@ -3669,10 +3833,10 @@ describe("AUTOMATION_IPC descriptor table", () => {
   describe("AUTOMATION_CHANNELS derivation", () => {
     it("derives from the descriptor table's keys and covers the whole surface", () => {
       expect(AUTOMATION_CHANNELS).toEqual(Object.keys(AUTOMATION_IPC));
-      // 15 through VC-132, plus VC-226's shared pending-list/exact-Cancel and
-      // VC-228's retained-command Retry doors. Derived above; the count catches
-      // an accidentally omitted guard.
-      expect(AUTOMATION_CHANNELS).toHaveLength(18);
+      // 15 through VC-132, plus VC-226's shared pending-list/exact-Cancel,
+      // VC-228's retained-command Retry doors, and VC-297's two scoped history
+      // reads. Derived above; the count catches an accidentally omitted guard.
+      expect(AUTOMATION_CHANNELS).toHaveLength(20);
     });
   });
 });

@@ -1,6 +1,6 @@
 /**
  * E2e smoke for the Done flow — the Details-rail commit / push+draft-PR
- * affordances (docs/plans/done-flow.md "Testing"). Sibling of worktree-smoke.mjs
+ * affordances. Sibling of worktree-smoke.mjs
  * (same launch/DB/event assertion style) but exercising the LATER half of a
  * ticket's life: a materialized worktree gets dirtied, then squared away and
  * published entirely from the rail.
@@ -223,6 +223,27 @@ async function main() {
       return page.getByRole("tab", { name: displayId, exact: true });
     }
 
+    /**
+     * Open the worktree body under the rail's pinned footer (VC-406).
+     *
+     * The publish split lives in that body, which rests CLOSED — the footer row
+     * carries the branch and one glance, and the body is one press away. Idempotent:
+     * a body already open is left alone, so a check may call this without knowing
+     * what the previous one left behind.
+     */
+    async function unfoldWorktreeBody() {
+      const fold = page.locator("aside").getByTestId("ticket-repository-fold");
+      await waitUntil("worktree fold present", async () => (await fold.count()) === 1, {
+        timeout: 10000,
+      });
+      if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+      await waitUntil(
+        "worktree body unfolded",
+        async () => (await fold.getAttribute("aria-expanded")) === "true",
+        { timeout: 10000 },
+      );
+    }
+
     async function openDetail(displayId) {
       for (let i = 0; i < 4; i += 1) {
         await cardBy(displayId).dblclick();
@@ -428,6 +449,12 @@ async function main() {
 
         // The primary button now resolves to "View PR" (prUrl set) — check via the real UI.
         if ((await docTab(displayId).count()) !== 1) await openDetail(displayId);
+        // VC-406 re-homed the repository card as the rail's pinned FOOTER: the
+        // branch and its one glance stay on screen, and the card's body — the
+        // state strip, the CI row, and this publish split — folds above it,
+        // closed at rest. The primary is one press away rather than absent, so
+        // the check unfolds before looking, exactly as `ticket-rail-shots` does.
+        await unfoldWorktreeBody();
         const viewPrShown = await waitUntil(
           '"View PR" primary button',
           async () =>

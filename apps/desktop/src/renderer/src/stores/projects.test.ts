@@ -1,4 +1,4 @@
-import type { Canvas, Project, Ticket } from "@volli/shared";
+import type { Canvas, Project, ProjectRelinkAftermath, Ticket } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { toast } from "sonner";
 import { flushPendingAppState } from "@renderer/lib/app-state-storage";
@@ -10,10 +10,20 @@ import {
   type ProjectsGateway,
   createProjectsStore,
   decodeProjectsUiState,
+  decodeRemoteSelection,
   encodeProjectsUiState,
   useProjectsStore,
 } from "./projects";
 import { projectScope, ticketScope, useSessionsStore, type SessionLaunch } from "./sessions";
+
+// The default gateway's desktop-only command rides the Session RPC client (VC-608).
+const rpc = vi.hoisted(() => ({ reorder: vi.fn(async () => null) }));
+vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
+  sessionRpcClient: () => ({ project: { reorder: { mutate: rpc.reorder } } }),
+}));
+
+import { useExperimentsStore } from "./experiments";
+import { THIS_MAC_HOST, useHostConnectionStore } from "./host-connection";
 
 import { useThemeStore } from "./theme";
 import { useWorkspaceStore } from "./workspace";
@@ -41,6 +51,8 @@ beforeEach(() => {
       appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
     },
   });
+  useExperimentsStore.setState({ snapshot: null });
+  useHostConnectionStore.setState({ hosts: [], projects: {} });
   useBoardStore.setState({ ticketsByProject: {}, labelsByProject: {} });
   useWorkspaceStore.setState({ byProject: {} });
   useSessionsStore.setState({ byOwner: {}, sessionOwner: {}, lastOutputAt: {}, starting: {} });
@@ -76,6 +88,15 @@ function project(overrides: Partial<Project> & { id: string; path: string }): Pr
   };
 }
 
+/** A relink that left nothing behind — the shape most tests here do not care about. */
+const SETTLED_MOVE: ProjectRelinkAftermath = {
+  liveSessions: 0,
+  worktrees: 0,
+  worktreesRepaired: true,
+  containerMoveNeeded: false,
+  containerMoved: true,
+};
+
 /** A resident chat slice, nothing about its content under test — only that it disappears. */
 function chatSlice(): ChatSessionSlice {
   return {
@@ -106,7 +127,19 @@ function fakeGateway(overrides: Partial<ProjectsGateway> = {}): ProjectsGateway 
   }));
   const reorder = vi.fn<ProjectsGateway["reorder"]>(async () => ({ ok: true }));
   const setSelection = vi.fn<ProjectsGateway["setSelection"]>(async () => ({ ok: true }));
-  return { create, update, remove, reorder, setSelection, ...overrides };
+  const relink = vi.fn<ProjectsGateway["relink"]>(async ({ id, path }) => ({
+    ok: true,
+    project: project({ id, path }),
+    aftermath: SETTLED_MOVE,
+  }));
+  // Every folder is where its project says by default: the add flow only asks
+  // its claim question when one is NOT, so the ordinary add stays ordinary.
+  const checkFolder = vi.fn<ProjectsGateway["checkFolder"]>(async (projectId) => ({
+    ok: true,
+    path: `/Users/me/${projectId}`,
+    state: "present",
+  }));
+  return { create, update, remove, reorder, setSelection, relink, checkFolder, ...overrides };
 }
 
 /**
@@ -461,9 +494,10 @@ describe("removeProject", () => {
     expect(useBoardStore.getState().ticketsByProject[only.id]).toBeUndefined();
   });
 
-  it("kills the removed project's live PTYs and forgets its terminal sessions", async () => {
-    // removeProject must tear PTYs down explicitly (no terminal view is
-    // mounted here — or in headless flows — to do it as an unmount side effect).
+  it("forgets the removed project's terminal sessions, leaving their PTYs to the host", async () => {
+    // The host's `project.remove` ended the PTYs before its detach (VC-796),
+    // for every window; the store only forgets this window's views of them,
+    // with no terminal view mounted to do it as an unmount side effect.
     // Keeps `appState` in the stub too: zustand's `persist` middleware writes
     // through on EVERY action call, even a logical no-op (see the module doc
     // above) — removeProject's cascade always touches useWorkspaceStore.
@@ -481,10 +515,10 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(useSessionsStore.getState().byOwner[only.id]).toBeUndefined();
-    expect(kill).toHaveBeenCalledWith("s1");
+    expect(kill).not.toHaveBeenCalled();
   });
 
-  it("kills the removed project's ticket-scoped sessions too", async () => {
+  it("forgets the removed project's ticket-scoped sessions too", async () => {
     const kill = vi
       .fn<(sessionId: string) => Promise<{ ok: boolean }>>()
       .mockResolvedValue({ ok: true });
@@ -506,7 +540,7 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(useSessionsStore.getState().byOwner["tk1"]).toBeUndefined();
-    expect(kill).toHaveBeenCalledWith("ts1");
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it("disposes the removed project's own ticketless chat clients", async () => {
@@ -1123,6 +1157,328 @@ describe("updateSetupCommand", () => {
   });
 });
 
+describe("relink", () => {
+  it("re-homes the project in place, keeping its id and its position in the rail", async () => {
+    const moved = project({ id: "p1", path: "/Users/me/volli", name: "Volli" });
+    const other = project({ id: "p2", path: "/Users/me/atlas", name: "Atlas" });
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([moved, other], moved.id);
+
+    const settled = await store.getState().relink("p1", "/Users/me/code/volli");
+
+    expect(settled).toEqual({ ok: true, aftermath: SETTLED_MOVE });
+    expect(gateway.relink).toHaveBeenCalledWith({ id: "p1", path: "/Users/me/code/volli" });
+    expect(store.getState().projects.map((row) => [row.id, row.path])).toEqual([
+      ["p1", "/Users/me/code/volli"],
+      ["p2", "/Users/me/atlas"],
+    ]);
+    // The rail's selection is about a project, never about a folder.
+    expect(store.getState().selectedProjectId).toBe("p1");
+  });
+
+  // The whole point of a relink is that it is the SAME project. A refusal must
+  // not leave a half-moved row, and must never add a second one.
+  it("reports a refusal and leaves every row exactly as it was", async () => {
+    const original = project({ id: "p1", path: "/Users/me/volli" });
+    const gateway = fakeGateway({
+      relink: vi.fn<ProjectsGateway["relink"]>(async () => ({
+        ok: false,
+        error: "Atlas already tracks that folder.",
+        refusal: "claimed",
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    // The id travels beside the toast, so a surface can behave differently for
+    // "somebody else has that folder" than for "you already point at it".
+    await expect(store.getState().relink("p1", "/Users/me/atlas")).resolves.toEqual({
+      ok: false,
+      refusal: "claimed",
+    });
+    expect(store.getState().projects).toEqual([original]);
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't relink project: Atlas already tracks that folder.",
+      expect.anything(),
+    );
+  });
+
+  // Not every refusal is one of the folder rules: "Unknown project" carries a
+  // sentence and no id, and a surface must not read the absence as a rule.
+  it("reports no refusal for a failure that names none", async () => {
+    const original = project({ id: "p1", path: "/Users/me/volli" });
+    const gateway = fakeGateway({
+      relink: vi.fn<ProjectsGateway["relink"]>(async () => ({
+        ok: false,
+        error: "Unknown project",
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    await expect(store.getState().relink("p1", "/Users/me/code/volli")).resolves.toEqual({
+      ok: false,
+      refusal: null,
+    });
+  });
+
+  // A rejected IPC carries no refusal at all. Reporting `null` rather than
+  // guessing one is what keeps a surface from acting on a rule nobody applied.
+  it("reports no refusal when the call itself failed", async () => {
+    const original = project({ id: "p1", path: "/Users/me/volli" });
+    const gateway = fakeGateway({
+      relink: vi.fn<ProjectsGateway["relink"]>(async () => {
+        throw new Error("channel closed");
+      }),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    await expect(store.getState().relink("p1", "/Users/me/atlas")).resolves.toEqual({
+      ok: false,
+      refusal: null,
+    });
+    expect(store.getState().projects).toEqual([original]);
+  });
+
+  it("carries the aftermath back so the surface can say what did not follow", async () => {
+    const original = project({ id: "p1", path: "/Users/me/volli" });
+    const gateway = fakeGateway({
+      relink: vi.fn<ProjectsGateway["relink"]>(async ({ id, path }) => ({
+        ok: true,
+        project: project({ id, path }),
+        aftermath: {
+          liveSessions: 2,
+          worktrees: 1,
+          worktreesRepaired: false,
+          containerMoveNeeded: true,
+          containerMoved: false,
+        },
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([original], original.id);
+
+    await expect(store.getState().relink("p1", "/Users/me/code/volli-2")).resolves.toEqual({
+      ok: true,
+      aftermath: {
+        liveSessions: 2,
+        worktrees: 1,
+        worktreesRepaired: false,
+        containerMoveNeeded: true,
+        containerMoved: false,
+      },
+    });
+  });
+
+  it("reads the folder check through the gateway", async () => {
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+
+    await expect(store.getState().checkFolder("p1")).resolves.toEqual({
+      ok: true,
+      path: "/Users/me/p1",
+      state: "present",
+    });
+    expect(gateway.checkFolder).toHaveBeenCalledWith("p1");
+  });
+});
+
+/**
+ * The trap VC-430 opens with, closed at the door a person actually walks
+ * through. A project whose folder was renamed keeps a row pointing at a path
+ * that no longer resolves; adding the folder the work moved to is what mints
+ * the second project, with none of the first one's tickets or history. Nothing
+ * on disk can settle it — the old folder is gone — so the store stops and asks.
+ */
+describe("addProject and the folder-claim question", () => {
+  /** A gateway whose only missing folder belongs to `missingId`. */
+  function gatewayMissing(missingId: string) {
+    return fakeGateway({
+      checkFolder: vi.fn<ProjectsGateway["checkFolder"]>(async (projectId) => ({
+        ok: true,
+        path: `/Users/me/${projectId}`,
+        state: projectId === missingId ? "missing" : "present",
+      })),
+    });
+  }
+
+  it("adds the folder outright when every tracked folder is where it should be", async () => {
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([project({ id: "p1", path: "/Users/me/volli" })], "p1");
+
+    await expect(
+      store.getState().addProject({ path: "/Users/me/atlas", defaultName: "Atlas" }),
+    ).resolves.toBe(true);
+    expect(gateway.create).toHaveBeenCalledWith({ path: "/Users/me/atlas", name: "Atlas" });
+    expect(store.getState().folderClaim).toBeNull();
+  });
+
+  // The headline: nothing is created while the question is open. A duplicate
+  // that a person has to undo is worse than a question they have to answer.
+  it("creates nothing while a project's folder is missing, and asks instead", async () => {
+    const gateway = gatewayMissing("p1");
+    const { store } = freshStore(gateway);
+    const lost = project({ id: "p1", path: "/Users/me/p1", name: "Volli" });
+    store.getState().hydrate([lost], "p1");
+
+    await expect(
+      store.getState().addProject({ path: "/Users/me/code/volli", defaultName: "volli" }),
+    ).resolves.toBe(false);
+
+    expect(gateway.create).not.toHaveBeenCalled();
+    expect(store.getState().folderClaim).toEqual({
+      path: "/Users/me/code/volli",
+      defaultName: "volli",
+      candidates: [lost],
+    });
+  });
+
+  it("relinks the claimed project, and selects it rather than adding anything", async () => {
+    const gateway = gatewayMissing("p1");
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([project({ id: "p1", path: "/Users/me/p1", name: "Volli" })], null);
+    await store.getState().addProject({ path: "/Users/me/code/volli", defaultName: "volli" });
+
+    await expect(store.getState().resolveClaimAsRelink("p1")).resolves.toEqual({
+      ok: true,
+      aftermath: SETTLED_MOVE,
+    });
+
+    expect(gateway.relink).toHaveBeenCalledWith({ id: "p1", path: "/Users/me/code/volli" });
+    expect(gateway.create).not.toHaveBeenCalled();
+    expect(store.getState().projects.map((row) => [row.id, row.path])).toEqual([
+      ["p1", "/Users/me/code/volli"],
+    ]);
+    expect(store.getState().selectedProjectId).toBe("p1");
+    expect(store.getState().folderClaim).toBeNull();
+  });
+
+  it("adds a new project when the answer is that it really is one", async () => {
+    const gateway = gatewayMissing("p1");
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([project({ id: "p1", path: "/Users/me/p1" })], "p1");
+    await store.getState().addProject({ path: "/Users/me/atlas", defaultName: "Atlas" });
+
+    await store.getState().resolveClaimAsNewProject();
+
+    expect(gateway.create).toHaveBeenCalledWith({ path: "/Users/me/atlas", name: "Atlas" });
+    expect(gateway.relink).not.toHaveBeenCalled();
+    expect(store.getState().folderClaim).toBeNull();
+  });
+
+  it("does nothing at all when the question is dismissed", async () => {
+    const gateway = gatewayMissing("p1");
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([project({ id: "p1", path: "/Users/me/p1" })], "p1");
+    await store.getState().addProject({ path: "/Users/me/atlas", defaultName: "Atlas" });
+
+    store.getState().dismissFolderClaim();
+
+    expect(store.getState().folderClaim).toBeNull();
+    expect(gateway.create).not.toHaveBeenCalled();
+    expect(gateway.relink).not.toHaveBeenCalled();
+  });
+
+  // Answering a question that is no longer there must not act on a stale path.
+  it("refuses to resolve a claim that is not open", async () => {
+    const gateway = fakeGateway();
+    const { store } = freshStore(gateway);
+
+    await expect(store.getState().resolveClaimAsRelink("p1")).resolves.toEqual({
+      ok: false,
+      refusal: null,
+    });
+    await store.getState().resolveClaimAsNewProject();
+
+    expect(gateway.relink).not.toHaveBeenCalled();
+    expect(gateway.create).not.toHaveBeenCalled();
+  });
+
+  // A folder this renderer already tracks is main's "you already have this one"
+  // path, not a claim: asking would be a question with an obvious answer.
+  it("asks nothing when the chosen folder is one it already tracks", async () => {
+    const gateway = gatewayMissing("p1");
+    const { store } = freshStore(gateway);
+    store
+      .getState()
+      .hydrate(
+        [
+          project({ id: "p1", path: "/Users/me/p1" }),
+          project({ id: "p2", path: "/Users/me/atlas" }),
+        ],
+        "p1",
+      );
+
+    await expect(
+      store.getState().addProject({ path: "/Users/me/atlas", defaultName: "Atlas" }),
+    ).resolves.toBe(true);
+    expect(store.getState().folderClaim).toBeNull();
+    expect(gateway.create).toHaveBeenCalledWith({ path: "/Users/me/atlas", name: "Atlas" });
+  });
+
+  // A check that could not run is not evidence that a folder moved. Treating it
+  // as missing would put a question in front of a person about a project that
+  // is almost certainly fine.
+  it("treats an unreadable check as present rather than asking about it", async () => {
+    const gateway = fakeGateway({
+      checkFolder: vi.fn<ProjectsGateway["checkFolder"]>(async (projectId) =>
+        projectId === "p1"
+          ? { ok: false, error: "Unknown project" }
+          : { ok: true, path: "/Users/me/p2", state: "present" },
+      ),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([project({ id: "p1", path: "/Users/me/p1" })], "p1");
+
+    await expect(
+      store.getState().addProject({ path: "/Users/me/atlas", defaultName: "Atlas" }),
+    ).resolves.toBe(true);
+    expect(store.getState().folderClaim).toBeNull();
+  });
+
+  it("treats a rejected check as present too", async () => {
+    const gateway = fakeGateway({
+      checkFolder: vi.fn<ProjectsGateway["checkFolder"]>(async () => {
+        throw new Error("channel closed");
+      }),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([project({ id: "p1", path: "/Users/me/p1" })], "p1");
+
+    await expect(
+      store.getState().addProject({ path: "/Users/me/atlas", defaultName: "Atlas" }),
+    ).resolves.toBe(true);
+    expect(store.getState().folderClaim).toBeNull();
+  });
+
+  it("reports the refusal when the claimed relink is refused", async () => {
+    const gateway = fakeGateway({
+      checkFolder: vi.fn<ProjectsGateway["checkFolder"]>(async (projectId) => ({
+        ok: true,
+        path: `/Users/me/${projectId}`,
+        state: projectId === "p1" ? "missing" : "present",
+      })),
+      relink: vi.fn<ProjectsGateway["relink"]>(async () => ({
+        ok: false,
+        error: "Atlas already tracks that folder.",
+        refusal: "claimed",
+      })),
+    });
+    const { store } = freshStore(gateway);
+    store.getState().hydrate([project({ id: "p1", path: "/Users/me/p1" })], "p1");
+    await store.getState().addProject({ path: "/Users/me/atlas", defaultName: "Atlas" });
+
+    await expect(store.getState().resolveClaimAsRelink("p1")).resolves.toEqual({
+      ok: false,
+      refusal: "claimed",
+    });
+    expect(store.getState().folderClaim).toBeNull();
+  });
+});
+
 describe("createProjectsStore() with the default gateway", () => {
   // No fake gateway injected here — these exercise the real
   // `defaultGateway` wrappers (window.api.projects.* and
@@ -1190,11 +1546,59 @@ describe("createProjectsStore() with the default gateway", () => {
     expect(remove).toHaveBeenCalledWith(only.id);
   });
 
-  it("commitReorder calls window.api.projects.reorder", async () => {
-    const reorder = vi.fn(async () => ({ ok: true as const }));
+  it("relink calls window.api.projects.relink", async () => {
+    const relink = vi.fn(async ({ id, path }: { id: string; path: string }) => ({
+      ok: true as const,
+      project: project({ id, path }),
+      aftermath: SETTLED_MOVE,
+    }));
     vi.stubGlobal("window", {
       api: {
-        projects: { create: vi.fn(), remove: vi.fn(), reorder },
+        projects: { create: vi.fn(), remove: vi.fn(), reorder: vi.fn(), relink },
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+      },
+    });
+    const only = project({ id: "only", path: "/a" });
+    const store = createProjectsStore();
+    store.getState().hydrate([only], only.id);
+
+    await expect(store.getState().relink(only.id, "/b")).resolves.toEqual({
+      ok: true,
+      aftermath: SETTLED_MOVE,
+    });
+
+    expect(relink).toHaveBeenCalledWith({ id: only.id, path: "/b" });
+    expect(store.getState().projects.map((row) => row.path)).toEqual(["/b"]);
+  });
+
+  it("checkFolder calls window.api.projects.checkFolder", async () => {
+    const checkFolder = vi.fn(async () => ({
+      ok: true as const,
+      path: "/a",
+      state: "present" as const,
+    }));
+    vi.stubGlobal("window", {
+      api: {
+        projects: { create: vi.fn(), remove: vi.fn(), reorder: vi.fn(), checkFolder },
+        terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
+        appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
+      },
+    });
+    const store = createProjectsStore();
+
+    await expect(store.getState().checkFolder("p1")).resolves.toEqual({
+      ok: true,
+      path: "/a",
+      state: "present",
+    });
+    expect(checkFolder).toHaveBeenCalledWith("p1");
+  });
+
+  it("commitReorder calls project.reorder over the Session RPC client", async () => {
+    vi.stubGlobal("window", {
+      api: {
+        projects: { create: vi.fn(), remove: vi.fn() },
         terminal: { kill: vi.fn().mockResolvedValue({ ok: true }) },
         appState: { set: vi.fn().mockResolvedValue({ ok: true }) },
       },
@@ -1207,7 +1611,7 @@ describe("createProjectsStore() with the default gateway", () => {
 
     await store.getState().commitReorder(previousOrder);
 
-    expect(reorder).toHaveBeenCalledWith([b.id, a.id]);
+    expect(rpc.reorder).toHaveBeenCalledWith({ orderedIds: [b.id, a.id] });
   });
 
   it("select calls window.api.appState.set with the selection payload", async () => {
@@ -1230,5 +1634,284 @@ describe("createProjectsStore() with the default gateway", () => {
       PROJECTS_UI_APP_STATE_KEY,
       JSON.stringify({ selectedProjectId: only.id }),
     );
+  });
+});
+
+/** A store whose remote claims the case sets (VC-711). */
+function withClaims(claims: string[], gateway: ProjectsGateway = fakeGateway()) {
+  const remote = new Set(claims);
+  const onSelectedProjectChange = vi.fn<(projectId: string | null) => void>();
+  const store = createProjectsStore(gateway, onSelectedProjectChange, (id) => remote.has(id));
+  return { store, gateway, remote, onSelectedProjectChange };
+}
+
+describe("remote projects (VC-711)", () => {
+  const LOCAL = project({ id: "local", path: "/Users/me/local", name: "Local" });
+  const REMOTE = project({ id: "remote", path: "/srv/remote", name: "Remote" });
+
+  it("takes a claimed remote project's first snapshot row into the list, after this Mac's", () => {
+    const { store } = withClaims(["remote"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local", "remote"]);
+    // Its next row replaces it in place.
+    store.getState().adoptProject({ ...REMOTE, name: "Renamed on the box" });
+    expect(store.getState().projects.at(-1)?.name).toBe("Renamed on the box");
+    // An unclaimed unknown row is still refused: a removed project stays gone.
+    store.getState().adoptProject(project({ id: "stranger", path: "/x" }));
+    expect(store.getState().projects).toHaveLength(2);
+  });
+
+  it("keeps remote rows, and a remote selection, across this Mac's wholesale hydrate", () => {
+    const { store, onSelectedProjectChange } = withClaims(["remote"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    store.getState().select("remote");
+    onSelectedProjectChange.mockClear();
+    const second = project({ id: "second", path: "/Users/me/second" });
+    // The bootstrap's own fallback would pick its first row: the remote selection stands.
+    store.getState().hydrate([LOCAL, second], "local");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local", "second", "remote"]);
+    expect(store.getState().selectedProjectId).toBe("remote");
+    expect(onSelectedProjectChange).not.toHaveBeenCalled();
+    // A local selection hydrates as before.
+    store.getState().select("local");
+    store.getState().hydrate([second], "second");
+    expect(store.getState().selectedProjectId).toBe("second");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["second", "remote"]);
+  });
+
+  it("lets a row go when its claim does, before the next hydrate", () => {
+    const { store, remote } = withClaims(["remote"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    remote.delete("remote");
+    store.getState().hydrate([LOCAL], "local");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local"]);
+  });
+
+  it("drops a remote row and falls back to a neighbour, writing nothing but the selection", async () => {
+    const { store, gateway, onSelectedProjectChange } = withClaims(["remote", "other"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    store.getState().adoptProject(project({ id: "other", path: "/srv/other" }));
+    store.getState().dropRemoteProject("other");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local", "remote"]);
+    store.getState().select("remote");
+    vi.mocked(gateway.setSelection).mockClear();
+    store.getState().dropRemoteProject("remote");
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["local"]);
+    expect(store.getState().selectedProjectId).toBe("local");
+    expect(onSelectedProjectChange).toHaveBeenLastCalledWith("local");
+    await flush();
+    expect(gateway.setSelection).toHaveBeenCalledWith("local");
+    expect(gateway.remove).not.toHaveBeenCalled();
+    // Unknown: nothing happens.
+    store.getState().dropRemoteProject("remote");
+    expect(store.getState().projects).toHaveLength(1);
+  });
+
+  it("selects nothing when the only project, a remote one, goes", () => {
+    const { store } = withClaims(["remote"]);
+    store.getState().hydrate([], null);
+    store.getState().adoptProject(REMOTE);
+    store.getState().select("remote");
+    store.getState().dropRemoteProject("remote");
+    expect(store.getState().selectedProjectId).toBeNull();
+  });
+
+  it("never asks this Mac's database to remove or relink a remote project", async () => {
+    const { store, gateway } = withClaims(["remote"]);
+    store.getState().hydrate([LOCAL], "local");
+    store.getState().adoptProject(REMOTE);
+    await store.getState().removeProject("remote");
+    expect(await store.getState().relink("remote", "/elsewhere")).toEqual({
+      ok: false,
+      refusal: null,
+    });
+    expect(gateway.remove).not.toHaveBeenCalled();
+    expect(gateway.relink).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't remove project: That isn’t available for a project on a remote host yet.",
+      expect.anything(),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't relink project: That isn’t available for a project on a remote host yet.",
+      expect.anything(),
+    );
+    expect(store.getState().projects).toHaveLength(2);
+  });
+
+  it("persists this Mac's own rail order only", async () => {
+    const { store, gateway } = withClaims(["remote"]);
+    const second = project({ id: "second", path: "/Users/me/second" });
+    store.getState().hydrate([LOCAL, second], "local");
+    store.getState().adoptProject(REMOTE);
+    const before = store.getState().projects;
+    store.getState().reorder("remote", "local");
+    await store.getState().commitReorder(before);
+    expect(store.getState().projects.map(({ id }) => id)).toEqual(["remote", "local", "second"]);
+    expect(gateway.reorder).toHaveBeenCalledWith(["local", "second"]);
+  });
+
+  it("asks the host-connection store which projects are remote by default", () => {
+    const store = createProjectsStore(fakeGateway(), vi.fn());
+    store.getState().hydrate([LOCAL], "local");
+    // Nothing claims it: a stranger's row stays out.
+    store.getState().adoptProject(REMOTE);
+    expect(store.getState().projects).toHaveLength(1);
+  });
+});
+
+describe("remote selection intent", () => {
+  const remote = { hostId: "box-id", projectId: "remote", hostName: "box" };
+  const local = project({ id: "local", path: "/local" });
+  const row = project({ id: "remote", path: "/box" });
+
+  it("the production gateway writes remote intent only with cloud on, leaving local IPC untouched", () => {
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
+    useHostConnectionStore.setState({
+      hosts: [{ ...THIS_MAC_HOST, id: remote.hostId, name: remote.hostName, local: false }],
+      projects: { remote: { hostId: remote.hostId, link: { status: "open" } } },
+    });
+    useProjectsStore.getState().hydrate([local], local.id);
+    useProjectsStore.getState().adoptProject(row);
+    useProjectsStore.getState().select(local.id);
+    useProjectsStore.getState().select(remote.projectId);
+    expect(window.api.appState.set).toHaveBeenLastCalledWith(
+      PROJECTS_UI_APP_STATE_KEY,
+      encodeProjectsUiState(local.id, remote),
+    );
+    useExperimentsStore.setState({ snapshot: { cloud: { enabled: false, source: "storage" } } });
+    useProjectsStore.getState().select(local.id);
+    expect(window.api.appState.set).toHaveBeenLastCalledWith(
+      PROJECTS_UI_APP_STATE_KEY,
+      JSON.stringify({ selectedProjectId: local.id }),
+    );
+  });
+
+  it("persists remote identity additively beside the last local selection", () => {
+    const gateway = fakeGateway();
+    const store = createProjectsStore(
+      gateway,
+      vi.fn(),
+      (id) => id === "remote",
+      (id) => (id === "remote" ? remote : null),
+    );
+    store.getState().hydrate([local], local.id);
+    store.getState().adoptProject(row);
+    store.getState().select(row.id);
+    expect(gateway.setSelection).toHaveBeenCalledWith(local.id, remote);
+    const raw = encodeProjectsUiState(local.id, remote);
+    expect(decodeProjectsUiState(raw)).toBe(local.id);
+    expect(decodeRemoteSelection(raw)).toEqual(remote);
+    store.getState().select(local.id);
+    expect(gateway.setSelection).toHaveBeenLastCalledWith(local.id);
+  });
+
+  it.each([
+    undefined,
+    "bad",
+    "null",
+    "{}",
+    '{"remoteSelection":{}}',
+    JSON.stringify({ remoteSelection: { ...remote, hostId: "this-mac" } }),
+    JSON.stringify({ remoteSelection: { ...remote, projectId: "" } }),
+    JSON.stringify({ remoteSelection: { ...remote, hostName: 1 } }),
+  ])("ignores older and malformed remote intent: %s", (raw) => {
+    expect(decodeRemoteSelection(raw)).toBeNull();
+  });
+
+  it("holds no selected id while pending, preserves it over local refresh, then settles without a write", () => {
+    const { store, gateway, onSelectedProjectChange } = freshStore();
+    store.getState().hydrate([local], local.id);
+    store.getState().beginRemoteRestore(remote);
+    store.getState().hydrate([local], local.id);
+    expect(store.getState().pendingRemoteSelection).toBe(remote);
+    expect(store.getState().selectedProjectId).toBeNull();
+    store.getState().settleRemoteRestore(remote, true);
+    expect(store.getState().selectedProjectId).toBe(remote.projectId);
+    expect(onSelectedProjectChange).toHaveBeenLastCalledWith(remote.projectId);
+    expect(gateway.setSelection).not.toHaveBeenCalled();
+  });
+
+  it("a person's pick retires pending intent and rejects late settlement", () => {
+    const { store } = freshStore();
+    store.getState().hydrate([local], local.id);
+    store.getState().beginRemoteRestore(remote);
+    store.getState().select(local.id);
+    store.getState().settleRemoteRestore(remote, true);
+    expect(store.getState().selectedProjectId).toBe(local.id);
+    expect(store.getState().pendingRemoteSelection).toBeNull();
+  });
+
+  it("a host pick without an open project cancels and persists the local fallback", () => {
+    const { store, gateway } = freshStore();
+    store.getState().hydrate([local], local.id);
+    store.getState().beginRemoteRestore(remote);
+    store.getState().cancelRemoteRestore();
+    store.getState().cancelRemoteRestore();
+    expect(store.getState().selectedProjectId).toBe(local.id);
+    expect(gateway.setSelection).toHaveBeenLastCalledWith(local.id);
+  });
+
+  it.each([false, true])(
+    "fallback resolves fresh local membership, including an empty Mac (%s)",
+    (empty) => {
+      const { store } = freshStore();
+      const neighbor = project({ id: "neighbor", path: "/neighbor" });
+      store.getState().hydrate([local, neighbor], local.id);
+      store.getState().beginRemoteRestore(remote);
+      store.setState({ projects: empty ? [] : [neighbor] });
+      store.getState().settleRemoteRestore(remote, false);
+      expect(store.getState().selectedProjectId).toBe(empty ? null : "neighbor");
+    },
+  );
+
+  it("an unclaimed row cannot replace the last positively local fallback selection", () => {
+    const gateway = fakeGateway();
+    const store = createProjectsStore(
+      gateway,
+      vi.fn(),
+      (id) => id === remote.projectId,
+      () => null,
+    );
+    const neighbor = project({ id: "neighbor", path: "/neighbor" });
+    store.getState().hydrate([local, neighbor], local.id);
+    store.getState().select(neighbor.id);
+    store.getState().adoptProject(row);
+    store.getState().select(row.id);
+    store.getState().beginRemoteRestore(remote);
+    store.getState().settleRemoteRestore(remote, false);
+    expect(store.getState().selectedProjectId).toBe(neighbor.id);
+  });
+
+  it("a successful local create establishes fallback provenance", async () => {
+    const { store } = freshStore();
+    store.getState().hydrate([], null);
+    await store.getState().addProject({ path: "/new", defaultName: "New" });
+    store.getState().beginRemoteRestore(remote);
+    store.getState().settleRemoteRestore(remote, false);
+    expect(store.getState().selectedProjectId).toBe("id-/new");
+  });
+
+  it("a successful local removal retires provenance, even if a stale row remains", async () => {
+    const { store } = freshStore();
+    store.getState().hydrate([local], null);
+    await store.getState().removeProject(local.id);
+    store.setState({ projects: [local] });
+    store.getState().beginRemoteRestore(remote);
+    store.getState().settleRemoteRestore(remote, false);
+    expect(store.getState().selectedProjectId).toBeNull();
+  });
+
+  it("adding a local project wins over restore", async () => {
+    const { store } = freshStore();
+    store.getState().hydrate([local], local.id);
+    store.getState().beginRemoteRestore(remote);
+    await store.getState().addProject({ path: "/new", defaultName: "New" });
+    store.getState().settleRemoteRestore(remote, true);
+    expect(store.getState().pendingRemoteSelection).toBeNull();
+    expect(store.getState().selectedProjectId).toBe("id-/new");
   });
 });

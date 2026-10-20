@@ -18,20 +18,24 @@
  * the lettermark; one provider is signed out. Labels are what pi's catalog
  * actually ships (`model.name`), not raw ids.
  *
- * This scratch held variants A and B of the pane during the VC-259 design
- * review — flat rows under two group headings against the tree — and the
- * tree shipped. The A/B chrome is gone with the decision.
+ * This scratch held variants A and B of the pane during VC-259 — flat rows
+ * under two group headings against the tree — and the tree shipped. The A/B
+ * chrome is gone with the decision.
  *
  * WHAT THE LAB CANNOT SHOW: persistence. The client below holds state in memory
  * and forgets it on reload.
  */
 import * as React from "react";
 import {
+  DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   visualModelProblem,
 } from "@volli/shared";
 import type {
+  DecisionModelCatalogEntry,
+  DecisionModelSetting,
+  CodeModePolicy,
   HiddenModelRef,
   ModelAccessDefaults,
   ModelAccessSnapshot,
@@ -41,6 +45,7 @@ import type {
 
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import { Button } from "@renderer/components/ui/button";
+import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 
 import { appApi, seedApp } from "../seed";
@@ -49,7 +54,65 @@ export const title = "Model tiers · Settings, picker Defaults, Automation runti
 export const note = "Six slots on three surfaces — flat tier list, unset rows, the Visual refusal";
 
 export const seed = seedApp;
-export const api = appApi;
+
+/* ---------------------------------------------------------- decision model */
+
+/**
+ * The Decision model section (VC-478) over an in-memory store: a signed-in
+ * TypeSafe, an OpenCode Zen that still needs its key, and a local server that
+ * "answers" the connection test. Choose Cloud → a Zen model to see the opt-in
+ * and the Needs setup row; Local → Test to see a result.
+ */
+const DECISION_CATALOG: readonly DecisionModelCatalogEntry[] = [
+  {
+    providerId: "typesafe",
+    providerLabel: "TypeSafe",
+    modelId: "jev-latest",
+    label: "Jev",
+    state: "available",
+    inputUsdPerMillion: 0,
+    contextWindow: 64_000,
+  },
+  {
+    providerId: "opencode",
+    providerLabel: "OpenCode Zen",
+    modelId: "jev-1.13",
+    label: "Jev 1.13",
+    state: "needs-setup",
+    inputUsdPerMillion: 0.042,
+    contextWindow: 32_000,
+  },
+  {
+    providerId: "opencode",
+    providerLabel: "OpenCode Zen",
+    modelId: "jev-1.13-free",
+    label: "Jev 1.13 Free",
+    state: "needs-setup",
+    inputUsdPerMillion: 0,
+    contextWindow: 32_000,
+  },
+];
+let decisionGlobal: DecisionModelSetting = { kind: "none" };
+const decisionView = () => ({ global: decisionGlobal, catalog: DECISION_CATALOG });
+
+export const api = {
+  ...appApi,
+  decisionModel: {
+    get: () => Promise.resolve({ ok: true, settings: decisionView() }),
+    set: (_scope: unknown, setting: DecisionModelSetting | null) => {
+      if (setting !== null) decisionGlobal = setting;
+      return Promise.resolve({ ok: true, settings: decisionView() });
+    },
+    test: (setting: DecisionModelSetting) =>
+      Promise.resolve({
+        ok: true,
+        test:
+          setting.kind === "local"
+            ? { ok: true, elapsedMs: 184, probability: 0.97 }
+            : { ok: false, elapsedMs: 0, message: "Sign in to the provider first." },
+      }),
+  },
+};
 
 /* ------------------------------------------------------------ model access */
 
@@ -203,6 +266,7 @@ const SEEDED_DEFAULTS: ModelAccessDefaults = {
 function labModelAccess(): ModelAccessClient {
   let defaults: ModelAccessDefaults = SEEDED_DEFAULTS;
   let hidden: readonly HiddenModelRef[] = [];
+  let codeMode: CodeModePolicy = DEFAULT_CODE_MODE_POLICY;
   return {
     inspect: () =>
       Promise.resolve({ observedAt: Date.now(), providers: PROVIDERS, models: MODELS }),
@@ -222,6 +286,13 @@ function labModelAccess(): ModelAccessClient {
     },
     compactionPolicy: () => Promise.resolve(DEFAULT_COMPACTION_POLICY),
     setCompactionPolicy: (policy) => Promise.resolve(policy),
+    // Held like `hidden`, so the pane's Code Mode section keeps its pins
+    // across a toggle the way it would against main.
+    codeModePolicy: () => Promise.resolve(codeMode),
+    setCodeModePolicy: (policy) => {
+      codeMode = policy;
+      return Promise.resolve(codeMode);
+    },
     pickerView: () => Promise.resolve("all" as const),
     setPickerView: (view) => Promise.resolve(view),
     beginSignIn: () => Promise.reject(new Error("Sign-in needs the main process")),
@@ -232,14 +303,21 @@ function labModelAccess(): ModelAccessClient {
 /* ------------------------------------------------------------------ scratch */
 
 export default function ModelTiersScratch() {
-  const [generation, setGeneration] = React.useState(0);
-  const client = React.useMemo(labModelAccess, [generation]);
+  // Reset swaps in a fresh client and remounts the provider around it.
+  const [{ generation, client }, setLab] = React.useState(() => ({
+    generation: 0,
+    client: labModelAccess(),
+  }));
 
   return (
     <ModelAccessProvider key={generation} client={client}>
       <div className="flex flex-col gap-6">
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => setGeneration((n) => n + 1)}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setLab({ generation: generation + 1, client: labModelAccess() })}
+          >
             Reset defaults
           </Button>
           <span className="text-ui text-muted-foreground">
@@ -248,9 +326,13 @@ export default function ModelTiersScratch() {
         </div>
         <section className="flex flex-col gap-4">
           <h2 className="text-ui font-medium text-muted-foreground">Settings → Model Access</h2>
-          <div className="flex max-w-4xl flex-col gap-4">
-            <ModelAccessSettings />
-          </div>
+          {/* The provider `PrefShell` mounts around every real pane: the
+              Code Mode pins' row actions are glyphs with tooltips. */}
+          <TooltipProvider>
+            <div className="flex max-w-4xl flex-col gap-4">
+              <ModelAccessSettings />
+            </div>
+          </TooltipProvider>
         </section>
       </div>
     </ModelAccessProvider>

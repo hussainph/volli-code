@@ -24,8 +24,8 @@ import {
 } from "./index";
 
 /**
- * Persistence probe for `docs/plans/delta-frames.md` ("Proof, checked in
- * before the change", item 2). Every `transcript.message` observation the
+ * Persistence probe for the delta-frames work (proof checked in before the
+ * change). Every `transcript.message` observation the
  * runtime records writes the WHOLE message as a fresh content-addressed
  * artifact and appends one `transcript.referenced` ledger event; subscribers
  * get the full decoded artifact inlined on the frame

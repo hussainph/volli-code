@@ -1,20 +1,29 @@
 import { describe, expect, it } from "vite-plus/test";
 import { NO_AUTOMATION_TRIGGER } from "@volli/shared";
-import type { Automation, AutomationRun, AutomationSkippedOccurrence } from "@volli/shared";
+import type {
+  Automation,
+  AutomationRun,
+  AutomationSchedule,
+  AutomationSkippedOccurrence,
+} from "@volli/shared";
 
 import {
   INSTRUCTIONS_PLACEHOLDER,
   MANUAL_TRIGGER_LABEL,
+  SCHEDULE_SKIPPED_OCCURRENCE_POLICY,
   automationHistory,
   duplicateName,
   groupByOwnership,
   laneDropRank,
   laneRowId,
   listingRunTarget,
+  nextScheduledRun,
   parseLaneRowId,
   ownershipLabel,
+  historyEmptyCopy,
   runAutomationLabel,
   runModelLabel,
+  runStartLabel,
   runModelTitle,
   runtimeLabel,
   skipCountLabel,
@@ -130,6 +139,33 @@ describe("a Run prints its own evidence", () => {
   it("keeps the Automation name a deleted record left behind", () => {
     expect(runAutomationLabel(run())).toBe("Review");
     expect(runAutomationLabel(run({ automationId: null, automationName: null }))).toBe("Run once");
+  });
+
+  it("says how it started, from its own attendance (VC-297)", () => {
+    expect(runStartLabel(run({ attendance: "attended" }))).toBe("By hand");
+    expect(runStartLabel(run({ attendance: "unattended" }))).toBe("Automatic");
+  });
+
+  it("says nothing about an empty history until the read has landed (VC-297)", () => {
+    // "Nothing has run" is a claim about the past, and an unread cache cannot
+    // make it. A cold cache is the ordinary state on every record the reader
+    // picks, so this is the difference between silence and a false sentence.
+    expect(historyEmptyCopy("automation-1", false)).toBeNull();
+    expect(historyEmptyCopy(null, false)).toBeNull();
+  });
+
+  it("names the scope once it knows the answer is empty", () => {
+    expect(historyEmptyCopy("automation-1", true)).toBe("Nothing has run this Automation yet.");
+    expect(historyEmptyCopy(null, true)).toBe("Nothing has run in this project yet.");
+  });
+
+  it("never names a schedule for an unattended Run", () => {
+    // `unattended` is the schedule timer AND the agent's own Run verb, so a
+    // Run another Session started has no schedule to name. One word covers
+    // both, or the row would be false for half of them.
+    expect(runStartLabel(run({ attendance: "unattended" })).toLowerCase()).not.toContain(
+      "schedule",
+    );
   });
 });
 
@@ -268,6 +304,22 @@ describe("laneDropRank", () => {
       }),
     ).toBeNull();
   });
+
+  it("promotes a row ranked past the ninth, which the lane draws without a digit", () => {
+    const crowd = Array.from({ length: 11 }, (_, index) => `c${index}`);
+    // `c0` is the pinned armed row, so it is drawn but not draggable.
+    expect(
+      laneDropRank({
+        authoredIds: crowd,
+        visibleIds: crowd.slice(1),
+        activeId: laneRowId("doing", "c10"),
+        overId: laneRowId("doing", "c1"),
+      }),
+    ).toEqual({
+      status: "doing",
+      rankedAutomationIds: ["c0", "c10", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"],
+    });
+  });
 });
 
 /* ------------------------------- schedules (VC-130) ----------------------- */
@@ -384,5 +436,64 @@ describe("skipCountLabel", () => {
   it("stays quiet for the ordinary single miss and states a real gap", () => {
     expect(skipCountLabel({ missedCount: 1 })).toBe("");
     expect(skipCountLabel({ missedCount: 50 })).toBe("50 occurrences");
+  });
+});
+
+const NEW_YORK = "America/New_York";
+const KUWAIT = "Asia/Kuwait";
+function next(schedule: AutomationSchedule, now: number, timeZone = NEW_YORK) {
+  return nextScheduledRun({ schedule, automationId: "automation-1", now, timeZone });
+}
+// Off the hour throughout, so no stagger moves these instants.
+const daily = (hour: number, timeZone: string): AutomationSchedule => ({
+  preset: "daily",
+  hour,
+  minute: 30,
+  timeZone,
+});
+
+describe("nextScheduledRun (VC-298)", () => {
+  it("keeps the wall time across a spring-forward change", () => {
+    // Saturday 7 March 2026, 10:00 EST — past today's 09:30. Sunday is on EDT.
+    const result = next(daily(9, NEW_YORK), Date.UTC(2026, 2, 7, 15));
+    expect(result.at).toBe(Date.UTC(2026, 2, 8, 13, 30));
+  });
+
+  it("runs a wall time the spring-forward gap skips just after it, never early", () => {
+    // 02:30 does not exist on 8 March in New York; 03:30 EDT is when it would have been.
+    expect(next(daily(2, NEW_YORK), Date.UTC(2026, 2, 7, 12)).at).toBe(Date.UTC(2026, 2, 8, 7, 30));
+  });
+
+  it("answers the later reading of a wall time a fall-back change repeats", () => {
+    // 01:30 happens twice on 1 November in New York; the EST one wins.
+    expect(next(daily(1, NEW_YORK), Date.UTC(2026, 9, 31, 12)).at).toBe(
+      Date.UTC(2026, 10, 1, 6, 30),
+    );
+  });
+
+  it("computes in the schedule's stored zone and reads it on this Mac's clock", () => {
+    // 09:30 in Kuwait (UTC+3) on Sunday 8 March is 01:30 EST on this New York Mac.
+    const now = Date.UTC(2026, 2, 7, 12);
+    const result = next(daily(9, KUWAIT), now);
+    expect(result.at).toBe(Date.UTC(2026, 2, 8, 6, 30));
+    expect(result.label).toMatch(/^Next: /);
+    expect(result.label).toContain("1:30");
+    // The same instant, read on a Mac in Kuwait instead: a different clock face.
+    const inKuwait = next(daily(9, KUWAIT), now, KUWAIT).label;
+    expect(inKuwait).toContain("9:30");
+    expect(inKuwait).not.toBe(result.label);
+  });
+
+  it("staggers an on-the-hour schedule inside the stagger window", () => {
+    const schedule: AutomationSchedule = { preset: "daily", hour: 9, minute: 0, timeZone: KUWAIT };
+    const at = next(schedule, Date.UTC(2026, 2, 7, 12)).at;
+    expect(at).toBeGreaterThanOrEqual(Date.UTC(2026, 2, 8, 6));
+    expect(at).toBeLessThan(Date.UTC(2026, 2, 8, 6, 5));
+  });
+
+  it("states the scheduler's grace and what happens outside it", () => {
+    expect(SCHEDULE_SKIPPED_OCCURRENCE_POLICY).toBe(
+      "Runs up to 2 min late; skipped if Volli is closed or the Mac is asleep",
+    );
   });
 });

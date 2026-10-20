@@ -151,12 +151,9 @@ export function sessionPersonNeed(
  * already showing the thing.
  *
  * ── SO THE RULE IS THE SURFACE'S RULE ─────────────────────────────────────
- * Round 3's correction. This used to scan for the first qualifying attention,
- * while the blocker row draws `attention.primary` — which the ledger defines as
- * the NEWEST active attention. With two live attentions the two disagreed, and
- * both failures follow from that: a deep link to a card nothing draws, and a
- * window reporting an attention nobody can see as "already visible", which
- * suppressed the alert for it.
+ * The blocker row draws `attention.primary`, the newest active attention.
+ * Choosing another by scan order could link to an invisible card or suppress
+ * its alert while the window is showing a different attention.
  *
  * So the order below is the order the plane resolves in:
  *
@@ -184,13 +181,12 @@ export function sessionPersonNeed(
  */
 /**
  * The Attention a notification click asked to be shown, while it is still live
- * (VC-295 round 4).
+ * (VC-295).
  *
  * THE one answer to "which Attention is that row drawing", asked by the chat
- * plane's blocker and by the window reporting what it shows. Two derivations of
- * it is precisely how round 3 shipped a row displaying one problem while the
- * window told main a different one was visible — which suppressed the alert for
- * the problem that was NOT on screen.
+ * plane's blocker and by the window reporting what it shows. Sharing this
+ * derivation prevents the window from suppressing an alert for a problem the
+ * row is not displaying.
  *
  * `null` for "no click named one" and for "the one it named has cleared" alike:
  * both mean the caller falls back to what it would have drawn anyway.
@@ -217,8 +213,7 @@ export function revealedSessionAttention<T extends { id: string }>(
  * answers, so a revealed Attention changes nothing there; and a revealed
  * question does not displace a failure row, because the row is drawn above the
  * card either way. Each override applies only while its item is still live —
- * one that has cleared falls back to what the plane would draw anyway (round 5
- * extended this from Attentions to questions).
+ * one that has cleared falls back to what the plane would draw anyway.
  */
 export function shownSessionNotificationItem(
   projection: {

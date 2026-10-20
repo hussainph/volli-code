@@ -3,10 +3,9 @@
  * The markdown file tab itself: which view it offers, which one it mounts, and
  * what switching between them is allowed to do to the file (VC-192, VC-307).
  *
- * Round 1 of this work tested the Preview surface and the pure policy in
- * isolation and left the TAB untested — a review mutation that simply turned
- * the Preview branch off here left every other test green. So these mount the
- * real `FileView` over a stubbed bridge, with Monaco replaced by a recorder
+ * Testing the Preview surface and pure policy in isolation cannot prove that
+ * the tab mounts Preview. These tests mount the real `FileView` over a stubbed
+ * bridge, with Monaco replaced by a recorder
  * (it cannot be constructed in jsdom, and what is under test is the host's
  * decisions, not the editor's).
  */

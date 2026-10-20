@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="apps/desktop/build/icon-source.svg" width="96" alt="Volli Code icon" />
+  <img src="apps/desktop/build/icon-source.svg" width="96" alt="Volli icon" />
 </p>
 
-<h1 align="center">Volli Code</h1>
+<h1 align="center">Volli</h1>
 
 <p align="center">
   A local-first macOS workspace for parallel coding agents. Turn rough ideas into focused tasks yourself or with an agent, run them in parallel, and review every change in one place.
@@ -21,7 +21,7 @@
 <p align="center">
   <img
     src="apps/docs/src/assets/screenshots/board.png"
-    alt="Volli Code's Home Board tab with five task columns and a Chat control."
+    alt="Volli's Home Board tab with five task columns and a Chat control."
     width="1200"
   />
 </p>
@@ -29,7 +29,7 @@
 ## Install
 
 > [!IMPORTANT]
-> Volli Code is in **early alpha**, for **Apple silicon** Macs (M1 and later). Builds ship as prereleases, features move between them, and behavior you rely on can change. There is no Intel or universal build yet.
+> Volli is in **early alpha**, for **Apple silicon** Macs (M1 and later). Builds ship as prereleases, features move between them, and behavior you rely on can change. There is no Intel or universal build yet.
 
 Download the current build from [volli.app/download](https://volli.app/download/), or from [GitHub Releases](https://github.com/hussainph/volli-code/releases) if you want a specific one. Builds are signed with a Developer ID and notarized, and the app updates itself from the same feed when you quit.
 
@@ -50,7 +50,7 @@ Projects, tickets, and chat history stay on your machine. Model requests go to t
 
 ## Build from source
 
-Requirements: macOS, Node.js `^24.13.0` (a `.nvmrc` is provided — `nvm use`), and pnpm `11.10.0`. The Node range is enforced: `pnpm install` and the dev scripts refuse to run under an unsupported Node, because native modules built against the wrong ABI leave the app unable to open its database (and sign-in disabled).
+Requirements: macOS, Node.js `^24.16.0` (a `.nvmrc` is provided — `nvm use`), and pnpm `11.10.0`. The Node range is enforced: `pnpm install` and the dev scripts refuse to run under an unsupported Node, because native modules built against the wrong ABI leave the app unable to open its database (and sign-in disabled).
 
 ```bash
 git clone https://github.com/hussainph/volli-code.git

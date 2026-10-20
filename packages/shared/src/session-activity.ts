@@ -51,6 +51,9 @@ export const ACTIVITY_BROWSE_ACTIONS = [
   "screenshot",
   "console",
   "tabs",
+  // Appended (VC-364): a build that predates it reads such a row as having no
+  // browse facet, never as a different action.
+  "find",
 ] as const;
 
 export type ActivityBrowseAction = (typeof ACTIVITY_BROWSE_ACTIONS)[number];

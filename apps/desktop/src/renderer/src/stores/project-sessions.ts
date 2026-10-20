@@ -17,7 +17,7 @@
  * moved nothing over here. Ten seconds is a long time to be told an agent is
  * idle while it is working.
  *
- * `volli:session-activity` closed that (`main/session-control/activity-watch.ts`):
+ * `volli:session-activity` closed that (`packages/host-core/src/session-control/activity-watch.ts`):
  * main re-derives a Session's listing row whenever its durable history moves and
  * pushes the row — the same row the fetch returns, so applying one is an upsert
  * and never a translation. The fetch survives as the BASELINE only: a window
@@ -35,14 +35,19 @@ import { create } from "zustand";
 import {
   errorMessage,
   isListableSession,
+  isSessionUnread,
+  sessionReadStateOf,
   type ChatSessionRecord,
   type SessionListingRow,
   type SessionProvenance,
+  type SessionReadState,
   type SessionRecord,
 } from "@volli/shared";
 
+import { sessionListingReaderForProject } from "@renderer/lib/session-listing-reader";
 import { toastError } from "@renderer/lib/toast";
 import type { SessionActivityNotice } from "../../../ipc/contract";
+import { markSessionRead } from "./session-read-mark";
 
 /** One project's rows, split into the two shapes every consumer wants them in. */
 export interface ProjectSessionRows {
@@ -62,13 +67,50 @@ export interface ProjectSessionRows {
    * into the resting answer.
    */
   provenance: Readonly<Record<string, SessionProvenance>>;
+  /**
+   * Which Sessions have unread work, keyed by Session id — sparse for exactly
+   * the reason `provenance` above is (VC-30). Unread rides on the listing ROW
+   * and this store keeps the records rather than the wrapper, so the fact needs
+   * one place to live; a project where every Session has been seen carries an
+   * empty object here, which is what the resting case should cost.
+   *
+   * OPTIONAL, unlike `provenance`, because rows seeded from elsewhere (the lab,
+   * a restore of a known Session) predate it and a missing map must read as
+   * "nothing unread" rather than "unknown". Read it through {@link sessionReadOf}
+   * or {@link unreadSessionIds}, never directly.
+   */
+  read?: Readonly<Record<string, SessionReadState>>;
 }
 
 export const EMPTY_PROJECT_SESSION_ROWS: ProjectSessionRows = {
   terminal: [],
   chat: [],
   provenance: {},
+  read: {},
 };
+
+/** One Session's read state, with the resting answer for a Session nobody marked. */
+export function sessionReadOf(
+  rows: ProjectSessionRows | undefined,
+  sessionId: string,
+): SessionReadState {
+  return sessionReadStateOf(rows?.read?.[sessionId]);
+}
+
+/**
+ * Every Session in this project with unread work (VC-30).
+ *
+ * The shape both sidebars want: membership rules ask "is this one of them"
+ * rather than "how long has it been", and a set keeps the sparse map from
+ * leaking into every consumer.
+ */
+export function unreadSessionIds(rows: ProjectSessionRows | undefined): ReadonlySet<string> {
+  const unread = new Set<string>();
+  for (const [sessionId, read] of Object.entries(rows?.read ?? {})) {
+    if (isSessionUnread(read)) unread.add(sessionId);
+  }
+  return unread;
+}
 
 /** Whether a project's baseline listing is still in flight, usable, or failed. */
 export type ProjectSessionListingState = "loading" | "loaded" | "failed";
@@ -168,14 +210,16 @@ export function mergedProjectSessionRows(
   const terminal: SessionRecord[] = [];
   const chat: ChatSessionRecord[] = [];
   const provenance: Record<string, SessionProvenance> = {};
+  const read: Record<string, SessionReadState> = {};
   for (const projectId of projectIds) {
     const rows = byProject[projectId];
     if (rows === undefined) continue;
     terminal.push(...rows.terminal);
     chat.push(...rows.chat);
     Object.assign(provenance, rows.provenance);
+    Object.assign(read, rows.read ?? {});
   }
-  return { terminal, chat, provenance };
+  return { terminal, chat, provenance, read };
 }
 
 interface ProjectSessionsState {
@@ -190,7 +234,7 @@ interface ProjectSessionsState {
    * which rows exist at all (a ticket archived out from under them); the push
    * channel carries everything after that.
    */
-  refresh(projectId: string): Promise<void>;
+  refresh(projectId: string, options?: ListingRefreshOptions): Promise<void>;
   /**
    * {@link refresh}, but at most once per project and never twice at a time.
    *
@@ -222,6 +266,29 @@ interface ProjectSessionsState {
    * and started another in the same shell.
    */
   setActiveHarness(projectId: string, sessionId: string, harnessId: string): void;
+  /**
+   * Marks one Session read or unread (VC-30).
+   *
+   * Optimistic: the local map moves first so the dot answers the keypress in
+   * the same frame, then the receipt is persisted. A failure puts the old state
+   * back and toasts (AGENTS.md: surface every failed mutation) — the optimistic
+   * write is the only thing moving this dot, so a refused write would otherwise
+   * leave every sidebar asserting a receipt main does not have.
+   *
+   * The authoritative answer arrives afterwards as an ordinary
+   * `volli:session-activity` upsert, which is also how the OTHER window learns.
+   */
+  setSessionRead(projectId: string, sessionId: string, unread: boolean): Promise<void>;
+}
+
+/**
+ * How a listing read behaves (VC-713). `quiet` is a read nobody asked for —
+ * the remote listing's poll, focus or reconnect re-read: it keeps the rows on
+ * screen while it runs (no skeleton) and, failing, keeps them and says nothing,
+ * since the next read is already scheduled and no person is waiting on it.
+ */
+export interface ListingRefreshOptions {
+  quiet?: boolean;
 }
 
 /** Replaces the row with `sessionId` in `rows`, or appends it. */
@@ -244,45 +311,69 @@ export function createProjectSessionsStore() {
    * every consumer re-render twice per fetch for a fact none of them show.
    */
   const inFlight = new Map<string, Promise<void>>();
+  /**
+   * The newest read per project (VC-713). A remote listing is re-read on a
+   * poll, a focus and a reconnect, and a read can land after a later one: only
+   * the newest read's answer is applied, so an older answer never paints over
+   * a newer one.
+   */
+  const latestRead = new Map<string, number>();
+  let reads = 0;
 
   return create<ProjectSessionsState>()((set, get) => ({
     byProject: {},
     listingState: {},
 
-    async refresh(projectId) {
-      set((state) => ({
-        listingState: { ...state.listingState, [projectId]: "loading" },
-      }));
+    async refresh(projectId, options = {}) {
+      const quiet = options.quiet === true;
+      const thisRead = ++reads;
+      latestRead.set(projectId, thisRead);
+      const current = () => latestRead.get(projectId) === thisRead;
+      if (!quiet) {
+        set((state) => ({
+          listingState: { ...state.listingState, [projectId]: "loading" },
+        }));
+      }
+      const failed = (message: string): void => {
+        if (!current()) return;
+        if (!quiet) toastError(`Couldn't load sessions: ${message}`);
+        // A quiet read keeps loaded rows standing; it only stands down a
+        // skeleton an earlier, superseded read left behind.
+        else if (get().listingState[projectId] !== "loading") return;
+        set((state) => ({
+          listingState: { ...state.listingState, [projectId]: "failed" },
+        }));
+      };
       try {
-        const result = await window.api.sessions.list({ projectId });
+        const result = await sessionListingReaderForProject(projectId).list({ projectId });
         if (!result.ok) {
-          toastError(`Couldn't load sessions: ${result.error}`);
-          set((state) => ({
-            listingState: { ...state.listingState, [projectId]: "failed" },
-          }));
+          failed(result.error);
           return;
         }
+        if (!current()) return;
         const provenance: Record<string, SessionProvenance> = {};
+        const read: Record<string, SessionReadState> = {};
         for (const row of result.sessions) {
           // Only a Session with something to say takes a slot. `user` is the
           // overwhelming majority and it says nothing, so it is stored as its
           // own absence — see `ProjectSessionRows.provenance`.
           if (row.provenance.kind !== "user") provenance[rowSessionId(row)] = row.provenance;
+          // The same sparseness for the same reason: a read Session is the
+          // resting case and stores nothing (VC-30).
+          if (isSessionUnread(row.read)) read[rowSessionId(row)] = sessionReadStateOf(row.read);
         }
         const rows: ProjectSessionRows = {
           terminal: result.sessions.flatMap((row) => (row.kind === "terminal" ? [row.record] : [])),
           chat: result.sessions.flatMap((row) => (row.kind === "chat" ? [row.record] : [])),
           provenance,
+          read,
         };
         set((state) => ({
           byProject: { ...state.byProject, [projectId]: rows },
           listingState: { ...state.listingState, [projectId]: "loaded" },
         }));
       } catch (error) {
-        toastError(`Couldn't load sessions: ${errorMessage(error)}`);
-        set((state) => ({
-          listingState: { ...state.listingState, [projectId]: "failed" },
-        }));
+        failed(errorMessage(error));
       }
     },
 
@@ -319,6 +410,13 @@ export function createProjectSessionsStore() {
           row.provenance.kind === "user"
             ? current.provenance
             : { ...current.provenance, [rowSessionId(row)]: row.provenance };
+        // Unread, unlike provenance, MOVES: a turn ending makes a Session
+        // unread and opening it makes it read again, and both arrive here. So
+        // the pushed row is the whole answer for that Session — a resting one
+        // must clear the entry rather than leave the old stamp standing.
+        const read = { ...current.read };
+        if (isSessionUnread(row.read)) read[rowSessionId(row)] = sessionReadStateOf(row.read);
+        else delete read[rowSessionId(row)];
         const next: ProjectSessionRows =
           row.kind === "terminal"
             ? {
@@ -330,6 +428,7 @@ export function createProjectSessionsStore() {
                 ),
                 chat: current.chat.filter((record) => record.sessionId !== row.record.id),
                 provenance,
+                read,
               }
             : {
                 terminal: current.terminal.filter((record) => record.id !== row.record.sessionId),
@@ -340,6 +439,7 @@ export function createProjectSessionsStore() {
                   row.record.sessionId,
                 ),
                 provenance,
+                read,
               };
         return { byProject: { ...state.byProject, [notice.projectId]: next } };
       });
@@ -362,10 +462,40 @@ export function createProjectSessionsStore() {
         return {
           byProject: {
             ...state.byProject,
-            [projectId]: { terminal, chat: current.chat, provenance: current.provenance },
+            [projectId]: {
+              terminal,
+              chat: current.chat,
+              provenance: current.provenance,
+              read: current.read,
+            },
           },
         };
       });
+    },
+
+    setSessionRead(projectId, sessionId, unread) {
+      // The optimistic stamp, the toast and the conditional revert are
+      // `session-read-mark.ts`' — shared with the ticket rail, which marks the
+      // same Sessions. This store contributes only how a row is read and
+      // written here.
+      return markSessionRead(
+        { sessionId, unread },
+        {
+          readState: () => sessionReadOf(get().byProject[projectId], sessionId),
+          write: (read) => {
+            set((state) => {
+              const current = state.byProject[projectId];
+              if (current === undefined) return state;
+              const next = { ...current.read };
+              if (read.unreadSince === null) delete next[sessionId];
+              else next[sessionId] = read;
+              return {
+                byProject: { ...state.byProject, [projectId]: { ...current, read: next } },
+              };
+            });
+          },
+        },
+      );
     },
   }));
 }

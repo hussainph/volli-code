@@ -1,6 +1,6 @@
 /**
  * End-to-end acceptance smoke for the GLOBAL ARTIFACTS + @file refs rework
- * (CONCEPT decision #33, docs/plans/global-artifacts.md). Drives the REAL
+ * (CONCEPT decision #33). Drives the REAL
  * packaged renderer through Playwright against a scratch SQLite database
  * (`VOLLI_DB_PATH`) + isolated user-data dir:
  *

@@ -133,7 +133,7 @@ describe("renderFontNoticeDocument", () => {
         "redistributes their font software. The copyright notice and full license",
         "text for every one of them follow, as their licenses require.",
         "",
-        "Nothing here covers the rest of the site: Volli Code itself is licensed",
+        "Nothing here covers the rest of the site: Volli itself is licensed",
         "under Apache-2.0 (https://github.com/hussainph/volli-code/blob/main/LICENSE).",
         "",
         "Generated from the installed font packages at build time, never edited by",

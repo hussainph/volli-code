@@ -1,6 +1,6 @@
 /**
  * SPLIT VIEW — how one tabbed surface's tabs are spread over several panes
- * (VC-202, `docs/plans/split-view.md` §1).
+ * (VC-202).
  *
  * Both tabbed surfaces (Home, and a ticket workspace) already own one ordered
  * strip of tabs and one active tab. A split view sits BESIDE that, exactly as
@@ -241,6 +241,26 @@ export function activateTab(state: SplitViewState, tabId: string): SplitViewStat
   return replacePane(focusPane(state, holder.id), holder.id, (pane) =>
     pane.activeTabId === tabId ? pane : { ...pane, activeTabId: tabId },
   );
+}
+
+/**
+ * Assign an unclaimed tab to a pane without moving focus. A draft's first
+ * content may arrive after focus has moved elsewhere; its placement still
+ * belongs to the pane where it was composed. Only `activate` changes that
+ * pane's front tab. Already-claimed tabs and missing panes are left alone.
+ */
+export function claimTabInPane(
+  state: SplitViewState,
+  tabId: string,
+  paneId: string,
+  activate: boolean,
+): SplitViewState {
+  if (findPaneWithTab(state, tabId) !== null) return state;
+  return replacePane(state, paneId, (pane) => ({
+    ...pane,
+    tabIds: [...pane.tabIds, tabId],
+    activeTabId: activate ? tabId : pane.activeTabId,
+  }));
 }
 
 /**

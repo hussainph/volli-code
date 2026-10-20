@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   automationMarkLabel,
-  automationMarkName,
   drawsSessionProvenanceMark,
   PERSON_STARTED,
   sessionProvenanceHoverLine,
@@ -10,13 +9,21 @@ import {
   type SessionProvenance,
 } from "./session-provenance";
 
-const AUTOMATION: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+const AUTOMATION: SessionProvenance = {
+  kind: "automation",
+  automationRunId: null,
+  automationName: "Nightly sweep",
+};
 /**
  * A Run whose Automation cannot be named: an Unbound Run, or one whose
  * `automation_runs` row had not landed when the app stopped. The mark treats
  * the two alike — see `SessionProvenance`.
  */
-const UNNAMED: SessionProvenance = { kind: "automation", automationName: null };
+const UNNAMED: SessionProvenance = {
+  kind: "automation",
+  automationRunId: null,
+  automationName: null,
+};
 const PARENT: SessionProvenance = {
   kind: "session",
   parentSessionId: "session-parent",
@@ -67,7 +74,7 @@ describe("drawsSessionProvenanceMark", () => {
 });
 
 describe("automationMarkLabel", () => {
-  it("names the Automation in full, whatever the visible half decided", () => {
+  it("names the Automation in full behind the bolt-only mark", () => {
     expect(automationMarkLabel(AUTOMATION)).toBe("Started by the Automation Nightly sweep");
   });
 
@@ -80,30 +87,6 @@ describe("automationMarkLabel", () => {
   it("says nothing for the two arms that draw no bolt", () => {
     expect(automationMarkLabel(PERSON_STARTED)).toBeNull();
     expect(automationMarkLabel(PARENT)).toBeNull();
-  });
-});
-
-describe("automationMarkName", () => {
-  it("says nothing for a row that is not a Run's", () => {
-    expect(automationMarkName(PERSON_STARTED, "Plan the migration")).toBeNull();
-    expect(automationMarkName(PARENT, "Plan the migration")).toBeNull();
-  });
-
-  // The ordinary Run: `run.ts` titles the Session after its Automation, so the
-  // word is already the largest text on the row.
-  it("does not repeat a name the row's title already is", () => {
-    expect(automationMarkName(AUTOMATION, "Nightly sweep")).toBeNull();
-    expect(automationMarkName(AUTOMATION, "  nightly SWEEP ")).toBeNull();
-  });
-
-  it("prints the name once the title no longer carries it", () => {
-    expect(automationMarkName(AUTOMATION, "Fixing the flaky worktree test")).toBe("Nightly sweep");
-  });
-
-  // The bolt has already said the only thing that is known here, and a
-  // stand-in word beside it would be a name the reader could go looking for.
-  it("prints nothing for an Automation it cannot name", () => {
-    expect(automationMarkName(UNNAMED, "Fixing the flaky worktree test")).toBeNull();
   });
 });
 

@@ -304,16 +304,39 @@ async function main() {
     // rail's resting Now page, so there is no drawer to open anymore — the
     // retention prompt (and its "Archive & clean" primary) is in the rail
     // (`aside`) as soon as the detail view opens.
-    async function waitForArchivePrimary() {
-      return waitUntil(
-        '"Archive & clean" primary button',
-        async () =>
-          (await page
-            .locator("aside")
-            .getByRole("button", { name: "Archive & clean", exact: true })
-            .count()) >= 1,
+    //
+    // VC-406 then re-homed that card as the rail's pinned FOOTER. The row keeps
+    // the branch and one glance on screen under every page — and for a merged
+    // Ticket that glance READS "Ready to archive", so the signal is still at
+    // rest. What folds is the card's body, where the archive primary lives. So
+    // the check unfolds first, exactly as `ticket-rail-shots` does; what it
+    // pins is that the button is one press away, not that it is absent.
+    async function unfoldWorktreeBody() {
+      const fold = page.locator("aside").getByTestId("ticket-repository-fold");
+      await waitUntil("worktree fold present", async () => (await fold.count()) === 1, {
+        timeout: 10000,
+      });
+      if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+      await waitUntil(
+        "worktree body unfolded",
+        async () => (await fold.getAttribute("aria-expanded")) === "true",
         { timeout: 10000 },
-      )
+      );
+    }
+
+    async function waitForArchivePrimary() {
+      return unfoldWorktreeBody()
+        .then(() =>
+          waitUntil(
+            '"Archive & clean" primary button',
+            async () =>
+              (await page
+                .locator("aside")
+                .getByRole("button", { name: "Archive & clean", exact: true })
+                .count()) >= 1,
+            { timeout: 10000 },
+          ),
+        )
         .then(() => true)
         .catch(() => false);
     }

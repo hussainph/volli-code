@@ -1,0 +1,50 @@
+---
+/**
+ * The Feed (BRAND.md §7.7): a few of the sidebar's session rows, set in the
+ * page's own type, floating as a Window in a feature card's World. It shows
+ * one thing — many agents working at once — so it carries no chrome beyond
+ * the rows themselves.
+ *
+ * When its card is revealed (`.is-revealed`, the page's one observer) the rows
+ * arrive one by one, then every row's working ring appears together: they
+ * were started in turn, and now they all run. The rings turn slowly, as they
+ * do in the app. Plays once; under reduced motion or without JavaScript the
+ * rows are simply there and the rings are still.
+ *
+ * The arrival is adapted from Magic UI's Animated List (MIT, Copyright (c)
+ * Magic UI): its staggered, finite item sequencing, as CSS — no scale-from-
+ * zero spring, no newest-first cycling.
+ */
+interface Props {
+  rows: readonly string[];
+  label: string;
+}
+
+const { rows, label } = Astro.props;
+---
+
+<ul class="feed" aria-label={label} style={`--feed-count: ${rows.length}`}>
+  {
+    rows.map((title, index) => (
+      <li class="feed-row" style={`--row: ${index}`}>
+        <span class="feed-glyph" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+            <path
+              d="M8 1.5v13M1.5 8h13M3.4 3.4l9.2 9.2M12.6 3.4l-9.2 9.2"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span class="feed-ring" />
+        </span>
+        <span class="feed-text">
+          <span class="feed-title">{title}</span>
+          <span class="feed-meta">
+            No ticket · just now<span class="visually-hidden"> · working</span>
+          </span>
+        </span>
+      </li>
+    ))
+  }
+</ul>

@@ -116,11 +116,11 @@ async function loadMainModules() {
   try {
     const load = (path) => vite.ssrLoadModule(resolve(APP_DIR, path));
     const [migrations, projects, tickets, labels, appState, shared] = await Promise.all([
-      load("src/main/db/migrations.ts"),
-      load("src/main/db/projects-repo.ts"),
-      load("src/main/db/tickets-repo.ts"),
-      load("src/main/db/labels-repo.ts"),
-      load("src/main/db/app-state-repo.ts"),
+      load("../../packages/host-core/src/db/migrations.ts"),
+      load("../../packages/host-core/src/db/projects-repo.ts"),
+      load("../../packages/host-core/src/db/tickets-repo.ts"),
+      load("../../packages/host-core/src/db/labels-repo.ts"),
+      load("../../packages/host-core/src/db/app-state-repo.ts"),
       vite.ssrLoadModule("@volli/shared"),
     ]);
     return { vite, migrations, projects, tickets, labels, appState, shared };

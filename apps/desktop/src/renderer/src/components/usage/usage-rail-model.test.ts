@@ -3,6 +3,8 @@ import {
   EMPTY_SESSION_USAGE_SUMMARY,
   summarizeSessionUsage,
   type ChatSessionRecord,
+  type ModelAccessModel,
+  type ModelAccessProvider,
   type SessionListingIdentity,
   type SessionRecord,
   type SessionUsage,
@@ -10,7 +12,13 @@ import {
   type SessionUsageSummary,
 } from "@volli/shared";
 
-import { groupRows, modelLabel, sessionLabel, ticketSessionRows } from "./usage-rail-model";
+import {
+  modelName,
+  modelRows,
+  sessionLabel,
+  ticketSessionRows,
+  type UsageModelCatalogue,
+} from "./usage-rail-model";
 
 /** A summary that cost `usd`, priced, so rows can be compared by money. */
 function spent(usd: number): SessionUsageSummary {
@@ -57,6 +65,7 @@ function chatRow(
     bornTicketless: false,
     role: "ticket",
     parentSessionId: null,
+    model: null,
     ...overrides,
   };
   return { kind: "chat", record };
@@ -199,22 +208,116 @@ describe("ticketSessionRows", () => {
   });
 });
 
-describe("groupRows", () => {
-  it("keeps a null group under a stable key, so it cannot collide or vanish", () => {
-    const rows = groupRows(report([{ key: null, usage: spent(1) }]), (key) =>
-      key === null ? "Unknown model" : key,
+function model(over: Partial<ModelAccessModel> & Pick<ModelAccessModel, "modelId" | "label">) {
+  return {
+    providerId: "anthropic",
+    state: "available",
+    reasoningLevels: [],
+    acceptsImageInput: true,
+    ...over,
+  } satisfies ModelAccessModel;
+}
+
+function provider(id: string, label: string): ModelAccessProvider {
+  return {
+    id,
+    label,
+    state: "available",
+    accountLabel: null,
+    billingSource: "api-key",
+    recovery: null,
+    signIn: [],
+    hasStoredCredential: true,
+  };
+}
+
+const CATALOGUE: UsageModelCatalogue = {
+  providers: [provider("anthropic", "Anthropic"), provider("openrouter", "OpenRouter")],
+  models: [
+    model({ modelId: "claude-opus-4-1", label: "Claude Opus 4.1" }),
+    // A model the reader has hidden, or whose provider has been signed out. The
+    // catalogue still holds it and this row still spent money.
+    model({ modelId: "claude-haiku-4-5", label: "Claude Haiku 4.5", state: "unavailable" }),
+    model({
+      providerId: "openrouter",
+      modelId: "anthropic/claude-sonnet-4.5",
+      label: "Claude Sonnet 4.5",
+    }),
+  ],
+};
+
+describe("modelRows", () => {
+  it("names each model as the catalogue does, in the report's cost order", () => {
+    const rows = modelRows(
+      report([
+        { key: "anthropic/claude-opus-4-1", usage: spent(3) },
+        { key: "anthropic/claude-haiku-4-5", usage: spent(1) },
+      ]),
+      CATALOGUE,
     );
+    expect(rows.map((row) => row.label)).toEqual(["Claude Opus 4.1", "Claude Haiku 4.5"]);
+    // The identity the mark is drawn from travels with the row: the drawing
+    // resolves nothing itself.
+    expect(rows[0]?.model).toEqual({
+      model: {
+        providerId: "anthropic",
+        modelId: "claude-opus-4-1",
+        label: "Claude Opus 4.1",
+      },
+      providerLabel: "Anthropic",
+    });
+  });
+
+  it("keeps a null group under a stable key, so it cannot collide or vanish", () => {
+    const rows = modelRows(report([{ key: null, usage: spent(1) }]), CATALOGUE);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.key).toBe("\u0000none");
     expect(rows[0]?.label).toBe("Unknown model");
+    // Nothing to mark: there is no model here to be recognised.
+    expect(rows[0]?.model).toBeNull();
   });
 });
 
-describe("modelLabel", () => {
-  it("drops the provider prefix and keeps an unprefixed id whole", () => {
-    expect(modelLabel("anthropic/claude-opus-4-1")).toBe("claude-opus-4-1");
-    expect(modelLabel("claude-opus-4-1")).toBe("claude-opus-4-1");
-    expect(modelLabel(null)).toBe("Unknown model");
+describe("modelName", () => {
+  it("reads the whole catalogue, because history stays valid after a sign-out", () => {
+    // `state: "unavailable"` is exactly what the composers' offerable slice
+    // drops. The money was still spent by a model with a name.
+    expect(modelName("anthropic/claude-haiku-4-5", CATALOGUE).label).toBe("Claude Haiku 4.5");
+  });
+
+  it("splits the key at its FIRST slash, so a gateway's model id survives whole", () => {
+    const named = modelName("openrouter/anthropic/claude-sonnet-4.5", CATALOGUE);
+    expect(named.label).toBe("Claude Sonnet 4.5");
+    expect(named.model?.model.modelId).toBe("anthropic/claude-sonnet-4.5");
+    expect(named.model?.providerLabel).toBe("OpenRouter");
+  });
+
+  it("keeps the model id when the catalogue cannot name it", () => {
+    // A model retired from the catalogue, or a provider this build never knew.
+    const named = modelName("openai/gpt-5.6-luna", CATALOGUE);
+    expect(named.label).toBe("gpt-5.6-luna");
+    // Still a mark: the provider and the model ids are the ledger's own facts,
+    // so the row does not move sideways for want of a display name.
+    expect(named.model).toEqual({
+      model: { providerId: "openai", modelId: "gpt-5.6-luna", label: "gpt-5.6-luna" },
+      // Nothing named the account either, so the id stands in for it.
+      providerLabel: "openai",
+    });
+  });
+
+  it("keeps the ids when there is no catalogue at all", () => {
+    // The read is still out, or it failed. An honest id beats a guess.
+    const named = modelName("anthropic/claude-opus-4-1", null);
+    expect(named.label).toBe("claude-opus-4-1");
+    expect(named.model?.providerLabel).toBe("anthropic");
+  });
+
+  it("marks nothing for a null key or a key that is not a model reference", () => {
+    expect(modelName(null, CATALOGUE)).toEqual({ label: "Unknown model", model: null });
+    expect(modelName("claude-opus-4-1", CATALOGUE)).toEqual({
+      label: "claude-opus-4-1",
+      model: null,
+    });
   });
 });
 

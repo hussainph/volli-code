@@ -32,9 +32,11 @@ import type { DbHandle } from "../data-ipc";
 import { AUTOMATION_CHANNELS, AUTOMATION_IPC } from "../ipc-descriptors";
 import type { IpcHandlerTable } from "../ipc-registry";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "../ipc-registry";
-import type { PendingArmedRunCoordinator } from "./pending-armed-runs";
-import type { AutomationRunner } from "./run";
-import type { AutomationService } from "./service";
+import type {
+  PendingArmedRunCoordinator,
+  AutomationRunner,
+  AutomationService,
+} from "@volli/host-core/automations";
 
 export interface AutomationIpcDeps {
   /** Command/event/projection application service; absent only during a degraded boot. */
@@ -112,6 +114,12 @@ export function registerAutomationIpcHandlers(handle: DbHandle, deps: Automation
 
     "volli:automation-runs-for-project": (input): AutomationRunsResult =>
       service.runsForProject(input.projectId),
+
+    "volli:automation-runs-for-automation": (input): AutomationRunsResult =>
+      service.runsForAutomation(input),
+
+    "volli:automation-skips-for-automation": (input): AutomationSkipsResult =>
+      service.skipsForAutomation(input),
 
     "volli:automation-enablement": async (): Promise<AutomationEnablementResult> => ({
       ok: true,

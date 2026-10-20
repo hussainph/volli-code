@@ -46,7 +46,14 @@
  * caption about their age would be the surface apologising for itself. The one
  * line an account with nothing to show earns is a state, not an explanation,
  * and the failed one names its retry: the host's Refresh.
+ *
+ * THE PIN IS THE HOST'S, NOT THE ROW'S (VC-452). A host that can put a window
+ * on the window-bar glyph passes {@link UsageWindowPin}, and each row grows
+ * one pin at its end; a host that cannot passes nothing and the rows are
+ * exactly what they were. The row never learns what a pin means — only
+ * whether its window is pinned and whom to tell when it is pressed.
  */
+import { PushPinIcon } from "@phosphor-icons/react/dist/csr/PushPin";
 import * as React from "react";
 import {
   elapsedShare,
@@ -58,17 +65,27 @@ import {
   type UsageWindow,
 } from "@volli/shared";
 
+import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
+
+/** What a host that can pin a window hands each row. */
+export interface UsageWindowPin {
+  isPinned(windowId: string): boolean;
+  toggle(windowId: string): void;
+}
 
 export function AccountUsage({
   limits,
   now,
   testId,
+  pin,
 }: {
   limits: UsageLimits;
   /** Anchor for the countdown, the hairline and the age. Defaults to the snapshot's arrival. */
   now?: number;
   testId?: string;
+  /** Omitted, the rows carry no pin. */
+  pin?: UsageWindowPin;
 }) {
   if (limits.unavailable !== undefined) {
     return (
@@ -84,17 +101,21 @@ export function AccountUsage({
   // `checkedAt` arrives, and only then. The holder hands back the very same
   // object when nothing changed, so a confirming inspection keeps the key and
   // the anchor with it.
-  return <UsageWindows key={limits.checkedAt} limits={limits} now={now} testId={testId} />;
+  return (
+    <UsageWindows key={limits.checkedAt} limits={limits} now={now} testId={testId} pin={pin} />
+  );
 }
 
 function UsageWindows({
   limits,
   now,
   testId,
+  pin,
 }: {
   limits: UsageLimits;
   now: number | undefined;
   testId: string | undefined;
+  pin: UsageWindowPin | undefined;
 }) {
   // Taken once, before anything draws, and held for this snapshot's life.
   const [at] = React.useState(() => now ?? Date.now());
@@ -106,13 +127,21 @@ function UsageWindows({
     // this block to the row that named the account.
     <div data-testid={testId} className="mb-4 flex flex-col gap-2 last:mb-0">
       {limits.windows.map((window) => (
-        <UsageWindowRow key={window.id} window={window} now={at} />
+        <UsageWindowRow key={window.id} window={window} now={at} pin={pin} />
       ))}
     </div>
   );
 }
 
-function UsageWindowRow({ window, now }: { window: UsageWindow; now: number }) {
+function UsageWindowRow({
+  window,
+  now,
+  pin,
+}: {
+  window: UsageWindow;
+  now: number;
+  pin: UsageWindowPin | undefined;
+}) {
   // Whole points on the surface. The mappers hand through what the provider
   // said — a header's `0.29` becomes `28.999999999999996` — and a bar labelled
   // to fourteen places would be precision the reading does not have.
@@ -136,8 +165,15 @@ function UsageWindowRow({ window, now }: { window: UsageWindow; now: number }) {
             <span className="truncate text-ui tabular-nums text-muted-foreground">{resetsIn}</span>
           )}
         </span>
-        <span className="shrink-0 text-ui tabular-nums text-muted-foreground">
-          {remaining}% left
+        <span className="flex shrink-0 items-baseline gap-1">
+          <span className="text-ui tabular-nums text-muted-foreground">{remaining}% left</span>
+          {pin === undefined ? null : (
+            <PinButton
+              label={window.label}
+              pinned={pin.isPinned(window.id)}
+              onPress={() => pin.toggle(window.id)}
+            />
+          )}
         </span>
       </div>
       {/* The bar is the picture of one division, so it is `role="img"` with
@@ -171,6 +207,46 @@ function UsageWindowRow({ window, now }: { window: UsageWindow; now: number }) {
         )}
       </span>
     </div>
+  );
+}
+
+/**
+ * The pin at the end of a window's first line.
+ *
+ * Always drawn rather than revealed on hover: the ticket that added it was
+ * filed because nobody could find a way to pin, and a control that appears
+ * only under the pointer is one a person has to already know is there. It
+ * stays quiet instead — muted outline at rest, the foreground's filled pin
+ * once pressed — so a list of six accounts is not a column of loud buttons.
+ *
+ * Sized to the 20px `icon-xs` rung and pulled into the line's own height, so
+ * a row with a pin is the same height as one without: the bar below it must
+ * not move when a host starts offering pins.
+ */
+function PinButton({
+  label,
+  pinned,
+  onPress,
+}: {
+  label: string;
+  pinned: boolean;
+  onPress(): void;
+}) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      aria-label={pinned ? `Unpin ${label} from the window bar` : `Pin ${label} to the window bar`}
+      aria-pressed={pinned}
+      title={pinned ? "Unpin from the window bar" : "Pin to the window bar"}
+      onClick={onPress}
+      className="-my-1 self-center"
+    >
+      <PushPinIcon
+        weight={pinned ? "fill" : "bold"}
+        className={pinned ? "text-foreground" : "text-muted-foreground"}
+      />
+    </Button>
   );
 }
 

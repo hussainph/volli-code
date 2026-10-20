@@ -15,6 +15,7 @@ import {
   createAutomationsStore,
   effectiveArmedIn,
   offeredInDigitOrder,
+  offeredInPinnedOrder,
   offeredInRankOrder,
   selectArmedAutomation,
   selectArmings,
@@ -22,11 +23,11 @@ import {
   selectColumnOrders,
   selectColumnRank,
   selectRailFresh,
-  selectTicketRuns,
   type OfferedListSlices,
 } from "./automations";
+import { remoteProject } from "./remote-project.test-support";
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 /**
  * The four slices an Offered-list composition reads, assembled from one
@@ -81,6 +82,8 @@ function stubApi(impl: {
   delete?: () => Promise<unknown>;
   runsForProject?: () => Promise<unknown>;
   skipsForProject?: () => Promise<unknown>;
+  runsForAutomation?: (input: { projectId: string; automationId: string }) => Promise<unknown>;
+  skipsForAutomation?: (input: { projectId: string; automationId: string }) => Promise<unknown>;
   runsForTicket?: () => Promise<unknown>;
   enablement?: () => Promise<unknown>;
   setEnabled?: () => Promise<unknown>;
@@ -103,6 +106,12 @@ function stubApi(impl: {
         ),
         skipsForProject: vi.fn(
           impl.skipsForProject ?? (() => Promise.resolve({ ok: true, skips: [] })),
+        ),
+        runsForAutomation: vi.fn(
+          impl.runsForAutomation ?? (() => Promise.resolve({ ok: true, runs: [] })),
+        ),
+        skipsForAutomation: vi.fn(
+          impl.skipsForAutomation ?? (() => Promise.resolve({ ok: true, skips: [] })),
         ),
         runsForTicket: vi.fn(impl.runsForTicket ?? (() => Promise.resolve({ ok: true, runs: [] }))),
         // The stored set is the ENABLED one (`automations/enablement.ts`), so
@@ -757,6 +766,105 @@ describe("run history", () => {
   });
 });
 
+describe("one Automation's history (VC-297)", () => {
+  const SCOPED_SKIP: AutomationSkippedOccurrence = {
+    id: "skip-1",
+    automationId: "automation-1",
+    automationName: "Review sweep",
+    projectId: "p1",
+    dueAt: 500,
+    missedCount: 1,
+    reason: { kind: "app-closed" },
+    recordedAt: 900,
+  };
+
+  it("caches both halves under the project AND Automation pair", async () => {
+    const listed = [run({ id: "run-2", createdAt: 20 }), run()];
+    stubApi({
+      runsForAutomation: () => Promise.resolve({ ok: true, runs: listed }),
+      skipsForAutomation: () => Promise.resolve({ ok: true, skips: [SCOPED_SKIP] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toEqual(listed);
+    expect(store.getState().skipsByAutomation["p1:automation-1"]).toEqual([SCOPED_SKIP]);
+    // The PAIR, never the Automation alone: a global Automation is listable in
+    // every project, and its Runs there are not its Runs here.
+    expect(store.getState().runsByAutomation["automation-1"]).toBeUndefined();
+  });
+
+  it("keeps one project's cache clear of another's answer for the same record", async () => {
+    const here = [run({ id: "run-here" })];
+    const there = [run({ id: "run-there" })];
+    stubApi({
+      runsForAutomation: (input: { projectId: string }) =>
+        Promise.resolve({ ok: true, runs: input.projectId === "p1" ? here : there }),
+      skipsForAutomation: () => Promise.resolve({ ok: true, skips: [] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+    await store.getState().refreshAutomationHistory("p2", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toEqual(here);
+    expect(store.getState().runsByAutomation["p2:automation-1"]).toEqual(there);
+  });
+
+  it("toasts a refused Run read and writes NEITHER half", async () => {
+    // One write for both halves, so a refusal leaves the pair untouched rather
+    // than caching a list that was never true beside a missing one.
+    stubApi({
+      runsForAutomation: () => Promise.resolve({ ok: false, error: "Unknown project" }),
+      skipsForAutomation: () => Promise.resolve({ ok: true, skips: [SCOPED_SKIP] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(store.getState().skipsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load run history: Unknown project",
+      expect.anything(),
+    );
+  });
+
+  it("toasts a refused skip read, and still writes neither", async () => {
+    stubApi({
+      runsForAutomation: () => Promise.resolve({ ok: true, runs: [run()] }),
+      skipsForAutomation: () => Promise.resolve({ ok: false, error: "Unknown project" }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(store.getState().skipsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load skipped occurrences: Unknown project",
+      expect.anything(),
+    );
+  });
+
+  it("toasts a transport failure the same way", async () => {
+    stubApi({
+      runsForAutomation: () => Promise.reject(new Error("ipc gone")),
+      skipsForAutomation: () => Promise.resolve({ ok: true, skips: [] }),
+    });
+    const store = createAutomationsStore();
+
+    await store.getState().refreshAutomationHistory("p1", "automation-1");
+
+    expect(store.getState().runsByAutomation["p1:automation-1"]).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't load run history: ipc gone",
+      expect.anything(),
+    );
+  });
+});
+
 describe("skipped occurrences (VC-130)", () => {
   const SKIP: AutomationSkippedOccurrence = {
     id: "skip-1",
@@ -1107,6 +1215,22 @@ describe("the digit order (VC-132)", () => {
     ).toEqual(["automation-2", "automation-1"]);
   });
 
+  it("draws the lane's whole pinned list, whose first nine are the drag's digits", () => {
+    const crowd = Array.from({ length: 11 }, (_, index) =>
+      automation({ id: `crowd-${index}`, trigger: COLUMNS_TRIGGER }),
+    );
+    const slices: OfferedListSlices = {
+      automations: crowd,
+      armings: [{ ...ARMING, automationId: "crowd-10" }],
+      orders: [],
+      enabledAutomationIds: ["crowd-10"],
+    };
+    const pinned = offeredInPinnedOrder(slices, "doing").map((row) => row.id);
+    expect(pinned).toHaveLength(11);
+    expect(pinned[0]).toBe("crowd-10");
+    expect(offeredInDigitOrder(slices, "doing").map((row) => row.id)).toEqual(pinned.slice(0, 9));
+  });
+
   it("offers nothing for a column no Trigger names", async () => {
     const store = await loaded({});
     expect(offeredInDigitOrder(slicesFor(store.getState(), "p1"), "todo")).toEqual([]);
@@ -1114,58 +1238,6 @@ describe("the digit order (VC-132)", () => {
     // lookup's own empty answer, which the frozen-empties case above can only
     // reach through a project that was never read.
     expect(offeredInRankOrder(slicesFor(store.getState(), "p1"), "needs_review")).toEqual([]);
-  });
-});
-
-describe("refreshTicketRuns", () => {
-  it("caches one Ticket's Runs under that Ticket, beside the project's own history", async () => {
-    const listed = [run(), run({ id: "run-2", automationId: null, automationName: null })];
-    stubApi({ runsForTicket: () => Promise.resolve({ ok: true, runs: listed }) });
-    const store = createAutomationsStore();
-
-    // The rail's read and the page's read are separate slices on purpose: a
-    // Ticket's rail must not depend on a project history nobody opened.
-    await store.getState().refreshTicketRuns("t1");
-
-    expect(store.getState().runsByTicket["t1"]).toEqual(listed);
-    expect(store.getState().runsByProject["p1"]).toBeUndefined();
-    expect(selectTicketRuns(store.getState(), "t1")).toEqual(listed);
-  });
-
-  it("toasts a refusal and leaves the cache empty", async () => {
-    stubApi({ runsForTicket: () => Promise.resolve({ ok: false, error: "Unknown ticket" }) });
-    const store = createAutomationsStore();
-
-    await store.getState().refreshTicketRuns("t1");
-
-    expect(store.getState().runsByTicket["t1"]).toBeUndefined();
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't load this ticket's runs: Unknown ticket",
-      expect.anything(),
-    );
-  });
-
-  it("toasts a transport failure the same way", async () => {
-    stubApi({ runsForTicket: () => Promise.reject(new Error("ipc gone")) });
-    const store = createAutomationsStore();
-
-    await store.getState().refreshTicketRuns("t1");
-
-    expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't load this ticket's runs: ipc gone",
-      expect.anything(),
-    );
-  });
-
-  it("answers one frozen empty list before the first read", () => {
-    const store = createAutomationsStore();
-
-    const first = selectTicketRuns(store.getState(), "t1");
-
-    expect(first).toEqual([]);
-    // The same reference, so a rail subscribing to it does not re-render on
-    // every unrelated store update while the cache is cold.
-    expect(selectTicketRuns(store.getState(), "t2")).toBe(first);
   });
 });
 
@@ -1314,5 +1386,47 @@ describe("selectRailFresh", () => {
     expect(selectRailFresh(warm, "p1", 4)).toBe(false);
     // Another project reading at the same version does not answer for p1.
     expect(selectRailFresh(warm, "p2", 3)).toBe(false);
+  });
+});
+
+// VC-711: a remote project's Automations are its host's. Nothing about one is
+// asked of this Mac: reads answer empty, writes say where they are not available.
+describe("a remote project", () => {
+  let undo: (() => void) | null = null;
+  afterEach(() => {
+    undo?.();
+    undo = null;
+  });
+
+  it("lists nothing and arms nothing, asking this Mac nothing", async () => {
+    stubApi({});
+    undo = remoteProject("r1");
+    const store = createAutomationsStore();
+    expect(await store.getState().refresh("r1")).toBe(true);
+    expect(await store.getState().refreshArming("r1")).toBe(true);
+    expect(await store.getState().refreshOrder("r1")).toBe(true);
+    await store.getState().refreshRuns("r1");
+    await store.getState().refreshSkips("r1");
+    await store.getState().refreshAutomationHistory("r1", "automation-1");
+    expect(store.getState().byProject["r1"]).toEqual([]);
+    expect(store.getState().armingByProject["r1"]).toEqual([]);
+    expect(store.getState().orderByProject["r1"]).toEqual([]);
+    const refused = "Not available on box yet";
+    expect(
+      await store.getState().arm({ projectId: "r1", status: "doing", automationId: "a" }),
+    ).toBe(refused);
+    expect(
+      await store
+        .getState()
+        .setColumnOrder({ projectId: "r1", status: "doing", rankedAutomationIds: [] }),
+    ).toBe(refused);
+    expect(await store.getState().save({ projectId: "r1" } as never)).toBe(refused);
+    store.getState().openEditor("r1");
+    expect(await store.getState().save({ projectId: null } as never)).toBe(refused);
+    await store.getState().duplicate("r1", automation());
+    await store.getState().remove("r1", automation());
+    for (const verb of Object.values(window.api.automations)) {
+      expect(verb).not.toHaveBeenCalled();
+    }
   });
 });

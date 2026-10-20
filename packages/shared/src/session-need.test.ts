@@ -134,8 +134,8 @@ describe("sessionPersonNeed", () => {
 
 describe("sessionNotificationItem", () => {
   /**
-   * The one derivation both sides of the suppression comparison use (VC-295
-   * round 2). A producer names the item its alert is about with it, and a
+   * The one derivation both sides of the suppression comparison use (VC-295).
+   * A producer names the item its alert is about with it, and a
    * window reports the item it is showing with it — so "is the person already
    * looking at this" is a comparison between two answers to the same question,
    * rather than between two similar-looking guesses.
@@ -164,7 +164,7 @@ describe("sessionNotificationItem", () => {
   });
 
   it("names the NEWEST failure when several are live — the one the row draws", () => {
-    // Round 3. The blocker row shows `attention.primary`, which the ledger
+    // The blocker row shows `attention.primary`, which the ledger
     // defines as the newest active attention. An item chosen by scan order
     // instead could name a failure the person cannot see, which is both a dead
     // deep link and a window claiming to show something it does not.
@@ -228,7 +228,7 @@ describe("sessionNotificationItem", () => {
 
 describe("revealedSessionAttention", () => {
   /**
-   * The one answer to "which Attention is the row drawing" (VC-295 round 4).
+   * The one answer to "which Attention is the row drawing" (VC-295).
    * The blocker asks it, and so does the window reporting what it shows — two
    * derivations is how the row came to draw one problem while the window
    * claimed another was visible.
@@ -292,7 +292,7 @@ describe("shownSessionNotificationItem", () => {
     ).toEqual({ interactionId: "ask-1", attentionId: null });
   });
 
-  it("names the revealed question when it is one of several open (round 5)", () => {
+  it("names the revealed question when it is one of several open", () => {
     // The plane puts the revealed question in the foot slot (or scrolls to its
     // row), so that — not the first — is what the person is looking at.
     const twoQuestions = projection({

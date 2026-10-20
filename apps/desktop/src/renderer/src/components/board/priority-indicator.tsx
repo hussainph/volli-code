@@ -25,7 +25,7 @@ const FILLED_COUNT: Record<TicketPriority, number> = {
 
 const BAR_HEIGHTS = [4, 7, 10];
 
-/** Linear-style 3-bar priority signal: stair-step bars, bottom-aligned. */
+/** 3-bar priority signal: stair-step bars, bottom-aligned. */
 export function PriorityIndicator({ priority }: { priority: TicketPriority }) {
   const filled = FILLED_COUNT[priority];
   const label = TICKET_PRIORITY_LABELS[priority];

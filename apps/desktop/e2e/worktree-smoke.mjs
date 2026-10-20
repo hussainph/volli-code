@@ -453,6 +453,84 @@ async function main() {
       },
     );
 
+    // === 4. The ticket's worktree moved to another branch. A same-ticket
+    // branch an agent cut there (VC-297) is adopted: the next Session opens in
+    // the worktree and the ticket records the branch actually checked out. A
+    // branch that is not the ticket's is still refused, and nothing is switched.
+    await attempt(
+      4,
+      "Wrong-branch worktree: a same-ticket branch is adopted (Session opens, ticket records it via an automation worktree_changed); another ticket's branch is still refused untouched",
+      async () => {
+        const setRes = await setSetupCommand(null);
+        if (!setRes.ok) return { ok: false, detail: `setup_command clear failed: ${setRes.error}` };
+
+        const title = "Worktree adoption ticket";
+        const { ticketId, displayId } = await createTicketViaBridge(page, PROJECT.name, {
+          title,
+          status: "todo",
+        });
+        const first = await bootSession(ticketId, title);
+        if (!first.ok) return { ok: false, detail: `first create failed: ${first.error}` };
+        await page.evaluate((id) => window.api.terminal.kill(id), first.sessionId).catch(() => {});
+        const worktreeDir = first.session.cwd;
+        const originalBranch = ticketBranchName(displayId, title);
+
+        // What the agent did: cut a narrower branch of the same ticket.
+        const narrower = `volli/${displayId}-agent-narrower`;
+        await git(worktreeDir, ["switch", "-q", "-c", narrower]);
+
+        const adopted = await bootSession(ticketId, title);
+        if (adopted.ok) liveSessionIds.push(adopted.sessionId);
+        const opened = adopted.ok && adopted.session.cwd === worktreeDir;
+        const adoptedRow = await ticketRow(ticketId);
+        const recorded = adoptedRow?.branch === narrower;
+        const adoptedEvent = (await eventsFor(ticketId)).find(
+          (e) =>
+            e.payload.kind === "worktree_changed" &&
+            e.actor === "automation" &&
+            e.payload.from.branch === originalBranch &&
+            e.payload.to.branch === narrower,
+        );
+        const stillOnNarrower =
+          (await git(worktreeDir, ["branch", "--show-current"])).stdout.trim() === narrower;
+        const originalKept =
+          (await git(projectPath, ["branch", "--list", originalBranch])).stdout.trim().length > 0;
+        if (adopted.ok) {
+          await page.evaluate((id) => window.api.terminal.kill(id), adopted.sessionId);
+        }
+
+        // Another ticket's branch in this ticket's worktree: refused, loudly.
+        const foreign = `volli/${PROJECT.prefix}-999-someone-elses-work`;
+        await git(worktreeDir, ["switch", "-q", "-c", foreign]);
+        const refused = await bootSession(ticketId, title);
+        if (refused.ok) liveSessionIds.push(refused.sessionId);
+        const refusedLoudly =
+          refused.ok === false && String(refused.error).includes(`on branch ${foreign}`);
+        const untouched =
+          (await git(worktreeDir, ["branch", "--show-current"])).stdout.trim() === foreign;
+        const branchKept = (await ticketRow(ticketId))?.branch === narrower;
+
+        const ok =
+          opened &&
+          recorded &&
+          adoptedEvent !== undefined &&
+          stillOnNarrower &&
+          originalKept &&
+          refusedLoudly &&
+          untouched &&
+          branchKept;
+        return {
+          ok,
+          detail:
+            `opened=${opened} recorded=${recorded} event=${adoptedEvent !== undefined} ` +
+            `stillOnNarrower=${stillOnNarrower} originalKept=${originalKept} ` +
+            `refusedLoudly=${refusedLoudly} untouched=${untouched} branchKept=${branchKept} ` +
+            `adoptError=${JSON.stringify(adopted.ok ? null : adopted.error)} ` +
+            `refuseError=${JSON.stringify(refused.ok ? null : refused.error)}`,
+        };
+      },
+    );
+
     // Kill any live PTYs so teardown's close gate has nothing busy to negotiate.
     for (const sessionId of liveSessionIds) {
       await page.evaluate((id) => window.api.terminal.kill(id), sessionId).catch(() => {});

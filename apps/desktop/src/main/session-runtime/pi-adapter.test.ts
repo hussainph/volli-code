@@ -1,26 +1,44 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
+import { describe, expect, it, vi } from "vite-plus/test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
-  getProjectAuthorityPolicy,
-  insertProject,
-  updateProjectAuthorityPolicy,
-} from "../db/projects-repo";
-import { openTestDb, testProject } from "../db/test-helpers";
-import type { TestDb } from "../db/test-helpers";
+  createSqliteSessionLedger,
+  openRawDb,
+  openTestDb,
+  testProject,
+} from "@volli/host-core/testing";
+import {
+  createFileTranscriptArtifactStore,
+  closeStaleAttachments,
+  createPiNativeAdapter,
+  createPiRuntimeHost,
+  PI_ADAPTER_ID,
+  type PiAdapterOptions,
+  type PiRuntimeContext,
+} from "@volli/host-core/session-runtime";
+import { SecretService, SecretStore } from "@volli/host-core/secrets";
+
+import { insertProject } from "@volli/host-core/db";
 import type {
   BindingHandle,
   HarnessCommand,
   NativeAttachmentSpec,
   ObservationSink,
 } from "@volli/session-engine";
-import { NativeAttachmentError, sessionRootThreadId } from "@volli/session-engine";
 import {
-  BUILTIN_RULE_PACK_HASH,
-  BUILTIN_RULE_PACK_ID,
-  DEFAULT_AUTHORITY_POLICY,
+  createInMemorySessionLedger,
+  createInMemoryTranscriptArtifactStore,
+  createSessionEngine,
+  createSessionRuntime,
+  NativeAttachmentError,
+  sessionRootThreadId,
+} from "@volli/session-engine";
+import {
+  codeModeSurfaceFor,
   errorMessage,
   mcpProviderToolName,
-  resolveAuthorityPolicy,
+  promptId,
   sessionToolIds,
   skillResourcePart,
   type AgentRuntime,
@@ -30,6 +48,7 @@ import {
   type ModelAccessSnapshot,
   type ModelSelectionOutcome,
   type PromptResource,
+  type RuntimeAskChoice,
   type RuntimeAskRequest,
   type RuntimeAskUserRequest,
   type RuntimeAttachmentHandle,
@@ -41,25 +60,24 @@ import {
 } from "@volli/shared";
 import type { UIMessage } from "ai";
 
-import {
-  createPiNativeAdapter,
-  createPiRuntimeHost,
-  PI_ADAPTER_ID,
-  type PiAdapterOptions,
-  type PiRuntimeContext,
-} from "./pi-adapter";
+// The default runtime factory is the real Pi-backed one, which opens Pi's own
+// credential and model stores on this machine. It is spied so a test can see it
+// chosen without building it; it delegates to the real factory unless a test says otherwise.
+const { defaultRuntimeFactory } = vi.hoisted(() => ({ defaultRuntimeFactory: vi.fn() }));
+vi.mock("@volli/agent-runtime", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@volli/agent-runtime")>();
+  defaultRuntimeFactory.mockImplementation(original.createPiAgentRuntime);
+  return { ...original, createPiAgentRuntime: defaultRuntimeFactory };
+});
+
+/** What the runtime factory is handed, read off the adapter's own option type. */
+type RuntimeFactoryOptions = Parameters<NonNullable<PiAdapterOptions["createRuntime"]>>[0];
 
 const SESSION_ID = "session-1";
 const ATTACHMENT_ID = "attachment-1";
 
 const context: PiRuntimeContext = {
   role: "ticket",
-  location: "worktree",
-  // The built-in defaults, which is what a project that has recorded no
-  // departure resolves to — `enforcement: "observe"`, so the Snapshot is pinned
-  // and the runtime is handed none.
-  authorityPolicy: DEFAULT_AUTHORITY_POLICY,
-  priorAuthorityDenials: 0,
   projectId: "project-1",
   ticketId: "ticket-1",
   rootThreadId: sessionRootThreadId(SESSION_ID),
@@ -120,6 +138,7 @@ class FakeRuntime implements AgentRuntime {
   readonly deliveries: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[1]> = [];
   /** What each submit was asked to settle on (VC-324). */
   readonly settles: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[5]> = [];
+  readonly targetTurnIds: Array<Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[6]> = [];
   readonly submissionCommandIds: Array<
     Parameters<RuntimeAttachmentHandle["submitUserMessage"]>[2]
   > = [];
@@ -127,6 +146,8 @@ class FakeRuntime implements AgentRuntime {
   readonly modelSelections: SessionRuntimeSpec["model"][] = [];
   readonly modelSelectionOutcomes: ModelSelectionOutcome[] = [];
   modelSelectionFailure: unknown = null;
+  /** When set, Pi fails the interrupt it is asked for. */
+  interruptFailure: unknown = null;
   interrupts = 0;
   retries = 0;
   closes = 0;
@@ -141,6 +162,8 @@ class FakeRuntime implements AgentRuntime {
   reconciliationCursor: string | null = null;
   readonly reconciliationObservations: RuntimeObservation[] = [];
   readonly reconciliationReceipts: Array<{ commandId: string; acceptedAt: number }> = [];
+  /** Whether Pi's replay carries receipts at all; the port treats their absence as none. */
+  reportsReconciliationReceipts = true;
   readonly reconciledFrom: Array<string | null> = [];
   recovery: RuntimeAttachmentHandle["recovery"] = {
     runtime: "pi",
@@ -177,11 +200,13 @@ class FakeRuntime implements AgentRuntime {
         _images,
         resources = [],
         settle,
+        targetTurnId,
       ): Promise<DeliveryOutcome> => {
         this.submissions.push(text);
         this.submissionResources.push(resources);
         this.deliveries.push(delivery);
         this.settles.push(settle);
+        this.targetTurnIds.push(targetTurnId);
         this.submissionCommandIds.push(commandId);
         if (this.submitFailure !== null) throw this.submitFailure;
         return this.outcomes.shift() ?? { kind: "delivered", delivery: "prompt" };
@@ -192,6 +217,7 @@ class FakeRuntime implements AgentRuntime {
         return this.modelSelectionOutcomes.shift() ?? { kind: "selected" };
       },
       interrupt: async (): Promise<void> => {
+        if (this.interruptFailure !== null) throw this.interruptFailure;
         this.interrupts += 1;
       },
       retry: async (commandId): Promise<DeliveryOutcome> => {
@@ -213,7 +239,9 @@ class FakeRuntime implements AgentRuntime {
         return {
           cursor: this.reconciliationCursor ?? cursor,
           observations: [...this.reconciliationObservations],
-          receipts: [...this.reconciliationReceipts],
+          ...(this.reportsReconciliationReceipts
+            ? { receipts: [...this.reconciliationReceipts] }
+            : {}),
         };
       },
       recovery: this.recovery,
@@ -259,25 +287,25 @@ async function attached(
 }
 
 /** The interaction id the request below is asked under, spelled out because it is durable. */
-const ASK_INTERACTION_ID = "ask:call-7";
+const ASK_INTERACTION_ID = "budget-ask:call-7";
 
-const ASK_REASON = "`git reset --hard` discards uncommitted work in this checkout.";
+const ASK_REASON = "The delegation allowance has been exhausted.";
 
 function askRequest(overrides: Partial<RuntimeAskRequest> = {}): RuntimeAskRequest {
   return {
-    cause: "command.git-discards-work",
+    cause: "budget.delegation-children",
     tool: "execute",
     toolCallId: "call-7",
     turnId: "turn-1",
     reason: ASK_REASON,
-    trip: "consecutive",
+    trip: "budget",
     overridable: true,
     ...overrides,
   };
 }
 
 /** How one ask ended. */
-type AskOutcome = { answered: string } | { failed: string };
+type AskOutcome = { answered: RuntimeAskChoice } | { failed: string };
 
 /**
  * Escalate the way the runtime does, and read the result the way it reads it.
@@ -384,11 +412,137 @@ function cancelled(occurredAt: number, interactionId = ASK_INTERACTION_ID): Runt
   };
 }
 
+/** A runtime option a test injects only to watch it forwarded; ever being called is a failure. */
+function unusedRuntimeOption(name: string): never {
+  throw new Error(`${name} is never called by this test`);
+}
+
 const unusedExecutionEnvFactory: NonNullable<
   PiAdapterOptions["executionEnvFactory"]
 > = async () => {
   throw new Error("never called by this test");
 };
+
+/** Recorded attachments survive removal of the live review machinery. */
+describe("legacy enforce attachment boot recovery", () => {
+  it("rehydrates its existing Pi identity without passing a gate or approval host", async () => {
+    const db = openTestDb();
+    let clock = 50_000;
+    const venue = { id: "local", kind: "local" as const };
+    const launch = () => {
+      const engine = createSessionEngine({
+        ledger: createSqliteSessionLedger(db.db),
+        clock: { now: () => clock++ },
+        ids: { next: (kind) => `${kind}-${clock++}` },
+      });
+      const { adapter, runtime: model } = composition({
+        resolveRuntimeContext: async (sessionId) => ({
+          ...context,
+          role: "project",
+          ticketId: null,
+          rootThreadId: sessionRootThreadId(sessionId),
+        }),
+      });
+      const host = createSessionRuntime({
+        engine,
+        executor: adapter,
+        artifacts: createFileTranscriptArtifactStore(join(dirname(db.dbPath), "transcripts")),
+        locations: {
+          resolve: async () => ({ directory: "/work", venue }),
+          prepare: async () => ({ directory: "/work", venue }),
+          reaffirm: async () => undefined,
+        },
+        clock: { now: () => clock++ },
+        ids: { next: (kind) => `rt-${kind}-${clock++}` },
+      });
+      return { engine, host, model };
+    };
+    try {
+      insertProject(db.db, testProject({ id: "project-1" }));
+      const prior = launch();
+      const { sessionId } = await prior.host.command({
+        commandId: "legacy-create",
+        command: {
+          kind: "session.create",
+          projectId: "project-1",
+          ticketId: null,
+          role: "project",
+          parentSessionId: null,
+          title: "Legacy enforce task",
+        },
+      });
+      await prior.host.command({
+        commandId: "legacy-attach",
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      await prior.model.observe({ kind: "turn", state: "started", turnId: "lost-turn" });
+      const attachmentId = (await prior.host.snapshot({ sessionId })).projection.liveExecutor!.id;
+      const row = db.db
+        .prepare(
+          "SELECT id, payload FROM session_events WHERE session_id = ? AND json_extract(payload, '$.kind') = 'attachment.opened'",
+        )
+        .get(sessionId) as { id: string; payload: string };
+      const payload = JSON.parse(row.payload);
+      payload.attachment.authority = {
+        mode: "auto",
+        location: "worktree",
+        enforcement: "enforce",
+        protection: true,
+        judgmentMode: "auto",
+        tools: ["read", "edit", "write", "execute"],
+        rulePackId: "volli-builtin-v1",
+        rulePackHash: "legacy-rule-pack",
+        classifierModel: { providerId: "anthropic", modelId: "legacy" },
+        fallback: { consecutiveDenials: 1, sessionDenials: 20 },
+      };
+      db.db
+        .prepare("UPDATE session_events SET payload = ? WHERE id = ?")
+        .run(JSON.stringify(payload), row.id);
+      db.db
+        .prepare("DELETE FROM session_projection_checkpoints WHERE session_id = ?")
+        .run(sessionId);
+      db.db.close();
+      db.db = openRawDb(db.dbPath);
+      db.db.pragma("foreign_keys = ON");
+      const restarted = launch();
+      restarted.model.reconciliationObservations.push({
+        kind: "turn",
+        state: "interrupted",
+        turnId: "lost-turn",
+      });
+      const errors: unknown[] = [];
+      expect(
+        await closeStaleAttachments({
+          engine: restarted.engine,
+          reconcile: (input) => restarted.host.reconcile(input),
+          projectIds: ["project-1"],
+          newId: () => `boot-${clock++}`,
+          now: () => clock++,
+          onError: (_id, error) => errors.push(error),
+        }),
+      ).toBe(0);
+      expect(errors).toEqual([]);
+      expect(restarted.model.spec.recovery).toEqual(prior.model.recovery);
+      for (const key of [
+        "authority",
+        "approvals",
+        "decisions",
+        "authorityReason",
+        "priorAuthorityDenials",
+        "beforeToolCall",
+      ]) {
+        expect(restarted.model.spec).not.toHaveProperty(key);
+      }
+      const projection = (await restarted.host.snapshot({ sessionId })).projection;
+      expect(projection.liveExecutor!.id).toBe(attachmentId);
+      expect(projection.liveExecutor!.authority).toBeNull();
+      expect(projection.turnActive).toBe(false);
+    } finally {
+      db.cleanup();
+    }
+  });
+});
 
 describe("Pi native adapter identity", () => {
   it("declares the one adapter id and the pinned runtime identity", () => {
@@ -436,178 +590,320 @@ describe("Pi runtime host", () => {
     expect(runtime.modelAccessInputs).toEqual([{ refresh: true }]);
     expect(runtime.specs).toHaveLength(1);
   });
+
+  it("builds the Pi-backed runtime itself when no runtime factory is injected", () => {
+    const runtime = new FakeRuntime();
+    defaultRuntimeFactory.mockClear();
+    defaultRuntimeFactory.mockReturnValueOnce(runtime);
+
+    const host = createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+    });
+
+    expect(defaultRuntimeFactory).toHaveBeenCalledOnce();
+    expect(defaultRuntimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionDataDir: "/data/pi-sessions" }),
+    );
+    expect(host.adapter.id).toBe(PI_ADAPTER_ID);
+  });
+
+  it("answers utility completions through the same runtime the host attaches sessions with", async () => {
+    const runtime = new FakeRuntime();
+    runtime.utilityReplies.push("VC-12: Host the Pi runtime");
+    const host = createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: () => runtime,
+    });
+    const completion: UtilityCompletion = {
+      model: context.model,
+      systemPrompt: "Title the ticket.",
+      user: context.brief,
+    };
+
+    expect(await host.completeUtility(completion)).toEqual({
+      text: "VC-12: Host the Pi runtime",
+      usage: null,
+    });
+    expect(runtime.utilityCompletions).toEqual([completion]);
+  });
+
+  it("reads provider usage through the platform fetch, looked up when the probe runs", async () => {
+    const seen: Array<RuntimeFactoryOptions["usageLimits"]> = [];
+    createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: (options) => {
+        seen.push(options.usageLimits);
+        return new FakeRuntime();
+      },
+    });
+
+    // Installed after the host exists: the probe must read the platform fetch
+    // at call time, not capture whichever one was global at construction.
+    const platformFetch = vi.fn(
+      async (_url: string, _init: unknown) => new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", platformFetch);
+    try {
+      const init = {
+        method: "GET" as const,
+        headers: {},
+        signal: new AbortController().signal,
+        redirect: "error" as const,
+      };
+
+      const response = await seen[0]!.fetch("https://usage.example/limits", init);
+
+      expect(platformFetch).toHaveBeenCalledWith("https://usage.example/limits", init);
+      expect(response.status).toBe(204);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("hands the rest of the injected runtime options to the Pi runtime factory unchanged", () => {
+    const credentials = { sentinel: "credentials" } as unknown as NonNullable<
+      PiAdapterOptions["credentials"]
+    >;
+    const catalogs = { sentinel: "catalogs" } as unknown as NonNullable<
+      PiAdapterOptions["catalogs"]
+    >;
+    const catalogReady = Promise.resolve();
+    const compactionPolicy: NonNullable<PiAdapterOptions["compactionPolicy"]> = () =>
+      unusedRuntimeOption("compactionPolicy");
+    const observability = { sentinel: "observability" } as unknown as NonNullable<
+      PiAdapterOptions["observability"]
+    >;
+    const connectivity = { sentinel: "connectivity" } as unknown as NonNullable<
+      PiAdapterOptions["connectivity"]
+    >;
+    const persistActivityImage: NonNullable<PiAdapterOptions["persistActivityImage"]> = () =>
+      unusedRuntimeOption("persistActivityImage");
+    const usageLimits: NonNullable<PiAdapterOptions["usageLimits"]> = {
+      fetch: async () => unusedRuntimeOption("usageLimits"),
+    };
+    const seen: RuntimeFactoryOptions[] = [];
+
+    createPiRuntimeHost({
+      sessionDataDir: "/data/pi-sessions",
+      resolveRuntimeContext: async () => context,
+      createRuntime: (options) => {
+        seen.push(options);
+        return new FakeRuntime();
+      },
+      credentials,
+      catalogReady,
+      catalogs,
+      compactionPolicy,
+      observability,
+      connectivity,
+      persistActivityImage,
+      usageLimits,
+    });
+
+    const options = seen[0]!;
+    expect(options.credentials).toBe(credentials);
+    expect(options.catalogReady).toBe(catalogReady);
+    expect(options.catalogs).toBe(catalogs);
+    expect(options.compactionPolicy).toBe(compactionPolicy);
+    expect(options.observability).toBe(observability);
+    expect(options.connectivity).toBe(connectivity);
+    expect(options.persistActivityImage).toBe(persistActivityImage);
+    expect(options.usageLimits).toBe(usageLimits);
+  });
 });
 
-/**
- * VC-44's acceptance, held here because this is the one product caller that
- * constructs an Authority Snapshot.
- */
-describe("Pi native adapter authority snapshot", () => {
-  const policy = (over: Parameters<typeof resolveAuthorityPolicy>[0]) =>
-    ({
-      resolveRuntimeContext: async () => ({
-        ...context,
-        authorityPolicy: resolveAuthorityPolicy(over),
-      }),
-    }) satisfies Partial<PiAdapterOptions>;
-
-  it("pins a Snapshot the Session Engine can record, naming the pack it ran under", async () => {
-    const { binding } = await attached();
-
-    // The whole point of the ticket: `rulePackId`/`rulePackHash` finally have
-    // something durable to be pinned on, so an `authority.denied` event — which
-    // carries this attachment's id — resolves to the exact pack that refused.
-    expect(binding.authority).toMatchObject({
-      mode: "auto",
-      location: "worktree",
-      rulePackId: BUILTIN_RULE_PACK_ID,
-      rulePackHash: BUILTIN_RULE_PACK_HASH,
-    });
-  });
-
-  it("records the Agent Tool Surface the Session actually holds, interaction tools included", async () => {
-    // VC-3's guarantee, held in the product rather than only in tests: the
-    // Snapshot is the Session's FROZEN tool surface, and `runtimeSpec` asserts
-    // the array Pi resolves against re-derives to that same list. So it cannot
-    // under-report by the three tools that used to trip `tool.not-bundled`.
-    const { binding, runtime } = await attached({
-      resolveRuntimeContext: async () => ({
-        ...context,
-        toolSurface: ["read", "edit", "write", "execute", "ask_user", "web_fetch", "web_search"],
-      }),
-      resolveWebPorts: () => ({
-        webFetch: async () => {
-          throw new Error("unused");
-        },
-        webSearch: async () => {
-          throw new Error("unused");
+describe("Pi native adapter context carry", () => {
+  it("hands a context_replay attach the earlier attachment's sidecar to carry, and nothing for anything else (VC-457)", async () => {
+    const opened = await attached();
+    const { runtime } = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: "/earlier",
+          native: opened.binding.native,
         },
       }),
-    });
-
-    expect(binding.authority?.tools).toEqual([
-      "read",
-      "edit",
-      "write",
-      "execute",
-      "ask_user",
-      "web_fetch",
-      "web_search",
-    ]);
-    expect(binding.authority?.tools).toEqual(sessionToolIds(runtime.spec));
-  });
-
-  it("omits a web tool from the Snapshot when the Session's surface never named one", async () => {
-    // A tool the Session was never offered must not appear in the durable record
-    // of what it was allowed to do. The frozen surface is what decides that, so
-    // resolving no port cannot add one and could not silently drop one either.
-    const { binding } = await attached({ resolveWebPorts: () => ({}) });
-
-    expect(binding.authority?.tools).toEqual(["read", "edit", "write", "execute", "ask_user"]);
-  });
-
-  it("observes by default: the Snapshot is pinned and the runtime is handed none", async () => {
-    const { binding, runtime } = await attached(policy(null));
-
-    expect(binding.authority?.enforcement).toBe("observe");
-    // Absent, not present-and-permissive: Pi installs `beforeToolCall` on this
-    // field's presence, so absence is what keeps the pack dormant.
-    expect("authority" in runtime.spec).toBe(false);
-  });
-
-  it("hands the runtime the Snapshot only when the project asks it to enforce", async () => {
-    const { binding, runtime } = await attached(policy({ enforcement: "enforce" }));
-
-    expect(binding.authority?.enforcement).toBe("enforce");
-    expect(runtime.spec.authority).toEqual(binding.authority);
-  });
-
-  it("pins no Snapshot at all when a project turns the gate off", async () => {
-    // The explicit bypass — Codex's and Claude Code's — and what every Session
-    // ran under before VC-44. Nothing to record, because nothing governed it.
-    const { binding, runtime } = await attached(policy({ enforcement: "off" }));
-
-    expect(binding.authority).toBeNull();
-    expect("authority" in runtime.spec).toBe(false);
-  });
-
-  it("carries the judgment mode and thresholds the project recorded", async () => {
-    const { binding } = await attached(
-      policy({ judgmentMode: "auto", fallback: { consecutiveDenials: 1 } }),
     );
-
-    expect(binding.authority?.judgmentMode).toBe("auto");
-    expect(binding.authority?.fallback).toEqual({ consecutiveDenials: 1, sessionDenials: 20 });
-  });
-
-  it("seeds the runtime with the refusals history already holds", async () => {
-    // The Session half of the fallback is a fact about the Session. A counter
-    // that restarted at zero on every attach would never reach a threshold of
-    // twenty, so the escalation it exists to trigger would never fire — a gate
-    // that looks configured and silently never asks anyone anything.
-    const { runtime } = await attached({
-      resolveRuntimeContext: async () => ({ ...context, priorAuthorityDenials: 19 }),
+    expect(runtime.spec.carry).toEqual({
+      runtime: "pi",
+      sessionId: "pi-session-9",
+      sessionFilePath: "/data/pi-sessions/pi-session-9.jsonl",
+      attachmentId: "attachment-0",
+      workspacePath: "/earlier",
     });
+    expect(runtime.spec).not.toHaveProperty("recovery");
 
-    expect(runtime.spec.priorAuthorityDenials).toBe(19);
+    // A binding this build cannot read opens fresh rather than failing — and
+    // says why, so a lost conversation never looks like a first attach.
+    const unreadable = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: null,
+          native: { id: "x", detail: { runtime: "other" } },
+        },
+      }),
+    );
+    expect(unreadable.runtime.spec).not.toHaveProperty("carry");
+    expect(unreadable.runtime.spec.carryUnreadable).toMatch(/not one this build can read/);
+    const notAnObject = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: null,
+          native: { id: "x", detail: null },
+        },
+      }),
+    );
+    expect(notAnObject.runtime.spec.carryUnreadable).toMatch(/not one this build can read/);
+    // The engine's own "unreadable envelope" is passed through as the reason.
+    const envelope = await attached(
+      undefined,
+      attachmentSpec({
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          unreadable: "Attachment has invalid native binding metadata",
+        },
+      }),
+    );
+    expect(envelope.runtime.spec.carryUnreadable).toBe(
+      "Attachment has invalid native binding metadata",
+    );
+    // A first attach through the reattach door has nothing to carry, and says nothing.
+    const first = await attached(undefined, attachmentSpec({ continuity: "context_replay" }));
+    expect(first.runtime.spec).not.toHaveProperty("carry");
+    expect(first.runtime.spec).not.toHaveProperty("carryUnreadable");
   });
 
-  it("replays a rehydrated attachment's own Snapshot instead of today's policy", async () => {
-    // Pinning is a claim about the attachment's whole life, not about one
-    // process. A relaunch rebuilds the binding from history, and the project's
-    // policy may have changed in between; re-resolving it here would leave the
-    // live gate and the durable record disagreeing about one `attachmentId` —
-    // and `authority.denied` resolves through exactly that id, so the durable
-    // half would be the wrong one.
+  it("opens a fresh attach clean, whatever earlier conversation the engine handed it", async () => {
     const opened = await attached();
-    const pinned = opened.binding.authority;
-    expect(pinned?.enforcement).toBe("observe");
-
-    const { binding, runtime } = await attached(
-      // The project turned enforcement on after this attachment opened.
-      policy({ enforcement: "enforce" }),
+    const { runtime } = await attached(
+      undefined,
       attachmentSpec({
-        continuity: "native_resume",
-        native: opened.binding.native,
-        pinnedAuthority: pinned,
+        continuity: "fresh",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: "/earlier",
+          native: opened.binding.native,
+        },
       }),
     );
 
-    expect(binding.authority).toEqual(pinned);
-    // And the posture rides with it: the replayed Snapshot still observes, so
-    // the gate stays uninstalled for the attachment that opened without it.
-    expect("authority" in runtime.spec).toBe(false);
+    // Only a context_replay attach continues an earlier conversation.
+    expect(runtime.spec).not.toHaveProperty("carry");
+    expect(runtime.spec).not.toHaveProperty("carryUnreadable");
   });
 
-  it("keeps a rehydrated attachment ungoverned when it opened with no Snapshot", async () => {
-    // `null` is a real answer, distinct from absence: the attachment opened
-    // under `off` (or predates VC-44), and a policy edit made afterwards must
-    // not retroactively hand it a Snapshot it never ran under.
+  it("names this attachment's directory as the carried workspace when the earlier one recorded none", async () => {
     const opened = await attached();
-    const { binding, runtime } = await attached(
-      policy({ enforcement: "enforce" }),
+    const { runtime } = await attached(
+      undefined,
       attachmentSpec({
-        continuity: "native_resume",
-        native: opened.binding.native,
-        pinnedAuthority: null,
+        continuity: "context_replay",
+        carryFrom: {
+          attachmentId: "attachment-0",
+          directory: null,
+          native: opened.binding.native,
+        },
       }),
     );
 
-    expect(binding.authority).toBeNull();
-    expect("authority" in runtime.spec).toBe(false);
+    expect(runtime.spec.carry).toEqual({
+      runtime: "pi",
+      sessionId: "pi-session-9",
+      sessionFilePath: "/data/pi-sessions/pi-session-9.jsonl",
+      attachmentId: "attachment-0",
+      workspacePath: attachmentSpec().directory,
+    });
   });
 
-  it("records the tree the Session runs in, so policy can tell a worktree from a Main checkout", async () => {
-    const { binding } = await attached({
-      resolveRuntimeContext: async () => ({
-        ...context,
-        role: "project",
+  it("carries an unreadable earlier binding's reason from the engine to the runtime (VC-457)", async () => {
+    // The two layers end to end: the Session Engine records this attach as
+    // `fresh` — which is what it is — and the reason it could not carry must
+    // still reach the runtime, which is what raises the Attention.
+    const { adapter, runtime: fakeRuntime } = composition();
+    let now = 1;
+    const venue = { id: "local", kind: "local" as const };
+    const engine = createSessionEngine({
+      ledger: createInMemorySessionLedger(),
+      clock: { now: () => now++ },
+      ids: { next: (kind) => `${kind}-${now++}` },
+    });
+    const runtime = createSessionRuntime({
+      engine,
+      executor: adapter,
+      artifacts: createInMemoryTranscriptArtifactStore(),
+      locations: {
+        resolve: async () => ({ directory: "/work", venue }),
+        prepare: async () => ({ directory: "/work", venue }),
+        reaffirm: async () => undefined,
+      },
+      clock: { now: () => now++ },
+      ids: { next: (kind) => `rt-${kind}-${now++}` },
+    });
+    const created = await runtime.command({
+      commandId: "create",
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
         ticketId: null,
-        location: "main-checkout",
-      }),
+        role: "project",
+        parentSessionId: null,
+        title: "Resumed",
+      },
+    });
+    const sessionId = created.sessionId;
+    const provenance = {
+      source: { kind: "adapter" as const, id: adapter.id, detail: null },
+      venue,
+    };
+    await engine.observe({
+      id: "earlier",
+      sessionId,
+      occurredAt: now++,
+      provenance,
+      kind: "attachment.opened",
+      attachment: {
+        id: "earlier",
+        sessionId,
+        adapterId: adapter.id,
+        venue,
+        continuity: "fresh",
+        native: { id: "n", detail: { kind: "not-a-binding-envelope" } },
+        authority: null,
+      },
+    });
+    await engine.observe({
+      id: "earlier:closed",
+      sessionId,
+      occurredAt: now++,
+      provenance,
+      kind: "attachment.closed",
+      attachmentId: "earlier",
+      outcome: "completed",
     });
 
-    expect(binding.authority?.location).toBe("main-checkout");
+    await runtime.command({
+      commandId: "reattach",
+      sessionId,
+      command: { kind: "adapter.attach", continuity: "context_replay" },
+    });
+
+    expect(fakeRuntime.spec).not.toHaveProperty("carry");
+    expect(fakeRuntime.spec.carryUnreadable).toMatch(/native binding/);
+    expect((await runtime.snapshot({ sessionId })).projection.liveExecutor?.continuity).toBe(
+      "fresh",
+    );
   });
 });
 
@@ -627,9 +923,7 @@ describe("Pi native adapter attach", () => {
     expect(spec.venue).toBe("local");
     expect(spec.workspacePath).toBe("/work/volli/.worktrees/VC-12");
     expect(spec.model).toEqual(context.model);
-    // Ungated: no Snapshot means the runtime installs no gate at all, so the
-    // rule pack cannot run however the resolved location reads.
-    expect(spec.authority).toBeUndefined();
+    expect(spec).not.toHaveProperty("authority");
     expect(spec.tools).toEqual({ tools: ["read", "edit", "write", "execute"] });
     expect(spec.brief).toEqual({ text: "VC-12: Host the Pi runtime" });
     // No skills named at start — the field is absent, not an empty list.
@@ -792,9 +1086,69 @@ describe("Pi native adapter attach", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it("hands a surface frozen with the hold pair the whole port, and ends its holds when the turn does (VC-239)", async () => {
-    const turnEnded = vi.fn();
-    const { runtime, sink } = await attached({
+  it.each(["ticket", "subagent"] as const)(
+    "hands a surface frozen with the hold pair the whole port, and ends its holds when the %s turn does (VC-239)",
+    async (role) => {
+      const turnEnded = vi.fn();
+      const { runtime, sink } = await attached({
+        resolveRuntimeContext: async () => ({
+          ...context,
+          role,
+          parentSessionId: "session-parent",
+          toolSurface: [
+            "read",
+            "edit",
+            "write",
+            "execute",
+            "browser_tabs",
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_act",
+            "browser_screenshot",
+            "browser_console",
+            "browser_acquire",
+            "browser_release",
+          ],
+        }),
+        resolveBrowserPort: () => ({
+          tabs: async () => ({ tabs: [] }),
+          navigate: unusedPortMethod,
+          snapshot: unusedPortMethod,
+          act: unusedPortMethod,
+          screenshot: unusedPortMethod,
+          console: unusedPortMethod,
+          acquire: async (input) => ({ kind: "held", tabId: input.tabId }),
+          release: async (input) => ({ tabId: input.tabId }),
+          find: unusedPortMethod,
+          turnEnded,
+        }),
+      });
+
+      expect(runtime.spec.browser?.acquire).toBeDefined();
+      expect(runtime.spec.browser?.release).toBeDefined();
+      // Frozen before browser_find existed (VC-364): the port reaches the
+      // runtime without `find`, so the surface binds eight and not nine.
+      expect(runtime.spec.browser?.find).toBeUndefined();
+
+      // A turn starting ends nothing; a turn completing or interrupted ends
+      // every hold — told BEFORE the fact reaches the sink, so no hold outlives
+      // its turn by even one write.
+      await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
+      expect(turnEnded).not.toHaveBeenCalled();
+      await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
+      expect(turnEnded).toHaveBeenCalledTimes(1);
+      if (role === "subagent")
+        expect(turnEnded).toHaveBeenNthCalledWith(1, { closeHeadlessOwned: true });
+      else expect(turnEnded).toHaveBeenNthCalledWith(1);
+      await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-2" });
+      expect(turnEnded).toHaveBeenCalledTimes(2);
+      expect(turnEnded).toHaveBeenNthCalledWith(2);
+      expect(sink.observations.filter((one) => one.kind === "turn")).toHaveLength(3);
+    },
+  );
+
+  it("hands a surface frozen with browser_find the port's find (VC-364)", async () => {
+    const { runtime } = await attached({
       resolveRuntimeContext: async () => ({
         ...context,
         toolSurface: [
@@ -810,34 +1164,25 @@ describe("Pi native adapter attach", () => {
           "browser_console",
           "browser_acquire",
           "browser_release",
+          "browser_find",
         ],
       }),
       resolveBrowserPort: () => ({
-        tabs: async () => ({ tabs: [] }),
+        tabs: unusedPortMethod,
         navigate: unusedPortMethod,
         snapshot: unusedPortMethod,
         act: unusedPortMethod,
         screenshot: unusedPortMethod,
         console: unusedPortMethod,
-        acquire: async (input) => ({ kind: "held", tabId: input.tabId }),
-        release: async (input) => ({ tabId: input.tabId }),
-        turnEnded,
+        acquire: unusedPortMethod,
+        release: unusedPortMethod,
+        find: unusedPortMethod,
+        turnEnded: () => undefined,
       }),
     });
 
+    expect(runtime.spec.browser?.find).toBeDefined();
     expect(runtime.spec.browser?.acquire).toBeDefined();
-    expect(runtime.spec.browser?.release).toBeDefined();
-
-    // A turn starting ends nothing; a turn completing or interrupted ends
-    // every hold — told BEFORE the fact reaches the sink, so no hold outlives
-    // its turn by even one write.
-    await runtime.observe({ kind: "turn", state: "started", turnId: "turn-1" });
-    expect(turnEnded).not.toHaveBeenCalled();
-    await runtime.observe({ kind: "turn", state: "completed", turnId: "turn-1" });
-    expect(turnEnded).toHaveBeenCalledTimes(1);
-    await runtime.observe({ kind: "turn", state: "interrupted", turnId: "turn-2" });
-    expect(turnEnded).toHaveBeenCalledTimes(2);
-    expect(sink.observations.filter((one) => one.kind === "turn")).toHaveLength(3);
   });
 
   it("refuses attachment rather than binding a frozen browser surface the host cannot answer", async () => {
@@ -976,6 +1321,42 @@ describe("Pi native adapter attach", () => {
       }),
     });
     await expect(attempt).rejects.toThrow(/shell/);
+  });
+
+  it("binds no classify port to a Session born without a decision model, whatever the host has now (VC-478)", async () => {
+    // The frozen record decides: a Session created before a decision model
+    // was configured keeps its tool array and its Cache Prefix.
+    const { runtime } = await attached({
+      resolveClassifyPort: () => ({ classify: unusedPortMethod }),
+    });
+    expect("classify" in runtime.spec).toBe(false);
+  });
+
+  it("hands a recorded classify surface the decision port, bound to its Session and project (VC-478)", async () => {
+    const scopes: unknown[] = [];
+    const port = { classify: unusedPortMethod };
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "classify"],
+      }),
+      resolveClassifyPort: (scope) => {
+        scopes.push(scope);
+        return port;
+      },
+    });
+    expect(scopes).toEqual([{ sessionId: SESSION_ID, projectId: "project-1" }]);
+    expect(runtime.spec.classify).toBe(port);
+  });
+
+  it("refuses attachment rather than dropping a frozen classify tool the launch cannot answer (VC-478)", async () => {
+    const attempt = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "classify"],
+      }),
+    });
+    await expect(attempt).rejects.toThrow(/classify/);
   });
 
   it("resolves the ports once per attachment rather than per turn", async () => {
@@ -1150,8 +1531,106 @@ describe("Pi native adapter attach", () => {
       new AbortController().signal,
     );
     expect(call).toHaveBeenCalledOnce();
+    // The attachment's own ask rides into the call (VC-470), so a call blocked
+    // on a sign-in can put the question to the person driving.
+    expect(call).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: "call-1" }),
+      expect.any(AbortSignal),
+      expect.any(Function),
+    );
     await binding.release("requested");
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("routes an MCP sign-in question through Code Mode's call scope (VC-470 / VC-471)", async () => {
+    const tool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("fixture-1", "Fixture", "echo"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, tool.providerName],
+        mcpTools: [tool],
+      }),
+      resolveMcpPort: () => ({
+        call: async (_request, signal, hostAsk) => {
+          const choice = await hostAsk!(installQuestion("confirm.mcp-sign-in"), signal);
+          return {
+            content: [{ type: "text", text: choice }],
+            isError: false,
+          };
+        },
+        dispose: async () => undefined,
+      }),
+    });
+    const question = vi.fn();
+    const result = runtime.spec.mcp!.call(
+      { serverId: "fixture-1", toolName: "echo", arguments: {}, toolCallId: "call-12" },
+      new AbortController().signal,
+      {
+        question: async (performAsk) => {
+          question();
+          return performAsk();
+        },
+      },
+    );
+    await flush();
+    expect(question).toHaveBeenCalledOnce();
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "opened",
+        interaction: expect.objectContaining({ id: "credential-ask:call-12" }),
+      }),
+    );
+    await binding.dispatch(answerCommand("credential-ask:call-12", ["once"]));
+    expect(await result).toEqual({ content: [{ type: "text", text: "allow" }], isError: false });
+    await binding.release("requested");
+  });
+
+  it("puts a sign-in question from a direct MCP call to the person, with no Code Mode scope", async () => {
+    const tool: McpToolDefinition = {
+      serverId: "fixture-1",
+      toolName: "echo",
+      providerName: mcpProviderToolName("fixture-1", "Fixture", "echo"),
+      description: "Echo",
+      inputSchema: { type: "object" },
+    };
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, tool.providerName],
+        mcpTools: [tool],
+      }),
+      resolveMcpPort: () => ({
+        call: async (_request, signal, hostAsk) => {
+          const choice = await hostAsk!(installQuestion("confirm.mcp-sign-in"), signal);
+          return { content: [{ type: "text", text: choice }], isError: false };
+        },
+        dispose: async () => undefined,
+      }),
+    });
+
+    // No scope lent: the call's question parks on the attachment directly.
+    const result = runtime.spec.mcp!.call(
+      { serverId: "fixture-1", toolName: "echo", arguments: {}, toolCallId: "call-12" },
+      new AbortController().signal,
+    );
+    await flush();
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "opened",
+        interaction: expect.objectContaining({ id: "credential-ask:call-12" }),
+      }),
+    );
+    await binding.dispatch(answerCommand("credential-ask:call-12", ["once"]));
+    expect(await result).toEqual({ content: [{ type: "text", text: "allow" }], isError: false });
+    await binding.release("requested");
   });
 
   it("disposes the MCP attachment host when runtime setup fails", async () => {
@@ -1229,6 +1708,44 @@ describe("Pi native adapter attach", () => {
     });
   });
 
+  it("carries Code Mode's frozen routes into the bundle, and refuses a surface that names it without them (VC-471)", async () => {
+    const codeMode = codeModeSurfaceFor({
+      tools: ["read", "edit", "write", "execute", "ask_user"],
+    });
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "codemode"],
+        codeMode,
+      }),
+    });
+    expect(runtime.spec.tools).toEqual({
+      tools: ["read", "edit", "write", "execute"],
+      codeMode,
+    });
+    const missing = attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "codemode"],
+      }),
+    });
+    await expect(missing).rejects.toThrow("names codemode without its routes");
+  });
+
+  it("hands the runtime host the Code Mode sandbox location when main supplies one (VC-471)", () => {
+    const seen: unknown[] = [];
+    createPiRuntimeHost({
+      sessionDataDir: join(import.meta.dirname, "../../../../../.bench-tmp/volli-codemode-host"),
+      codeModeSandbox: { wasmPath: "/opt/quickjs.wasm" },
+      createRuntime: (options) => {
+        seen.push(options.codeModeSandbox);
+        return new FakeRuntime();
+      },
+      resolveRuntimeContext: async () => context,
+    });
+    expect(seen).toEqual([{ wasmPath: "/opt/quickjs.wasm" }]);
+  });
+
   it("leaves the bundle without todoWrite for a surface frozen before the tool existed (VC-6)", async () => {
     // Absent, not `false`: the attachment refuses a derived tool array that
     // disagrees with the record, so this is the assertion standing between an
@@ -1247,6 +1764,24 @@ describe("Pi native adapter attach", () => {
     expect("callVerb" in runtime.spec).toBe(false);
   });
 
+  it("passes the frozen MCP-management naming mode to Pi without changing the durable verb", async () => {
+    for (const mode of [undefined, "server"] as const) {
+      const { runtime } = await attached({
+        resolveRuntimeContext: async () => ({
+          ...context,
+          toolSurface: [...context.toolSurface, "mcp.list"],
+          ...(mode === undefined ? {} : { mcpManagementNames: mode }),
+        }),
+        callVerb: async () => ({ text: "listed" }),
+      });
+      expect(runtime.spec.tools).toMatchObject({
+        verbs: ["mcp.list"],
+        ...(mode === undefined ? {} : { mcpManagementNames: "server" }),
+      });
+      if (mode === undefined) expect(runtime.spec.tools.mcpManagementNames).toBeUndefined();
+    }
+  });
+
   it("refuses the attachment rather than dropping a frozen verb it cannot bind", async () => {
     // The Web Access rule, one surface over: an attachment that quietly sent a
     // smaller tool array would have thrown away the Session's Cache Prefix and
@@ -1261,6 +1796,89 @@ describe("Pi native adapter attach", () => {
     const attaching = adapter.attach(attachmentSpec(), new RecordingSink());
 
     await expect(attaching).rejects.toThrow(/wired no handler for them/);
+  });
+
+  it("attaches a subagent under its own Role, naming the Session it answers to", async () => {
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        role: "subagent",
+        projectId: "project-1",
+        ticketId: "ticket-1",
+        parentSessionId: "session-parent",
+        rootThreadId: sessionRootThreadId(SESSION_ID),
+        brief: "Delegated work",
+        model: context.model,
+        toolSurface: context.toolSurface,
+        promptResources: [],
+      }),
+    });
+
+    expect(runtime.spec.identity).toEqual({
+      role: "subagent",
+      sessionId: SESSION_ID,
+      rootThreadId: sessionRootThreadId(SESSION_ID),
+      attachmentId: ATTACHMENT_ID,
+      projectId: "project-1",
+      ticketId: "ticket-1",
+      parentSessionId: "session-parent",
+    });
+  });
+
+  it("declares the multi-question shape to Pi for a Session frozen with it", async () => {
+    const { runtime } = await attached({
+      resolveRuntimeContext: async () => ({ ...context, askUserQuestions: true }),
+    });
+
+    expect(runtime.spec.tools.askUserQuestions).toBe(true);
+  });
+
+  it("refuses a frozen tool surface whose names are out of their canonical order", async () => {
+    // Same members, wrong order: the derivation lists coding tools first and then
+    // the Volli tools, so a record that puts `ask_user` ahead of them would be a
+    // different provider tool array from the one it was born with. Refused.
+    const { adapter } = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["ask_user", "read", "edit", "write", "execute"],
+      }),
+    });
+
+    const attaching = adapter.attach(attachmentSpec(), new RecordingSink());
+
+    await expect(attaching).rejects.toThrow(/not valid for this product version/);
+    await expect(attaching).rejects.toMatchObject({ code: "PI_CONFIGURATION_INVALID" });
+  });
+
+  it("reports the runtime setup failure, not a cleanup failure that followed it", async () => {
+    const providerName = mcpProviderToolName("fixture-1", "Fixture", "echo");
+    const dispose = vi.fn(async () => {
+      throw new Error("MCP client already closed");
+    });
+    const { adapter, runtime } = composition({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, providerName],
+        mcpTools: [
+          {
+            serverId: "fixture-1",
+            toolName: "echo",
+            providerName,
+            description: "Echo",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+      resolveMcpPort: () => ({
+        call: async () => ({ content: [], isError: false }),
+        dispose,
+      }),
+    });
+    runtime.startFailure = new Error("runtime setup failed");
+
+    const attaching = adapter.attach(attachmentSpec(), new RecordingSink());
+
+    await expect(attaching).rejects.toThrow(/^runtime setup failed$/);
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("passes the injected model collection and session directory to the runtime factory", async () => {
@@ -1297,6 +1915,23 @@ describe("Pi native adapter attach", () => {
     expect(seen).toEqual([unusedExecutionEnvFactory]);
   });
 
+  it("passes the developer parallel-read switch through only when main sets it (VC-454)", async () => {
+    const seen: unknown[] = [];
+    for (const parallelMcpReads of [undefined, true] as const) {
+      createPiNativeAdapter({
+        sessionDataDir: "/data/pi-sessions",
+        resolveRuntimeContext: async () => context,
+        ...(parallelMcpReads === undefined ? {} : { parallelMcpReads }),
+        createRuntime: (options) => {
+          seen.push("parallelMcpReads" in options ? options.parallelMcpReads : "absent");
+          return new FakeRuntime();
+        },
+      });
+    }
+
+    expect(seen).toEqual(["absent", true]);
+  });
+
   it("leaves the runtime factory's own default execution environment untouched when none is injected", async () => {
     const seen: unknown[] = [];
     createPiNativeAdapter({
@@ -1316,9 +1951,6 @@ describe("Pi native adapter attach", () => {
       {
         resolveRuntimeContext: async () => ({
           role: "project",
-          location: "main-checkout",
-          authorityPolicy: DEFAULT_AUTHORITY_POLICY,
-          priorAuthorityDenials: 0,
           projectId: "project-1",
           ticketId: null,
           rootThreadId: sessionRootThreadId(SESSION_ID),
@@ -1553,7 +2185,210 @@ describe("Pi native adapter attach", () => {
   });
 });
 
+function secrets() {
+  return new SecretService(
+    // Its own directory: the store's credential lock (VC-642) sits beside it.
+    new SecretStore(join(mkdtempSync(join(tmpdir(), "volli-secret-adapter-")), "secrets.enc"), {
+      isEncryptionAvailable: () => false,
+      encryptString: () => {
+        throw new Error("unused");
+      },
+      decryptString: () => {
+        throw new Error("unused");
+      },
+    }),
+  );
+}
+
+describe("Pi credential waiting and lifetime", () => {
+  it("filters output for every frozen surface without granting request_secret or injection", async () => {
+    const service = secrets();
+    service.store.put({
+      name: "TOKEN",
+      value: "dummy-global-token",
+      scope: "session",
+      sessionId: "another",
+    });
+    const { binding, runtime } = await attached({
+      resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
+        service.port(
+          { sessionId, projectId, sessionLabel: "Session", projectLabel: "Project" },
+          wait,
+          allowInjection,
+        ),
+    });
+    expect(runtime.spec.secret).toBeUndefined();
+    expect(runtime.spec.credentialRedaction?.redact("dummy-global-token")).toBe("‹secret:TOKEN›");
+    expect(sessionToolIds(runtime.spec)).not.toContain("request_secret");
+    expect(service.environment(SESSION_ID)).toEqual({});
+    await binding.release("requested");
+  });
+  it("publishes credential decisions, withdraws them and retires values only on close", async () => {
+    const service = secrets();
+    const { binding, runtime, sink } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: [...context.toolSurface, "request_secret"],
+      }),
+      resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
+        service.port(
+          { sessionId, projectId, sessionLabel: "Session", projectLabel: "Project" },
+          wait,
+          allowInjection,
+        ),
+    });
+    const request = () =>
+      runtime.spec.secret!.request(
+        { name: "TOKEN", toolCallId: "credential-call" },
+        new AbortController().signal,
+      );
+    const waiting = request();
+    const list = await service.list();
+    if (!list.ok) throw new Error("missing list");
+    const metadata = list.requests[0]!;
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "opened",
+        interaction: expect.objectContaining({ credential: metadata, options: [] }),
+      }),
+    );
+    service.submit(metadata.id, "dummy-adapter-token", "session");
+    expect(await waiting).toBe("signed in");
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({
+        kind: "interaction",
+        state: "resolved",
+        interactionId: metadata.id,
+        resolution: { optionIds: ["signed in"], response: null },
+      }),
+    );
+    expect(service.environment(SESSION_ID)).toEqual({ TOKEN: "dummy-adapter-token" });
+    const entry = service.store.list().find((item) => item.name === "TOKEN")!;
+    service.store.revoke(entry.id);
+    const withdrawn = request();
+    const next = await service.list();
+    if (!next.ok) throw new Error("missing list");
+    await binding.withdrawInteraction!(next.requests[0]!.id);
+    expect(await withdrawn).toBe("still missing");
+    // Engine withdrawal already writes cancellation; the binding must not repeat it.
+    expect(
+      sink.observations.filter(
+        (observation) => observation.kind === "interaction" && observation.state === "cancelled",
+      ),
+    ).toEqual([]);
+    const last = request();
+    await binding.release("requested");
+    expect(await last).toBe("still missing");
+    expect(runtime.closes).toBe(1);
+    expect(service.environment(SESSION_ID)).toEqual({});
+    expect(await request()).toBe("still missing");
+    expect(JSON.stringify(sink.observations)).not.toContain("dummy-adapter-token");
+    expect(sink.observations).toContainEqual(
+      expect.objectContaining({ kind: "interaction", state: "cancelled" }),
+    );
+  });
+});
+
 describe("Pi native adapter dispatch", () => {
+  it.each(["message.submit", "executor.retry"] as const)(
+    "uses the persisted acceptance timestamp for %s live and replay receipts",
+    async (kind) => {
+      const { binding, runtime } = await attached();
+      runtime.outcomes.push({
+        kind: "delivered",
+        delivery: kind === "message.submit" ? "prompt" : "retry",
+        acceptedAt: 456,
+      });
+      runtime.reconciliationReceipts.push({ commandId: "same-command", acceptedAt: 456 });
+      const command: HarnessCommand =
+        kind === "message.submit"
+          ? {
+              kind,
+              commandId: "same-command",
+              sessionId: SESSION_ID,
+              attachmentId: ATTACHMENT_ID,
+              message: userMessage("Continue"),
+              delivery: "queue",
+              model: null,
+              agent: null,
+              variant: null,
+            }
+          : { kind, commandId: "same-command", sessionId: SESSION_ID, attachmentId: ATTACHMENT_ID };
+      const live = await binding.dispatch(command);
+      const replay = await binding.reconcile(null);
+      expect(live).toMatchObject({ status: "accepted", acceptedAt: 456 });
+      expect(replay.receipts).toEqual([
+        expect.objectContaining({
+          status: "accepted",
+          commandId: live.commandId,
+          acceptedAt: 456,
+          native: live.native,
+        }),
+      ]);
+      await binding.release("requested");
+    },
+  );
+
+  it("hands a turn's prepared attachments to Pi, with the note the preparer wrote", async () => {
+    const owners: unknown[] = [];
+    const { binding, runtime } = await attached({
+      prepareTurnAttachments: async (_message, owner) => {
+        owners.push(owner);
+        return { note: "\n\n[attached: screenshot.png]", images: [] };
+      },
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-with-file",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("What is this?"),
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    // Prepared against the Session's own directory, never the main checkout's.
+    expect(owners).toEqual([
+      { sessionId: SESSION_ID, ticketId: "ticket-1", workspacePath: attachmentSpec().directory },
+    ]);
+    expect(runtime.submissions).toEqual(["What is this?\n\n[attached: screenshot.png]"]);
+    expect(receipt).toMatchObject({ commandId: "command-with-file", status: "accepted" });
+    await binding.release("requested");
+  });
+
+  it("refuses a turn whose attachments could not be prepared, without delivering it", async () => {
+    const { binding, runtime } = await attached({
+      prepareTurnAttachments: async () => {
+        throw new Error("The attachment is no longer on disk.");
+      },
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "message.submit",
+      commandId: "command-missing-file",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      message: userMessage("What is this?"),
+      delivery: "queue",
+      model: null,
+      agent: null,
+      variant: null,
+    });
+
+    expect(receipt).toMatchObject({
+      commandId: "command-missing-file",
+      status: "rejected",
+      code: "PI_ATTACHMENT_FAILED",
+      detail: "The attachment is no longer on disk.",
+    });
+    expect(runtime.submissions).toEqual([]);
+    await binding.release("requested");
+  });
+
   it("delivers the message text and accepts it", async () => {
     const { binding, runtime } = await attached();
 
@@ -1682,12 +2517,14 @@ describe("Pi native adapter dispatch", () => {
       attachmentId: ATTACHMENT_ID,
       message: userMessage("now"),
       delivery: "steer",
+      targetTurnId: "turn-active",
       model: null,
       agent: null,
       variant: null,
     });
 
     expect(runtime.deliveries).toEqual(["queue", "steer"]);
+    expect(runtime.targetTurnIds).toEqual([undefined, "turn-active"]);
   });
 
   it("asks the runtime to settle where the command said, and reports the turn it opened", async () => {
@@ -1825,6 +2662,62 @@ describe("Pi native adapter dispatch", () => {
       detail: "the ledger write failed",
       native: binding.native,
     });
+  });
+
+  it("reports an interrupt or retry Pi could not complete as unknown, never as accepted", async () => {
+    const { binding, runtime } = await attached();
+    runtime.interruptFailure = new Error("the interrupt lost the stream");
+
+    const interrupted = await binding.dispatch({
+      kind: "executor.interrupt",
+      commandId: "command-interrupt-failed",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+    });
+    expect(interrupted).toMatchObject({
+      commandId: "command-interrupt-failed",
+      status: "unknown",
+      detail: "the interrupt lost the stream",
+    });
+
+    // Pi may already have run the retry, so the answer is unknown, not refused.
+    runtime.submitFailure = new Error("the retry lost the stream");
+    const retried = await binding.dispatch({
+      kind: "executor.retry",
+      commandId: "command-retry-failed",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+    });
+    expect(retried).toMatchObject({
+      commandId: "command-retry-failed",
+      status: "unknown",
+      detail: "the retry lost the stream",
+    });
+    await binding.release("requested");
+  });
+
+  it("reports a retry Pi refuses with that refusal's own code", async () => {
+    const { binding, runtime } = await attached();
+    runtime.outcomes.push({
+      kind: "rejected",
+      reason: "retry-unavailable",
+      message: "Nothing failed to retry.",
+    });
+
+    const receipt = await binding.dispatch({
+      kind: "executor.retry",
+      commandId: "command-retry-refused",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+    });
+
+    expect(receipt).toMatchObject({
+      commandId: "command-retry-refused",
+      status: "rejected",
+      code: "PI_RETRY_UNAVAILABLE",
+      detail: "Nothing failed to retry.",
+    });
+    await binding.release("requested");
   });
 
   it("interrupts the running turn without ending the attachment", async () => {
@@ -2107,12 +3000,36 @@ describe("Pi native adapter dispatch", () => {
   });
 });
 
-describe("Pi native adapter escalation", () => {
+describe("Pi native adapter host permissions", () => {
+  it("titles a call the runtime refused outright as blocked, not as one to allow", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = ask(runtime, { overridable: false });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      kind: "interaction",
+      state: "opened",
+      interaction: { id: ASK_INTERACTION_ID, title: "Blocked this execute call" },
+    });
+    await binding.release("requested");
+    expect(await answer).toEqual(WITHDRAWN);
+  });
+
+  it("never opens a live permission interaction for a retired rule-refusal request", async () => {
+    const { runtime, sink } = await attached();
+    expect(
+      await ask(runtime, { cause: "path.outside-workspace" as RuntimeAskRequest["cause"] }),
+    ).toEqual({
+      failed: "This host request is not a budget extension or confirmation.",
+    });
+    expect(sink.observations).toEqual([]);
+  });
+
   /**
    * The lent half of the budget seam (VC-204): a verb call rides in with the
    * binding's own parked-question machinery, and a budget cause is asked under
-   * the frozen `budget-ask:` segment — never `ask:` — so a gate ask and a
-   * budget ask about one tool call cannot mint one interaction id. The answer
+   * the frozen `budget-ask:` segment, distinct from host confirmations. The answer
    * travels the same durable open → resolve → settle path every escalation
    * takes.
    */
@@ -2166,6 +3083,11 @@ describe("Pi native adapter escalation", () => {
       },
     });
 
+    const opened = sink.observations[0];
+    if (opened.kind !== "interaction" || opened.state !== "opened")
+      throw new Error("No budget interaction");
+    expect(opened.interaction).not.toHaveProperty("approval");
+    expect(opened.interaction).not.toHaveProperty("prompts");
     const receipt = await binding.dispatch(answerCommand("budget-ask:call-9", ["once"]));
 
     expect(receipt).toMatchObject({ commandId: "command-answer", status: "accepted" });
@@ -2176,6 +3098,52 @@ describe("Pi native adapter escalation", () => {
       interactionId: "budget-ask:call-9",
       resolution: { optionIds: ["once"], response: null },
     });
+  });
+
+  it("asks a Code Mode program's budget question through the scope the call was lent (VC-471)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "session.start"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "claimed at the limit" };
+      },
+    });
+    const scoped: string[] = [];
+    await runtime.spec.callVerb?.(
+      { verb: "session.start", input: { ticket: "VC-1" }, toolCallId: "cm-1:abc:1" },
+      new AbortController().signal,
+      {
+        question: async (asking) => {
+          scoped.push("waiting");
+          const answer = await asking();
+          scoped.push("answered");
+          return answer;
+        },
+      },
+    );
+    if (lent === undefined) throw new Error("The binding lent no budget ask");
+    const choice = lent(
+      {
+        cause: "budget.delegation-children",
+        tool: "session_start",
+        toolCallId: "cm-1:abc:1",
+        turnId: null,
+        reason: "At the limit.",
+        trip: "budget",
+        overridable: true,
+      },
+      new AbortController().signal,
+    );
+    await flush();
+    expect(scoped).toEqual(["waiting"]);
+    expect(sink.observations[0]).toMatchObject({ kind: "interaction", state: "opened" });
+    await binding.dispatch(answerCommand("budget-ask:cm-1:abc:1", ["once"]));
+    expect(await choice).toBe("allow");
+    expect(scoped).toEqual(["waiting", "answered"]);
   });
 
   /**
@@ -2230,6 +3198,50 @@ describe("Pi native adapter escalation", () => {
     expect(await choice).toBe("refuse");
   });
 
+  /**
+   * VC-470: one `mcp_install` call confirms the install AND then asks the
+   * person to sign in. Under one id the second question would dedupe against
+   * the first and park where nobody can answer it.
+   */
+  it("asks a sign-in after an install confirmation on the same call as a second, answerable question (VC-470)", async () => {
+    let lent: Parameters<NonNullable<PiAdapterOptions["callVerb"]>>[3] | undefined;
+    const { binding, sink, runtime } = await attached({
+      resolveRuntimeContext: async () => ({
+        ...context,
+        toolSurface: ["read", "edit", "write", "execute", "ask_user", "mcp.install"],
+      }),
+      callVerb: async (_session, _request, _signal, budgetAsk) => {
+        lent = budgetAsk;
+        return { text: "installing" };
+      },
+    });
+    await runtime.spec.callVerb?.(
+      { verb: "mcp.install", input: { id: "sentry" }, toolCallId: "call-12" },
+      new AbortController().signal,
+    );
+    if (lent === undefined) throw new Error("The binding lent no ask");
+
+    const install = lent(installQuestion("confirm.mcp-install"), new AbortController().signal);
+    await flush();
+    await binding.dispatch(answerCommand("confirm-ask:call-12", ["once"]));
+    expect(await install).toBe("allow");
+
+    const signIn = lent(installQuestion("confirm.mcp-sign-in"), new AbortController().signal);
+    await flush();
+    expect(
+      sink.observations.filter((entry) => entry.kind === "interaction" && entry.state === "opened"),
+    ).toEqual([
+      expect.objectContaining({
+        interaction: expect.objectContaining({ id: "confirm-ask:call-12" }),
+      }),
+      expect.objectContaining({
+        interaction: expect.objectContaining({ id: "credential-ask:call-12" }),
+      }),
+    ]);
+    await binding.dispatch(answerCommand("credential-ask:call-12", ["once"]));
+    expect(await signIn).toBe("allow");
+  });
+
   it("puts a blocked call to a person, and grants exactly the call they allowed", async () => {
     const { binding, runtime, sink } = await attached();
 
@@ -2247,7 +3259,7 @@ describe("Pi native adapter escalation", () => {
           // from it, and rederives that id from live data on every relaunch, so
           // a rename would not fail here, it would duplicate every question a
           // Session ever asked.
-          id: "ask:call-7",
+          id: "budget-ask:call-7",
           kind: "permission",
           title: "Allow this execute call?",
           detail: ASK_REASON,
@@ -2376,36 +3388,6 @@ describe("Pi native adapter escalation", () => {
     await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["reject"]));
 
     expect(await answer).toEqual({ answered: "refuse" });
-  });
-
-  it("offers a refusal nobody may overrule the two things a person can still decide", async () => {
-    const { binding, runtime, sink } = await attached();
-
-    const answer = ask(runtime, {
-      cause: "command.persistence",
-      tool: "write",
-      overridable: false,
-      reason: "This command installs a login item, which outlives the Session.",
-    });
-    await flush();
-
-    expect(sink.observations[0]).toMatchObject({
-      state: "opened",
-      interaction: {
-        kind: "question",
-        // A statement, not a request: neither option grants anything, so a title
-        // phrased as a permission would misdescribe both controls under it.
-        title: "Blocked this write call",
-        options: [
-          { id: "continue", label: "Keep working", description: null },
-          { id: "stop", label: "Stop the turn", description: null },
-        ],
-      },
-    });
-
-    await binding.dispatch(answerCommand(ASK_INTERACTION_ID, ["stop"]));
-
-    expect(await answer).toEqual({ answered: "stop" });
   });
 
   it("rejects an answer to a question nothing is waiting on", async () => {
@@ -2551,6 +3533,61 @@ describe("Pi native adapter escalation", () => {
  * a tool result, and the two live under ids that cannot collide.
  */
 describe("Pi native adapter model questions", () => {
+  it("puts several model questions to the person as prompts of one card, each with its own choices", async () => {
+    const { binding, runtime, sink } = await attached();
+
+    const answer = askUser(runtime, {
+      questions: [
+        { question: "Which path?", choices: ["spike", "migrate"] },
+        { question: "Smoke it too?", choices: [] },
+      ],
+    });
+    await flush();
+
+    expect(sink.observations[0]).toMatchObject({
+      kind: "interaction",
+      state: "opened",
+      interaction: {
+        id: ASK_USER_INTERACTION_ID,
+        kind: "question",
+        title: "Which path?",
+        prompts: [
+          {
+            id: promptId(0),
+            label: "Which path?",
+            options: [
+              { id: "choice:0", label: "spike", description: null },
+              { id: "choice:1", label: "migrate", description: null },
+            ],
+            multiple: false,
+            custom: true,
+          },
+          {
+            id: promptId(1),
+            label: "Smoke it too?",
+            options: [],
+            multiple: false,
+            custom: true,
+          },
+        ],
+      },
+    });
+    await binding.release("requested");
+    expect(await answer).toEqual(WITHDRAWN);
+  });
+
+  it("withdraws a model question whose turn gave up while the question was being recorded", async () => {
+    const { runtime, sink } = await attached();
+
+    const answer = askUser(runtime, {}, AbortSignal.abort());
+
+    // The `opened` fact committed before the signal could be read, so the card
+    // exists and has to be closed even though nobody was ever going to answer it.
+    expect(await answer).toEqual(WITHDRAWN);
+    expect(sink.observations).toHaveLength(2);
+    expect(sink.observations[1]).toEqual(cancelled(1001, ASK_USER_INTERACTION_ID));
+  });
+
   it("opens the model's question as a card of the model's own options", async () => {
     const { binding, runtime, sink } = await attached();
 
@@ -2837,6 +3874,39 @@ describe("Pi native adapter reconcile and release", () => {
     });
   });
 
+  it("refuses a recovery cursor that lost its sidecar entry id rather than replaying from nowhere", async () => {
+    const { binding, runtime } = await attached();
+
+    await expect(binding.reconcile({ entryId: 7 })).rejects.toThrow(
+      "Pi recovery cursor is missing its sidecar entry id.",
+    );
+    expect(runtime.reconciledFrom).toEqual([]);
+  });
+
+  it("answers a reconcile after release with nothing, leaving Pi untouched", async () => {
+    const { binding, runtime } = await attached();
+
+    await binding.release("requested");
+
+    expect(await binding.reconcile({ entryId: "entry-9" })).toEqual({
+      cursor: { entryId: "entry-9" },
+      observations: [],
+      receipts: [],
+    });
+    expect(runtime.reconciledFrom).toEqual([]);
+  });
+
+  it("reconciles to no receipts when Pi's replay carries none", async () => {
+    const { binding, runtime } = await attached();
+    runtime.reportsReconciliationReceipts = false;
+
+    expect(await binding.reconcile({ entryId: "entry-8" })).toEqual({
+      cursor: { entryId: "entry-8" },
+      observations: [],
+      receipts: [],
+    });
+  });
+
   it("maps durable Pi delivery evidence to an accepted Session receipt", async () => {
     const { binding, runtime } = await attached();
     runtime.reconciliationReceipts.push({ commandId: "command-crash-window", acceptedAt: 456 });
@@ -2947,99 +4017,14 @@ describe("Pi native adapter reconcile and release", () => {
  * no test because until this ticket it had no beginning: the store was
  * write-only through raw SQL in a test file.
  */
-describe("a departure written by the product reaches the next attachment's Snapshot", () => {
-  let db: TestDb;
-
-  afterEach(() => {
-    db.cleanup();
-  });
-
-  /** The real main-process read, standing where the fake policy usually stands. */
-  function fromDatabase(projectId: string): Partial<PiAdapterOptions> {
-    return {
-      resolveRuntimeContext: async () => ({
-        ...context,
-        authorityPolicy: getProjectAuthorityPolicy(db.db, projectId),
-      }),
-    };
-  }
-
-  it("carries enforcement from the write, through resolution, into the pinned Snapshot", async () => {
-    db = openTestDb();
-    insertProject(db.db, testProject({ id: "p1" }));
-
-    updateProjectAuthorityPolicy(db.db, "p1", { enforcement: "enforce" }, 1000);
-    const { binding, runtime } = await attached(fromDatabase("p1"));
-
-    expect(binding.authority?.enforcement).toBe("enforce");
-    // And the gate actually installs, which is the difference the person who
-    // opened the pane was reaching for.
-    expect(runtime.spec.authority).toEqual(binding.authority);
-  });
-
-  it("carries the thresholds a person set, inheriting the one they left alone", async () => {
-    db = openTestDb();
-    insertProject(db.db, testProject({ id: "p1" }));
-
-    updateProjectAuthorityPolicy(db.db, "p1", { fallback: { consecutiveDenials: 2 } }, 1000);
-    const { binding } = await attached(fromDatabase("p1"));
-
-    expect(binding.authority?.fallback).toEqual({
-      consecutiveDenials: 2,
-      sessionDenials: DEFAULT_AUTHORITY_POLICY.fallback.sessionDenials,
-    });
-  });
-
-  it("pins no Snapshot once a project turns the gate off through the product", async () => {
-    db = openTestDb();
-    insertProject(db.db, testProject({ id: "p1" }));
-
-    updateProjectAuthorityPolicy(db.db, "p1", { enforcement: "off" }, 1000);
-    const { binding, runtime } = await attached(fromDatabase("p1"));
-
-    expect(binding.authority).toBeNull();
-    expect("authority" in runtime.spec).toBe(false);
-  });
-
-  it("returns to the built-in defaults when the last departure is reverted", async () => {
-    db = openTestDb();
-    insertProject(db.db, testProject({ id: "p1" }));
-    updateProjectAuthorityPolicy(db.db, "p1", { enforcement: "enforce" }, 1000);
-
-    // What the pane's revert button does.
-    updateProjectAuthorityPolicy(db.db, "p1", null, 2000);
-    const { binding } = await attached(fromDatabase("p1"));
-
-    expect(binding.authority?.enforcement).toBe(DEFAULT_AUTHORITY_POLICY.enforcement);
-  });
-
-  it("reaches the NEXT attachment, never one already running", async () => {
-    db = openTestDb();
-    insertProject(db.db, testProject({ id: "p1" }));
-
-    // A Session attaches under the defaults...
-    const opened = await attached(fromDatabase("p1"));
-    const pinned = opened.binding.authority;
-    expect(pinned?.enforcement).toBe("observe");
-
-    // ...and someone opens the pane and turns enforcement on mid-Session.
-    updateProjectAuthorityPolicy(db.db, "p1", { enforcement: "enforce" }, 2000);
-
-    // The running attachment keeps the policy it was pinned to. This is the
-    // property the write path must not break: a Snapshot is a claim about one
-    // attachment's whole life, and `authority.denied` resolves through its id.
-    const rehydrated = await attached(
-      fromDatabase("p1"),
-      attachmentSpec({
-        continuity: "native_resume",
-        native: opened.binding.native,
-        pinnedAuthority: pinned,
-      }),
-    );
-    expect(rehydrated.binding.authority).toEqual(pinned);
-
-    // A fresh attachment is where the change lands.
-    const fresh = await attached(fromDatabase("p1"));
-    expect(fresh.binding.authority?.enforcement).toBe("enforce");
-  });
-});
+function installQuestion(cause: "confirm.mcp-install" | "confirm.mcp-sign-in") {
+  return {
+    cause,
+    tool: "server_install",
+    toolCallId: "call-12",
+    turnId: null,
+    reason: cause,
+    trip: "confirm" as const,
+    overridable: true,
+  };
+}

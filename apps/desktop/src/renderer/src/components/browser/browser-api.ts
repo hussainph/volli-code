@@ -11,6 +11,8 @@ import type {
   BrowserTabSetBoundsInput,
   BrowserTabSetPresentationInput,
   BrowserTabStateEvent,
+  BrowserTracesInput,
+  BrowserTracesResult,
   Result,
 } from "../../../../ipc/contract";
 
@@ -37,6 +39,8 @@ export interface BrowserApi {
   setPresentation(input: BrowserTabSetPresentationInput): Promise<BrowserTabResult>;
   /** One picture the transcript names, as a data URL — or null once the host let it go. */
   picture(input: BrowserPictureInput): Promise<BrowserPictureResult>;
+  /** A Session's kept Browser Traces (VC-453); frames resolve through `picture`. */
+  traces(input: BrowserTracesInput): Promise<BrowserTracesResult>;
   /** The person's hold controls (VC-239): take the tab, give it back, ask the holder to leave. */
   takeOver(input: BrowserTabIdInput): Promise<BrowserTabResult>;
   handBack(input: BrowserTabIdInput): Promise<BrowserTabResult>;

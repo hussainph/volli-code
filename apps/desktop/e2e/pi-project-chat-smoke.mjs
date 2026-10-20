@@ -1,17 +1,10 @@
 /**
  * E2e proof of the Pi-backed native adapter attaching a real TICKETLESS
  * (Board Session) chat, against the BUILT app — the ticketless twin of
- * `pi-ticket-chat-smoke.mjs`. Board Sessions attached OpenCode until commit
- * 49a62640 moved them onto the same Pi runtime a ticket chat uses
- * (`apps/desktop/src/main/session-runtime/project-sessions.ts`), and commit
- * 0f0e7007 gave them the ticket composer's model semantics
- * (`chat-plane.tsx` dropped its ticket/project "pinned" carve-out) — so the
- * retired `session-chat-smoke.mjs`'s fake-`opencode`-binary proof of the
- * Project-Session chat lifecycle no longer has anything to attach to. This is that
- * proof, rebuilt on the real thing: there is no fake server anywhere here,
- * and this smoke drives ONE real turn against a real provider, billed to a
- * ChatGPT subscription ($0 marginal — keep it to one short prompt, never loop
- * turns speculatively).
+ * `pi-ticket-chat-smoke.mjs`. Board and Ticket Sessions use the same Pi
+ * runtime and recorded-model semantics. There is no fake server: this probe
+ * runs one real provider turn. Keep it to one short prompt and never loop
+ * turns speculatively.
  *
  * Two things make a real Pi turn against a TICKETLESS Session possible at
  * all, both set up before the first prompt is typed:

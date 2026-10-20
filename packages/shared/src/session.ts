@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "./session-origin";
 /**
  * The terminal-shaped view of a Session: the trace and resume seed for a
  * terminal, distinct from its live in-memory PTY state
@@ -20,8 +21,8 @@
  * structured (chat) Session — has no honest record here at all, and
  * `terminalSessionRecord` returns `null` for one rather than fabricating a
  * `harnessId: "claude-code"` that read every structured Session out of a
- * listing as a never-ending terminal (see
- * `docs/plans/session-ui-migration-readiness.md`, blocker B4). Do not add a
+ * listing as a never-ending terminal (session-UI migration readiness blocker
+ * B4). Do not add a
  * field to this interface expecting the ledger to carry it; add it to the
  * attachment the projection reads.
  *
@@ -38,11 +39,12 @@
  * they were never the surface that dropped chat Sessions.
  */
 
-import type { SessionRole } from "./agent-runtime";
+import type { ModelSelection, SessionRole } from "./agent-runtime";
 import { declaresInputNeeded, expectsHarnessEvents } from "./harness/types";
 import type { HarnessAdapter, HarnessEvent } from "./harness/types";
 import type { SessionTurnOutcome } from "./session-ledger";
 import type { SessionProvenance } from "./session-provenance";
+import type { SessionReadState } from "./session-read";
 import type { SessionUsageSummary } from "./session-usage";
 import type { HarnessId } from "./ticket";
 
@@ -164,6 +166,9 @@ export type ChatWaitingReason = "question" | "permission" | "auth";
  * structured adapter's own domain, read through the Session Engine directly).
  */
 export interface ChatSessionRecord {
+  /** Optional only for older clients/fixtures; main always projects these. */
+  latestTurnOrigin?: SessionOrigin | null;
+  resumedAfterStop?: boolean;
   sessionId: string;
   title: string;
   projectId: string;
@@ -221,6 +226,26 @@ export interface ChatSessionRecord {
   role: SessionRole;
   /** The Session that delegated this one (VC-9); a listing names it beside a helper. */
   parentSessionId: string | null;
+  /**
+   * The model policy this Session is running under —
+   * {@link SessionProjection.modelSelection} carried verbatim — or `null`
+   * before one has been recorded.
+   *
+   * It rides the record rather than being looked up per Session because of
+   * who needs it (VC-416): a parent's Activity Island draws a row per Subagent
+   * Session, and a subagent has no listing row of its own (VC-279) and no
+   * resident chat client until someone peeks it. Without this field the only
+   * surface that could say which model an agent picked for its helper was the
+   * helper's own composer, one promotion away — so the two glance surfaces
+   * that exist precisely to save that trip could not answer the question they
+   * are for.
+   *
+   * The full {@link ModelSelection} rather than the two words a row prints:
+   * `providerId` is what tells two catalogs' identically named models apart,
+   * and a record that dropped it would make every reader that cares reach for
+   * a second source.
+   */
+  model: ModelSelection | null;
 }
 
 /**
@@ -249,7 +274,54 @@ export interface ChatSessionRecord {
 export type SessionListingRow = SessionListingIdentity & {
   usage: SessionUsageSummary;
   provenance: SessionProvenance;
+  /**
+   * Unread state (VC-30). OPTIONAL and sparse for the reason `provenance` is
+   * defaulted: a builder with no receipt reader must mark nothing rather than
+   * guess. Read it through `sessionReadStateOf`, which answers the resting
+   * `SESSION_READ` for a row that carries none.
+   */
+  read?: SessionReadState;
 };
+
+/**
+ * A host's Session listing over the host protocol (VC-713, feature
+ * `sessions.listing`): the rows `volli:session-list` serves, bounded so one
+ * answer fits a WebSocket frame. Every row a person must act on (waiting) or
+ * that is running now (working) is kept; past the bound, the rows with the
+ * oldest activity are left out and counted.
+ */
+export interface SessionListingPage {
+  sessions: SessionListingRow[];
+  /** Rows the host left out past its bound; 0 when the listing is whole. */
+  omitted: number;
+}
+
+/**
+ * The bounds of one `session.listing` answer (VC-713), frozen with the
+ * feature: the wire schema publishes them and the host clips to them before it
+ * answers, so a long title shortens a row rather than failing the listing.
+ *
+ * - `rows`: at most this many rows.
+ * - `bytes`: at most this much UTF-8 JSON across the rows. hostd refuses an
+ *   answer past its 2 MiB frame whole (`response-too-large`); a row's bounded
+ *   strings can still reach tens of KiB once escaped, so the row count alone
+ *   cannot keep a page inside the frame. 1.5 MiB leaves the envelope and the
+ *   frame's own allowance room.
+ * - `id`: any id a row carries (Session, project, ticket, attachment, run,
+ *   harness Session). Never clipped: ids this host mints are far shorter.
+ * - `text`: a display string (a title, an Automation's or a parent's name),
+ *   clipped with an ellipsis.
+ * - `path`: a working directory, clipped the same way.
+ * - `name`: a provider, model or harness id.
+ */
+export const SESSION_LISTING_BOUNDS = Object.freeze({
+  rows: 500,
+  bytes: 1_572_864,
+  id: 1024,
+  text: 512,
+  path: 4096,
+  name: 256,
+});
 
 /**
  * The identity half of a listing row: which kind of Session, and its record.

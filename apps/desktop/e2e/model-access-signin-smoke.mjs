@@ -177,7 +177,8 @@ try {
     // convenience field from quietly appearing on the snapshot later.
     const snapshot = await page.evaluate(() =>
       window.api.sessionRpc.request({
-        procedure: "modelAccess.inspect",
+        path: "modelAccess.inspect",
+        type: "query",
         input: { refresh: false },
       }),
     );

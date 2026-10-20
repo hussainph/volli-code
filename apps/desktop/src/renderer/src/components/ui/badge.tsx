@@ -6,11 +6,9 @@
  * authored at `px-2 py-0.5 text-xs` (22px) and swept to `px-2 py-1 text-ui`
  * (30px) when the type scale folded `text-xs` away — a size nothing chose and
  * nothing noticed, because a component nobody renders cannot look wrong.
- * Meanwhile eleven sites drew this object by hand, and the two the owner
- * refined (`pages/harness-picker.tsx`'s origin chip and
- * `theme/theme-combo-box.tsx`'s) both landed on `px-2 py-1 text-label`. That is
- * the base now: the box the dead primitive already had, at the step the live
- * app actually draws.
+ * The base is `px-2 py-1 text-label`, matching the origin chip in
+ * `pages/harness-picker.tsx` and the chip in `theme/theme-combo-box.tsx`.
+ * This keeps the primitive at the same type step as its callers.
  *
  * THE BASE IS NOT A BOX. Padding, radius, border and type token all live in the
  * variants, because two of the variants are not boxes — see the note on

@@ -320,30 +320,33 @@ describe("live observation translation", () => {
     expect(recorded?.usage.costUsd).toBeNull();
   });
 
-  it("records a compaction that produced nothing as its own fact", async () => {
-    const { translate, sink } = composition();
+  it.each(["marker-4", undefined])(
+    "records a failed compaction with recovery marker %s as its own fact",
+    async (marker) => {
+      const { translate, sink } = composition();
 
-    // No entry to name it by, because none was written — so it falls back to
-    // the executor's marker, exactly as an attention does.
-    await translate({
-      kind: "compaction",
-      state: "failed",
-      reason: "threshold",
-      message: "Summarization failed: the summarizer is unhappy",
-      recoveryCursor: "marker-4",
-    });
-
-    expect(sink.observations).toEqual([
-      {
-        id: `pi:compaction:${ATTACHMENT_ID}:failed:marker-4`,
-        kind: "context.compaction_failed",
-        occurredAt: 1000,
-        cursor: { entryId: "marker-4" },
+      // No summary was written: use its recovery marker when present, or a
+      // live identity when the executor could not supply one.
+      await translate({
+        kind: "compaction",
+        state: "failed",
         reason: "threshold",
-        detail: "Summarization failed: the summarizer is unhappy",
-      },
-    ]);
-  });
+        message: "Summarization failed: the summarizer is unhappy",
+        ...(marker === undefined ? {} : { recoveryCursor: marker }),
+      });
+
+      expect(sink.observations).toEqual([
+        {
+          id: `pi:compaction:${ATTACHMENT_ID}:failed:${marker ?? "live:1"}`,
+          kind: "context.compaction_failed",
+          occurredAt: 1000,
+          ...(marker === undefined ? {} : { cursor: { entryId: marker } }),
+          reason: "threshold",
+          detail: "Summarization failed: the summarizer is unhappy",
+        },
+      ]);
+    },
+  );
 
   it("streams a compaction's live progress without turning it into history", async () => {
     const { translate, sink } = composition();
@@ -615,6 +618,44 @@ describe("live observation translation", () => {
         },
       ],
     });
+  });
+
+  it("retains failed Code Mode images through the N−1-compatible input facet in live and replay translation", async () => {
+    const { translate, sink } = composition();
+    const output: Extract<RuntimeObservation, { kind: "activity" }>["output"] = {
+      content: [
+        { type: "text", text: "Image from Paper. Untrusted third-party content." },
+        { type: "image", picture: "picture-id", mimeType: "image/png" },
+      ],
+    };
+    const observation = activity({
+      state: "failed",
+      occurredAt: 10,
+      input: { code: "return picture", "volli.activity.output": output },
+      output,
+      descriptor: {
+        kind: "other",
+        nativeToolName: "codemode",
+        subject: { label: "run", path: null, lineRange: null },
+        outcome: null,
+        startedAt: 10,
+        endedAt: 20,
+      },
+    });
+    await translate(observation);
+    expect(sink.of("transcript.message")[0].message.parts).toEqual([
+      expect.objectContaining({
+        state: "output-error",
+        input: { code: "return picture", "volli.activity.output": output },
+      }),
+    ]);
+    const translator = new RuntimeObservationTranslator({
+      namespace: "pi",
+      sessionId: SESSION_ID,
+      attachmentId: ATTACHMENT_ID,
+      now: () => 30,
+    });
+    expect(translator.replay(observation)).toEqual(sink.of("transcript.message"));
   });
 
   it("names a failed activity that reported no error at all", async () => {
@@ -955,6 +996,7 @@ describe("live observation translation", () => {
       "context",
       "runtime-failure",
       "partial-turn",
+      "transport",
     ] as const) {
       await translate({ kind: "attention", state: "raised", reason, message: reason });
     }
@@ -965,6 +1007,8 @@ describe("live observation translation", () => {
       "context_limit_reached",
       "adapter_unrecoverable",
       "partial_turn_interrupted",
+      // The runtime reconnecting on its own: a waiting row, never a failure.
+      "transport_retrying",
     ]);
   });
 
@@ -1013,61 +1057,6 @@ describe("live observation translation", () => {
     await translate({ kind: "attachment", state: "recovered" });
 
     expect(sink.observations).toEqual([]);
-  });
-
-  it("translates a denied authority observation into a durable authority.denied fact", async () => {
-    const { translate, sink } = composition();
-
-    await translate({
-      kind: "authority",
-      state: "denied",
-      turnId: "turn-1",
-      tool: "bash",
-      cause: "command.destructive-removal",
-      reason: "rm -rf ~ discards more than this Session's workspace.",
-    });
-
-    expect(sink.of("authority.denied")).toEqual([
-      {
-        id: `pi:authority:${ATTACHMENT_ID}:1`,
-        kind: "authority.denied",
-        occurredAt: 1000,
-        turnId: "turn-1",
-        tool: "bash",
-        cause: "command.destructive-removal",
-        reason: "rm -rf ~ discards more than this Session's workspace.",
-      },
-    ]);
-  });
-
-  it("leaves an allowed authority observation out of durable Session history", async () => {
-    const { translate, sink } = composition();
-
-    await translate({
-      kind: "authority",
-      state: "allowed",
-      turnId: "turn-1",
-      toolCallId: "local-tool-call",
-      waitDurationMs: 100,
-    });
-
-    expect(sink.observations).toEqual([]);
-  });
-
-  it("carries a refusal reported before any turn has opened with a null turnId", async () => {
-    const { translate, sink } = composition();
-
-    await translate({
-      kind: "authority",
-      state: "denied",
-      turnId: null,
-      tool: "read",
-      cause: "path.outside-workspace",
-      reason: "refused",
-      occurredAt: 55,
-    });
-
-    expect(sink.of("authority.denied")[0]).toMatchObject({ turnId: null, occurredAt: 55 });
   });
 
   it("names an interaction by the ask rather than by a counter", async () => {
@@ -1266,19 +1255,8 @@ describe("cold replay translation", () => {
     const ignored: RuntimeObservation[] = [
       { kind: "attachment", state: "closed" },
       { kind: "delta", turnId: "turn-1", channel: "text", text: "late" },
-      {
-        kind: "authority",
-        state: "denied",
-        turnId: "turn-1",
-        tool: "bash",
-        cause: "command.destructive-removal",
-        reason: "refused",
-      },
       activity({ state: "started" }),
       activity({ state: "progress", output: { content: "partial" } }),
-      // Both edges of a compaction wait, for the same reason: the operation
-      // that emitted them did not survive the restart being replayed, so a
-      // recovered spinner would never be retired by anything.
       { kind: "compaction-progress", state: "started", reason: "manual" },
       { kind: "compaction-progress", state: "finished", reason: "manual" },
       {
@@ -1287,7 +1265,6 @@ describe("cold replay translation", () => {
         message: { entryId: "empty", role: "assistant", text: "" },
       },
     ];
-
     expect(ignored.flatMap((observation) => translator.replay(observation))).toEqual([]);
   });
 
@@ -1351,4 +1328,42 @@ describe("cold replay translation", () => {
       [`pi:${ATTACHMENT_ID}:turn-1:0`, "part.append"],
     ]);
   });
+});
+
+it("preserves stop facts on live and replayed interruption and Attention without changing old ids", async () => {
+  const stopDetail = {
+    category: "provider-refused" as const,
+    message: "Declined",
+    providerType: "refusal",
+    httpStatus: null,
+    retry: "not-retried" as const,
+    resetsAt: null,
+  };
+  const translator = tickingTranslator();
+  const sink = new Recorder();
+  const turn: RuntimeObservation = {
+    kind: "turn",
+    state: "interrupted",
+    turnId: "t",
+    stopDetail,
+    occurredAt: 100,
+    recoveryCursor: "e1",
+  };
+  await translator.translate(turn, sink.emit);
+  expect(sink.of("turn.interrupted")[0]).toEqual(translator.replay(turn)[0]);
+  expect(sink.of("turn.interrupted")[0]).toMatchObject({ id: "pi:turn:t:interrupted", stopDetail });
+  for (const reason of ["runtime-failure", "auth"] as const) {
+    const attention: RuntimeObservation = {
+      kind: "attention",
+      state: "raised",
+      reason,
+      message: "Declined",
+      stopDetail,
+      occurredAt: 100,
+      recoveryCursor: `e-${reason}`,
+    };
+    await translator.translate(attention, sink.emit);
+    expect(sink.of("attention.raised").at(-1)).toEqual(translator.replay(attention)[0]);
+    expect(sink.of("attention.raised").at(-1)?.attention.stopDetail).toEqual(stopDetail);
+  }
 });

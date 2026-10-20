@@ -23,8 +23,7 @@ import type { HarnessTrustVerdict } from "@volli/shared";
 import type { PendingHarnessManifest } from "../../../../ipc/contract";
 
 /**
- * The confirmation a registered harness manifest is inert without
- * (docs/plans/harness-events.md §Trust).
+ * The confirmation a registered harness manifest is inert without.
  *
  * One manifest at a time, head of the queue, mounted app-wide because the
  * question is about the app and not about whatever page is open. The model

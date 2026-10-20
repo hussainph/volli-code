@@ -1,6 +1,7 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
+  normalizeContext,
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Model,
@@ -18,9 +19,11 @@ import {
   instrumentStreamFn,
   providerErrorClassForStatus,
   providerErrorClass,
-  recordObservationToSink,
   teeObservationsToSink,
 } from "./observability";
+
+/** The empty normalized request pi-ai 0.86 hands a stream function. */
+const EMPTY_TRANSCRIPT = normalizeContext({ messages: [] });
 
 const SENSITIVE = "SENSITIVE-user-material";
 
@@ -181,20 +184,6 @@ describe("teeObservationsToSink", () => {
     expect(seen).toEqual([turnCompleted]);
   });
 
-  it("records an observability-only allowance without involving the runtime observer", () => {
-    const { sink, events } = recordingSink();
-    const reducer = new ObservabilityReducer(() => 0);
-
-    recordObservationToSink(reducer, sink, "run-1", {
-      kind: "authority",
-      state: "allowed",
-      turnId: "t1",
-      toolCallId: "call-1",
-    });
-
-    expect(events).toEqual([{ kind: "authority", outcome: "allowed", runId: "run-1" }]);
-  });
-
   it("still delivers when the reducer itself throws", async () => {
     const seen: RuntimeObservation[] = [];
     const poisoned = {
@@ -242,7 +231,7 @@ describe("instrumentStreamFn", () => {
     const { inner, finish, stream } = scripted(message);
     const wrapped = instrumentStreamFn(inner, { sink, runId: "run-9", now: steppingClock(10) });
 
-    const produced = wrapped(model(), { messages: [] }, { reasoning: "high" });
+    const produced = wrapped(model(), EMPTY_TRANSCRIPT, { reasoning: "high" });
     expect(produced).toBe(stream);
     finish();
     await settle(stream);
@@ -286,7 +275,7 @@ describe("instrumentStreamFn", () => {
       now: () => readings.shift() ?? 700,
     });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     finish();
     await settle(stream);
 
@@ -302,7 +291,7 @@ describe("instrumentStreamFn", () => {
     const { inner, finish, stream } = scripted(settledMessage());
     const wrapped = instrumentStreamFn(inner, { sink, runId: "run-9", now: steppingClock(1) });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     finish();
     await settle(stream);
 
@@ -342,7 +331,7 @@ describe("instrumentStreamFn", () => {
         usageLimits: { record: (providerId, update) => void recorded.push([providerId, update]) },
       });
 
-      wrapped(model(), { messages: [] });
+      wrapped(model(), EMPTY_TRANSCRIPT);
 
       expect(recorded).toEqual([
         [
@@ -375,7 +364,7 @@ describe("instrumentStreamFn", () => {
         usageLimits: { record: () => void order.push("sink") },
       });
 
-      wrapped(model(), { messages: [] }, {
+      wrapped(model(), EMPTY_TRANSCRIPT, {
         onResponse: () => {
           order.push("caller");
         },
@@ -395,7 +384,7 @@ describe("instrumentStreamFn", () => {
         now: () => 0,
         usageLimits: { record: (_providerId, update) => void recorded.push(update) },
       });
-      withSink(model(), { messages: [] });
+      withSink(model(), EMPTY_TRANSCRIPT);
       expect(recorded).toEqual([]);
 
       const { inner, seen } = responding(ANTHROPIC_HEADERS);
@@ -404,7 +393,7 @@ describe("instrumentStreamFn", () => {
         runId: "run-9",
         now: () => 0,
       });
-      withoutSink(model(), { messages: [] });
+      withoutSink(model(), EMPTY_TRANSCRIPT);
       // The options reach the provider untouched — no onResponse of ours.
       expect(seen).toEqual([undefined]);
     });
@@ -435,7 +424,7 @@ describe("instrumentStreamFn", () => {
         },
       });
 
-      expect(() => wrapped(model(), { messages: [] })).not.toThrow();
+      expect(() => wrapped(model(), EMPTY_TRANSCRIPT)).not.toThrow();
       expect(produced).toBe(true);
     });
   });
@@ -447,7 +436,7 @@ describe("instrumentStreamFn", () => {
     const { inner, finish, stream } = scripted(message);
     const wrapped = instrumentStreamFn(inner, { sink, runId: "run-9", now: steppingClock(1) });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     finish();
     await settle(stream);
 
@@ -464,7 +453,7 @@ describe("instrumentStreamFn", () => {
       now: steppingClock(1),
     });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     stream.push({ type: "error", reason: "aborted", error: message });
     await settle(stream);
 
@@ -481,7 +470,7 @@ describe("instrumentStreamFn", () => {
     const { inner, finish, stream } = scripted(message);
     const wrapped = instrumentStreamFn(inner, { sink, runId: "run-9", now: steppingClock(1) });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     finish();
     await settle(stream);
 
@@ -501,7 +490,7 @@ describe("instrumentStreamFn", () => {
       now: steppingClock(1),
     });
 
-    const produced = await wrapped(model(), { messages: [] });
+    const produced = await wrapped(model(), EMPTY_TRANSCRIPT);
     expect(produced).toBe(stream);
     stream.push({ type: "done", reason: "stop", message });
     await settle(stream);
@@ -524,7 +513,7 @@ describe("instrumentStreamFn", () => {
       now: steppingClock(10),
     });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     stream.push({ type: "done", reason: "stop", message });
     await settle(stream);
 
@@ -549,7 +538,7 @@ describe("instrumentStreamFn", () => {
       },
     });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     finish();
     const settled = await stream.result();
     expect(settled).toBe(message);
@@ -573,7 +562,7 @@ describe("instrumentStreamFn", () => {
       now: steppingClock(1),
     });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     finish();
     await expect(stream.result()).resolves.toBe(message);
   });
@@ -596,8 +585,8 @@ describe("instrumentStreamFn", () => {
       { sink, runId: "run-9", now: steppingClock(1) },
     );
 
-    expect(wrapped({ ...model(), id: "rejecting" }, { messages: [] })).toBe(rejecting);
-    expect(wrapped({ ...model(), id: "throwing" }, { messages: [] })).toBe(throwing);
+    expect(wrapped({ ...model(), id: "rejecting" }, EMPTY_TRANSCRIPT)).toBe(rejecting);
+    expect(wrapped({ ...model(), id: "throwing" }, EMPTY_TRANSCRIPT)).toBe(throwing);
     await Promise.resolve();
     await Promise.resolve();
 
@@ -611,7 +600,7 @@ describe("instrumentStreamFn", () => {
     const { inner, finish, stream } = scripted(message);
     const wrapped = instrumentStreamFn(inner, { sink, runId: "run-9", now: steppingClock(1) });
 
-    wrapped(model(), { messages: [] });
+    wrapped(model(), EMPTY_TRANSCRIPT);
     finish();
     await settle(stream);
 

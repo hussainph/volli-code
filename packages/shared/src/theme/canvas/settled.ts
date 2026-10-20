@@ -20,8 +20,7 @@
  *
  * Every number was solved against the ember default at vibrancy 0.6 — the canvas
  * the app ships with — and then measured across the editor's other seeds to
- * confirm it does not fall apart on them. The measurement runs live in
- * `docs/plans/arc-theming-migration.md` § Appendix — measured derivations.
+ * confirm the same values work across the supported seeds.
  */
 
 import type { ResolvedAppearance } from "./types";
@@ -75,7 +74,7 @@ export const ARC_SETTLED = {
    * mode to leave broken.
    *
    * Measured at {@link cardTint} 0.25 and nowhere else, because the gap is
-   * tint-dependent. Appendix § Surface spread.
+   * tint-dependent.
    */
   surfaceSpread: { light: 0.943, dark: 0.627 },
 
@@ -89,7 +88,6 @@ export const ARC_SETTLED = {
    * dial position would therefore mean two different Lc, so the number that was
    * frozen is the Lc and the weight is read back off it: secondary Lc 69.9 in
    * light and 64.0 in dark, label 51% / 55% of the way from secondary to body.
-   * Appendix § Copy weight.
    */
   textWeight: { light: 0.133, dark: 0.222 },
 

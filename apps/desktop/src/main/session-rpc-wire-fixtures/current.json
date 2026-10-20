@@ -1,0 +1,211 @@
+{
+  "provenance": {
+    "revision": "VC-669 working tree based on 4c712841ae777dcc178d10552e7b0052fa905b81",
+    "peer": "VC-669 public client using tracked-id resume",
+    "producer": "VC-669 createSessionRouter with current output validators",
+    "sources": ["packages/session-rpc/src/index.ts", "packages/session-rpc/src/output-schema.ts"],
+    "format": "Canonical application-wire payloads recorded through the real IPC bridge/link and loopback tRPC WebSocket adapters; transport-local request/subscription ids omitted"
+  },
+  "query": {
+    "procedure": "session.projection",
+    "input": {
+      "sessionId": "wire-session"
+    },
+    "output": {
+      "projection": {
+        "session": {
+          "id": "wire-session",
+          "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+          "ticketId": null,
+          "role": "project",
+          "parentSessionId": null,
+          "title": "Recorded Session",
+          "createdAt": 10
+        }
+      },
+      "throughSequence": 4
+    }
+  },
+  "snapshot": {
+    "procedure": "session.snapshot",
+    "input": {
+      "sessionId": "wire-session"
+    },
+    "output": {
+      "projection": {
+        "session": {
+          "id": "wire-session",
+          "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+          "ticketId": null,
+          "role": "project",
+          "parentSessionId": null,
+          "title": "Recorded Session",
+          "createdAt": 10
+        }
+      },
+      "throughSequence": 4,
+      "frames": [
+        {
+          "sessionId": "wire-session",
+          "sequence": 4,
+          "event": {
+            "id": "wire-event-4",
+            "sessionId": "wire-session",
+            "sequence": 4,
+            "occurredAt": 10,
+            "recordedAt": 10,
+            "provenance": {
+              "source": {
+                "kind": "system",
+                "id": "wire-fixture",
+                "detail": null
+              },
+              "venue": null
+            },
+            "payload": {
+              "kind": "session.created",
+              "session": {
+                "id": "wire-session",
+                "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+                "ticketId": null,
+                "role": "project",
+                "parentSessionId": null,
+                "title": "Recorded Session",
+                "createdAt": 10
+              }
+            }
+          },
+          "transcript": null
+        }
+      ]
+    }
+  },
+  "mutation": {
+    "procedure": "session.command",
+    "input": {
+      "sessionId": "wire-session",
+      "commandId": "new-command-1",
+      "command": {
+        "kind": "model.select",
+        "selection": {
+          "providerId": "test",
+          "modelId": "model",
+          "reasoningLevel": "high"
+        }
+      }
+    },
+    "output": {
+      "sessionId": "wire-session",
+      "receipt": {
+        "id": "receipt-new-command-1",
+        "commandId": "new-command-1",
+        "sequence": 5,
+        "recordedAt": 10,
+        "status": "accepted",
+        "acceptedAt": 10,
+        "result": {
+          "kind": "model.selected",
+          "sessionId": "wire-session"
+        }
+      },
+      "throughSequence": 5,
+      "refusal": null
+    }
+  },
+  "subscription": {
+    "procedure": "session.subscribe",
+    "input": {
+      "sessionId": "wire-session",
+      "afterSequence": 4
+    },
+    "resumedInput": {
+      "sessionId": "wire-session",
+      "afterSequence": 2,
+      "lastEventId": "5"
+    },
+    "cursors": [4, 5],
+    "frames": [
+      {
+        "id": "5",
+        "data": {
+          "sessionId": "wire-session",
+          "sequence": 5,
+          "transcript": null,
+          "event": {
+            "id": "wire-event-5",
+            "sessionId": "wire-session",
+            "sequence": 5,
+            "occurredAt": 10,
+            "recordedAt": 10,
+            "provenance": {
+              "source": {
+                "kind": "system",
+                "id": "wire-fixture",
+                "detail": null
+              },
+              "venue": null
+            },
+            "payload": {
+              "kind": "session.created",
+              "session": {
+                "id": "wire-session",
+                "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+                "ticketId": null,
+                "role": "project",
+                "parentSessionId": null,
+                "title": "Recorded Session",
+                "createdAt": 10
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "6",
+        "data": {
+          "sessionId": "wire-session",
+          "sequence": 6,
+          "transcript": null,
+          "event": {
+            "id": "wire-event-6",
+            "sessionId": "wire-session",
+            "sequence": 6,
+            "occurredAt": 10,
+            "recordedAt": 10,
+            "provenance": {
+              "source": {
+                "kind": "system",
+                "id": "wire-fixture",
+                "detail": null
+              },
+              "venue": null
+            },
+            "payload": {
+              "kind": "session.created",
+              "session": {
+                "id": "wire-session",
+                "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+                "ticketId": null,
+                "role": "project",
+                "parentSessionId": null,
+                "title": "Recorded Session",
+                "createdAt": 10
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "error": {
+    "procedure": "session.projection",
+    "input": {
+      "sessionId": "foreign-session"
+    },
+    "output": {
+      "code": "NOT_FOUND",
+      "message": "Not found in this Workspace.",
+      "reason": "workspace-unknown"
+    }
+  }
+}

@@ -23,6 +23,7 @@ import type { BrowserTabState } from "../../../../ipc/contract";
 import { useBackgroundShellsStore } from "@renderer/stores/background-shells";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import { createChatSessionsStore } from "@renderer/stores/chat-sessions";
+import { useChatDraftsStore } from "@renderer/stores/chat-drafts";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
   useProjectSessionsStore,
@@ -97,6 +98,7 @@ function child(over: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     bornTicketless: true,
     role: "subagent",
     parentSessionId: SESSION,
+    model: { providerId: "anthropic", modelId: "sonnet-4.5", reasoningLevel: "high" },
     ...over,
   };
 }
@@ -118,6 +120,7 @@ let root: Root | null = null;
 let container: HTMLElement | null = null;
 
 beforeEach(() => {
+  useChatDraftsStore.setState({ drafts: {} });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
@@ -151,6 +154,7 @@ afterEach(async () => {
   container?.remove();
   container = null;
   MotionGlobalConfig.skipAnimations = false;
+  useChatDraftsStore.setState({ drafts: {} });
   vi.unstubAllGlobals();
 });
 
@@ -283,25 +287,30 @@ describe("the Activity Island in the chat plane", () => {
     expect(flash?.textContent).toContain("Done");
     expect(flash?.textContent).toContain("Grep the tests");
 
-    // Clicking the row peeks the child: one dialog, holding the child's own
-    // transcript, read-only — no composer inside it.
+    // Clicking the row peeks the child: one shared overlay with the child's
+    // own transcript and a real ChatPlane composer.
     const cluster = island()?.querySelector('[data-island-cluster="agents"]');
     expect(cluster).not.toBeNull();
     click(cluster!);
     const row = document.body.querySelector<HTMLElement>(`[data-island-row="${CHILD}"]`);
     expect(row).not.toBeNull();
+    // What the parent picked for this helper (VC-416), read off the listing
+    // record and drawn without a second source.
+    expect(row!.querySelector("[data-agent-model]")?.textContent).toContain("sonnet-4.5");
+    expect(row!.querySelector("[data-agent-model]")?.textContent).toContain("High");
     act(() => row!.focus());
     click(row!);
     await settle();
-    const dialogs = document.body.querySelectorAll("[data-subagent-peek-dialog]");
+    const dialogs = document.body.querySelectorAll("[data-session-peek-dialog]");
     expect(dialogs).toHaveLength(1);
     const dialog = dialogs[0]!;
     expect(dialog.textContent).toContain("Grep the tests");
-    expect(dialog.querySelector("[data-subagent-peek-state]")?.textContent).toBe("done");
-    expect(dialog.querySelector("[data-subagent-peek-transcript]")?.textContent).toContain(
-      "Found three matching tests.",
-    );
-    expect(dialog.querySelector("textarea")).toBeNull();
+    expect(dialog.querySelector("[data-session-peek-state]")?.textContent).toBe("done");
+    // The shared shell preserves the same model and effort as the island row.
+    expect(dialog.querySelector("[data-agent-model]")?.textContent).toContain("sonnet-4.5");
+    expect(dialog.querySelector("[data-agent-model]")?.textContent).toContain("High");
+    expect(dialog.textContent).toContain("Found three matching tests.");
+    expect(dialog.querySelector("textarea")).not.toBeNull();
 
     // The peek's promotion is the host's door, with the child id.
     const openAsTab = [...dialog.querySelectorAll("button")].find((button) =>
@@ -311,17 +320,13 @@ describe("the Activity Island in the chat plane", () => {
     click(openAsTab!);
     expect(onOpenSession).toHaveBeenCalledWith(CHILD);
 
-    // The modal took focus, so the row's card — a popover — dismissed under
-    // it: the row is gone. Escape closes the peek, focus returns to the
-    // island's agents cluster (the anchor that reopens the card), and the
-    // child's client stays resident (closeChatSession is not ref-counted).
+    // Promotion dismisses the modal without a second Escape. The source row
+    // is gone and must not reclaim focus from the destination tab; the child's
+    // client stays resident (closeChatSession is not ref-counted).
     expect(row!.isConnected).toBe(false);
-    await act(async () => {
-      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
     await settle();
-    expect(document.body.querySelector("[data-subagent-peek-dialog]")).toBeNull();
-    expect(document.activeElement).toBe(cluster);
+    expect(document.body.querySelector("[data-session-peek-dialog]")).toBeNull();
+    expect(document.activeElement).not.toBe(cluster);
     expect(store.getState().sessions[CHILD]).toBeDefined();
   });
 });

@@ -28,6 +28,7 @@ import {
   NO_AUTOMATION_TRIGGER,
   offeredAutomationsForColumn,
   offeredAutomationsInDigitOrder,
+  offeredAutomationsInPinnedOrder,
   parseAutomationSkipReason,
   parseAutomationTrigger,
   sameAutomationRunRequestIdentity,
@@ -120,6 +121,22 @@ describe("the tier Runtime (VC-259)", () => {
       kind: "invalid",
       raw: { kind: "tier" },
     });
+  });
+
+  it("reads a stored Utility tier as INVALID, so an old record cannot still run there", () => {
+    // VC-431. `utility` is the slot for work nobody asked for, and a Run
+    // starts a Session, so no Run may resolve that row. The save door refuses
+    // it now — but an older build's save door admitted it, and narrowing only
+    // the save would have left every record already written still running on
+    // Utility. The READ is what makes the guarantee hold for rows that exist.
+    expect(parseAutomationRuntime({ kind: "tier", tier: "utility" })).toEqual({
+      kind: "invalid",
+      raw: { kind: "tier", tier: "utility" },
+    });
+    // And the invalid row is not another spelling of inherit, which RUNS.
+    expect(
+      isValidAutomationRuntime(parseAutomationRuntime({ kind: "tier", tier: "utility" })),
+    ).toBe(false);
   });
 
   it("keeps the invalid answer for everything a pin parser already refused", () => {
@@ -483,6 +500,28 @@ describe("offeredAutomationsInDigitOrder", () => {
         rankedAutomationIds: ["shared", "r1"],
       }).map((row) => row.id),
     ).toEqual(["shared", "r1"]);
+  });
+});
+
+describe("offeredAutomationsInPinnedOrder", () => {
+  const crowd = Array.from({ length: 12 }, (_, index) =>
+    automation({ id: `c${index}`, trigger: { kind: "columns", columns: ["doing"] } }),
+  );
+
+  it("keeps every row past the ninth, pinned the same way the digits are", () => {
+    const input = {
+      automations: crowd,
+      status: "doing" as const,
+      rankedAutomationIds: ["c11"],
+      effectiveArmedAutomationId: "c5",
+    };
+    const pinned = offeredAutomationsInPinnedOrder(input).map((row) => row.id);
+    expect(pinned).toHaveLength(12);
+    expect(pinned.slice(0, 2)).toEqual(["c5", "c11"]);
+    // The digit order is this list's first nine — one list, cut in one place.
+    expect(offeredAutomationsInDigitOrder(input).map((row) => row.id)).toEqual(
+      pinned.slice(0, MAX_OFFERED_DIGITS),
+    );
   });
 });
 

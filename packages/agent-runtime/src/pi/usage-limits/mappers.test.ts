@@ -6,8 +6,10 @@ import { kimiUsageFromEndpoint } from "./kimi";
 import { githubCopilotUsageFromEndpoint } from "./github-copilot";
 import { xaiUsageFromEndpoint } from "./xai";
 import { opencodeGoUsageFromEndpoint } from "./opencode-go";
+import { zaiUsageFromEndpoint } from "./zai";
 import { headerUsageUpdate } from "./passive";
 import {
+  epochMillisToIso,
   epochSecondsToIso,
   finiteNumber,
   isoTimestamp,
@@ -891,6 +893,193 @@ describe("xaiUsageFromEndpoint", () => {
   });
 });
 
+// --- Z.AI --------------------------------------------------------------------
+
+/**
+ * `/api/monitor/usage/quota/limit` as the console serves it: the payload
+ * wrapped in `{ code, data, success }`, every window naming its length as a
+ * `number` of `unit`s, and resets in epoch MILLISECONDS.
+ */
+const ZAI_BODY = {
+  code: 200,
+  success: true,
+  data: {
+    level: "pro",
+    limits: [
+      {
+        type: "TOKENS_LIMIT",
+        unit: 3,
+        number: 5,
+        usage: 800_000_000,
+        currentValue: 127_694_464,
+        remaining: 672_305_536,
+        percentage: 15,
+        nextResetTime: RESET_5H,
+      },
+      {
+        type: "TOKENS_LIMIT",
+        unit: 6,
+        number: 7,
+        usage: 4_000_000_000,
+        currentValue: 1_200_000_000,
+        remaining: 2_800_000_000,
+        percentage: 30,
+        nextResetTime: RESET_7D,
+      },
+      {
+        // Web search and reader calls, nearly spent. Not a window that stops a
+        // turn, and the one entry that would take over the account's headline
+        // if this mapper carried it.
+        type: "TIME_LIMIT",
+        unit: 5,
+        number: 1,
+        usage: 4_000,
+        currentValue: 3_800,
+        remaining: 200,
+        percentage: 95,
+        usageDetails: [{ modelCode: "search-prime", usage: 3_800 }],
+      },
+    ],
+  },
+};
+
+/** One five-hour token window, spent this far. */
+const zaiSpan = (currentValue: number) => ({
+  type: "TOKENS_LIMIT",
+  unit: 3,
+  number: 5,
+  usage: 100,
+  currentValue,
+});
+
+describe("zaiUsageFromEndpoint", () => {
+  it("reads the token windows by the length each one states, and nothing else", () => {
+    expect(zaiUsageFromEndpoint(ZAI_BODY, NOW)).toEqual({
+      checkedAt: NOW,
+      windows: [
+        {
+          id: "session",
+          kind: "session",
+          label: "Session",
+          // 127,694,464 of 800,000,000 — the counts, not the whole-number
+          // `percentage: 15` beside them, which at this scale rounds away
+          // eight million tokens.
+          usedPercent: 15.961808,
+          resetsAt: iso(RESET_5H),
+          windowDurationMins: 300,
+        },
+        {
+          id: "weekly",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: 30,
+          resetsAt: iso(RESET_7D),
+          windowDurationMins: 10_080,
+        },
+      ],
+    });
+  });
+
+  it("leaves the web-search allowance out, so it cannot become the account's headline", () => {
+    // The guarantee the exclusion exists for: `usageLimitAccounts` binds an
+    // account to its smallest remaining share, so a 95%-spent search quota
+    // would otherwise report a coding plan with 84% of its tokens left as the
+    // account closest to running out.
+    const limits = zaiUsageFromEndpoint(ZAI_BODY, NOW);
+    expect(limits.windows.map((window) => window.id)).toEqual(["session", "weekly"]);
+    expect(Math.max(...limits.windows.map((window) => window.usedPercent))).toBeLessThan(50);
+  });
+
+  it("reads the payload whether or not it arrives inside the console's envelope", () => {
+    expect(zaiUsageFromEndpoint(ZAI_BODY.data, NOW)).toEqual(zaiUsageFromEndpoint(ZAI_BODY, NOW));
+  });
+
+  it("reads a spend stated only as what is left, and falls back to the stated percentage", () => {
+    const fromRemaining = zaiUsageFromEndpoint(
+      { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 200, remaining: 150 }] },
+      NOW,
+    );
+    expect(fromRemaining.windows[0]?.usedPercent).toBe(25);
+    // No counts worth dividing: the coarse percentage is all there is.
+    const fromPercentage = zaiUsageFromEndpoint(
+      { limits: [{ type: "TOKENS_LIMIT", unit: 6, number: 7, usage: 0, percentage: 62 }] },
+      NOW,
+    );
+    expect(fromPercentage.windows[0]?.usedPercent).toBe(62);
+  });
+
+  it("skips a window whose unit code this reader has not confirmed", () => {
+    // Naming a window from a guess at an undocumented enum would put a made-up
+    // length on a row the countdown then reads as fact.
+    const limits = zaiUsageFromEndpoint(
+      {
+        limits: [
+          { type: "TOKENS_LIMIT", unit: 9, number: 5, usage: 100, currentValue: 50 },
+          { type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, currentValue: 40 },
+        ],
+      },
+      NOW,
+    );
+    expect(limits.windows.map((window) => window.id)).toEqual(["session"]);
+  });
+
+  it("keeps the further-along of two readings of the same span, in either order", () => {
+    // The console has served a token limit beside a per-tier one over the same
+    // five hours, and two rows under one id is not a row anyone can read. The
+    // one that stops a turn first wins whichever way round they arrive — a
+    // rule that held only in listed order would be a coin toss on the wire.
+    for (const limits of [
+      zaiUsageFromEndpoint({ limits: [zaiSpan(20), zaiSpan(80)] }, NOW),
+      zaiUsageFromEndpoint({ limits: [zaiSpan(80), zaiSpan(20)] }, NOW),
+    ]) {
+      expect(limits.windows).toHaveLength(1);
+      expect(limits.windows[0]?.usedPercent).toBe(80);
+    }
+  });
+
+  it("skips a window whose length is stated as a count it cannot use", () => {
+    // Zero five-hour spans, or a count that is not a number at all: both name
+    // a window of no length, and a length is what the countdown reads.
+    for (const number of [0, -5, "soon", undefined]) {
+      const limits = zaiUsageFromEndpoint(
+        { limits: [{ type: "TOKENS_LIMIT", unit: 3, number, usage: 100, currentValue: 40 }] },
+        NOW,
+      );
+      expect(limits.windows).toEqual([]);
+    }
+  });
+
+  it("falls back to the stated percentage when the counts measure nothing", () => {
+    // A limit with neither a spend nor a remainder beside it: the counts are
+    // there but they answer no question, so the coarse percentage is all there
+    // is rather than a share divided out of half a reading.
+    const limits = zaiUsageFromEndpoint(
+      { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 800, percentage: 41 }] },
+      NOW,
+    );
+    expect(limits.windows[0]?.usedPercent).toBe(41);
+  });
+
+  it("reports a failed probe when the body names no usable token window", () => {
+    const failed = { checkedAt: NOW, windows: [], unavailable: { reason: "probeFailed" } };
+    expect(zaiUsageFromEndpoint(undefined, NOW)).toEqual(failed);
+    expect(zaiUsageFromEndpoint([], NOW)).toEqual(failed);
+    expect(zaiUsageFromEndpoint({}, NOW)).toEqual(failed);
+    expect(zaiUsageFromEndpoint({ data: { limits: [] } }, NOW)).toEqual(failed);
+    // A key with no coding plan behind it: the search allowance alone.
+    expect(
+      zaiUsageFromEndpoint(
+        { data: { limits: [{ type: "TIME_LIMIT", unit: 5, number: 1, usage: 4_000 }] } },
+        NOW,
+      ),
+    ).toEqual(failed);
+    // A window with neither counts nor a percentage measures nothing.
+    expect(
+      zaiUsageFromEndpoint({ limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5 }] }, NOW),
+    ).toEqual(failed);
+  });
+});
+
 describe("headerUsageUpdate", () => {
   it("delegates to the mapper the provider owns and to nothing for anyone else", () => {
     expect(headerUsageUpdate("openai-codex", CODEX_HEADERS, NOW)?.windows).toHaveLength(2);
@@ -933,6 +1122,16 @@ describe("value readers", () => {
     expect(secondsFromNowToIso(600, NOW)).toBe(iso(NOW + 600_000));
     expect(secondsFromNowToIso("0", NOW)).toBeUndefined();
     expect(secondsFromNowToIso(null, NOW)).toBeUndefined();
+  });
+
+  it("turns epoch milliseconds into ISO, without confusing them for seconds", () => {
+    expect(epochMillisToIso(RESET_5H)).toBe(iso(RESET_5H));
+    // The same integer under the other reading is a different century, which
+    // is exactly why the two helpers are separate.
+    expect(epochSecondsToIso(RESET_5H)).not.toBe(iso(RESET_5H));
+    expect(epochMillisToIso("0")).toBeUndefined();
+    expect(epochMillisToIso(-1)).toBeUndefined();
+    expect(epochMillisToIso(null)).toBeUndefined();
   });
 
   it("normalizes an ISO timestamp the provider wrote, and drops one that does not parse", () => {

@@ -1,0 +1,300 @@
+/**
+ * Model-call Session titling (VC-81): the one hook every auto-title door feeds.
+ *
+ * The shipped heuristic names a Session instantly and stays the offline,
+ * unconfigured and failed-call answer. Behind it, one utility completion asks
+ * a model for a sharper title — six words maximum — and the heuristic is
+ * replaced only when the stored title is still byte-identical to what the
+ * heuristic wrote, so a person who renamed while the call was in flight wins
+ * and the model answer is dropped.
+ *
+ * The call is deliberately not part of the chat: it runs through
+ * `completeUtility`, which creates no Session, no attachment, no transcript
+ * and no ledger entry.
+ *
+ * The model ladder itself is domain policy and lives in `@volli/shared`
+ * ({@link resolveAutoTitleModel}); this file only reads the three rungs and
+ * runs the winner (VC-81): utility, then the model the chat already runs under,
+ * then the Role's default. The utility preference (VC-81) avoids using the
+ * orchestration tier for a six-word title when a cheaper model is available.
+ *
+ * Titling runs as cheaply as the chosen model allows: `off` where the model
+ * offers it, otherwise the least reasoning it will do
+ * ({@link cheapestReasoningLevel}), with the thinking discarded on the way
+ * back out. Refusing every model that cannot be turned off left the feature
+ * inert on a large slice of real profiles — most of the OpenAI reasoning tier
+ * cannot. This is a downward choice from validated catalog data, not pi's
+ * clampThinkingLevel, which climbs.
+ *
+ * A Session nobody named a title for is never answered with anything but the
+ * heuristic. Failures log and keep the heuristic; this is not a mutation a
+ * person requested, so nothing toasts.
+ */
+import {
+  AUTO_TITLE_SYSTEM_PROMPT,
+  autoTitlePrompt,
+  cheapestReasoningLevel,
+  errorMessage,
+  resolveAutoTitleModel,
+  resolveDefaultModel,
+  sanitizeAutoTitle,
+  UtilityCompletionError,
+  type AutoTitleAutomation,
+  type AutoTitleTicket,
+  type ModelAccessDefaults,
+  type ModelAccessSnapshot,
+  type ModelSelection,
+  type SessionUsage,
+  type UtilityCompletion,
+  type UtilityCompletionResult,
+} from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("auto-title");
+
+/**
+ * The whole refinement's budget — the provider probe and the completion share
+ * it. Nothing waits on this call: the heuristic title is already on screen, so
+ * a provider that never answers should cost one abandoned request, not a
+ * promise that is still pending when the app quits.
+ */
+export const AUTO_TITLE_TIMEOUT_MS = 20_000;
+
+/** The Session facts one refine needs, read once from a projection. */
+export interface AutoTitleSession {
+  title: string | null;
+  ticketId: string | null;
+  /** The Session's own recorded model policy — the ladder's second rung. */
+  model: ModelSelection | null;
+}
+
+export interface AutoTitlerOptions {
+  readSession(sessionId: string): Promise<AutoTitleSession | null>;
+  /**
+   * The configured defaults, read once per refinement rather than once per
+   * rung, so a Settings change mid-refinement cannot be half-applied — and so
+   * one title costs one read.
+   */
+  readModelDefaults(): ModelAccessDefaults;
+  /**
+   * The Ticket a Ticket Session is work on, for the prompt's background. Never
+   * called for a Board chat. `null` when the Ticket has gone.
+   */
+  readTicket(ticketId: string): AutoTitleTicket | null;
+  inspectModelAccess(input: { signal: AbortSignal }): Promise<ModelAccessSnapshot>;
+  completeUtility(input: UtilityCompletion): Promise<UtilityCompletionResult>;
+  retitle(sessionId: string, title: string): Promise<void>;
+  /**
+   * Bill the Session for the model call this refinement made.
+   *
+   * Separate from {@link retitle} because the two answer different questions.
+   * A title Volli decides not to keep was still paid for, and a Session whose
+   * only spend was the title it rejected should still be able to say so.
+   */
+  recordUsage(sessionId: string, usage: SessionUsage): Promise<void>;
+}
+
+/**
+ * One refinement request — the shape every door sends and every seam between
+ * them passes along. Declared once here and imported by the CLI door, the IPC
+ * contract, the renderer handler and the Automation runner, so the common
+ * fields never travel as structurally-identical inline types.
+ */
+export interface AutoTitleRequest {
+  sessionId: string;
+  /** The first user message the title is derived from. */
+  firstMessage: string;
+  /** The heuristic title the door wrote, the byte-identical guard's baseline. */
+  heuristicTitle: string;
+  /** Present when the message is reusable Automation Instructions rather than a one-off turn. */
+  automation?: AutoTitleAutomation;
+}
+
+export interface AutoTitler {
+  /**
+   * Refine one Session's heuristic title behind a model call. Never rejects:
+   * every failure is logged and leaves the heuristic standing.
+   */
+  refine(request: AutoTitleRequest): Promise<void>;
+}
+
+function logSkip(sessionId: string, detail: string): void {
+  log.warn("auto-title skipped", { sessionId, reason: detail });
+}
+
+/**
+ * Record what a title call consumed, and never let that record cost the user
+ * their title.
+ *
+ * One function because both paths through the call — an answer, and a billed
+ * failure — owe the same bill and must swallow the same way. Auto-titling is
+ * work nobody asked for: no failure inside it may reach a person, and a ledger
+ * that refuses the fact is a line in the log, not a toast.
+ */
+async function bill(
+  options: Pick<AutoTitlerOptions, "recordUsage">,
+  sessionId: string,
+  usage: SessionUsage,
+): Promise<void> {
+  try {
+    await options.recordUsage(sessionId, usage);
+  } catch (failure) {
+    log.error("auto-title usage was not recorded", { sessionId, error: failure });
+  }
+}
+
+export function createAutoTitler(options: AutoTitlerOptions): AutoTitler {
+  /**
+   * Sessions with a refinement already running. One Session is only ever
+   * titled from one opening message, so a second request that arrives while
+   * the first is still out at the model is a duplicate — a Retry attach
+   * resuming an Automation's delivery beside its own boot, or a crash-window
+   * replay — and running it would bill a second call whose answer the
+   * byte-identical guard would drop anyway.
+   */
+  const inFlight = new Set<string>();
+
+  async function refine(request: AutoTitleRequest): Promise<void> {
+    if (inFlight.has(request.sessionId)) return;
+    inFlight.add(request.sessionId);
+    try {
+      await refineOnce(request);
+    } finally {
+      inFlight.delete(request.sessionId);
+    }
+  }
+
+  async function refineOnce(request: AutoTitleRequest): Promise<void> {
+    let session: AutoTitleSession | null;
+    try {
+      session = await options.readSession(request.sessionId);
+    } catch (failure) {
+      logSkip(request.sessionId, `could not read the session (${errorMessage(failure)})`);
+      return;
+    }
+    if (session === null) {
+      logSkip(request.sessionId, "the session no longer exists");
+      return;
+    }
+    // Zero calls for Sessions someone already named: a durable title that is
+    // not the heuristic this door wrote is a person's or a CLI --title's.
+    if (session.title !== null && session.title !== request.heuristicTitle) {
+      return;
+    }
+    // The renderer normally races the heuristic in ahead of this call; a
+    // still-untitled Session is titled with it here, so the guard below has
+    // the baseline it compares against.
+    if (session.title === null) {
+      try {
+        await options.retitle(request.sessionId, request.heuristicTitle);
+      } catch (failure) {
+        logSkip(request.sessionId, `the heuristic title did not stick (${errorMessage(failure)})`);
+        return;
+      }
+    }
+    const defaults = options.readModelDefaults();
+    const chosen = resolveAutoTitleModel({
+      utility: defaults.utility,
+      session: session.model,
+      roleDefault: resolveDefaultModel(defaults, session.ticketId === null ? "global" : "ticket"),
+    });
+    if (chosen === null) {
+      return;
+    }
+    // One deadline for the probe and the call together.
+    const signal = AbortSignal.timeout(AUTO_TITLE_TIMEOUT_MS);
+    let access: ModelAccessSnapshot;
+    try {
+      access = await options.inspectModelAccess({ signal });
+    } catch (failure) {
+      logSkip(request.sessionId, `Model Access could not be read (${errorMessage(failure)})`);
+      return;
+    }
+    const available = access.models.find(
+      (candidate) =>
+        candidate.providerId === chosen.providerId && candidate.modelId === chosen.modelId,
+    );
+    if (available === undefined || available.state !== "available") {
+      logSkip(
+        request.sessionId,
+        `model ${chosen.providerId}/${chosen.modelId} is not currently available`,
+      );
+      return;
+    }
+    // As cheap as this model goes. Only a model offering no level at all is
+    // refused, which the catalog does not currently produce but the type
+    // allows.
+    const reasoningLevel = cheapestReasoningLevel(available.reasoningLevels);
+    if (reasoningLevel === null) {
+      logSkip(
+        request.sessionId,
+        `model ${chosen.providerId}/${chosen.modelId} offers no reasoning level`,
+      );
+      return;
+    }
+    // The Ticket is background the message often does not carry: a CLI Session
+    // started with no -m says only "Begin work on this ticket". Losing it is
+    // not worth losing the title, so a failed read titles without it.
+    let ticket: AutoTitleTicket | null = null;
+    if (session.ticketId !== null) {
+      try {
+        ticket = options.readTicket(session.ticketId);
+      } catch (failure) {
+        logSkip(request.sessionId, `the ticket could not be read (${errorMessage(failure)})`);
+      }
+    }
+    let completion: UtilityCompletionResult;
+    try {
+      completion = await options.completeUtility({
+        model: { providerId: chosen.providerId, modelId: chosen.modelId, reasoningLevel },
+        systemPrompt: AUTO_TITLE_SYSTEM_PROMPT,
+        // Capped and delimited: a title is six words, and the opening decides
+        // them. A pasted file behind the question is billed input that buys
+        // nothing, and unbounded text is where instruction-shaped content hides.
+        user: autoTitlePrompt(request.firstMessage, ticket, request.automation),
+        signal,
+      });
+    } catch (failure) {
+      // A CALL THAT FAILED WAS STILL BILLED. A reply that stopped on a length
+      // limit or came back as nothing but a reasoning span cost what its prompt
+      // cost, and the titler retries — so a Session can be charged repeatedly
+      // for work that produces no title and, without this, leaves no trace.
+      // The usage rides on the error precisely so the bill survives the throw.
+      if (failure instanceof UtilityCompletionError && failure.usage !== null) {
+        await bill(options, request.sessionId, failure.usage);
+      }
+      logSkip(request.sessionId, `the model call failed (${errorMessage(failure)})`);
+      return;
+    }
+    // Billed here, before any decision about the answer: the provider charged
+    // for the call, not for what Volli concluded from it. A ledger that
+    // refuses the fact must not also cost the user their title — auto-titling
+    // is work nobody asked for, and no failure inside it may reach a person.
+    if (completion.usage !== null) {
+      await bill(options, request.sessionId, completion.usage);
+    }
+    const title = sanitizeAutoTitle(completion.text);
+    if (title === null) {
+      logSkip(request.sessionId, "the model answer held no title");
+      return;
+    }
+    // The async gap guard: whatever the stored title is now, only the
+    // byte-identical heuristic may be replaced. A person who renamed during
+    // the call wins.
+    try {
+      const current = await options.readSession(request.sessionId);
+      if (current === null) {
+        logSkip(request.sessionId, "the session no longer exists");
+        return;
+      }
+      if (current.title !== request.heuristicTitle) {
+        return;
+      }
+      await options.retitle(request.sessionId, title);
+    } catch (failure) {
+      log.error("auto-title did not stick", { sessionId: request.sessionId, error: failure });
+    }
+  }
+
+  return { refine };
+}

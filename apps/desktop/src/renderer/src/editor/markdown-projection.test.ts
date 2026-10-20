@@ -258,6 +258,16 @@ describe("projectMarkdown — fenced code", () => {
     ]);
   });
 
+  it("reveals a fence inside a quote when the caret is on the `>` in front of it", () => {
+    // The opening hide spans the whole line, `> ` included, so a caret on that
+    // marker has to count as touching the block or the marker it sits on
+    // stays hidden under the fence line.
+    const text = "> ```js\n> code\n> ```";
+    const ops = projectMarkdown({ text, selection: [{ from: 1, to: 1 }], focused: true });
+
+    expect(ops.filter((op) => op.kind === "hide" && op.from <= 0 && op.to >= 2)).toEqual([]);
+  });
+
   it("never hides a one-line block, which would erase the block entirely", () => {
     const ops = projectMarkdown({ text: "```", selection: [], focused: false });
 

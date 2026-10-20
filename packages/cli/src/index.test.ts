@@ -9,11 +9,28 @@
  * reaped proves it.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
+import {
+  closeSync,
+  constants,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
+import { join } from "node:path";
+import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vite-plus/test";
 
 const bundlePath = fileURLToPath(new URL("../dist/volli.cjs", import.meta.url));
+const readerGatePath = fileURLToPath(
+  new URL("./__fixtures__/departed-reader-gate.cjs", import.meta.url),
+);
+const outputProbePath = fileURLToPath(
+  new URL("./__fixtures__/broken-output-probe.cjs", import.meta.url),
+);
 
 /**
  * The promotion marker is the REPOSITORY root version, which vite.config.ts
@@ -97,6 +114,86 @@ function runHookProcess(mode: "idle" | "flood"): Promise<HookRun> {
   });
 }
 
+interface BrokenOutputRun {
+  exitCode: number | null;
+  /** Everything the CLI managed to say on the stream that still worked. */
+  intactOutput: string;
+}
+
+function cliEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env["VOLLI_SOCKET"];
+  delete env["VOLLI_SESSION"];
+  delete env["VOLLI_TICKET"];
+  return env;
+}
+
+/** The status the process ended on, and what it said on the stream that worked. */
+function collectOutcome(child: ChildProcess, intact: Readable): Promise<BrokenOutputRun> {
+  return new Promise<BrokenOutputRun>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    intact.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.once("error", reject);
+    child.once("close", (exitCode) => {
+      resolve({ exitCode, intactOutput: Buffer.concat(chunks).toString("utf8") });
+    });
+  });
+}
+
+/**
+ * Runs the built CLI with one of its output streams already unreadable: the
+ * reader closed its end before the CLI wrote a byte, which is the state
+ * `head -12` leaves behind the moment it has taken its twelve lines.
+ *
+ * These help/usage commands emit a small response in one write. Closing after
+ * the first chunk is not a reliable regression: the pipe buffer may already
+ * hold the whole response, so the test can pass without any EPIPE handler.
+ * A larger response could force backpressure, but this fixture avoids both
+ * payload-size assumptions and reader scheduling.
+ *
+ * So the close happens first and a Node preload holds the CLI back until it
+ * has: the preload blocks on stdin until the parent sends a go-ahead and EOF,
+ * and only then does Node load the built CLI in that same process. No wrapper
+ * forwards an exit status or catches a stream error: both belong to the CLI.
+ * Writing to a pipe with no readers is EPIPE on the first byte, every time,
+ * whatever the payload. There is no shell, FIFO, or scheduling delay.
+ */
+function runWithDepartedReader(
+  broken: "stdout" | "stderr",
+  argv: readonly string[],
+  paths: { entrypoint?: string; preload?: string } = {},
+): Promise<BrokenOutputRun> {
+  const child = spawn(
+    process.execPath,
+    ["--require", paths.preload ?? readerGatePath, paths.entrypoint ?? bundlePath, ...argv],
+    { env: cliEnvironment(), stdio: ["pipe", "pipe", "pipe"] },
+  );
+  // Every stream is a pipe here, so none of the three is null.
+  const doomed = (broken === "stdout" ? child.stdout : child.stderr)!;
+  const outcome = collectOutcome(child, (broken === "stdout" ? child.stderr : child.stdout)!);
+  // `close` fires once the descriptor is really gone, so the go-ahead cannot
+  // release the preload while the pipe still has a reader.
+  doomed.once("close", () => child.stdin!.end("go\n"));
+  doomed.destroy();
+  return outcome;
+}
+
+/**
+ * Runs the built CLI with a stdout that refuses writes for a reason nobody
+ * chose: a read-only descriptor, where the failure is EBADF rather than a
+ * reader's decision to stop listening.
+ */
+function runWithUnwritableStdout(argv: readonly string[]): Promise<BrokenOutputRun> {
+  // Read-only so that writing fails, and `/dev/null` so that nothing on disk
+  // has to be made or cleaned up to say so.
+  const readOnly = openSync("/dev/null", constants.O_RDONLY);
+  const child = spawn(process.execPath, [bundlePath, ...argv], {
+    env: cliEnvironment(),
+    stdio: ["ignore", readOnly, "pipe"],
+  });
+  return collectOutcome(child, child.stderr!).finally(() => closeSync(readOnly));
+}
+
 describe("volli built entrypoint", () => {
   beforeAll(() => {
     const built = spawnSync(fileURLToPath(new URL("../node_modules/.bin/vp", import.meta.url)), [
@@ -121,6 +218,57 @@ describe("volli built entrypoint", () => {
     expect(run.stdout).toMatch(/Build id: [0-9a-f]{12}(?:\+dirty)?@/);
     expect(run.stdout).not.toContain("source mode");
     expect(run.stdout).not.toContain("unbundled-source");
+  });
+
+  // The reported bug, as a process: `volli session list | head -12` printed
+  // its first rows and then an unhandled `node:events` EPIPE stack, because a
+  // write whose reader had gone raised an `error` nobody was listening for.
+  // Without the handler this run exits 1 and puts that stack on stderr.
+  it("says nothing when the reader of stdout has gone", async () => {
+    const run = await runWithDepartedReader("stdout", ["help"]);
+    expect(run.intactOutput).toBe("");
+    expect(run.exitCode).toBe(0);
+  });
+
+  // The other half, and the one an over-eager fix gets wrong: bare `volli` is
+  // a usage refusal that prints the whole reference to stderr and exits 2. A
+  // reader that left has no opinion about whether the command worked, so the
+  // status stays 2 — not 0 for having exited quietly, not 1 for crashing.
+  it("keeps the command's own failure status when the reader of stderr has gone", async () => {
+    const run = await runWithDepartedReader("stderr", []);
+    expect(run.intactOutput).toBe("");
+    expect(run.exitCode).toBe(2);
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "the departed %s fixture yields EPIPE and preserves paths, arguments, and exit status",
+    async (broken) => {
+      // Keep the temporary links inside this worktree. Both Node paths and
+      // the probe's arguments must remain literal, not shell syntax.
+      const directory = mkdtempSync(
+        fileURLToPath(new URL("../.departed reader ;$()' -", import.meta.url)),
+      );
+      try {
+        const entrypoint = join(directory, "output probe ;$()' .cjs");
+        const preload = join(directory, "reader gate ;$()' .cjs");
+        symlinkSync(outputProbePath, entrypoint);
+        symlinkSync(readerGatePath, preload);
+        const argv = [broken, "two words", "'\";$HOME $(echo unexpected) `echo unexpected`", ""];
+        const run = await runWithDepartedReader(broken, argv, { entrypoint, preload });
+        expect(JSON.parse(run.intactOutput)).toEqual({ code: "EPIPE", argv });
+        expect(run.exitCode).toBe(23);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // Quiet is owed to a departed reader and to nobody else. A descriptor that
+  // cannot be written is a real fault, and it still costs what it always did.
+  it("stays loud when a write fails for a reason other than a departed reader", async () => {
+    const run = await runWithUnwritableStdout(["help"]);
+    expect(run.intactOutput).toContain("EBADF");
+    expect(run.exitCode).toBe(1);
   });
 
   // The read budget used to bound the promise and not the process: the `data`

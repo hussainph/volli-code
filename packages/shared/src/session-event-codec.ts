@@ -21,19 +21,24 @@
  * The payload graph's other roots live here too: `command.recorded` carries a
  * whole `SessionCommand` and `command.receipt.recorded` a `CommandReceipt`,
  * so intent, route, receipt and provenance decoding are this module's as well.
- * Encode stays a plain canonical `JSON.stringify` behind a strict JSON-safety
- * assertion — the codec never re-orders or rewrites what is already on disk.
+ * Encode stays canonical JSON behind a strict JSON-safety assertion. Ordinary
+ * records are not rewritten; credential-bearing interactions are allowlisted
+ * at every boundary so unknown fields cannot become stored credential values.
  *
  * The renderer-safe form is the same table's other column. Each entry's
  * `scrub` maps a durable payload onto what may cross the product edge to the
  * renderer — runtime identity (`adapterId`) and adapter-native detail
  * (recovery locators, diagnostics, provenance internals) stay behind it — and
  * {@link RendererSessionEventPayload} is **derived from the scrub return
- * types**, so the published renderer type and the runtime scrub cannot
- * disagree. That derivation replaces a mapped type the edge once kept beside
- * a hand-written switch, whose quiet divergence is exactly the failure mode
- * this table exists to make impossible.
+ * types**. A type-level check also requires each `decodeRenderer` return to
+ * match that same kind's scrub return, so the published renderer type, the
+ * runtime scrub, and the renderer decoder cannot disagree. That derivation
+ * replaces a mapped type the edge once kept beside a hand-written switch,
+ * whose quiet divergence is exactly the failure mode this table exists to
+ * make impossible.
  */
+
+import { SESSION_STOP_CATEGORIES, type SessionStopDetail } from "./session-stop";
 
 import {
   COMPACTION_REASONS,
@@ -44,24 +49,37 @@ import {
 } from "./agent-runtime";
 import type { ModelSelection, PromptResource, SessionRole } from "./agent-runtime";
 import { MODEL_TIERS } from "./model-access-policy";
+import type { ModelAutoPick } from "./model-auto-select";
 import type { ModelTier } from "./model-access-policy";
 import { isSessionToolId } from "./agent-tool-surface";
-import type { AuthoritySnapshot, SessionToolId } from "./authority";
-import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
-import type { McpToolDefinition } from "./mcp";
-import { JUDGMENT_MODES } from "./authority-config";
-import { errorMessage } from "./errors";
+import type { SessionToolId } from "./authority";
 import {
+  CODE_MODE_TOOL_ID,
+  isToolRoute,
+  parseCodeModeSurface,
+  type CodeModeSurface,
+  type ToolRoute,
+} from "./code-mode";
+import type { SessionToolRefreshDelta } from "./tool-refresh-delta";
+import { isMcpToolId, sanitizeMcpToolDefinition, validateMcpToolDefinitions } from "./mcp";
+import type { McpJsonObject, McpToolDefinition } from "./mcp";
+import { errorMessage } from "./errors";
+import type { PresentedScheduledResume } from "./scheduled-resume";
+import type { SecretRequestMetadata } from "./secrets";
+import {
+  SCHEDULED_RESUME_SKIP_REASONS,
   SESSION_ATTACHMENT_CONTINUITIES,
   SESSION_ATTENTION_KINDS,
   SESSION_INTERACTION_CANCEL_REASONS,
   roleImpliedByTicket,
 } from "./session-ledger";
+import { TODO_STATUSES } from "./session-todo";
 import { COST_BASES, SESSION_USAGE_CAUSES } from "./session-usage";
 import type { SessionUsage } from "./session-usage";
 import type {
   CommandReceipt,
   CommandReceiptResult,
+  ScheduledResumeOutcome,
   Session,
   SessionAttachment,
   SessionAttachmentFailure,
@@ -82,6 +100,7 @@ import type {
   SessionNativeReference,
   SessionProjection,
   SessionStopActor,
+  SessionTranscriptDigest,
   SessionUsageAttribution,
   TranscriptReference,
 } from "./session-ledger";
@@ -125,10 +144,11 @@ interface SessionEventKindCodec<Kind extends SessionEventKind, Safe = unknown> {
   scrub(payload: PayloadOf<Kind>): Safe;
   /**
    * Renderer-safe JSON → typed renderer payload, for the read back on the
-   * renderer's side of the edge. Only needed when the scrub *removes* keys —
-   * `decode` then rejects the scrubbed JSON — so most kinds omit it and the
+   * renderer's side of the edge. Needed when the scrub *removes* keys or the
+   * durable decoder performs host-only validation — most kinds omit it and the
    * renderer parse runs `scrub(decode(…))` instead, which both validates the
-   * shape and re-nulls anything an unscrubbed value could be leaking.
+   * shape and re-nulls anything an unscrubbed value could be leaking. The
+   * table checks its return against this kind's own scrub result.
    */
   decodeRenderer?(record: JsonRecord, context: string): Safe;
 }
@@ -174,29 +194,34 @@ const codecs = {
       kind: "model.selected",
       selection: decodeModelSelection(record.selection, `${context}.selection`),
       ...decodeModelTier(record.tier, `${context}.tier`),
+      ...decodeModelAuto(record.auto, `${context}.auto`),
     }),
     scrub: (payload) => payload,
   },
   "session.input.recorded": {
+    decode: (record, context) =>
+      decodeSessionInputRecord(record, context, decodeMcpToolDefinitions),
+    scrub: scrubSessionInputRecord,
+    // The host validates MCP schemas at discovery and durable replay. Ajv's
+    // lazy meta-schema compilation is forbidden by renderer CSP; presentation
+    // checks the wire shape, never re-compiles those host-validated schemas.
+    decodeRenderer: (record, context) =>
+      scrubSessionInputRecord(
+        decodeSessionInputRecord(record, context, decodeRendererMcpToolDefinitions),
+      ),
+  },
+  "session.tools.refreshed": {
     decode: (record, context) => {
-      const input = asRecord(record.input, `${context}.input`);
-      const kind = enumValue(
-        input.kind,
-        ["runtime-brief", "prompt-resources", "tool-surface"],
-        `${context}.input.kind`,
-      );
-      const decoded =
-        kind === "runtime-brief"
-          ? { kind, text: readString(input.text, `${context}.input.text`) }
-          : kind === "prompt-resources"
-            ? {
-                kind,
-                resources: decodePromptResources(input.resources, `${context}.input.resources`),
-              }
-            : decodeToolSurfaceInput(input, kind, `${context}.input`);
-      return { kind: "session.input.recorded", input: decoded };
+      const notice = decodeToolRefreshNotice(record, context);
+      return {
+        ...notice,
+        delta: decodeToolRefreshDelta(record.delta, notice.added, `${context}.delta`),
+      };
     },
-    scrub: (payload) => payload,
+    // Definitions and marker/route deltas are host-only. The quiet transcript
+    // fact still needs just names and why they changed.
+    scrub: ({ delta: _delta, ...notice }) => notice,
+    decodeRenderer: decodeToolRefreshNotice,
   },
   "session.signaled": {
     decode: (record, context) => ({
@@ -315,6 +340,7 @@ const codecs = {
       kind: "turn.interrupted",
       attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
       turnId: readString(record.turnId, `${context}.turnId`),
+      ...optionalStopDetail(record.stopDetail, `${context}.stopDetail`),
     }),
     scrub: (payload) => payload,
   },
@@ -385,6 +411,7 @@ const codecs = {
       attachmentId: readNullableString(record.attachmentId, `${context}.attachmentId`),
       turnId: readNullableString(record.turnId, `${context}.turnId`),
       reference: decodeTranscriptReference(record.reference, `${context}.reference`),
+      ...optionalTranscriptDigest(record.digest, `${context}.digest`),
     }),
     scrub: (payload) => payload,
   },
@@ -440,23 +467,6 @@ const codecs = {
     }),
     scrub: (payload) => payload,
   },
-  // `cause` is read as a plain string, not checked against the live rule pack.
-  // History outlives the pack that wrote it, and a decoder that rejected a
-  // retired rule id would make an old Session unreadable — every later read of
-  // that Session, not just this event, because the decode throws.
-  "authority.denied": {
-    decode: (record, context) => ({
-      kind: "authority.denied",
-      attachmentId: readString(record.attachmentId, `${context}.attachmentId`),
-      turnId: readNullableString(record.turnId, `${context}.turnId`),
-      tool: readString(record.tool, `${context}.tool`),
-      cause: readString(record.cause, `${context}.cause`),
-      reason: readString(record.reason, `${context}.reason`),
-    }),
-    // `authority.denied` crosses untouched — `tool`, `cause` and `reason` are
-    // Volli's own vocabulary already, not a harness's.
-    scrub: (payload) => payload,
-  },
   "adapter.observed": {
     decode: (record, context) => ({
       kind: "adapter.observed",
@@ -470,8 +480,8 @@ const codecs = {
   // than defaulted: absent is what an executor that reported nothing actually
   // said, and a decoder that healed it to `0` would invent a free request.
   // `cause` and `costBasis` are checked against Volli's own vocabulary because
-  // both ARE Volli's vocabulary — unlike an authority rule id, neither is a
-  // pack's word this build might have retired.
+  // both ARE Volli's vocabulary — unlike an opaque adapter word, neither is a
+  // name this build might have retired.
   "usage.recorded": {
     decode: (record, context) => ({
       kind: "usage.recorded",
@@ -486,15 +496,43 @@ const codecs = {
   },
 } satisfies { [Kind in SessionEventKind]: SessionEventKindCodec<Kind> };
 
+/** Structural assignability permits extra object keys, so check both shape and safety. */
+type RendererReturnMatchesScrub<Decoded, Safe> = Decoded extends unknown
+  ? [Decoded] extends [Safe]
+    ? Exclude<keyof Decoded, keyof Safe> extends never
+      ? true
+      : false
+    : false
+  : never;
+
+type CheckRendererDecoderAgainstScrub<Codecs> = {
+  [Kind in keyof Codecs]: Codecs[Kind] extends {
+    scrub: (...args: infer _ScrubArgs) => infer Safe;
+    decodeRenderer: (...args: infer _RendererArgs) => infer Decoded;
+  }
+    ? RendererReturnMatchesScrub<Decoded, Safe> extends true
+      ? Codecs[Kind]
+      : never
+    : Codecs[Kind];
+};
+
+type CodecForKind<Kind extends SessionEventKind> = SessionEventKindCodec<
+  Kind,
+  ReturnType<(typeof codecs)[Kind]["scrub"]>
+>;
+
+type AnySessionEventKindCodec = {
+  [Kind in SessionEventKind]: CodecForKind<Kind>;
+}[SessionEventKind];
+
 /**
- * The table again, viewed by an arbitrary string kind. The widening is sound —
- * each entry's decode returns its own arm of the union and each scrub one arm
- * of the derived renderer union — and it is what lets an unknown kind be
- * answered with the distinct error instead of a type hole.
+ * The table again, viewed by an arbitrary string kind. Its widened entries
+ * retain the corresponding kind-specific scrub return for `decodeRenderer` —
+ * never the renderer union — while still letting unknown kinds raise the
+ * distinct error instead of opening a type hole.
  */
-const codecByKind: Partial<
-  Record<string, SessionEventKindCodec<SessionEventKind, RendererSessionEventPayload>>
-> = codecs;
+const codecByKind: Partial<Record<string, AnySessionEventKindCodec>> =
+  codecs satisfies CheckRendererDecoderAgainstScrub<typeof codecs>;
 
 /* ------------------------------------------------------- renderer-safe form */
 
@@ -504,73 +542,18 @@ const codecByKind: Partial<
  * session id, session file path) in `native`, which must never cross the
  * product edge — and the type says so, rather than claiming a field survives
  * that never arrives. Renderer correlation keys on durable ids instead
- * (see `askInteractionId`).
+ * through the interaction's own durable id.
  */
 export interface RendererSessionNativeReference {
   id: null;
   detail: null;
 }
 
-/** An attachment without executor routing identity or its recovery locator. */
-/**
- * `authority` is scrubbed with the two host-only fields rather than projected.
- *
- * Not because a Snapshot is a secret — it is policy, and a person is entitled to
- * read the policy their Session runs under. It is withheld because no surface
- * renders it yet, and the renderer's attachment shape is a contract: putting a
- * field there before something displays it invites a client to depend on a shape
- * that has never been designed. VC-44 makes the Snapshot durable; showing it is
- * a later, deliberate act.
- *
- * VC-285 is that act, and it does NOT undo this line. What a surface needed was
- * the answer to one question — what is the live attachment governed by — and
- * that answer is {@link RendererSessionAuthority}, derived by
- * {@link scrubSessionAuthority} and carried on the projection. The attachment
- * shape stays as it is: an event stream that suddenly carried policy on every
- * `attachment.opened` would publish the Snapshot's remainder (the frozen tool
- * surface, the classifier, the tree it runs in) to buy one chip.
- */
+/** An attachment without executor routing identity, recovery locator, or retired snapshot slot. */
 export type RendererSessionAttachment = Omit<
   SessionAttachment,
   "adapterId" | "native" | "authority"
 >;
-
-/**
- * What the live attachment was pinned to, as much of it as a surface may say.
- *
- * THREE FIELDS, and each one is here because the chip cannot be truthful
- * without it:
- *
- *  - `attachmentId`, because the pinned unit is an attachment and not a Session.
- *    One Session can hold two attachments that opened under different policies,
- *    and a summary that named only the Session could not say which one this is.
- *  - `enforcement`, because that is the outcome: `observe` saved this
- *    attachment's policy and allowed every call, `enforce` installed the gate.
- *  - `rulePackId` / `rulePackHash`, because a Snapshot has no policy version
- *    field and the pack's hash is the only version there is. A denial read back
- *    after the pack moved is only interpretable against the pack that produced
- *    it.
- *
- * `snapshot: null` is a REAL answer and the reason this is not three nullable
- * fields: an attachment that opened under `enforcement: "off"` was handed no
- * Snapshot, and neither was any attachment written before VC-44. The two are
- * deliberately indistinguishable in durable history, so the null carries both
- * and a reader is told the truth — runtime defaults — instead of being invited
- * to guess today's project setting.
- *
- * What is NOT here is the rest of the Snapshot: `tools`, `classifierModel`,
- * `fallback`, `location`, `judgmentMode`, and the internal `mode: "auto"`. None
- * of them is the user-facing outcome, and a wider shape would be a second
- * contract to keep rather than one fact to render.
- */
-export interface RendererSessionAuthority {
-  attachmentId: string;
-  snapshot: {
-    enforcement: AuthoritySnapshot["enforcement"];
-    rulePackId: string;
-    rulePackHash: string;
-  } | null;
-}
 
 export type RendererSessionAttachmentFailure = Omit<SessionAttachmentFailure, "diagnostic"> & {
   diagnostic: null;
@@ -616,6 +599,12 @@ export type RendererSessionEventPayload = {
   [Kind in SessionEventKind]: ReturnType<(typeof codecs)[Kind]["scrub"]>;
 }[SessionEventKind];
 
+/** Dynamic dispatch erases the kind correlation after the per-kind table check. */
+type DynamicSessionEventKindCodec = SessionEventKindCodec<
+  SessionEventKind,
+  RendererSessionEventPayload
+>;
+
 export type RendererSessionEvent = Omit<SessionEvent, "provenance" | "payload"> & {
   provenance: RendererSessionEventProvenance;
   payload: RendererSessionEventPayload;
@@ -627,7 +616,7 @@ export function scrubSessionEventPayload(
 ): RendererSessionEventPayload {
   // Present for every kind the union can name; only an untyped caller could
   // miss, and the parse owns that path.
-  return codecByKind[payload.kind]!.scrub(payload);
+  return (codecByKind[payload.kind]! as DynamicSessionEventKindCodec).scrub(payload);
 }
 
 /** One whole event made renderer-safe: provenance and payload scrubbed together. */
@@ -662,39 +651,6 @@ export function scrubSessionAttachment(attachment: SessionAttachment): RendererS
   return presentation;
 }
 
-/**
- * The live attachment's pinned policy, reduced to what a surface may show.
- *
- * Takes the ATTACHMENT rather than the Snapshot, and takes `null` for "nothing
- * is attached", because those are two different absences a chip has to tell
- * apart: no live attachment means there is nothing to say at all, while a live
- * attachment holding no Snapshot means this Session is genuinely running at the
- * runtime's own defaults. Collapsing them would draw "runtime defaults" over a
- * Session that has not attached yet.
- *
- * It reads nothing but the attachment it is handed. A summary that fell back to
- * the project's CURRENT policy would be the exact lie this ticket exists to
- * remove: policy is pinned when an attachment opens, and an edit made since
- * then reaches the next attachment, not this one.
- */
-export function scrubSessionAuthority(
-  attachment: SessionAttachment | null,
-): RendererSessionAuthority | null {
-  if (attachment === null) return null;
-  const snapshot = attachment.authority;
-  return {
-    attachmentId: attachment.id,
-    snapshot:
-      snapshot === null
-        ? null
-        : {
-            enforcement: snapshot.enforcement,
-            rulePackId: snapshot.rulePackId,
-            rulePackHash: snapshot.rulePackHash,
-          },
-  };
-}
-
 export function scrubSessionAttachmentFailure(
   failure: SessionAttachmentFailure,
 ): RendererSessionAttachmentFailure {
@@ -708,7 +664,20 @@ export function scrubSessionAttention(attention: SessionAttention): RendererSess
 export function scrubSessionInteraction(
   interaction: SessionInteraction,
 ): RendererSessionInteraction {
-  return { ...interaction, native: scrubbedNativeReference() };
+  // Decode the presentation rather than spreading it: unknown fields, including
+  // an accidental credential value, are never renderer data.
+  return {
+    ...decodeInteraction(
+      { ...interaction, native: scrubbedNativeReference() },
+      "Session interaction",
+    ),
+    native: scrubbedNativeReference(),
+  };
+}
+
+/** Write-side allowlist, also used before runtime observations become facts. */
+export function sanitizeSessionInteraction(interaction: SessionInteraction): SessionInteraction {
+  return decodeInteraction(interaction, "Session interaction");
 }
 
 export function scrubSessionCommand(command: SessionCommand): RendererSessionCommand {
@@ -770,12 +739,14 @@ export function decodeRendererSessionEventPayload(
 ): RendererSessionEventPayload {
   const record = asRecord(value, context);
   const kind = readString(record.kind, `${context}.kind`);
-  const codec = codecByKind[kind];
+  const legacy = legacyPayload(record);
+  if (legacy !== null) return legacy;
+  const codec = codecByKind[kind] as DynamicSessionEventKindCodec | undefined;
   if (codec === undefined) throw new UnknownSessionEventKindError(kind, context);
   // `scrub(decode(…))` where the scrubbed JSON is still durable-decodable:
   // one parse per kind, and re-scrubbing on read means an unscrubbed leak is
   // nulled here rather than trusted. The kinds whose scrub removes keys carry
-  // their own renderer decode instead, because `decode` would refuse them.
+  // their own renderer decode instead, as do host-only validation paths.
   return codec.decodeRenderer === undefined
     ? codec.scrub(codec.decode(record, context))
     : codec.decodeRenderer(record, context);
@@ -896,35 +867,87 @@ export interface SessionPresentationProjection extends Pick<
   | "signal"
   | "modelSelection"
   | "modelTier"
+  | "modelAuto"
   | "turnActive"
   | "lastActivityAt"
   | "bornTicketless"
+  | "todoList"
 > {
   attention: RendererSessionAttentionProjection;
   interactions: RendererSessionInteractionProjection;
   liveExecutor: { id: string } | null;
   /**
-   * What the live attachment is governed by (VC-285), or `null` while nothing
-   * is attached.
-   *
-   * Beside `liveExecutor` rather than inside it, because the two answer
-   * different questions and one of them is derived: `liveExecutor` is the
-   * attachment's identity, this is the durable policy that attachment opened
-   * under. Both are read from the same attachment, so they cannot disagree
-   * about which one is live.
+   * The resume this Session is waiting to run at a quota reset, or `null`.
+   * Derived from its commands by `presentedScheduledResume` — only one that
+   * is still going to run is drawn, never one the Session already overtook.
    */
-  authority: RendererSessionAuthority | null;
+  scheduledResume: PresentedScheduledResume | null;
 }
 
-/**
- * Durable JSON → typed payload. Throws {@link UnknownSessionEventKindError}
- * on a kind this build does not know, and a plain `Error` on a malformed
- * field inside a known kind.
- */
+const RETIRED_EVENT_KINDS = new Set([
+  "authority.denied",
+  "authority.reviewed",
+  "approval.used",
+  "approval-used",
+  "approval.revoked",
+  "approval.restored",
+  "approval.revoke",
+  "approval.restore",
+]);
+
+function legacyGateInteractionId(id: unknown): boolean {
+  return typeof id === "string" && (id.startsWith("ask:") || id.startsWith("approval-retry:"));
+}
+
+/** Known retired facts are history, never commands or pending permissions. */
+function legacyPayload(
+  record: JsonRecord,
+): (PayloadOf<"adapter.observed"> & { native: null }) | null {
+  const kind = record.kind;
+  const interaction =
+    typeof record.interaction === "object" && record.interaction !== null
+      ? (record.interaction as JsonRecord)
+      : null;
+  const command =
+    typeof record.command === "object" && record.command !== null
+      ? (record.command as JsonRecord)
+      : null;
+  const intent =
+    command !== null && typeof command.intent === "object" && command.intent !== null
+      ? (command.intent as JsonRecord)
+      : null;
+  const isRetired =
+    RETIRED_EVENT_KINDS.has(String(kind)) ||
+    (kind === "interaction.opened" &&
+      interaction !== null &&
+      (interaction.approval !== undefined || legacyGateInteractionId(interaction.id))) ||
+    ((kind === "interaction.resolved" || kind === "interaction.cancelled") &&
+      legacyGateInteractionId(record.interactionId)) ||
+    (kind === "command.recorded" &&
+      intent !== null &&
+      RETIRED_EVENT_KINDS.has(String(intent.kind))) ||
+    (kind === "adapter.observed" && RETIRED_EVENT_KINDS.has(String(record.name)));
+  if (!isRetired) return null;
+  return {
+    kind: "adapter.observed",
+    attachmentId:
+      typeof record.attachmentId === "string"
+        ? record.attachmentId
+        : typeof interaction?.attachmentId === "string"
+          ? interaction.attachmentId
+          : null,
+    name: `Legacy ${String(kind === "adapter.observed" ? record.name : kind)}`,
+    native: null,
+  };
+}
+
+/** Durable payloads validate current fields, while known retired kinds decode as inert evidence. */
 export function decodeSessionEventPayload(value: unknown, context: string): SessionEventPayload {
   const record = asRecord(value, context);
   const kind = readString(record.kind, `${context}.kind`);
-  const codec = codecByKind[kind];
+  const legacy = legacyPayload(record);
+  if (legacy !== null) return legacy;
+  const codec = codecByKind[kind] as DynamicSessionEventKindCodec | undefined;
   if (codec === undefined) throw new UnknownSessionEventKindError(kind, context);
   return codec.decode(record, context);
 }
@@ -1001,6 +1024,7 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         kind,
         selection: decodeModelSelection(row.selection, `${context}.selection`),
         ...decodeModelTier(row.tier, `${context}.tier`),
+        ...decodeModelAuto(row.auto, `${context}.auto`),
       };
     case "executor.start":
       return {
@@ -1034,6 +1058,21 @@ export function decodeSessionCommandIntent(value: unknown, context: string): Ses
         interactionId: readString(row.interactionId, `${context}.interactionId`),
         resolution: decodeInteractionResolution(row.resolution, `${context}.resolution`),
         reference: decodeTranscriptReference(row.reference, `${context}.reference`),
+      };
+    case "resume.schedule":
+      return {
+        kind,
+        attentionId: readString(row.attentionId, `${context}.attentionId`),
+        attachmentId: readString(row.attachmentId, `${context}.attachmentId`),
+        resumeAt: readInteger(row.resumeAt, `${context}.resumeAt`),
+      };
+    case "resume.cancel":
+      return { kind, scheduleId: readString(row.scheduleId, `${context}.scheduleId`) };
+    case "resume.settle":
+      return {
+        kind,
+        scheduleId: readString(row.scheduleId, `${context}.scheduleId`),
+        outcome: decodeScheduledResumeOutcome(row.outcome, `${context}.outcome`),
       };
     default:
       throw new Error(`${context}.kind is not a known Session command`);
@@ -1124,15 +1163,26 @@ export function assertSession(value: Session, context: string): void {
 }
 
 /**
- * Canonical persisted form: a plain `JSON.stringify` behind a strict
- * JSON-safety assertion. No re-ordering — what is already on disk stays
- * byte-identical when re-encoded from the same value.
+ * Canonical persisted form behind a strict JSON-safety assertion. Ordinary
+ * records retain key order. Credential-bearing interactions (including those
+ * in checkpoints) are explicitly allowlisted, never serialized by a spread.
  */
 export function encodeSessionJson(value: unknown): string {
   assertJsonValue(value, "JSON value");
   // `JSON.stringify` returns `undefined` only for values `assertJsonValue`
   // already refused (undefined, functions, symbols), so the result is a string.
-  return JSON.stringify(value);
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (
+      item !== null &&
+      typeof item === "object" &&
+      "credential" in item &&
+      "kind" in item &&
+      (item.kind === "question" || item.kind === "permission")
+    ) {
+      return decodeInteraction(item, "Credential interaction");
+    }
+    return item;
+  });
 }
 
 /* ------------------------------------------------------------ entity decoders */
@@ -1193,6 +1243,18 @@ function decodeSessionStopActor(value: unknown, context: string): SessionStopAct
     : { kind };
 }
 
+function decodeScheduledResumeOutcome(value: unknown, context: string): ScheduledResumeOutcome {
+  const row = asRecord(value, context);
+  const kind = enumValue(row.kind, ["resumed", "skipped"], `${context}.kind`);
+  return kind === "resumed"
+    ? { kind, retryCommandId: readString(row.retryCommandId, `${context}.retryCommandId`) }
+    : {
+        kind,
+        reason: enumValue(row.reason, SCHEDULED_RESUME_SKIP_REASONS, `${context}.reason`),
+        detail: readNullableString(row.detail, `${context}.detail`),
+      };
+}
+
 function decodeReceiptResult(value: unknown, context: string): CommandReceiptResult {
   const row = asRecord(value, context);
   const kind = enumValue(
@@ -1211,6 +1273,9 @@ function decodeReceiptResult(value: unknown, context: string): CommandReceiptRes
       "context.compacted",
       "message.submitted",
       "interaction.resolved",
+      "resume.scheduled",
+      "resume.cancelled",
+      "resume.settled",
     ],
     `${context}.kind`,
   );
@@ -1234,6 +1299,82 @@ function decodePromptResources(value: unknown, context: string): readonly Prompt
   });
 }
 
+function scrubSessionInputRecord(payload: PayloadOf<"session.input.recorded">) {
+  const { input } = payload;
+  if (input.kind !== "tool-surface") return { kind: payload.kind, input };
+  // Birth-only declaration state stays durable on the host, never on the
+  // renderer/public wire. Keep all tool-surface markers in this one scrub path.
+  const {
+    askUserQuestions: _askUserQuestions,
+    refreshDescriptions: _refreshDescriptions,
+    codeMode: frozenCodeMode,
+    ...surface
+  } = input;
+  if (frozenCodeMode === undefined) return { kind: payload.kind, input: surface };
+  const { descriptionVersion: _descriptionVersion, ...codeMode } = frozenCodeMode;
+  return { kind: payload.kind, input: { ...surface, codeMode } };
+}
+
+function decodeSessionInputRecord(
+  record: JsonRecord,
+  context: string,
+  decodeMcpTools: typeof decodeMcpToolDefinitions,
+): PayloadOf<"session.input.recorded"> {
+  const input = asRecord(record.input, `${context}.input`);
+  const kind = enumValue(
+    input.kind,
+    ["runtime-brief", "prompt-resources", "tool-surface"],
+    `${context}.input.kind`,
+  );
+  const decoded =
+    kind === "runtime-brief"
+      ? { kind, text: readString(input.text, `${context}.input.text`) }
+      : kind === "prompt-resources"
+        ? {
+            kind,
+            resources: decodePromptResources(input.resources, `${context}.input.resources`),
+          }
+        : decodeToolSurfaceInput(input, kind, `${context}.input`, decodeMcpTools);
+  return { kind: "session.input.recorded", input: decoded };
+}
+
+/** Host-validated schema data, not executable validators, crosses the renderer edge. */
+function decodeRendererMcpToolDefinitions(
+  value: unknown,
+  context: string,
+): readonly McpToolDefinition[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((entry, index): McpToolDefinition => {
+    const path = `${context}[${index}]`;
+    const row = asRecord(entry, path);
+    const serverId = readString(row.serverId, `${path}.serverId`);
+    const toolName = readString(row.toolName, `${path}.toolName`);
+    const providerName = readString(row.providerName, `${path}.providerName`);
+    const description = readString(row.description, `${path}.description`);
+    if (!isMcpToolId(providerName)) throw new Error(`${path}.providerName is invalid`);
+    if (row.parallelRead !== undefined && row.parallelRead !== true) {
+      throw new Error(`${path}.parallelRead must be true when present`);
+    }
+    return {
+      serverId,
+      toolName,
+      providerName,
+      description,
+      inputSchema: decodeRendererMcpSchema(row.inputSchema, `${path}.inputSchema`),
+      ...(row.outputSchema === undefined
+        ? {}
+        : { outputSchema: decodeRendererMcpSchema(row.outputSchema, `${path}.outputSchema`) }),
+      ...(row.parallelRead === true ? { parallelRead: true as const } : {}),
+    };
+  });
+}
+
+function decodeRendererMcpSchema(value: unknown, context: string): McpJsonObject {
+  const schema = asRecord(value, context);
+  assertJsonValue(schema, context);
+  return schema as McpJsonObject;
+}
+
 function decodeMcpToolDefinitions(value: unknown, context: string): readonly McpToolDefinition[] {
   if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
   const definitions = value.map((entry, index): McpToolDefinition => {
@@ -1248,36 +1389,170 @@ function decodeMcpToolDefinitions(value: unknown, context: string): readonly Mcp
       toolName,
       description,
       inputSchema: row.inputSchema,
+      // Absent on every definition frozen before VC-469, which replays as it
+      // was written: without one.
+      ...(row.outputSchema === undefined ? {} : { outputSchema: row.outputSchema }),
     });
     if (!sanitized.ok) throw new Error(`${context}[${index}] ${sanitized.reason}`);
+    if (sanitized.outputSchemaRejected !== undefined) {
+      throw new Error(`${context}[${index}] ${sanitized.outputSchemaRejected}`);
+    }
     if (!isMcpToolId(providerName)) {
       throw new Error(`${context}[${index}].providerName is invalid`);
     }
-    return { ...sanitized.definition, providerName };
+    // Host-authored parallel-read eligibility (VC-454): read back exactly as
+    // written, and only as `true`. Anything else is a damaged record, not a
+    // tool that quietly runs one call at a time.
+    if (row.parallelRead !== undefined && row.parallelRead !== true) {
+      throw new Error(`${context}[${index}].parallelRead must be true when present`);
+    }
+    return {
+      ...sanitized.definition,
+      providerName,
+      ...(row.parallelRead === true ? { parallelRead: true as const } : {}),
+    };
   });
   return validateMcpToolDefinitions(definitions);
+}
+
+function decodeToolRefreshNotice(record: JsonRecord, context: string) {
+  return {
+    kind: "session.tools.refreshed" as const,
+    // An open output enum: a newer trigger is still a useful transcript fact.
+    trigger: readString(
+      record.trigger,
+      `${context}.trigger`,
+    ) as PayloadOf<"session.tools.refreshed">["trigger"],
+    added: readToolRefreshNames(record.added, `${context}.added`),
+    changed: readToolRefreshNames(record.changed, `${context}.changed`),
+  };
+}
+
+function readToolRefreshNames(value: unknown, context: string): readonly string[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  const names = value.map((name, index) => readString(name, `${context}[${index}]`));
+  if (new Set(names).size !== names.length) throw new Error(`${context} must contain unique names`);
+  return names;
+}
+
+function decodeToolRefreshDelta(
+  value: unknown,
+  added: readonly string[],
+  context: string,
+): SessionToolRefreshDelta {
+  const row = asRecord(value, context);
+  const mcpTools =
+    row.mcpTools === undefined
+      ? undefined
+      : decodeMcpToolDefinitions(row.mcpTools, `${context}.mcpTools`);
+  if (
+    JSON.stringify(added.filter(isMcpToolId)) !==
+    JSON.stringify((mcpTools ?? []).map((tool) => tool.providerName))
+  )
+    throw new Error(`${context} MCP definitions must match exactly the added MCP names`);
+  for (const marker of ["askUserQuestions", "refreshDescriptions"] as const) {
+    if (row[marker] !== undefined && row[marker] !== true)
+      throw new Error(`${context}.${marker} must be true when present`);
+  }
+  if (row.askUserQuestions === true && !added.includes("ask_user"))
+    throw new Error(`${context}.askUserQuestions requires added ask_user`);
+  if (row.descriptionVersion !== undefined && row.descriptionVersion !== 2)
+    throw new Error(`${context}.descriptionVersion is 2 or absent`);
+  const routes: Record<string, ToolRoute> = {};
+  if (row.routes !== undefined) {
+    for (const [tool, route] of Object.entries(asRecord(row.routes, `${context}.routes`))) {
+      if (tool === CODE_MODE_TOOL_ID || !isToolRoute(route))
+        throw new Error(`${context}.routes.${tool} is not a route`);
+      if (row.codeMode === undefined && !added.includes(tool))
+        throw new Error(`${context}.routes must name only added tools`);
+      Object.defineProperty(routes, tool, { value: route, enumerable: true });
+    }
+  }
+  let codeMode: SessionToolRefreshDelta["codeMode"];
+  if (row.codeMode !== undefined) {
+    const declaration = asRecord(row.codeMode, `${context}.codeMode`);
+    if (
+      !added.includes(CODE_MODE_TOOL_ID) ||
+      row.descriptionVersion !== undefined ||
+      declaration.routes !== undefined
+    )
+      throw new Error(`${context}.codeMode is only for first acquisition, with routes separate`);
+    const { routes: _routes, ...parsed } = parseCodeModeSurface(
+      { ...declaration, routes },
+      [CODE_MODE_TOOL_ID, ...Object.keys(routes)],
+      `${context}.codeMode`,
+    );
+    codeMode = parsed;
+    if (added.some((tool) => tool !== CODE_MODE_TOOL_ID && !Object.hasOwn(routes, tool)))
+      throw new Error(`${context}.routes must cover added tools`);
+  } else if (added.includes(CODE_MODE_TOOL_ID)) {
+    throw new Error(`${context}.codeMode is required for added codemode`);
+  }
+  return {
+    ...(mcpTools === undefined ? {} : { mcpTools }),
+    ...(row.routes === undefined ? {} : { routes }),
+    ...(codeMode === undefined ? {} : { codeMode }),
+    ...(row.descriptionVersion === 2 ? { descriptionVersion: 2 as const } : {}),
+    ...(row.askUserQuestions === true ? { askUserQuestions: true as const } : {}),
+    ...(row.refreshDescriptions === true ? { refreshDescriptions: true as const } : {}),
+  };
 }
 
 function decodeToolSurfaceInput(
   input: Record<string, unknown>,
   kind: "tool-surface",
   context: string,
+  decodeMcpTools: typeof decodeMcpToolDefinitions,
 ): {
   kind: "tool-surface";
   tools: readonly SessionToolId[];
+  mcpManagementNames?: "server";
+  askUserQuestions?: true;
+  refreshDescriptions?: true;
   mcpTools?: readonly McpToolDefinition[];
+  codeMode?: CodeModeSurface;
 } {
+  // Birth remains strict because pre-feature builds read this known record.
   const tools = decodeSessionToolIds(input.tools, `${context}.tools`);
+  // Birth-only declaration marker: historical absence must not become a default.
+  if (input.askUserQuestions !== undefined && input.askUserQuestions !== true) {
+    throw new Error(`${context}.askUserQuestions must be true when present`);
+  }
+  if (input.refreshDescriptions !== undefined && input.refreshDescriptions !== true) {
+    throw new Error(`${context}.refreshDescriptions must be true when present`);
+  }
+  const mcpManagementNames =
+    input.mcpManagementNames === undefined
+      ? undefined
+      : enumValue(input.mcpManagementNames, ["server"], `${context}.mcpManagementNames`);
   const mcpTools =
     input.mcpTools === undefined
       ? undefined
-      : decodeMcpToolDefinitions(input.mcpTools, `${context}.mcpTools`);
+      : decodeMcpTools(input.mcpTools, `${context}.mcpTools`);
   const mcpNames = tools.filter(isMcpToolId);
   const definitionNames = (mcpTools ?? []).map((definition) => definition.providerName);
   if (JSON.stringify(mcpNames) !== JSON.stringify(definitionNames)) {
     throw new Error(`${context} MCP definitions do not match the tool surface`);
   }
-  return mcpTools === undefined ? { kind, tools } : { kind, tools, mcpTools };
+  // Code Mode's record and its name travel together (VC-471): a surface that
+  // names `codemode` with no routes, or routes with no `codemode`, is damaged
+  // rather than a smaller surface, and its routes must cover it exactly.
+  const codeMode =
+    input.codeMode === undefined
+      ? undefined
+      : parseCodeModeSurface(input.codeMode, tools, `${context}.codeMode`);
+  if (codeMode === undefined && tools.includes(CODE_MODE_TOOL_ID)) {
+    throw new Error(`${context} names ${CODE_MODE_TOOL_ID} without its routes`);
+  }
+  return {
+    kind,
+    tools,
+    ...(mcpManagementNames === undefined ? {} : { mcpManagementNames }),
+    ...(input.askUserQuestions === true ? { askUserQuestions: true as const } : {}),
+    ...(input.refreshDescriptions === true ? { refreshDescriptions: true as const } : {}),
+    ...(mcpTools === undefined ? {} : { mcpTools }),
+    ...(codeMode === undefined ? {} : { codeMode }),
+  };
 }
 
 /**
@@ -1327,6 +1602,35 @@ function decodeModelTier(value: unknown, context: string): { tier?: ModelTier } 
   return value === undefined ? {} : { tier: enumValue(value, MODEL_TIERS, context) };
 }
 
+/**
+ * The optional automatic-choice provenance beside a model selection (VC-432),
+ * as a spreadable fragment: absent stays absent, so every record written
+ * before it decodes to the object it always did.
+ */
+function readProbability(item: unknown, at: string): number {
+  if (typeof item !== "number" || !Number.isFinite(item) || item < 0 || item > 1) {
+    throw new Error(`${at} must be a number between 0 and 1`);
+  }
+  return item;
+}
+
+function decodeModelAuto(value: unknown, context: string): { auto?: ModelAutoPick } {
+  if (value === undefined) return {};
+  const row = asRecord(value, context);
+  return {
+    auto: {
+      confidence: readProbability(row.confidence, `${context}.confidence`),
+      alternatives: readArray(row.alternatives, `${context}.alternatives`, (item, at) => {
+        const alternative = asRecord(item, at);
+        return {
+          selection: decodeModelSelection(alternative.selection, `${at}.selection`),
+          probability: readProbability(alternative.probability, `${at}.probability`),
+        };
+      }),
+    },
+  };
+}
+
 function decodeAttachment(value: unknown, context: string): SessionAttachment {
   const row = asRecord(value, context);
   const venue = asRecord(row.venue, `${context}.venue`);
@@ -1340,78 +1644,13 @@ function decodeAttachment(value: unknown, context: string): SessionAttachment {
     },
     continuity: enumValue(row.continuity, SESSION_ATTACHMENT_CONTINUITIES, `${context}.continuity`),
     native: row.native === null ? null : decodeNative(row.native, `${context}.native`),
-    // Absent reads as null, and must: every attachment written before VC-44 has
-    // no `authority` key at all, and history that refused to decode without one
-    // would make those Sessions unopenable rather than merely quiet about the
-    // policy they ran under.
-    authority:
-      row.authority === undefined || row.authority === null
-        ? null
-        : decodeAuthoritySnapshot(row.authority, `${context}.authority`),
+    // Old enforce snapshots are deliberately ignored. Recovery has no gate.
+    authority: null,
   };
   if (!attachment.id || !attachment.sessionId || !attachment.adapterId || !attachment.venue.id) {
     throw new Error(`${context} is not a valid Session attachment`);
   }
   return attachment;
-}
-
-/**
- * One durably recorded Authority Snapshot, read back.
- *
- * The tool list and the rule pack strings are read as written rather than
- * validated against today's vocabulary, for the reason `authority.denied`'s
- * `cause` is a bare string: history outlives the pack and the tool surface that
- * produced it, and a decoder that rejected a retired tool name or an unknown
- * pack id would make an old Session unreadable in exactly the case the record
- * exists to serve — reading a denial back long after the pack changed.
- *
- * The enums are the exception and are validated, because each names a branch
- * this codebase still switches on; a value outside them is not a record from an
- * older vocabulary but a corrupt one.
- */
-function decodeAuthoritySnapshot(value: unknown, context: string): AuthoritySnapshot {
-  const row = asRecord(value, context);
-  const fallback = asRecord(row.fallback, `${context}.fallback`);
-  return {
-    mode: enumValue(row.mode, ["auto"] as const, `${context}.mode`),
-    location: enumValue(
-      row.location,
-      ["worktree", "main-checkout"] as const,
-      `${context}.location`,
-    ),
-    enforcement: enumValue(
-      row.enforcement,
-      ["observe", "enforce"] as const,
-      `${context}.enforcement`,
-    ),
-    judgmentMode: enumValue(row.judgmentMode, JUDGMENT_MODES, `${context}.judgmentMode`),
-    tools: readToolIds(row.tools, `${context}.tools`),
-    rulePackId: readString(row.rulePackId, `${context}.rulePackId`),
-    rulePackHash: readString(row.rulePackHash, `${context}.rulePackHash`),
-    classifierModel: readNullableString(row.classifierModel, `${context}.classifierModel`),
-    fallback: {
-      consecutiveDenials: readInteger(
-        fallback.consecutiveDenials,
-        `${context}.fallback.consecutiveDenials`,
-      ),
-      sessionDenials: readInteger(fallback.sessionDenials, `${context}.fallback.sessionDenials`),
-    },
-  };
-}
-
-/**
- * The recorded Agent Tool Surface, read as written.
- *
- * Not checked against {@link SessionToolId}, deliberately. A Snapshot naming a
- * tool this build no longer offers is the normal shape of old history, and the
- * record is most valuable precisely then — it is how a reader learns that the
- * Session which made a call held a tool that has since been retired.
- */
-function readToolIds(value: unknown, context: string): AuthoritySnapshot["tools"] {
-  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  return value.map((item, index) =>
-    readString(item, `${context}[${index}]`),
-  ) as AuthoritySnapshot["tools"];
 }
 
 function decodeNative(value: unknown, context: string): SessionNativeReference {
@@ -1448,12 +1687,22 @@ function decodeAttention(value: unknown, context: string): SessionAttention {
     attachmentId: readNullableString(row.attachmentId, `${context}.attachmentId`),
     detail: readNullableString(row.detail, `${context}.detail`),
     diagnostic: decodeNativeDetail(row.diagnostic, `${context}.diagnostic`),
+    ...optionalStopDetail(row.stopDetail, `${context}.stopDetail`),
   };
   if (kind === "rate_limited") {
     return { ...base, kind, retryAt: readNullableInteger(row.retryAt, `${context}.retryAt`) };
   }
   if (kind === "quota_exhausted") {
     return { ...base, kind, resetAt: readNullableInteger(row.resetAt, `${context}.resetAt`) };
+  }
+  if (kind === "adapter_unrecoverable") {
+    // Absent is an Attention written before the field existed, and reads as
+    // "no reset stated" — the same thing the explicit null says.
+    return {
+      ...base,
+      kind,
+      resetsAt: readAbsentableInteger(row.resetsAt, `${context}.resetsAt`),
+    };
   }
   return { ...base, kind };
 }
@@ -1536,6 +1785,9 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
     multiple: readBoolean(row.multiple, `${context}.multiple`),
     native: decodeNative(row.native, `${context}.native`),
   };
+  if (row.credential !== undefined) {
+    interaction.credential = decodeSecretRequestMetadata(row.credential, `${context}.credential`);
+  }
   // `prompts` is optional in both directions. A record written before an
   // interaction could carry per-question detail must decode back without the
   // key — not with an empty array, and not with one synthesised from the flat
@@ -1543,6 +1795,20 @@ function decodeInteraction(value: unknown, context: string): SessionInteraction 
   // doing it here would persist a derived value on the next write.
   if (row.prompts === undefined) return interaction;
   return { ...interaction, prompts: decodeInteractionPrompts(row.prompts, `${context}.prompts`) };
+}
+
+/** Deliberately enumerate every metadata field; never spread a credential object. */
+function decodeSecretRequestMetadata(value: unknown, context: string): SecretRequestMetadata {
+  const row = asRecord(value, context);
+  return {
+    id: readString(row.id, `${context}.id`),
+    name: readString(row.name, `${context}.name`),
+    sessionId: readString(row.sessionId, `${context}.sessionId`),
+    sessionLabel: readString(row.sessionLabel, `${context}.sessionLabel`),
+    projectId: readString(row.projectId, `${context}.projectId`),
+    projectLabel: readString(row.projectLabel, `${context}.projectLabel`),
+    agentSays: readNullableString(row.agentSays, `${context}.agentSays`),
+  };
 }
 
 function decodeInteractionResolution(
@@ -1566,17 +1832,7 @@ function decodeInteractionResolution(
 
 /* ----------------------------------------------------------------- readers */
 
-/**
- * What the spend was on, read back.
- *
- * Required, with no absent-reads-as-null grace — the opposite stance from
- * `attachment.authority` a few functions up, and deliberately so. There, absent
- * is a real historical answer: every attachment written before VC-44 ran at the
- * runtime's defaults, and that is a fact the record can state. Here, absent
- * would mean the fact never recorded what it was spent on, which no build has
- * ever been able to write. Accepting it would let a rebuild quietly file real
- * spend as unattributed rather than say the history is corrupt.
- */
+/** Spend attribution is required: absent must not quietly file a bill as unattributed. */
 function decodeUsageAttribution(value: unknown, context: string): SessionUsageAttribution {
   const row = asRecord(value, context);
   return {
@@ -1674,12 +1930,11 @@ function readNullableInteger(value: unknown, context: string): number | null {
   return value === null ? null : readInteger(value, context);
 }
 
-/**
- * A money amount, which is the one durable number here that is not whole.
- * NaN and the infinities are refused rather than carried: JSON writes NaN as
- * `null`, so a poisoned cost would come back looking exactly like an honest
- * absent one, and every total it entered afterwards would be NaN.
- */
+/** Absent either way — an explicit `null` or a key an older event never wrote. */
+function readAbsentableInteger(value: unknown, context: string): number | null {
+  return value === undefined ? null : readNullableInteger(value, context);
+}
+
 function readNullableFiniteNumber(value: unknown, context: string): number | null {
   if (value === null) return null;
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -1697,4 +1952,56 @@ function enumValue<const T extends readonly string[]>(
     throw new Error(`${context} has an unsupported value`);
   }
   return value as T[number];
+}
+
+/**
+ * Optional rather than defaulted, like a stop detail: an event written before
+ * VC-315 has none, and its identity must not change on replay.
+ */
+function optionalTranscriptDigest(
+  value: unknown,
+  context: string,
+): { digest?: SessionTranscriptDigest } {
+  if (value === undefined) return {};
+  const row = asRecord(value, context);
+  const digest: { -readonly [K in keyof SessionTranscriptDigest]: SessionTranscriptDigest[K] } = {
+    role: enumValue(row.role, ["user", "assistant", "system"], `${context}.role`),
+  };
+  if (row.reply !== undefined) {
+    if (row.reply !== true) throw new Error(`${context}.reply must be true when present`);
+    digest.reply = true;
+  }
+  if (row.todoList !== undefined) {
+    digest.todoList = readArray(row.todoList, `${context}.todoList`, (item, itemContext) => {
+      const todo = asRecord(item, itemContext);
+      return {
+        content: readString(todo.content, `${itemContext}.content`),
+        status: enumValue(todo.status, TODO_STATUSES, `${itemContext}.status`),
+      };
+    });
+  }
+  return { digest };
+}
+
+/** Optional rather than defaulted: legacy event identity must not change on replay. */
+function optionalStopDetail(value: unknown, context: string): { stopDetail?: SessionStopDetail } {
+  return value === undefined ? {} : { stopDetail: decodeSessionStopDetail(value, context) };
+}
+
+export function decodeSessionStopDetail(value: unknown, context: string): SessionStopDetail {
+  const row = asRecord(value, context);
+  const bounded = (field: unknown, key: string, max: number): string | null => {
+    const text = readNullableString(field, `${context}.${key}`);
+    if (text !== null && text.length > max)
+      throw new Error(`${context}.${key} exceeds ${max} characters`);
+    return text;
+  };
+  return {
+    category: enumValue(row.category, SESSION_STOP_CATEGORIES, `${context}.category`),
+    message: bounded(row.message, "message", 401),
+    providerType: bounded(row.providerType, "providerType", 80),
+    httpStatus: readNullableInteger(row.httpStatus, `${context}.httpStatus`),
+    retry: enumValue(row.retry, ["not-retried", "exhausted"], `${context}.retry`),
+    resetsAt: readNullableInteger(row.resetsAt, `${context}.resetsAt`),
+  };
 }

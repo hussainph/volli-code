@@ -1,0 +1,297 @@
+{
+  "provenance": {
+    "revision": "VC-565 branch, first captured on a4fff8271fb2dee4b84afc057ea106484c1c5a2c",
+    "peer": "VC-565 public board client (board.read, board.write) using tracked-id resume",
+    "producer": "createHostRouter() through startHostProtocolListener, over fakeBoard() (board-host.test-support.ts)",
+    "sources": [
+      "packages/session-rpc/src/board-router.ts",
+      "packages/session-rpc/src/board-schema.ts",
+      "packages/session-rpc/src/board-host.test-support.ts"
+    ],
+    "format": "Application-wire payloads as the stock tRPC WebSocket client receives them through the production listener; transport-local request/subscription ids omitted",
+    "regenerate": "UPDATE_BOARD_WIRE_FIXTURES=1 vp test run src/board-wire-compatibility.test.ts (in packages/session-rpc), then vp fmt the JSON"
+  },
+  "snapshot": {
+    "procedure": "board.snapshot",
+    "input": {
+      "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b"
+    },
+    "output": {
+      "project": {
+        "id": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+        "name": "Board",
+        "path": "/work/vc",
+        "ticketPrefix": "VC",
+        "baseBranch": "main",
+        "setupCommand": null,
+        "themeAppearance": null,
+        "skillModes": {
+          "code-review": "manual"
+        },
+        "sessionModel": {
+          "providerId": "anthropic",
+          "modelId": "model-a",
+          "reasoningLevel": "high"
+        },
+        "colorIndex": 2,
+        "sortOrder": 0,
+        "createdAt": 100,
+        "updatedAt": 100
+      },
+      "tickets": [
+        {
+          "id": "ticket-a",
+          "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+          "ticketNumber": 1,
+          "title": "First card",
+          "status": "todo",
+          "priority": "medium",
+          "labels": ["ui"],
+          "usesWorktree": true,
+          "preferredHarnessId": "claude-code",
+          "order": 0,
+          "worktreePath": null,
+          "branch": null,
+          "baseBranch": null,
+          "prUrl": null,
+          "createdAt": 200,
+          "updatedAt": 200,
+          "body": "First card, in Markdown."
+        },
+        {
+          "id": "ticket-b",
+          "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+          "ticketNumber": 2,
+          "title": "Second card",
+          "status": "doing",
+          "priority": "high",
+          "labels": [],
+          "usesWorktree": true,
+          "preferredHarnessId": "claude-code",
+          "order": 0,
+          "worktreePath": null,
+          "branch": null,
+          "baseBranch": null,
+          "prUrl": null,
+          "createdAt": 200,
+          "updatedAt": 200,
+          "body": "Second card, in Markdown."
+        }
+      ],
+      "labels": [
+        {
+          "id": "label-ui",
+          "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+          "name": "ui",
+          "color": null
+        }
+      ],
+      "cursor": "feed-a:0"
+    }
+  },
+  "mutation": {
+    "procedure": "board.createTicket",
+    "input": {
+      "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+      "status": "todo",
+      "title": "Recorded over the wire",
+      "priority": "high",
+      "body": "A *recorded* body.",
+      "labels": ["ui", "remote"]
+    },
+    "output": {
+      "receipt": {
+        "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+        "status": "completed",
+        "replayed": false
+      },
+      "throughCursor": "feed-a:1",
+      "ticket": {
+        "id": "ticket-1",
+        "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+        "ticketNumber": 4,
+        "title": "Recorded over the wire",
+        "status": "todo",
+        "priority": "high",
+        "labels": ["ui", "remote"],
+        "usesWorktree": true,
+        "preferredHarnessId": "claude-code",
+        "order": 1,
+        "worktreePath": null,
+        "branch": null,
+        "baseBranch": null,
+        "prUrl": null,
+        "createdAt": 1001,
+        "updatedAt": 1001,
+        "body": "A *recorded* body."
+      }
+    },
+    "retryOutput": {
+      "receipt": {
+        "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+        "status": "completed",
+        "replayed": true
+      },
+      "throughCursor": "feed-a:1",
+      "ticket": {
+        "id": "ticket-1",
+        "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+        "ticketNumber": 4,
+        "title": "Recorded over the wire",
+        "status": "todo",
+        "priority": "high",
+        "labels": ["ui", "remote"],
+        "usesWorktree": true,
+        "preferredHarnessId": "claude-code",
+        "order": 1,
+        "worktreePath": null,
+        "branch": null,
+        "baseBranch": null,
+        "prUrl": null,
+        "createdAt": 1001,
+        "updatedAt": 1001,
+        "body": "A *recorded* body."
+      }
+    }
+  },
+  "subscription": {
+    "procedure": "board.changes",
+    "input": {
+      "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+      "lastEventId": "feed-a:0"
+    },
+    "write": {
+      "procedure": "board.setPriority",
+      "input": {
+        "commandId": "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+        "ticketId": "ticket-b",
+        "priority": "low"
+      },
+      "output": {
+        "receipt": {
+          "commandId": "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+          "status": "completed",
+          "replayed": false
+        },
+        "throughCursor": "feed-a:2",
+        "ticket": {
+          "id": "ticket-b",
+          "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+          "ticketNumber": 2,
+          "title": "Second card",
+          "status": "doing",
+          "priority": "low",
+          "labels": [],
+          "usesWorktree": true,
+          "preferredHarnessId": "claude-code",
+          "order": 0,
+          "worktreePath": null,
+          "branch": null,
+          "baseBranch": null,
+          "prUrl": null,
+          "createdAt": 200,
+          "updatedAt": 1002,
+          "body": "Second card, in Markdown."
+        }
+      }
+    },
+    "resumedInput": {
+      "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+      "lastEventId": "feed-a:1"
+    },
+    "afters": ["feed-a:0", "feed-a:1"],
+    "frames": [
+      {
+        "id": "feed-a:1",
+        "data": {
+          "cursor": "feed-a:1",
+          "changes": [
+            {
+              "kind": "label",
+              "op": "upsert",
+              "id": "label-2",
+              "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+              "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+              "label": {
+                "id": "label-2",
+                "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+                "name": "remote",
+                "color": null
+              }
+            },
+            {
+              "kind": "ticket",
+              "op": "upsert",
+              "id": "ticket-1",
+              "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+              "commandId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+              "ticket": {
+                "id": "ticket-1",
+                "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+                "ticketNumber": 4,
+                "title": "Recorded over the wire",
+                "status": "todo",
+                "priority": "high",
+                "labels": ["ui", "remote"],
+                "usesWorktree": true,
+                "preferredHarnessId": "claude-code",
+                "order": 1,
+                "worktreePath": null,
+                "branch": null,
+                "baseBranch": null,
+                "prUrl": null,
+                "createdAt": 1001,
+                "updatedAt": 1001
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "feed-a:2",
+        "data": {
+          "cursor": "feed-a:2",
+          "changes": [
+            {
+              "kind": "ticket",
+              "op": "upsert",
+              "id": "ticket-b",
+              "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+              "commandId": "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+              "ticket": {
+                "id": "ticket-b",
+                "projectId": "6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b",
+                "ticketNumber": 2,
+                "title": "Second card",
+                "status": "doing",
+                "priority": "low",
+                "labels": [],
+                "usesWorktree": true,
+                "preferredHarnessId": "claude-code",
+                "order": 0,
+                "worktreePath": null,
+                "branch": null,
+                "baseBranch": null,
+                "prUrl": null,
+                "createdAt": 200,
+                "updatedAt": 1002
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "error": {
+    "procedure": "board.snapshot",
+    "input": {
+      "projectId": "0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d"
+    },
+    "output": {
+      "code": "NOT_FOUND",
+      "message": "Not found in this Workspace.",
+      "reason": "workspace-unknown"
+    }
+  }
+}

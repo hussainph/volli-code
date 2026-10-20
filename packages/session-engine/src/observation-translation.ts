@@ -27,6 +27,7 @@
  */
 
 import type {
+  SessionStopDetail,
   AttentionObservation,
   CompactionObservation,
   CompactionProgressObservation,
@@ -139,7 +140,11 @@ export type TranslatedObservation =
     })
   | (TranslatedObservationBase & { kind: "turn.started"; turnId: string })
   | (TranslatedObservationBase & { kind: "turn.completed"; turnId: string })
-  | (TranslatedObservationBase & { kind: "turn.interrupted"; turnId: string })
+  | (TranslatedObservationBase & {
+      kind: "turn.interrupted";
+      turnId: string;
+      stopDetail?: SessionStopDetail;
+    })
   /**
    * The executor summarized its context, or tried to and could not.
    *
@@ -180,18 +185,6 @@ export type TranslatedObservation =
       turnId: string | null;
       usage: SessionUsage;
     })
-  /**
-   * The Session's authority refused a call. The executor reports it rather than
-   * minting it: only the runtime sees the call, and only the Session Engine owns
-   * the attachment the fact belongs to.
-   */
-  | (TranslatedObservationBase & {
-      kind: "authority.denied";
-      turnId: string | null;
-      tool: string;
-      cause: string;
-      reason: string;
-    })
   | (TranslatedObservationBase & {
       kind: "interaction.opened";
       interaction: Omit<SessionInteraction, "attachmentId">;
@@ -208,17 +201,28 @@ export type TranslatedObservation =
     })
   | (TranslatedObservationBase & {
       kind: "attention.raised";
-      attention: {
-        id: string;
-        kind:
-          | "auth_required"
-          | "configuration_invalid"
-          | "context_limit_reached"
-          | "partial_turn_interrupted"
-          | "adapter_unrecoverable";
-        detail: string | null;
-        diagnostic: SessionNativeDetail | null;
-      };
+      attention:
+        | {
+            id: string;
+            stopDetail?: SessionStopDetail;
+            kind:
+              | "auth_required"
+              | "configuration_invalid"
+              | "context_limit_reached"
+              | "partial_turn_interrupted"
+              | "transport_retrying";
+            detail: string | null;
+            diagnostic: SessionNativeDetail | null;
+          }
+        | {
+            id: string;
+            stopDetail?: SessionStopDetail;
+            kind: "adapter_unrecoverable";
+            detail: string | null;
+            diagnostic: SessionNativeDetail | null;
+            /** The spent allowance's reset, when the run failed on one that stated it. */
+            resetsAt: number | null;
+          };
     })
   | (TranslatedObservationBase & { kind: "attention.cleared"; attentionId: string });
 
@@ -232,6 +236,7 @@ const ATTENTION_KINDS = {
   context: "context_limit_reached",
   "runtime-failure": "adapter_unrecoverable",
   "partial-turn": "partial_turn_interrupted",
+  transport: "transport_retrying",
 } as const satisfies Record<
   AttentionObservation["reason"],
   Extract<TranslatedObservation, { kind: "attention.raised" }>["attention"]["kind"]
@@ -291,42 +296,7 @@ export class RuntimeObservationTranslator {
   #closedActivityTurns = new Set<string>();
   /** Assistant overlays already opened in the current turn; the id's last segment. */
   #messageSequence = 0;
-  /**
-   * Transient and synthetic observations carry no native identity, so a counter
-   * is the whole of it.
-   *
-   * **A fresh translator restarts this at zero, and three durable id families
-   * are minted from it** — `…:authority:<attachment>:<n>`,
-   * `…:attachment:<attachment>:failed:<n>`, and the `live:<n>` fallback an
-   * attention event takes when the executor offers no `recoveryCursor`. Two
-   * translators over one attachment therefore re-mint one id for two different
-   * facts, and the ledger's response to that is not a duplicate but a throw:
-   * `was already recorded with different evidence`, raised back through the
-   * executor's own observer. For a refusal that is the exact ordering
-   * {@link RuntimeObservationTranslator.#translateAuthority} exists to prevent —
-   * the model told, the ledger silent.
-   *
-   * What contains it, and what does not:
-   *
-   * - **Within one process, nothing restarts the counter.** A translator's
-   *   lifetime is one attach; the binding record is only ever dropped once the
-   *   attachment is closed or failed, and `#bindingForAttachment` rehydrates
-   *   only on a miss. So one open attachment has exactly one translator.
-   * - **Across a relaunch it is not contained for the structured executor.**
-   *   The boot sweep (`boot-recovery.ts`) retires stale open attachments, but
-   *   deliberately skips the structured adapter so it can rehydrate from its own
-   *   sidecar — which is the adapter that mints these ids. A rehydrated
-   *   attachment translates on a counter that starts again at zero.
-   * - **Two of the three families cannot collide anyway.** `attachment.failed`
-   *   closes the attachment, so no rehydrate can follow the run that wrote one;
-   *   and the runtime stamps every attention marker with its sidecar entry id,
-   *   so the `live:<n>` fallback has no producer today.
-   *
-   * That leaves refusals, whose numbering depends on how many transient deltas
-   * preceded them in each run. Do not narrow the containment above without
-   * replacing it: the fix is a per-attachment id that survives a relaunch —
-   * durable high-water mark or executor-supplied identity — not a longer counter.
-   */
+  /** Counter identity for synthetic failures and cursorless live attention. */
   #sequence = 0;
 
   constructor(spec: ObservationTranslationSpec) {
@@ -374,8 +344,6 @@ export class RuntimeObservationTranslator {
         return emit(this.#usageObservation(observation));
       case "activity":
         return this.#translateActivity(observation, emit);
-      case "authority":
-        return this.#translateAuthority(observation, emit);
       case "attention":
         return emit(this.#attentionObservation(observation));
       case "interaction":
@@ -431,41 +399,7 @@ export class RuntimeObservationTranslator {
       case "attachment":
       case "delta":
         return [];
-      // A refusal never lands in an executor's own recovery history: it is
-      // committed through the live observer only, because the durable fact
-      // belongs to the Session's ledger rather than to the executor's replay
-      // log. Reconcile therefore never actually offers one — the case exists so
-      // this switch stays exhaustive against the type it is honestly wider than.
-      case "authority":
-        return [];
     }
-  }
-
-  /**
-   * A refusal reaches the Session before it reaches the model.
-   *
-   * `observer` resolves only at the consumer boundary, so a refusal that
-   * reached the sink and then dropped would leave the model told and the ledger
-   * silent — the one ordering this must never produce.
-   */
-  async #translateAuthority(
-    observation: Extract<RuntimeObservation, { kind: "authority" }>,
-    emit: TranslatedObservationSink,
-  ): Promise<void> {
-    // An allowance is a metrics denominator, not Session history. It travels
-    // only through the runtime's passive observability recorder, but accepting
-    // this arm here keeps a direct observer harmless if a future executor uses
-    // the broader shared vocabulary.
-    if (observation.state === "allowed") return;
-    await emit({
-      id: `${this.#namespace}:authority:${this.#attachmentId}:${++this.#sequence}`,
-      kind: "authority.denied",
-      occurredAt: observation.occurredAt ?? this.#now(),
-      turnId: observation.turnId,
-      tool: observation.tool,
-      cause: observation.cause,
-      reason: observation.reason,
-    });
   }
 
   async #translateAttachment(
@@ -623,6 +557,7 @@ export class RuntimeObservationTranslator {
       occurredAt: observation.occurredAt ?? this.#now(),
       ...recoveryCursor(observation.recoveryCursor),
       turnId: observation.turnId,
+      ...(observation.stopDetail === undefined ? {} : { stopDetail: observation.stopDetail }),
     };
   }
 
@@ -782,12 +717,29 @@ export class RuntimeObservationTranslator {
       kind: "attention.raised",
       occurredAt: observation.occurredAt ?? this.#now(),
       ...recoveryCursor(observation.recoveryCursor),
-      attention: {
-        id: attentionId,
-        kind: ATTENTION_KINDS[observation.reason],
-        detail: observation.message,
-        diagnostic: null,
-      },
+      // Only a run that failed carries a reset, and a marker written before the
+      // field existed says nothing about one.
+      attention:
+        observation.reason === "runtime-failure"
+          ? {
+              id: attentionId,
+              kind: ATTENTION_KINDS[observation.reason],
+              detail: observation.message,
+              ...(observation.stopDetail === undefined
+                ? {}
+                : { stopDetail: observation.stopDetail }),
+              diagnostic: null,
+              resetsAt: observation.resetsAt ?? null,
+            }
+          : {
+              id: attentionId,
+              kind: ATTENTION_KINDS[observation.reason],
+              detail: observation.message,
+              ...(observation.stopDetail === undefined
+                ? {}
+                : { stopDetail: observation.stopDetail }),
+              diagnostic: null,
+            },
     };
   }
 

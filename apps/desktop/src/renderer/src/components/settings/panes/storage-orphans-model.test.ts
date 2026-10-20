@@ -23,6 +23,7 @@ import {
   describeRemovable,
   describeRunFailures,
   describeUnreadableProject,
+  dirtyOrphanRow,
   hasCleanupWork,
   historyRows,
   isScanStale,
@@ -203,9 +204,9 @@ describe("what a row says", () => {
     ).toBe("Proj One — Kept — Volli can't tell when this was last used.");
   });
 
-  // The re-review's C6: an occupied checkout that is otherwise past the window
-  // HAS a known eligibility date, and hiding it leaves the row unable to answer
-  // the question a person is asking — why is this still on the list?
+  // An occupied checkout that is otherwise past the window HAS a known
+  // eligibility date, and hiding it leaves the row unable to answer the question
+  // a person is asking — why is this still on the list?
   it("names what is live inside an active worktree, and still says since when it was eligible", () => {
     expect(describeKept({ ...keptBase, reason: "active", detail: "a running terminal" })).toBe(
       `Proj One — Kept — a running terminal. Eligible for cleanup since ${new Date(AT).toLocaleDateString()} (the folder's last modification), but kept while in use.`,
@@ -261,7 +262,7 @@ describe("what a row says", () => {
     expect(retentionNote(14)).toBe("Unused folders become eligible after 14 day(s).");
   });
 
-  // Review C6: the retention period and the archive policy have to be SHOWN,
+  // The retention period and the archive policy have to be SHOWN,
   // not summoned — and the orphan/ticket distinction is what explains why this
   // list's only verb is "remove the folder".
   it("states the retention window and the archive policy as a row of its own", () => {
@@ -514,8 +515,8 @@ describe("an interrupted run", () => {
       finishedAt: null,
       items: [item({ state: "indeterminate" })],
     });
-    // The shape the re-review found with no callout and no recovery anywhere:
-    // every item settled `failed`, then the app died before the run closed.
+    // An interrupted run needs a callout and recovery even when every item
+    // settled `failed` before the app died and the run never closed.
     // Nothing is pending, nothing is executing — and it is still a cleanup that
     // stopped, with failures nobody has been told about.
     const allFailedAndOpen = run({
@@ -576,7 +577,7 @@ describe("a run that finished with trouble in it", () => {
 
   // An open run is not a FINISHED run with trouble in it, so this projection
   // stays quiet about one — `unfinishedRuns` is where it surfaces, with its own
-  // Scan again (re-review S2). What must never happen is neither of them
+  // Scan again. What must never happen is neither of them
   // claiming it.
   it("is not reported as troubled while it is still open, because the interrupted callout has it", () => {
     const open = run({ finishedAt: null, items: [item({ state: "failed" })] });
@@ -676,8 +677,8 @@ describe("a refused cleanup command", () => {
   });
 });
 
-// The re-review's C6: the retention window is what every eligibility date on
-// the list was measured against, so changing it makes the proposal on screen a
+// The retention window is what every eligibility date on the list was measured
+// against, so changing it makes the proposal on screen a
 // statement about a policy that no longer exists.
 describe("a scan measured against a retention window that has since moved", () => {
   it("is stale, and says what changed and how to fix it", () => {
@@ -693,7 +694,7 @@ describe("a scan measured against a retention window that has since moved", () =
   });
 });
 
-// The re-review's C3/C6: an outcome a later launch established has no known
+// An outcome a later launch established has no known
 // mutation time — only a window — and printing the launch clock as the moment a
 // folder was removed is a claim about a deletion nobody watched.
 describe("an outcome recorded by a later launch", () => {
@@ -757,5 +758,80 @@ describe("an outcome recorded by a later launch", () => {
     expect(describeCompleted(run(), item({ branch: null, reconciledAt }))).toContain(
       "confirmed it at",
     );
+  });
+});
+
+// VC-292: the row leads with the ticket, and every state it cannot act on is a
+// named fallback rather than a button that fails.
+describe("dirtyOrphanRow", () => {
+  const claimed = {
+    path: "/wt/volli-code/VC-82-strand",
+    projectId: "p1",
+    projectName: "Volli Code",
+    reason: "A ticket still points here, but git no longer tracks it.",
+  };
+
+  it("leads with a live ticket and offers it instead of Delete", () => {
+    expect(
+      dirtyOrphanRow({
+        ...claimed,
+        ticket: {
+          id: "t82",
+          projectId: "p1",
+          displayId: "VC-82",
+          title: "Strand it",
+          archived: false,
+        },
+      }),
+    ).toEqual({
+      displayId: "VC-82",
+      title: "Strand it",
+      notices: [],
+      openTicket: { projectId: "p1", ticketId: "t82" },
+      deletable: false,
+      meta: "Volli Code — A ticket still points here, but git no longer tracks it.",
+    });
+  });
+
+  it("names an archived ticket, says how to reach it, and opens nothing", () => {
+    const row = dirtyOrphanRow({
+      ...claimed,
+      ticket: {
+        id: "t82",
+        projectId: "p1",
+        displayId: "VC-82",
+        title: "Strand it",
+        archived: true,
+      },
+    });
+    expect(row.notices).toEqual(["Archived ticket"]);
+    expect(row.openTicket).toBeNull();
+    expect(row.deletable).toBe(false);
+    expect(row.meta).toContain("Restore VC-82 from the Archive to open it.");
+  });
+
+  it("falls back to the folder name when no ticket claims it, and keeps Delete", () => {
+    const row = dirtyOrphanRow({
+      path: "/wt/volli-code/leftover/",
+      reason: "Not registered with git, so it isn't safe to remove automatically.",
+    });
+    expect(row).toEqual({
+      displayId: null,
+      title: "leftover",
+      notices: ["No ticket"],
+      openTicket: null,
+      deletable: true,
+      meta: "Not registered with git, so it isn't safe to remove automatically.",
+    });
+  });
+
+  it("says a folder could not be read, and survives a path with no segments", () => {
+    const row = dirtyOrphanRow({
+      path: "/",
+      reason: "could not read git status",
+      pathReadable: false,
+    });
+    expect(row.title).toBe("/");
+    expect(row.notices).toEqual(["No ticket", "Can't read folder"]);
   });
 });

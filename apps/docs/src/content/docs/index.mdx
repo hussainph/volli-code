@@ -1,106 +1,57 @@
 ---
-title: Volli Code
-description: "Documentation for Volli Code, a local-first macOS workspace for parallel coding agents."
-template: splash
-head:
-  - tag: title
-    content: Volli Code documentation
-hero:
-  tagline: Turn ideas into focused tasks, run agents in parallel, and review every change in one place.
-  actions:
-    - text: Install Volli Code
-      link: /start/install/
-      icon: right-arrow
-    - text: View the source
-      link: https://github.com/hussainph/volli-code
-      icon: external
-      variant: minimal
+title: Volli documentation
+description: Install Volli, run coding tasks in separate Git worktrees, and review the changes on your Mac.
 ---
 
 import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Volli Code is a local-first macOS workspace for parallel coding agents. Turn a
-rough idea into focused tasks yourself, or ask an agent to help break it down.
-Run independent tasks in parallel, reuse saved Automations when work starts, and
-inspect every change before you merge.
-
-In Volli, a task is a **ticket**. Each ticket keeps its brief, chat history,
-Git branch, and changes together. Projects, tickets, chat history, and
-worktrees stay on your machine. Volli itself needs no account. You sign in to a
-model provider through **Settings → Models** (the Model Access policy), and model
-requests go there.
+Volli keeps a task's brief, its chats, its Git branch, and its changes in one
+workspace. It runs on your Mac, and its built-in chats use a model provider you
+connect.
 
 <Aside type="caution" title="Alpha">
-  Volli Code is in early alpha, for Apple silicon Macs. Features move between
-  builds. See [Install](/start/install/) for what that means in practice, and
-  [open an issue](https://github.com/hussainph/volli-code/issues) when something
-  is wrong.
+  Volli runs on Apple silicon Macs. Keep your own backups and Git branches.
 </Aside>
 
-## Start here
+## Get started
 
 <CardGrid>
   <LinkCard
-    title="Install Volli Code"
+    title="Install Volli"
     href="/start/install/"
-    description="What the alpha supports, how to install it, and where your data lives."
+    description="Install the app and connect a model provider."
   />
   <LinkCard
-    title="Quickstart"
+    title="Run your first coding task"
     href="/start/quickstart/"
-    description="Turn a rough idea into tasks, run an agent on one, and inspect the change."
-  />
-  <LinkCard
-    title="Concepts"
-    href="/start/concepts/"
-    description="Translate tasks, chats, branches, and review into Volli's UI terms."
-  />
-  <LinkCard
-    title="What's new in 0.2"
-    href="/releases/whats-new-0-2/"
-    description="See how Automations add repeatable ways to start work."
-  />
-  <LinkCard
-    title="CLI reference"
-    href="/reference/cli/"
-    description="The local `volli` command, and what a terminal Volli opened is attached to."
+    description="Create a ticket, start its agent, and inspect the result."
   />
 </CardGrid>
 
-## Work in Volli
+## Work on a task
 
-<CardGrid>
-  <LinkCard
-    title="Plan on the board"
-    href="/guides/board/"
-    description="Organize tasks before and while agents work."
-  />
-  <LinkCard
-    title="Automations"
-    href="/guides/automations/"
-    description="Save repeatable starts, run them by hand, or trigger them from a column or schedule."
-  />
-  <LinkCard
-    title="Ticket workspace"
-    href="/guides/ticket-workspace/"
-    description="A task's brief, chats, files, branch, and changes."
-  />
-  <LinkCard
-    title="Chats and worktrees"
-    href="/guides/agents-and-worktrees/"
-    description="Run project and task chats while keeping their branches separate."
-  />
-  <LinkCard
-    title="Settings"
-    href="/guides/settings/"
-    description="Models, web search, worktrees, terminal companions, and the CLI."
-  />
-</CardGrid>
+- [Manage tickets](/guides/manage-tickets/): write a brief, set properties, and track work.
+- [Use a chat](/guides/sessions/): start, interrupt, and return to an agent conversation.
+- [Review and publish changes](/guides/review-changes/): inspect diffs, test, commit, and open a pull request.
+- [Clean up worktrees](/guides/clean-up-worktrees/): remove checkout folders without losing the branch.
 
-## Getting help
+## Configure your workflow
 
-Bugs and confusion belong in [GitHub issues](https://github.com/hussainph/volli-code/issues).
-Anything security-sensitive should go through
-[private vulnerability reporting](https://github.com/hussainph/volli-code/security/advisories/new)
-instead. If something is misbehaving on your machine, start with
-[Troubleshooting](/reference/troubleshooting/).
+- [Models and usage](/guides/models/): connect providers and choose defaults.
+- [Browser Tabs](/guides/browser-tabs/): watch an agent use a page and take control.
+- [Skills and commands](/guides/skills-and-commands/): reuse instructions and templates.
+- [MCP servers](/guides/mcp-servers/): connect external tools to a project.
+- [Automations](/guides/automations/): save instructions and choose when they run.
+
+## Look up an answer
+
+[Concepts](/start/concepts/) explains unfamiliar terms,
+[Keyboard shortcuts](/reference/keyboard-shortcuts/) lists keys, and
+[CLI commands](/reference/cli-commands/) covers shell syntax.
+[What's new in 0.2](/releases/whats-new-0-2/) lists what changed in this
+release.
+
+If a Session fails or setup goes wrong, start with
+[Troubleshooting](/reference/troubleshooting/). Report bugs in
+[GitHub issues](https://github.com/hussainph/volli-code/issues). Report security
+issues through [private vulnerability reporting](https://github.com/hussainph/volli-code/security/advisories/new).

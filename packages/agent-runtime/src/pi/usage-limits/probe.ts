@@ -1,11 +1,13 @@
 /**
  * The on-demand read: one bounded read per subscribed provider, no model call.
  *
- * Six providers have an endpoint that answers "how much of my subscription is
- * left" without spending any of it — Anthropic's `/api/oauth/usage`, Codex's
- * `/backend-api/wham/usage`, OpenCode Go's `/zen/go/v1/usage`, Kimi Code's
- * `/coding/v1/usages`, xAI's `/v1/billing?format=credits`, and Copilot's
- * `/copilot_internal/user`. Most take the same credential the turns use, so
+ * Seven providers have an endpoint that answers "how much of my subscription
+ * is left" without spending any of it — Anthropic's `/api/oauth/usage`,
+ * Codex's `/backend-api/wham/usage`, OpenCode Go's `/zen/go/v1/usage`, Kimi
+ * Code's `/coding/v1/usages`, xAI's `/v1/billing?format=credits`, Copilot's
+ * `/copilot_internal/user`, and Z.AI's `/api/monitor/usage/quota/limit` on
+ * whichever of its two regional hosts issued the key. Most take the same
+ * credential the turns use, so
  * the probe asks Pi for it through `Models.getAuth`, which runs Pi's own
  * refresh under Pi's own lock; nothing here mints a token.
  *
@@ -58,6 +60,7 @@ import { githubCopilotUsageFromEndpoint } from "./github-copilot";
 import { kimiUsageFromEndpoint } from "./kimi";
 import { opencodeGoUsageFromEndpoint } from "./opencode-go";
 import { xaiUsageFromEndpoint } from "./xai";
+import { zaiUsageFromEndpoint } from "./zai";
 
 /** How long a 429 holds the endpoint off when it names no `Retry-After`. */
 export const USAGE_PROBE_COOLDOWN_MS = 5 * 60_000;
@@ -309,6 +312,25 @@ const READERS: Readonly<Record<string, UsageReader>> = {
       });
     },
     parse: xaiUsageFromEndpoint,
+  },
+  zai: {
+    url: "https://api.z.ai/api/monitor/usage/quota/limit",
+    // A GLM Coding Plan is a subscription driven by a key: the console mints
+    // it FROM the plan, and this endpoint is the console's own read. Refusing
+    // an API key here would report `unsupported` for every subscriber, since
+    // pi-ai offers this provider no OAuth at all.
+    acceptsApiKey: true,
+    headers: () => ({}),
+    parse: zaiUsageFromEndpoint,
+  },
+  "zai-coding-cn": {
+    // The same read, on the mainland host its own keys are issued for. A key
+    // from one region is not known to the other, so the host follows the
+    // provider rather than being probed for.
+    url: "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+    acceptsApiKey: true,
+    headers: () => ({}),
+    parse: zaiUsageFromEndpoint,
   },
   "opencode-go": {
     url: "https://opencode.ai/zen/go/v1/usage",

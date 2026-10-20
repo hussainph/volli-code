@@ -6,8 +6,7 @@
  * an outer band down the right edge, an outer band across the bottom) are
  * invisible; what lights up is the rectangle the drop would leave behind — the
  * whole pane for a centre drop, the right half for a right split, the bottom
- * half for a down split. That is VS Code's `editorDropTarget` reading, and it
- * is the one that answers the question a person actually has mid-drag ("where
+ * half for a down split. This answers the question a person has mid-drag ("where
  * will this end up?") rather than the one the implementation has ("which
  * region am I over?").
  *
@@ -17,7 +16,7 @@
  * mind rather than two rectangles swapping — and because nothing in the real
  * world appears from nothing.
  *
- * MOTION, per the decision framework (`docs/plans/split-view.md` §6):
+ * MOTION, per the split-view plan's decision framework:
  *  • Opacity and the four box properties, named exactly, 150ms `ease-out`. The
  *    plan asked for 120ms on the fade and 150ms on the morph; one element can
  *    only have one duration without an inline `transition` (which `motion-reduce`

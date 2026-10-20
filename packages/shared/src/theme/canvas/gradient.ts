@@ -2,13 +2,9 @@
  * The canvas as math: one to three authored color pools in, one CSS
  * `background` out.
  *
- * This is Arc's Space gradient rather than the near-black backdrop the app
- * shipped first, and the difference is the whole point. The old generator
- * band-clamped every canvas toward the ladder, which is the right call for a
- * surface that has to stay readable under every seed and the wrong one for a
- * genuinely *vivid* canvas: freely-placed pools, a light/dark transform that is
- * a real change of color rather than a dimming, and (in `ink.ts`) a foreground
- * chosen against the WORST pool on screen instead of the average one.
+ * Freely placed color pools form a vivid canvas. Light and dark appearances
+ * transform the colors rather than simply dimming them; `ink.ts` chooses a
+ * foreground against the worst pool on screen instead of the average one.
  *
  * Every number here comes from `ARC_TUNING`. Nothing in this module knows what
  * an appearance IS — it takes a resolved one and reads the table.

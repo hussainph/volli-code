@@ -1,6 +1,6 @@
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { COMPACT_VERB, COMPOSER_VERBS, SKILL_POLICY_DEFAULT } from "@volli/shared";
 import type { PromptResource, PromptTemplate, SkillReference } from "@volli/shared";
 
@@ -10,6 +10,7 @@ import type { ComposerPickerState } from "@renderer/chat/composer-picker";
 import { Button } from "@renderer/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem } from "@renderer/components/ui/dropdown-menu";
 
+import { ComposerAddMenu } from "./composer-add-menu";
 import { EffortPill } from "./composer-effort-ui";
 import { ComposerPicker } from "./composer-picker-ui";
 import {
@@ -57,7 +58,15 @@ function findElements(
  * why) and a memo component is an object, not a function. `.type` is the render
  * function inside it, so this stays the same call it always was.
  */
-const composerTree = SessionComposer.type;
+function composerTree(props: SessionComposerProps) {
+  let tree!: React.ReactNode;
+  function Capture() {
+    tree = SessionComposer.type(props);
+    return null;
+  }
+  renderToStaticMarkup(<Capture />);
+  return tree;
+}
 
 function composerProps(overrides: Partial<SessionComposerProps> = {}): SessionComposerProps {
   return {
@@ -91,6 +100,82 @@ describe("the queued message row", () => {
     expect(html).toContain('data-slot="dropdown-menu-trigger"');
     expect(html).toContain('aria-label="Queued message actions: also cover the empty-name branch"');
     expect(html).not.toContain('aria-label="Edit queued message"');
+  });
+
+  // A releasing row with no proof of delivery would otherwise be stuck at the
+  // head of the FIFO: the host cancels an unproven release and refuses one in
+  // flight, so Remove and Edit stay offered and the host decides. Steer stays
+  // off — the release already claimed that identity.
+  it("disables only Steer on a releasing host row; Remove and Edit ask the host", () => {
+    for (const queueState of ["queued", "releasing"] as const) {
+      const tree = composerTree(
+        composerProps({
+          queued: [
+            {
+              id: "host-row",
+              commandId: "host-command",
+              queueState,
+              text: "later",
+            },
+          ],
+        }),
+      );
+      const buttons = findElements(tree, Button);
+      const disabled = (label: string) => {
+        const button = buttons.find((entry) => entry.props["aria-label"] === label);
+        expect(button).toBeDefined();
+        return button?.props.disabled;
+      };
+      expect(disabled("Steer queued message: later")).toBe(queueState === "releasing");
+      expect(disabled("Remove queued message: later")).toBeFalsy();
+      expect(disabled("Queued message actions: later")).toBeFalsy();
+      expect(findElements(tree, DropdownMenuItem)).toHaveLength(1);
+    }
+  });
+
+  // The host refuses a release already in flight (or proven delivered). The
+  // composer must neither drop the row nor hand its words and files back.
+  it("leaves a releasing row and the draft untouched when the host refuses its cancel", async () => {
+    const attachment = {
+      linkId: "link",
+      blobHash: "ab".repeat(32),
+      label: "shot",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    };
+    const queued = [
+      {
+        id: "host-row",
+        commandId: "host-command",
+        queueState: "releasing" as const,
+        text: "in flight",
+        attachments: [attachment],
+      },
+    ];
+    const events: string[] = [];
+    const tree = composerTree(
+      composerProps({
+        value: "typing",
+        queued,
+        onQueuedChange: async (next, options) => {
+          events.push(options?.restoreDraft === undefined ? "remove" : "edit");
+          expect(next).toEqual([]);
+          return false;
+        },
+        onRestoreAttachments: () => events.push("files"),
+        onValueChange: () => events.push("draft"),
+        onComposerFocusRequest: () => events.push("focus"),
+      }),
+    );
+
+    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    await findElements(tree, Button)
+      .find((button) => button.props["aria-label"] === "Remove queued message: in flight")
+      ?.props.onClick?.();
+    await vi.waitFor(() => expect(events).toEqual(["edit", "remove"]));
+    await Promise.resolve();
+    expect(events).toEqual(["edit", "remove"]);
   });
 
   it("draws the files a queued message is carrying (VC-273)", () => {
@@ -152,7 +237,7 @@ describe("the queued message row", () => {
     }
   });
 
-  it("wires Edit message to return that row to the current draft", () => {
+  it("wires Edit message to return that row to the current draft", async () => {
     let nextQueue: readonly { id: string; text: string }[] | undefined;
     let nextDraft: string | undefined;
     const acts: string[] = [];
@@ -187,16 +272,16 @@ describe("the queued message row", () => {
       },
     });
     expect(nextQueue).toEqual([]);
-    expect(nextDraft).toBe("also cover the empty-name branch\nnew thought");
+    await vi.waitFor(() => expect(nextDraft).toBe("also cover the empty-name branch\nnew thought"));
     // Two focus requests: one inside `editQueued` (which the modal menu's
     // focus trap swallows while the content is still mounted) and one from
     // `onCloseAutoFocus`, the first moment after the trap is gone — the only
     // request that can actually land on the textarea.
-    expect(acts).toEqual(["queue", "draft", "focus", "focus"]);
+    expect(acts).toEqual(["queue", "focus", "draft", "focus"]);
     expect(restorePrevented).toBe(true);
   });
 
-  it("does not edit or remove a row whose resident delivery claim rejects mutation", () => {
+  it("does not edit or remove a row whose resident delivery claim rejects mutation", async () => {
     let draft: string | undefined;
     let focusRequests = 0;
     const tree = composerTree(
@@ -216,7 +301,7 @@ describe("the queued message row", () => {
       (button) =>
         button.props["aria-label"] === "Remove queued message: also cover the empty-name branch",
     );
-    remove?.props.onClick?.();
+    await remove?.props.onClick?.();
 
     expect(draft).toBeUndefined();
     expect(focusRequests).toBe(0);
@@ -226,7 +311,7 @@ describe("the queued message row", () => {
   // row carried: the files go back to the strip BEFORE the row leaves the
   // queue, because the removal path reads the strip to tell "came back" from
   // "deleted" — restoring after would read as a delete and drop the links.
-  it("hands an edited row's attachments back to the strip before it leaves the queue", () => {
+  it("hands an edited row's attachments back to the strip before it leaves the queue", async () => {
     const acts: string[] = [];
     const attachments = [
       {
@@ -256,10 +341,42 @@ describe("the queued message row", () => {
 
     findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
 
-    expect(acts).toEqual(["restore", "queue", "draft", "focus"]);
+    await vi.waitFor(() => expect(acts).toEqual(["queue", "restore", "draft", "focus"]));
   });
 
-  it("wires direct Steer and removal before handing focus to the composer", () => {
+  it("waits for host acceptance before returning text or attachment links", async () => {
+    let accept!: (accepted: boolean) => void;
+    const events: string[] = [];
+    const attachment = {
+      linkId: "link",
+      blobHash: "ab".repeat(32),
+      label: "shot",
+      originalName: "shot.png",
+      mime: "image/png",
+      sizeBytes: 12,
+    };
+    const tree = composerTree(
+      composerProps({
+        queued: [{ id: "q1", text: "later", attachments: [attachment] }],
+        onQueuedChange: (_rows, options) => {
+          expect(options?.restoreAttachments).toEqual([attachment]);
+          events.push("cancel");
+          return new Promise((resolve) => {
+            accept = resolve;
+          });
+        },
+        onRestoreAttachments: () => events.push("files"),
+        onValueChange: () => events.push("draft"),
+      }),
+    );
+    findElements(tree, DropdownMenuItem)[0]?.props.onSelect?.();
+    expect(events).toEqual(["cancel"]);
+    accept(false);
+    await Promise.resolve();
+    expect(events).toEqual(["cancel"]);
+  });
+
+  it("wires direct Steer and removal before handing focus to the composer", async () => {
     let steered: string | undefined;
     let nextQueue: readonly { id: string; text: string }[] | undefined;
     const acts: string[] = [];
@@ -282,7 +399,7 @@ describe("the queued message row", () => {
     named("Steer queued message: also cover the empty-name branch")?.props.onClick?.();
     expect(acts).toEqual(["steer:m1", "focus"]);
     acts.length = 0;
-    named("Remove queued message: also cover the empty-name branch")?.props.onClick?.();
+    await named("Remove queued message: also cover the empty-name branch")?.props.onClick?.();
     expect(steered).toBe("m1");
     expect(nextQueue).toEqual([]);
     expect(acts).toEqual(["queue:0", "focus"]);
@@ -413,8 +530,7 @@ describe("the effort control's place in the footer", () => {
   it("stands beside the model pill rather than inside its popover", () => {
     const html = renderFooter();
 
-    // Readable before the first keystroke, which is the whole complaint the
-    // redesign answers — it used to be two levels down, on one row of a list.
+    // Readable before the first keystroke, not two levels down in a list.
     expect(html).toContain('aria-label="Reasoning effort: Medium"');
   });
 
@@ -467,8 +583,9 @@ describe("the effort control's place in the footer", () => {
   it("keeps its chrome at one ink — no resting dim (VC-335)", () => {
     // The row rested at 70% and came up under focus. On the app's own
     // canvases that made a resting composer and a disabled one the same
-    // picture, and the field (T3 Code, OpenCode, ChatGPT, Cursor) draws the
-    // chrome at one ink and lets the muted tier say "chrome" by itself.
+    // picture. The chrome rests at one ink, and the muted tier alone says
+    // "chrome", so normal chrome and a disabled control read as different
+    // pictures.
     const html = renderFooter();
 
     expect(html).not.toContain("opacity-70");
@@ -524,6 +641,36 @@ describe("the effort control's place in the footer", () => {
     // two triggers nothing else on the surface names.
     expect(html).toContain('data-slot="dropdown-menu-trigger"');
     expect(html).not.toContain('aria-label="Attach files"');
+  });
+});
+
+describe("a Session on a remote host (VC-713)", () => {
+  it("runs the host's default model: no picker, no effort, a label naming it", () => {
+    const tree = composerTree(footerProps({ hostModelOnly: "hetzner-1" }));
+    expect(findElements(tree, ModelPill)).toEqual([]);
+    expect(findElements(tree, EffortPill)).toEqual([]);
+    expect(renderFooter({ hostModelOnly: "hetzner-1" })).toContain(
+      "hetzner-1&#x27;s default model",
+    );
+  });
+
+  it("keeps the picker for This Mac's Sessions, exactly as before", () => {
+    const tree = composerTree(footerProps({ hostModelOnly: null }));
+    expect(findElements(tree, ModelPill)).toHaveLength(1);
+    expect(renderFooter()).not.toContain('data-slot="host-model"');
+  });
+
+  it("says attachments are not available, and hands the add menu the reason", () => {
+    const tree = composerTree(
+      footerProps({
+        onAttachFiles: () => undefined,
+        attachUnavailable: "Not available on hetzner-1 yet",
+      }),
+    );
+    const [menu] = findElements(tree, ComposerAddMenu);
+    expect((menu!.props as { attachUnavailable?: string }).attachUnavailable).toBe(
+      "Not available on hetzner-1 yet",
+    );
   });
 });
 
@@ -1055,7 +1202,10 @@ describe("the picker's place in the composer stack", () => {
   it("offers an opt-in contained overlay that contributes no flow height", () => {
     const html = renderStack("overlay");
     const stack = /<div data-slot="composer-picker-stack" class="([^"]*)"/.exec(html)?.[1];
-    const layer = /<div data-slot="composer-picker-overlay" class="([^"]*)"/.exec(html)?.[1];
+    const layer =
+      /<div data-slot="composer-picker-overlay" data-native-plane-overlay="true" class="([^"]*)"/.exec(
+        html,
+      )?.[1];
 
     expect(stack).toContain("relative");
     expect(stack).toContain("min-w-0");
@@ -1072,4 +1222,15 @@ describe("the picker's place in the composer stack", () => {
       html.indexOf('aria-label="Layout probe"'),
     );
   });
+});
+
+it.each([
+  [{ id: "q", text: "later", queueState: "queued" as const }, "Queued"],
+  [{ id: "q", text: "later", queueState: "releasing" as const }, "Sending"],
+  [{ id: "q", text: "later", localUnsent: true as const }, "Not sent"],
+  [{ id: "q", text: "later", afterCurrentStep: true as const }, "Sends after this step"],
+])("names queue ownership instead of showing unexplained words", (message, label) => {
+  const html = renderToStaticMarkup(<SessionComposer {...composerProps({ queued: [message] })} />);
+  expect(html).toContain('data-slot="queue-status"');
+  expect(html).toContain(`>${label}</span>`);
 });

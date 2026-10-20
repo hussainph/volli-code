@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import type { IslandFlash } from "@volli/session-presentation";
 import type { BrowserTabState } from "../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { BROWSER_NEW_TAB_TITLE, useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 import {
   EMPTY_PROJECT_SESSION_ROWS,
@@ -127,14 +128,17 @@ afterEach(async () => {
 });
 
 /** Mounts the feed and reports its latest slice and every flash it pushed. */
-async function mount(browser: BrowserApi | null = api()) {
+async function mount(
+  browser: BrowserApi | null = api(),
+  openTrace?: (request: BrowserTraceRequest) => void,
+) {
   // `null` is the UI lab: no bridge at all.
   vi.stubGlobal("api", browser === null ? undefined : { browser });
   const seen: { feed: IslandTabsFeed; flash: IslandFlash | null }[] = [];
   const flashes: IslandFlash[] = [];
   function Probe() {
     const channel = useIslandFlash();
-    const feed = useIslandTabs(SESSION, PROJECT, channel.push);
+    const feed = useIslandTabs(SESSION, PROJECT, channel.push, { openTrace });
     seen.push({ feed, flash: channel.flash });
     if (channel.flash !== null && flashes.at(-1)?.id !== channel.flash.id) {
       flashes.push(channel.flash);
@@ -277,6 +281,30 @@ describe("verbs", () => {
     await act(async () => probe.latest().feed.actions.promoteTab("one"));
     expect(browser.setPresentation).toHaveBeenCalledWith({ tabId: "one", presentation: "preview" });
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("replay opens the tab's OWNER's trace at that tab — a child's tab is the child's record (VC-453)", async () => {
+    const openTrace = vi.fn();
+    listing([{ sessionId: CHILD, title: "Read the docs" }]);
+    registry([tab({ tabId: "one" }), tab({ tabId: "childs", ownerSessionId: CHILD })]);
+    const probe = await mount(api(), openTrace);
+
+    probe.latest().feed.actions.replayTab("one");
+    probe.latest().feed.actions.replayTab("childs");
+    expect(openTrace.mock.calls).toEqual([
+      [{ sessionId: SESSION, tabId: "one", pictureId: null }],
+      [{ sessionId: CHILD, tabId: "childs", pictureId: null }],
+    ]);
+
+    // A tab that has left the registry has no owner to name: nothing opens.
+    probe.latest().feed.actions.replayTab("gone");
+    expect(openTrace).toHaveBeenCalledTimes(2);
+  });
+
+  it("replay opens nowhere, and does not throw, with no replay mounted", async () => {
+    registry([tab({ tabId: "one" })]);
+    const probe = await mount(api());
+    expect(() => probe.latest().feed.actions.replayTab("one")).not.toThrow();
   });
 
   it("names the refused tab by its host even after the tab has left the registry", async () => {

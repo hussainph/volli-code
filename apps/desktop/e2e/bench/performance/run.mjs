@@ -20,7 +20,7 @@ import {
   TICKET_TAB_STRIP,
 } from "../../lib/smoke-kit.mjs";
 import { busyLoadName, startBusyLoad } from "./background-load.mjs";
-import { generateFixture, verifyFixture } from "./fixture.mjs";
+import { assertFixtureBandsCurrent, generateFixture, verifyFixture } from "./fixture.mjs";
 import { DEFAULT_SEED, PRESET_NAMES, REAL_BUSY_CORE_DEFAULT, presetNamed } from "./presets.mjs";
 import { sessionProjectionRequest, sessionRpcRoundTrip } from "./session-rpc-round-trip.mjs";
 import { ticketSwitchBreakdown, TICKET_SWITCH_MARKS } from "./ticket-switch-breakdown.mjs";
@@ -323,7 +323,7 @@ async function buildProducts() {
   });
 }
 
-async function hostMetadata() {
+export async function hostMetadata() {
   const git = async (...args) => (await command("git", args)).trim();
   const sysctl = async (key) =>
     command("/usr/sbin/sysctl", ["-n", key])
@@ -713,8 +713,10 @@ async function measureSidebar(page, app) {
 }
 
 async function selectTicketFromPalette(page, targetTitle, targetDisplayId) {
-  await page.getByRole("button", { name: "Search tickets and sessions", exact: true }).click();
-  const input = page.getByPlaceholder("Search tickets and sessions…");
+  await page
+    .getByRole("button", { name: "Search tickets, sessions, and commands", exact: true })
+    .click();
+  const input = page.getByPlaceholder("Search tickets, sessions, and commands…");
   await input.waitFor({ state: "visible", timeout: 10_000 });
   await input.fill(targetDisplayId);
   // Scoped to the palette's own list, not the page. A page-wide text match also
@@ -1781,6 +1783,16 @@ export async function writeReports(report, output) {
   return { jsonPath, summaryPath, markdownPath };
 }
 
+/**
+ * How long a run may keep measuring against its fixture: the loaded arm is
+ * bounded by its exposure, the idle arm takes about as long again, and an hour
+ * of slack covers builds and warm-up. Deliberately generous — a fresh fixture
+ * holds its bands for about a day.
+ */
+export function runBandMarginMs(args) {
+  return 2 * args.loadDurationSeconds * 1_000 + 60 * 60_000;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -1809,6 +1821,10 @@ async function main() {
     );
     generated = { manifest, userDataDir: fixtureDirectory };
   }
+  // A reused fixture's bands are relative to when it was generated, not now,
+  // and must still hold when the last arm finishes. Checked before the
+  // minutes-long verification so a stale profile fails at once.
+  assertFixtureBandsCurrent(generated.manifest, Date.now(), runBandMarginMs(args));
   const verification = await verifyFixture(fixtureDirectory, { preset: args.preset });
   const runOwnerRoot = ownerRoot ?? (await fs.mkdtemp(join(os.tmpdir(), "volli-perf-runs-")));
   const runRoot = join(runOwnerRoot, "runs");

@@ -596,7 +596,7 @@ export function readAuthorInvocationPolicy(
  * Characters, rather than estimated tokens, are the enforceable unit: prompt
  * accounting uses the same stable four-characters-per-token estimate, making
  * this at most ~512 estimated tokens before the RESOURCE delimiter. That keeps
- * the current checkout's fresh Board package below its ~1,500-token goal. Every
+ * the current checkout's fresh Board package below its ~1,700-token goal. Every
  * project, however many skills it installs, gets the same index bound.
  */
 export const SKILLS_INDEX_MAX_CHARS = 2_048;

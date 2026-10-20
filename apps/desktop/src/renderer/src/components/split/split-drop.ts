@@ -43,9 +43,8 @@ import { tabDropOrder } from "@renderer/components/ui/tab-reorder";
 export type SplitDropZone = "center" | "right" | "bottom";
 
 /**
- * How much of a pane its edge bands claim. A quarter is VS Code's own
- * proportion for `editorDropTarget`, and it is the number that makes the
- * gesture readable without a pointer-perfect approach to the border.
+ * How much of a pane its edge bands claim. A quarter makes the gesture
+ * readable without a pointer-perfect approach to the border.
  */
 export const SPLIT_DROP_EDGE_FRACTION = 0.25;
 

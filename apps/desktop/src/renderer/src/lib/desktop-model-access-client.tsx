@@ -34,6 +34,14 @@ export function DesktopModelAccessProvider({ children }: React.PropsWithChildren
       compactionPolicy: () => rpc.modelAccess.compactionPolicy.query(),
       setCompactionPolicy: (policy) =>
         rpc.modelAccess.setCompactionPolicy.mutate({ autoCompaction: policy.autoCompaction }),
+      codeModePolicy: () => rpc.modelAccess.codeModePolicy.query(),
+      // Copied field by field, as compaction is: the policy crosses whole, and
+      // nothing riding on the caller's object reaches the edge with it.
+      setCodeModePolicy: (policy) =>
+        rpc.modelAccess.setCodeModePolicy.mutate({
+          enabled: policy.enabled,
+          models: { ...policy.models },
+        }),
       pickerView: () => rpc.modelAccess.pickerView.query(),
       setPickerView: (view) => rpc.modelAccess.setPickerView.mutate(view),
       beginSignIn: (providerId, type, onUpdate) => beginSignIn(providerId, type, onUpdate),

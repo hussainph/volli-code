@@ -1,54 +1,223 @@
-import { initTRPC, TRPCError, tracked } from "@trpc/server";
-import type { JsonUnsafeProcedures } from "./json-safe";
-export type { IsJsonSafe, JsonUnsafeProcedures } from "./json-safe";
+import { procedureSchemas, type ProcedureSchema } from "./procedure-schema";
+export type { ProcedureSchema } from "./procedure-schema";
+export { workspacesProcedureSchemas } from "./workspaces-router";
+import { TRPCError, tracked } from "@trpc/server";
+import {
+  HOST_SCOPE_PROOF_LIMITS,
+  isHostActor,
+  type HostActor,
+  type JsonUnsafeProcedures,
+} from "@volli/host-protocol";
+export type { IsJsonSafe, JsonUnsafeProcedures } from "@volli/host-protocol";
+export type { SessionReadInput } from "./session-reads";
 import {
   isSessionStreamFrame,
+  SuperviseSessionError,
   type ModelAccessSnapshot,
   type SessionClientCommand,
-  type SessionRuntime,
   type SessionRuntimeCommandResult,
   type SessionRuntimeCommandRequest,
   type SessionRuntimeProjectionSnapshot,
+  type SessionHistoryPage,
+  type SessionLatestReply,
   type SessionRuntimeSnapshot,
   type SessionStreamCompactionProgress,
+  type SessionStreamQueue,
   type SessionStreamFrame,
+  type SessionStreamEmission,
   type SessionStreamOverlay,
   type SessionStartResult,
 } from "@volli/session-engine";
 import {
+  BOARD_RESOURCE_KINDS,
+  CODE_MODE_MODES,
+  CODE_MODE_POLICY_MODELS_MAX,
+  EXPERIMENTS,
+  LOG_LEVELS,
   MODEL_PICKER_VIEWS,
-  isolatePerformanceObserver,
   MODEL_PURPOSES,
-  readOptionalPerformanceClock,
+  presentedScheduledResume,
   REASONING_LEVELS,
   SESSION_ROLES,
   scrubSessionAttention,
-  scrubSessionAuthority,
   scrubSessionEvent,
   scrubSessionInteraction,
+  type AgentResponse,
+  type CodeModePolicy,
   type CompactionPolicy,
+  type ExperimentId,
+  type ExperimentSnapshot,
+  type HandlerCall,
   type HiddenModelRef,
+  type HostHandler,
+  type HostLogsBatch,
+  type HostLogsQuery,
+  type HostLogsRead,
+  type CatalogKeyOf,
+  type HostHandlerKeyOf,
   type ModelAccessDefaults,
   type ModelPickerView,
   type ModelPurpose,
   type ReasoningLevel,
   type RendererSessionEvent,
+  type SessionListingPage,
   type SessionPresentationProjection,
 } from "@volli/shared";
 import { z } from "zod";
+
+import {
+  hostAnswer,
+  HostProcedureError,
+  jsonByteLength,
+  PROJECT_RESOURCE,
+  type CatalogCallerContext,
+  type CatalogMismatch,
+  type ProcedurePaths,
+  type RouterTransport,
+  type RouterContextPorts,
+  type WorkspaceResource as CatalogWorkspaceResource,
+} from "./catalog";
+import { AsyncQueue } from "./async-queue";
+import { sanitizeDiagnosticText } from "./diagnostic-text";
+import {
+  SIGN_IN_VOID_OUTPUTS,
+  signInProcedures,
+  signInSupplementalOutputs,
+  type SignInRouterHandlers,
+} from "./sign-ins";
+export {
+  hostAuthCallbackDeliverResultSchema,
+  hostSignInAckSchema,
+  hostSignInFlowSchema,
+  hostSignInStatusSchema,
+  hostSignInUpdateSchema,
+  type SignInRouterHandlers,
+} from "./sign-ins";
+import { replayExceedsEvents, ReplayMeter, resnapshotRequired } from "./replay-bound";
+import {
+  readSession,
+  readWorkspace,
+  sessionHandleInput,
+  sessionListInput,
+  sessionListOutput,
+  sessionPeekInput,
+  sessionReadOutput,
+  type SessionReadInput,
+} from "./session-reads";
+import {
+  listingWire,
+  sessionListingForTicketInput,
+  sessionListingInput,
+  sessionListingPageSchema,
+} from "./session-listing-schema";
+export {
+  sessionListingPageSchema,
+  sessionListingRowSchema,
+  type SessionListingWireTypes,
+} from "./session-listing-schema";
+import {
+  diagnosticEntrySchema,
+  sessionAttachOutputSchema,
+  sessionCommandOutputSchema,
+  sessionHistoryOutputSchema,
+  sessionProjectionOutputSchema,
+  sessionSnapshotOutputSchema,
+  streamEmissionSchema,
+  legacyStreamEmissionSchema,
+  uiMessageWireSchema,
+} from "./output-schema";
+export {
+  sessionCommandOutputSchema,
+  sessionHistoryOutputSchema,
+  sessionProjectionOutputSchema,
+  sessionSnapshotOutputSchema,
+} from "./output-schema";
+import {
+  catalogRouter,
+  hostProcedure,
+  sessionResource,
+  workspaceProcedure,
+  type SessionRouterEntry,
+} from "./session-catalog";
+
+export {
+  createCatalogBuilders,
+  handlerCallOf,
+  hostErrorOf,
+  HostProcedureError,
+  LOCAL_DESKTOP_CALLER,
+  PROJECT_RESOURCE,
+  type CatalogBuildersOptions,
+  type CatalogCallerContext,
+  type CatalogDiagnostics,
+  type CatalogMismatch,
+  type CommandKindEnvelope,
+  type LocalRouterCaller,
+  type NetworkRouterCaller,
+  type ProcedurePaths,
+  type RouterProcedurePaths,
+  type RouterCaller,
+  type RouterContextPorts,
+  type WorkspaceResource,
+  type ResourceRelation,
+  type RouterTransport,
+  type WorkspaceResources,
+} from "./catalog";
+export { SESSION_RESOURCE, type SessionRouterEntry } from "./session-catalog";
+export {
+  createBoardRouter,
+  TICKET_RESOURCE,
+  type BoardRouter,
+  type BoardRouterContext,
+  type BoardRouterHandlers,
+  type BoardTicketMoveInput,
+} from "./board-router";
+export {
+  createHostRouter,
+  type HostRouter,
+  type HostRouterCatalogBinding,
+  type HostRouterContext,
+  type HostRouterFeatureBinding,
+  type HostRouterPaths,
+} from "./host-router";
+export {
+  createDesktopRouter,
+  desktopProcedureSchemas,
+  type DesktopRouter,
+  type DesktopRouterContext,
+  type DesktopRouterHandlers,
+} from "./desktop-router";
+export {
+  DESKTOP_IPC_EXPOSURE,
+  DESKTOP_IPC_PATHS,
+  type DesktopIpcExposure,
+  type DesktopIpcPath,
+  type DesktopIpcRouter,
+  type DesktopIpcRouterPath,
+  type DesktopIpcRouters,
+  type IpcExposureTable,
+} from "./desktop-ipc";
+export { AsyncQueue } from "./async-queue";
+export { sanitizeDiagnosticText } from "./diagnostic-text";
 
 type RpcUiMessage = Extract<SessionClientCommand, { kind: "message.submit" }>["message"];
 type RpcModelSelection = Extract<SessionClientCommand, { kind: "model.select" }>["selection"];
 
 export type RendererSessionCommand =
-  | Pick<Extract<SessionClientCommand, { kind: "message.submit" }>, "kind" | "message" | "delivery">
+  | Pick<
+      Extract<SessionClientCommand, { kind: "message.submit" }>,
+      "kind" | "message" | "delivery" | "settle"
+    >
   | Extract<
       SessionClientCommand,
+      | { kind: "session.stop" }
       | { kind: "model.select" }
       | { kind: "executor.interrupt" }
       | { kind: "executor.retry" }
       | { kind: "context.compact" }
       | { kind: "interaction.resolve" }
+      | { kind: "resume.schedule" }
+      | { kind: "resume.cancel" }
     >;
 
 export interface RendererSessionCommandRequest {
@@ -59,7 +228,7 @@ export interface RendererSessionCommandRequest {
 
 export type RendererSessionCommandResult = Pick<
   SessionRuntimeCommandResult,
-  "sessionId" | "receipt" | "throughSequence" | "refusal"
+  "sessionId" | "receipt" | "throughSequence" | "refusal" | "stop"
 >;
 
 /**
@@ -75,12 +244,13 @@ export type RendererSessionStreamFrame = Omit<SessionStreamFrame, "event"> & {
 export type RendererSessionStreamEmission =
   | RendererSessionStreamFrame
   | SessionStreamOverlay
-  | SessionStreamCompactionProgress;
+  | SessionStreamCompactionProgress
+  | SessionStreamQueue;
 
 /** The durable arm carries no `kind` of its own, mirroring the runtime's own test. */
 function isRendererStreamTransient(
   emission: RendererSessionStreamEmission,
-): emission is SessionStreamOverlay | SessionStreamCompactionProgress {
+): emission is SessionStreamOverlay | SessionStreamCompactionProgress | SessionStreamQueue {
   return "kind" in emission;
 }
 
@@ -119,6 +289,13 @@ export interface SessionCreateInput {
     model?: { providerId: string; modelId: string };
     reasoningLevel?: ReasoningLevel;
   };
+  /**
+   * The first message this chat is being born to carry (VC-432), offered to
+   * the decision model that may choose its model. Used only when the create
+   * names no `modelOverride` and a decision model is configured and permitted;
+   * otherwise ignored. Never stored.
+   */
+  autoSelect?: { request: string };
 }
 
 export interface SessionAttachInput {
@@ -147,30 +324,129 @@ export interface RpcProcedurePerformanceObserver {
   record(sample: RpcProcedurePerformanceSample): void;
 }
 
-export interface SessionRouterContext {
-  runtime: SessionRuntime;
-  inspectModelAccess?: (input: { refresh?: boolean }) => Promise<ModelAccessSnapshot>;
-  readModelAccessDefaults?: () => ModelAccessDefaults;
-  writeModelAccessDefault?: (
-    purpose: ModelPurpose,
-    selection: RpcModelSelection | null,
-  ) => ModelAccessDefaults | Promise<ModelAccessDefaults>;
-  readHiddenModels?: () => readonly HiddenModelRef[];
-  writeHiddenModels?: (hidden: readonly HiddenModelRef[]) => void | Promise<void>;
-  readCompactionPolicy?: () => CompactionPolicy;
-  writeCompactionPolicy?: (
-    policy: CompactionPolicy,
-  ) => CompactionPolicy | Promise<CompactionPolicy>;
-  /** Which list the model pickers open on (VC-259) — one word, profile-wide. */
-  readModelPickerView?: () => ModelPickerView;
-  writeModelPickerView?: (view: ModelPickerView) => ModelPickerView | Promise<ModelPickerView>;
-  /** Create-only (no attach): the optimistic chat-open route — see the Sessions facade. */
-  createSession?: (input: SessionCreateInput) => Promise<SessionCreateResult>;
-  attachSession?: (input: SessionAttachInput) => Promise<SessionStartResult>;
+/**
+ * The slice of the host's handler map (`@volli/host-core/handlers`) the
+ * Session router projects, keyed by catalog key (VC-668). Declared here
+ * structurally because this package cannot import host-core (D2); a
+ * composition root hands it the host's one map, and that assignment is the
+ * check that the two agree. Properties, not methods, so an input drift is a
+ * type error rather than a bivariant pass.
+ */
+export interface SessionRouterHandlers extends SignInRouterHandlers {
+  readonly "sessions.create": HostHandler<SessionCreateInput, SessionCreateResult>;
+  readonly "sessions.attach": HostHandler<SessionAttachInput, SessionStartResult>;
+  readonly "settings.experiments": HostHandler<void, ExperimentSnapshot>;
+  readonly "settings.setExperiment": HostHandler<
+    { id: ExperimentId; enabled: boolean },
+    ExperimentSnapshot
+  >;
+  readonly "modelAccess.inspect": HostHandler<{ refresh?: boolean }, ModelAccessSnapshot>;
+  readonly "modelAccess.defaults": HostHandler<void, ModelAccessDefaults>;
+  readonly "modelAccess.setDefault": HostHandler<
+    { purpose: ModelPurpose; selection: RpcModelSelection | null },
+    ModelAccessDefaults
+  >;
+  readonly "modelAccess.hiddenModels": HostHandler<void, readonly HiddenModelRef[]>;
+  readonly "modelAccess.setHiddenModels": HostHandler<readonly HiddenModelRef[], void>;
+  readonly "modelAccess.compactionPolicy": HostHandler<void, CompactionPolicy>;
+  readonly "modelAccess.setCompactionPolicy": HostHandler<CompactionPolicy, CompactionPolicy>;
+  readonly "modelAccess.codeModePolicy": HostHandler<void, CodeModePolicy>;
+  readonly "modelAccess.setCodeModePolicy": HostHandler<CodeModePolicy, CodeModePolicy>;
+  readonly "modelAccess.pickerView": HostHandler<void, ModelPickerView>;
+  readonly "modelAccess.setPickerView": HostHandler<ModelPickerView, ModelPickerView>;
+  readonly "session.snapshot": HostHandler<{ sessionId: string }, SessionRuntimeSnapshot>;
+  readonly "session.history": HostHandler<
+    { sessionId: string; before: number },
+    SessionHistoryPage
+  >;
+  readonly "session.picture": HostHandler<
+    { sessionId: string; pictureId: string; offset?: number },
+    { data: string | null; mimeType: string | null; nextOffset: number | null }
+  >;
+  readonly "session.projection": HostHandler<
+    { sessionId: string },
+    SessionRuntimeProjectionSnapshot
+  >;
+  /**
+   * A bounded door (the WebSocket's replay bounds, VC-663) passes `signal`
+   * to cancel a replay it has refused before the subscribe call returns.
+   */
+  readonly "session.subscribe": (
+    input: { sessionId: string; afterSequence: number; signal?: AbortSignal },
+    call: HandlerCall,
+    sink: {
+      emit(emission: SessionStreamEmission): void | Promise<void>;
+      fail(error: unknown): void;
+    },
+  ) => Promise<() => void>;
+  readonly "session.subscribeQueue": SessionRouterHandlers["session.subscribe"];
+  readonly "session.command": HostHandler<
+    SessionRuntimeCommandRequest,
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.cancelQueued": HostHandler<
+    { commandId: string; sessionId: string; messageId: string; expectedRevision?: number },
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.editQueued": HostHandler<
+    {
+      commandId: string;
+      sessionId: string;
+      messageId: string;
+      message: RpcUiMessage;
+      expectedRevision?: number;
+    },
+    SessionRuntimeCommandResult
+  >;
+  readonly "session.cancelInteraction": HostHandler<
+    { sessionId: string; interactionId: string },
+    void
+  >;
+  readonly "session.reconcile": HostHandler<{ sessionId: string; attachmentId: string }, void>;
+  /** The host's recent log (VC-699): a page after a cursor. */
+  readonly "logs.tail": HostHandler<HostLogsRead, HostLogsBatch>;
+  /** The host's log as it is written, after a cursor's backlog. */
+  readonly "logs.follow": (
+    input: HostLogsRead,
+    call: HandlerCall,
+    sink: { emit(batch: HostLogsBatch): void | Promise<void>; fail(error: unknown): void },
+  ) => Promise<() => void>;
+  /**
+   * The socket's Session reads, Workspace-scoped (VC-663, D4): the map runs
+   * the socket verb's own handler with its roster forced to `workspaceId`
+   * (`SOCKET_DELEGATED_HANDLER_KEYS`). The answer is the socket's envelope.
+   */
+  readonly "session.list": HostHandler<SessionReadInput, AgentResponse>;
+  readonly "session.show": HostHandler<SessionReadInput, AgentResponse>;
+  readonly "session.peek": HostHandler<SessionReadInput, AgentResponse>;
+  readonly "session.answer": HostHandler<SessionReadInput, AgentResponse>;
+  /** A Workspace's Session listing rows (VC-713), bounded for one frame. */
+  readonly "session.listing": HostHandler<{ projectId: string }, SessionListingPage>;
+  readonly "session.listingForTicket": HostHandler<{ ticketId: string }, SessionListingPage>;
+}
+
+type AssertNever<Type extends never> = Type;
+
+/** The Session family's keys and the slice's keys are one set: a missing handler fails here. */
+export type SessionRouterHandlersCoverage = AssertNever<
+  CatalogMismatch<keyof SessionRouterHandlers & string, HostHandlerKeyOf<SessionRouterEntry>>
+>;
+
+/**
+ * The Session router's context: the catalog's caller and resource ports
+ * ({@link CatalogCallerContext}; its `resourceWorkspace` answers `session`
+ * resources), plus the one handler map it projects. No other port: every
+ * procedure reaches the host through `handlers` (VC-668).
+ */
+export interface SessionRouterContext extends CatalogCallerContext {
+  handlers: SessionRouterHandlers;
   diagnostics: RpcDiagnosticLog;
-  transport?: "electron-ipc" | "unknown";
+  transport?: RouterTransport;
   performanceObserver?: RpcProcedurePerformanceObserver;
 }
+
+/** The context adds no port but the map. */
+export type SessionRouterContextPorts = AssertNever<RouterContextPorts<SessionRouterContext>>;
 
 export interface RpcDiagnosticEntry {
   id: number;
@@ -194,7 +470,6 @@ interface DiagnosticSubscriber {
   listener: (entry: RpcDiagnosticEntry) => void;
 }
 
-const MAX_DIAGNOSTIC_FIELD_LENGTH = 1_000;
 const MAX_IDENTIFIER_LENGTH = 512;
 /**
  * Display text is prose from someone else's catalog, not an identifier this app
@@ -203,6 +478,34 @@ const MAX_IDENTIFIER_LENGTH = 512;
  * later change to either must not silently move the other.
  */
 const MAX_DISPLAY_LABEL_LENGTH = 512;
+
+/** Where {@link logRpcDiagnostics} writes: a host's structured logger, by level. */
+export interface RpcDiagnosticLogger {
+  debug(msg: string, fields: Readonly<Record<string, unknown>>): void;
+  warn(msg: string, fields: Readonly<Record<string, unknown>>): void;
+}
+
+/**
+ * Forwards every route diagnostic from now on into a host's structured log
+ * (VC-699): a call's start and success at `debug`, its failure at `warn` with
+ * the code and the sanitized message. The diagnostic is recorded inside the
+ * call, so a host whose door opened a trace scope gets the call's trace on
+ * each line. Returns the unsubscribe.
+ */
+export function logRpcDiagnostics(
+  diagnostics: RpcDiagnosticLog,
+  logger: RpcDiagnosticLogger,
+): () => void {
+  const afterId = diagnostics.list({ limit: 1 }).at(-1)?.id ?? 0;
+  return diagnostics.subscribe({ afterId }, (entry) => {
+    const fields = { operation: entry.procedure, transport: entry.transport };
+    if (entry.phase === "error") {
+      logger.warn("rpc call failed", { ...fields, code: entry.code, reason: entry.message });
+    } else {
+      logger.debug(entry.phase === "start" ? "rpc call" : "rpc call answered", fields);
+    }
+  });
+}
 
 /**
  * Small in-process, lossless-within-capacity diagnostic log. It records route
@@ -284,26 +587,6 @@ export class RpcDiagnosticLog {
   }
 }
 
-/** Removes values that could expose credentials, prompts, provider bodies, or local paths. */
-export function sanitizeDiagnosticText(value: string): string {
-  return truncateDiagnostic(
-    value
-      .replace(
-        /\b(authorization)\b\s*(?:[:=]\s*|\s+)[^\r\n,;)}\]]+/gi,
-        (_match, label: string) => `${label}: [REDACTED]`,
-      )
-      .replace(
-        /\b(bearer|token|api[_-]?key|password|secret)\b\s*(?:[:=]\s*|\s+)[^\s,;)}\]]+/gi,
-        (_match, label: string) => `${label}: [REDACTED]`,
-      )
-      .replace(
-        /\b(prompt|messages?|parts?|provider(?:[_-]?payload)?)\b\s*[:=]\s*(?:\[[^\]]*\]|\{[^}]*\}|"[^"]*"|'[^']*'|\S+)/gi,
-        (_match, label: string) => `${label}: [REDACTED]`,
-      )
-      .replace(/(?:\/Users\/[^/\s]+|\/home\/[^/\s]+|~)(?:\/[^\s,;)}\]]*)?/g, "[HOME]"),
-  );
-}
-
 const nonEmptyString = z
   .string()
   .min(1)
@@ -329,7 +612,7 @@ const nonEmptyString = z
  * the answer to an unusable label live in {@link usableLabel}, which the
  * enclosing objects apply once they can see the ids to fall back to.
  */
-const displayLabel = z.string().transform((value) => value.trim());
+const displayLabel = z.string().trim();
 /**
  * The label to show, or the entry's own identity when the catalog's is unusable.
  *
@@ -368,7 +651,9 @@ const skillSlugs = z
   .array(nonEmptyString.refine((value) => /^[A-Za-z0-9_:-]+$/.test(value), "Expected a skill slug"))
   .max(20)
   .optional();
-const uiMessageSchema = z.custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage");
+const uiMessageSchema = z
+  .custom<RpcUiMessage>(isUiMessage, "Expected an AI SDK UIMessage")
+  .refine(isJsonSafeUiMessage, "UIMessage payloads must contain only JSON-safe values");
 const modelSelectionSchema = z.object({
   providerId: nonEmptyString,
   modelId: nonEmptyString,
@@ -411,7 +696,42 @@ const hiddenModelsSchema = z
 const compactionPolicySchema = z.object({
   autoCompaction: z.boolean(),
 });
+/**
+ * Code Mode's policy (VC-471), whole in both directions like compaction's:
+ * the switch and every per-model pin, never a delta.
+ *
+ * A pin is keyed `providerId/modelId` (`codeModeModelKey`). The key shape and
+ * the count cap are the ones main's tolerant reader holds a stored policy to,
+ * stated here so the edge REFUSES what storage would otherwise drop without a
+ * word — a pin the renderer saved and main silently discarded is a setting
+ * that lies about what is configured.
+ */
+const codeModeModelKeySchema = nonEmptyString.refine((key) => {
+  const slash = key.indexOf("/");
+  return slash > 0 && slash < key.length - 1;
+}, "Expected a providerId/modelId key");
+const codeModePolicySchema = z.object({
+  enabled: z.boolean(),
+  models: z
+    .record(codeModeModelKeySchema, z.enum(CODE_MODE_MODES))
+    .refine(
+      (models) => Object.keys(models).length <= CODE_MODE_POLICY_MODELS_MAX,
+      `At most ${CODE_MODE_POLICY_MODELS_MAX} models may have their own Code Mode`,
+    ),
+});
 const modelPickerViewSchema = z.enum(MODEL_PICKER_VIEWS);
+const experimentIdSchema = z.enum(EXPERIMENTS.map(({ id }) => id));
+const experimentFlagSchema = z.object({
+  enabled: z.boolean(),
+  source: z.enum(["default", "storage", "environment"]),
+  visible: z.boolean().optional(),
+});
+const experimentSnapshotSchema = z.object(
+  Object.fromEntries(EXPERIMENTS.map(({ id }) => [id, experimentFlagSchema])) as Record<
+    ExperimentId,
+    typeof experimentFlagSchema
+  >,
+);
 const modelAccessStateSchema = z.enum(["available", "authentication-required", "unavailable"]);
 /**
  * One account's subscription windows (VC-263). Every field is a number the
@@ -481,7 +801,7 @@ const modelAccessSnapshotSchema = z.object({
         hasStoredCredential: z.boolean(),
         usageLimits: usageLimitsSchema.optional(),
       })
-      .transform((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
+      .overwrite((provider) => ({ ...provider, label: usableLabel(provider.label, provider.id) })),
   ),
   models: z.array(
     z
@@ -499,7 +819,7 @@ const modelAccessSnapshotSchema = z.object({
         // should not silently disable attachments across the whole catalog.
         acceptsImageInput: z.boolean().optional().default(true),
       })
-      .transform((model) => ({
+      .overwrite((model) => ({
         ...model,
         label: usableLabel(model.label, `${model.providerId}/${model.modelId}`),
       })),
@@ -516,12 +836,12 @@ const interactionAnswerSchema = z.object({
  * single-prompt shape `readInteractionAnswers` projects, so the edge neither
  * invents an empty array nor keeps a key it was handed empty-handed.
  */
-const interactionResolutionSchema = z
-  .object({
-    optionIds: z.array(nonEmptyString),
-    response: nullableString,
-    answers: z.array(interactionAnswerSchema).optional(),
-  })
+const interactionResolutionInputSchema = z.object({
+  optionIds: z.array(nonEmptyString),
+  response: nullableString,
+  answers: z.array(interactionAnswerSchema).optional(),
+});
+const interactionResolutionSchema = interactionResolutionInputSchema
   // An optional key that arrives explicitly `undefined` parses as a key that is
   // present and unserialisable — Electron's structured clone keeps one where
   // JSON would have dropped it. The ledger encodes a command intent behind a
@@ -532,6 +852,10 @@ const interactionResolutionSchema = z
   );
 
 const commandSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("session.stop"),
+    reason: z.string().trim().min(1).max(4000).optional(),
+  }),
   z.object({
     kind: z.literal("session.create"),
     projectId: nonEmptyString,
@@ -553,6 +877,9 @@ const commandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("message.submit"),
     message: uiMessageSchema,
     delivery: z.enum(["queue", "steer", "replace"]).optional(),
+    // Runtime-only wait boundary, not part of durable intent. Without this
+    // codec field the client asks for opening acceptance but waits for finish.
+    settle: z.enum(["turn", "opened"]).optional(),
     model: z.object({ providerId: nonEmptyString, modelId: nonEmptyString }).nullable().optional(),
     agent: nullableString.optional(),
     variant: nullableString.optional(),
@@ -577,6 +904,26 @@ const commandSchema = z.discriminatedUnion("kind", [
     resolution: interactionResolutionSchema,
   }),
   z.object({ kind: z.literal("adapter.release"), attachmentId: nonEmptyString }),
+  // A person's schedule and its withdrawal. `resume.settle` is deliberately
+  // absent: what became of a schedule is the host's to record, never a client's.
+  z.object({
+    kind: z.literal("resume.schedule"),
+    attentionId: nonEmptyString,
+    attachmentId: nonEmptyString,
+    resumeAt: positiveSafeInteger,
+  }),
+  z.object({ kind: z.literal("resume.cancel"), scheduleId: nonEmptyString }),
+  z.object({
+    kind: z.literal("message.cancel"),
+    messageId: nonEmptyString,
+    expectedRevision: nonNegativeSafeInteger.optional(),
+  }),
+  z.object({
+    kind: z.literal("message.edit"),
+    messageId: nonEmptyString,
+    message: uiMessageSchema,
+    expectedRevision: nonNegativeSafeInteger.optional(),
+  }),
 ]);
 
 const commandRequestSchema = z
@@ -594,10 +941,99 @@ const commandRequestSchema = z
     }
   });
 
+/**
+ * The welcome as `protocol.welcome` answers it: the grammar `isHostWelcome`
+ * checks, stated in zod so the JSON Schema a non-TypeScript client reads can
+ * be derived from it (D2). The actor is the one field left to its guard,
+ * which also refuses the reserved local device.
+ */
+const hostWelcomeSchema = z.object({
+  protocolVersion: positiveSafeInteger,
+  host: z.object({ id: z.uuidv4(), version: z.string().max(128) }),
+  workspace: z.object({ id: z.uuidv4(), epoch: nonNegativeSafeInteger }),
+  actor: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("device"), deviceId: z.uuidv4(), workspaceId: z.uuidv4() }),
+      z.object({ kind: z.literal("session"), sessionId: nonEmptyString, workspaceId: z.uuidv4() }),
+      z.object({ kind: z.literal("worker"), workerId: z.uuidv4(), workspaceId: z.uuidv4() }),
+    ])
+    .refine(isHostActor, "Expected a network actor") satisfies z.ZodType<HostActor>,
+  features: z.array(z.string().max(128)).max(256).readonly(),
+  proof: z.object({ scheme: z.string(), value: z.string() }).nullable(),
+});
+
+// A separate bootstrap preserves the frozen Workspace protocol.welcome output.
+// Scope and actor kind/scope are CLOSED output vocabularies: no tolerant reader
+// marker. Proof scheme is an OPEN reserved string, bounded in UTF-16 code units.
+const hostScopeWelcomeSchema = z.object({
+  scope: z.literal("host"),
+  protocolVersion: positiveSafeInteger,
+  host: z.object({ id: z.uuidv4(), version: z.string().max(128) }),
+  actor: z.object({ kind: z.literal("device"), deviceId: z.uuidv4(), scope: z.literal("host") }),
+  features: z.array(z.string().max(128)).max(256).readonly(),
+  proof: z
+    .object({
+      scheme: z.string().max(HOST_SCOPE_PROOF_LIMITS.scheme),
+      value: z.string().max(HOST_SCOPE_PROOF_LIMITS.value),
+    })
+    .nullable(),
+});
+
 const sessionSubscriptionSchema = z.object({
   sessionId: nonEmptyString,
   afterSequence: nonNegativeSafeInteger.optional(),
   lastEventId: sseCursor.optional(),
+});
+
+/**
+ * `host.logs` (VC-699; HP § Tracing and logs). A cursor is the host's opaque
+ * `<instance>:<seq>`; a page holds at most 500 lines of at most 16 KiB each.
+ * On a bounded door (VC-712) the host also selects every answer and followed
+ * batch by its encoded bytes, inside the connection's frame budget
+ * (`maxResponseBytes`), and says it left lines out (`gap`): 500 lines of
+ * 5 KiB would pass a 2 MiB frame.
+ */
+const logCursor = z.string().min(1).max(64);
+const logsQuerySchema = z.object({
+  after: logCursor.optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  minLevel: z.enum(LOG_LEVELS).optional(),
+});
+/** tRPC hands a resume's tracked id back as `lastEventId`: it wins over `after`. */
+const logsFollowSchema = logsQuerySchema.extend({ lastEventId: logCursor.optional() });
+const logRecordSchema = z
+  .object({
+    ts: z.string(),
+    level: z.enum(LOG_LEVELS),
+    component: z.string(),
+    msg: z.string(),
+  })
+  .catchall(z.json());
+const logsBatchSchema = z.object({
+  entries: z.array(z.object({ cursor: z.string(), record: logRecordSchema })),
+  gap: z.boolean(),
+  cursor: z.string(),
+});
+/** Batches one log stream may hold unsent before it ends `subscription-overflow`. */
+const LOGS_QUEUE_CAPACITY = 256;
+/**
+ * On a bounded door, the bytes one log stream may hold unsent, by the replay
+ * bound each stream is budgeted (twice it, as `session.subscribe` stages), so
+ * a log stream costs a connection no more than any other stream (VC-712).
+ */
+const LOGS_QUEUE_REPLAY_MULTIPLE = 2;
+const LOGS_OVERFLOW_MESSAGE = "The log stream fell behind the host's log";
+const LOGS_SOURCE_FAILURE_MESSAGE = "The host's log stopped";
+
+/** A reader's query as the host reads it: with the door's frame budget, when it has one. */
+function logsRead(query: HostLogsQuery, ctx: { readonly maxResponseBytes?: number }): HostLogsRead {
+  return ctx.maxResponseBytes === undefined ? query : { ...query, maxBytes: ctx.maxResponseBytes };
+}
+
+/** `before` is an event sequence: the page holds frames strictly below it (VC-315). */
+const sessionHistorySchema = z.object({
+  sessionId: nonEmptyString,
+  before: nonNegativeSafeInteger.min(1),
 });
 
 const diagnosticsSubscriptionSchema = z.object({
@@ -616,6 +1052,10 @@ const SESSION_SOURCE_FAILURE_MESSAGE =
  * because resuming from the last event id is the only thing the caller can do.
  */
 const SESSION_OVERFLOW_MESSAGE = "Session subscription fell behind; resume from the last event id";
+const SESSION_FRAME_TOO_LARGE_MESSAGE =
+  "A Session stream frame is larger than this connection's frame bound; read the Session in bounded pages instead";
+/** Frames one Session stream may hold unsent to its consumer, on every door. */
+const SESSION_STREAM_QUEUE_CAPACITY = 4_096;
 const DIAGNOSTICS_OVERFLOW_MESSAGE =
   "Diagnostics subscription fell behind; resume from the last event id";
 
@@ -639,128 +1079,210 @@ const DIAGNOSTICS_OVERFLOW_MESSAGE =
  * same losing race without the consumer ever learning it fell behind — the
  * exact silence this error exists to break.
  */
-function subscriptionOverflowError(message: string): TRPCError {
-  return new TRPCError({ code: "TOO_MANY_REQUESTS", message });
-}
-
-const t = initTRPC.context<SessionRouterContext>().create();
-
-const instrumentedProcedure = t.procedure.use(async ({ ctx, path, next }) => {
-  const transport = ctx.transport ?? "unknown";
-  ctx.diagnostics.record({ procedure: path, phase: "start", transport, code: null, message: null });
-  const performanceStartedAt = readOptionalPerformanceClock(ctx.performanceObserver);
-  const result = await next();
-  if (result.ok) {
-    ctx.diagnostics.record({
-      procedure: path,
-      phase: "success",
-      transport,
-      code: null,
-      message: null,
-    });
-  } else {
-    ctx.diagnostics.record({
-      procedure: path,
-      phase: "error",
-      transport,
-      code: result.error.code,
-      message: result.error.message,
-    });
-  }
-  const performanceEndedAt = readOptionalPerformanceClock(ctx.performanceObserver);
-  recordProcedurePerformance(ctx.performanceObserver, {
-    procedure: path,
-    startedAt: performanceStartedAt,
-    endedAt: performanceEndedAt,
-    outcome: result.ok ? "success" : "error",
-  });
-  return result;
-});
-
-function recordProcedurePerformance(
-  observer: RpcProcedurePerformanceObserver | undefined,
-  input: {
-    procedure: string;
-    startedAt: number | null;
-    endedAt: number | null;
-    outcome: RpcProcedurePerformanceSample["outcome"];
-  },
-): void {
-  // A missing clock endpoint means this sample has no trustworthy duration.
-  // Skipping it is preferable to publishing a plausible-looking zero.
-  if (!observer || input.startedAt === null || input.endedAt === null) return;
-  const durationMs = Math.max(0, input.endedAt - input.startedAt);
-  isolatePerformanceObserver(() => {
-    observer.record({ procedure: input.procedure, durationMs, outcome: input.outcome });
-  });
+function subscriptionOverflowError(message: string): HostProcedureError {
+  return new HostProcedureError("subscription-overflow", message);
 }
 
 /** Creates the transport-independent Session API, currently hosted over Electron IPC. */
 export function createSessionRouter() {
-  return t.router({
-    sessions: t.router({
-      create: instrumentedProcedure
-        .input(
-          z.object({
-            operationId: nonEmptyString,
-            projectId: nonEmptyString,
-            // The Role, stated once: a Ticket Session when set, a project
-            // Session when null — the same nullable field `session.create`
-            // records durably.
-            ticketId: nonEmptyString.nullable(),
-            title: nullableString,
-            // A client-minted UUID the durable Session adopts (VC-358), so a
-            // provisional chat needs no id swap on promotion. Checked at this
-            // edge: a malformed id must never reach the ledger.
-            //
-            // v4 SPECIFICALLY, not any UUID. `docs/BOUNDARIES.md` rule 1 bars a
-            // durable id built from anything machine-local, and a v1 UUID
-            // embeds the minting machine's MAC address. `z.string().uuid()`
-            // admits v1 (and the nil/max ids), so it is the wrong shape for an
-            // id a CLIENT proposes. A durable id derivation is frozen the
-            // moment it ships, which makes this the one line that cannot be
-            // tightened later.
-            requestedSessionId: z.uuidv4().optional(),
-            // The optimistic-open path mints the Session, so it is the path
-            // that has to carry the skills: `attach` composes the prompt from
-            // the record `create` wrote, and never sees this input.
-            skills: skillSlugs,
-            // Same reason, for the same door: a Session's model policy is
-            // recorded by the create and never revisited by the attach.
-            modelOverride: modelOverrideSchema,
-          }),
-        )
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.createSession) {
-            unavailable("Sessions are unavailable on this transport");
-          }
-          return ctx.createSession(input);
-        }),
-      attach: instrumentedProcedure
-        .input(z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }))
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.attachSession) {
-            unavailable("Sessions are unavailable on this transport");
-          }
-          return ctx.attachSession(input);
-        }),
-    }),
-    modelAccess: t.router({
-      inspect: instrumentedProcedure
-        .input(z.object({ refresh: z.boolean().optional() }))
-        .query(async ({ ctx, input }) => {
-          if (!ctx.inspectModelAccess) {
-            unavailable("Model Access is unavailable on this transport");
-          }
-          return modelAccessSnapshotSchema.parse(await ctx.inspectModelAccess(input));
-        }),
-      defaults: instrumentedProcedure.query(({ ctx }) => {
-        if (!ctx.readModelAccessDefaults) {
-          unavailable("Model Access preferences are unavailable on this transport");
+  const subscription = (key: "session.subscribe" | "session.subscribeQueue") =>
+    workspaceProcedure(key, sessionSubscriptionSchema, sessionResource).subscription(
+      async function* ({ ctx, input, signal }) {
+        if (signal?.aborted) return;
+        const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
+        // A bounded door (the WebSocket, D9) refuses a resume it would have
+        // to replay too much for, before the source is opened at all.
+        const bounds = ctx.replayBounds;
+        if (
+          bounds !== undefined &&
+          replayExceedsEvents(
+            bounds,
+            afterSequence,
+            (
+              await hostAnswer(() =>
+                ctx.handlers["session.projection"]({ sessionId: input.sessionId }, ctx.call),
+              )
+            ).throughSequence,
+          )
+        ) {
+          throw resnapshotRequired();
         }
-        return modelAccessDefaultsSchema.parse(ctx.readModelAccessDefaults());
-      }),
-      setDefault: instrumentedProcedure
+        const replay = bounds === undefined ? null : new ReplayMeter(bounds);
+        const frameBound = ctx.maxResponseBytes;
+        // Bounded in bytes too on a bounded door: twice the replay bound holds a
+        // whole admitted replay and the live frames that arrive behind it.
+        const queue = new AsyncQueue<RendererSessionStreamEmission>(
+          SESSION_STREAM_QUEUE_CAPACITY,
+          bounds === undefined ? undefined : 2 * bounds.bytes,
+        );
+        const sourceFailure: { current: { error: unknown } | null } = { current: null };
+        // What this stream ends with instead of a frame it refused to stage:
+        // resnapshot past the replay bounds, response-too-large past the frame
+        // bound. Set once; the source is cancelled with it.
+        const refused: { current: HostProcedureError | null } = { current: null };
+        // Cancels the runtime's side even while its subscribe call is still
+        // replaying: a refused replay is not read any further.
+        const source = new AbortController();
+        const abort = (): void => {
+          source.abort();
+          queue.close();
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        // A subscription's handler runs inside the stream, past the policy
+        // middleware, so its "unavailable" is mapped here.
+        const unsubscribe = await hostAnswer(() =>
+          ctx.handlers[key](
+            {
+              sessionId: input.sessionId,
+              afterSequence,
+              ...(replay === null ? {} : { signal: source.signal }),
+            },
+            ctx.call,
+            {
+              // Live emissions pass through untouched: `rendererFrame` exists to
+              // keep runtime identity and recovery locators behind the server
+              // boundary, and no transient arm carries either. Asked as the
+              // negation of the durable arm so a third transient arm needs no
+              // edit here.
+              emit: (emission) => {
+                if (refused.current !== null) return;
+                // The old network operation's closed output cannot gain a new
+                // union arm. Queue-aware peers opt into the new feature's path;
+                // the private desktop IPC stream keeps its existing vocabulary.
+                if (
+                  key === "session.subscribe" &&
+                  ctx.transport !== "electron-ipc" &&
+                  "kind" in emission &&
+                  emission.kind === "queue"
+                )
+                  return;
+                const durable = isSessionStreamFrame(emission);
+                const sent = durable ? rendererFrame(emission) : emission;
+                if (replay === null) {
+                  queue.push(sent);
+                  return;
+                }
+                // Judged before it is staged: nothing past a bound is ever held.
+                const bytes = jsonByteLength(sent);
+                if (frameBound !== undefined && bytes > frameBound) {
+                  refused.current = new HostProcedureError(
+                    "response-too-large",
+                    SESSION_FRAME_TOO_LARGE_MESSAGE,
+                  );
+                } else if (!replay.admit(bytes, durable)) {
+                  refused.current = resnapshotRequired();
+                } else {
+                  queue.push(sent, bytes);
+                  return;
+                }
+                // A refused replay sends nothing of itself; a live refusal still
+                // drains what came before it.
+                queue.close(replay.replaying);
+                source.abort();
+              },
+              // The runtime's drain died behind this subscription. Ended like an
+              // overflow — buffered contiguous frames still drain, then the
+              // stream closes with an error instead of a clean `done`, because a
+              // clean end here is the one thing the client must never see: it
+              // reads as a stream with nothing left to say, not one that lost
+              // `turn.completed` mid-turn.
+              fail: (error) => {
+                sourceFailure.current = { error };
+                queue.close(false);
+              },
+            },
+          ),
+        );
+        // The runtime replays history before its subscribe call returns, so
+        // a refusal so far was a replay's: nothing of it is sent.
+        replay?.end();
+        if (refused.current !== null) {
+          signal?.removeEventListener("abort", abort);
+          unsubscribe();
+          throw refused.current;
+        }
+        if (signal?.aborted) {
+          unsubscribe();
+          return;
+        }
+        try {
+          // A transient emission is tracked by the durable sequence it was
+          // emitted beside, never by a suffixed id: `sseCursor` rejects one on
+          // resubscribe, and duplicate ids are safe on both transports. A
+          // reconnect from an overlay id therefore replays durable history and
+          // is served a fresh baseline.
+          for await (const emission of queue) {
+            yield isRendererStreamTransient(emission)
+              ? tracked(String(emission.throughSequence), emission)
+              : tracked(String(emission.sequence), emission);
+          }
+          // The loop ends the same way on a clean close and on an overflow, so
+          // this throw is the only thing that tells them apart downstream. It
+          // sits inside the `try` on purpose: `finally` still runs on the way
+          // out, so `unsubscribe()` fires before the error leaves the
+          // generator and no runtime listener outlives the stream it fed.
+          // A consumer that tears the iterator down instead resumes at the
+          // `yield` with a return completion and never reaches this line —
+          // an overflow the client already walked away from stays a diagnostic.
+          // A frame refused after the replay ended the stream, once what
+          // came before it drained.
+          if (refused.current !== null) throw refused.current;
+          if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
+          // A source failure ends the same way an overflow does, and for the
+          // same reason: whatever this stream still owed its consumer is now
+          // only in the ledger, and only an error makes the client go back
+          // for it.
+          if (sourceFailure.current !== null) {
+            throw new HostProcedureError(
+              "subscription-source-failed",
+              SESSION_SOURCE_FAILURE_MESSAGE,
+              sourceFailure.current.error,
+            );
+          }
+        } finally {
+          signal?.removeEventListener("abort", abort);
+          unsubscribe();
+          if (queue.overflowed) {
+            ctx.diagnostics.record({
+              procedure: key,
+              phase: "error",
+              transport: ctx.transport ?? "unknown",
+              code: SUBSCRIPTION_OVERFLOW_CODE,
+              message: SESSION_OVERFLOW_MESSAGE,
+            });
+          }
+          if (sourceFailure.current !== null) {
+            ctx.diagnostics.record({
+              procedure: key,
+              phase: "error",
+              transport: ctx.transport ?? "unknown",
+              code: SUBSCRIPTION_SOURCE_FAILURE_CODE,
+              message: SESSION_SOURCE_FAILURE_MESSAGE,
+            });
+          }
+        }
+      },
+    );
+  // One schema/handler projection, two independently frozen wire features.
+  // hostModels admission is stricter; its domain command remains modelAccess.
+  function modelAccessProcedures(namespace: "modelAccess" | "hostModels") {
+    return {
+      inspect: hostProcedure(`${namespace}.inspect`)
+        .input(z.object({ refresh: z.boolean().optional() }))
+        .output(modelAccessSnapshotSchema)
+        .query(async ({ ctx, input }) =>
+          modelAccessSnapshotSchema.parse(
+            await ctx.handlers["modelAccess.inspect"](input, ctx.call),
+          ),
+        ),
+      defaults: hostProcedure(`${namespace}.defaults`)
+        .output(modelAccessDefaultsSchema)
+        .query(async ({ ctx }) =>
+          modelAccessDefaultsSchema.parse(
+            await ctx.handlers["modelAccess.defaults"](undefined, ctx.call),
+          ),
+        ),
+      setDefault: hostProcedure(`${namespace}.setDefault`)
         .input(
           z
             .object({ purpose: modelPurposeSchema, selection: modelSelectionSchema.nullable() })
@@ -772,187 +1294,416 @@ export function createSessionRouter() {
               "The Board default cannot be cleared — choose a model instead",
             ),
         )
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeModelAccessDefault) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return modelAccessDefaultsSchema.parse(
-            await ctx.writeModelAccessDefault(input.purpose, input.selection),
-          );
-        }),
-      hiddenModels: instrumentedProcedure.query(({ ctx }) => {
-        if (!ctx.readHiddenModels) {
-          unavailable("Model Access preferences are unavailable on this transport");
-        }
-        return hiddenModelsSchema.parse(ctx.readHiddenModels());
-      }),
-      setHiddenModels: instrumentedProcedure
+        .output(modelAccessDefaultsSchema)
+        .mutation(async ({ ctx, input }) =>
+          modelAccessDefaultsSchema.parse(
+            await ctx.handlers["modelAccess.setDefault"](input, ctx.call),
+          ),
+        ),
+      hiddenModels: hostProcedure(`${namespace}.hiddenModels`)
+        .output(hiddenModelsSchema)
+        .query(async ({ ctx }) =>
+          hiddenModelsSchema.parse(
+            await ctx.handlers["modelAccess.hiddenModels"](undefined, ctx.call),
+          ),
+        ),
+      setHiddenModels: hostProcedure(`${namespace}.setHiddenModels`)
         .input(hiddenModelsSchema)
+        .output(hiddenModelsSchema)
         .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeHiddenModels) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          await ctx.writeHiddenModels(input);
+          await ctx.handlers["modelAccess.setHiddenModels"](input, ctx.call);
           return input;
         }),
-      compactionPolicy: instrumentedProcedure.query(({ ctx }) => {
-        if (!ctx.readCompactionPolicy) {
-          unavailable("Model Access preferences are unavailable on this transport");
-        }
-        return compactionPolicySchema.parse(ctx.readCompactionPolicy());
-      }),
-      setCompactionPolicy: instrumentedProcedure
+      compactionPolicy: hostProcedure(`${namespace}.compactionPolicy`)
+        .output(compactionPolicySchema)
+        .query(async ({ ctx }) =>
+          compactionPolicySchema.parse(
+            await ctx.handlers["modelAccess.compactionPolicy"](undefined, ctx.call),
+          ),
+        ),
+      setCompactionPolicy: hostProcedure(`${namespace}.setCompactionPolicy`)
         .input(compactionPolicySchema)
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeCompactionPolicy) {
-            unavailable("Model Access preferences are unavailable on this transport");
-          }
-          return compactionPolicySchema.parse(await ctx.writeCompactionPolicy(input));
-        }),
-      pickerView: instrumentedProcedure.query(({ ctx }) => {
-        if (!ctx.readModelPickerView) {
-          unavailable("Model Access preferences are unavailable on this transport");
-        }
-        return modelPickerViewSchema.parse(ctx.readModelPickerView());
-      }),
-      setPickerView: instrumentedProcedure
+        .output(compactionPolicySchema)
+        .mutation(async ({ ctx, input }) =>
+          compactionPolicySchema.parse(
+            await ctx.handlers["modelAccess.setCompactionPolicy"](input, ctx.call),
+          ),
+        ),
+      codeModePolicy: hostProcedure(`${namespace}.codeModePolicy`)
+        .output(codeModePolicySchema)
+        .query(async ({ ctx }) =>
+          codeModePolicySchema.parse(
+            await ctx.handlers["modelAccess.codeModePolicy"](undefined, ctx.call),
+          ),
+        ),
+      setCodeModePolicy: hostProcedure(`${namespace}.setCodeModePolicy`)
+        .input(codeModePolicySchema)
+        .output(codeModePolicySchema)
+        .mutation(async ({ ctx, input }) =>
+          codeModePolicySchema.parse(
+            await ctx.handlers["modelAccess.setCodeModePolicy"](input, ctx.call),
+          ),
+        ),
+      pickerView: hostProcedure(`${namespace}.pickerView`)
+        .output(modelPickerViewSchema)
+        .query(async ({ ctx }) =>
+          modelPickerViewSchema.parse(
+            await ctx.handlers["modelAccess.pickerView"](undefined, ctx.call),
+          ),
+        ),
+      setPickerView: hostProcedure(`${namespace}.setPickerView`)
         .input(modelPickerViewSchema)
-        .mutation(async ({ ctx, input }) => {
-          if (!ctx.writeModelPickerView) {
-            unavailable("Model Access preferences are unavailable on this transport");
+        .output(modelPickerViewSchema)
+        .mutation(async ({ ctx, input }) =>
+          modelPickerViewSchema.parse(
+            await ctx.handlers["modelAccess.setPickerView"](input, ctx.call),
+          ),
+        ),
+    };
+  }
+  return catalogRouter({
+    // Sign-ins on a host (VC-702): their own module, this router's family.
+    ...signInProcedures(),
+    protocol: {
+      // The v1 bootstrap read: base, in no feature, so a client can always
+      // ask what its handshake negotiated before anything else.
+      welcome: hostProcedure("protocol.welcome")
+        .output(hostWelcomeSchema)
+        .query(({ ctx }) => {
+          if (ctx.welcome === undefined || "scope" in ctx.welcome) {
+            throw new HostProcedureError(
+              "operation-unavailable",
+              "This connection negotiated no welcome",
+            );
           }
-          return modelPickerViewSchema.parse(await ctx.writeModelPickerView(input));
+          return ctx.welcome;
         }),
-    }),
-    session: t.router({
-      snapshot: instrumentedProcedure
-        .input(z.object({ sessionId: nonEmptyString }))
-        .query(async ({ ctx, input }) => rendererSnapshot(await ctx.runtime.snapshot(input))),
+      hostWelcome: hostProcedure("protocol.hostWelcome")
+        .output(hostScopeWelcomeSchema)
+        .query(({ ctx }) => {
+          if (ctx.welcome === undefined || !("scope" in ctx.welcome)) {
+            throw new HostProcedureError(
+              "operation-unavailable",
+              "This connection negotiated no host welcome",
+            );
+          }
+          return ctx.welcome;
+        }),
+    },
+    sessions: {
+      create: workspaceProcedure(
+        "sessions.create",
+        z.object({
+          operationId: nonEmptyString,
+          projectId: nonEmptyString,
+          // The Role, stated once: a Ticket Session when set, a project
+          // Session when null — the same nullable field `session.create`
+          // records durably.
+          ticketId: nonEmptyString.nullable(),
+          title: nullableString,
+          // A client-minted UUID the durable Session adopts (VC-358), so a
+          // provisional chat needs no id swap on promotion. Checked at this
+          // edge: a malformed id must never reach the ledger.
+          //
+          // v4 SPECIFICALLY, not any UUID. `docs/BOUNDARIES.md` rule 1 bars a
+          // durable id built from anything machine-local, and a v1 UUID
+          // embeds the minting machine's MAC address. `z.string().uuid()`
+          // admits v1 (and the nil/max ids), so it is the wrong shape for an
+          // id a CLIENT proposes. A durable id derivation is frozen the
+          // moment it ships, which makes this the one line that cannot be
+          // tightened later.
+          requestedSessionId: z.uuidv4().optional(),
+          // The optimistic-open path mints the Session, so it is the path
+          // that has to carry the skills: `attach` composes the prompt from
+          // the record `create` wrote, and never sees this input.
+          skills: skillSlugs,
+          // Same reason, for the same door: a Session's model policy is
+          // recorded by the create and never revisited by the attach.
+          modelOverride: modelOverrideSchema,
+          // The first message, for automatic model choice (VC-432). The
+          // decision clips what it reads; this bounds what crosses the edge.
+          autoSelect: z.object({ request: z.string().max(200_000) }).optional(),
+        }),
+        // The Workspace is the project the Session is born in.
+        (input) => ({ kind: PROJECT_RESOURCE, id: input.projectId }),
+      ).mutation(({ ctx, input }) => ctx.handlers["sessions.create"](input, ctx.call)),
+      attach: workspaceProcedure(
+        "sessions.attach",
+        z.object({ operationId: nonEmptyString, sessionId: nonEmptyString }),
+        sessionResource,
+      ).mutation(({ ctx, input }) => ctx.handlers["sessions.attach"](input, ctx.call)),
+    },
+    settings: {
+      experiments: hostProcedure("settings.experiments")
+        .output(experimentSnapshotSchema)
+        .query(async ({ ctx }) =>
+          experimentSnapshotSchema.parse(
+            await ctx.handlers["settings.experiments"](undefined, ctx.call),
+          ),
+        ),
+      setExperiment: hostProcedure("settings.setExperiment")
+        .input(z.object({ id: experimentIdSchema, enabled: z.boolean() }))
+        .output(experimentSnapshotSchema)
+        .mutation(async ({ ctx, input }) =>
+          experimentSnapshotSchema.parse(
+            await ctx.handlers["settings.setExperiment"](input, ctx.call),
+          ),
+        ),
+    },
+    modelAccess: modelAccessProcedures("modelAccess"),
+    hostModels: modelAccessProcedures("hostModels"),
+    session: {
+      // The socket's Session reads, forced to the caller's Workspace (D4).
+      list: workspaceProcedure("session.list", sessionListInput, readWorkspace)
+        .output(sessionListOutput)
+        .query(({ ctx, input: { projectId, ...filters } }) =>
+          readSession(
+            (read) => ctx.handlers["session.list"](read, ctx.call),
+            projectId,
+            filters,
+            sessionListOutput,
+          ),
+        ),
+      show: workspaceProcedure("session.show", sessionHandleInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            (read) => ctx.handlers["session.show"](read, ctx.call),
+            input.projectId,
+            { id: input.session },
+            sessionReadOutput,
+          ),
+        ),
+      peek: workspaceProcedure("session.peek", sessionPeekInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            (read) => ctx.handlers["session.peek"](read, ctx.call),
+            input.projectId,
+            { id: input.session, lines: input.lines },
+            sessionReadOutput,
+          ),
+        ),
+      answer: workspaceProcedure("session.answer", sessionHandleInput, readWorkspace)
+        .output(sessionReadOutput)
+        .query(({ ctx, input }) =>
+          readSession(
+            (read) => ctx.handlers["session.answer"](read, ctx.call),
+            input.projectId,
+            { id: input.session },
+            sessionReadOutput,
+          ),
+        ),
+      // The listing rows the desktop's own rail reads (VC-713): full ids, so a
+      // remote Client subscribes from a row. Forced to the named Workspace.
+      listing: workspaceProcedure("session.listing", sessionListingInput, readWorkspace)
+        .output(sessionListingPageSchema)
+        .query(async ({ ctx, input }) =>
+          listingWire(await ctx.handlers["session.listing"](input, ctx.call)),
+        ),
+      // One ticket's: the ticket is the resource, so a ticket in another
+      // Workspace (or none) is refused before anything is read.
+      listingForTicket: workspaceProcedure(
+        "session.listingForTicket",
+        sessionListingForTicketInput,
+        (input): CatalogWorkspaceResource => ({
+          kind: BOARD_RESOURCE_KINDS.ticket,
+          id: input.ticketId,
+        }),
+      )
+        .output(sessionListingPageSchema)
+        .query(async ({ ctx, input }) =>
+          listingWire(await ctx.handlers["session.listingForTicket"](input, ctx.call)),
+        ),
+      snapshot: workspaceProcedure(
+        "session.snapshot",
+        z.object({ sessionId: nonEmptyString }),
+        sessionResource,
+      )
+        .output(sessionSnapshotOutputSchema)
+        .query(async ({ ctx, input }) =>
+          rendererSnapshot(
+            await ctx.handlers["session.snapshot"](input, ctx.call),
+            ctx.operations === undefined || ctx.operations.has("session.cancelQueued"),
+          ),
+        ),
+      // Older transcript, a bounded page at a time, for a surface scrolling
+      // back past the snapshot's tail (VC-315). The engine owns the bound.
+      history: workspaceProcedure("session.history", sessionHistorySchema, sessionResource)
+        .output(sessionHistoryOutputSchema)
+        .query(async ({ ctx, input }) =>
+          rendererHistoryPage(await ctx.handlers["session.history"](input, ctx.call)),
+        ),
+      // Pictures use their own optional feature and never enlarge transcript frames.
+      picture: workspaceProcedure(
+        "session.picture",
+        z.object({
+          sessionId: nonEmptyString,
+          pictureId: nonEmptyString,
+          offset: z.number().int().nonnegative().multipleOf(3).optional(),
+        }),
+        sessionResource,
+      )
+        .output(
+          z.object({
+            data: z
+              .string()
+              .max(256 * 1024)
+              .nullable(),
+            mimeType: z.string().nullable(),
+            nextOffset: z.number().int().nonnegative().nullable(),
+          }),
+        )
+        .query(({ ctx, input }) => ctx.handlers["session.picture"](input, ctx.call)),
       // The same durable state without the transcript replay beside it. A
       // surface that already holds the stream re-reads Session state often and
       // the frames never — and shipping them anyway costs an artifact read per
       // transcript event and a structured clone of the whole transcript, per
       // read. `snapshot` above stays for the callers that replay history.
-      projection: instrumentedProcedure
-        .input(z.object({ sessionId: nonEmptyString }))
-        .query(async ({ ctx, input }) => rendererProjection(await ctx.runtime.projection(input))),
-      subscribe: instrumentedProcedure
-        .input(sessionSubscriptionSchema)
+      projection: workspaceProcedure(
+        "session.projection",
+        z.object({ sessionId: nonEmptyString }),
+        sessionResource,
+      )
+        .output(sessionProjectionOutputSchema)
+        .query(async ({ ctx, input }) =>
+          rendererProjection(
+            await ctx.handlers["session.projection"](input, ctx.call),
+            ctx.operations === undefined || ctx.operations.has("session.cancelQueued"),
+          ),
+        ),
+      subscribe: subscription("session.subscribe"),
+      subscribeQueue: subscription("session.subscribeQueue"),
+      command: workspaceProcedure(
+        "session.command",
+        commandRequestSchema,
+        // `session.create`, the one kind that names no Session, is withheld
+        // before this resolves; every other kind requires `sessionId`.
+        (input) => sessionResource({ sessionId: input.sessionId! }),
+      )
+        .output(sessionCommandOutputSchema)
+        .mutation(async ({ ctx, input }) => {
+          // Start and queue-mutation kinds have their own entries and are
+          // withheld here (`refusedIntents`), whoever asks.
+          try {
+            return rendererCommandResult(
+              await ctx.handlers["session.command"](
+                toSessionRuntimeCommandRequest(input),
+                ctx.call,
+              ),
+            );
+          } catch (error) {
+            if (error instanceof SuperviseSessionError) {
+              throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+            }
+            throw error;
+          }
+        }),
+      cancelQueued: workspaceProcedure(
+        "session.cancelQueued",
+        z.object({
+          commandId: nonEmptyString,
+          sessionId: nonEmptyString,
+          messageId: nonEmptyString,
+          expectedRevision: nonNegativeSafeInteger.optional(),
+        }),
+        sessionResource,
+      )
+        .output(sessionCommandOutputSchema)
+        .mutation(async ({ ctx, input }) =>
+          rendererCommandResult(await ctx.handlers["session.cancelQueued"](input, ctx.call)),
+        ),
+      editQueued: workspaceProcedure(
+        "session.editQueued",
+        z.object({
+          commandId: nonEmptyString,
+          sessionId: nonEmptyString,
+          messageId: nonEmptyString,
+          message: uiMessageSchema,
+          expectedRevision: nonNegativeSafeInteger.optional(),
+        }),
+        sessionResource,
+      )
+        .output(sessionCommandOutputSchema)
+        .mutation(async ({ ctx, input }) =>
+          rendererCommandResult(await ctx.handlers["session.editQueued"](input, ctx.call)),
+        ),
+      // A pending interaction the user walked away from. The handler fixes the
+      // reason rather than taking it as input: a person's door can honestly
+      // report only that they left it undecided.
+      cancelInteraction: workspaceProcedure(
+        "session.cancelInteraction",
+        z.object({ sessionId: nonEmptyString, interactionId: nonEmptyString }),
+        sessionResource,
+      ).mutation(({ ctx, input }) => ctx.handlers["session.cancelInteraction"](input, ctx.call)),
+      reconcile: workspaceProcedure(
+        "session.reconcile",
+        z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }),
+        sessionResource,
+      ).mutation(({ ctx, input }) => ctx.handlers["session.reconcile"](input, ctx.call)),
+    },
+    logs: {
+      tail: hostProcedure("logs.tail")
+        .input(logsQuerySchema)
+        .output(logsBatchSchema)
+        .query(async ({ ctx, input }) => {
+          const page = await ctx.handlers["logs.tail"](logsRead(input, ctx), ctx.call);
+          return { ...page, entries: [...page.entries] };
+        }),
+      follow: hostProcedure("logs.follow")
+        .input(logsFollowSchema)
         .subscription(async function* ({ ctx, input, signal }) {
           if (signal?.aborted) return;
-          const afterSequence = maxCursor(input.afterSequence, input.lastEventId);
-          const queue = new AsyncQueue<RendererSessionStreamEmission>();
-          const sourceFailure: { current: { error: unknown } | null } = { current: null };
-          const unsubscribe = await ctx.runtime.subscribe(
-            { sessionId: input.sessionId, afterSequence },
-            // Live emissions pass through untouched: `rendererFrame` exists to
-            // keep runtime identity and recovery locators behind the server
-            // boundary, and no transient arm carries either. Asked as the
-            // negation of the durable arm so a third transient arm needs no
-            // edit here.
-            (emission) =>
-              queue.push(isSessionStreamFrame(emission) ? rendererFrame(emission) : emission),
-            // The runtime's drain died behind this subscription. Ended like an
-            // overflow — buffered contiguous frames still drain, then the
-            // stream closes with an error instead of a clean `done`, because a
-            // clean end here is the one thing the client must never see: it
-            // reads as a stream with nothing left to say, not one that lost
-            // `turn.completed` mid-turn.
-            (error) => {
-              sourceFailure.current = { error };
-              queue.close(false);
-            },
-          );
-          if (signal?.aborted) {
-            unsubscribe();
-            return;
-          }
-          const abort = () => queue.close();
+          const { lastEventId, ...query } = input;
+          const after = lastEventId ?? query.after;
+          // Bounded in bytes too on a bounded door: each batch is inside the
+          // frame budget, and the stream holds at most its replay share unsent.
+          // (Never less than one whole batch.)
+          const maxQueuedBytes =
+            ctx.replayBounds === undefined
+              ? undefined
+              : Math.max(
+                  LOGS_QUEUE_REPLAY_MULTIPLE * ctx.replayBounds.bytes,
+                  ctx.maxResponseBytes ?? 0,
+                );
+          const queue = new AsyncQueue<HostLogsBatch>(LOGS_QUEUE_CAPACITY, maxQueuedBytes);
+          const failure: { current: { error: unknown } | null } = { current: null };
+          const abort = (): void => queue.close();
           signal?.addEventListener("abort", abort, { once: true });
+          const unsubscribe = await hostAnswer(() =>
+            ctx.handlers["logs.follow"](
+              logsRead({ ...query, ...(after === undefined ? {} : { after }) }, ctx),
+              ctx.call,
+              {
+                emit: (batch) =>
+                  queue.push(batch, maxQueuedBytes === undefined ? 0 : jsonByteLength(batch)),
+                fail: (error) => {
+                  failure.current = { error };
+                  queue.close(false);
+                },
+              },
+            ),
+          );
           try {
-            // A transient emission is tracked by the durable sequence it was
-            // emitted beside, never by a suffixed id: `sseCursor` rejects one on
-            // resubscribe, and duplicate ids are safe on both transports. A
-            // reconnect from an overlay id therefore replays durable history and
-            // is served a fresh baseline.
-            for await (const emission of queue) {
-              yield isRendererStreamTransient(emission)
-                ? tracked(String(emission.throughSequence), emission)
-                : tracked(String(emission.sequence), emission);
-            }
-            // The loop ends the same way on a clean close and on an overflow, so
-            // this throw is the only thing that tells them apart downstream. It
-            // sits inside the `try` on purpose: `finally` still runs on the way
-            // out, so `unsubscribe()` fires before the error leaves the
-            // generator and no runtime listener outlives the stream it fed.
-            // A consumer that tears the iterator down instead resumes at the
-            // `yield` with a return completion and never reaches this line —
-            // an overflow the client already walked away from stays a diagnostic.
-            if (queue.overflowed) throw subscriptionOverflowError(SESSION_OVERFLOW_MESSAGE);
-            // A source failure ends the same way an overflow does, and for the
-            // same reason: whatever this stream still owed its consumer is now
-            // only in the ledger, and only an error makes the client go back
-            // for it.
-            if (sourceFailure.current !== null) {
-              throw new TRPCError({
-                code: "INTERNAL_SERVER_ERROR",
-                message: SESSION_SOURCE_FAILURE_MESSAGE,
-                cause: sourceFailure.current.error,
-              });
+            // Each batch is tracked by its newest line: a resume asks for what follows it.
+            for await (const batch of queue) yield tracked(batch.cursor, batch);
+            if (queue.overflowed) throw subscriptionOverflowError(LOGS_OVERFLOW_MESSAGE);
+            // A source that died never reads as a log with nothing more to say.
+            if (failure.current !== null) {
+              throw new HostProcedureError(
+                "subscription-source-failed",
+                LOGS_SOURCE_FAILURE_MESSAGE,
+                failure.current.error,
+              );
             }
           } finally {
             signal?.removeEventListener("abort", abort);
             unsubscribe();
-            if (queue.overflowed) {
-              ctx.diagnostics.record({
-                procedure: "session.subscribe",
-                phase: "error",
-                transport: ctx.transport ?? "unknown",
-                code: SUBSCRIPTION_OVERFLOW_CODE,
-                message: SESSION_OVERFLOW_MESSAGE,
-              });
-            }
-            if (sourceFailure.current !== null) {
-              ctx.diagnostics.record({
-                procedure: "session.subscribe",
-                phase: "error",
-                transport: ctx.transport ?? "unknown",
-                code: SUBSCRIPTION_SOURCE_FAILURE_CODE,
-                message: SESSION_SOURCE_FAILURE_MESSAGE,
-              });
-            }
           }
         }),
-      command: instrumentedProcedure
-        .input(commandRequestSchema)
-        .mutation(async ({ ctx, input }) => {
-          if (
-            ctx.transport === "electron-ipc" &&
-            (input.command.kind === "session.create" || input.command.kind === "adapter.attach")
-          ) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "Use the product Session start and recovery routes.",
-            });
-          }
-          return rendererCommandResult(
-            await ctx.runtime.command(toSessionRuntimeCommandRequest(input)),
-          );
-        }),
-      // A pending interaction the user walked away from. The reason is fixed
-      // here rather than taken as input: this transport is the user seam, and
-      // the only thing it can honestly report is that they left it undecided.
-      cancelInteraction: instrumentedProcedure
-        .input(z.object({ sessionId: nonEmptyString, interactionId: nonEmptyString }))
-        .mutation(({ ctx, input }) =>
-          ctx.runtime.cancelInteraction({ ...input, reason: "abandoned" }),
-        ),
-      reconcile: instrumentedProcedure
-        .input(z.object({ sessionId: nonEmptyString, attachmentId: nonEmptyString }))
-        .mutation(({ ctx, input }) => ctx.runtime.reconcile(input)),
-    }),
-    labDiagnostics: t.router({
-      list: instrumentedProcedure
+    },
+    labDiagnostics: {
+      list: hostProcedure("labDiagnostics.list")
         .input(
           z
             .object({
@@ -962,7 +1713,7 @@ export function createSessionRouter() {
             .optional(),
         )
         .query(({ ctx, input }) => ctx.diagnostics.list(input)),
-      subscribe: instrumentedProcedure
+      subscribe: hostProcedure("labDiagnostics.subscribe")
         .input(diagnosticsSubscriptionSchema)
         .subscription(async function* ({ ctx, input, signal }) {
           if (signal?.aborted) return;
@@ -998,7 +1749,7 @@ export function createSessionRouter() {
             }
           }
         }),
-    }),
+    },
   });
 }
 
@@ -1010,6 +1761,7 @@ function rendererCommandResult(result: SessionRuntimeCommandResult): RendererSes
     // Nullable rather than optional, so the field survives every transport
     // rather than only the one that carries `undefined` (BOUNDARIES.md rule 3).
     refusal: result.refusal,
+    ...(result.stop === undefined ? {} : { stop: result.stop }),
   };
 }
 
@@ -1022,8 +1774,14 @@ function rendererFrame(frame: SessionStreamFrame): RendererSessionStreamFrame {
   return { ...frame, event: scrubSessionEvent(frame.event) };
 }
 
-function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
-  projection: SessionPresentationProjection;
+export type RendererSessionProjection = SessionPresentationProjection &
+  Pick<SessionRuntimeProjectionSnapshot["projection"], "queue" | "queueRevision">;
+
+function rendererProjection(
+  snapshot: SessionRuntimeProjectionSnapshot,
+  includeQueue: boolean,
+): {
+  projection: RendererSessionProjection;
   throughSequence: number;
 } {
   const source = snapshot.projection;
@@ -1031,8 +1789,14 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   // so it drops the `readonly` the published type wears (VC-393). The value
   // leaves here as that type and nothing mutates it afterwards.
   const projection: {
-    -readonly [K in keyof SessionPresentationProjection]?: SessionPresentationProjection[K];
+    -readonly [K in keyof RendererSessionProjection]?: RendererSessionProjection[K];
   } = {};
+  // Old peers did not negotiate these optional output fields. Keep their
+  // strict JSON readers on the frozen projection shape, even if work exists.
+  if (includeQueue) {
+    if (source.queue !== undefined) projection.queue = source.queue;
+    if (source.queueRevision !== undefined) projection.queueRevision = source.queueRevision;
+  }
   if (source.session !== undefined) projection.session = source.session;
   if (source.status !== undefined) projection.status = source.status;
   if (source.attention !== undefined) {
@@ -1054,105 +1818,166 @@ function rendererProjection(snapshot: SessionRuntimeProjectionSnapshot): {
   if (source.signal !== undefined) projection.signal = source.signal;
   if (source.modelSelection !== undefined) projection.modelSelection = source.modelSelection;
   if (source.modelTier !== undefined) projection.modelTier = source.modelTier;
+  if (source.modelAuto !== undefined) projection.modelAuto = source.modelAuto;
   if (source.turnActive !== undefined) projection.turnActive = source.turnActive;
   if (source.lastActivityAt !== undefined) projection.lastActivityAt = source.lastActivityAt;
   if (source.bornTicketless !== undefined) projection.bornTicketless = source.bornTicketless;
+  // The plan as it stands, whatever part of the transcript a surface holds (VC-315).
+  if (source.todoList !== undefined) projection.todoList = source.todoList;
   if (source.liveExecutor !== undefined) {
     projection.liveExecutor = source.liveExecutor === null ? null : { id: source.liveExecutor.id };
     // Derived from the same attachment in the same branch, so the identity a
     // surface shows and the policy it shows beside it can never be about two
     // different attachments (VC-285). The codec owns what may cross; this edge
     // only composes it, as it does for every other scrubbed field here.
-    projection.authority = scrubSessionAuthority(source.liveExecutor);
+  }
+  // Derived from the Session's own commands and receipts, which never cross
+  // this edge themselves: the surface gets the one schedule it may draw.
+  if (source.commands !== undefined && source.receipts !== undefined) {
+    projection.scheduledResume = presentedScheduledResume(source);
   }
   return {
-    projection: projection as SessionPresentationProjection,
+    projection: projection as RendererSessionProjection,
     throughSequence: snapshot.throughSequence,
   };
 }
 
-function rendererSnapshot(snapshot: SessionRuntimeSnapshot): {
-  projection: SessionPresentationProjection;
+/** One window of transcript as the renderer receives it: scrubbed frames, then the older cursor. */
+export interface RendererSessionHistoryPage {
   frames: RendererSessionStreamFrame[];
+  before: number | null;
+}
+
+function rendererHistoryPage(page: SessionHistoryPage): RendererSessionHistoryPage {
+  return { frames: page.frames.map(rendererFrame), before: page.before };
+}
+
+/**
+ * The projection checkpoint plus the newest window of frames (VC-315). The
+ * window's own artifact list stays behind: every one of them is already inlined
+ * on its frame.
+ *
+ * `before` and `latestReply` ride only when they say something, like the
+ * projection's own fields: a window that reaches the first event and a turn
+ * with no reply read the same absent as present-and-null, and a snapshot that
+ * says neither is the exact reply an older Client already parses (VC-669's
+ * N−1 recording).
+ */
+function rendererSnapshot(
+  snapshot: SessionRuntimeSnapshot,
+  includeQueue: boolean,
+): {
+  projection: RendererSessionProjection;
   throughSequence: number;
+  frames: RendererSessionStreamFrame[];
+  before?: number;
+  latestReply?: SessionLatestReply;
 } {
   return {
-    ...rendererProjection(snapshot),
+    ...rendererProjection(snapshot, includeQueue),
     frames: snapshot.frames.map(rendererFrame),
+    ...(snapshot.before === null ? {} : { before: snapshot.before }),
+    ...(snapshot.latestReply === null ? {} : { latestReply: snapshot.latestReply }),
   };
 }
 
-function unavailable(message: string): never {
-  throw new TRPCError({ code: "NOT_IMPLEMENTED", message });
+export type AppRouter = ReturnType<typeof createSessionRouter>;
+
+/**
+ * Publishable wire grammar for every catalog procedure, including subscriptions
+ * (their output is one untracked emission, not the transport's SSE envelope).
+ * No-input and void-result calls have no JSON value: null is the document
+ * sentinel, explicitly distinguished by the booleans, never a runtime rewrite.
+ * The two command-input adapters describe custom/transform parsers without
+ * weakening their runtime checks. Refinements remain runtime-only constraints.
+ */
+function publishCommandInput(input: z.ZodType | undefined): z.ZodType {
+  if (
+    !(input instanceof z.ZodObject) ||
+    !(input.shape.command instanceof z.ZodDiscriminatedUnion)
+  ) {
+    throw new Error("session.command needs a structural command envelope for publication");
+  }
+  const commandWireSchema = z.union(
+    input.shape.command.options.map((option) => {
+      if (!(option instanceof z.ZodObject) || !(option.shape.kind instanceof z.ZodLiteral)) {
+        throw new Error("session.command needs object alternatives with literal kinds");
+      }
+      if (
+        option.shape.kind.value === "message.submit" ||
+        option.shape.kind.value === "message.edit"
+      ) {
+        return option.extend({
+          message: uiMessageWireSchema.extend({
+            id: nonEmptyString,
+            parts: uiMessageWireSchema.shape.parts.min(1),
+          }),
+        });
+      }
+      if (option.shape.kind.value === "interaction.resolve") {
+        return option.extend({ resolution: interactionResolutionInputSchema });
+      }
+      return option;
+    }),
+  );
+  // Preserve the actual envelope's required fields, bounds and refinements.
+  // Rebuilding it here would hide a breaking router change from the CI diff.
+  return input.safeExtend({ command: commandWireSchema });
 }
 
-export type AppRouter = ReturnType<typeof createSessionRouter>;
+export function sessionProcedureSchemas(
+  router: AppRouter = createSessionRouter(),
+): Record<string, ProcedureSchema> {
+  const supplementalOutputs: Record<string, z.ZodType> = {
+    "sessions.create": z.object({ sessionId: z.string() }),
+    "sessions.attach": sessionAttachOutputSchema,
+    "session.subscribe": legacyStreamEmissionSchema,
+    "session.subscribeQueue": streamEmissionSchema,
+    "session.cancelInteraction": z.null(),
+    "session.reconcile": z.null(),
+    "labDiagnostics.list": z.array(diagnosticEntrySchema),
+    "labDiagnostics.subscribe": diagnosticEntrySchema,
+    ...signInSupplementalOutputs,
+    "logs.follow": logsBatchSchema,
+  };
+  return procedureSchemas(
+    router,
+    supplementalOutputs,
+    (key, input) => {
+      if (key === "session.command") return publishCommandInput(input);
+      if (key === "session.editQueued") {
+        if (!(input instanceof z.ZodObject))
+          throw new Error("session.editQueued needs a structural message envelope for publication");
+        return input.safeExtend({
+          message: uiMessageWireSchema.extend({
+            id: nonEmptyString,
+            parts: uiMessageWireSchema.shape.parts.min(1),
+          }),
+        });
+      }
+      return input ?? z.null();
+    },
+    ["session.cancelInteraction", "session.reconcile", ...SIGN_IN_VOID_OUTPUTS],
+  );
+}
+
+/**
+ * Every Session-router procedure is one of the family's catalog entries and
+ * every such entry is one procedure (VC-564, D2). A procedure added here
+ * without a Verb Registry entry, or an entry with no procedure, fails
+ * `pnpm typecheck` on this line and names the key. The union over every
+ * router is `HostRouterCatalogBinding` (`host-router.ts`).
+ */
+export type SessionRouterCatalogBinding = AssertNever<
+  CatalogMismatch<ProcedurePaths<AppRouter["_def"]["record"]>, CatalogKeyOf<SessionRouterEntry>>
+>;
 
 /**
  * The Session RPC seam, checked in one place. If a procedure starts carrying a
  * value that changes across a JSON wire, this alias fails here and names the
  * procedure plus `input` or `output`.
  */
-type AssertNever<Type extends never> = Type;
 export type SessionRouterJsonSafety = AssertNever<JsonUnsafeProcedures<AppRouter>>;
-
-export class AsyncQueue<T> implements AsyncIterable<T> {
-  readonly #values: T[] = [];
-  readonly #waiters: ((result: IteratorResult<T>) => void)[] = [];
-  readonly #capacity: number;
-  #closed = false;
-  #overflowed = false;
-
-  constructor(capacity = 4_096) {
-    if (!Number.isInteger(capacity) || capacity < 1) {
-      throw new Error("AsyncQueue capacity must be a positive integer");
-    }
-    this.#capacity = capacity;
-  }
-
-  /**
-   * True once a push found the buffer full. **A consumer must convert this into
-   * a terminal error rather than letting the iteration end.** An overflowed
-   * queue ends exactly like an exhausted one, and a normal end is the single
-   * thing this stream must never claim after dropping frames: downstream it
-   * becomes a `done` frame, then `observer.complete()`, then a surface that
-   * silently stops updating while its own state is already stale.
-   */
-  get overflowed(): boolean {
-    return this.#overflowed;
-  }
-
-  push(value: T): void {
-    if (this.#closed) return;
-    const waiter = this.#waiters.shift();
-    if (waiter) waiter({ done: false, value });
-    else if (this.#values.length < this.#capacity) this.#values.push(value);
-    else {
-      // Closed without discarding: what the queue did hold is still contiguous
-      // history the consumer can use, and the gap only starts after it. Dropping
-      // it would widen the hole the consumer then has to resume across.
-      this.#overflowed = true;
-      this.close(false);
-    }
-  }
-
-  close(discard = true): void {
-    if (this.#closed) return;
-    this.#closed = true;
-    if (discard) this.#values.length = 0;
-    for (const waiter of this.#waiters.splice(0)) waiter({ done: true, value: undefined });
-  }
-
-  async next(): Promise<IteratorResult<T>> {
-    if (this.#values.length > 0) return { done: false, value: this.#values.shift()! };
-    if (this.#closed) return { done: true, value: undefined };
-    return new Promise((resolve) => this.#waiters.push(resolve));
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    return this;
-  }
-}
 
 function maxCursor(cursor: number | undefined, lastEventId: string | undefined): number {
   const restored = lastEventId === undefined ? 0 : Number.parseInt(lastEventId, 10);
@@ -1162,10 +1987,13 @@ function maxCursor(cursor: number | undefined, lastEventId: string | undefined):
 function toSessionRuntimeCommandRequest(
   input: z.infer<typeof commandRequestSchema>,
 ): SessionRuntimeCommandRequest {
+  /* v8 ignore next 3 -- unreachable: the `session.command` catalog entry withholds
+     `session.create` before any handler runs; the arm keeps this mapping total. */
   if (input.command.kind === "session.create") {
-    return { commandId: input.commandId, command: input.command };
+    return { origin: { kind: "user" }, commandId: input.commandId, command: input.command };
   }
   return {
+    origin: { kind: "user" },
     commandId: input.commandId,
     sessionId: input.sessionId!,
     command: input.command,
@@ -1188,6 +2016,44 @@ function isUiMessage(value: unknown): value is RpcUiMessage {
   return value.parts.every((part) => isRecord(part) && typeof part.type === "string");
 }
 
+/** Preserve transcript serialization's established undefined-slot semantics while checking opaque values. */
+function isJsonSafeUiMessage(value: unknown): boolean {
+  return isJsonSafeValue(value, new Set());
+}
+
+function isJsonSafeValue(value: unknown, ancestors: Set<object>): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value !== "object" || ancestors.has(value)) return false;
+  if (Object.getOwnPropertySymbols(value).length > 0) return false;
+
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return Object.keys(value).every((key) => {
+        const index = Number(key);
+        return (
+          Number.isInteger(index) &&
+          index >= 0 &&
+          index < value.length &&
+          `${index}` === key &&
+          isJsonSafeValue(value[index], ancestors)
+        );
+      });
+    }
+    const prototype = Object.getPrototypeOf(value);
+    return (
+      (prototype === Object.prototype || prototype === null) &&
+      Object.keys(value).every((key) =>
+        isJsonSafeValue((value as Record<string, unknown>)[key], ancestors),
+      )
+    );
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 function isUiRole(value: unknown): value is RpcUiMessage["role"] {
   return value === "system" || value === "user" || value === "assistant";
 }
@@ -1198,10 +2064,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cloneDiagnostic(entry: RpcDiagnosticEntry): RpcDiagnosticEntry {
   return { ...entry };
-}
-
-function truncateDiagnostic(value: string): string {
-  return value.length <= MAX_DIAGNOSTIC_FIELD_LENGTH
-    ? value
-    : `${value.slice(0, MAX_DIAGNOSTIC_FIELD_LENGTH - 1)}…`;
 }

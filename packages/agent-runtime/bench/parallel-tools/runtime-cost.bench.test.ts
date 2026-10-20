@@ -5,11 +5,9 @@
  *   pnpm -C packages/agent-runtime run bench:runtime            # fast probe
  *   pnpm -C packages/agent-runtime run bench:runtime:published  # the quoted arm
  *
- * The table it prints is the deliverable. The assertions around it are what
- * make the table worth reading: each one is a property VC-356's decision rests
- * on, and each is a property of the shipped runtime rather than of this file.
- * If one of the caches this ticket added stops working, these fail loudly
- * instead of quietly making the design note wrong.
+ * The printed table is checked against the shipped runtime: the assertions
+ * verify its context-projection and prompt-assembly cache behavior (VC-356). A cache
+ * regression fails the benchmark rather than producing an unchecked claim.
  */
 
 import { describe, expect, it } from "vite-plus/test";
@@ -54,7 +52,7 @@ describe("agent-runtime cost profile", () => {
   // -------------------------------------------------------------------------
 
   it("projects an unchanged context without re-counting a single settled message", () => {
-    const { messages, model, systemPrompt, tools } = longContextFixture();
+    const { messages, model } = longContextFixture();
     let counted = 0;
     const counting = messages.map(
       (message) =>
@@ -67,30 +65,28 @@ describe("agent-runtime cost profile", () => {
     );
     const projector = createContextTokenProjector();
 
-    projector(counting, model, systemPrompt, tools);
+    projector(counting, model);
     const afterFirst = counted;
     expect(afterFirst).toBeGreaterThan(0);
 
     // The second projection of the same settled prefix is the one a turn
     // actually makes twice — compaction preflight, then the output ceiling.
-    // It must touch no message content at all.
-    projector(counting, model, systemPrompt, tools);
+    // It must touch no message content at all — the head's prompt included.
+    projector(counting, model);
     expect(counted).toBe(afterFirst);
 
     // A newly appended message is still counted, exactly once.
     const appended = [...counting, { role: "user" as const, content: "tail", timestamp: 1 }];
-    projector(appended, model, systemPrompt, tools);
-    projector(appended, model, systemPrompt, tools);
+    projector(appended, model);
+    projector(appended, model);
     expect(counted).toBe(afterFirst);
   });
 
   it("never lets the cache change the answer the uncached projection gives", () => {
-    const { messages, model, systemPrompt, tools } = longContextFixture();
+    const { messages, model } = longContextFixture();
     const projector = createContextTokenProjector();
     for (let repeat = 0; repeat < 3; repeat += 1) {
-      expect(projector(messages, model, systemPrompt, tools)).toBe(
-        projectedContextTokens(messages, model, systemPrompt, tools),
-      );
+      expect(projector(messages, model)).toBe(projectedContextTokens(messages, model));
     }
   });
 

@@ -61,6 +61,8 @@ export const NOTIFICATION_PRODUCERS = [
   "session-watchdog",
   /** A verified harness hook reported that its agent is blocked on a human. */
   "harness-input-needed",
+  /** A resume a person scheduled for a quota reset was skipped at its time. */
+  "scheduled-resume-skipped",
   /** The retention watch saw a ticket's pull request merge. */
   "pull-request-merged",
   /** The retention watch reclaimed a stale worktree directory (VC-113). */
@@ -114,6 +116,9 @@ export const NOTIFICATION_PRODUCER_POLICY: Record<NotificationProducer, Notifica
   "run-attention": { kind: "preference", event: "needs-you" },
   "session-watchdog": { kind: "preference", event: "needs-you" },
   "harness-input-needed": { kind: "preference", event: "needs-you" },
+  // A skipped resume leaves the stopped Session exactly where the person left
+  // it, still waiting on them — the same switch as every other "needs you".
+  "scheduled-resume-skipped": { kind: "preference", event: "needs-you" },
   "pull-request-merged": { kind: "preference", event: "finished" },
   "worktree-reclaimed": { kind: "preference", event: "swept" },
   // Same switch as the worktree reclaim, and the same act one layer down:
@@ -228,6 +233,60 @@ export type NotificationTarget =
   | UpdateNotificationTarget;
 
 /**
+ * The one KIND of target each producer can have.
+ *
+ * A total record, so a new producer must say where its alert points before it
+ * compiles — and a producer cannot be given the wrong sort of target. A harness
+ * alert must open its waiting terminal, not carry a ticket target that opens
+ * the board instead.
+ *
+ * `null` is not an oversight where it appears. A free-form `volli notify` and a
+ * dead CLI socket have nowhere to point, and an invented destination is worse
+ * than none — it spends the interruption and takes the person somewhere
+ * unrelated.
+ */
+export interface NotificationProducerTargets {
+  "run-attention": SessionNotificationTarget;
+  "session-watchdog": SessionNotificationTarget;
+  "harness-input-needed": SessionNotificationTarget;
+  "scheduled-resume-skipped": SessionNotificationTarget;
+  "pull-request-merged": TicketNotificationTarget;
+  "worktree-reclaimed": TicketNotificationTarget;
+  // No target: one reap can take processes from several Tickets at once, and
+  // an alert that opened whichever one happened to be first would spend the
+  // interruption taking a person somewhere arbitrary.
+  "orphan-processes-reaped": null;
+  "worktree-record-failed": TicketNotificationTarget;
+  "ticket-moved-to-doing": TicketNotificationTarget;
+  "update-ready": UpdateNotificationTarget;
+  "agent-notify": null;
+  "cli-socket-failed": null;
+}
+
+/**
+ * The producers whose alert always knows where it points — derived from the
+ * table above rather than listed again, so the two cannot disagree.
+ */
+export type TargetedNotificationProducer = {
+  [P in NotificationProducer]: NotificationProducerTargets[P] extends null ? never : P;
+}[NotificationProducer];
+
+/** One alert, as its producer describes it. */
+export type NotificationRequest = {
+  [P in NotificationProducer]: {
+    producer: P;
+    title: string;
+    body: string;
+    target: NotificationProducerTargets[P];
+  };
+}[NotificationProducer];
+
+/** Why an alert was not posted, or that it was. */
+export type NotificationOutcome =
+  | { delivered: true }
+  | { delivered: false; reason: "muted" | "unsupported" | "focused-target" | "failed" };
+
+/**
  * The one thing in a Session a person is being sent to — the open question, or
  * the failure that stopped it.
  *
@@ -306,17 +365,12 @@ export function parseNotificationTarget(raw: unknown): NotificationTarget | null
  *    looking at exactly this", and anything looser silences an alert for work
  *    that is merely nearby.
  *  - **The SCOPE is part of the identity too.** Project and ticket are compared
- *    alongside the local ids (round 3). They are UUIDs today, so a collision is
- *    not reachable from this build — which is exactly why dropping them looked
- *    free, and exactly why it must not be: a scoped-id scheme, an import, or a
- *    fixture that reuses an id would turn a silent suppression in the wrong
- *    workspace into a bug nobody can see, because its only symptom is an alert
- *    that never arrives.
+ *    alongside the local ids. Even with UUIDs today, a scoped-id scheme, an
+ *    import, or a fixture that reuses an id must not suppress an alert in the
+ *    wrong workspace.
  *  - **The ITEM is part of the identity.** A Session match compares the open
- *    question and the failure as well as the Session id. Round 1 of this ticket
- *    compared only the id, which meant a person reading one question in a
- *    Session was never told about the failure that had just stopped it — the
- *    window was "showing the target", and the thing they needed was not on it.
+ *    question and the failure as well as the Session id. Reading one question
+ *    must not suppress an alert for a different failure in the same Session.
  *    Both sides derive the item with `sessionNotificationItem`, so this is a
  *    comparison between two answers to one question.
  *  - **`null` never matches.** An alert with no target has nowhere to be

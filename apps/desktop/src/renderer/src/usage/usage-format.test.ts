@@ -18,6 +18,7 @@ import {
   totalUsageTokens,
   usageBarSegments,
   usageBasisLine,
+  usageCostParts,
   USAGE_CLASSES,
   USAGE_CLASS_LABEL,
   USAGE_WINDOWS,
@@ -65,23 +66,46 @@ describe("formatUsageCost", () => {
     expect(formatUsageCost(summary)).toBe("$1.00");
   });
 
-  it("marks a catalogue estimate with a tilde", () => {
-    expect(formatUsageCost(summarizeSessionUsage([op()]))).toBe("~$0.50");
+  it("marks a catalogue estimate with `est.` after the money, never a tilde before it", () => {
+    const summary = summarizeSessionUsage([op()]);
+    expect(formatUsageCost(summary)).toBe("$0.50 est.");
+    expect(formatUsageCost(summary)).not.toContain("~");
   });
 
-  it("marks a mixed basis with a tilde — the weaker claim wins", () => {
+  it("marks a mixed basis as an estimate — the weaker claim wins", () => {
     const summary = summarizeSessionUsage([
       op({ costBasis: "provider-reported" }),
       op({ costBasis: "catalog-estimate" }),
     ]);
     expect(summary.costBasis).toBe("mixed");
-    expect(formatUsageCost(summary)).toBe("~$1.00");
+    expect(formatUsageCost(summary)).toBe("$1.00 est.");
   });
 
-  it("appends a plus when only some operations were priced", () => {
+  it("appends a plus to the figure when only some operations were priced", () => {
     const summary = summarizeSessionUsage([op(), op({ costUsd: null, costBasis: "unavailable" })]);
     expect(summary.costCoverage).toBe("partial");
-    expect(formatUsageCost(summary)).toBe("~$0.50+");
+    // The plus rides the money — it qualifies how much was counted — and the
+    // mark rides after it, qualifying how the counted part was priced.
+    expect(formatUsageCost(summary)).toBe("$0.50+ est.");
+  });
+
+  it("hands a drawing the figure and the hedge as two parts", () => {
+    // The surface sets the money in the row's ink and the mark a step smaller
+    // and muted; a string it had to split would be re-parsing this notation.
+    expect(usageCostParts(summarizeSessionUsage([op()]))).toEqual({
+      figure: "$0.50",
+      hedge: "est.",
+    });
+    expect(usageCostParts(summarizeSessionUsage([op({ costBasis: "provider-reported" })]))).toEqual(
+      {
+        figure: "$0.50",
+        hedge: null,
+      },
+    );
+    expect(
+      usageCostParts(summarizeSessionUsage([op({ costUsd: null, costBasis: "unavailable" })])),
+    ).toEqual({ figure: "—", hedge: null });
+    expect(usageCostParts(summarizeSessionUsage([]))).toBeNull();
   });
 
   it("can carry both hedges at once — reported, but partial", () => {
@@ -212,8 +236,10 @@ describe("usageBasisLine", () => {
     const summary = summarizeSessionUsage([op({ costUsd: 2, costBasis: "unavailable" })]);
     expect(summary.knownCostUsd).toBe(2);
     expect(usageBasisLine(summary)).toBe("Unverified basis · 1 operation");
-    // Still hedged — it may not print bare — just not attributed to a catalogue.
-    expect(formatUsageCost(summary)).toBe("~$2.00");
+    // Still hedged — it may not print bare — just not attributed to a catalogue:
+    // the mark says `unverified`, and never `est.`.
+    expect(usageCostParts(summary)).toEqual({ figure: "$2.00", hedge: "unverified" });
+    expect(formatUsageCost(summary)).toBe("$2.00 unverified");
   });
 
   it("keeps the words honest when an unverifiable basis is mixed with an estimate", () => {

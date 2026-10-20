@@ -246,4 +246,38 @@ describe("BrowserTabCard", () => {
     expect(button("Open as tab")).toBeUndefined();
     expect(button("Close")).toBeDefined();
   });
+
+  it("offers Replay for a Session's call against its tab, even once the tab is gone (VC-453)", async () => {
+    const openTrace = vi.fn();
+    const card = { ...host(), openTrace };
+
+    // No live tab: a reopened chat after a relaunch.
+    await draw(card, facet({ picture: "picture-4" }));
+    expect(button("Close")).toBeUndefined();
+    await act(async () => button("Replay")?.click());
+    expect(openTrace).toHaveBeenCalledWith({
+      sessionId: "s1",
+      tabId: "tab-1",
+      pictureId: "picture-4",
+    });
+
+    useBrowserTabsStore.getState().receive(tab());
+    await draw(card, facet({ action: "open" }));
+    expect(button("Replay")).toBeDefined();
+    expect(button("Close")).toBeDefined();
+  });
+
+  it("offers no Replay where nothing was recorded: a person's tab, a tab listing, no tab, or no replay to open", async () => {
+    const card = { ...host(), openTrace: vi.fn() };
+
+    await draw(card, facet({ ownerSessionId: null }));
+    expect(button("Replay")).toBeUndefined();
+    await draw(card, facet({ action: "tabs" }));
+    expect(button("Replay")).toBeUndefined();
+    await draw(card, facet({ tabId: null }));
+    expect(button("Replay")).toBeUndefined();
+    await draw(host(), facet());
+    expect(button("Replay")).toBeUndefined();
+    expect(container?.querySelectorAll("button")).toHaveLength(0);
+  });
 });

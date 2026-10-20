@@ -28,6 +28,19 @@ updates:
         update-types:
           - minor
           - patch
+      # Security updates are NOT covered by the group above: a group applies to
+      # version updates unless it says otherwise, so every advisory arrived as
+      # a job of its own and, when it resolved, a PR of its own — each PR a
+      # full CI run. On 29 Sep 2026 six advisories against transitive packages
+      # (js-yaml, undici, svgo, devalue, fast-uri, @xmldom/xmldom) failed
+      # together three times, eighteen red jobs for one situation. Grouping
+      # does not make those fixes possible (each was
+      # `security_update_not_possible`: no patched version reachable in the
+      # current tree), but it makes them one job, and one PR when they land.
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
     ignore:
       # apps/website deliberately pins typescript to 6.x (a literal version,
       # not `catalog:`): `astro check` — via @astrojs/language-server — needs

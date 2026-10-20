@@ -9,18 +9,63 @@ name: CI
 #
 # The budget that replaced it is WALL CLOCK, plus GitHub's cap on concurrent
 # macOS jobs (5 on Free/Pro/Team). So this file spends minutes freely and
-# guards latency instead:
+# guards latency instead. The number it is tuned against is the time an agent
+# waits on a PR (VC-461): before this layout, a median of ~10 min, and a
+# second push costs the whole of it again.
 #
+#   - Tests are SHARDED across Linux jobs. The old critical path was one job
+#     that ran every check and build and THEN `vp run -r test:coverage`, which
+#     alone took a median ~7.8 of its ~9.1 min: the other packages in about
+#     50s, then the desktop Vitest suite (596 files, 372s) after them. Now `Check + Build`
+#     carries every non-test step, the desktop suite runs as a matrix of
+#     shards, the other packages run in one job of their own, and all of them
+#     start at once.
+#   - The 100% protected-coverage gate is judged ONCE, over the MERGED
+#     coverage of every desktop shard, by `Coverage (desktop)` — with the
+#     thresholds read from apps/desktop/vite.config.ts exactly as an unsharded
+#     run reads them. A shard ran a quarter of the tests, so its own coverage
+#     is a quarter of the truth; each shard zeroes the thresholds on its
+#     command line and hands its coverage on in a vitest blob report instead.
+#     The other packages are small enough to stay unsharded, so they keep
+#     judging their own thresholds in place.
 #   - Smokes run CONCURRENTLY rather than serially. Each one boots the built
 #     Electron app and then mostly waits on it (measured on an M-series Mac:
 #     12–44% of one core, ~55s wall each), so a runner can carry several at
 #     once. They are safely parallel because lib/smoke-kit.mjs mkdtemp's a
 #     fresh scratch dir, database and --user-data-dir per run, and the agent
 #     socket resolves under that user-data dir.
-#   - A BOOT TIER runs first. If the app cannot start, that is known in about a
-#     minute instead of after a full matrix proves it three more times.
+#   - CORE E2E (run-smokes.mjs --tier core) gates every desktop PR and main
+#     merge: board, composer-basics, terminal, worktree, agent-socket,
+#     session-rpc-transport, agent-cli-roundtrip, database-recovery, canvas-theming.
+#     Extended journeys still gate in 3 rest shards. New probes join by default.
+#     Four measured repeat flakers run instead in smoke-quarantine.yml (nightly,
+#     non-gating, visibly reported): browser-recovery (VC-523), automations-picker
+#     (VC-524), bare-path-env (VC-525), browser-tab (VC-526). No smoke is deleted.
+#     Quarantine policy: AGENTS.md (Smoke quarantine requirements). Core coverage is
+#     never blanket-quarantined; cheap contrast/animation/readiness fixes stay
+#     gating. Every failed smoke retries ONCE in a fresh profile. Retry-green
+#     is FLAKY in the job summary; both attempts/exit/signal/timing/native-window
+#     evidence are uploaded on success or failure with 30-day retention.
+#   - CORE E2E runs BESIDE the smoke shards, not before them. It used to
+#     gate them, so that an app that cannot start was reported in a minute and
+#     the shards never spent their time proving it again. That ordering put
+#     the boot tier's whole job (a median 3.6 min, most of it checkout,
+#     install and build) in front of every green run to save time on the rare
+#     red one, so it was dropped. What it costs, stated plainly: (1) a PR now
+#     holds 4 of the 5 concurrent macOS slots at once (boot + 3 shards)
+#     instead of 1 and then 3, so two PRs pushed together queue one of them
+#     a little sooner; (2) an app that cannot boot now fails in all four jobs,
+#     and the three shards hold their slots until their own probes give up.
+#     The boot tier is still its own job: it is the fastest readable answer
+#     to "does the app start", it is what runs on main, and it carries the
+#     macOS-only licence assertions.
 #   - A COARSE path gate skips the desktop lanes entirely for changes that
 #     provably cannot reach the Electron app (website, docs site, prose).
+#   - ONE job, `CI gate`, is the required check. It waits on every lane and
+#     fails unless each one passed or was skipped by its own condition. The
+#     condition is re-derived there, not trusted: a smoke lane that skipped
+#     when it should have run fails the gate. Rulesets name that one check
+#     rather than the lanes, whose names change whenever a shard count does.
 #
 # Deliberately NOT done: per-smoke path mapping ("only run the smokes near the
 # diff"). Integration probes exist to catch NON-LOCAL breakage, so selecting
@@ -36,6 +81,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Scheduled workflows run on the default branch (main).
+  schedule:
+    - cron: "30 7 * * *"
 
 permissions:
   contents: read
@@ -57,6 +105,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
+      host-container: ${{ steps.filter.outputs.host-container }}
+      cloud-smoke: ${{ steps.filter.outputs.cloud-smoke }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -74,17 +124,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Anything not a PR (push to main, manual dispatch) runs the lanes.
+          # Anything not a PR (main push, nightly, manual dispatch) runs the lanes.
           if [[ "$EVENT" != "pull_request" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
-            echo "event is $EVENT — running desktop lanes"
+            echo "host-container=true" >> "$GITHUB_OUTPUT"
+            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
+            echo "event is $EVENT — running all conditional lanes"
             exit 0
           fi
 
           changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           if [[ -z "$changed" ]]; then
             echo "desktop=true" >> "$GITHUB_OUTPUT"
-            echo "no diff resolved — running desktop lanes (fail safe)"
+            echo "host-container=true" >> "$GITHUB_OUTPUT"
+            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
+            echo "no diff resolved — running all conditional lanes (fail safe)"
             exit 0
           fi
 
@@ -106,25 +160,103 @@ jobs:
             echo "-> prose/website only; skipping desktop smoke lanes"
           fi
 
-  core:
-    name: Check + Test
+          # Container inputs and host code. Workflow edits run it too, so the
+          # job and gate are exercised on the PR changing their own definition.
+          host='^(packages/|apps/hostd/|\.devcontainer/host/|\.nvmrc$|package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$|\.github/workflows/ci\.yml$|scripts/(check-host-electron-imports|ci-host-lane)[./])'
+          if echo "$changed" | grep -qE "$host"; then
+            echo "host-container=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "host-container=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Flag-on remote acceptance is a separate lane: never turn cloud on
+          # for core e2e. Include the harness and its CI definition, as well as
+          # shared install/build inputs, so it tests its own changes too.
+          cloud='^(packages/host-[^/]+/|packages/session-rpc/|apps/hostd/|apps/desktop/src/main/remote-hosts[^/]*|apps/desktop/src/main/host-sign-ins/|apps/desktop/src/renderer/src/components/hosts/|apps/desktop/src/renderer/src/stores/[^/]*host[^/]*|apps/desktop/src/renderer/src/lib/board-protocol\.ts$|apps/desktop/e2e/volli-drive/|apps/desktop/e2e/lib/|apps/desktop/src/main/harness/|\.github/workflows/ci\.yml$|scripts/ci-host-lane\.test\.mjs$|\.nvmrc$|package\.json$|apps/desktop/package\.json$|pnpm-(lock\.yaml|workspace\.yaml)$)'
+          if echo "$changed" | grep -qE "$cloud"; then
+            echo "cloud-smoke=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cloud-smoke=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Every gate that is not a test suite: format/lint, the licence and
+  # design-system checks, typecheck, and the builds. None of it waits on the
+  # tests any more, and the tests do not wait on it — no test reads a build
+  # artifact (packages/cli's own test packs the bundle it spawns).
+  check:
+    name: Check + Build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@1b32467adbe183473499fd9d5d372c3ed9641754 # v1.18.0
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
         with:
           node-version-file: package.json
           cache: true
           run-install: true
 
+      # VC-728: information, not a gate. Both the process and shell fallback
+      # tolerate errors; timeout keeps the advisory below a minute even on drift.
+      - name: Report exported seams (advisory)
+        id: exported-seams
+        continue-on-error: true
+        run: >-
+          timeout 55s node scripts/report-exported-seams.mjs
+          || echo 'Exported seams advisory unavailable or timed out; inspect callers manually.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test exported-seam advisory
+        run: vp test run scripts/report-exported-seams.test.mjs --maxWorkers=$(nproc)
+
       - name: Check
         run: vp check
+
+      - name: Check public repository content
+        run: |
+          node --test scripts/check-public-content.test.mjs
+          node scripts/check-public-content.mjs
+
+      - name: Check committed protocol schema and additive compatibility
+        env:
+          PROTOCOL_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          node --test scripts/protocol-schema/compatibility.test.mjs
+          args=()
+          if [[ -n "$PROTOCOL_BASE" && "$PROTOCOL_BASE" != 0000000000000000000000000000000000000000 ]]; then
+            args=(--base "$PROTOCOL_BASE")
+          fi
+          node scripts/protocol-schema/generate.mjs --check "${args[@]}"
+
+      # The live kickoff smoke needs credentials; its ledger/selection predicates
+      # and card-opening helper are deterministic and must still run on every PR.
+      - name: Test smoke runner policy, reporting and helpers
+        run: >-
+          node --test apps/desktop/scripts/run-smokes.test.mjs
+          apps/desktop/scripts/smoke-quiet-check.test.mjs
+          apps/desktop/e2e/lib/kickoff-support.test.mjs
+          apps/desktop/e2e/lib/focus-ring-probe.test.mjs
+          apps/desktop/e2e/lib/smoke-kit.test.mjs
+          apps/desktop/e2e/lib/shutdown-trace.test.mjs
+          apps/desktop/e2e/lib/screenshot-trace.test.mjs
+
+      # volli-drive (VC-703): its safety rules — the one launch gate (packed
+      # refused), home containment parity with the app, scratch-only fixture
+      # repos, identity-exact stop — plus the fake provider. No Electron. The
+      # sshd fixture test runs only on macOS and reports itself skipped here.
+      - name: Test volli-drive harness rules
+        run: >-
+          node --test apps/desktop/e2e/volli-drive/lib/core.test.mjs
+          apps/desktop/e2e/volli-drive/lib/launch-gate.test.mjs
+          apps/desktop/e2e/volli-drive/lib/stop.test.mjs
+          apps/desktop/e2e/volli-drive/lib/fake-provider.test.mjs
+          apps/desktop/e2e/volli-drive/lib/remote-acceptance.test.mjs
+          apps/desktop/e2e/volli-drive/lib/native-window-lifecycle.test.mjs
+          apps/desktop/e2e/volli-drive/lib/sshd-fixture.test.mjs
 
       # Every workspace manifest must declare the license the root declares
       # (VC-411). Not expressible as a lint rule, so it is its own step.
@@ -142,6 +274,20 @@ jobs:
       # invisible in a diff, which is why it is a step and not a convention.
       - name: Check excluded dependencies
         run: vp run check:excluded-dependencies
+
+      - name: Test hostd release safety and desktop pin
+        run: >-
+          node --test scripts/release-workflow.test.mjs
+          scripts/hostd-release-manifest.test.mjs
+          scripts/record-canary-peer.test.mjs
+          apps/desktop/scripts/copy-hostd-manifest.test.mjs
+          apps/desktop/scripts/check-packaged-e2e.test.mjs
+
+      - name: Check host Electron boundary and CI gate policy
+        run: |
+          node scripts/check-host-electron-imports.mjs --self-test
+          node scripts/check-host-electron-imports.mjs
+          node --test scripts/ci-host-lane.test.mjs
 
       # The encoded design system (the tokens ARE the spec, not a document).
       # `vp check` is fmt + lint + types with no plugin point, and neither of
@@ -255,28 +401,420 @@ jobs:
           test -f apps/desktop/dist-electron/preload.cjs
           test -f apps/desktop/dist/index.html
 
-      # The identical suite plus the 100%-threshold gate over the protected
-      # logic layer. This remains the hard regression gate.
-      #
+  # The desktop Vitest suite, one shard per job. Together with `coverage-
+  # desktop` below this is the identical suite plus the 100%-threshold gate
+  # over the protected logic layer that one job used to run: still the hard
+  # regression gate, split so no single runner carries all 596 files.
+  #
+  # The shard count lives in the matrix list and nowhere else. The command
+  # reads it back as `strategy.job-total`, the blob filename records it, and
+  # the merge job checks every index up to it arrived — so changing the list
+  # is the whole edit. Vitest assigns files to shards by hashing their paths,
+  # so a shard's share moves a little as files are added; 4 keeps each one
+  # comfortably under the macOS smoke shards that are the other long pole.
+  #
+  # `fail-fast: false`, deliberately: when a change breaks tests in two
+  # shards, the person fixing it should see both failures from one push, not
+  # one failure per push.
+  test-desktop:
+    name: Test (desktop ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
       # `--maxWorkers` restores vitest's own default — one worker per core —
       # which every package's config caps at 2 for a developer laptop shared
       # with several agent Sessions (VC-339, `vitest.workers.ts`). A runner has
-      # the box to itself, so it gets the whole box and CI wall time is
-      # unchanged. `nproc`, not a literal: a bigger runner then buys what it is
-      # paid for, and this line never has to be revisited.
+      # the box to itself, so it gets the whole box. `nproc`, not a literal: a
+      # bigger runner then buys what it is paid for, and this line never has
+      # to be revisited.
       #
       # The FLAG and not `VITEST_MAX_WORKERS`: that variable is the Session
       # concurrency budget's vitest entry, and a budget may only ever lower a
       # cap — `vitest.workers.ts` clamps it for exactly that reason. An explicit
       # flag is this invocation saying what it may take, and it outranks both.
-      - name: Test protected coverage surface
-        run: vp run -r test:coverage --maxWorkers=$(nproc)
+      #
+      # The four `--coverage.thresholds.*=0` flags are the one deliberate
+      # loosening, and it is scoped to this command line: a shard holds only
+      # its share of the tests, so its coverage of the protected surface is
+      # partial by construction and judging it would fail every shard. Nothing
+      # is waived — the coverage still rides out in the blob report and is
+      # judged, whole, by `coverage-desktop`. The text table is swapped for
+      # json-summary for the same reason: a per-shard table of partly covered
+      # files would read as a failure to anyone scanning this log.
+      #
+      # Two reporters: `default` so a failing test is readable right here, and
+      # `blob` for the merge. The blob path is absolute because the reporter
+      # resolves a relative one against the config's `root` (src/renderer),
+      # not against this directory.
+      - name: Run shard ${{ matrix.shard }} of ${{ strategy.job-total }}
+        working-directory: apps/desktop
+        run: >-
+          vp test run
+          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+          --maxWorkers=$(nproc)
+          --reporter=default --reporter=blob
+          --outputFile.blob="$RUNNER_TEMP/desktop-blobs/desktop-${{ matrix.shard }}-of-${{ strategy.job-total }}.json"
+          --coverage --coverage.reporter=json-summary
+          --coverage.thresholds.statements=0 --coverage.thresholds.branches=0
+          --coverage.thresholds.functions=0 --coverage.thresholds.lines=0
 
-  # Fail fast: five probes that each boot the app through a different door
-  # (board, composer, terminal, worktree, agent socket). If the app does not
-  # start, this says so in ~1 minute and the shard matrix never runs.
+      # `overwrite` so "Re-run all jobs" replaces this shard's blob instead
+      # of failing on the name it left last attempt.
+      - name: Upload blob report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-blob-${{ matrix.shard }}
+          path: ${{ runner.temp }}/desktop-blobs/desktop-${{ matrix.shard }}-of-${{ strategy.job-total }}.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  # THE protected-coverage gate for the desktop app. It runs no tests: it
+  # replays every shard's blob report, merges their coverage into one map, and
+  # applies apps/desktop/vite.config.ts's thresholds to it — the same config,
+  # the same numbers, no flags overriding them. Merging adds hit counts, so a
+  # line counts as covered only if some shard's tests actually ran it, and
+  # every shard's map already lists the protected files it never touched at
+  # zero; a file nothing covers still fails here exactly as it did unsharded.
+  #
+  # Two ways this job could pass while checking nothing, both closed below:
+  #   - `--merge-reports` WITHOUT `--coverage` replays the test results,
+  #     prints a green summary, and never loads the coverage provider — so no
+  #     threshold is ever evaluated. The flag is load-bearing.
+  #   - A missing shard shrinks the merged map. That would most likely fail
+  #     the thresholds anyway, but "most likely" is not a gate, so the job
+  #     refuses to merge unless every shard's blob is present.
+  coverage-desktop:
+    name: Coverage (desktop)
+    needs: test-desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Download blob reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-blob-*
+          path: ${{ runner.temp }}/desktop-blobs
+          merge-multiple: true
+
+      - name: Require a blob from every shard
+        shell: bash
+        working-directory: ${{ runner.temp }}/desktop-blobs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          blobs=(desktop-*-of-*.json)
+          if (( ${#blobs[@]} == 0 )); then
+            echo "::error::no desktop blob reports were downloaded"
+            exit 1
+          fi
+          total="${blobs[0]##*-of-}"
+          total="${total%.json}"
+          for (( i = 1; i <= total; i++ )); do
+            if [[ ! -f "desktop-$i-of-$total.json" ]]; then
+              echo "::error::shard $i/$total left no blob report"
+              exit 1
+            fi
+          done
+          if (( ${#blobs[@]} != total )); then
+            echo "::error::expected $total blob reports, found ${#blobs[@]}: ${blobs[*]}"
+            exit 1
+          fi
+          echo "all $total shard blobs present:"
+          ls -l
+
+      - name: Merge shards and enforce coverage thresholds
+        working-directory: apps/desktop
+        run: vp test run --merge-reports="$RUNNER_TEMP/desktop-blobs" --coverage
+
+  # Every other package's suite and its own coverage gate, unsharded. Each
+  # package's thresholds are judged in place. This runs in parallel with the
+  # desktop lanes; its duration grows with the host surface and native tests.
+  #
+  # The filter selects by DIRECTORY and then subtracts the desktop app, and
+  # both halves matter. An exclusion-only filter (`--filter '!@volli/desktop'`)
+  # also selects the workspace ROOT, whose own `test:coverage` is
+  # `vp run -r test:coverage` — which would run the whole desktop suite again
+  # in this job. And `--filter` cannot be combined with `-r`. A new package
+  # under apps/ or packages/ is picked up with no edit here; one without a
+  # `test:coverage` script is skipped, as `-r` skipped apps/docs.
+  # This IS the Linux host lane: plain Node/Vitest, not Electron. Today it
+  # covers session-engine, session-rpc, agent-runtime, shared and host-core.
+  # Future host-protocol and apps/hostd suites join with test:coverage.
+  # Native host builds must stay Node-ABI (see docs/development/host-linux.md).
+  test-packages:
+    name: Test (packages)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          # Exact host/container pin, rather than the root engines caret range.
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+
+      # host-core's terminal supervisor drives real shells through node-pty
+      # under plain Node here (VC-560). node-pty ships no Linux prebuild, and the
+      # install above ran desktop's postinstall, which built it against
+      # Electron's headers. Rebuild it from source for this Node (this job runs
+      # no Electron; the desktop jobs keep their own Electron build), then
+      # prove it loads and runs a shell before the tests depend on it.
+      # `vp rebuild`, not `pnpm rebuild`: pnpm is not a command on this runner.
+      - name: Build node-pty for Node
+        working-directory: packages/host-core
+        run: |
+          env -u npm_config_arch -u npm_config_target_arch \
+            npm_config_runtime=node \
+            npm_config_target="$(node -p 'process.versions.node')" \
+            npm_config_disturl=https://nodejs.org/download/release \
+            npm_config_build_from_source=true \
+            vp rebuild node-pty
+          node scripts/probe-node-pty.mjs
+
+      # host-core's Chromium backend suite (VC-619) drives a real browser:
+      # Playwright's Chrome for Testing, the full build (`--no-shell`, new
+      # headless), pinned by the lockfile's playwright-core and cached on its
+      # version. It runs from /usr/lib/volli-chromium, where the hostd unit's
+      # ProtectHome= can see it and every ancestor is root-owned: the probe
+      # refuses a binary the service user could replace through a writable
+      # ancestor, and the runner's /opt is runner-writable (a box's /opt is
+      # root-owned, so the runbook keeps /opt/volli-chromium). It runs with
+      # its sandbox: ubuntu-24.04 lets a binary make the user
+      # namespaces Chromium's sandbox needs only under an AppArmor profile that
+      # grants them, so the box's profile is loaded for it here. Never
+      # --no-sandbox. VOLLI_REQUIRE_CHROMIUM makes a missing browser fail the
+      # suite rather than skip it.
+      - name: Resolve the pinned Chromium
+        id: chromium
+        working-directory: packages/host-core
+        run: echo "playwright=$(node -p 'require("./node_modules/playwright-core/package.json").version')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Chrome for Testing
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: chromium-${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.chromium.outputs.playwright }}
+
+      - name: Install Chrome for Testing, sandboxed
+        working-directory: packages/host-core
+        run: |
+          node node_modules/playwright-core/cli.js install chromium --no-shell
+          chrome="$(node -p 'require("playwright-core").chromium.executablePath()')"
+          # Every ancestor's owner, for the log: the probe refuses any the
+          # runner could write.
+          stat -c '%U:%G %a %n' /usr/lib /usr /
+          sudo mkdir -p /usr/lib/volli-chromium
+          sudo cp -a "$(dirname "$chrome")/." /usr/lib/volli-chromium/
+          # Root-owned, as the box's is: the AppArmor grant must not cover a
+          # path the user the browser runs as could replace.
+          sudo chown -R root:root /usr/lib/volli-chromium
+          sed 's|@CHROMIUM@|/usr/lib/volli-chromium/chrome|' ../../apps/hostd/packaging/volli-chromium.apparmor \
+            | sudo tee /etc/apparmor.d/volli-chromium >/dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/volli-chromium
+          echo "VOLLI_CHROMIUM_PATH=/usr/lib/volli-chromium/chrome" >> "$GITHUB_ENV"
+          echo "VOLLI_REQUIRE_CHROMIUM=1" >> "$GITHUB_ENV"
+
+      # The same browser, sandboxed, under every hardening directive of the
+      # shipped hostd unit (packaging/volli-hostd.service).
+      - name: Probe Chromium's sandbox under the hostd unit
+        run: sudo apps/hostd/scripts/probe-chromium-sandbox.sh /usr/lib/volli-chromium/chrome "$(id -un)"
+
+      # `--maxWorkers=$(nproc)` for the reason given on the desktop shards.
+      - name: Test protected coverage surface
+        run: >-
+          vp run
+          --filter './packages/*' --filter './apps/*' --filter '!@volli/desktop'
+          test:coverage --maxWorkers=$(nproc)
+
+  # N-1 compatibility (VC-633). A previous build, run from its own shipped
+  # sources, against a profile THIS build migrated to its head: it must write
+  # to the profile if the head's migrations are compatible (and this build must
+  # then read what it left), or refuse it byte-identically if they raised the
+  # floor. That is the author rule above MIGRATIONS in
+  # packages/host-core/src/db/migrations.ts, checked against a real older
+  # build instead of only the author's word. Rolling and fixed N-1s, in parallel:
+  #   - release: the newest vX.Y.Z tag, the build external users run and drop
+  #     back to. Also holds the release policy: no floor raise may land while
+  #     that release predates the downgrade guard (VC-602), since it could
+  #     not refuse it.
+  #   - latest-canary: the newest vX.Y.Z-canary.N tag, the build a canary
+  #     tester drops back to when they hop between canaries. Held to the
+  #     same release policy: no floor raise while that canary predates the
+  #     guard.
+  #   - base: the PR's base (the build that knows nothing of this change),
+  #     or the previous main on a push.
+  #   - v0.2.1 / v0.2.2-canary.1: the fixed 0.2.2 downgrade promises (VC-758).
+  #     Rolling release/canary/base lanes must not silently replace this proof.
+  # Each N-1 is extracted with `git archive` and installs its own lockfile
+  # (scripts/n1/prepare.mjs), so neither its code nor its dependencies come
+  # from this checkout. fetch-depth 0 brings the tags and the base commit.
+  n1-compat:
+    name: N-1 compatibility (${{ matrix.lane }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [release, latest-canary, base, v0.2.1, v0.2.2-canary.1]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: .nvmrc
+          cache: true
+          run-install: true
+
+      - name: Prepare N-1
+        id: prepare
+        shell: bash
+        env:
+          LANE: ${{ matrix.lane }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$LANE" == "release" ]]; then
+            args=(--release)
+          elif [[ "$LANE" == "latest-canary" ]]; then
+            args=(--canary)
+          elif [[ "$LANE" == "v0.2.1" || "$LANE" == "v0.2.2-canary.1" ]]; then
+            args=(--ref "$LANE")
+          else
+            case "$EVENT" in
+              pull_request) base="$PR_BASE" ;;
+              push) base="$PUSH_BEFORE" ;;
+              *) base="" ;;
+            esac
+            # A new branch's push has no `before`; fall back to the first parent.
+            if [[ -z "$base" || "$base" =~ ^0+$ ]]; then base="$(git rev-parse HEAD^1)"; fi
+            args=(--ref "$base")
+          fi
+          node packages/host-core/scripts/n1/prepare.mjs "${args[@]}" --out "$RUNNER_TEMP/n1" | tee "$RUNNER_TEMP/n1-prepare.log"
+          manifest="$(tail -n 1 "$RUNNER_TEMP/n1-prepare.log")"
+          test -f "$manifest"
+          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+          head -n -1 "$RUNNER_TEMP/n1-prepare.log" | tail -n 1 >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run N-1 against this build's head
+        working-directory: packages/host-core
+        env:
+          VOLLI_N1_MANIFEST: ${{ steps.prepare.outputs.manifest }}
+        run: vp test run src/db/n1-compatibility.test.ts --maxWorkers=$(nproc)
+
+  # The Linux host image, then the hostd artifact built inside it (VC-562):
+  # Node = .nvmrc and bookworm's glibc, natives compiled there, then booted
+  # from the archive alone against an empty data directory, driven by the
+  # volli CLI, stopped with SIGTERM and its database integrity-checked. A CI
+  # artifact only; release.yml builds its own matching x64/arm64 asset set.
+  host-container:
+    name: Build (host container)
+    needs: changes
+    if: needs.changes.outputs.host-container == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # No registry login, image push or repo dependencies: just the dev tools.
+      # Build asserts Node matches .nvmrc and resolves pnpm from package.json.
+      - name: Build Linux host development image
+        run: docker build --file .devcontainer/host/Dockerfile --tag volli-host-dev .
+
+      - name: Verify tools as the non-root development user
+        run: |
+          docker run --rm volli-host-dev sh -ec '
+            node --version; pnpm --version; git --version
+            test "$(id -u)" -ne 0
+            test "$(node -p "process.versions.node")" = "$(cat /opt/volli-toolchain/.nvmrc)"
+            test "$(pnpm --version)" = "$(node -p "require(\"/opt/volli-toolchain/package.json\").packageManager.split(\"@\")[1]")"
+          '
+
+      # The checkout is mounted read-only; the image's non-root user copies it,
+      # installs host-only (never desktop), builds and writes only the archive.
+      - name: Build the hostd artifact (linux-x64)
+        run: |
+          mkdir -p "$RUNNER_TEMP/hostd"
+          chmod 0777 "$RUNNER_TEMP/hostd"
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/hostd:/out" volli-host-dev \
+            bash /src/apps/hostd/scripts/ci-build-artifact.sh
+
+      # A fresh container with no checkout and no system node on PATH.
+      - name: Boot the hostd artifact against an empty data directory
+        run: |
+          docker run --rm -i -v "$RUNNER_TEMP/hostd:/out:ro" volli-host-dev \
+            bash -s < apps/hostd/scripts/ci-boot-artifact.sh
+
+      # VC-623: as root, issue an operator token for a non-service login; that
+      # login registers a project and creates a ticket with the bundled CLI;
+      # the `volli` service account cannot read the token or mint one.
+      - name: Operator token proof (VC-623)
+        run: |
+          docker run --rm -i --user 0 -v "$RUNNER_TEMP/hostd:/out:ro" volli-host-dev \
+            bash -s < apps/hostd/scripts/ci-operator-proof.sh
+
+      - name: Upload the hostd artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: volli-hostd-linux-x64
+          path: |
+            ${{ runner.temp }}/hostd/*.tar.gz
+            ${{ runner.temp }}/hostd/*.tar.gz.sha256
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
+  # Core e2e: boot/board, session/composer, CLI round-trip, DB recovery and
+  # theming, plus the macOS-only licence assertions. It runs BESIDE the shard
+  # matrix rather than gating it — see
+  # the header for why and for what that costs — so it is no longer what
+  # stops the shards on a broken boot, only the quickest place to read one.
   smoke-boot:
-    name: Smoke (boot tier)
+    name: Smoke (core e2e)
     needs: changes
     if: needs.changes.outputs.desktop == 'true'
     runs-on: macos-15
@@ -288,7 +826,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@1b32467adbe183473499fd9d5d372c3ed9641754 # v1.18.0
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
         with:
           node-version-file: package.json
           cache: true
@@ -323,21 +861,59 @@ jobs:
           vp run --filter @volli/desktop check:lgpl-source
           vp run --filter @volli/desktop check:library-validation
 
-      - name: Run boot tier and verify quiet native windows
-        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier boot --jobs 4
+      # VC-493: building chunks and booting the unpackaged app never exercise
+      # electron-builder's dependency collector. Package on the same macOS
+      # lane, without any signing/notarization credentials or publishing, so
+      # a broken collector fails ordinary PR/main CI rather than a release.
+      # Keep vp exec (not pnpm exec): a pnpm parent can mask missing package
+      # manager metadata via npm_config_user_agent. The desktop manifest must
+      # identify pnpm itself; the root's packageManager is not searched first.
+      - name: Verify unsigned desktop packaging
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          DEBUG: electron-builder
+        run: |
+          vp exec electron-builder --dir --publish never
+          resources="release/mac-arm64/Volli Code.app/Contents/Resources"
+          test -f "$resources/app.asar"
+          test -f "$resources/LICENSES.chromium.html"
+          test -f "$resources/app.asar.unpacked/node_modules/@earendil-works/pi-codemode/dist/runtime/worker.js"
+          test -f "$resources/app.asar.unpacked/node_modules/quickjs-wasi/quickjs.wasm"
 
-  # Everything else, sharded three ways and run four-at-a-time inside each
-  # shard. The runner script globs apps/desktop/e2e/*-smoke.mjs and subtracts a
-  # commented deny-list, so a smoke added in a PR runs in that same PR — no
-  # registration step to forget.
+      # Exercise the same actual-artifact assertion before the first release
+      # cut, not only after signing/notarizing in the release workflow.
+      - name: "Gate: no e2e files in packaged app"
+        run: node apps/desktop/scripts/check-packaged-e2e.mjs --app "apps/desktop/release/mac-arm64/Volli Code.app"
+
+      - name: Run core e2e and verify quiet native windows
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
+        run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier core --jobs 4
+
+      - name: Upload core smoke attempts and native-window evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-core-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smoke-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Extended gating journeys, sharded three ways and four-at-a-time inside
+  # each shard. The runner globs apps/desktop/e2e/*-smoke.mjs and subtracts core,
+  # credential/legacy exclusions and measured nightly quarantine. A new smoke
+  # joins the gate in the same PR — no registration step to forget.
   #
   # Only on pull_request: a push to main has already been gated by its PR, and
-  # holding four more macOS jobs against the 5-job concurrency cap would queue
+  # holding three more macOS jobs against the 5-job concurrency cap would queue
   # the next PR behind a run whose answer is already known. The boot tier still
   # runs on main to catch semantic merge breakage.
+  #
+  # Needs only `changes`, not `smoke-boot`: the two start together (VC-461).
   smoke-rest:
     name: Smoke (shard ${{ matrix.shard }}/3)
-    needs: [changes, smoke-boot]
+    needs: changes
     if: needs.changes.outputs.desktop == 'true' && github.event_name == 'pull_request'
     runs-on: macos-15
     timeout-minutes: 40
@@ -352,7 +928,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@1b32467adbe183473499fd9d5d372c3ed9641754 # v1.18.0
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
         with:
           node-version-file: package.json
           cache: true
@@ -364,4 +940,195 @@ jobs:
           vp run --filter @volli/desktop ensure:electron
 
       - name: Run shard ${{ matrix.shard }} of 3 and verify quiet native windows
+        env:
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/smoke-results
         run: node apps/desktop/scripts/smoke-quiet-check.mjs --assert-stationary-cursor --tier rest --shard ${{ matrix.shard }}/3 --jobs 4
+
+      - name: Upload shard smoke attempts and native-window evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-rest-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/smoke-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Production add-host wiring over volli-drive's loopback sshd fixture.
+  # CI-only: install/start use the disposable macOS runner's launchd and home.
+  # Package hostd BEFORE the desktop install can rebuild native dependencies
+  # for Electron; the delivered archive must contain the exact .nvmrc Node.
+  smoke-cloud:
+    name: Smoke (cloud acceptance)
+    needs: changes
+    if: needs.changes.outputs.cloud-smoke == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # acceptance.json must name the PR head, not GitHub's synthetic merge.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
+        with:
+          node-version-file: .nvmrc
+          run-install: false
+
+      # setup-vp manages pnpm internally; package.mjs calls it by name.
+      - name: Enable pinned pnpm
+        run: |
+          set -euo pipefail
+          node_bin="$(dirname "$(node -p process.execPath)")"
+          mkdir -p "$RUNNER_TEMP/pnpm-bin"
+          "$node_bin/corepack" enable --install-directory "$RUNNER_TEMP/pnpm-bin" pnpm
+          echo "$RUNNER_TEMP/pnpm-bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/pnpm-bin:$PATH"
+          expected="$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+          test "$(pnpm --version)" = "$expected"
+
+      - name: Check hostd target and desktop version
+        run: |
+          set -euo pipefail
+          test "$(node -p process.platform)" = darwin
+          test "$(node -p process.arch)" = arm64
+          test "$(node -p process.versions.node)" = "$(cat .nvmrc)"
+          test "$(node -p 'require("./package.json").version')" = "$(node -p 'require("./apps/desktop/package.json").version')"
+
+      - name: Host-only install
+        run: pnpm --filter volli-code --filter './packages/*' --filter './apps/hostd' install --frozen-lockfile
+
+      - name: Package hostd and export production install artifact
+        run: |
+          set -euo pipefail
+          node apps/hostd/scripts/package.mjs --out "$RUNNER_TEMP/hostd"
+          version="$(node -p 'require("./apps/desktop/package.json").version')"
+          tarball="$RUNNER_TEMP/hostd/volli-hostd-$version-darwin-arm64.tar.gz"
+          test -f "$tarball"
+          test -f "$tarball.sha256"
+          echo "VOLLI_HOSTD_DEV_TARBALLS=$tarball" >> "$GITHUB_ENV"
+
+      - name: Install desktop dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and fetch Electron
+        run: |
+          vp run --filter @volli/desktop build
+          vp run --filter @volli/desktop ensure:electron
+
+      - name: Run flag-on remote acceptance
+        env:
+          VOLLI_EXPERIMENTAL: cloud
+          VOLLI_DRIVE_HOME: ${{ runner.temp }}/cloud-drive
+          VOLLI_DRIVE_EVIDENCE: ${{ runner.temp }}/cloud-acceptance
+          VOLLI_SMOKE_REPORT_DIR: ${{ runner.temp }}/cloud-acceptance
+        run: node apps/desktop/e2e/volli-drive/remote-acceptance-smoke.mjs
+
+      - name: Upload cloud acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-results-cloud-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloud-acceptance
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The one check a ruleset should require. It waits on every lane, including
+  # ones that failed or were cancelled (`always()`), and passes only when each
+  # lane either succeeded or was skipped by its OWN condition — the smoke
+  # conditions are re-derived here from the same inputs, so a lane that skips
+  # when it should have run is a failure, not a pass.
+  #
+  # `always()` and not `!cancelled()`, on purpose: a required check that is
+  # SKIPPED counts as passing, so a gate that stood down on cancellation would
+  # hand a cancelled run a green light. Under `always()` a cancelled run's gate
+  # still runs and fails on the cancelled lanes.
+  #
+  # Adding a lane means adding it to `needs` and to the list below; a lane the
+  # gate does not name is a lane nothing requires.
+  gate:
+    name: CI gate
+    if: always()
+    needs:
+      [
+        changes,
+        check,
+        test-desktop,
+        coverage-desktop,
+        test-packages,
+        n1-compat,
+        host-container,
+        smoke-boot,
+        smoke-rest,
+        smoke-cloud,
+      ]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every lane to pass or to skip by its own condition
+        id: require-lanes
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          DESKTOP: ${{ needs.changes.outputs.desktop }}
+          HOST_CONTAINER_REQUIRED: ${{ needs.changes.outputs.host-container }}
+          CLOUD_SMOKE_REQUIRED: ${{ needs.changes.outputs.cloud-smoke }}
+          SCOPE: ${{ needs.changes.result }}
+          CHECK: ${{ needs.check.result }}
+          TEST_DESKTOP: ${{ needs.test-desktop.result }}
+          COVERAGE_DESKTOP: ${{ needs.coverage-desktop.result }}
+          TEST_PACKAGES: ${{ needs.test-packages.result }}
+          N1_COMPAT: ${{ needs.n1-compat.result }}
+          HOST_CONTAINER: ${{ needs.host-container.result }}
+          SMOKE_BOOT: ${{ needs.smoke-boot.result }}
+          SMOKE_REST: ${{ needs.smoke-rest.result }}
+          SMOKE_CLOUD: ${{ needs.smoke-cloud.result }}
+        run: |
+          set -euo pipefail
+          status=0
+          expect() {
+            if [[ "$2" == "$3" ]]; then
+              echo "ok    $1: $2"
+            else
+              echo "::error::$1 is '$2', expected '$3'"
+              status=1
+            fi
+          }
+
+          # Only literal false permits a path-filtered skip. Missing/invalid
+          # outputs fail closed, even if every conditional lane was skipped.
+          for flag in "$DESKTOP" "$HOST_CONTAINER_REQUIRED" "$CLOUD_SMOKE_REQUIRED"; do
+            if [[ "$flag" != "true" && "$flag" != "false" ]]; then
+              echo "::error::invalid Scope output '$flag'"
+              status=1
+            fi
+          done
+
+          # Mirrors each conditional job's `if:`. Failed and cancelled are
+          # NEVER acceptable, including when a lane should have skipped.
+          boot=skipped
+          rest=skipped
+          container=skipped
+          cloud=skipped
+          if [[ "$HOST_CONTAINER_REQUIRED" == "true" ]]; then container=success; fi
+          if [[ "$CLOUD_SMOKE_REQUIRED" == "true" ]]; then cloud=success; fi
+          if [[ "$DESKTOP" == "true" ]]; then
+            boot=success
+            if [[ "$EVENT" == "pull_request" ]]; then rest=success; fi
+          fi
+
+          expect "Scope" "$SCOPE" success
+          expect "Check + Build" "$CHECK" success
+          expect "Test (desktop shards)" "$TEST_DESKTOP" success
+          expect "Coverage (desktop)" "$COVERAGE_DESKTOP" success
+          expect "Test (packages)" "$TEST_PACKAGES" success
+          expect "N-1 compatibility" "$N1_COMPAT" success
+          expect "Build (host container)" "$HOST_CONTAINER" "$container"
+          expect "Smoke (core e2e)" "$SMOKE_BOOT" "$boot"
+          expect "Smoke (shards)" "$SMOKE_REST" "$rest"
+          expect "Smoke (cloud acceptance)" "$SMOKE_CLOUD" "$cloud"
+          exit "$status"

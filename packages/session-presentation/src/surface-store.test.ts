@@ -21,7 +21,6 @@ const projection: SessionPresentationProjection = {
   },
   status: "open",
   liveExecutor: null,
-  authority: null,
   attention: { active: [], primary: null },
   interactions: { active: [], resolved: [] },
   signal: null,
@@ -30,6 +29,7 @@ const projection: SessionPresentationProjection = {
   turnActive: false,
   lastActivityAt: 0,
   bornTicketless: true,
+  scheduledResume: null,
 };
 
 describe("createSurfaceStore", () => {
@@ -62,7 +62,18 @@ describe("createSurfaceStore", () => {
       queueAtNotify = store.getState().sessions["s1"]?.queue.length ?? -1;
     });
 
-    store.getState().enqueue("s1", { id: "q1", text: "hello" });
+    store.getState().setQueue(
+      "s1",
+      [
+        {
+          id: "q1",
+          commandId: "q1",
+          state: "queued",
+          message: { id: "q1", role: "user", parts: [{ type: "text", text: "hello" }] },
+        },
+      ],
+      1,
+    );
 
     expect(queueAtNotify).toBe(1);
   });
@@ -109,8 +120,7 @@ describe("createSurfaceStore", () => {
     store.getState().attaching("ghost");
     store.getState().delivered("ghost", 0);
     store.getState().settle("ghost", "gone");
-    store.getState().enqueue("ghost", { id: "q1", text: "hello" });
-    store.getState().dequeue("ghost", "q1");
+    store.getState().setQueue("ghost", [], 1);
 
     expect(store.getState().sessions).toEqual({});
     expect(notified).toBe(0);
@@ -126,8 +136,7 @@ describe("createSurfaceStore", () => {
     });
 
     store.getState().applyStream("s1", [], []);
-    store.getState().enqueue("s1", { id: "q1", text: "   " });
-    store.getState().dequeue("s1", "never-queued");
+    store.getState().setQueue("s1", [], -1);
 
     expect(store.getState().sessions["s1"]).toBe(before);
     expect(notified).toBe(0);

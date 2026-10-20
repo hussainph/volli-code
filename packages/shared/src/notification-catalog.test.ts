@@ -64,6 +64,7 @@ describe("producer catalog", () => {
       "run-attention",
       "session-watchdog",
       "harness-input-needed",
+      "scheduled-resume-skipped",
     ]);
     expect([...producersForNotificationEvent("finished")]).toEqual(["pull-request-merged"]);
     // Maintenance that takes back a resource nobody is using: the folder
@@ -130,7 +131,7 @@ describe("notificationProducerAllowed", () => {
 
 describe("notificationTargetMatches", () => {
   it("matches only when the window is showing the very item the alert names", () => {
-    // VC-295 round 2: a Session id is not the target. A person looking at one
+    // VC-295: a Session id is not the target. A person looking at one
     // question in a Session must still be told about the failure that just
     // stopped it, so the whole scoped target has to agree.
     expect(
@@ -173,7 +174,7 @@ describe("notificationTargetMatches", () => {
   });
 
   it("does not match the same local id under another project", () => {
-    // Round 3. Ids are UUIDs today, but the scope is part of the target and a
+    // Ids are UUIDs today, but the scope is part of the target and a
     // comparison that drops it is one import, one fixture, or one future
     // scoped-id scheme away from silencing another workspace's alert.
     expect(notificationTargetMatches(session("s1"), session("s1", { projectId: "p2" }))).toBe(

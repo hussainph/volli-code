@@ -266,7 +266,7 @@ const DIRECTORIES = [
   "packages/shared/src",
   "packages/session-engine/src",
   "packages/cli/src",
-  "docs/plans",
+  "docs/licensing",
   ".volli/artifacts",
 ];
 

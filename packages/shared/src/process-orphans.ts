@@ -178,6 +178,39 @@ export interface OrphanProcessCandidate {
   reason: string;
 }
 
+/** A reap names only processes from one main-owned scan revision (VC-341). */
+export interface OrphanProcessReapInput {
+  scanRevision: string;
+  itemIds: string[];
+}
+
+/**
+ * The exact list of running processes a person is shown before any of them may
+ * be signalled (VC-341). `candidates` carries both sources — the spawn ledger's
+ * owned children and the cwd sweep's double-forkers — and the stance that says
+ * which of them Volli is prepared to kill.
+ */
+export interface OrphanProcessInventory {
+  revision: string;
+  scannedAt: number;
+  candidates: OrphanProcessCandidate[];
+  /** How many of them carry a Reap; the rest are listed for context only. */
+  reapableCount: number;
+}
+
+/** One candidate a reap declined, with what was found instead. */
+export interface OrphanProcessKept {
+  candidate: OrphanProcessCandidate;
+  reason: string;
+}
+
+/** What one explicit reap actually did. */
+export interface OrphanProcessReapReport {
+  reaped: OrphanProcessCandidate[];
+  kept: OrphanProcessKept[];
+  reapedCount: number;
+}
+
 export interface OrphanProcessScanInput {
   now: number;
   /** Every process the inventory saw, with cwds merged in where the sweep found them. */

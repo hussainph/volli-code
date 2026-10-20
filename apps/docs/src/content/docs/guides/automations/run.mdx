@@ -1,0 +1,48 @@
+---
+title: Run an Automation and read Runs
+description: Start a saved Automation and open the Session it created.
+sidebar:
+  label: Run
+---
+
+A **Run** is one start of a saved Automation. Each Run opens a fresh Session
+with the Automation's **Instructions** as its first message. It does not resume
+an existing Session.
+
+## Run an Automation by hand
+
+1. Open the **Automations** page and select an Automation.
+2. Select **Run**.
+3. If the Automation has no **On a schedule** Trigger, Volli opens a dialog
+   titled `Run "<name>" on`. Type in its **Find a ticket** field and select a
+   ticket.
+
+A scheduled Automation runs at the project level and opens a Board Session.
+
+You can also start a Run from a ticket's **Automations** section or from
+**Automations** on its board card's context menu. In the ticket workspace,
+choose a model under **Run on** to override the model and reasoning for one Run;
+the Automation armed for the ticket's column appears first. The command palette
+also lists Automations and runs the one you pick on the ticket you have open.
+
+The **Automatic triggers** switch controls automatic starts only. You can run an
+Automation by hand while its switch is off. A Run uses the Automation's
+**Runtime**, unless you select a one-time override in the ticket workspace.
+
+## Read Runs and skipped occurrences
+
+Select an Automation to see its **Runs** list. Rows are newest first. Each row
+shows the Automation name, target, resolved model and reasoning, how the Run
+started, and when. Select a Run to open the Session it created. The row records
+the model that actually started that Session, even if the Automation's Runtime
+changes later.
+
+A missed scheduled time appears in history with its reason. Select **Run now**
+to start one Run at the same project scope; it does not replay every missed
+occurrence. See [Schedule an Automation](/guides/automations/schedules/) for how
+Volli handles missed schedule times.
+
+Select **Project activity** in the Automations page to read the combined Runs
+and skipped occurrences across the project. This history stays available if you
+later delete an Automation. Deleting the Automation does not delete its past
+Runs.

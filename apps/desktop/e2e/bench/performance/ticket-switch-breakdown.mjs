@@ -34,8 +34,8 @@
  *   cost of actually building the ticket page, its rail and its panels.
  *   Before VC-385's review it was stamped during render instead, where it
  *   landed at the START of the workspace's render and the segment measured
- *   only the scheduling gap ahead of it — the four reports published under
- *   `docs/performance-baselines/vc-385-*` carry that earlier meaning, and their
+ *   only the scheduling gap ahead of it — the four VC-385 before/after
+ *   reports published then carry that earlier meaning, and their
  *   `rebuild workspace` and `description editor` lines are not comparable to
  *   later runs (their sum, and the total, are).
  * - `ticket-description.ready` is stamped only by the ticket-body editor, not

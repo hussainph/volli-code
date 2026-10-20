@@ -47,9 +47,14 @@ import { AccountUsage } from "@renderer/components/usage-limits/account-usage";
 import { UsageLimitsPopover } from "@renderer/components/usage-limits/usage-limits-popover";
 import { ModelAccessProvider, type ModelAccessClient } from "@renderer/lib/model-access-client";
 
+import { appApi } from "../seed";
+
 export const title = "Usage limits (VC-263 · VC-271 · VC-350)";
 export const note =
   "Remaining bar, elapsed hairline, tone by colour — including the chrome popover that hosts them";
+
+/** The popover's pins persist through `appState.set` (VC-452); the seed answers it. */
+export const api = appApi;
 
 /** One moment, so every countdown and pace reading is exact. */
 const NOW = Date.parse("2026-03-01T12:00:00Z");
@@ -314,6 +319,8 @@ const CLIENT: ModelAccessClient = {
   setHiddenModels: () => Promise.reject(new Error("not part of this scratch")),
   compactionPolicy: () => Promise.reject(new Error("not part of this scratch")),
   setCompactionPolicy: () => Promise.reject(new Error("not part of this scratch")),
+  codeModePolicy: () => Promise.reject(new Error("not part of this scratch")),
+  setCodeModePolicy: () => Promise.reject(new Error("not part of this scratch")),
   pickerView: () => Promise.reject(new Error("not part of this scratch")),
   setPickerView: () => Promise.reject(new Error("not part of this scratch")),
   beginSignIn: () => Promise.reject(new Error("not part of this scratch")),

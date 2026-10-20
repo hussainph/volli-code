@@ -1,3 +1,4 @@
+import type { SessionOrigin } from "./session-origin";
 /**
  * The append-only ticket event log (`ticket_events` table, migration 001):
  * every mutation records one event in the same transaction as its row
@@ -90,6 +91,7 @@ export const TICKET_EVENT_KINDS = [
   // started Session; surfaces shorten the id before showing it (full Session
   // UUIDs never cross the socket).
   "session_started",
+  "session_resumed",
 ] as const;
 
 export type TicketEventKind = (typeof TICKET_EVENT_KINDS)[number];
@@ -167,13 +169,20 @@ export type TicketEventPayload =
   /**
    * The retention pass trimmed the worktree's ignored content (VC-340).
    * `entries` is how many ignored paths were removed and `bytes` their apparent
-   * size; `kept` is how many ignored paths were PRESERVED as configuration,
-   * because that number is the difference between a trim and a `git clean -fdX`.
+   * size; `kept` is how many ignored paths were KEPT (preserved configuration,
+   * nested git repositories), because that number is the difference between a
+   * trim and a blind `git clean -fdX`.
    */
   | { kind: "worktree_trimmed"; entries: number; bytes: number; kept: number }
   | { kind: "attachment_added"; attachmentId: string; label: string }
   | { kind: "attachment_removed"; attachmentId: string; label: string }
-  | { kind: "session_started"; sessionId: string };
+  | { kind: "session_started"; sessionId: string; origin?: SessionOrigin }
+  | {
+      kind: "session_resumed";
+      sessionId: string;
+      attachmentId: string;
+      origin: SessionOrigin | null;
+    };
 
 /**
  * The `ensure`-pipeline stage a `worktree_failed` event aborted at
@@ -355,13 +364,17 @@ export interface TicketEvent {
  * The latest durable Session outcome for one ticket, denormalized for the
  * sidebar's batched attention read. It crosses the existing IPC seam without
  * making immutable Session facts planner history.
+ *
+ * "Latest" is the one the owning ledger accepted most recently, in local
+ * ledger order — not the largest `createdAt`, which is what a source claimed
+ * and can move backwards with a clock (VC-512).
  */
 export interface LatestSessionSignal {
   ticketId: string;
   sessionId: string | null;
   signal: "done" | "blocked";
   reason: string | null;
-  /** Epoch milliseconds. */
+  /** Epoch milliseconds: when the signal's source said it happened. */
   createdAt: number;
 }
 

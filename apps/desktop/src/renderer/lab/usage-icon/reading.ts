@@ -1,0 +1,223 @@
+/**
+ * What the window-bar glyph is asked to draw, derived from what the popover
+ * already lists (VC-376).
+ *
+ * This module exists so the candidate drawings next door cannot each invent
+ * their own idea of "the account closest to running out". `accounts.ts` in the
+ * app already picks that account and its binding window for the collapsed row,
+ * and `usageTone` in shared already decides the colour — an icon that computed
+ * either one itself could disagree with the bars it sits above, which is the
+ * one failure the redesign is not allowed to have.
+ *
+ * SO NOTHING NEW IS COMPUTED HERE. Everything below is a rearrangement of
+ * `UsageLimitAccount` into what the picker can compare at the old 14px rung
+ * and the chosen 26px box: one lead reading, windows in a stable order for
+ * the stacked figures or segmented ring, and other accounts for the dots.
+ *
+ * THE PIN IS THE ONE ADDITION, and it is deliberately a lens rather than a
+ * fact: pinning changes which window the glyph reports, never which window is
+ * binding. An unpinned glyph tracks whatever is nearest to running out, which
+ * is right nearly always and wrong exactly when a person is nursing one
+ * particular window through a long Session. See `PinnedWindow`.
+ */
+
+import {
+  elapsedShare,
+  paceOf,
+  remainingPercent,
+  usageTone,
+  type UsagePace,
+  type UsageTone,
+  type UsageWindow,
+  type UsageWindowKind,
+} from "@volli/shared";
+
+import type { UsageLimitAccount } from "@renderer/components/usage-limits/accounts";
+
+/** What the surface knows, mirroring the popover's own `Reading`. */
+export type ReadingKind = "unread" | "failed" | "read";
+
+/**
+ * A window the person chose to keep the glyph on, identified the way a
+ * snapshot identifies one: provider plus window id. Both are stable across
+ * reads, so a pin survives a Refresh, a sign-out of some other account, and a
+ * window whose numbers moved.
+ */
+export interface PinnedWindow {
+  providerId: string;
+  windowId: string;
+}
+
+/** One window, with the things a drawing needs and nothing else. */
+export interface WindowReading {
+  id: string;
+  kind: UsageWindowKind;
+  label: string;
+  /** 0–100, whole points — the same rounding the popover's rows print. */
+  remaining: number;
+  tone: UsageTone;
+  /**
+   * Ahead of, on, or under an even burn across the window; null when the
+   * window cannot be placed in time. Straight from `paceOf`.
+   */
+  pace: UsagePace | null;
+  /**
+   * Where {@link remaining} WOULD be, 0–100, if spending had tracked the clock
+   * exactly — which is just the share of the window still to run.
+   *
+   * This is the number that makes pace drawable instead of merely coloured.
+   * `usageTone` turns amber on pace alone, so a window with 39% left and 45%
+   * of its time still to run is amber while a healthy 39% is not, and the two
+   * draw an IDENTICAL arc. Colour ends up the only difference between them,
+   * which is the one thing this redesign may not do.
+   *
+   * Given `paceOf`'s own definition, whenever pace is `ahead` this figure is
+   * at least `USAGE_PACE_BAND_POINTS` GREATER than `remaining` — so a mark at
+   * this position always falls in the empty track beyond the arc's tip, never
+   * on top of it, and the gap between tip and mark is the deficit itself.
+   */
+  onPace: number | null;
+}
+
+/** One account reduced to what a glyph can carry about it. */
+export interface AccountReading {
+  providerId: string;
+  label: string;
+  /** Sorted by {@link KIND_ORDER}, so a segment's position means one thing. */
+  windows: readonly WindowReading[];
+  /** The window with the least left — `accounts.ts` picked it, not us. */
+  binding: WindowReading | null;
+}
+
+/**
+ * Everything the glyph draws, in one object.
+ *
+ * `lead` is the account the ring reports: the pinned one if a pin resolves,
+ * otherwise the nearest to running out, which `accounts.ts` already sorted to
+ * the front. `others` is every remaining metered account — a count for the
+ * dots, plus each one's tone so a dot can say "not this one, but look".
+ */
+export interface IconReading {
+  kind: ReadingKind;
+  /** Null when read succeeded but nothing is metered, and on unread/failed. */
+  lead: AccountReading | null;
+  /** The window the ring's arc reports. Null when the lead has none. */
+  reported: WindowReading | null;
+  /** Whether {@link reported} came from a pin rather than from the sort. */
+  pinned: boolean;
+  others: readonly AccountReading[];
+}
+
+/**
+ * Session first, then the longer spans. A segmented ring is only readable if a
+ * segment's position is fixed, so the order is by window FAMILY and never by
+ * value: a ring whose segments reshuffled as numbers moved would be a ring
+ * nobody could learn.
+ */
+const KIND_ORDER: Record<UsageWindowKind, number> = {
+  session: 0,
+  weekly: 1,
+  monthly: 2,
+  other: 3,
+};
+
+export function iconReading(
+  kind: ReadingKind,
+  accounts: readonly UsageLimitAccount[],
+  now: number,
+  pin: PinnedWindow | null = null,
+): IconReading {
+  if (kind !== "read") {
+    return { kind, lead: null, reported: null, pinned: false, others: [] };
+  }
+  // An account whose own read failed has no window to report and no tone to
+  // contribute. It stays in the popover, where a line can explain it; it is
+  // nothing to a glyph, so it is dropped before the dots are counted.
+  const readings = accounts.map((account) => accountReading(account, now)).filter(hasBinding);
+  if (readings.length === 0) {
+    return { kind, lead: null, reported: null, pinned: false, others: [] };
+  }
+
+  const pinnedIndex =
+    pin === null ? -1 : readings.findIndex((r) => r.providerId === pin.providerId);
+  const pinnedWindow =
+    pin === null || pinnedIndex === -1
+      ? undefined
+      : readings[pinnedIndex]?.windows.find((w) => w.id === pin.windowId);
+  // A pin whose account signed out, or whose window the provider stopped
+  // reporting, silently falls back to the sort rather than blanking the glyph.
+  // The pin is a preference about a drawing, not a promise the provider made.
+  const leadIndex = pinnedWindow === undefined ? 0 : pinnedIndex;
+  const lead = readings[leadIndex] ?? null;
+  const others = readings.filter((_, index) => index !== leadIndex);
+
+  return {
+    kind,
+    lead,
+    reported: pinnedWindow ?? lead?.binding ?? null,
+    pinned: pinnedWindow !== undefined,
+    others,
+  };
+}
+
+function accountReading(account: UsageLimitAccount, now: number): AccountReading {
+  const windows = account.limits.windows
+    .map((window) => windowReading(window, now))
+    .toSorted((left, right) => KIND_ORDER[left.kind] - KIND_ORDER[right.kind]);
+  const bindingId = account.binding?.id;
+  return {
+    providerId: account.providerId,
+    label: account.label,
+    windows,
+    binding: windows.find((window) => window.id === bindingId) ?? null,
+  };
+}
+
+function windowReading(window: UsageWindow, now: number): WindowReading {
+  const elapsed = elapsedShare(window, now);
+  return {
+    id: window.id,
+    kind: window.kind,
+    label: window.label,
+    // Rounded here, once, so the arc and any number printed inside it are the
+    // same figure the popover's row prints. A ring drawn from 7.4 beside a row
+    // that says 7% is the surface disagreeing with itself by one point.
+    remaining: Math.round(remainingPercent(window)),
+    tone: usageTone(window, now),
+    // Both from shared, neither re-derived: the mark the glyph draws has to be
+    // the same comparison `usageTone` coloured it from, or the drawing would
+    // contradict its own colour.
+    pace: paceOf(window, now),
+    onPace: elapsed === null ? null : Math.round((1 - elapsed) * 100),
+  };
+}
+
+function hasBinding(
+  account: AccountReading,
+): account is AccountReading & { binding: WindowReading } {
+  return account.binding !== null;
+}
+
+/**
+ * The accessible name the button carries.
+ *
+ * `usage-limits-popover.test.tsx` finds the trigger by `aria-label="Usage
+ * limits"`, and more to the point a control whose whole name changes with a
+ * number is a control nobody can tell a screen reader to press. So the name
+ * keeps its stable head and the reading is a suffix — "Usage limits, 8% left
+ * on Anthropic Session" — which `getByLabelText(/^Usage limits/)` and a
+ * `[aria-label^="Usage limits"]` query both still find.
+ */
+export function iconLabel(reading: IconReading): string {
+  if (reading.kind === "unread") return "Usage limits";
+  if (reading.kind === "failed") return "Usage limits, not read";
+  if (reading.reported === null || reading.lead === null) return "Usage limits, none metered";
+  const head = `Usage limits, ${reading.reported.remaining}% left on ${reading.lead.label} ${reading.reported.label}`;
+  // Pace is named, not implied by the amount. A reader who hears "39% left"
+  // has been told the arc and not the colour, and on this state the colour is
+  // the whole point — the same words would otherwise describe a window that is
+  // comfortably fine. The glyph draws a mark here; this is its equivalent.
+  const paced = reading.reported.pace === "ahead" ? `${head}, ahead of pace` : head;
+  if (reading.others.length === 0) return paced;
+  return `${paced}, ${reading.others.length} more metered`;
+}

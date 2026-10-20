@@ -14,17 +14,21 @@
  * facts; an executor states what happened and never what to record.
  */
 
+import type { SessionStopDetail } from "./session-stop";
+
 import type { RuntimeImageInput } from "./blob";
 import type { ActivityDescriptor } from "./session-activity";
 import type { WorkspaceDependenciesStatus } from "./session-env";
 import type {
-  AuthorityDenialCause,
-  AuthoritySnapshot,
+  BudgetCauseId,
   CodingToolId,
+  ConfirmCauseId,
   NonCodingToolId,
   SessionToolId,
 } from "./authority";
 import { NON_CODING_TOOL_IDS } from "./authority";
+import type { DecisionAnswered, DecisionMiss } from "./decision-model";
+import { parseCodeModeSurface, type CodeModeSurface } from "./code-mode";
 import type { ModelAccessSignInMethod } from "./model-access-sign-in";
 import { validateMcpToolDefinitions } from "./mcp";
 import type { McpJsonValue, McpToolDefinition, McpToolId } from "./mcp";
@@ -269,6 +273,8 @@ export type ExecutionVenue = "local";
  * lets {@link SessionToolBinding} carry the right thing for each.
  */
 export interface RuntimeToolBundle {
+  /** Compatible versioned verb copy; absent preserves historical description bytes. */
+  refreshDescriptions?: true;
   /** Coding tools, in the order this venue offers them. */
   tools: readonly CodingToolId[];
   /**
@@ -300,6 +306,19 @@ export interface RuntimeToolBundle {
   todoWrite?: boolean;
   /** Sanitized dynamic MCP definitions, frozen in provider order. */
   mcp?: readonly McpToolDefinition[];
+  /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
+  mcpManagementNames?: "server";
+  /** Multi-question ask_user declaration, frozen at birth; absent keeps the original surface. */
+  askUserQuestions?: true;
+  /**
+   * Whether this Session's surface names `codemode`, and if so the route of
+   * every other tool and the limits each script run is held to (VC-471).
+   *
+   * `todo_write`'s reasoning: no port answers Code Mode — the runtime builds
+   * it over the Session's own tools — so the bundle is what decides it. Absent
+   * on every Session born without it, which keeps their surface unchanged.
+   */
+  codeMode?: CodeModeSurface;
 }
 
 /** Generated Runtime Brief, delivered as persisted Session input. */
@@ -325,72 +344,33 @@ export interface RuntimeRecoveryRef {
 }
 
 /**
- * Which half of {@link AuthorityFallback} sent the runtime to ask — or, for
- * `budget`, the fact that no denial accrued at all.
+ * An earlier, closed attachment whose conversation a fresh one continues
+ * (VC-457, `context_replay` continuity).
  *
- * Worth naming rather than collapsing, because the three mean different things
- * to the person answering: a run of refusals back to back means the policy is
- * in the way of one line of work, a total across the Session means it is in
- * the way of the Session, and a budget means nothing was refused yet — an
- * allowance ran out and the call is waiting on "a little more" (VC-204).
- * `budget` asks are raised by a verb's own door rather than by the escalation
- * counter, so they never advance either {@link AuthorityFallback} threshold:
- * the person already answered, and counting that answer as friction would
- * escalate twice over one decision.
- *
- * `confirm` is the fourth, and it is not a refusal at all (VC-380). Nothing
- * denied the call and no allowance ran out: the operation is simply one that
- * asks before it acts, because it starts a process as the user or breaks
- * reattachment for older Sessions. It shares `budget`'s standing with the
- * escalation counter — it advances no threshold — but it must not borrow
- * `budget`'s name, or the denial ledger would count a confirmation as a spent
- * allowance and escalate a Session that was never refused anything. The same
- * separation {@link CONFIRM_CAUSE_IDS} keeps on the cause side.
+ * A stopped Session that a person sends a message to gets a new attachment,
+ * and a new attachment gets a new Pi sidecar — which, until this existed,
+ * meant a model that had never heard of the work it was doing. This names
+ * the sidecar the previous attachment wrote, so the new one can seed its
+ * context from it. Read, never reopened: the new attachment keeps its own
+ * sidecar and its own identity, and the earlier one's durable Session facts
+ * are already in the ledger and are not replayed.
  */
-export type RuntimeAskTrip = "consecutive" | "session" | "budget" | "confirm";
+export interface RuntimeContextCarry extends RuntimeRecoveryRef {
+  /** The attachment that wrote that sidecar, which its identity must name. */
+  attachmentId: string;
+  /** The directory that attachment ran in; sidecars are listed per workspace. */
+  workspacePath: string;
+}
 
-/**
- * One escalation: a question the runtime blocks on because its own policy keeps
- * refusing.
- *
- * Deliberately a port and not an observation. An observation states what
- * happened and expects no reply; this needs an answer before the tool call it
- * belongs to can proceed either way. Keeping it a typed port is also what keeps
- * `@volli/agent-runtime` free of ledger types — the host owns the interaction
- * record, and the runtime owns only the question.
- */
+/** Questions the runtime may ask for an exhausted budget or existing confirmation. */
+export type RuntimeAskTrip = "budget" | "confirm";
 export interface RuntimeAskRequest {
-  /** The rule that refused, or `call.unreadable` when the gate refused before any ran. */
-  cause: AuthorityDenialCause;
-  /** The runtime tool name as requested, which may not be a tool Volli offers. */
+  cause: BudgetCauseId | ConfirmCauseId;
   tool: string;
-  /**
-   * The runtime's own id for the call being judged.
-   *
-   * Carried so a producer can correlate the question to the activity row it is
-   * about. Without it an ask can only ever be shown at the foot of the
-   * transcript, never against the call that raised it.
-   */
   toolCallId: string;
-  /** The turn the blocked call belongs to. Null before the first turn opens. */
   turnId: string | null;
-  /** The refusing rule's own words, as the model would otherwise have received them. */
   reason: string;
   trip: RuntimeAskTrip;
-  /**
-   * Whether a person may overrule this refusal.
-   *
-   * Not "could the call run if this layer stood aside" — for the hard-deny rules
-   * that is true and is exactly why they are not overridable. See
-   * {@link OVERRIDABLE_AUTHORITY_RULES}, which keeps the two reasons apart: some
-   * refusals an override could not honour anyway, because the tool is not
-   * loaded; the rest are perfectly grantable and must not be granted, because a
-   * login item or a disabled certificate check outlives the Session that asked
-   * for it.
-   *
-   * The runtime enforces this rather than trusting it: a host that answers
-   * `allow` to a refusal that is not overridable is not obeyed.
-   */
   overridable: boolean;
 }
 
@@ -478,8 +458,15 @@ export interface RuntimeAskUserOption {
   description?: string;
 }
 
+/** One related decision in the simplified, birth-marked ask_user declaration. */
+export interface RuntimeAskUserQuestion {
+  question: string;
+  /** Short answer choices. Empty means prose only; free text is always available. */
+  choices: readonly string[];
+}
+
 /**
- * One question the model decided to put to the person driving the Session.
+ * One request the model decided to put to the person driving the Session.
  *
  * A separate port from {@link RuntimeAskRequest}, and separate for a reason that
  * survives their similar shapes: an escalation is the runtime's own policy
@@ -494,6 +481,8 @@ export interface RuntimeAskUserOption {
 export interface RuntimeAskUserRequest {
   /** The runtime's own id for the asking call, so the question can be shown against it. */
   toolCallId: string;
+  /** Related decisions in the birth-marked declaration; historical flat calls stay unchanged. */
+  questions?: readonly RuntimeAskUserQuestion[];
   /** What the model wants to know, in its own words. */
   question: string;
   /** Absent or empty means the model wants prose rather than a choice. */
@@ -547,6 +536,40 @@ export interface RuntimeWebDocument {
   text: string;
   /** Whether the boundary cut the text short of the document's end. */
   truncated: boolean;
+  /**
+   * The text before the character bound cut it, when that bound did (VC-237):
+   * for the runtime to save beside the Session, never to show the model.
+   */
+  whole?: RuntimeWholeText;
+  /**
+   * How a GitHub page URL was read instead of as a page, when it was: a `blob`
+   * URL as the raw file it shows, a `tree` URL as the listing GitHub's git
+   * trees API gives for that directory. Set only when the answer came from the
+   * host the rewrite expected; absent for every other read. A fixed vocabulary
+   * rather than prose, so the runtime states it in its own words.
+   */
+  via?: "github-raw-file" | "github-directory-listing";
+}
+
+/**
+ * The whole of a read whose bounded copy is what the model reads (VC-237).
+ *
+ * A host bound exists to keep one result small enough for a conversation, and
+ * a dense page is exactly where the part it cut is the part someone needs. So
+ * the host hands the runtime this beside the bounded copy, and the runtime
+ * saves it to the Session's own saved tool output and names the file in the
+ * result: the model reads the bounded copy, and the rest only by asking for
+ * it. Untrusted exactly as the bounded copy is, and never part of the content
+ * a model is sent.
+ */
+export interface RuntimeWholeText {
+  text: string;
+  /**
+   * Whether even this stops at one of Volli's own bounds short of the source's
+   * end — the most of a page a parse or a tree walk takes on, or the console a
+   * tab keeps — because the whole is still a bounded read, not an unbounded one.
+   */
+  bounded: boolean;
 }
 
 /**
@@ -677,6 +700,20 @@ export interface RuntimeBrowserSnapshot extends RuntimeBrowserPage {
   /** Whether the host cut the tree at its own bound before the page ended. */
   truncated: boolean;
   /**
+   * The tree printed past the bound that cut {@link snapshotText}, when one
+   * did (VC-237), for the runtime to save. Only the elements
+   * {@link snapshotText} shows carry refs in it: an element past the cut was
+   * never shown, so it has no ref to act on.
+   */
+  whole?: RuntimeWholeText;
+  /**
+   * Whether the tree exposed nothing at all (VC-277): the page has rendered no
+   * accessible structure yet, or draws without any. A read that failed or
+   * timed out never answers with this — it fails the call — so an empty
+   * {@link snapshotText} with this false is Volli's bound, never the page.
+   */
+  empty: boolean;
+  /**
    * An opaque id for the picture the host took of the page after this call
    * changed it, for the person's transcript card — never the bytes, which
    * stay with the host (VC-238). Null when nothing changed (a plain read) or
@@ -693,6 +730,16 @@ export interface RuntimeBrowserActResult extends RuntimeBrowserSnapshot {
    * was empty. Null altogether for page-level actions (press, scroll, wait).
    */
   target: { ref: string; name: string | null } | null;
+  /**
+   * What Volli saw move between the tab as the action found it and the fresh
+   * read after it (VC-277), so a click the page ignored reads differently
+   * from one that worked: the tab's URL, its navigation generation, and the
+   * accessibility tree's content — roles, names, values and states such as
+   * checked or expanded, but not focus, which every click moves. The tree is
+   * compared with the latest read before the action, so a page that changes
+   * by itself can read as changed.
+   */
+  changed: { url: boolean; generation: boolean; tree: boolean };
 }
 
 /**
@@ -729,9 +776,40 @@ export interface RuntimeBrowserActRequest {
   waitMs?: number;
 }
 
-/** A captured Browser Tab image, bounded by the host before it reaches anyone. */
+/**
+ * One bounded search of a Browser Tab's accessibility tree (VC-364): the
+ * subtrees whose accessible names or text contain a literal query, each under
+ * its path from the root, printed in the snapshot's dialect with refs that are
+ * as actionable — and as strictly judged — as a snapshot's.
+ *
+ * Everything in {@link findText} is page-derived and untrusted, exactly as a
+ * snapshot's text is. The counts beside it are Volli's: how many matches the
+ * search found and showed, and whether the tree had anything in it at all —
+ * so "no match" and "an empty page" never read the same.
+ */
+export interface RuntimeBrowserFind extends RuntimeBrowserPage {
+  /** The query as the model gave it; its own words, never the page's. */
+  query: string;
+  /** The matching subtrees, already bounded by the host; empty when nothing matched. */
+  findText: string;
+  /** The generation the refs belong to, as for a snapshot. */
+  generation: number;
+  /** Every match in the tree the host searched. */
+  matches: number;
+  /** The matches {@link findText} shows. */
+  shown: number;
+  /** Whether the host cut the search or its answer at its own bound. */
+  truncated: boolean;
+  /** Whether the tree exposed nothing at all — distinct from matching nothing. */
+  empty: boolean;
+}
+
+/** A captured Browser Tab image. */
 export interface RuntimeBrowserScreenshot extends RuntimeBrowserPage {
-  /** PNG bytes, base64. The host owns scale and size bounds. */
+  /**
+   * PNG bytes, base64, at the capture's own resolution. The runtime bounds the
+   * copy it hands a model; this one is what the host keeps for the person.
+   */
   base64Png: string;
   /** The host's id for the same picture, kept for the person (VC-238). Null when the host keeps none. */
   picture: string | null;
@@ -749,13 +827,19 @@ export interface RuntimeBrowserConsoleMessage {
 export interface RuntimeBrowserConsole extends RuntimeBrowserPage {
   messages: readonly RuntimeBrowserConsoleMessage[];
   truncated: boolean;
+  /**
+   * The longer console the host keeps, when {@link messages} left part of it
+   * out (VC-237), for the runtime to save: every message it still holds,
+   * oldest first, each cut only to that longer record's own bound.
+   */
+  kept?: { messages: readonly RuntimeBrowserConsoleMessage[]; bounded: boolean };
 }
 
 /**
  * The one Browser port: everything a Session can do to a Browser Tab, answered
  * by the host that owns the native surface.
  *
- * One port for six tools, deliberately. Looking and acting are one capability
+ * One port for every browser tool, deliberately. Looking and acting are one capability
  * with one answerer — the desktop's BrowserTabHost — and splitting the port
  * would invent a grant model this slice does not have; when per-tab grants
  * arrive they arrive as policy inside the host, not as port shape. Like
@@ -788,6 +872,14 @@ export interface RuntimeBrowserPort {
   acquire?(input: { tabId: string; signal: AbortSignal }): Promise<RuntimeBrowserHoldOutcome>;
   /** Give a hold back early. Releasing a tab this Session does not hold is a no-op. */
   release?(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
+  /**
+   * Search a fresh read of the tab's accessibility tree for literal text
+   * (VC-364). Optional for the hold pair's reason: a Session whose frozen
+   * surface predates `browser_find` is handed a port without it, and the
+   * surface offers the tool exactly when the port carries it. A read, so it
+   * never takes a hold; its refs replace the latest snapshot's.
+   */
+  find?(input: { tabId: string; query: string; signal: AbortSignal }): Promise<RuntimeBrowserFind>;
   /** Releases host-private debugger/controller resources when an attachment ends. */
   dispose?(): void;
 }
@@ -817,6 +909,19 @@ export function browserHoldPort(
   // narrowing is a fact about `port` rather than a copy that could lose a
   // `this`-bound method.
   return port as RuntimeBrowserHoldPort;
+}
+
+/** A Browser port that carries `find` — what `browser_find` binds to (VC-364). */
+export type RuntimeBrowserFindPort = RuntimeBrowserPort &
+  Required<Pick<RuntimeBrowserPort, "find">>;
+
+/** The port narrowed to `find`, or `undefined` when it does not carry it. */
+export function browserFindPort(
+  port: RuntimeBrowserPort | undefined,
+): RuntimeBrowserFindPort | undefined {
+  if (port?.find === undefined) return undefined;
+  // The same object, proven, for `browserHoldPort`'s reason.
+  return port as RuntimeBrowserFindPort;
 }
 
 /** How a background shell stands: still running, or exited with what it exited with. */
@@ -865,6 +970,24 @@ export function shellStanding(
 }
 
 /**
+ * How long a shell ran, in the two units that matter: `45s`, `2m 5s`, `1h 1m`
+ * (VC-495). Here beside {@link shellStanding} because the notice the model
+ * reads and the transcript row a person reads must say the same duration.
+ */
+export function formatShellRuntime(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    const rest = seconds % 60;
+    return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+/**
  * The one line a shell is named by: the first non-blank line of its command,
  * trimmed. Deliberately NOT truncated — how short a name must be is the
  * caller's business (the model's listing bounds it to fit a result; the
@@ -910,6 +1033,13 @@ export interface RuntimeShellKillOutcome {
   shells: readonly RuntimeShellRecord[];
 }
 
+/** A shell output notice's portable pattern; the host owns syntax and work bounds. */
+export interface ShellNotifyPattern {
+  pattern: string;
+  /** True for the host's bounded regular-expression subset, false for literal text. */
+  regex: boolean;
+}
+
 /**
  * The one background shell port (VC-270): everything a Session can do to a
  * command that runs beside the turn, answered by the host that owns the
@@ -932,6 +1062,12 @@ export interface RuntimeShellPort {
     /** Defaults to the Session workspace, and must stay inside it. */
     cwd?: string;
     title?: string;
+    /**
+     * Send the Session ONE notice the first time this appears in a line of the
+     * shell's output (VC-495). A literal, or a regular expression when `regex`;
+     * the host bounds it and refuses what it will not run as `shell.pattern`.
+     */
+    notifyOn?: ShellNotifyPattern;
     signal: AbortSignal;
   }): Promise<RuntimeShellStartOutcome>;
   output(input: {
@@ -943,6 +1079,33 @@ export interface RuntimeShellPort {
   kill(input: { shellId: string; signal: AbortSignal }): Promise<RuntimeShellKillOutcome>;
   /** Kills every shell this Session started and forgets them; the attachment's end. */
   dispose?(): void;
+}
+
+/**
+ * What one `classify` call came to (VC-478): the decision, or the miss that
+ * says why there is none. Never a rejection for a decision not made — the
+ * host's decision port turns every such outcome into a miss, which the tool
+ * shows the model as an error result it can recover from by deciding itself.
+ */
+export type RuntimeClassifyOutcome =
+  | { kind: "answered"; answered: DecisionAnswered }
+  | { kind: "miss"; miss: DecisionMiss };
+
+/**
+ * Ask the Session's decision model typed questions about a JSON state
+ * (VC-478).
+ *
+ * The arguments are what the model said, unchecked: the host holds the
+ * bounds, and its answer for a request that breaks one is a miss naming the
+ * bound. The port is bound to its Session at attach, so the call carries no
+ * Session, no project and no purpose — those are the host's to state.
+ */
+export interface RuntimeClassifyPort {
+  classify(input: {
+    state: unknown;
+    questions: unknown;
+    signal: AbortSignal;
+  }): Promise<RuntimeClassifyOutcome>;
 }
 
 /**
@@ -971,6 +1134,12 @@ export interface RuntimeWorkspaceEnvironment {
 }
 
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
+export interface RuntimeToolRefreshAnnouncement {
+  /** Session Event id, never an attachment-local id. */
+  id: string;
+  namespaces: readonly { name: string; count: number }[];
+}
+
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
   /**
@@ -982,29 +1151,6 @@ export interface SessionRuntimeSpec {
   workspacePath: string;
   venue: ExecutionVenue;
   model: ModelSelection;
-  /**
-   * The policy every tool call is checked against — when the Session was given
-   * one at all.
-   *
-   * Optional, and the optionality carries meaning that a value could not.
-   * Absence is not a Snapshot that allows everything: with no Snapshot the
-   * runtime installs no `beforeToolCall`, so the rule pack, the fallback
-   * thresholds and {@link ask} are structurally unreachable rather than merely
-   * permissive. A Snapshot that meant "do not consult me" would still have to
-   * carry a pack id, a pack hash and two thresholds describing rules nobody will
-   * ever run, and the one path that must not reach the gate would depend on
-   * every caller remembering to check.
-   *
-   * The desktop adapter fills it from the attaching project's `AuthorityPolicy`
-   * (VC-44), and fills it only when that policy says `enforce`. The two other
-   * postures both arrive here as absence, for different reasons: `off` builds no
-   * Snapshot at all, and `observe` builds one, records it on the attachment, and
-   * deliberately does not hand it over. So a Session whose policy is `observe`
-   * has a durable Snapshot and an unreachable gate at the same time — which is
-   * the state slice 7 wanted, and the reason this field is the seam rather than
-   * a flag inside the Snapshot.
-   */
-  authority?: AuthoritySnapshot;
   brief: RuntimeBrief;
   /**
    * The workspace's measured package state, when whoever built this spec could
@@ -1015,28 +1161,50 @@ export interface SessionRuntimeSpec {
   workspaceEnvironment?: RuntimeWorkspaceEnvironment;
   promptResources?: readonly PromptResource[];
   tools: RuntimeToolBundle;
+  /**
+   * Last cold provider-visible bundle. Omitted when equal to `tools`.
+   * Warm additions behind Code Mode change the executable bundle only; startup
+   * and recovery must render this subset, not regenerate the cached declaration
+   * from the larger executable registry. Direct additions cannot happen warm.
+   */
+  declarationTools?: RuntimeToolBundle;
+  /** Durable warm refresh facts whose keyed discovery messages survive sidecar retries/recovery. */
+  toolRefreshAnnouncements?: readonly RuntimeToolRefreshAnnouncement[];
+  /**
+   * Recompute and durably record an additions-only compatible surface before
+   * returning its full desired spec, including unchanged durable state on retry.
+   * Null also means unchanged; the runtime compares tool bundles and wired IDs.
+   * Warm/code-mode calls may add code-only tools, but must preserve provider declarations, routes and
+   * description bytes. Cold triggers may also upgrade compatible declarations.
+   * The model is the currently selected pair, not necessarily the birth model.
+   * The runtime awaits this before the next program or provider turn; failures
+   * propagate through that operation rather than silently losing an update.
+   */
+  refreshTools?: (request: {
+    trigger: "cold-turn" | "warm-turn" | "compaction" | "model-switch" | "code-mode";
+    model: ModelSelection;
+  }) => Promise<SessionRuntimeSpec | null>;
   /** Opaque Pi sidecar locator from the durable Session Attachment. */
   recovery?: RuntimeRecoveryRef;
+  /**
+   * The earlier attachment a fresh one continues (VC-457). Ignored when
+   * {@link recovery} is present: a resumed attachment already holds its own
+   * conversation, carried context included.
+   */
+  carry?: RuntimeContextCarry;
+  /**
+   * Why an earlier attachment's conversation exists but cannot be carried —
+   * its recorded binding is not one this build can read (VC-457). The
+   * attachment opens fresh and raises the same Attention a carry that failed
+   * to read does, so "there was nothing to carry" and "there was, and it was
+   * lost" never look alike. Ignored beside {@link recovery} or {@link carry}.
+   */
+  carryUnreadable?: string;
   signal?: AbortSignal;
   /**
-   * Refusals this Session already accrued, before this attachment existed.
+   * Ask a person about an exhausted budget or an existing confirmation.
    *
-   * Carried beside {@link AuthoritySnapshot} rather than inside it because a
-   * count is live machine state and not policy — the snapshot's own rule is that
-   * the facts its rules read stay live while the policy is pinned. The per-
-   * Session half of {@link AuthorityFallback} is a fact about the Session, so a
-   * counter starting from zero on every attach would never reach its threshold;
-   * the consecutive half has no equivalent, since an allowed call is not an
-   * event and only a live runtime sees both answers.
-   */
-  priorAuthorityDenials?: number;
-  /**
-   * Ask a person, and block until they answer.
-   *
-   * Optional, and its absence is a working configuration rather than a
-   * degradation: with no host to ask, the fallback thresholds have nothing to
-   * escalate to and every refusal stays silent, which is exactly what shipped
-   * before this port existed.
+   * Optional: without a host to ask, the operation stays refused.
    *
    * There is no timeout, invented or otherwise — an unanswered question parks
    * the turn for as long as it takes. `signal` is how the wait ends without an
@@ -1080,6 +1248,26 @@ export interface SessionRuntimeSpec {
     request: RuntimeAskUserRequest,
     signal: AbortSignal,
   ) => Promise<SessionInteractionResolution>;
+  /**
+   * Request a credential outside the conversation. The host owns its value and
+   * subprocess injection; the runtime receives only an outcome. Redaction is
+   * best-effort exact text matching, not protection against encoded output or
+   * a command deliberately sending a credential elsewhere.
+   */
+  /** Universal output filter, independent of request_secret tool membership. */
+  credentialRedaction?: {
+    redact(text: string): string;
+    hasValues?(): boolean;
+  };
+  secret?: {
+    request(
+      input: { name: string; purpose?: string; toolCallId: string },
+      signal: AbortSignal,
+    ): Promise<"signed in" | "declined" | "still missing">;
+    redact(text: string): string;
+    /** Whether credential values are held; absent means shell spills are disabled. */
+    hasValues?(): boolean;
+  };
   /**
    * Read one public web document, through a boundary this Session does not own.
    *
@@ -1144,6 +1332,13 @@ export interface SessionRuntimeSpec {
    */
   shell?: RuntimeShellPort;
   /**
+   * Ask the decision model, through the host's decision service (VC-478).
+   * Optional on {@link webFetch}'s terms: absence is what decides whether the
+   * model is offered `classify`, and the host wires it only for a Session
+   * whose frozen surface names the tool.
+   */
+  classify?: RuntimeClassifyPort;
+  /**
    * Call the exact server/tool identity behind this Session's frozen MCP
    * definitions. Main owns clients and transports; this typed port owns no
    * configuration and lets the model change none of it.
@@ -1176,7 +1371,11 @@ export interface SessionRuntimeSpec {
    * can act on rather than as thrown errors — the line {@link webFetch} draws
    * between a refusal and a host that could not answer at all.
    */
-  callVerb?: (request: RuntimeVerbCall, signal: AbortSignal) => Promise<RuntimeVerbResult>;
+  callVerb?: (
+    request: RuntimeVerbCall,
+    signal: AbortSignal,
+    scope?: RuntimeCallScope,
+  ) => Promise<RuntimeVerbResult>;
   /** Resolves only after the observation reaches its required consumer boundary. */
   observer: (observation: RuntimeObservation) => Promise<void>;
 }
@@ -1199,8 +1398,26 @@ export interface RuntimeMcpCall {
   toolCallId: string;
 }
 
+/**
+ * What the runtime lends one tool call while it runs (VC-471).
+ *
+ * A Code Mode program can have several calls in flight, and a host may put a
+ * question to the person driving from inside a call — a verb's spent budget,
+ * an MCP server's sign-in. `question` is the program's own door for that: the
+ * host runs its ask through it, and the program holds every question to one
+ * at a time and stops its own clock while a person answers. Absent for a call
+ * the model made directly: the host then asks exactly as it always has.
+ */
+export interface RuntimeCallScope {
+  question<T>(ask: () => Promise<T>): Promise<T>;
+}
+
 export interface RuntimeMcpPort {
-  call(request: RuntimeMcpCall, signal: AbortSignal): Promise<RuntimeMcpCallResult>;
+  call(
+    request: RuntimeMcpCall,
+    signal: AbortSignal,
+    scope?: RuntimeCallScope,
+  ): Promise<RuntimeMcpCallResult>;
 }
 
 /** One product verb call, as the runtime hands it to the host. */
@@ -1220,25 +1437,52 @@ export interface RuntimeVerbCall {
   toolCallId: string;
 }
 
+/** One JSON scalar a verb result's `details` may carry. */
+export type RuntimeVerbDetailScalar = string | number | boolean | null;
+
+/**
+ * One value of a verb result's `details`: a scalar, a list of strings, or a
+ * flat object of scalars — the shapes `VerbResultFieldSchema` can declare.
+ */
+export type RuntimeVerbDetailValue =
+  | RuntimeVerbDetailScalar
+  | readonly string[]
+  | Readonly<Record<string, RuntimeVerbDetailScalar>>;
+
 /** What the model is told a verb did. Text, because that is all a model reads. */
 export interface RuntimeVerbResult {
   text: string;
   /**
-   * Structured facts for the transcript row, never for the model (VC-9).
+   * Structured facts beside the text, never shown to a model calling the verb
+   * directly (VC-9).
    *
    * Rides the tool result's `details` slot, which the activity mapper reads
-   * and the model does not see. Exists for one row today: a `delegate` row
-   * links to the child Session by id and names it by title, and parsing
-   * either out of {@link text} would tie the transcript to the door's prose.
-   * Flat JSON scalars only, so the durable activity marker stays bounded.
+   * and the model does not see. Two readers today. A `delegate` row links to
+   * the child Session by id and names it by title, and parsing either out of
+   * {@link text} would tie the transcript to the door's prose. And a Code Mode
+   * program receives it as `details` (VC-471), typed by the verb's
+   * `resultDetails` schema in the Verb Registry when it declares one.
+   *
+   * One level deep at most — scalars, string lists, flat objects of scalars —
+   * so the durable activity marker stays small and bounded.
    */
-  details?: Readonly<Record<string, string | number | boolean | null>>;
+  details?: Readonly<Record<string, RuntimeVerbDetailValue>>;
 }
 
 /** Just enough of a spec to say what surface it describes. */
 export type SessionToolSpec = Pick<
   SessionRuntimeSpec,
-  "tools" | "askUser" | "webFetch" | "webSearch" | "browser" | "shell" | "mcp" | "callVerb"
+  | "tools"
+  | "askUser"
+  | "secret"
+  | "credentialRedaction"
+  | "webFetch"
+  | "webSearch"
+  | "browser"
+  | "shell"
+  | "classify"
+  | "mcp"
+  | "callVerb"
 >;
 
 /**
@@ -1255,6 +1499,7 @@ export type SessionToolSpec = Pick<
 export type SessionToolBinding =
   | { tool: CodingToolId }
   | { tool: "ask_user"; port: NonNullable<SessionRuntimeSpec["askUser"]> }
+  | { tool: "request_secret"; port: NonNullable<SessionRuntimeSpec["secret"]> }
   | { tool: "web_fetch"; port: NonNullable<SessionRuntimeSpec["webFetch"]> }
   | { tool: "web_search"; port: NonNullable<SessionRuntimeSpec["webSearch"]> }
   // Eight arms, one port: each browser tool carries the whole RuntimeBrowserPort,
@@ -1269,6 +1514,11 @@ export type SessionToolBinding =
   | { tool: "browser_console"; port: RuntimeBrowserPort }
   | { tool: "browser_acquire"; port: RuntimeBrowserHoldPort }
   | { tool: "browser_release"; port: RuntimeBrowserHoldPort }
+  // The search (VC-364) carries the port with its optional `find` proven.
+  | { tool: "browser_find"; port: RuntimeBrowserFindPort }
+  // Code Mode (VC-471) carries its frozen record: the runtime builds the tool
+  // over the Session's other tools, so there is no port to carry.
+  | { tool: "codemode"; codeMode: CodeModeSurface }
   // A name and nothing else, like a coding tool — but for the opposite reason.
   // A coding tool carries nothing because the runtime holds the environment
   // this package cannot see; `todo_write` carries nothing because there is
@@ -1278,6 +1528,8 @@ export type SessionToolBinding =
   | { tool: "shell_start"; port: RuntimeShellPort }
   | { tool: "shell_output"; port: RuntimeShellPort }
   | { tool: "shell_kill"; port: RuntimeShellPort }
+  // The decision model (VC-478), one name and one port, on the web tools' terms.
+  | { tool: "classify"; port: RuntimeClassifyPort }
   | {
       tool: McpToolId;
       definition: McpToolDefinition;
@@ -1290,7 +1542,7 @@ export type SessionToolBinding =
  *
  * The one derivation, and the reason there is only one. Two lists used to state
  * the same fact — the array the runtime builds, and the tool list on the
- * {@link AuthoritySnapshot} — kept equal by a caller remembering to keep them
+ * a separate policy tool list — kept equal by a caller remembering to keep them
  * equal. A caller that forgot did not produce a misconfiguration; it produced a
  * Session whose own policy refused its own tools, which is the failure VC-3 was
  * filed for. Deriving both from here is what makes that unrepresentable, and it
@@ -1320,9 +1572,12 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
   // smaller surface, and it is caught here where the cost is a thrown error
   // rather than a Session that can take a hold it cannot give back.
   const hold = browserHoldPort(browser);
+  const find = browserFindPort(browser);
   const shell = spec.shell;
   const wired: Record<NonCodingToolId, SessionToolBinding | null> = {
     ask_user: spec.askUser === undefined ? null : { tool: "ask_user", port: spec.askUser },
+    request_secret:
+      spec.secret === undefined ? null : { tool: "request_secret", port: spec.secret },
     web_fetch: spec.webFetch === undefined ? null : { tool: "web_fetch", port: spec.webFetch },
     web_search: spec.webSearch === undefined ? null : { tool: "web_search", port: spec.webSearch },
     browser_tabs: browser === undefined ? null : { tool: "browser_tabs", port: browser },
@@ -1341,6 +1596,12 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
     shell_start: shell === undefined ? null : { tool: "shell_start", port: shell },
     shell_output: shell === undefined ? null : { tool: "shell_output", port: shell },
     shell_kill: shell === undefined ? null : { tool: "shell_kill", port: shell },
+    browser_find: find === undefined ? null : { tool: "browser_find", port: find },
+    classify: spec.classify === undefined ? null : { tool: "classify", port: spec.classify },
+    codemode:
+      spec.tools.codeMode === undefined
+        ? null
+        : { tool: "codemode", codeMode: spec.tools.codeMode },
   };
   const verbs = spec.tools.verbs ?? [];
   const callVerb = spec.callVerb;
@@ -1360,7 +1621,7 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       "This Session's bundle names MCP tools, but no MCP port is wired to answer them.",
     );
   }
-  return [
+  const bindings: SessionToolBinding[] = [
     ...spec.tools.tools.map((tool): SessionToolBinding => ({ tool })),
     ...NON_CODING_TOOL_IDS.flatMap((tool) => wired[tool] ?? []),
     ...verbs.map((verb): SessionToolBinding => ({
@@ -1374,10 +1635,21 @@ export function sessionToolBindings(spec: SessionToolSpec): SessionToolBinding[]
       port: mcp as RuntimeMcpPort,
     })),
   ];
+  // Held to the surface it routes, at the boundary that builds the surface: a
+  // record routing a tool the Session does not hold, or leaving one out, is
+  // a Session whose provider tool array would differ from the one it was
+  // born with (VC-471).
+  if (spec.tools.codeMode !== undefined) {
+    parseCodeModeSurface(
+      spec.tools.codeMode,
+      bindings.map((binding) => binding.tool),
+    );
+  }
+  return bindings;
 }
 
 /**
- * The same surface as names alone — what a durable {@link AuthoritySnapshot}
+ * The same surface as names alone — what durable Session input
  * records, and what a Role bundle and a rule pack would spell.
  */
 export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
@@ -1395,6 +1667,7 @@ export function sessionToolIds(spec: SessionToolSpec): SessionToolId[] {
  * it, so it must not be mistaken for a transport fault worth retrying as is.
  */
 export interface RuntimeFailure {
+  stopDetail?: SessionStopDetail;
   reason: "auth" | "configuration" | "context" | "reasoning" | "model" | "aborted" | "unknown";
   message: string;
 }
@@ -1434,7 +1707,6 @@ export type RuntimeObservation =
   | SettledMessageObservation
   | UsageObservation
   | RuntimeActivityObservation
-  | AuthorityObservation
   | AttentionObservation
   | InteractionObservation;
 
@@ -1489,42 +1761,6 @@ export interface ProviderReasoningDroppedObservation {
   recoveryCursor?: string;
 }
 
-/**
- * The Session's authority decided whether one tool call could run.
- *
- * A denial is durable Session history, so it keeps the model-visible tool and
- * reason for the normal translation path. An allowance is observability-only:
- * the runtime reduces it straight to the metadata side channel rather than
- * making a durable fact or waiting on the Session observer. `toolCallId` is an
- * opaque local join key for that reducer; it must never leave it.
- */
-export type AuthorityObservation =
-  | {
-      kind: "authority";
-      state: "allowed";
-      /** Null before the first turn opens, which a decision need not wait for. */
-      turnId: string | null;
-      /** Pi's local tool-call id, used only to join a wait to its activity. */
-      toolCallId?: string;
-      /** Time waiting for a person, when the authority gate measured it. */
-      waitDurationMs?: number;
-      occurredAt?: number;
-    }
-  | {
-      kind: "authority";
-      state: "denied";
-      /** Null before the first turn opens, which a refusal need not wait for. */
-      turnId: string | null;
-      /** Pi's local tool-call id, used only to join a wait to its activity. */
-      toolCallId?: string;
-      /** Time waiting for a person, when the authority gate measured it. */
-      waitDurationMs?: number;
-      tool: string;
-      cause: AuthorityDenialCause;
-      reason: string;
-      occurredAt?: number;
-    };
-
 export interface AttachmentObservation {
   kind: "attachment";
   state: "started" | "recovered" | "closed" | "failed";
@@ -1533,6 +1769,7 @@ export interface AttachmentObservation {
 }
 
 export interface TurnObservation {
+  stopDetail?: SessionStopDetail;
   kind: "turn";
   state: "started" | "completed" | "interrupted";
   turnId: string;
@@ -1715,22 +1952,37 @@ export type RuntimeActivityObservation =
     });
 
 /**
- * Attention's `reason` is frozen, unlike the arms of this union.
+ * Attention's `reason` may be widened, never narrowed or renamed.
  *
  * Pi's recovery sidecar validates a persisted marker by switching on `kind` and
- * then whitelisting this exact set — and it throws rather than skipping what it
- * does not recognise. Adding a whole new observation kind is therefore safe: the
- * sidecar holds none of them, so no marker already on disk changes how it
- * validates — {@link CompactionObservation} was added exactly that way.
- * Adding a `reason` is not: every attention marker written by an older build is
- * re-validated against the new list on the next recovery, and a Session whose
- * marker no longer matches fails to attach outright.
+ * then whitelisting this exact set, so every attention marker already on disk
+ * is re-read against the current list on the next recovery. Adding a reason
+ * leaves each older marker valid. Removing or renaming one does not: a marker
+ * that stops validating is quarantined (skipped and counted, never thrown on),
+ * which costs the Session the attention state that marker held. A build OLDER
+ * than a reason quarantines that reason's markers the same way — the one price
+ * of widening, and a bounded one.
+ *
+ * `transport` is the widening (VC-443): the runtime is waiting out a network
+ * or provider failure on its own and the turn is still live. It projects to
+ * the ledger's existing `transport_retrying`, which is deliberately neither a
+ * failure nor a question — it clears itself when the provider answers, and
+ * nobody is notified about it.
  */
 export interface AttentionObservation {
+  stopDetail?: SessionStopDetail;
   kind: "attention";
   state: "raised" | "cleared";
-  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn";
+  reason: "auth" | "configuration" | "context" | "runtime-failure" | "partial-turn" | "transport";
   message: string;
+  /**
+   * On a raised `runtime-failure` only: the instant, epoch ms, at which the
+   * spent provider allowance that stopped the run comes back, when the failure
+   * stated it unambiguously (`quotaResetInstant`). A FIELD rather than a new
+   * `reason`, and optional, for the reason above: the sidecar ignores a field
+   * it does not validate, so markers already on disk still recover.
+   */
+  resetsAt?: number;
   occurredAt?: number;
   recoveryCursor?: string;
 }
@@ -1795,6 +2047,12 @@ export type DeliveryOutcome =
   | {
       kind: "delivered";
       delivery: "prompt" | "queue" | "steer" | "retry";
+      /**
+       * Timestamp of the durable command acceptance marker, when one exists.
+       * Live receipts and recovery must name the same acceptance. Absent for
+       * volatile queue admission and callers without a command identity.
+       */
+      acceptedAt?: number;
       /**
        * True only when this delivery OPENED a turn that is still running
        * (VC-324) — the `settle: "opened"` answer on an idle target.
@@ -1873,6 +2131,11 @@ export interface RuntimeAttachmentHandle {
      * behaviour it was written against.
      */
     settle?: RuntimeMessageSettle,
+    /**
+     * A host-owned steer may only join this still-accepting turn. Refuse if
+     * it ended or changed while delivery waited; never open another turn.
+     */
+    targetTurnId?: string,
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;
@@ -1918,6 +2181,8 @@ export interface UtilityCompletion {
   systemPrompt: string;
   /** The single user message. */
   user: string;
+  /** A small output budget for latency-sensitive utility explanations. */
+  maxOutputTokens?: number;
   /**
    * The caller's deadline. Background work has no one waiting on it, so a
    * provider that never answers must not leave a promise pending for the life

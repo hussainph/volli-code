@@ -23,7 +23,9 @@
  * leaves it empty — and its state is projected from `activity` and `outcome`
  * by {@link islandAgentState}, which is where the two folds the ticket ruled
  * on live. `progress` is 0: indeterminate, by decision; the arc orbits on
- * its own and `agentStateWord` prints a word for it.
+ * its own and `agentStateWord` prints a word for it. `model` is the listing
+ * row's own policy field (VC-416) — the model and effort the parent picked for
+ * this helper, which no glance surface could reach before it existed.
  *
  * THE NOW CHANNEL IS A DIFF, exactly as the tab feed's is: the listing is a
  * push cache with no history, so "delegated" and "done" are what changed
@@ -33,8 +35,10 @@
  *
  * THE VERBS ARE DOORS THE MOUNT SUPPLIES. Peek and promote go where
  * `ChatPlane` says (VC-270's precedent: the mount decides the destination,
- * the feed only calls it). Stop is a request to main — `sessions.stop`, the
- * person's door — and its refusal surfaces the way every failed mutation
+ * the feed only calls it). Stop is a request to main — `session.stop` over
+ * the shared `session.command` router (VC-533), the person's door, the
+ * mount's to override through `deps.api` with the window's RPC bridge as the
+ * Electron fallback — and its refusal surfaces the way every failed mutation
  * does; the "Stopped" flash itself comes back through the diff when the row
  * moves, so the card's confirmation is the real transition and not a hope.
  */
@@ -56,6 +60,7 @@ import {
   useProjectSessionsStore,
   type ProjectSessionRows,
 } from "@renderer/stores/project-sessions";
+import { browserIslandAgentsApi, type IslandAgentsApi } from "./island-agents-api";
 import type { IslandFlashPush } from "./use-island-flash";
 import type { ChatSessionsStore } from "./use-session-controller";
 
@@ -88,9 +93,9 @@ export function islandAgentLabel(record: Pick<ChatSessionRecord, "title">): stri
  *
  *  • `idle` is `done` or `failed` by `outcome` (VC-269 ruling): a turn that
  *    completed is done; one that was interrupted or whose executor failed is
- *    failed. `outcome === null` on an idle row is the NEWBORN case (fix-first,
- *    review c5714a22): a child sits `idle` for one beat between its row
- *    appearing and its first `turn.started` landing, before any turn has ever
+ *    failed. `outcome === null` on an idle row is the NEWBORN case: a child sits
+ *    `idle` for one beat between its row appearing and its first `turn.started`
+ *    landing, before any turn has ever
  *    ended — that is "not finished yet", not "done", so it reads `working`
  *    rather than lying that a freshly delegated helper already finished.
  *  • `interrupted` (VC-324) is `failed` — the same word an `idle` row with an
@@ -135,6 +140,10 @@ export function islandAgentOf(record: ChatSessionRecord, promoted: boolean): Isl
     progress: 0,
     state: islandAgentState(record),
     promoted,
+    // The policy the parent picked for this child (VC-416), carried straight
+    // off the listing row. Null until the Session has recorded one, which is
+    // the beat between a row appearing and its start settling.
+    model: record.model,
   };
 }
 
@@ -153,6 +162,8 @@ export interface IslandAgentsDeps {
   openSession?: (sessionId: string) => void;
   /** The UI lab's own chat-sessions store, whose `openTabs` says what is promoted. */
   store?: ChatSessionsStore;
+  /** The stop door; production rides the window's RPC bridge via {@link browserIslandAgentsApi}. */
+  api?: IslandAgentsApi;
 }
 
 const NO_RECORDS: readonly ChatSessionRecord[] = [];
@@ -240,7 +251,7 @@ export function useIslandAgents(
     seen.current = diffAgents(seen.current, agents, flash);
   }, [agents, flash, listed]);
 
-  const { peekSession, openSession } = deps;
+  const { peekSession, openSession, api } = deps;
   const labelOf = React.useCallback(
     (id: string) => agents.find((agent) => agent.id === id)?.label ?? UNTITLED_SUBAGENT,
     [agents],
@@ -255,12 +266,14 @@ export function useIslandAgents(
       // the row's handler; the refusal is a toast plus the channel's word.
       stopAgent: (id) => {
         const label = labelOf(id);
-        /* v8 ignore next -- the lab has no bridge, and no subagents to stop through one. */
-        const api = typeof window === "undefined" ? undefined : window.api?.sessions;
-        if (api === undefined) return;
+        // The door is the mount's when it supplies one; otherwise the
+        // window's RPC bridge, adapted — undefined where there is neither,
+        // which presses nowhere. Read at press time, like every door here.
+        const bridge = api ?? browserIslandAgentsApi(projectId);
+        if (bridge === undefined) return;
         void (async () => {
           try {
-            const result = await api.stop({ sessionId: id });
+            const result = await bridge.stop({ sessionId: id });
             if (!result.ok) {
               toastError(`Could not stop subagent: ${result.error}`);
               flash("Stop refused", label);
@@ -276,7 +289,7 @@ export function useIslandAgents(
         })();
       },
     }),
-    [flash, labelOf, openSession, peekSession],
+    [api, flash, labelOf, openSession, peekSession, projectId],
   );
 
   return React.useMemo(() => ({ model: { agents }, actions }), [agents, actions]);

@@ -1,3 +1,4 @@
+import { sessionStopSummary } from "@volli/shared";
 /**
  * The chat plane's decisions, without a plane.
  *
@@ -8,6 +9,7 @@
  */
 import type {
   BlobLinkView,
+  PresentedScheduledResume,
   ModelAccessModel,
   ModelAccessProvider,
   ModelAccessState,
@@ -18,6 +20,7 @@ import type {
   SessionInteractionResolution,
 } from "@volli/shared";
 import {
+  attentionResumeAt,
   findComposerVerb,
   REASONING_LEVELS,
   revealedSessionAttention,
@@ -26,11 +29,26 @@ import {
 import type { UIMessage } from "ai";
 
 import {
+  currentTurnReply,
+  isBundleStreaming,
+  segmentTurn,
   type ComposerIntent,
   type InteractionSubmission,
   type QueuedMessage,
 } from "@volli/session-presentation";
 import type { HeldMessage } from "@renderer/stores/chat-drafts";
+
+/** Use the same segmentation as the feed: stale thoughts and blank text are
+ * not visible progress. Collapsed bundles carry their live row in the header.
+ * Only the stream-owned live assistant turn can stand in for Working. */
+export function liveTurnHasProgress(messages: readonly UIMessage[] | null): boolean {
+  if (messages?.[0]?.role !== "assistant") return false;
+  return segmentTurn(messages).some((segment) =>
+    segment.kind === "bundle"
+      ? isBundleStreaming(segment.rows)
+      : segment.part.state === "streaming",
+  );
+}
 
 export function composerModelSelection(input: {
   providerId: string;
@@ -193,35 +211,17 @@ export function messageRoute(intent: ComposerIntent, deliverable: boolean): Mess
 }
 
 /**
- * The plain text of the Session's most recent reply, or null.
+ * The plain text of the most recent reply in a COMPLETE transcript, or null.
  *
- * What `/copy` copies. Walks back from the end of the transcript over the
- * assistant messages of the latest turn and returns the first one that said
- * anything — the final answer, wherever in the turn it landed — and stops at
- * the first user message, because a turn that has produced no words yet has
- * no "last reply", and silently handing back the PREVIOUS turn's words would
- * be a copy that looked right and pasted wrong.
- *
- * Reasoning and tool parts are not prose and do not travel: the clipboard
- * gets what a reader would call the reply, not the transcript's internals.
- * A message whose text parts are all whitespace has not said anything, the
- * same rule the transcript's own prose rendering follows.
+ * The rule is `currentTurnReply`'s (`@volli/session-presentation`): walk back
+ * over the latest turn's assistant messages for the first that said
+ * anything, stop at the first user message, text parts only. This is that
+ * rule for a message list known to start at the Session's first event. The
+ * chat plane holds only a window (VC-315) and asks `currentTurnReply` itself,
+ * with the host's baseline for a reply above it.
  */
 export function lastAssistantText(messages: readonly UIMessage[]): string | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (message.role !== "assistant") {
-      // The turn ended without a word: an older reply is not "the last reply".
-      if (message.role === "user") return null;
-      continue;
-    }
-    const text = message.parts
-      .flatMap((part) => (part.type === "text" ? [part.text] : []))
-      .join("\n\n")
-      .trim();
-    if (text.length > 0) return text;
-  }
-  return null;
+  return currentTurnReply({ messages, before: null, latestReply: null });
 }
 
 /**
@@ -295,56 +295,16 @@ export async function dispatchHeldMessage(acts: HeldDispatchActs): Promise<HeldD
 
 export interface QueuedMutationActs {
   queueBacked: boolean;
-  claim(): boolean;
-  consumeClaim(): boolean;
-  releaseClaim(): void;
+  cancel(): Promise<boolean>;
+  localMutable: boolean;
   dropHeld(): void;
 }
 
-/** Refuses Edit/Delete while resident delivery owns the same queue identity. */
-export function coordinateQueuedMutation(acts: QueuedMutationActs): boolean {
-  if (acts.queueBacked) {
-    if (!acts.claim()) return false;
-    if (!acts.consumeClaim()) {
-      acts.releaseClaim();
-      return false;
-    }
-  }
+/** Cancel must win host release before words or files become a draft again. */
+export async function coordinateQueuedMutation(acts: QueuedMutationActs): Promise<boolean> {
+  if (acts.queueBacked ? !(await acts.cancel()) : !acts.localMutable) return false;
   acts.dropHeld();
   return true;
-}
-
-export interface QueuedSteerActs {
-  /** One synchronous reading of both resident sources and current liveness. */
-  read(): {
-    held: readonly HeldMessage[];
-    queue: readonly QueuedMessage[];
-    steerable: boolean;
-  };
-  /**
-   * Claims the resident queue, persists the visible order, revalidates
-   * liveness, and only then consumes the target. Every non-started result has
-   * restored its source state and waited for that persistence attempt.
-   */
-  start(visible: readonly QueuedMessage[], targetId: string): Promise<QueuedSteerStart>;
-  submit(message: QueuedMessage, delivery: "steer"): Promise<QueuedSteerDelivery>;
-  /** Waits for held cleanup or refusal persistence before settling. */
-  finish(id: string, outcome: QueuedSteerDelivery): Promise<void>;
-}
-
-export type QueuedSteerDelivery = "delivered" | "recorded" | "refused";
-export type QueuedSteerOutcome = QueuedSteerDelivery | "held" | "stale";
-export type QueuedSteerStart =
-  | "started"
-  | Exclude<QueuedSteerOutcome, QueuedSteerDelivery>
-  | "refused";
-
-/** The held state an aborted steer must restore without corrupting its source. */
-export function steerRollbackState(
-  queueBacked: boolean,
-  heldState: HeldMessage["state"] | undefined,
-): HeldMessage["state"] {
-  return queueBacked ? "queued" : (heldState ?? "unsent");
 }
 
 /** True only while the exact turn targeted before an async durability wait remains active. */
@@ -361,139 +321,8 @@ export function steerTurnIsCurrent(
   );
 }
 
-export interface QueuedSteerStartActs {
-  queueBacked: boolean;
-  claim(): boolean;
-  persist(): Promise<boolean>;
-  current(): { turnEpoch: number; working: boolean; deliverable: boolean } | undefined;
-  consumeClaim(): boolean;
-  restore(): Promise<void>;
-  releaseClaim(): void;
-}
-
-/**
- * Owns the async gap between a queue click and its durable held copy. A queue
- * claim freezes resident release until this either consumes the selected row or
- * restores its source state; held-only retries take the same path without one.
- */
-export async function coordinateQueuedSteerStart(
-  targetedTurnEpoch: number | undefined,
-  acts: QueuedSteerStartActs,
-): Promise<QueuedSteerStart> {
-  let claimActive = false;
-  if (acts.queueBacked) {
-    if (!acts.claim()) return "stale";
-    claimActive = true;
-  }
-
-  let restored = false;
-  const restore = async (): Promise<void> => {
-    if (restored) return;
-    restored = true;
-    await acts.restore();
-  };
-
-  try {
-    if (!(await acts.persist())) {
-      await restore();
-      return "refused";
-    }
-    if (!steerTurnIsCurrent(targetedTurnEpoch, acts.current())) {
-      await restore();
-      return "held";
-    }
-    if (acts.queueBacked && !acts.consumeClaim()) {
-      await restore();
-      return "stale";
-    }
-    claimActive = false;
-    return "started";
-  } catch (error) {
-    await restore();
-    throw error;
-  } finally {
-    if (claimActive) acts.releaseClaim();
-  }
-}
-
-/**
- * The message a steer actually delivers, rebuilt from whichever of the two
- * records name it.
- *
- * A queue-only row — no held copy at all — is exactly what the release queue
- * already holds. A held row's own text and resources win over the queue's,
- * and so do its attachments (VC-137): the held copy is the durable one, and
- * the queue's serves only as a fallback for a held row this build wrote
- * before attachments rode it at all.
- */
-function steerMessage(
-  held: HeldMessage | undefined,
-  queued: QueuedMessage | undefined,
-): QueuedMessage | undefined {
-  if (held === undefined) return queued;
-  const attachments = held.attachments ?? queued?.attachments;
-  return {
-    id: held.id,
-    text: held.text,
-    ...(held.resources === undefined ? {} : { resources: held.resources }),
-    ...(attachments === undefined ? {} : { attachments }),
-  };
-}
-
-/**
- * Moves one existing strip row into the active turn without changing its id.
- *
- * A queue-only row gains its durable held copy before dequeue. An unsent
- * held-only row already has one. A held `queued` row whose release queue entry
- * vanished is stale: the resident client may already own it, so steering it
- * again would risk a duplicate turn.
- */
-export async function steerQueuedMessage(
-  id: string,
-  inFlight: Set<string>,
-  acts: QueuedSteerActs,
-): Promise<QueuedSteerOutcome> {
-  if (inFlight.has(id)) return "stale";
-  const snapshot = acts.read();
-  const held = snapshot.held.find((entry) => entry.id === id);
-  const queued = snapshot.queue.find((entry) => entry.id === id);
-  if (held?.state === "sending" || (held?.state === "queued" && queued === undefined)) {
-    return "stale";
-  }
-  const message: QueuedMessage | undefined = steerMessage(held, queued);
-  if (message === undefined) return "stale";
-  // A click cannot improve a queue while the Session cannot steer. In
-  // particular, never manufacture a release-queue copy for a held-only row:
-  // the resident client observes enqueue synchronously and can drain that copy
-  // before this transition marks the held source as queued.
-  if (!snapshot.steerable) return "held";
-
-  inFlight.add(id);
-  try {
-    const started = await acts.start(heldStrip(snapshot.held, snapshot.queue), id);
-    if (started !== "started") return started;
-    const outcome = await acts.submit(message, "steer");
-    await acts.finish(id, outcome);
-    return outcome;
-  } finally {
-    inFlight.delete(id);
-  }
-}
-
-/**
- * Every message this Session is holding for you, in one strip.
- *
- * Two lists say it, for two different spans. The release queue is what the
- * resident client drains and it lives as long as the window does; the persisted
- * held list is what survives one, and it is also where a message nothing took
- * goes rather than being welded onto whatever was typed after it. A message
- * that is in both — the ordinary queued one — is one row, because the id is the
- * same message in two records and not two messages.
- *
- * `sending` is excluded on purpose: the transcript is already drawing that
- * message, and a copy of it under the composer reads as one that failed to
- * leave.
- */
+/** Host-ordered follow-ups first, then local unsent recovery. Legacy queued and
+ * sending copies hydrate as unsent; never auto-adopt them into host work. */
 export function heldStrip(
   held: readonly HeldMessage[],
   queue: readonly QueuedMessage[],
@@ -505,27 +334,20 @@ export function heldStrip(
   // or Remove in that interval: either action can mint a new identity before
   // the durable message with the old one is available to reconcile it.
   if (!snapshotReconciled) return [];
-  const rows: QueuedMessage[] = [];
-  const drawn = new Set<string>();
+  // Host order and content always win over a device's recovery snapshot.
+  const rows: QueuedMessage[] = [...queue];
+  const drawn = new Set(queue.map((entry) => entry.id));
   for (const entry of held) {
-    // Sending still owns this id even though it owns no row. If the queue has
-    // not observed the start transition yet, drawing its copy would flash the
-    // target back into the strip and invite a second click.
-    drawn.add(entry.id);
-    if (entry.state === "sending" || durableMessageIds.has(entry.id)) continue;
+    if (drawn.has(entry.id) || entry.state === "sending" || durableMessageIds.has(entry.id))
+      continue;
     rows.push({
       id: entry.id,
       text: entry.text,
-      // The row is also what `beginQueuedSteer` persists back, so the skill
-      // resources riding the held copy must survive the round trip (VC-49) —
-      // and so must the files (VC-137): a strip row that redraws without its
-      // attachments is a message the person believes still carries them.
+      ...(entry.state === "unsent" ? { localUnsent: true as const } : {}),
       ...(entry.resources === undefined ? {} : { resources: entry.resources }),
       ...(entry.attachments === undefined ? {} : { attachments: entry.attachments }),
     });
   }
-  for (const entry of queue)
-    if (!drawn.has(entry.id) && !durableMessageIds.has(entry.id)) rows.push(entry);
   return rows;
 }
 
@@ -593,29 +415,15 @@ export function hasReconciledSessionSnapshot(projection: unknown): boolean {
   return projection !== null && projection !== undefined;
 }
 
-/**
- * The held copies the release queue has finished with, and nothing else.
- *
- * A `queued` copy exists for one reason: the queue is renderer memory, so
- * without it a reload loses a message a person typed. Once the queue no longer
- * names it, the release either delivered it or the person removed the row —
- * both are answers, and neither leaves this surface holding the words.
- *
- * A matching durable transcript id wins for every state: it proves the same
- * stable message identity crossed the Session seam before a renderer died.
- * Otherwise only `queued` is inferred from queue disappearance; `sending` and
- * `unsent` still need an explicit durable match.
- */
+/** Only positive transcript or host queue evidence retires a held copy. */
 export function settledHeldIds(
   held: readonly HeldMessage[],
   queue: readonly QueuedMessage[],
   durableMessageIds: ReadonlySet<string> = new Set(),
 ): readonly string[] {
-  const live = new Set(queue.map((entry) => entry.id));
+  const accepted = new Set(queue.map((entry) => entry.id));
   return held.flatMap((entry) =>
-    durableMessageIds.has(entry.id) || (entry.state === "queued" && !live.has(entry.id))
-      ? [entry.id]
-      : [],
+    durableMessageIds.has(entry.id) || accepted.has(entry.id) ? [entry.id] : [],
   );
 }
 
@@ -662,6 +470,8 @@ export interface SessionBlockerState {
   /** The harness's own wording. It qualifies the headline; it is never it. */
   detail: string | null;
   tone: "error" | "waiting" | "unconfigured";
+  /** Runtime facts and failed sends belong in the conversation, not setup chrome. */
+  placement?: "timeline";
   /**
    * Null where nothing on this surface can fix it. A button that cannot help is
    * worse than no button: it spends the reader's one attempt at recovery and
@@ -701,6 +511,10 @@ export interface SessionBlockerInput {
   catalogError: string | null;
   /** This Session's model against the catalog — see {@link sessionModelStanding}. */
   sessionModel: SessionModelStanding | null;
+  /** The resume this Session is waiting to run at a quota reset, if any. */
+  scheduledResume: PresentedScheduledResume | null;
+  /** Epoch ms: a reset already behind is not offered as a resume. */
+  now: number;
   /**
    * Providers offering an in-app sign-in, for the first-run menu. Empty is
    * honest — the row then offers Settings alone, exactly as before.
@@ -718,6 +532,10 @@ export interface SessionBlockerActs {
   dismissError(): void;
   /** Hides one rendered error locally; a changed or re-raised report returns. */
   dismiss(dismissKey: string): void;
+  /** Schedules the stopped run to resume at the reset its Attention stated. */
+  scheduleResume(input: { attentionId: string; attachmentId: string; resumeAt: number }): void;
+  /** Withdraws a scheduled resume. */
+  cancelScheduledResume(scheduleId: string): void;
 }
 
 /** Select the user's existing ticket terminal tab without creating a new one. */
@@ -735,9 +553,9 @@ export function terminalCompanionTabId(
 /**
  * What actually stops you typing, and what to do about it — nothing else.
  *
- * It sits on the composer rather than in the transcript because it is about
- * whether you can write, not about what happened in the conversation, and a
- * failure that scrolls away with the history is one nobody can act on.
+ * Setup sits on the composer. Runtime failures and waits are conversation
+ * facts, so their placement is the transcript tail, including before any
+ * model output exists.
  *
  * Four sources, in the order they answer:
  *
@@ -783,6 +601,7 @@ export function sessionBlocker(
         message: input.sessionError,
         detail: null,
         action: retry,
+        placement: "timeline",
       },
       dismissKey,
       () => {
@@ -830,14 +649,21 @@ export function sessionBlocker(
   // which is what this row has always drawn.
   // `revealedSessionAttention` is the SAME call the window reporting what it
   // shows makes, so the row and that report cannot name different problems
-  // (VC-295 round 4).
+  // (VC-295).
   const attention =
     revealedSessionAttention(input.attention.active, input.revealedAttentionId) ??
     input.attention.primary;
   if (attention) {
-    return asked && answeredByCard(attention.kind)
-      ? null
-      : attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss);
+    if (asked && answeredByCard(attention.kind)) return null;
+    return {
+      ...attentionBlocker(attention, retry, retryRuntime, settings, acts.dismiss, {
+        scheduled: input.scheduledResume,
+        now: input.now,
+        schedule: acts.scheduleResume,
+        cancel: acts.cancelScheduledResume,
+      }),
+      placement: "timeline",
+    };
   }
   // Only a catalog that has actually answered can say a person configured
   // nothing; `loading` looks identical from here and is not a blocked state.
@@ -918,13 +744,14 @@ function attentionDismissKey(attention: SessionAttention): string {
       ? attention.retryAt
       : attention.kind === "quota_exhausted"
         ? attention.resetAt
-        : null;
+        : attention.kind === "adapter_unrecoverable"
+          ? attention.resetsAt
+          : null;
   return JSON.stringify(["attention", attention.id, attention.kind, attention.detail, scheduledAt]);
 }
 
 /**
- * A provider-owned recovery: where to fix it, and the exact retry of the run it
- * broke, beside it.
+ * A provider-owned recovery: one route to fix sign-in or configuration.
  *
  * A signed-out provider reaches this surface twice — as the harness's own
  * `auth_required` after a run died, and as the Session's pinned model reading
@@ -934,16 +761,14 @@ function attentionDismissKey(attention: SessionAttention): string {
  * Board chat and a Ticket chat get the same answer and neither is sent to a
  * terminal to finish a Settings task.
  *
- * That is also why Retry is unconditional here. It used to be withheld from a
- * Board chat, on the honest ground that retrying a run whose sign-in could
- * not be reached was offering a button that could not work. The sign-in is
- * reachable from both now, so the run is retryable from both.
+ * Retry cannot repair an expired account or invalid configuration. The row
+ * offers Open settings alone instead of asking the person to diagnose which
+ * of two competing recoveries will work.
  */
 function providerRecovery(input: {
   message: string;
   detail: string | null;
   settings: SessionBlockerAction;
-  retryRuntime: SessionBlockerAction;
   dismissKey: string;
   dismiss(): void;
 }): SessionBlockerState {
@@ -951,8 +776,7 @@ function providerRecovery(input: {
     {
       message: input.message,
       detail: input.detail,
-      action: input.settings,
-      secondaryAction: input.retryRuntime,
+      action: { ...input.settings, label: "Open settings" },
     },
     input.dismissKey,
     input.dismiss,
@@ -960,8 +784,8 @@ function providerRecovery(input: {
 }
 
 /**
- * One line and one recovery action per attention kind, except Pi auth/config:
- * its existing terminal handoff and exact Retry are intentionally adjacent.
+ * One line and one immediate recovery per attention kind. Scheduled resumes
+ * retain their existing explicit scheduling/cancellation controls.
  *
  * The switch is total over the union and has no `default`: a kind added later
  * has to be answered here, not silently absorbed into whichever branch was
@@ -971,22 +795,24 @@ function providerRecovery(input: {
  * also carries a local Dismiss, which hides the current report without claiming
  * it is repaired.
  *
- * - **Settings + Retry** — Pi auth/configuration recovery sends you to Model
- *   Access, where signing in now happens, and then retries the exact failed run
- *   without submitting the user's message again. Both halves are offered to
- *   every Session: the sign-in no longer depends on a manual Ticket terminal
- *   being there to hand off to, so neither does the Retry that follows it.
- * - **Retry** — `transport_retrying`, `adapter_disconnected` and `rate_limited`.
- *   The first two are a connection to re-establish, which is exactly what
- *   `recover` does. A rate limit gets one because the wait is the whole fix; the
- *   provider's own time is shown when it sent one, and an absent one stays
- *   absent rather than becoming a guess.
+ * - **Open settings** — Pi auth/configuration recovery sends you to Model
+ *   Access, where signing in now happens, without a competing Retry.
+ * - **Retry** — `adapter_disconnected` and `rate_limited`. The first is a
+ *   connection to re-establish, which is exactly what `recover` does. A rate
+ *   limit gets one because the wait is the whole fix; the provider's own time is
+ *   shown when it sent one, and an absent one stays absent rather than becoming
+ *   a guess.
  * - **Retry of the run** — `adapter_unrecoverable`. The kind is named for having
  *   no *automatic* recovery, and by the time it is raised the runtime has spent
  *   every attempt it makes on its own; the run itself is still there to try
  *   again, and re-running it is not the same act as re-establishing a
- *   connection that never dropped.
- * - **No recovery** — `context_limit_reached` (the runtime has already compacted
+ *   connection that never dropped. When a spent allowance with a stated reset
+ *   stopped it, a scheduled resume sits beside the Retry — see
+ *   {@link stoppedRunBlocker}.
+ * - **No recovery** — `transport_retrying` (the runtime is already reconnecting
+ *   on its own, waiting for the network or backing off, and `recover` would
+ *   neither cut that wait short nor add a retry to it — a button there promises
+ *   an act that does nothing); `context_limit_reached` (the runtime has already compacted
  *   this Session and been refused again, so there is nothing left to summarize);
  *   `quota_exhausted` (a spent allowance is not retryable and no local setting
  *   refills it); `partial_turn_interrupted` (a stopped turn left the composer
@@ -1000,6 +826,7 @@ function attentionBlocker(
   retryRuntime: SessionBlockerAction,
   settings: SessionBlockerAction,
   dismiss: (dismissKey: string) => void,
+  resume: ResumeContext,
 ): SessionBlockerState {
   const detail = attention.detail;
   const dismissKey = attentionDismissKey(attention);
@@ -1007,10 +834,11 @@ function attentionBlocker(
   switch (attention.kind) {
     case "auth_required":
       return providerRecovery({
-        message: "Sign-in required",
+        message: attention.stopDetail
+          ? sessionStopSummary(attention.stopDetail)
+          : "Sign-in required",
         detail,
         settings,
-        retryRuntime,
         dismissKey,
         dismiss: dismissAttention,
       });
@@ -1019,12 +847,11 @@ function attentionBlocker(
         message: "Configuration invalid",
         detail,
         settings,
-        retryRuntime,
         dismissKey,
         dismiss: dismissAttention,
       });
     case "transport_retrying":
-      return { message: "Reconnecting", detail, tone: "waiting", action: retry };
+      return { message: "Reconnecting", detail, tone: "waiting", action: null };
     case "adapter_disconnected":
       return errorBlocker(
         { message: "Disconnected", detail, action: retry },
@@ -1046,23 +873,97 @@ function attentionBlocker(
       );
     case "context_limit_reached":
       return errorBlocker(
-        { message: "Context limit reached", detail, action: null },
+        {
+          message: "Context limit reached",
+          detail,
+          action: null,
+        },
         dismissKey,
         dismissAttention,
       );
     case "partial_turn_interrupted":
       return { message: "Turn interrupted", detail, tone: "waiting", action: null };
     case "adapter_unrecoverable":
-      return errorBlocker(
-        { message: "Session stopped", detail, action: retryRuntime },
-        dismissKey,
-        dismissAttention,
-      );
+      return stoppedRunBlocker(attention, retryRuntime, resume, dismissKey, dismissAttention);
     case "input_required":
       return { message: "Waiting for an answer", detail, tone: "waiting", action: null };
     case "permission_required":
       return { message: "Waiting for approval", detail, tone: "waiting", action: null };
   }
+}
+
+/** What the stopped-run row needs to offer, or show, a scheduled resume. */
+interface ResumeContext {
+  scheduled: PresentedScheduledResume | null;
+  now: number;
+  schedule: SessionBlockerActs["scheduleResume"];
+  cancel: SessionBlockerActs["cancelScheduledResume"];
+}
+
+/**
+ * A run that stopped, and — when a spent allowance stopped it — the resume.
+ *
+ * Retry stays the primary act either way: it is the exact failed run, now.
+ * Beside it, a reset the failure stated is offered as "Resume at …" — nothing
+ * is scheduled unless it is chosen (CLAUDE.md: quota needs explicit recovery,
+ * and this is that recovery made once instead of remembered). Once chosen the
+ * row stops being an error and stops saying "stopped": its headline is the
+ * time it resumes, the failure stays as the line under it, and it offers the
+ * Cancel, with Retry still beside it for a person who would rather not wait. A schedule for a different Attention than the one drawn is not this
+ * row's, and a reset already behind is not offered — Retry is the answer.
+ */
+function stoppedRunBlocker(
+  attention: Extract<SessionAttention, { kind: "adapter_unrecoverable" }>,
+  retryRuntime: SessionBlockerAction,
+  resume: ResumeContext,
+  dismissKey: string,
+  dismiss: () => void,
+): SessionBlockerState {
+  const detail = attention.detail;
+  const scheduled = resume.scheduled?.attentionId === attention.id ? resume.scheduled : null;
+  if (scheduled !== null) {
+    return {
+      message: `Resumes at ${resumeClock(scheduled.resumeAt, resume.now)}`,
+      detail,
+      tone: "waiting",
+      action: { label: "Cancel", act: () => resume.cancel(scheduled.id) },
+      secondaryAction: retryRuntime,
+    };
+  }
+  const resumeAt = attentionResumeAt(attention, resume.now);
+  const attachmentId = attention.attachmentId;
+  return errorBlocker(
+    {
+      message: attention.stopDetail ? sessionStopSummary(attention.stopDetail) : "Session stopped",
+      detail,
+      action: retryRuntime,
+      secondaryAction:
+        resumeAt === null || attachmentId === null
+          ? null
+          : {
+              label: `Resume at ${resumeClock(resumeAt, resume.now)}`,
+              act: () => resume.schedule({ attentionId: attention.id, attachmentId, resumeAt }),
+            },
+    },
+    dismissKey,
+    dismiss,
+  );
+}
+
+/**
+ * A resume time as a person reads it: the local clock alone when it is today,
+ * with the weekday inside the coming week, with the date beyond that. A Codex
+ * weekly reset five days out reading as a bare "04:24" would name the wrong day.
+ */
+export function resumeClock(instant: number, now: number): string {
+  const at = new Date(instant);
+  const clock = at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (at.toDateString() === new Date(now).toDateString()) return clock;
+  const day =
+    instant - now < 6 * 24 * 60 * 60_000
+      ? at.toLocaleDateString(undefined, { weekday: "short" })
+      : at.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${day} ${clock}`;
 }
 
 /** A time the provider stated, or nothing at all. An absent one is not invented. */
@@ -1132,5 +1033,14 @@ export function sameInteractionId(left: SessionInteraction, right: SessionIntera
  * old ones through a stale identity.
  */
 export function sameQueuedMessage(left: QueuedMessage, right: QueuedMessage): boolean {
-  return left.id === right.id && left.text === right.text && left.resources === right.resources;
+  return (
+    left.id === right.id &&
+    left.text === right.text &&
+    left.resources === right.resources &&
+    left.attachments === right.attachments &&
+    left.commandId === right.commandId &&
+    left.queueState === right.queueState &&
+    left.localUnsent === right.localUnsent &&
+    left.afterCurrentStep === right.afterCurrentStep
+  );
 }

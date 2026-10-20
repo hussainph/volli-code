@@ -1,3 +1,24 @@
+import type { RendererLogEntry } from "@volli/shared";
+import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
+import type {
+  FileMutationResult,
+  FileReadResult,
+  FileWriteResult,
+  FileSearchResult,
+  ArtifactCreateResult,
+} from "@volli/shared";
+export type {
+  FileMutationResult,
+  FileContent,
+  FileReadResult,
+  FileWriteResult,
+  FileSearchMatch,
+  FileSearchFile,
+  FileSearchLimit,
+  FileSearchResult,
+  ArtifactCreateResult,
+} from "@volli/shared";
+export type { FileChangedEvent, DirChangedEvent } from "@volli/shared";
 // The Electron IPC catalog: every channel this app speaks, declared once.
 //
 // Type-only module, and it must stay that way. All three desktop processes may
@@ -11,18 +32,89 @@
 // It lives in the app rather than in @volli/shared because a transport catalog
 // is knowledge of Electron, and that package is pure domain code.
 
-import type { ExternalAppId } from "../external-app-ids";
+import type {
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanInventory,
+  PiSessionOrphanReclaimReport,
+} from "@volli/shared";
+export type {
+  PiSessionOrphanReclaimInput,
+  PiSessionOrphanCandidate,
+  PiSessionOrphanSkipped,
+  PiSessionOrphanInventory,
+  PiSessionOrphanKept,
+  PiSessionOrphanReclaimReport,
+} from "@volli/shared";
 
 import type {
+  Result,
+  ModelAccessSignInBeginResult,
+  WebAccessProvider,
+  KeyedWebAccessProvider,
+  WebAccessSettingsView,
+  DecisionModelSettingsView,
+  DecisionModelTestView,
+  DecisionModelScope,
+} from "@volli/shared";
+export type {
+  Result,
+  ModelAccessSignInBeginResult,
+  WebAccessProvider,
+  KeyedWebAccessProvider,
+  WebAccessKeyState,
+  WebAccessSettingsView,
+  DecisionModelSettingsView,
+  DecisionModelTestView,
+  DecisionModelScope,
+} from "@volli/shared";
+
+import type {
+  OrphanProcessReapInput,
+  OrphanProcessInventory,
+  OrphanProcessReapReport,
+  DatabaseSafetyCopy,
+} from "@volli/shared";
+export type {
+  OrphanProcessReapInput,
+  OrphanProcessInventory,
+  OrphanProcessKept,
+  OrphanProcessReapReport,
+  DatabaseSafetyCopy,
+} from "@volli/shared";
+
+import type { ExternalAppId } from "../external-app-ids";
+import type {
+  CredentialsResult,
+  SecretReplaceInput,
+  SecretSubmitInput,
+  SecretsResult,
+} from "./secrets";
+
+import type {
+  WorktreeBranchListing,
+  DirtyWorktreeOrphan,
+  RemovableWorktreeOrphan,
+  KeptWorktreeOrphan,
+  PrunableWorktreeMetadata,
+  KeptWorktreeMetadata,
+  UnreadableWorktreeProject,
+  WorktreeTrimScanEntry,
+  WorktreeTrimSweepReport,
+  WorktreeTrimSettings,
+  WorktreeTrimSettingsInput,
+  WorktreeDiffMode,
+  TicketRetentionState,
+  BrowserTrace,
+  BrowserTabBounds,
+  BrowserTabCreatedBy,
+  BrowserTabPresentation,
+  BrowserTabState,
   Appearance,
   ArchivedTicket,
   AutoReapPolicy,
-  BrowserTabHolder,
-  OrphanProcessCandidate,
   Automation,
   AutomationCommandReceipt,
   AutomationRun,
-  AutomationRunRefusalCode,
   AutomationRunTarget,
   AutomationSkippedOccurrence,
   AutomationTrigger,
@@ -37,14 +129,10 @@ import type {
   DiffStat,
   DirEntry,
   DoctorCheck,
-  FileKind,
-  FileSource,
   GhosttyAppearancePayload,
   GhosttyConfigResult,
   HarnessAdapter,
   HarnessChannelStatus,
-  HarnessEvent,
-  HarnessEventOrder,
   HarnessId,
   HarnessTrustPrompt,
   HarnessTrustVerdict,
@@ -53,10 +141,13 @@ import type {
   LatestSessionSignal,
   LegacyProject,
   ManifestError,
+  McpConnectionBlock,
+  McpServerAccess,
   McpServerDraft,
   McpOperationRecord,
   McpServerRecord,
   ModelAccessSignInType,
+  DecisionModelSetting,
   DeliberateMoveChoice,
   ModelSelection,
   NotificationEvent,
@@ -76,10 +167,12 @@ import type {
   PendingArmedRun,
   PendingArmedRunFailure,
   Project,
+  ProjectFolderState,
+  ProjectRelinkAftermath,
+  ProjectRelinkRefusal,
   ProjectThemeOverride,
   PromptTemplate,
-  ResolvedAppearance,
-  RetentionReason,
+  FirstPaintHint,
   SESSION_RPC_CANCEL_CHANNEL,
   SESSION_RPC_EVENT_CHANNEL,
   SESSION_RPC_IPC_CHANNEL,
@@ -88,8 +181,8 @@ import type {
   RequirableSessionEnvTool,
   SessionEnvTool,
   SessionListingRow,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
+  SessionPeekContent,
+  SessionReadState,
   SessionUsageGrouping,
   SessionUsageReport,
   SessionUsageScope,
@@ -100,7 +193,6 @@ import type {
   Ticket,
   TicketComment,
   TicketEvent,
-  TicketEventActorKind,
   TicketPriority,
   TicketStatus,
   TicketStatusEntry,
@@ -108,6 +200,18 @@ import type {
   ValidAutomationRuntime,
   VenueReading,
   WorkspaceDependenciesStatus,
+  AutomationRunStartResult,
+  DataChangeKind,
+  DataChangedEvent,
+  HarnessEventNotice,
+  PendingArmedRunSettledNotice,
+  SessionActivityNotice,
+  SessionHarnessNotice,
+  SessionRetitledEvent,
+  SessionStartedNotice,
+  SessionsInterruptedEvent,
+  WorktreePhase,
+  WorktreePhaseEvent,
 } from "@volli/shared";
 
 // ---- request contract (issue #98) ------------------------------------------
@@ -132,6 +236,20 @@ export interface ProjectUpdateInput {
 }
 
 /**
+ * Point an existing project at the folder it moved to (VC-430).
+ *
+ * Deliberately NOT part of {@link ProjectUpdateInput}: every other field there
+ * is a preference, and this one re-homes the project. It is judged against the
+ * disk before it is saved, it can be refused, and it is the only write that
+ * can move `projects.path` after creation.
+ */
+export interface ProjectRelinkInput {
+  id: string;
+  /** The replacement folder, absolute. */
+  path: string;
+}
+
+/**
  * One project's per-skill rules (VC-111, migration 023). The WHOLE map every
  * time, not a delta: the surface holds every switch on screen at once, so a
  * per-slug channel would turn one visible state into N writes that can land
@@ -144,12 +262,10 @@ export interface ProjectSkillModesInput {
 }
 
 /**
- * One project's authority departures (VC-172, migration 025).
+ * One project's actor policy and delegation budget departures (VC-172).
  *
- * The WHOLE override every time and `null` to state nothing, matching
- * `ProjectSkillModesInput`: the Authority pane holds every control on screen at
- * once, so a per-field channel would turn one visible state into N writes that
- * can land out of order and half-fail.
+ * The whole override every time and `null` to inherit the defaults, matching
+ * `ProjectSkillModesInput`.
  *
  * Typed `unknown` on the wire ON PURPOSE. This is the one project write whose
  * payload is a nested document rather than a flat row, and the renderer is not
@@ -170,11 +286,29 @@ export interface McpProjectInput {
 
 export interface McpServerInput extends McpProjectInput {
   server: McpServerDraft;
+  /**
+   * Secret values typed into the editor and not stored yet, by slot
+   * (`header:authorization`, `env:API_KEY`, `oauth:client-secret`). They cross
+   * this boundary once, renderer to main, and are never sent back: every read
+   * reports only which slots hold a value (VC-470).
+   */
+  secrets?: Readonly<Record<string, string>>;
 }
 
 export interface McpSaveInput extends McpServerInput {
   enabledTools: readonly string[];
 }
+
+/** Sign in to a saved server (`serverId`) or to the editor's unsaved draft (`server`). */
+export interface McpSignInInput extends McpProjectInput {
+  serverId?: string;
+  server?: McpServerDraft;
+  secrets?: Readonly<Record<string, string>>;
+}
+
+export type McpSignInResult =
+  | { ok: true; message: string }
+  | { ok: false; cancelled: boolean; error: string };
 
 export interface McpServerIdInput extends McpProjectInput {
   serverId: string;
@@ -201,14 +335,19 @@ export type McpServersResult =
        * precisely when its server is no longer in the list beside it.
        */
       operations: readonly McpOperationRecord[];
+      /**
+       * Each server's sign-in state and which stored secrets are missing, by
+       * server id (VC-470). Labels and states only — never a value.
+       */
+      access: Readonly<Record<string, McpServerAccess>>;
     }
   | { ok: false; error: string };
 export type McpServerResult =
   | { ok: true; server: McpServerRecord }
-  | { ok: false; error: string; server?: McpServerRecord };
+  | { ok: false; error: string; server?: McpServerRecord; blocked?: McpConnectionBlock };
 export type McpCatalogResult =
   | { ok: true; catalog: McpServerRecord["catalog"] }
-  | { ok: false; error: string };
+  | { ok: false; error: string; blocked?: McpConnectionBlock };
 
 /**
  * A policy write that was refused, with every reason.
@@ -404,26 +543,6 @@ export interface SessionRenameInput {
   refineFrom?: string;
 }
 
-/**
- * A person's stop of a Session's work (VC-269): the Activity Island's armed
- * "Stop subagent". `reason` is the optional durable why, as the agent tool's
- * is. One request channel and no push: the row the stop moves already rides
- * `volli:session-activity`.
- */
-export interface SessionStopInput {
-  sessionId: string;
-  reason?: string;
-}
-
-/**
- * A retitle main performed on its own (VC-81 auto-titling), pushed so live
- * surfaces can move their labels the same way a renderer rename does.
- */
-export interface SessionRetitledEvent {
-  sessionId: string;
-  title: string;
-}
-
 /** The window a Session-start read covers: an inclusive epoch-ms lower bound. */
 export interface SessionStartsInput {
   sinceMs: number;
@@ -513,7 +632,7 @@ export interface WorktreeOrphansInput {
 
 /**
  * The Storage pane's confirmed cleanup, as a COMMAND rather than a list of
- * paths (VC-284 review, S1/C1).
+ * paths (VC-284).
  *
  * It carries no paths at all. `scanRevision` names the read-only scan a person
  * reviewed, `itemIds` selects items out of the proposal main itself minted for
@@ -537,18 +656,6 @@ export interface WorktreeOrphanDeleteInput {
   path: string;
 }
 
-/** The explicit Pi cleanup names only items from one main-owned inventory. */
-export interface PiSessionOrphanReclaimInput {
-  scanRevision: string;
-  itemIds: string[];
-}
-
-/** A reap names only processes from one main-owned scan revision (VC-341). */
-export interface OrphanProcessReapInput {
-  scanRevision: string;
-  itemIds: string[];
-}
-
 /** `{ ticketId, keep }` — sets/clears the durable retention pin. */
 export interface RetentionKeepInput {
   ticketId: string;
@@ -560,7 +667,7 @@ export interface RetentionTtlSetInput {
   days: number;
 }
 
-// ---- file-channel input shapes (docs/plans/global-artifacts.md) -----------
+// ---- file-channel input shapes (global artifacts) --------------------------
 
 /**
  * The scope pair the index is listed for — the same `{ projectId, ticketId }`
@@ -659,14 +766,6 @@ export interface FileRenameInput extends FilePathInput {
   toRelPath: string;
 }
 
-/**
- * What the create/rename/duplicate track resolves with: the project-relative
- * path the entry now has (plan §4.5). Named rather than echoed back from the
- * request because the caller does not always know it — `duplicate` derives a
- * free name in main, and the renderer opens exactly what was created.
- */
-export type FileMutationResult = { ok: true; relPath: string } | { ok: false; error: string };
-
 /** `name` is forced to `.md` inside `.volli/artifacts/` (decision #8). */
 export interface ArtifactCreateInput {
   projectId: string;
@@ -704,7 +803,7 @@ export interface VolliDataIpcContract {
     result: ProjectUpdateResult;
   };
   /**
-   * Replaces this project's authority departures wholesale (VC-172).
+   * Replaces this project's actor policy and delegation budget departures (VC-172).
    *
    * APP-ONLY, and that is the security property rather than an oversight. There
    * is no agent verb behind this channel and there must not be: writing the
@@ -726,10 +825,31 @@ export interface VolliDataIpcContract {
   "volli:mcp-set-enabled": { args: [input: McpSetEnabledInput]; result: McpServerResult };
   "volli:mcp-set-tools": { args: [input: McpSetToolsInput]; result: McpServerResult };
   "volli:mcp-remove": { args: [input: McpServerIdInput]; result: Result };
+  /** Opens the server's OAuth page in the browser and waits for the loopback redirect (VC-470). */
+  "volli:mcp-sign-in": { args: [input: McpSignInInput]; result: McpSignInResult };
+  /** Stops a sign-in still waiting on the browser. */
+  "volli:mcp-cancel-sign-in": { args: [input: McpServerIdInput]; result: Result };
+  /** Deletes a server's stored OAuth tokens and registration. */
+  "volli:mcp-sign-out": { args: [input: McpServerIdInput]; result: Result };
+  /** Forgets credentials gathered for an editor draft that was never saved. */
+  "volli:mcp-discard-draft": { args: [input: McpServerIdInput]; result: Result };
+  /**
+   * Points an existing project at the folder it moved to (VC-430).
+   *
+   * App-only, and note WHERE that comes from: no data channel is reachable from
+   * the agent socket at all — the socket dispatches verbs from
+   * `verb-registry.ts`, and this has none. So unlike
+   * `volli:project-authority-policy`, which argues for a boundary that must
+   * never be crossed, this is simply the ordinary state of a renderer channel.
+   * It stays that way on the same grounds: re-homing a project changes where
+   * every Session it starts will run, so no agent verb may ever be added behind
+   * it. The folder is validated here before it is saved.
+   */
+  "volli:project-relink": { args: [input: ProjectRelinkInput]; result: ProjectRelinkResult };
+  /** Whether one project's registered folder is still on disk (VC-430). */
+  "volli:project-folder-check": { args: [input: ProjectIdInput]; result: ProjectFolderResult };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
-  /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
-  "volli:project-reorder": { args: [orderedIds: string[]]; result: ProjectMutationResult };
 
   "volli:ticket-create": { args: [input: TicketCreateInput]; result: TicketResult };
   "volli:ticket-move": { args: [input: TicketMoveRequest]; result: TicketsResult };
@@ -795,12 +915,28 @@ export interface VolliDataIpcContract {
   /** Renames a session (project- or ticket-scoped); the title is trimmed and must be non-empty in main. */
   "volli:session-rename": { args: [input: SessionRenameInput]; result: SessionRenameResult };
   /**
+   * Marks a Session read or unread (VC-30).
+   *
+   * Persists the receipt and then re-publishes that Session's listing row on
+   * `volli:session-activity` — the same broadcast the push channel uses — so a
+   * mark made in one sidebar reaches the other sidebar, the ticket rail, and
+   * every other window.
+   */
+  "volli:session-read-set": { args: [input: SessionReadSetInput]; result: SessionReadSetResult };
+  /**
+   * One fold of a Session's tail plus the question it is asking, for a peek
+   * card (VC-30). Read-only: it adopts nothing and subscribes to nothing.
+   */
+  "volli:session-peek-content": {
+    args: [input: SessionPeekContentInput];
+    result: SessionPeekContentResult;
+  };
+  /**
    * Stops a Session's work as the person (VC-269): records `session.stop`
    * with the `user` actor, interrupts the open turn and releases the live
    * attachment — the agent tool's three acts, by id. The Session stays
    * openable; a person can reattach it.
    */
-  "volli:session-stop": { args: [input: SessionStopInput]; result: SessionStopResult };
   /**
    * When Sessions were started, across EVERY project, from `sinceMs` onward
    * (VC-55). Stamps only: the Home empty chat draws a count per day, and
@@ -826,7 +962,7 @@ export interface VolliDataIpcContract {
   "volli:label-set-color": { args: [input: LabelSetColorInput]; result: LabelResult };
   "volli:app-state-set": { args: [key: string, value: string]; result: AppStateSetResult };
 
-  // Ticket worktrees (docs/plans/worktree-support.md). `ensure` runs implicitly
+  // Ticket worktrees. `ensure` runs implicitly
   // inside terminal-create (§1) and on a Session boot; `worktree-recreate`
   // below is its ONE explicit door, for putting back a checkout that something
   // outside the app deleted (VC-113).
@@ -871,14 +1007,16 @@ export interface VolliDataIpcContract {
    * untouched — pruning is the confirmed orphan cleanup's act, not this one's.
    */
   "volli:worktree-trim": { args: []; result: WorktreeTrimResult };
-  /** The preserved-configuration allowlist and the automatic-trim opt-out. */
-  "volli:worktree-trim-settings-get": { args: []; result: WorktreeTrimSettingsResult };
+  /**
+   * Writes the preserved-configuration allowlist and the automatic-trim
+   * opt-out. Read through `worktree.trimSettings` on the bridge (VC-608).
+   */
   "volli:worktree-trim-settings-set": {
     args: [input: WorktreeTrimSettingsInput];
     result: WorktreeTrimSettingsResult;
   };
 
-  // Done flow (docs/plans/done-flow.md §"Persistence, IPC, events"): the
+  // Done flow: the
   // Details-rail diff/commit/push-PR affordances. `status`/`diff` are read-only;
   // `commit` records an event; `push-pr` composes fetch→push→PR and is async.
   "volli:worktree-status": { args: [input: TicketIdInput]; result: WorktreeStatusResult };
@@ -936,9 +1074,9 @@ export interface VolliDataIpcContract {
 export type DataIpcChannel = keyof VolliDataIpcContract;
 
 /**
- * Global artifacts + `@file` refs (docs/plans/global-artifacts.md), the
+ * Global artifacts + `@file` refs, the
  * Project Files workspace (issue #106), and Files' external-app launch/reveal
- * surface — the file channels `src/main/volli-fs.ts` owns.
+ * surface — the file channels `src/main/volli-fs-ipc.ts` owns.
  */
 export interface VolliFileIpcContract {
   /** The scoped file index the `@` picker and quick-open rank over (git-listed + `.volli/artifacts/`). Fetched fresh per picker open. */
@@ -1023,7 +1161,7 @@ export interface UnsavedDocumentsReport {
   names: readonly string[];
 }
 
-// ---- bring-your-own harness trust (docs/plans/harness-events.md §Trust) ----
+// ---- bring-your-own harness trust ------------------------------------------
 
 /**
  * A manifest Volli found on disk and will not launch until someone confirms it,
@@ -1263,7 +1401,7 @@ export type CliIpcChannel = keyof VolliCliIpcContract;
 // ---- support metadata -------------------------------------------------------
 
 /**
- * The five facts a support report needs and the renderer cannot know (VC-293).
+ * The facts a support report needs and the renderer cannot know (VC-293, VC-633, VC-294).
  *
  * An ALLOWLIST, and written as a closed shape for that reason: every field is
  * named here, main assembles exactly these, and the report prints them. The
@@ -1286,6 +1424,20 @@ export interface SupportInfo {
   arch: string;
   /** SQLite's `PRAGMA user_version`. A report is unavailable when it cannot be read. */
   schemaVersion: number;
+  /**
+   * What the file's applied-migration history says against this build's lock
+   * (VC-633): one sentence, `consistent` or the versions another lineage ran.
+   * Version numbers and words only; never a row of data.
+   */
+  migrationHistory: string;
+  /**
+   * The updater's last answered check (VC-294) as one line: its ISO time and
+   * result, a failure only as `summarizeUpdateFailure`'s redacted sentence —
+   * never the raw updater text, which can carry feed URLs and response
+   * headers. "none recorded" when there is none. Not required: a report is
+   * complete without it.
+   */
+  lastUpdateCheck: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;
@@ -1336,7 +1488,7 @@ export interface ThemeStatePayload {
   terminal: GhosttyAppearancePayload;
 }
 
-// ---- canvas theming writes (docs/plans/arc-theming-migration.md) ------------
+// ---- canvas theming writes --------------------------------------------------
 // WRITES ONLY. There is no `volli:canvas-state` read channel and there must not
 // be one: the global canvas, the global appearance and the first-paint hint are
 // `app_state` rows, and every project's canvas is a `projects` column — so
@@ -1368,27 +1520,25 @@ export interface AppearanceSetProjectInput {
 }
 
 /**
- * The first-paint HINT: the mode the renderer resolved to, and the canvas
- * background it painted.
- *
- * This is a cache, not an authority. `{canvas, appearance}` remains the only
- * authoritative pair — this row exists solely because main has to answer "what
- * color is this window's edge, and is it light or dark?" *synchronously, at
- * window construction*, before any renderer exists to ask. Whenever the two
- * disagree, the pair wins and this row is overwritten on the next paint.
- *
- * It is NOT a violation of "never persist the resolved token set" (`apply.ts`):
- * what is stored is one enum and one hex — the two values main physically
- * cannot derive without the renderer — not the 31-token ladder. Persisting the
- * ladder would let a stale copy of it out-vote the authored canvas, which is the
- * bug that rule is about; one background color cannot, because nothing reads it
- * after first paint.
+ * The first-paint hint is persisted by the host's theme repo, so its shape is
+ * `@volli/shared`'s; re-exported because every desktop process reads channel
+ * types from this one file.
  */
-export interface FirstPaintHint {
-  /** `auto` already resolved — main stamps this mode before the renderer boots. */
-  appearance: ResolvedAppearance;
-  /** The canvas background as a hex color; `BrowserWindow`'s `backgroundColor`. */
-  background: string;
+export type { FirstPaintHint };
+
+/**
+ * What the renderer reports after every durable paint: the {@link FirstPaintHint}
+ * main stores for the next launch, plus the one color main needs live and
+ * cannot derive itself.
+ *
+ * `planeBackground` is the painted `--background` token (not `--card`): the rung
+ * the workbench inset and a Browser pane's plane are drawn in (VC-302). It
+ * differs from the hint's `background`, which is the canvas's base fill at the
+ * window edge. Main hands it to Browser Tab views live and never stores it, so
+ * it is checked on its own and a bad value never costs the stored hint.
+ */
+export interface FirstPaintReport extends FirstPaintHint {
+  planeBackground?: string;
 }
 
 export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;
@@ -1440,8 +1590,9 @@ export interface VolliThemeIpcContract {
    * Records what the renderer actually resolved and painted, so the NEXT launch
    * can construct its window with the right edge color and the right mode class
    * before anything runs. A hint, never an authority — see {@link FirstPaintHint}.
+   * Also carries the live card color for Browser Tab planes ({@link FirstPaintReport}).
    */
-  "volli:theme-first-paint-set": { args: [input: FirstPaintHint]; result: Result };
+  "volli:theme-first-paint-set": { args: [input: FirstPaintReport]; result: Result };
   /** Rewrites keys in a Volli ghostty overlay — global or per-project. Never the user's own config. */
   "volli:theme-terminal-overlay-write": {
     args: [input: TerminalOverlayWriteInput];
@@ -1501,48 +1652,6 @@ export interface VolliModelAccessIpcContract {
 
 export type ModelAccessIpcChannel = keyof VolliModelAccessIpcContract;
 
-/** The attempt id every later message about one sign-in is correlated by. */
-export type ModelAccessSignInBeginResult = Result<{ attemptId: string }>;
-
-/** Which search provider this profile brings, if any. `off` is the default. */
-export type WebAccessProvider = "off" | "brave" | "searxng" | "exa";
-
-/**
- * The providers that authenticate with a key a person pastes.
- *
- * Named apart from {@link WebAccessProvider} because carrying a credential is
- * what decides most of this surface: a keyed provider has a secret row, a key
- * state to report, and a "replace stored key" affordance, while SearXNG has an
- * address and `off` has neither.
- */
-export type KeyedWebAccessProvider = "brave" | "exa";
-
-/**
- * What the renderer may know about a stored API key: that there is one, or that
- * there is none.
- *
- * A state rather than the value, and there is no third member that carries one.
- * There was a third member — "unreadable", for a key the OS keychain would no
- * longer open — until the keys stopped being keychain material. A key the
- * profile holds is a key it can read.
- */
-export type WebAccessKeyState = "absent" | "present";
-
-/** The whole of what Settings is told about Web Access. */
-export interface WebAccessSettingsView {
-  provider: WebAccessProvider;
-  /** The normalized instance URL a person configured, or null. Never a secret. */
-  searxngUrl: string | null;
-  /**
-   * What is stored for each keyed provider, and never what it is.
-   *
-   * One entry per provider rather than one for the selected one, because the
-   * rows are independent: configuring Exa does not discard a Brave key, and a
-   * person switching back should not be asked to paste one they already gave.
-   */
-  keys: Readonly<Record<KeyedWebAccessProvider, WebAccessKeyState>>;
-}
-
 export type WebAccessResult = Result<{ settings: WebAccessSettingsView }>;
 
 /**
@@ -1575,11 +1684,14 @@ export interface VolliWebAccessIpcContract {
     result: WebAccessResult;
   };
   /**
-   * Stores the Brave API key. The one inbound secret on this surface.
+   * Stores one keyed provider's API key. The one inbound secret on this surface.
    *
-   * It crosses once, is encrypted with the OS keychain, and is never echoed,
-   * returned, logged, or included in an error string. A machine that cannot
-   * encrypt refuses rather than storing it in the clear.
+   * It crosses once and is never echoed, returned, logged, or included in an
+   * error string. It is saved in the profile database, in the clear, which
+   * stays its one source of truth until the read switch (VC-644); a sealed
+   * copy follows (VC-643), and the answer's `sealing` says whether that copy
+   * is current ("saved; sealing pending" when it is not). Nothing here claims
+   * the key is encrypted.
    */
   "volli:web-access-set-key": {
     args: [provider: KeyedWebAccessProvider, key: string];
@@ -1593,6 +1705,53 @@ export interface VolliWebAccessIpcContract {
 }
 
 export type WebAccessIpcChannel = keyof VolliWebAccessIpcContract;
+
+// ---- decision models (VC-478) ---------------------------------------------
+
+export type DecisionModelResult = Result<{
+  settings: DecisionModelSettingsView;
+  /** The project row as the write left it, when the write was a project's. */
+  project?: Project;
+}>;
+
+export type DecisionModelTestResult = Result<{ test: DecisionModelTestView }>;
+
+/**
+ * The decision model setting (VC-478), on its own door.
+ *
+ * Nothing on this surface carries a secret, and it cannot start carrying one:
+ * a setting names a provider and a model or a loopback URL, and main re-reads
+ * every write through `parseDecisionModelSetting`, which keeps only those
+ * fields. A cloud model's key is entered through Model Access sign-in and
+ * lives in Pi's own `auth.json`; this door only reports whether one exists.
+ */
+export interface VolliDecisionModelIpcContract {
+  /** The app-wide setting, a project's override when named, and the cloud catalog. */
+  "volli:decision-model-get": {
+    args: [projectId: string | null];
+    result: DecisionModelResult;
+  };
+  /**
+   * Stores one scope's setting. `null` clears a project's override back to
+   * inheriting; the app-wide setting cannot be null (`none` turns it off). A
+   * cloud setting must carry the person's opt-in, which main time-stamps.
+   */
+  "volli:decision-model-set": {
+    args: [scope: DecisionModelScope, setting: DecisionModelSetting | null];
+    result: DecisionModelResult;
+  };
+  /**
+   * Asks a local server or a cloud model one fixed question, end to end. Sends
+   * a probe sentence Volli wrote, never a Session's data, so it needs no
+   * opt-in; it is how a person checks a URL or a sign-in before relying on it.
+   */
+  "volli:decision-model-test": {
+    args: [setting: DecisionModelSetting];
+    result: DecisionModelTestResult;
+  };
+}
+
+export type DecisionModelIpcChannel = keyof VolliDecisionModelIpcContract;
 
 /** Whether agent telemetry is exported, and whether it is actually landing. */
 export interface AgentObservabilityView {
@@ -1695,57 +1854,12 @@ export type NotificationIpcChannel = keyof VolliNotificationIpcContract;
 // ---- Browser Tabs (VC-110) -------------------------------------------------
 
 /**
- * Provenance main assigns when it creates a Browser Tab. The two values stay
- * closed because personal and agent-created tabs have different profile and
- * future grant policy; an arbitrary renderer label could not be trusted.
+ * A tab's provenance, presentation and renderer-safe state are domain
+ * vocabulary every client of a host reads (VC-561), so their shapes are
+ * `@volli/shared`'s; re-exported because every desktop process reads channel
+ * types from this one file.
  */
-export type BrowserTabCreatedBy = "user" | "session";
-
-/**
- * Where a Browser Tab is drawn (VC-238). Main owns the value; the renderer asks
- * to change it through `volli:browser-set-presentation` and never writes it.
- *
- * - `headless`: the tab exists with a real viewport, wake hold, console and
- *   screenshots, but is in no strip, no tab order, and never attached to the
- *   window. Every Session-created tab is born this way.
- * - `preview`: pinned live above the composer of the chat that owns it.
- * - `tab`: an ordinary item in the Home or Ticket strip. A person's own tabs
- *   are always this and cannot be anything else.
- */
-export type BrowserTabPresentation = "headless" | "preview" | "tab";
-
-/**
- * Renderer-safe state for one live Browser Tab. Product identity and bounded
- * browser chrome facts cross IPC; Chromium ids, Session partitions, page
- * content, cookies, and history entries never do.
- */
-export interface BrowserTabState {
-  /** Product-owned opaque id — never a positional Chromium tab index. */
-  tabId: string;
-  projectId: string;
-  /** Null for a project-level tab, whether opened by a person or Board Session. */
-  ticketId: string | null;
-  createdBy: BrowserTabCreatedBy;
-  /**
-   * The Session that opened this tab, or null for a person's tab. Ownership is
-   * who may drive it through the Browser port — sibling Sessions on the same
-   * Ticket never see each other's — and is separate from the storage partition,
-   * which stays per Ticket.
-   */
-  ownerSessionId: string | null;
-  presentation: BrowserTabPresentation;
-  url: string;
-  title: string;
-  loading: boolean;
-  /** Main-frame load failure, cleared when the next navigation starts. */
-  error: string | null;
-  canGoBack: boolean;
-  canGoForward: boolean;
-  /** Monotonic within this tab; a main-frame navigation advances it. */
-  generation: number;
-  /** Who holds the tab right now, or `null` for a free tab (VC-239). */
-  heldBy: BrowserTabHolder | null;
-}
+export type { BrowserTabCreatedBy, BrowserTabPresentation, BrowserTabState };
 
 /**
  * A person's request to open a Browser Tab in one workspace scope. Provenance
@@ -1774,16 +1888,7 @@ export interface BrowserTabNavigateInput extends BrowserTabIdInput {
   url: string;
 }
 
-/**
- * The renderer-measured native host plane in BrowserWindow content coordinates.
- * Main, not renderer, applies it to the WebContentsView.
- */
-export interface BrowserTabBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+export type { BrowserTabBounds };
 
 /** One measured host plane paired with the opaque tab it belongs to. */
 export interface BrowserTabSetBoundsInput extends BrowserTabIdInput {
@@ -1810,6 +1915,18 @@ export interface BrowserPictureInput {
  * Null is an answer, not a failure — the card says the picture is gone.
  */
 export type BrowserPictureResult = Result<{ dataUrl: string | null }>;
+
+/** Whose Browser Traces a replay asks for (VC-453). */
+export interface BrowserTracesInput {
+  sessionId: string;
+}
+
+/**
+ * A Session's kept Browser Traces, oldest first — the portable record from
+ * `@volli/shared`, frames named by picture id and read through
+ * `volli:browser-picture`. Empty is an answer: nothing recorded, or swept.
+ */
+export type BrowserTracesResult = Result<{ traces: BrowserTrace[] }>;
 
 /** A Browser Tab mutation/read that answers with the current chrome snapshot. */
 export type BrowserTabResult = Result<{ tab: BrowserTabState }>;
@@ -1866,6 +1983,7 @@ export interface VolliBrowserIpcContract {
     result: BrowserTabResult;
   };
   "volli:browser-picture": { args: [input: BrowserPictureInput]; result: BrowserPictureResult };
+  "volli:browser-traces": { args: [input: BrowserTracesInput]; result: BrowserTracesResult };
   /**
    * The person's three hold controls (VC-239). Explicit, never inferred from
    * input: main cannot tell a person's click in the native view from a
@@ -1899,23 +2017,13 @@ export type BrowserTabStateEvent =
  * that started them, do not survive a relaunch, and the tool calls that
  * started and read them are the durable record.
  */
-export interface BackgroundShellState {
-  /** Host-minted opaque id, never a pid. */
-  shellId: string;
-  sessionId: string;
-  projectId: string;
-  ticketId: string | null;
-  /** The command as the model gave it; the island shows its first line. */
-  command: string;
-  title: string | null;
-  state: "running" | "exited";
-  /** Exit code once exited; `null` while running and when a signal ended it. */
-  code: number | null;
-  signal: string | null;
-  startedAt: number;
-  exitedAt: number | null;
-  pid: number;
-}
+/**
+ * One background shell as the host holds it. Client wire vocabulary in
+ * `@volli/shared` (VC-632), re-exported here so the renderer contract stays in
+ * one place; this contract never depends on host-core.
+ */
+export type { BackgroundShellState } from "@volli/shared";
+import type { BackgroundShellState } from "@volli/shared";
 
 /**
  * A complete shell snapshot pushed on start and on exit, or the id of a shell
@@ -2136,6 +2244,19 @@ export type AutomationResult = Result<{
   receipt: AutomationCommandReceipt;
 }>;
 export type AutomationDeleteResult = Result<{ receipt: AutomationCommandReceipt }>;
+/**
+ * One Automation's history inside one project (VC-297).
+ *
+ * Both ids, because neither answers alone: a global Automation is listable in
+ * every project but each Run it produced happened in ONE, so the pair is the
+ * whole question. A read, so it carries no `commandId` — unlike
+ * {@link AutomationIdInput}, which is a command's.
+ */
+export interface AutomationHistoryScopeInput {
+  projectId: string;
+  automationId: string;
+}
+
 export type AutomationRunsResult = Result<{ runs: AutomationRun[] }>;
 /** One project's Skipped occurrences — the other half of its Run history (VC-130). */
 export type AutomationSkipsResult = Result<{ skips: AutomationSkippedOccurrence[] }>;
@@ -2157,23 +2278,6 @@ export type AutomationSetColumnOrderResult = Result<{
   receipt: AutomationCommandReceipt;
 }>;
 
-/**
- * A run's answer: the durable Run (holding the fresh Session's id and the
- * RESOLVED model), or a coded refusal the caller classifies without string
- * matching. The Session boots detached — VC-16's optimistic open — so an ok
- * here means "durable and addressable", never "attached and delivered".
- */
-export type AutomationRunStartResult =
-  | { ok: true; run: AutomationRun; projectId: string; receipt: AutomationCommandReceipt }
-  // `code` is absent only when the shared guard/throw envelope produced the
-  // failure; every handler-authored refusal carries one.
-  | {
-      ok: false;
-      error: string;
-      code?: AutomationRunRefusalCode;
-      receipt?: AutomationCommandReceipt;
-    };
-
 /** Main's complete countdown and retained-failure projection. */
 export type PendingArmedRunsResult = Result<{
   pending: PendingArmedRun[];
@@ -2193,16 +2297,6 @@ export interface PendingArmedRunRetryInput {
 }
 
 export type PendingArmedRunRetryResult = Result<{ retrying: boolean }>;
-
-/** What main learned after removing an expired countdown from the pending projection. */
-export type PendingArmedRunSettledNotice =
-  | { kind: "attempted"; pending: PendingArmedRun; result: AutomationRunStartResult }
-  | { kind: "failed"; pending: PendingArmedRun; error: string }
-  | {
-      kind: "abandoned";
-      pending: PendingArmedRun;
-      reason: "gone" | "left-column" | "disarmed" | "switched-off";
-    };
 
 /**
  * The Automations planning surface (VC-126): the record's CRUD plus the one
@@ -2256,6 +2350,24 @@ export interface VolliAutomationIpcContract {
   "volli:automation-runs-for-project": {
     args: [input: ProjectIdInput];
     result: AutomationRunsResult;
+  };
+  /**
+   * ONE Automation's Runs in one project, newest first — what the editor's
+   * history shows (VC-297).
+   *
+   * Narrower than the project read above it, and a separate door rather than a
+   * filter the client applies: a caller that is not this process should ask for
+   * the list it draws, not download a project's whole history to find it. Main
+   * has the index for both questions (`idx_automation_runs_automation`).
+   */
+  "volli:automation-runs-for-automation": {
+    args: [input: AutomationHistoryScopeInput];
+    result: AutomationRunsResult;
+  };
+  /** The same Automation's Skipped occurrences, read beside its Runs (VC-297). */
+  "volli:automation-skips-for-automation": {
+    args: [input: AutomationHistoryScopeInput];
+    result: AutomationSkipsResult;
   };
   /** Which Automations are switched on on this machine. */
   "volli:automation-enablement": { args: []; result: AutomationEnablementResult };
@@ -2358,9 +2470,27 @@ export interface VolliSystemIpcContract {
  * Where the updater is in its check→download→install lifecycle, as the
  * renderer's download icon renders it. `idle` covers both "never checked" and
  * "checked, up to date" — either way there is nothing to show or do beyond
- * offering a manual check.
+ * offering a manual check. Which of the two it is lives in
+ * {@link UpdateUiState.lastCheck}, not here.
  */
 export type UpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "error";
+
+/**
+ * What the most recent check that ANSWERED said (VC-294): the feed had
+ * nothing newer, had a newer version (whose download then began), the check
+ * failed, or the download it started failed. Main persists it, so Settings →
+ * Updates' Status row can still say "Up to date · 3h ago" or "Check failed"
+ * after a relaunch.
+ */
+export interface UpdateLastCheck {
+  /** When the check settled (epoch ms). */
+  at: number;
+  result: "up-to-date" | "available" | "error" | "download-error";
+  /** The version on offer when `available`, or the one whose download failed; null otherwise. */
+  version: string | null;
+  /** The failure's message when `error` or `download-error`; null otherwise. */
+  error: string | null;
+}
 
 /**
  * The updater's whole user-facing state (VC-59): one snapshot the renderer
@@ -2383,6 +2513,8 @@ export interface UpdateUiState {
   percent: number | null;
   /** The last failure's message while `error`; null otherwise. */
   error: string | null;
+  /** The last answered check, this run or a previous one; null when none was ever recorded. */
+  lastCheck: UpdateLastCheck | null;
 }
 
 export type UpdateStateResult = Result<{ state: UpdateUiState }>;
@@ -2415,6 +2547,11 @@ export type UpdateLiveWorkResult = Result<{
   busyCommands: string[];
   /** Open structured agent Sessions — turns open right now, a plane that outlives any one PTY. */
   openAgentSessions: number;
+  /**
+   * Running background shells (VC-577) — a dev server a turn started. Counted
+   * only with the `cloud` flag on, from the host's live work; 0 otherwise.
+   */
+  backgroundShells: number;
   /** Display names of editor tabs holding unsaved drafts — the one thing a restart destroys unrecoverably. */
   unsavedDrafts: string[];
 }>;
@@ -2451,16 +2588,17 @@ export type UpdateIpcChannel = keyof VolliUpdateIpcContract;
  * The native Session tRPC edge (`src/main/session-rpc-ipc.ts`): ONE invoke
  * channel carrying every routed procedure, because the router — not this
  * contract — is where a Session procedure's input and output are declared.
- * The wire shapes live in `session-rpc-wire.ts`; the renderer's terminating
- * tRPC link is the only thing that should ever speak them directly.
+ * The wire shapes are the router-generic bridge's (`@volli/host-protocol/ipc`,
+ * VC-608); the renderer's terminating tRPC link is the only thing that should
+ * ever speak them directly.
  */
 export interface VolliSessionRpcIpcContract {
-  /** Runs one routed procedure; `session.subscribe` acknowledges with a subscription id instead. */
-  "volli:session-rpc": { args: [request: SessionRpcIpcRequest]; result: SessionRpcIpcResponse };
+  /** Runs one served procedure; a subscription acknowledges with a subscription id instead. */
+  "volli:session-rpc": { args: [request: IpcRequest]; result: IpcResponse };
 }
 
 /**
- * The 4 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
+ * The send-based channels (`ipcRenderer.send`, not `invoke`) — declared
  * separately from {@link VolliInvokeContract} because they have no result to
  * await.
  */
@@ -2490,6 +2628,15 @@ export interface VolliSendContract {
   // stopping the frames, which the renderer is already listening for — an ack
   // would only be a second way to learn the same thing, later.
   "volli:session-rpc-cancel": { args: [subscriptionId: string] };
+  // Send-based (ipcRenderer.send, not invoke): a renderer warning or error
+  // for main's log (VC-699). Nobody waits on a log line, and an invoke per
+  // line would put a round-trip on the path of whatever is failing.
+  "volli:renderer-log": { args: [entry: RendererLogEntry] };
+  // Send-based (ipcRenderer.send, not invoke): the renderer's answer to a
+  // `volli:client-state-flush` push (VC-577) — every pending client-local
+  // write it held has been acknowledged by main. Main asked, so main is the
+  // one waiting; an invoke from the renderer would have no question to answer.
+  "volli:client-state-flushed": { args: [requestId: string] };
 }
 
 /**
@@ -2528,10 +2675,46 @@ export interface VolliOrphanProcessIpcContract {
 
 export type OrphanProcessIpcChannel = keyof VolliOrphanProcessIpcContract;
 
+export type DatabaseRecoveryListResult = Result<{ backups: DatabaseSafetyCopy[] }>;
+export type DatabaseRecoveryRestoreResult = Result<{ restoredBackup: string }>;
+
+/**
+ * Why the database failed to open, as far as the recovery screen needs to
+ * know: `newer-version` names the "database is from a newer Volli" variant
+ * (VC-602); everything else is `unreadable`.
+ */
+export type DatabaseOpenFault = "unreadable" | "newer-version";
+export type DatabaseRecoveryFaultResult = Result<{ fault: DatabaseOpenFault }>;
+
+export interface VolliDatabaseRecoveryIpcContract {
+  "volli:database-recovery-list": { args: []; result: DatabaseRecoveryListResult };
+  "volli:database-recovery-restore": { args: []; result: DatabaseRecoveryRestoreResult };
+  "volli:database-recovery-fault": { args: []; result: DatabaseRecoveryFaultResult };
+  /** Quits Volli from the recovery screen; only while the database is unavailable. */
+  "volli:database-recovery-quit": { args: []; result: Result };
+}
+
+/** Person-only credentials: a dedicated handler group, never generic data or Session IPC. */
+export interface VolliSecretIpcContract {
+  "volli:secrets-list": { args: [projectId?: string]; result: SecretsResult };
+  "volli:secret-submit": { args: [input: SecretSubmitInput]; result: Result };
+  "volli:secret-decline": { args: [id: string]; result: Result };
+  "volli:secret-revoke": { args: [id: string]; result: Result };
+  "volli:secret-replace": { args: [input: SecretReplaceInput]; result: Result };
+  /** Tries locked stored secrets again (VC-641). */
+  "volli:secrets-unlock": { args: []; result: CredentialsResult };
+  /** Sets locked stored secrets aside, kept, and starts empty (VC-641). */
+  "volli:secrets-reset": { args: []; result: CredentialsResult };
+}
+
+export type SecretIpcChannel = keyof VolliSecretIpcContract;
+
 /** Every invoke channel with a contract entry — the full catalog. */
 export interface VolliInvokeContract
   extends
     VolliDataIpcContract,
+    VolliDatabaseRecoveryIpcContract,
+    VolliSecretIpcContract,
     VolliPiSessionOrphanIpcContract,
     VolliOrphanProcessIpcContract,
     VolliFileIpcContract,
@@ -2540,6 +2723,7 @@ export interface VolliInvokeContract
     VolliThemeIpcContract,
     VolliModelAccessIpcContract,
     VolliWebAccessIpcContract,
+    VolliDecisionModelIpcContract,
     VolliAgentObservabilityIpcContract,
     VolliBrowserIpcContract,
     VolliShellIpcContract,
@@ -2565,6 +2749,12 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
+  // Main is about to destroy this window without an unload (VC-577: menu-bar
+  // mode, after the quit's confirms already answered), so `beforeunload` will
+  // not flush the debounced client-local writes. The renderer sends them now
+  // and answers `volli:client-state-flushed` with the request id once main
+  // has acknowledged every one; main waits for that, bounded, then destroys.
+  | "volli:client-state-flush"
   | "volli:browser-tab-state"
   // A background shell started, exited, or was forgotten with its Session's
   // attachment (VC-270): one push, one store, the island's shell feed.
@@ -2658,7 +2848,7 @@ export type VolliIpcEvent =
   // them, instead of within ten seconds of it.
   | "volli:session-activity"
   // Ordered frames for one live Session RPC subscription — see
-  // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
+  // `IpcEvent` (`@volli/host-protocol/ipc`). Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
   | "volli:session-rpc-event"
   // The updater's user-facing state changed (VC-59) — one full {@link
@@ -2706,218 +2896,26 @@ export type SessionRpcEventChannelIsDeclared = Assert<
 export type UiZoomCommand = "in" | "out" | "reset";
 
 /**
- * A coarse hint at WHAT a {@link DataChangedEvent} touched. Readers decide
- * whether to re-hydrate from `ticketId`, never from this. Kept a small closed
- * union so every producer names its change.
- *
- * One reader does act on it (VC-286): `worktree` is the kind that can move a
- * ticket's CHECKOUT — materialized, removed, recreated, scope switched — and
- * the renderer's venue boundary (`lib/boot.ts`) discards the ticket's cached
- * venue reading on it. So a producer whose change moves a checkout MUST name
- * `worktree`; one that omits `kind` re-hydrates the board but leaves the venue
- * where it was.
+ * What main announces to every window, as domain vocabulary (VC-554). The
+ * payloads live in `@volli/shared` (`host-events.ts`) so host-core's event bus
+ * can name them; the channels that carry them stay here.
  */
-export type DataChangeKind = "ticket" | "comment" | "session" | "worktree" | "retention";
+export type {
+  AutomationRunStartResult,
+  DataChangeKind,
+  DataChangedEvent,
+  HarnessEventNotice,
+  PendingArmedRunSettledNotice,
+  SessionActivityNotice,
+  SessionHarnessNotice,
+  SessionRetitledEvent,
+  SessionStartedNotice,
+  SessionsInterruptedEvent,
+  WorktreePhase,
+  WorktreePhaseEvent,
+};
 
-/**
- * Main→renderer invalidation after a planning mutation that happened OUTSIDE the
- * renderer's own request/response cycle (a socket-originated agent command, a
- * session-lifecycle worktree boot, a worktree/retention side effect). The
- * renderer always re-hydrates the board wholesale on receipt (cheap SQLite reads
- * — the recovery guarantee); the optional scope only lets a per-ticket surface
- * skip a refetch when the change PROVABLY targets a different ticket.
- *
- * An UNTARGETED payload — one with no `ticketId` — means "anything may have
- * changed" and every reader must still react to it (the conservative arm). A
- * targeted payload carries the affected `ticketId` (and, when the producer knows
- * it, its `projectId`), so a reader watching that ticket refreshes promptly
- * while readers for other tickets stand down.
- */
-export interface DataChangedEvent {
-  entity: "tickets";
-  /** The ticket the change targets; omitted for an untargeted (anything-changed) broadcast. */
-  ticketId?: string;
-  /** The project the change belongs to, when the producer knows it. */
-  projectId?: string;
-  /**
-   * Hint at what changed. Never the basis of whether a reader re-hydrates — but
-   * `worktree` is load-bearing for the venue boundary; see {@link DataChangeKind}.
-   */
-  kind?: DataChangeKind;
-}
-
-/**
- * A committed Deliberate move as main's armed-arrival coordinator receives it.
- *
- * Both move doors report through this one shape after persistence: renderer IPC
- * may carry the Option-drag choice, while an explicit `volli ticket move`
- * carries no choice. Same-column no-ops are never reported because they are not
- * arrivals.
- */
-export interface TicketMovedNotice {
-  projectId: string;
-  ticketId: string;
-  /** The column it left — the fact a post-commit re-read cannot recover. */
-  from: TicketStatus;
-  to: TicketStatus;
-  choice?: DeliberateMoveChoice;
-}
-
-/**
- * Main→renderer announcement that a backward move interrupted live agent
- * sessions (issue #78, CONCEPT #20). Fired only when `sessionIds` is
- * non-empty — an empty interrupt announces nothing, mirroring the event log.
- */
-export interface SessionsInterruptedEvent {
-  ticketId: string;
-  sessionIds: string[];
-}
-
-/**
- * One canonical harness event, as it reaches the renderer (harness-events). The
- * involuntary channel: a hook the wrapper configured fired, `volli hook`
- * forwarded it over the socket, and main resolved which session it belongs to.
- * Harness-native event names never get this far — the union is the whole
- * vocabulary.
- *
- * `sessionId` is the FULL session id (the same key terminal data/exit events
- * carry), not the short public handle, because this addresses the renderer's
- * live session state rather than a human reader.
- */
-export interface HarnessEventNotice {
-  sessionId: string;
-  projectId: string;
-  /** The ticket this session drives, or `null` for a Board Session. */
-  ticketId: string | null;
-  harnessId: HarnessId;
-  event: HarnessEvent;
-  /**
-   * The harness's own session id when the event carried one — already persisted
-   * on the session record by the time this fires. `null` on the events that
-   * carry none, which is most of them.
-   */
-  harnessSessionId: string | null;
-  /** Epoch ms the event was ingested (main's clock, never the harness's). */
-  at: number;
-  /**
-   * Epoch ms the hook process that reported this event STARTED, off that
-   * process's own wall clock — {@link HarnessEventOrder}, and the only field on
-   * this notice that says anything about the order the harness fired things in.
-   * `null` when the delivery carried none, which an older `volli` always will.
-   *
-   * `at` is deliberately not that field and cannot be made into it: each event
-   * arrives on its own short-lived process over its own connection, so arrival
-   * order is a property of the races between them rather than of the agent.
-   */
-  firedAt: HarnessEventOrder;
-}
-
-/**
- * Main→renderer: a different harness is now running in one session's terminal,
- * as announced by its own launch wrapper (`volli session harness <slug>`).
- *
- * A SIBLING of {@link HarnessEventNotice} rather than a member of it, because
- * it is not one: this is not a canonical harness event, it is not in
- * `HARNESS_EVENTS`, it comes from the PATH shim rather than from a hook, and it
- * carries no `firedAt` to be ordered by — the wrapper runs once per launch, so
- * the newest announce IS the running harness and there is no race to settle.
- * Folding it into the event union would have every reader of that union
- * pattern-matching around a member that answers none of its questions.
- *
- * Fired on every announce, INCLUDING the overwhelmingly common one that agrees
- * with what Volli already believes. An announce is a LAUNCH — the wrapper runs
- * once per invocation, from the harness's own process — and a launch is the
- * moment the reporting channel starts owing us an event. Firing only on a
- * changed slug meant quitting a harness and starting the same one again in one
- * terminal left the second launch wearing the first one's reputation.
- */
-export interface SessionHarnessNotice {
-  /** The FULL session id — this addresses live renderer state, not a human reader. */
-  sessionId: string;
-  projectId: string;
-  /** The ticket this session drives, or `null` for a Board Session. */
-  ticketId: string | null;
-  /** The harness now running there. The session's LAUNCH harness is unchanged. */
-  harnessId: HarnessId;
-  /**
-   * Whether this announce named a DIFFERENT harness than the session was
-   * already believed to be running. Not a gate on the notice — every launch is
-   * broadcast — but the durable record only has to be repointed when it moved.
-   */
-  changed: boolean;
-  /** Epoch ms the announce was ingested (main's clock). */
-  at: number;
-}
-
-/**
- * Main→renderer: a structured chat Session was started on a ticket through the
- * agent socket (`volli session start`, VC-13). The renderer toasts it —
- * "<actor> started a session on VC-4" — with an action that opens the
- * session's chat tab; without the click nothing moves. Board/sidebar surfaces
- * refresh through the ordinary `volli:data-changed` path, so this notice only
- * carries what the toast itself says and where its action goes.
- */
-export interface SessionStartedNotice {
-  /** The FULL session id — the action addresses live renderer state, not a human reader. */
-  sessionId: string;
-  projectId: string;
-  ticketId: string;
-  /** The started ticket's display id, precomputed so the toast never joins. */
-  ticketDisplayId: string;
-  /**
-   * Who started it, as the door that started it derived them — never
-   * self-declared.
-   *
-   * Two doors produce this since VC-163: the `session_start` tool, which binds
-   * its caller from the attachment the call arrived on, and the app, which is
-   * the person. The shell was a third until VC-163 closed it.
-   */
-  actor: TicketEventActorKind;
-  /** Display id of the ticket the starting session was itself working, when known. */
-  actorTicket: string | null;
-  /** Epoch ms the start was ingested (main's clock). */
-  at: number;
-}
-
-/**
- * Main→renderer: one Session's listing row, re-derived after its durable
- * history moved.
- *
- * It carries the WHOLE {@link SessionListingRow} rather than a compact
- * activity delta, and that is the point. Every renderer listing already holds
- * exactly these rows (`volli:session-list` returns them), so applying a notice
- * is an upsert keyed by Session id and never a second vocabulary that has to
- * be kept in step with the fetched one. A Session that has just been created
- * arrives complete, so a listing learns about it without refetching anything;
- * a retitle and a turn boundary travel the same way, so there is one channel to
- * reason about rather than one per fact.
- *
- * `projectId` rides at the top level even though both record shapes carry it,
- * because a window filters on it before it looks inside: a listing scoped to
- * one project must be able to drop another project's notice without
- * discriminating the union first.
- *
- * Broadcast to every window, like every other Session notice — a Session's rows
- * are visible wherever its project is open.
- */
-export interface SessionActivityNotice {
-  projectId: string;
-  /** The ticket this Session drives, or `null` for a Board Session. */
-  ticketId: string | null;
-  row: SessionListingRow;
-}
-
-/**
- * Result types below travel as typed discriminated unions rather than
- * thrown errors: `ipcMain.handle` rejections serialize into useless
- * strings across the IPC boundary, and every failure must be surfaceable
- * in the UI.
- *
- * {@link Result} is the shared shape every one of them had by hand: a success
- * carrying payload `T`, or a failure carrying an `error` string. Bare
- * `Result` (no payload) is a plain ok/error ack.
- */
-export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; error: string };
+export type { TicketMovedNotice } from "@volli/shared";
 
 /**
  * The app-owned database actions. `undefined` reads its size; neither action
@@ -3008,10 +3006,32 @@ export interface LegacyImportRequest {
 
 export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: number }>;
 
-/** `created: false` means an existing project at that path was selected instead of inserted. */
+/**
+ * `created: false` means an existing project at that path was selected instead
+ * of inserted: one already on the rail, or a removed one put back on it with
+ * its tickets and Sessions (VC-822).
+ */
 export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
 
 export type ProjectUpdateResult = Result<{ project: Project }>;
+
+/**
+ * A committed relink, plus what the move could not take with it (VC-430).
+ *
+ * The AFTERMATH travels, not the sentences derived from it: the renderer turns
+ * it into notices through `@volli/shared`'s `projectRelinkNotices`, so the
+ * facts main measured and the words a person reads cannot drift apart. A
+ * refusal carries the shared `ProjectRelinkRefusal` id beside its sentence, so
+ * a surface may react to WHICH refusal it was without matching on prose.
+ */
+export type ProjectRelinkResult =
+  | { ok: true; project: Project; aftermath: ProjectRelinkAftermath }
+  | { ok: false; error: string; refusal?: ProjectRelinkRefusal };
+
+/** Whether a project's registered folder is still on disk (VC-430). */
+export type ProjectFolderResult =
+  | { ok: true; path: string; state: ProjectFolderState }
+  | { ok: false; error: string };
 
 export type ProjectMutationResult = Result;
 
@@ -3060,16 +3080,38 @@ export type SessionsResult = Result<{ sessions: SessionListingRow[] }>;
 export type SessionRenameResult = Result;
 
 /**
- * What a person's stop did (`session-stop`). `ok` means the stop fact is
- * durable; the two booleans and `failures` are the runtime acts, reported
- * rather than hidden — "stopped" with a still-streaming executor is the one
- * lie the door must not tell (see `supervise-session.ts`).
+ * A person's own read decision (VC-30): `U`, the context menu, opening a
+ * Session, or answering it from a peek card.
+ *
+ * `unread: true` stamps it as of main's clock rather than the caller's — the
+ * receipt is main's record and a renderer clock never writes into it.
  */
-export type SessionStopResult = Result<{
-  interrupted: boolean;
-  released: boolean;
-  failures: string[];
-}>;
+export interface SessionReadSetInput {
+  sessionId: string;
+  unread: boolean;
+}
+
+/**
+ * What the receipt says after the write. The caller already moved its row
+ * optimistically; this is what it reverts to if the write failed, and the
+ * authoritative row follows on `volli:session-activity` for every other window.
+ */
+export type SessionReadSetResult = Result<{ read: SessionReadState }>;
+
+/** One peek's fold (VC-30). How much it holds is `SESSION_PEEK_ENTRIES`, not the caller's to pick. */
+export interface SessionPeekContentInput {
+  sessionId: string;
+  /** Explicit summary demand. Absent/false reads local content without model work. */
+  refine?: boolean;
+}
+
+/**
+ * What a peek card draws, or `null` for a Session the ledger no longer has.
+ *
+ * A pull with no subscription behind it: hovering a row must not adopt a
+ * Session or open a stream (see `packages/host-core/src/session-control/peek-content.ts`).
+ */
+export type SessionPeekContentResult = Result<{ content: SessionPeekContent | null }>;
 
 /** Session creation stamps in the requested window, ascending — every project's. */
 export type SessionStartsResult = Result<{ startedAt: number[] }>;
@@ -3090,7 +3132,7 @@ export type UsageReportResult = Result<{ report: SessionUsageReport }>;
  */
 export type VenueSnapshotResult = Result<{ reading: VenueReading }>;
 
-// ---- global artifacts + @file refs (docs/plans/global-artifacts.md) --------
+// ---- global artifacts + @file refs -----------------------------------------
 
 /**
  * The file index the `@` picker and quick-open rank over — returned by
@@ -3153,159 +3195,33 @@ export type PromptTemplateIndexResult = Result<{
   skills: SkillReference[];
 }>;
 
-/**
- * A read file's content, discriminated by how the renderer must render it:
- * `text` (utf8, `truncated` when the ~1 MiB cap was hit), `image` (inline
- * `data:` URI), or `binary` (NUL-sniffed or oversize — stub + reveal only).
- */
-export type FileContent =
-  | { type: "text"; text: string; truncated: boolean }
-  | { type: "image"; dataUrl: string }
-  | { type: "binary" };
-
-/**
- * A resolved file read — returned by `volli:file-read`. `source` says which
- * checkout it came from (drives the worktree tab badge); `size`/`mtime` are the
- * on-disk stats; `content` carries the render-ready payload.
- */
-export type FileReadResult = Result<{
-  source: FileSource;
-  kind: FileKind;
-  size: number;
-  mtime: number;
-  content: FileContent;
-}>;
-
-/** The post-write mtime (the renderer's fresh conflict-guard baseline) — returned by `volli:file-write`. */
-export type FileWriteResult = Result<{ mtime: number }>;
-
 // ---- find across files (plan §4.7) ----------------------------------------
 
-/**
- * One matched line, as the Search page draws it and opens it.
- *
- * `line`/`column` are 1-based — Monaco's own numbering, so the click that opens
- * the file hands them straight to `revealLineInCenter`/`setPosition` without a
- * translation step nobody would think to test. `preview` is the matched line,
- * possibly windowed around the match (a minified bundle's single 400 KB line is
- * not a preview), and `start`/`end` are the match's offsets INSIDE that
- * preview — never into the original line, which the renderer never sees.
- */
-export interface FileSearchMatch {
-  line: number;
-  column: number;
-  preview: string;
-  /** 0-based, half-open `[start, end)` offsets of the match within `preview`. */
-  start: number;
-  end: number;
-}
+// ---- ticket worktrees ------------------------------------------------------
 
-/** Every match in one file, in file order — the Search page's group. */
-export interface FileSearchFile {
-  relPath: string;
-  matches: readonly FileSearchMatch[];
-}
-
-/**
- * Which cap ended the search, if any — the honest twin of the 1 MiB read cap's
- * `truncated` flag, saying WHICH bound was hit rather than only that one was:
- *
- *  - `none`    — ripgrep ran to completion; this is everything there is.
- *  - `matches` — the match cap was reached and the search was stopped there.
- *  - `time`    — the time budget ran out; what is here is what had arrived.
- */
-export type FileSearchLimit = "none" | "matches" | "time";
-
-/**
- * A completed search — returned by `volli:search`. `matches` counts what is
- * carried in `files` (not what exists on disk, which a capped search cannot
- * know), and `limit` is why counting stopped.
- */
-export type FileSearchResult = Result<{
-  files: readonly FileSearchFile[];
-  matches: number;
-  limit: FileSearchLimit;
-}>;
-
-/**
- * A newly-created artifact's project-relative path (`.volli/artifacts/<name>.md`),
- * insertable directly as an `@ref` — returned by `volli:artifact-create`.
- */
-export type ArtifactCreateResult = Result<{ relPath: string }>;
-
-/**
- * The last word a watch subscription gets: main has torn the subscription down
- * and will never send for it again (issue #134). Every holder of that watch owes
- * itself a re-arm or an honest "live updates are off" — its `watch()` hold is
- * now a hold on nothing. Only ever `true`; ORDINARY change events omit the field
- * entirely, so `event.final === true` is the whole test.
- *
- * It cannot be inferred from the payload: the dominant teardown (the watched
- * directory is gone for good) does carry `revision: null`, but a watcher that
- * fails to REWIRE over a directory still present sends a final event that reads
- * exactly like ordinary news.
- */
-interface FinalWatchEvent {
-  final?: true;
-}
-
-/** The single watched file a `volli:file-changed` push event fired for. */
-export interface FileChangedEvent extends FinalWatchEvent {
-  projectId: string;
-  /** The worktree owner; Main-checkout files always normalize this to null. */
-  ticketId: string | null;
-  relPath: string;
-  source: FileSource;
-  /** Current on-disk mtime after the debounce, or null when the file is unreadable. */
-  revision: number | null;
-}
-
-/**
- * The single watched directory a `volli:dir-changed` push event fired for
- * (`relPath: ""` is the project root). Always the MAIN checkout, so unlike
- * {@link FileChangedEvent} there is no `source` to disambiguate.
- */
-export interface DirChangedEvent extends FinalWatchEvent {
-  projectId: string;
-  relPath: string;
-}
-
-// ---- ticket worktrees (docs/plans/worktree-support.md) ---------------------
-
-/**
- * The transient lifecycle of a worktree `ensure` pipeline. NEVER persisted —
- * on boot, truth is recomputed from disk — so a phase only exists while (or
- * just after) an ensure ran in this app session.
- */
-export type WorktreePhase = "creating" | "copying" | "setting-up" | "ready" | "failed";
-
-/** One `volli:worktree-phase` push: the ticket whose ensure moved, and where to. */
-export interface WorktreePhaseEvent {
-  ticketId: string;
-  phase: WorktreePhase;
-}
-
-/**
- * Debounced signal that a live ticket worktree's filesystem changed
- * (`volli:worktree-changed`). The renderer refetches the Change Set; the
- * payload carries only the ticket id (no file list).
- */
-export interface WorktreeChangedEvent {
-  ticketId: string;
-}
-
-/**
- * A ticket's worktree watch faulted and has been torn down
- * (`volli:worktree-watch-error`). Emitted exactly once per fault, right before
- * teardown: after this the renderer will receive no further
- * `volli:worktree-changed` for the ticket, so its Change Set is frozen until
- * something re-establishes the watch. Surfaced, never swallowed — a silently
- * dead watch looks identical to a worktree nobody is touching.
- */
-export interface WorktreeWatchErrorEvent {
-  ticketId: string;
-  error: string;
-}
+// Service vocabulary lives in @volli/shared; the Electron channels stay here.
+export type {
+  WorktreeChangedEvent,
+  WorktreeWatchErrorEvent,
+  WorktreeBranchListing,
+  DirtyWorktreeOrphan,
+  RemovableWorktreeOrphan,
+  KeptWorktreeOrphan,
+  PrunableWorktreeMetadata,
+  KeptWorktreeMetadata,
+  UnreadableWorktreeProject,
+  WorktreeTrimRemoval,
+  WorktreeTrimKeep,
+  WorktreeTrimReport,
+  WorktreeTrimScanEntry,
+  WorktreeTrimSweepReport,
+  WorktreeTrimSettings,
+  WorktreeTrimSettingsInput,
+  WorktreeDiffMode,
+  PrCheckState,
+  PrCheck,
+  TicketRetentionState,
+} from "@volli/shared";
 
 /** Where a worktree dir stands relative to what git knows — the live half of worktree state. */
 export type WorktreeDiskState = "present" | "missing" | "unregistered";
@@ -3313,43 +3229,11 @@ export type WorktreeDiskState = "present" | "missing" | "unregistered";
 /** Ack for a `volli:worktree-remove` (the "Remove worktree…" escape hatch). */
 export type WorktreeRemoveResult = Result;
 
-/**
- * A project's branch refs, for the base-branch pickers (the Details rail's and
- * the composer's).
- *
- * `remotes` is a SNAPSHOT, not a live reading: a remote-tracking ref only moves
- * on a fetch, so the list is exactly as old as {@link
- * WorktreeBranchListing.fetchedAt} and a picker has to say so. Nothing in the
- * worktree pipeline fetches on the user's behalf before branching, so a base
- * chosen from `remotes` inherits that same age — which is the whole reason this
- * timestamp crosses the boundary instead of staying a main-process detail.
- */
-export interface WorktreeBranchListing {
-  /** Local branch short names (`refs/heads`), most-recently-committed first. */
-  branches: string[];
-  /** The project checkout's own branch; `null` when detached or unreadable. */
-  current: string | null;
-  /** Remote-tracking short names in `origin/main` form, as of {@link WorktreeBranchListing.fetchedAt}. */
-  remotes: string[];
-  /** Epoch ms of the repo's last fetch (`FETCH_HEAD`'s mtime); `null` when it has never fetched. */
-  fetchedAt: number | null;
-}
-
 /** A project's branch refs — returned by `volli:worktree-branches` for the base-branch pickers. */
 export type WorktreeBranchesResult = Result<WorktreeBranchListing>;
 
-/** One orphan the scan refuses to propose for cleanup, for the Storage list. */
-export interface DirtyWorktreeOrphan {
-  path: string;
-  projectId?: string;
-  /** The project's display name, so a row can name a project and not an id (VC-284 review C6). */
-  projectName?: string;
-  reason: string;
-}
-
 /**
- * The orphan scan/cleanup DOMAIN vocabulary is `@volli/shared`'s (VC-284
- * review S1): the run projection, its item states, the acceptance receipt and
+ * The orphan scan/cleanup DOMAIN vocabulary is `@volli/shared`'s (VC-284): the run projection, its item states, the acceptance receipt and
  * the rejection codes describe the act itself, not the wire it crosses, so the
  * core that mints and folds them never imports this catalog. They are
  * re-exported here because every desktop process reads the channel types from
@@ -3367,97 +3251,6 @@ export type {
   OrphanKeptReason,
   OrphanMetadataKeptReason,
 };
-
-/**
- * One clean, stale orphan a CLEANUP would remove (VC-284). The scan only names
- * it: every field here is what the confirmation has to show before anything is
- * touched — which directory, whose project, and the branch that survives it.
- */
-export interface RemovableWorktreeOrphan {
-  /**
-   * This item's id inside its scan revision — what a cleanup command selects
-   * (VC-284 review C1). Scoped by the revision UUID, so an id from a superseded
-   * scan can never name work in the current one.
-   */
-  id: string;
-  path: string;
-  /** The project whose container held it — every scan tier knows this, so the type says so. */
-  projectId: string;
-  /** That project's display name, for a row that names a project rather than an id. */
-  projectName: string;
-  /** The branch the directory is on; retained by the removal, so nothing committed is lost. */
-  branch: string | null;
-  /** Epoch ms of the last thing that touched it (dir mtime or branch tip). */
-  lastTouchedAt: number;
-  /** Which of the two clocks that timestamp came from. */
-  ageBasis: OrphanAgeBasis;
-  /** Epoch ms it became eligible — the basis Storage shows for the verdict. */
-  removableAt: number;
-}
-
-/**
- * One clean orphan the scan KEEPS: still inside the retention window, its age
- * unreadable (VC-113), or something is live inside it right now. `removableAt`
- * is when it becomes eligible, so the list can say "in 9 days" instead of
- * leaving the user to guess whether it is safe.
- */
-export interface KeptWorktreeOrphan {
-  path: string;
-  projectId: string;
-  projectName: string;
-  branch: string | null;
-  lastTouchedAt: number | null;
-  ageBasis: OrphanAgeBasis | null;
-  removableAt: number | null;
-  reason: OrphanKeptReason;
-  /** What is live in it, when `reason` is `active`; `null` otherwise. */
-  detail: string | null;
-}
-
-/**
- * One stale git ADMIN record a cleanup would prune — read out of the `prunable`
- * marker in `git worktree list --porcelain`, so naming it costs nothing and
- * changes nothing.
- *
- * One record per entry, not one bundle per project (VC-284 review C2): the
- * confirmation shows records, so the plan has to carry records, and every one
- * of them earns its own outcome in the durable history.
- */
-export interface PrunableWorktreeMetadata {
-  /** This record's id inside its scan revision — what a cleanup command selects. */
-  id: string;
-  projectId: string;
-  projectName: string;
-  projectPath: string;
-  /** The path git can no longer find. */
-  path: string;
-  /** Git's own reason, verbatim (`prunable <reason>`). */
-  reason: string;
-}
-
-/** One stale git record the scan reports but refuses to propose, and why. */
-export interface KeptWorktreeMetadata {
-  projectId: string;
-  projectName: string;
-  projectPath: string;
-  path: string;
-  /** Git's own `prunable` reason. */
-  gitReason: string;
-  reason: OrphanMetadataKeptReason;
-}
-
-/**
- * A project whose worktree listing could not be read (VC-284 review C5). It is
- * reported rather than skipped in silence: without the listing, every checkout
- * in that project's container is unaccounted for, and "we could not look" is a
- * different statement from "there was nothing there".
- */
-export interface UnreadableWorktreeProject {
-  projectId: string;
-  projectName: string;
-  projectPath: string;
-  error: string;
-}
 
 /**
  * A `volli:worktree-orphans` SCAN report (VC-284): read-only by construction.
@@ -3499,162 +3292,17 @@ export type WorktreeOrphanDeleteResult = Result;
 
 // ---- worktree trim (VC-340) ------------------------------------------------
 
-/**
- * One ignored path a trim removed, with the apparent bytes it held. Sizes are
- * summed from the walk the removal needed anyway; for a pnpm tree they overstate
- * what the filesystem gets back (the files are hardlinks into the store), which
- * is honest for what this reclaims — files nothing has to walk any more.
- */
-export interface WorktreeTrimRemoval {
-  path: string;
-  bytes: number;
-}
-
-/**
- * One ignored path a trim KEPT, and why. Ignored is not the same as disposable:
- * `.env`, `.envrc`, `*.local`, keys and certificates are ignored precisely
- * because they are local configuration, so the report states what survived as
- * plainly as what did not.
- */
-export interface WorktreeTrimKeep {
-  path: string;
-  reason: string;
-}
-
-/** What one worktree's trim did — paths are relative to `worktreePath`. */
-export interface WorktreeTrimReport {
-  worktreePath: string;
-  /** Largest first, so "the top offenders" is the head of the list. */
-  removed: WorktreeTrimRemoval[];
-  kept: WorktreeTrimKeep[];
-  totalBytes: number;
-  /** A measured preview that deleted nothing. */
-  dryRun: boolean;
-}
-
-/** One worktree in the Settings table, with the artifact footprint it carries. */
-export interface WorktreeTrimScanEntry {
-  path: string;
-  projectId: string;
-  /** The ticket that owns the checkout, or `null` for an orphan git still registers. */
-  ticketId: string | null;
-  branch: string | null;
-  /** How many ignored paths a trim would take. `0` reads as "nothing to trim". */
-  artifactCount: number;
-  /** Why this worktree is off limits right now (live work, dirty tracked files), else `null`. */
-  activeReason: string | null;
-}
-
 /** The scan behind Settings → Storage → Build artifacts. Reads only; never removes. */
 export type WorktreeTrimScanResult = Result<{ worktrees: WorktreeTrimScanEntry[] }>;
-
-/**
- * What a manual trim across every non-active worktree did: the per-worktree
- * reports and the worktrees it refused, with the reason.
- *
- * No metadata pruning here on purpose — `git worktree prune` drops every stale
- * record in a repository, so it belongs to the confirmed orphan cleanup that
- * reviews a set before taking it (VC-284), never to a second action running it
- * blind.
- */
-export interface WorktreeTrimSweepReport {
-  worktrees: WorktreeTrimReport[];
-  skipped: { path: string; reason: string }[];
-  totalBytes: number;
-  removedCount: number;
-  dryRun: boolean;
-}
 
 /** Ack for `volli:worktree-trim` — the sweep report the Settings action renders. */
 export type WorktreeTrimResult = Result<{ report: WorktreeTrimSweepReport }>;
 
-/**
- * The trim settings: the preserved-configuration allowlist and whether a ticket
- * reaching Done/Archived trims its own worktree. Both are user-owned — the
- * automatic trim is opt-out, and the allowlist ships with defaults rather than
- * empty.
- */
-export interface WorktreeTrimSettings {
-  keepPatterns: string[];
-  trimOnFinish: boolean;
-}
-
 /** The trim settings — returned by `volli:worktree-trim-settings-get`/`-set`. */
 export type WorktreeTrimSettingsResult = Result<{ settings: WorktreeTrimSettings }>;
 
-/** `{ trimOnFinish?, keepPatterns? }` — a partial update of the trim settings. */
-export interface WorktreeTrimSettingsInput {
-  trimOnFinish?: boolean;
-  keepPatterns?: string[];
-}
-
-/** One confirmed, currently-unreferenced Pi sidecar proposed by a read-only scan. */
-export interface PiSessionOrphanCandidate {
-  itemId: string;
-  path: string;
-  sessionId: string;
-  sizeBytes: number;
-}
-
-/** A jsonl-shaped entry the scanner refused to treat as a deletion candidate. */
-export interface PiSessionOrphanSkipped {
-  path: string;
-  reason: string;
-}
-
-/** The exact proposal displayed before Pi cleanup can be confirmed. */
-export interface PiSessionOrphanInventory {
-  revision: string;
-  scannedAt: number;
-  candidates: PiSessionOrphanCandidate[];
-  candidateCount: number;
-  candidateBytes: number;
-  skipped: PiSessionOrphanSkipped[];
-}
-
-/** One reviewed candidate main kept after its mandatory pre-unlink re-check. */
-export interface PiSessionOrphanKept {
-  candidate: PiSessionOrphanCandidate;
-  reason: string;
-}
-
-/** What one explicit Pi cleanup actually did. */
-export interface PiSessionOrphanReclaimReport {
-  removed: PiSessionOrphanCandidate[];
-  kept: PiSessionOrphanKept[];
-  removedCount: number;
-  removedBytes: number;
-}
-
 export type PiSessionOrphanScanResult = Result<{ inventory: PiSessionOrphanInventory }>;
 export type PiSessionOrphanReclaimResult = Result<{ report: PiSessionOrphanReclaimReport }>;
-
-/**
- * The exact list of running processes a person is shown before any of them may
- * be signalled (VC-341). `candidates` carries both sources — the spawn ledger's
- * owned children and the cwd sweep's double-forkers — and the stance that says
- * which of them Volli is prepared to kill.
- */
-export interface OrphanProcessInventory {
-  revision: string;
-  scannedAt: number;
-  candidates: OrphanProcessCandidate[];
-  /** How many of them carry a Reap; the rest are listed for context only. */
-  reapableCount: number;
-}
-
-/** One candidate a reap declined, with what was found instead. */
-export interface OrphanProcessKept {
-  candidate: OrphanProcessCandidate;
-  reason: string;
-}
-
-/** What one explicit reap actually did. */
-export interface OrphanProcessReapReport {
-  reaped: OrphanProcessCandidate[];
-  kept: OrphanProcessKept[];
-  reapedCount: number;
-}
 
 export type OrphanProcessScanResult = Result<{
   inventory: OrphanProcessInventory;
@@ -3670,19 +3318,22 @@ export type OrphanProcessPolicyResult = Result<{ policy: AutoReapPolicy }>;
  */
 export type WorktreeRecreateResult = Result<{ worktreePath: string }>;
 
-// ---- Done flow (docs/plans/done-flow.md) -----------------------------------
+// ---- Done flow -------------------------------------------------------------
 
 /**
  * The finer Details-rail worktree status (done-flow §7 "dirty predicate
  * split"), returned by `volli:worktree-status`. Mirrors main's
  * `getWorktreeStatus` report: is the tree uncommitted, is a sequencer op
- * mid-flight (blocks one-click commit), and how far the branch has moved from
- * its base (`null` when the base is unknown or the count could not be read).
+ * mid-flight or are paths unmerged (either blocks one-click commit), and how
+ * far the branch has moved from its base (`null` when the base is unknown or
+ * the count could not be read).
  */
 export type WorktreeStatusResult = Result<{
   status: {
     uncommitted: boolean;
     sequencerActive: boolean;
+    /** Unmerged index entries (stash-pop/squash conflicts carry no sequencer marker). */
+    unmergedPaths: number;
     aheadOfBase: number | null;
     behindBase: number | null;
     /** Commits not yet on `origin/<branch>`; null when never pushed / no remote. */
@@ -3690,12 +3341,6 @@ export type WorktreeStatusResult = Result<{
   };
 }>;
 
-/**
- * A worktree diff summary for `volli:worktree-diff` (done-flow §"diff.ts", the
- * two-mode split): `"working-tree"` is "what the agent is doing right now",
- * `"merge-base"` is "what the PR would contain".
- */
-export type WorktreeDiffMode = "working-tree" | "merge-base";
 export type WorktreeDiffResult = Result<{ diff: DiffStat }>;
 
 /** The composed Change Set for `volli:worktree-change-set`. */
@@ -3735,62 +3380,6 @@ export type WorktreePushPrResult = Result<{ url: string; existing: boolean }>;
 // `RetentionReason` is domain vocabulary, not transport: @volli/shared's pure
 // `computeArchiveReadiness` decides it, so the type is declared there and
 // imported above.
-
-/**
- * One PR check, normalized off the two shapes GitHub's rollup mixes together
- * (VC-182): a GitHub Actions `CheckRun` and a legacy `StatusContext`.
- *
- * FOUR states, not gh's nine conclusions crossed with its five status values.
- * The reader's question is "can I merge this?", and the answer has exactly four
- * shapes — it failed, it is still going, it passed, it did not run. Collapsing
- * happens ONCE, in `ghPrStatus`, so every surface reads the same verdict rather
- * than each re-deciding what `NEUTRAL` means.
- */
-export type PrCheckState = "passing" | "failing" | "pending" | "skipped";
-
-/** One row of the PR's check rollup, as the rail draws it. */
-export interface PrCheck {
-  /** Display name — a job name ("Check + Test") or a status context ("ci/legacy"). */
-  name: string;
-  /** The Actions workflow the job belongs to; `null` for a legacy commit status. */
-  workflow: string | null;
-  state: PrCheckState;
-  /** The run's log page, or `null` when the provider published no link. */
-  url: string | null;
-}
-
-/**
- * The composed retention state for ONE ticket, returned by
- * `volli:retention-state`. Everything but `keep` is TRANSIENT (decision #42:
- * persist identity, compute state) — recomputed from the merge-watch's last
- * poll plus the live Done-TTL clock, never stored. `keep` is the durable pin
- * (migration 010). `hasConflicts`/`checks` are surfacing-only (the #44/#45
- * button-never-gate rule): they explain why a PR can't merge yet, they do not
- * block the wrap-up prompt.
- */
-export interface TicketRetentionState {
-  ticketId: string;
-  /** The watched PR url, or `null` when the ticket has none yet. */
-  prUrl: string | null;
-  /** The watched PR's state, or `null` when unknown / no PR. */
-  prState: "open" | "merged" | "closed" | null;
-  /** The PR's base branch conflicts with it (`mergeStateStatus` DIRTY). */
-  hasConflicts: boolean;
-  /**
-   * The PR's whole check rollup (VC-182), empty when the PR has no checks —
-   * which is also how a project with no GitHub Actions pipeline reads, and is
-   * what makes the rail's checks row self-detecting rather than a setting.
-   */
-  checks: PrCheck[];
-  /** Whether the Archive & clean prompt should be offered right now. */
-  archiveReady: boolean;
-  /** The condition behind `archiveReady` (still set when suppressed by dismissal). */
-  reason: RetentionReason | null;
-  /** The durable Keep pin — exempts the ticket from BOTH retention paths. */
-  keep: boolean;
-  /** Whether the prompt was dismissed this launch (re-offered next launch). */
-  dismissed: boolean;
-}
 
 /** The composed retention state for a ticket — returned by `volli:retention-state`. */
 export type RetentionStateResult = Result<{ state: TicketRetentionState }>;

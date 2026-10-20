@@ -7,6 +7,7 @@ import {
   createSessionEngine,
   createSessionRuntime,
   isSessionStreamFrame,
+  SESSION_HISTORY_WINDOW,
   type BindingHandle,
   type NativeHarnessAdapter,
   type ObservationSink,
@@ -54,6 +55,7 @@ class Adapter implements NativeHarnessAdapter {
   reconcileReceipts: Awaited<ReturnType<BindingHandle["reconcile"]>>["receipts"] = [];
   dispatchReceipt: Awaited<ReturnType<BindingHandle["dispatch"]>> | null = null;
   sink: ObservationSink | null = null;
+  onRelease: (() => void) | null = null;
   specs: Parameters<NativeHarnessAdapter["attach"]>[0][] = [];
 
   async attach(spec: Parameters<NativeHarnessAdapter["attach"]>[0], sink: ObservationSink) {
@@ -81,6 +83,7 @@ class Adapter implements NativeHarnessAdapter {
       },
       release: async () => {
         this.releases += 1;
+        this.onRelease?.();
       },
     } satisfies BindingHandle;
   }
@@ -122,6 +125,27 @@ function composition(
       ids: runtimeIds(input.runtimeIdPrefix),
       ...(input.onSubscriberFailure ? { onSubscriberFailure: input.onSubscriberFailure } : {}),
     }),
+  };
+}
+
+/** One `gh pr checks --watch` bash call, declared with a 30-minute timeout. */
+function bashCall(state: "started" | "completed"): RuntimeObservation {
+  return {
+    kind: "activity",
+    state,
+    turnId: "turn-1",
+    activityId: "call-1",
+    descriptor: {
+      kind: "run-command",
+      nativeToolName: "bash",
+      subject: { label: "gh pr checks --watch", path: null, lineRange: null },
+      outcome: null,
+      startedAt: 10,
+      endedAt: state === "completed" ? 20 : null,
+    },
+    input: { command: "gh pr checks --watch", timeout: 1_800 },
+    output: null,
+    occurredAt: 450,
   };
 }
 
@@ -185,7 +209,112 @@ describe("SessionRuntime durable boundary invariants", () => {
       "is not open",
     );
     expect(adapter.attaches).toBe(1);
+    const failed = await runtime.snapshot({ sessionId: created.sessionId });
+    expect(failed.projection.attention.active).toContainEqual(
+      expect.objectContaining({
+        attachmentId: null,
+        kind: "adapter_unrecoverable",
+        detail: "provider disconnected",
+      }),
+    );
+    // A fresh attachment is the existing recovery, and clears the one durable
+    // explanation even though the failed binding is already historical.
+    await attach(runtime, created.sessionId, "recover");
+    expect(
+      (await runtime.snapshot({ sessionId: created.sessionId })).projection.attention.active,
+    ).toEqual([]);
   });
+
+  it("names a fatal attachment with no diagnostic and redacts diagnostic credentials (VC-758)", async () => {
+    for (const diagnostic of [undefined, "", "   ", "password=fixture-secret-value"]) {
+      const { runtime, adapter } = composition();
+      const { sessionId } = await create(runtime);
+      await attach(runtime, sessionId);
+      await adapter.emit({
+        kind: "attachment",
+        state: "failed",
+        ...(diagnostic === undefined
+          ? {}
+          : { failure: { reason: "unknown" as const, message: diagnostic } }),
+      });
+      const snapshot = await runtime.snapshot({ sessionId });
+      expect(snapshot.projection.attention.active).toHaveLength(1);
+      expect(snapshot.projection.attention.active[0]?.detail).toEqual(
+        !diagnostic?.trim()
+          ? "The runtime stopped unexpectedly."
+          : expect.stringContaining("[redacted]"),
+      );
+      expect(JSON.stringify(snapshot)).not.toContain("fixture-secret-value");
+      expect(snapshot.projection.liveExecutor).toBeNull();
+      await runtime.close();
+    }
+  });
+
+  it("keeps the existing recovery when a runtime fails after explaining the turn (VC-758)", async () => {
+    const { runtime, adapter } = composition();
+    const { sessionId } = await create(runtime);
+    await attach(runtime, sessionId);
+    await adapter.emit({
+      kind: "attention",
+      state: "raised",
+      reason: "runtime-failure",
+      message: "Provider request failed",
+    });
+    await adapter.emit({
+      kind: "attachment",
+      state: "failed",
+      failure: { reason: "unknown", message: "Transport closed" },
+    });
+    const snapshot = await runtime.snapshot({ sessionId });
+    expect(snapshot.projection.attention.active).toHaveLength(1);
+    expect(snapshot.projection.attention.active[0]?.detail).toBe("Provider request failed");
+    expect(snapshot.projection.liveExecutor).toBeNull();
+  });
+
+  it.each(["before explanation", "after explanation"])(
+    "drops fatal observation work when close wins %s (VC-758)",
+    async (boundary) => {
+      const base = composition();
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let armed = false;
+      const engine: SessionEngine = {
+        ...base.engine,
+        listEvents: async (query) => {
+          const events = await base.engine.listEvents(query);
+          if (armed && boundary === "before explanation") {
+            armed = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return events;
+        },
+        observe: async (observation) => {
+          const event = await base.engine.observe(observation);
+          if (armed && observation.kind === "attention.raised") {
+            armed = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return event;
+        },
+      };
+      const { runtime, adapter } = composition({ engine });
+      const { sessionId } = await create(runtime);
+      await attach(runtime, sessionId);
+      armed = true;
+      const failed = adapter.emit({ kind: "attachment", state: "failed" });
+      await entered.promise;
+      await runtime.close();
+      release.resolve();
+      await expect(failed).resolves.toBeUndefined();
+      const projection = await engine.getSession({ sessionId });
+      expect(projection?.attention.active).toHaveLength(boundary === "before explanation" ? 0 : 1);
+      // close() is process teardown, not a durable attachment outcome.
+      expect(projection?.liveExecutor).not.toBeNull();
+      await base.runtime.close();
+    },
+  );
 
   it("single-flights buffered rehydration and resumes from the immutable original directory", async () => {
     let directory = "/ticket/original";
@@ -367,6 +496,46 @@ describe("SessionRuntime durable boundary invariants", () => {
       sessionId: created.sessionId,
       command: { kind: "adapter.release", attachmentId },
     });
+    expect(runtime.openNativeBindings()).toEqual([]);
+  });
+
+  it("lists the tool calls a live binding has in flight, for the watchdog", async () => {
+    const { runtime, adapter } = composition();
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    expect(runtime.openNativeBindings()[0]!.inFlightTools).toEqual([]);
+
+    await adapter.emit({ kind: "turn", state: "started", turnId: "turn-1", occurredAt: 400 });
+    // A `started` is only ever a transient overlay, never a durable fact, so
+    // the binding is the one place its being in flight is known.
+    await adapter.emit(bashCall("started"));
+    expect(runtime.openNativeBindings()[0]!.inFlightTools).toEqual([
+      { activityId: "call-1", toolName: "bash", declaredTimeoutMs: 1_800_000 },
+    ]);
+
+    await adapter.emit(bashCall("completed"));
+    expect(runtime.openNativeBindings()[0]!.inFlightTools).toEqual([]);
+  });
+
+  it("ignores an observation that arrives while shutdown is releasing its binding", async () => {
+    const { runtime, adapter } = composition();
+    const created = await create(runtime);
+    await attach(runtime, created.sessionId);
+    const late: Promise<void>[] = [];
+    // The executor still speaking inside its own shutdown release: the binding
+    // has already left the runtime's map, and its sink is not yet discarded.
+    adapter.onRelease = () => {
+      late.push(
+        adapter
+          .emit({ kind: "turn", state: "interrupted", turnId: "turn-1", occurredAt: 500 })
+          .catch(() => undefined),
+      );
+    };
+
+    await runtime.close();
+    await Promise.all(late);
+
+    expect(late).toHaveLength(1);
     expect(runtime.openNativeBindings()).toEqual([]);
   });
 
@@ -836,8 +1005,12 @@ describe("SessionRuntime durable boundary invariants", () => {
       });
     }
 
+    // Past one engine page the projection still folds every event, while the
+    // snapshot beside it carries only its bounded tail (VC-315).
     const snapshot = await runtime.snapshot({ sessionId: created.sessionId });
-    expect(snapshot.frames.length).toBeGreaterThan(500);
+    expect(snapshot.throughSequence).toBeGreaterThan(500);
+    expect(snapshot.frames).toHaveLength(SESSION_HISTORY_WINDOW.events);
+    expect(snapshot.frames.at(-1)?.sequence).toBe(snapshot.throughSequence);
     await expect(
       runtime.command({
         commandId: "paged-interrupt",
@@ -1082,6 +1255,63 @@ describe("SessionRuntime durable boundary invariants", () => {
       },
     });
     first.adapter.attach = originalAttach;
+  });
+
+  it("leaves a replayed attach unreceipted when shutdown wins its recovery", async () => {
+    const first = composition();
+    const created = await create(first.runtime);
+    await first.engine.submit({
+      commandId: "recover-closing-attach",
+      sessionId: created.sessionId,
+      intent: { kind: "executor.start", adapterId: "invariant-adapter", continuity: "fresh" },
+      provenance: { source: { kind: "user", id: "test", detail: null }, venue },
+    });
+    await first.engine.observe({
+      id: "recover-closing-attach-opened",
+      sessionId: created.sessionId,
+      commandId: "recover-closing-attach",
+      occurredAt: 100,
+      provenance: { source: { kind: "adapter", id: "invariant-adapter", detail: null }, venue },
+      kind: "attachment.opened",
+      attachment: {
+        id: "recover-closing-attach-opened",
+        sessionId: created.sessionId,
+        adapterId: "invariant-adapter",
+        venue,
+        continuity: "fresh",
+        native: {
+          id: "recover-native",
+          detail: {
+            kind: "volli.native-binding.v1",
+            profileId: "native",
+            directory: "/ticket/original",
+            locator: null,
+          },
+        },
+        authority: null,
+      },
+    });
+    const attachStarted = Promise.withResolvers<void>();
+    const releaseAttach = Promise.withResolvers<void>();
+    const originalAttach = first.adapter.attach.bind(first.adapter);
+    first.adapter.attach = async (spec, sink) => {
+      attachStarted.resolve();
+      await releaseAttach.promise;
+      return originalAttach(spec, sink);
+    };
+
+    const recovering = attach(first.runtime, created.sessionId, "recover-closing-attach");
+    await attachStarted.promise;
+    await first.runtime.close();
+    releaseAttach.resolve();
+
+    await expect(recovering).rejects.toThrow("Session runtime is closed");
+    expect(first.adapter.releases).toBe(1);
+    expect(first.adapter.reconciles).toBe(0);
+    const session = await first.engine.getSession({ sessionId: created.sessionId });
+    expect(
+      session?.receipts.filter(({ commandId }) => commandId === "recover-closing-attach"),
+    ).toEqual([]);
   });
 
   it("keeps the durable attachment identity when an opened attach is replayed without a receipt", async () => {

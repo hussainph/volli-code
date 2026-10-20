@@ -4,7 +4,7 @@
  * The subject here is one line of Volli's runtime — `toolExecution:
  * "sequential"` — and the only honest way to measure what changing it buys is
  * to run Pi's real loop against it. So the `Agent`, its batching, its
- * preflight, its `beforeToolCall` gate and its result ordering all run
+ * preflight and result ordering all run
  * unmodified; the two things a benchmark must own are faked and only those:
  *
  *  - the provider call, scripted exactly as `runtime.test.ts` scripts it, so a
@@ -26,6 +26,7 @@ import { Agent, type StreamFn, type ToolExecutionMode } from "@earendil-works/pi
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
+  type JsonObject,
   type Model,
   type ToolCall,
 } from "@earendil-works/pi-ai";
@@ -38,7 +39,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
  *
  * Run-relative rather than absolute, and that is load-bearing rather than
  * tidy: `ToolSample.startedAt` is asserted against a duration ("this call did
- * not start until the approval settled"), and against `hrtime`'s own origin —
+ * started only after an earlier mutation settled"), and against `hrtime`'s own origin —
  * time since boot — every such assertion passes on a number near 4×10⁹ no
  * matter what the scheduler did. A test that cannot fail is worse than no
  * test, because it gets quoted as evidence.
@@ -122,9 +123,7 @@ function benchTool(spec: BenchTool, samples: ToolSample[], now: () => number): A
  * emits one call per reply measures the case where parallel mode is
  * unreachable — which is why the control scenario emits exactly that.
  */
-export type ScriptedReply =
-  | { toolCalls: { name: string; args?: Record<string, unknown> }[] }
-  | { text: string };
+export type ScriptedReply = { toolCalls: { name: string; args?: JsonObject }[] } | { text: string };
 
 /** Deterministic per-reply usage, so token totals are comparable across modes. */
 export interface ScriptedUsage {
@@ -254,17 +253,12 @@ export function scriptedProvider(
 
 // --- the run ---------------------------------------------------------------
 
-/** A `beforeToolCall` stand-in, so approval behaviour can be measured too. */
-export type BenchGate = (context: { toolName: string; toolCallId: string }) => Promise<void>;
-
 export interface RunSpec {
   mode: ToolExecutionMode;
   tools: BenchTool[];
   replies: ScriptedReply[];
   providerLatencyMs?: number;
   usage?: ScriptedUsage;
-  /** Run before each call, serialized by Pi's preflight exactly as Volli's gate is. */
-  gate?: BenchGate;
 }
 
 export interface RunResult {
@@ -337,14 +331,6 @@ export async function runOnce(spec: RunSpec): Promise<RunResult> {
     },
     streamFn,
     toolExecution: spec.mode,
-    ...(spec.gate === undefined
-      ? {}
-      : {
-          beforeToolCall: async ({ toolCall }) => {
-            await spec.gate?.({ toolName: toolCall.name, toolCallId: toolCall.id });
-            return undefined;
-          },
-        }),
   });
 
   agent.subscribe((event) => {

@@ -18,14 +18,44 @@ import {
 import { toast } from "sonner";
 
 import { runAutomationAction, type RunAutomationAction } from "./run-automation-model";
+import { guardWrite } from "@renderer/components/hosts/use-hosts";
 import { chatTabId } from "@renderer/components/ticket/ticket-chat-tab";
 import { toastError } from "@renderer/lib/toast";
+import { useBoardStore } from "@renderer/stores/board";
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useUiStore } from "@renderer/stores/ui";
 import { useWorkspaceStore } from "@renderer/stores/workspace";
+import { refuseRemote, refuseRemoteTicket } from "@renderer/stores/remote-project";
 
 /** A click whose IPC reply was lost keeps its durable command id for Retry. */
 const pendingCommandIds = new Map<string, string>();
+
+/**
+ * What became of a hand-run, for a surface that gates its own control on it
+ * (VC-406: the rail's inspect popover, whose Run must not be pressable twice
+ * for one launch and must offer Retry when a launch did not land).
+ *
+ * It is a REPORT, not a second announcement: every arm below has already done
+ * what a person needs — adopted the Session and toasted its door, toasted the
+ * refusal, or opened Model Access. A caller that ignores the value behaves
+ * exactly as it did before this existed, which is why every other Run door
+ * still does.
+ *
+ * The two retryable arms are distinguished from the third on purpose:
+ * `needs-model-access` is configuration a person must fix elsewhere before any
+ * Run can land, so pressing Run again would fail the same way — it is not an
+ * offer to retry (AGENTS.md: authentication, permissions, configuration and
+ * quota failures require explicit user recovery).
+ */
+export type AutomationRunOutcome =
+  /** Main accepted the Run; its Session is adopted and its door is on screen. */
+  | "started"
+  /** No default model: Model Access is open, and Run is not the recovery. */
+  | "needs-model-access"
+  /** A typed refusal, already toasted. Pressing again is a fresh attempt. */
+  | "refused"
+  /** The transport itself failed, already toasted. Retry repeats the intent. */
+  | "failed";
 
 /** The transport fields shared by every Ticket-targeted Run request. */
 interface RunRequest {
@@ -48,6 +78,8 @@ export interface TicketRunRequest extends RunRequest {
  * waiting on a Session and no other surface will tell them.
  */
 async function startRun(input: RunRequest): Promise<RunAutomationAction | null> {
+  // A remote project's ticket runs on its host, not here (VC-711).
+  if (refuseRemoteTicket(input.ticketId)) return null;
   // What a lost reply is retried AS: the WHOLE intent (`automationRunRetryKey`)
   // — the record or the Unbound Run's own words, the Ticket, and this
   // invocation's model override. Running the same work on a different model is
@@ -92,6 +124,7 @@ async function startProjectRun(input: {
   automationId: string;
   projectId: string;
 }): Promise<RunAutomationAction | null> {
+  if (refuseRemote(input.projectId)) return null;
   const retryKey = `project\u0000${input.automationId}\u0000${input.projectId}`;
   const commandId = pendingCommandIds.get(retryKey) ?? crypto.randomUUID();
   pendingCommandIds.set(retryKey, commandId);
@@ -171,21 +204,39 @@ export async function runAutomationForProject(input: {
  * launch answer wins when main resolved a bound Automation under a newer name
  * (VC-231). A missing default model still opens Model Access: that is recovery
  * for the Run the person requested, not a successful landing.
+ *
+ * It ANSWERS with {@link AutomationRunOutcome} as well as acting on the result,
+ * for the one caller that gates a control on the launch rather than firing and
+ * forgetting. Nothing about the arms themselves changed.
  */
-export async function runAutomationOnTicket(input: TicketRunRequest): Promise<void> {
+/** The project a ticket the board holds belongs to, `null` for one it does not hold. */
+function ticketProject(ticketId: string): string | null {
+  for (const [projectId, tickets] of Object.entries(useBoardStore.getState().ticketsByProject)) {
+    if (tickets.some((ticket) => ticket.id === ticketId)) return projectId;
+  }
+  return null;
+}
+
+export async function runAutomationOnTicket(
+  input: TicketRunRequest,
+): Promise<AutomationRunOutcome> {
+  // Every hand-run door (the card menu, the rail, the palette, the page, the
+  // New-ticket composer) lands here. A ticket whose project's host cannot
+  // serve (VC-576) starts no Run, and says why.
+  if (!guardWrite(ticketProject(input.ticketId))) return "refused";
   const action = await startRun({
     target: input.target,
     ticketId: input.ticketId,
     modelOverride: input.modelOverride,
   });
-  if (action === null) return;
+  if (action === null) return "failed";
   switch (action.kind) {
     case "open-model-access":
       useUiStore.getState().setSettingsOpen(true, "model-access");
-      return;
+      return "needs-model-access";
     case "toast":
       toastError(action.message);
-      return;
+      return "refused";
     case "session-started": {
       const chat = useChatSessionsStore.getState();
       chat.adoptChatSession(action.sessionId);
@@ -209,7 +260,7 @@ export async function runAutomationOnTicket(input: TicketRunRequest): Promise<vo
           },
         },
       );
-      return;
+      return "started";
     }
   }
 }

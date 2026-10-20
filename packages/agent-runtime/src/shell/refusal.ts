@@ -1,4 +1,4 @@
-import { lexCommandLine, splitProgram, type LexedSegment } from "../authority/vendor/shell";
+import { lexCommandLine, splitProgram, type LexedSegment } from "./lexer";
 
 /**
  * The refusal a background shell port answers with when it judged an action

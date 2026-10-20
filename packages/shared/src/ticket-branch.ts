@@ -47,6 +47,71 @@ export function ticketBranchName(ticketId: string, title: string): string {
   return slug ? `volli/${ticketId}-${slug}` : `volli/${ticketId}`;
 }
 
+/**
+ * `volli/<DISPLAY-ID>`, an optional one-letter stacked-PR slice (`c` in
+ * `volli/VC-627c-venue`, VC-659), then either the end or `-<slug>`. The
+ * display id is a ticket prefix (`isValidPrefix`: a letter then up to four
+ * letters or digits, never a hyphen) and a ticket number, so the first
+ * `-<digits>` closes it and no slug can be mistaken for part of the id:
+ * `volli/VC-2-3-things` is VC-2's, and a slice cut as `volli/VC-627-b-…` is
+ * VC-627's through its slug. Anything else after the number is refused —
+ * `volli/VC-6270` is VC-6270's, never VC-627's, and `volli/VC-627.bak` or
+ * `volli/VC-627_x` belong to no ticket. Linear (CodeQL js/polynomial-redos,
+ * #429): it is anchored, and `\d+` can only give back digits, which neither
+ * the slice letter nor `-` nor the end can match.
+ */
+const TICKET_BRANCH = /^volli\/([A-Z][A-Z0-9]{0,4}-\d+)[a-z]?(?:-|$)/;
+
+/**
+ * The display id a ticket branch names (`"VC-12"` for `volli/VC-12-mcp-server`
+ * or `volli/VC-12`), or `null` for a branch outside the convention. The slug is
+ * deliberately ignored: it is the title as it read when the branch was cut, and
+ * a retitle or an agent's own `git switch -c volli/VC-12-narrower-fix` changes
+ * it without changing whose work the branch carries.
+ */
+export function ticketBranchDisplayId(branch: string): string | null {
+  return TICKET_BRANCH.exec(branch)?.[1] ?? null;
+}
+
+/**
+ * What a ticket's own worktree directory is checked out on, measured against
+ * the branch the ticket expects there:
+ *
+ * - `expected` — the branch the ticket records (or would name).
+ * - `adopt` — a different branch of the SAME ticket (its display id parses out
+ *   of it). This is the ticket's work, moved: an agent in the worktree cut a
+ *   narrower branch or a stacked-PR slice (`volli/VC-627c-…`, VC-659), or the
+ *   slug drifted with a retitle. The checkout is what
+ *   is true, so the ticket takes it on rather than refusing to open.
+ * - `foreign` — a branch that is not this ticket's: another ticket's, or one
+ *   outside the `volli/` convention. Whose work it is cannot be known from
+ *   here, so it is refused, never adopted and never switched away from.
+ * - `detached` — no branch at all. Refused too: there is no branch to record,
+ *   and a Session opened there would commit onto nothing, leaving its work
+ *   reachable only through the reflog.
+ */
+export type TicketWorktreeCheckout =
+  | { kind: "expected" }
+  | { kind: "adopt"; branch: string }
+  | { kind: "foreign"; branch: string }
+  | { kind: "detached" };
+
+export function classifyTicketWorktreeCheckout(input: {
+  /** The ticket's display id, e.g. `"VC-12"`. */
+  displayId: string;
+  /** The branch the ticket records for its worktree, or would name for it. */
+  expectedBranch: string;
+  /** The branch checked out in the ticket's worktree, `null` for a detached HEAD. */
+  checkedOutBranch: string | null;
+}): TicketWorktreeCheckout {
+  const branch = input.checkedOutBranch;
+  if (branch === null) return { kind: "detached" };
+  if (branch === input.expectedBranch) return { kind: "expected" };
+  return ticketBranchDisplayId(branch) === input.displayId
+    ? { kind: "adopt", branch }
+    : { kind: "foreign", branch };
+}
+
 /** git-reserved ref characters (`~ ^ : ? * [ \`), by code point. */
 const RESERVED_REF_CODES = new Set([0x7e, 0x5e, 0x3a, 0x3f, 0x2a, 0x5b, 0x5c]);
 

@@ -47,6 +47,7 @@ const tab: BrowserTabState = {
 let host: {
   setPresentation: ReturnType<typeof vi.fn>;
   pictureOf: ReturnType<typeof vi.fn>;
+  tracesOf: ReturnType<typeof vi.fn>;
   show: ReturnType<typeof vi.fn>;
 };
 
@@ -55,6 +56,7 @@ beforeEach(() => {
   host = {
     setPresentation: vi.fn(() => tab),
     pictureOf: vi.fn(() => "data:image/png;base64,AAA"),
+    tracesOf: vi.fn(() => []),
     show: vi.fn(),
   };
   registerBrowserTabIpcHandlers(host as unknown as BrowserTabHost);
@@ -108,6 +110,16 @@ describe("Browser Tab IPC (VC-238)", () => {
       ok: true,
       dataUrl: null,
     });
+  });
+
+  it("reads one Session's Browser Traces, and answers none as an empty list (VC-453)", () => {
+    expect(invoke("volli:browser-traces", { sessionId: "s1" })).toEqual({ ok: true, traces: [] });
+    expect(host.tracesOf).toHaveBeenCalledWith("s1");
+    expect(invoke("volli:browser-traces", { sessionId: 3 })).toEqual({
+      ok: false,
+      error: "Invalid Browser Trace request",
+    });
+    expect(host.tracesOf).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a malformed request at the guard, before the host is asked anything", () => {

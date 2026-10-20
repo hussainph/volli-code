@@ -29,15 +29,16 @@
  *    says.
  *
  * INLINE HTML deliberately does NOT refuse. `<editor>` inside a sentence — the
- * shape this repo's own plans use, four times across two files — is one token
+ * shape this repo's own plans used, four times across two files — is one token
  * in a paragraph the projection renders faithfully; it conceals nothing and
  * stays visible as its own bytes, and refusing a 400-line plan over one
  * angle-bracketed word would take Document view away from the corpus it was
  * built for. Same reasoning for HTML comments (`CommentBlock`): not structure,
  * never hidden. The corpus test beside this file is what keeps those judgements
- * honest — it verifies every markdown file in `docs/` and the repo root, and
- * asserts that in every file Document Mode agrees to open, every span the
- * projection hides or replaces can be brought back by putting the caret in it.
+ * honest — it verifies a committed fixture corpus and every markdown file the
+ * repo tracks, and asserts that in every file Document Mode agrees to open,
+ * every span the projection hides or replaces can be brought back by putting
+ * the caret in it.
  *
  * The gate reads the bytes on DISK (the last load or save), not the live draft:
  * a Document view that ejected you mid-sentence because you typed a `<` would

@@ -1,6 +1,6 @@
 /**
  * "Open that Session AT that question" — the second half of a notification
- * click (VC-295 round 2).
+ * click (VC-295).
  */
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -82,7 +82,7 @@ describe("two planes on one Session", () => {
   });
 });
 
-describe("what a plane is currently showing (round 4)", () => {
+describe("what a plane is currently showing", () => {
   /**
    * The claim's second reader is the window's own report to main. Without it,
    * the row drew the revealed Attention while the report named the primary —

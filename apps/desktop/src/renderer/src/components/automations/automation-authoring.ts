@@ -47,7 +47,7 @@ export async function startAutomationAuthoring(
     },
   });
   if (sessionId === null) return null;
-  useChatSessionsStore.getState().enqueue(sessionId, {
+  await useChatSessionsStore.getState().enqueue(sessionId, {
     id: crypto.randomUUID(),
     text: automationAuthoringPrompt(context),
   });

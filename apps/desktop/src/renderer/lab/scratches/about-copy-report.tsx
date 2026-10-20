@@ -20,6 +20,8 @@ App version: 0.2.0-canary.4
 Release channel: canary
 OS: darwin arm64
 Database schema: 34
+Migration history: consistent
+Last update check: none recorded
 
 CLI status
 Volli command: Linked

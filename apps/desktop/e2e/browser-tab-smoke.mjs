@@ -8,21 +8,24 @@
  * denied `window.open`. The smoke then exercises managed HTTP popup handling,
  * address/history/reload chrome, in-pane DevTools, a Session's hold on the tab
  * with its cursor drawn over the plane (VC-239), tab destruction, and clean
- * app/server teardown. It starts no Session and takes no model turn, so it costs
+ * app/server teardown. It starts no executor and takes no model turn, so it costs
  * $0 and needs no provider credentials: the hold step builds the same Browser
  * port the adapter builds, through main's `VOLLI_BROWSER_PROBE` seam, in two
  * invented Sessions' names.
  *
- * This is a MANUALLY-RUN smoke (needs a display + the built app); it is NOT
- * wired into `vp test`.
+ * VC-773 also seeds one completed Session through the production ledger and
+ * transcript writer, then opens its real sidebar hover peek and markdown link
+ * safety prompt over a live Browser Tab. Electron's actual child views, not a
+ * mocked detector or renderer visibility flag, prove the plane leaves and
+ * returns while its WebContents survives.
  *
- *   Run:
- *     pnpm run build
- *     node apps/desktop/e2e/browser-tab-smoke.mjs
+ * CI-only (needs a display + the built app); not wired into `vp test`.
  */
 import http from "node:http";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+
+import { createServer } from "vite";
 
 import {
   assertBuiltRendererLoaded,
@@ -32,7 +35,7 @@ import {
   launch,
   makeGitRepo,
   makeScratch,
-  seedProjects,
+  REPO,
   tabStrip,
   waitForChildExit,
   waitUntil,
@@ -46,6 +49,125 @@ const PROJECT = {
 const ISOLATION = "api:undefined;node:undefined;open:false";
 const START_TITLE = `Fixture Start | ${ISOLATION}`;
 const POPUP_TITLE = "Fixture Popup";
+const OVERLAY_SESSION = {
+  id: "browser-overlay-session",
+  title: "Browser overlay fixture",
+};
+const MARKDOWN_LINK = "Check browser overlay link";
+
+/** Seed durable content, never a renderer component, detector or DOM overlay. */
+async function seedOverlaySession(projectPath, linkUrl) {
+  const vite = await createServer({
+    root: REPO,
+    appType: "custom",
+    server: { middlewareMode: true },
+    optimizeDeps: { noDiscovery: true },
+    logLevel: "error",
+  });
+  let db;
+  try {
+    const { openVolliDb } = await vite.ssrLoadModule("/packages/host-core/src/db/index.ts");
+    const { insertProject } = await vite.ssrLoadModule(
+      "/packages/host-core/src/db/projects-repo.ts",
+    );
+    const { createSqliteSessionLedger } = await vite.ssrLoadModule(
+      "/packages/host-core/src/session-control/sqlite-ledger.ts",
+    );
+    const { createFileTranscriptArtifactStore, sessionTranscriptsRoot } = await vite.ssrLoadModule(
+      "/packages/host-core/src/session-runtime/transcript-artifacts.ts",
+    );
+    db = openVolliDb(dbPath);
+    const now = Date.now();
+    insertProject(db, {
+      id: PROJECT.id,
+      name: PROJECT.name,
+      path: projectPath,
+      ticketPrefix: PROJECT.prefix,
+      baseBranch: "main",
+      setupCommand: null,
+      colorIndex: 0,
+      sortOrder: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const session = {
+      id: OVERLAY_SESSION.id,
+      projectId: PROJECT.id,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: OVERLAY_SESSION.title,
+      createdAt: now,
+    };
+    const attachmentId = `${session.id}-attachment`;
+    const turnId = `${session.id}-turn`;
+    const reference = await createFileTranscriptArtifactStore(
+      sessionTranscriptsRoot(userDataDir),
+    ).write({
+      version: 1,
+      threadId: `${session.id}-thread`,
+      branchId: `${session.id}-branch`,
+      attemptId: `${session.id}-attempt`,
+      turnId,
+      message: {
+        id: `${session.id}-reply`,
+        role: "assistant",
+        parts: [
+          { type: "text", text: `A completed local fixture. [${MARKDOWN_LINK}](${linkUrl})` },
+        ],
+      },
+    });
+    const payloads = [
+      { kind: "session.created", session },
+      {
+        kind: "model.selected",
+        selection: {
+          providerId: "anthropic",
+          modelId: "claude-sonnet-4-5",
+          reasoningLevel: "medium",
+        },
+        tier: "global",
+      },
+      {
+        kind: "attachment.opened",
+        attachment: {
+          id: attachmentId,
+          sessionId: session.id,
+          adapterId: "pi",
+          venue: { id: "local", kind: "local" },
+          continuity: "fresh",
+          native: { id: `${session.id}-native`, detail: { fixture: true } },
+          authority: null,
+        },
+      },
+      { kind: "turn.started", attachmentId, turnId },
+      { kind: "transcript.referenced", attachmentId, turnId, reference },
+      { kind: "turn.completed", attachmentId, turnId },
+      { kind: "attachment.closed", attachmentId, outcome: "completed" },
+    ];
+    await createSqliteSessionLedger(db).transaction((transaction) => {
+      transaction.insertSession(session);
+      for (const [index, payload] of payloads.entries()) {
+        transaction.appendEvent({
+          id: `${session.id}-event-${index + 1}`,
+          sessionId: session.id,
+          sequence: index + 1,
+          occurredAt: now + index,
+          recordedAt: now + index,
+          provenance: {
+            source: { kind: "adapter", id: "pi", detail: { fixture: "browser-overlay" } },
+            venue: { id: "local", kind: "local" },
+          },
+          ...(index >= 2 ? { attachmentId } : {}),
+          payload,
+        });
+      }
+    });
+  } finally {
+    db?.close();
+    await vite.close();
+  }
+}
 
 /**
  * The fixture is intentionally owned by this process: no external network,
@@ -307,6 +429,86 @@ async function remoteViewAttached(app, targetUrl) {
   }, targetUrl);
 }
 
+/** Observe the real native plane, including its identity across hide/restore. */
+async function nativePlaneState(app, targetUrl) {
+  return app.evaluate(({ BrowserWindow, webContents }, url) => {
+    const contents = webContents
+      .getAllWebContents()
+      .find((candidate) => !candidate.isDestroyed() && candidate.getURL() === url);
+    const window = BrowserWindow.getAllWindows().find((candidate) => !candidate.isDestroyed());
+    const view = window?.contentView.children.find(
+      (child) => "webContents" in child && child.webContents === contents,
+    );
+    return {
+      contentsId: contents?.id ?? null,
+      attached: view !== undefined,
+      bounds: view?.getBounds() ?? null,
+    };
+  }, targetUrl);
+}
+
+/** Independent geometry/paint witness; does not call the production detector. */
+async function overlayOverNativePlane(overlay, nativeBounds) {
+  return overlay.evaluate((element, plane) => {
+    const box = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const left = Math.max(box.left, plane.x);
+    const right = Math.min(box.right, plane.x + plane.width);
+    const top = Math.max(box.top, plane.y);
+    const bottom = Math.min(box.bottom, plane.y + plane.height);
+    const intersects = right > left && bottom > top;
+    const hit = intersects
+      ? document.elementFromPoint((left + right) / 2, (top + bottom) / 2)
+      : null;
+    return {
+      intersects,
+      painted:
+        style.visibility === "visible" &&
+        Number(style.opacity) > 0 &&
+        hit !== null &&
+        element.contains(hit),
+      box: { x: box.x, y: box.y, width: box.width, height: box.height },
+      role: element.getAttribute("role"),
+    };
+  }, nativeBounds);
+}
+
+async function frozenOverlayReceipt(page, targetUrl, overlay, before) {
+  if (!before.attached || before.bounds === null || before.contentsId === null) {
+    throw new Error(`no live native plane before overlay: ${JSON.stringify(before)}`);
+  }
+  return waitUntil(
+    "the real overlay over captured pixels with the native view hidden",
+    async () => {
+      if (!(await overlay.isVisible())) return null;
+      const geometry = await overlayOverNativePlane(overlay, before.bounds);
+      const native = await nativePlaneState(app, targetUrl);
+      const snapshotReady = await page
+        .locator('[data-browser-plane-snapshot="page"]')
+        .evaluateAll((images) =>
+          images.some(
+            (image) =>
+              image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0,
+          ),
+        );
+      return geometry.intersects &&
+        geometry.painted &&
+        snapshotReady &&
+        !native.attached &&
+        native.contentsId === before.contentsId
+        ? { geometry, native, snapshotReady }
+        : null;
+    },
+  );
+}
+
+async function restoredNativePlane(targetUrl, contentsId) {
+  return waitUntil("the same live WebContentsView to return after overlay dismissal", async () => {
+    const state = await nativePlaneState(app, targetUrl);
+    return state.attached && state.contentsId === contentsId ? state : null;
+  });
+}
+
 async function dockedDevToolsState(app, targetUrl) {
   return app.evaluate(({ BrowserWindow, webContents }, url) => {
     const all = webContents.getAllWebContents().filter((candidate) => !candidate.isDestroyed());
@@ -436,6 +638,7 @@ let code = 1;
 async function main() {
   await fs.mkdir(scratchHome, { recursive: true });
   const projectPath = await makeGitRepo(scratch, "browser-project-");
+  await seedOverlaySession(projectPath, popupUrl);
   app = await launch({
     dbPath,
     userDataDir,
@@ -448,7 +651,11 @@ async function main() {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.waitForLoadState("domcontentloaded");
   assertBuiltRendererLoaded(page);
-  await seedProjects(page, [{ ...PROJECT, path: projectPath }]);
+  // The project already exists in SQLite, so boot deliberately skips the
+  // legacy localStorage import (including its selectedProjectId). Select the
+  // actual rail tile instead: its accessible name is the project's monogram,
+  // and the button filter excludes dnd-kit's outer role="button" wrapper.
+  await page.getByRole("button", { name: "BT", exact: true }).and(page.locator("button")).click();
   await waitUntil("Home tab strip", async () => ((await strip(page).count()) === 1 ? true : null));
 
   await must(
@@ -808,38 +1015,34 @@ async function main() {
       const pillBefore = await holderPill(page).count();
       const cursorBefore = await cursorViewOver(app, secondUrl);
 
-      const alpha = await sessionWrite(app, "a", secondUrl);
-      const pill = await waitUntil("the holder pill for the Session", async () =>
-        (await holderPill(page).getAttribute("data-holder")) === "session" ? true : null,
-      ).catch(() => false);
+      // Observe each projection as the write starts, not serially after the
+      // others. The pinned label is intentionally transient: a slow holder UI
+      // must not spend its whole visible lifetime before we look for its size.
+      // No write retry, longer timeout, or substitute for the real size report.
+      const [alpha, pill, cursor, labelSized] = await Promise.all([
+        sessionWrite(app, "a", secondUrl),
+        waitUntil("the holder pill for the Session", async () =>
+          (await holderPill(page).getAttribute("data-holder")) === "session" ? true : null,
+        ).catch(() => false),
+        waitUntil("the cursor view over the plane", async () => {
+          const view = await cursorViewOver(app, secondUrl);
+          return view?.inside === true ? view : null;
+        }).catch(() => null),
+        // The overlay boots lazily. Its size report proves that the drawing
+        // grew around the pinned label; the drawing ACK starts the pin's clock.
+        waitUntil(
+          "the cursor view to grow around its pinned label",
+          async () => {
+            const view = await cursorViewOver(app, secondUrl);
+            return view !== null && view.cursor.width > 60 ? view.cursor : null;
+          },
+          { timeout: 15000 },
+        ).catch(() => null),
+      ]);
       const takeOverOffered = await page
         .getByRole("button", { name: "Take over", exact: true })
         .count();
       const dots = await holderDots(page).count();
-      const cursor = await waitUntil("the cursor view over the plane", async () => {
-        const view = await cursorViewOver(app, secondUrl);
-        return view?.inside === true ? view : null;
-      }).catch(() => null);
-      // The label is pinned for a moment when a hold begins, and the view is
-      // sized to the drawing: wider than the arrow alone while the label shows,
-      // which is the page's size report reaching main.
-      const labelSized = await waitUntil(
-        "the cursor view to grow around its pinned label",
-        async () => {
-          const view = await cursorViewOver(app, secondUrl);
-          return view !== null && view.cursor.width > 60 ? view.cursor : null;
-        },
-        // What this waits on is a renderer BOOT: the overlay's page is built
-        // lazily by the first draw, and only once it is listening can it be
-        // told to show the label and report the size that proves it. A dev Mac
-        // does that inside the label's own pin and a loaded CI runner takes
-        // seconds, so the old 1.5s bound failed on CI for every branch. The
-        // pin now runs from when the page can first draw (cursor-overlay.ts),
-        // which makes the label certain; this bound only has to outlast a slow
-        // boot.
-        { timeout: 15000 },
-      ).catch(() => null);
-
       const beta = await sessionWrite(app, "b", secondUrl);
 
       return {
@@ -909,6 +1112,117 @@ async function main() {
           cursorAfterTurn === true &&
           pageErrors.length === 0,
         detail: `yours=${yours} cursorGone=${cursorGone} refused=${JSON.stringify(refusedByPerson)} freed=${freed} again=${JSON.stringify(again)} heldAgain=${heldAgain} endedWithTurn=${endedWithTurn} cursorAfterTurn=${cursorAfterTurn} pageErrors=${JSON.stringify(pageErrors)}`,
+      };
+    },
+  );
+
+  await must(
+    "9b",
+    "a real sidebar hover peek hides the overlapping native view and restores it on close",
+    async () => {
+      const row = page.locator(
+        `[data-peek-row="chat:${OVERLAY_SESSION.id}"][data-peek-surface="nav"]`,
+      );
+      await row.waitFor({ state: "visible" });
+      await page.mouse.move(700, 70);
+      const before = await waitUntil("the live Browser plane before the sidebar peek", async () => {
+        const state = await nativePlaneState(app, secondUrl);
+        return state.attached && state.bounds !== null && state.contentsId !== null ? state : null;
+      });
+      const box = await row.boundingBox();
+      if (box === null) throw new Error("seeded sidebar Session has no pointer target");
+      // The controller listens for pointermove, not mouseenter. Real stepped
+      // input crosses the row and lets the shipped dwell timer open its card.
+      await page.mouse.move(box.x + box.width / 2, box.y - 12);
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 12 });
+      const peek = page.locator('[data-peek-card][data-peek-subject="session"]');
+      const receipt = await frozenOverlayReceipt(page, secondUrl, peek, before);
+      // A hover peek is deliberately NOT a dialog. Moving into it must leave
+      // its stand-in stable, not restore the native plane under the pointer.
+      const peekBox = await peek.boundingBox();
+      if (peekBox === null) throw new Error("hover peek lost its frame");
+      await page.mouse.move(peekBox.x + peekBox.width / 2, peekBox.y + peekBox.height / 2, {
+        steps: 12,
+      });
+      const inCard = await frozenOverlayReceipt(page, secondUrl, peek, before);
+      await page.mouse.move(700, 70);
+      await waitUntil("the unpinned hover peek to dismiss", async () => (await peek.count()) === 0);
+      const restored = await restoredNativePlane(secondUrl, before.contentsId);
+      return {
+        ok: receipt.geometry.role === "note" && pageErrors.length === 0,
+        detail: `hover=${JSON.stringify(receipt)} inCard=${JSON.stringify(inCard)} restored=${JSON.stringify(restored)}`,
+      };
+    },
+  );
+
+  await must(
+    "9c",
+    "a real markdown link safety prompt hides the Browser view in another visible pane and restores it",
+    async () => {
+      // Keep the Browser on screen while opening the seeded transcript below
+      // it. No Send, provider request, injected modal or detector substitution.
+      // Put keyboard focus back in the renderer chrome, not a remote page or
+      // a holder control that disappeared when the Session's hold ended.
+      await browserTabs(page).and(page.locator('[aria-selected="true"]')).click();
+      await page.keyboard.press("Shift+Meta+\\");
+      const transcriptPane = page.locator(
+        '[data-slot="split-view-pane"][aria-label="Pane 2 of 2"]',
+      );
+      await waitUntil(
+        "a focused second pane for the completed Session",
+        async () =>
+          (await page.locator('[data-slot="split-view-pane"]').count()) === 2 &&
+          (await transcriptPane.getAttribute("data-focused")) === "true",
+      );
+      await page
+        .locator(`[data-peek-row="chat:${OVERLAY_SESSION.id}"][data-peek-surface="nav"]`)
+        .getByRole("button")
+        .click();
+      const transcriptTab = tabStrip(page, "Pane 2 tabs").getByRole("tab", {
+        name: OVERLAY_SESSION.title,
+        exact: true,
+      });
+      await waitUntil(
+        "the completed Session to activate in the lower pane",
+        async () => (await transcriptTab.getAttribute("aria-selected")) === "true",
+      );
+      const link = transcriptPane.getByRole("button", { name: MARKDOWN_LINK, exact: true });
+      await link.waitFor({ state: "visible" });
+      await page.mouse.move(700, 70);
+      await waitUntil(
+        "any sidebar hover peek to dismiss before the link prompt",
+        async () => (await page.locator("[data-peek-card]").count()) === 0,
+      );
+      const before = await waitUntil("the Browser to stay live beside the transcript", async () => {
+        const state = await nativePlaneState(app, secondUrl);
+        return state.attached ? state : null;
+      });
+      await link.click();
+      const modal = page.locator('[data-streamdown="link-safety-modal"]');
+      // Check the visible confirmation CARD, not just its viewport-wide backdrop.
+      const panel = modal.locator('[role="presentation"]').first();
+      const receipt = await frozenOverlayReceipt(page, secondUrl, panel, before);
+      const promptVisible = await modal
+        .getByText("Open external link?", { exact: true })
+        .isVisible();
+      const targetVisible = await modal.getByText(popupUrl, { exact: true }).isVisible();
+      await modal.getByRole("button", { name: "Close", exact: true }).click();
+      await waitUntil("the link safety prompt to dismiss", async () => (await modal.count()) === 0);
+      const restored = await restoredNativePlane(secondUrl, before.contentsId);
+      // Close only the fixture transcript, leaving the original Browser journey
+      // and its two tabs untouched for the teardown assertion below.
+      // A down split keeps "Home tabs" on the primary pane; this Session's
+      // close affordance belongs to the lower pane's "Pane 2 tabs" strip.
+      await transcriptTab.getByTestId("tab-close").click();
+      await waitUntil(
+        "the original unsplit Browser surface",
+        async () =>
+          (await page.locator('[data-slot="split-view-pane"]').count()) === 1 &&
+          (await remoteViewAttached(app, secondUrl)),
+      );
+      return {
+        ok: promptVisible && targetVisible && pageErrors.length === 0,
+        detail: `prompt=${JSON.stringify(receipt)} restored=${JSON.stringify(restored)} promptVisible=${promptVisible} targetVisible=${targetVisible}`,
       };
     },
   );

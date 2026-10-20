@@ -1,4 +1,5 @@
-import { promises as fs } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, promises as fs } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -169,6 +170,52 @@ describe("ensureShellInit", () => {
   // The refusal above must not read as the ordinary first write. Absent means
   // "regenerate"; occupied means "something else owns this path", and
   // `doctor --fix` would repeat the refusal forever if the two were one answer.
+  // The chain run by a real zsh, the way a PTY spawns it. Global rc files stay
+  // on (macOS /etc/zshrc is where HISTFILE gets set from ZDOTDIR); HISTFILE is
+  // also preset into Volli's directory so a host whose /etc/zshrc does not set
+  // it still exercises the same path.
+  it.skipIf(!existsSync("/bin/zsh")).each([
+    ["no ZDOTDIR of their own", ""],
+    ["a .zshenv that moves ZDOTDIR", ".config/zsh"],
+  ])(
+    "runs a real zsh's startup with the user's ZDOTDIR and HISTFILE: %s",
+    async (_label, userDir) => {
+      const root = await tmpDir();
+      const zdotDir = join(root, "volli", "zsh");
+      const binDir = join(root, "volli", "bin");
+      const home = join(root, "home");
+      const userZdotDir = userDir === "" ? home : join(home, userDir);
+      await fs.mkdir(userZdotDir, { recursive: true });
+      if (userDir !== "") {
+        await fs.writeFile(join(home, ".zshenv"), `ZDOTDIR="$HOME/${userDir}"\n`);
+      }
+      await fs.writeFile(join(userZdotDir, ".zshrc"), '. "$ZDOTDIR/extra.zsh"\n');
+      await fs.writeFile(join(userZdotDir, "extra.zsh"), "volli_test_extra=loaded\n");
+      const env = await shellInit({ zdotDir, binDir });
+
+      const result = spawnSync(
+        "/bin/zsh",
+        ["-l", "-i", "-c", 'print -r -- "$HISTFILE|${volli_test_extra:-}|${path[1]}"'],
+        {
+          env: {
+            PATH: "/usr/bin:/bin",
+            HOME: home,
+            TERM: "dumb",
+            HISTFILE: join(zdotDir, ".zsh_history"),
+            ...env,
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+          encoding: "utf8",
+          timeout: 15_000,
+        },
+      );
+
+      expect(result.stdout.trim().split("\n").at(-1)).toBe(
+        `${join(userZdotDir, ".zsh_history")}|loaded|${binDir}`,
+      );
+    },
+  );
+
   it("treats an absent chain file as the ordinary first write", async () => {
     const root = await tmpDir();
     const zdotDir = join(root, "never-written", "zsh");

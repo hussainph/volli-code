@@ -55,6 +55,20 @@ export function epochSecondsToIso(value: unknown): string | undefined {
   return new Date(Math.round(seconds * 1000)).toISOString();
 }
 
+/**
+ * Epoch MILLISECONDS as ISO 8601, for a provider that states a reset in them.
+ *
+ * Separate from {@link epochSecondsToIso} rather than guessing the unit from
+ * the magnitude: the same integer is a plausible instant under either reading,
+ * and a reset that silently lands in 1970 or in the year 57000 is a countdown
+ * nobody can use. The reader that knows the wire format names the unit.
+ */
+export function epochMillisToIso(value: unknown): string | undefined {
+  const millis = finiteNumber(value);
+  if (millis === undefined || millis <= 0) return undefined;
+  return new Date(Math.round(millis)).toISOString();
+}
+
 /** An ISO timestamp the provider wrote, normalized — or nothing when it does not parse. */
 export function isoTimestamp(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;

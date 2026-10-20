@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
+  SessionEngineCommandConflictError,
   SessionEngineConflictError,
   SessionEngineNotFoundError,
   createSessionEngine,
@@ -187,7 +188,7 @@ describe("SessionEngine creation and explicit commands", () => {
         ...createRequest("command-promote"),
         requestedSessionId: "11111111-2222-4333-8444-555555555555",
       }),
-    ).rejects.toBeInstanceOf(SessionEngineConflictError);
+    ).rejects.toBeInstanceOf(SessionEngineCommandConflictError);
   });
 
   it("records one immutable Runtime Brief when concurrent callers disagree", async () => {
@@ -283,7 +284,9 @@ describe("SessionEngine creation and explicit commands", () => {
       { ...createRequest(), parentSessionId: "other-parent" },
       { ...createRequest(), title: "different" },
     ]) {
-      await expect(plane.createSession(request)).rejects.toBeInstanceOf(SessionEngineConflictError);
+      await expect(plane.createSession(request)).rejects.toBeInstanceOf(
+        SessionEngineCommandConflictError,
+      );
     }
     await plane.submit({
       commandId: "command-create-conflict",
@@ -295,6 +298,217 @@ describe("SessionEngine creation and explicit commands", () => {
       plane.createSession(createRequest("command-create-conflict")),
     ).rejects.toBeInstanceOf(SessionEngineConflictError);
   });
+
+  it("reconciles only legacy Pi acceptance ids with a different recovery timestamp, without weakening conflicts", async () => {
+    const { ledger, plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const piProvenance = {
+      ...adapterProvenance,
+      source: { ...adapterProvenance.source, id: "pi" },
+    };
+    const opened = { ...attachment(session.id), adapterId: "pi" };
+    await plane.observe({
+      id: "replay-open",
+      sessionId: session.id,
+      occurredAt: 1,
+      provenance: piProvenance,
+      kind: "attachment.opened",
+      attachment: opened,
+    });
+    const submitted = await plane.submit({
+      commandId: "replay-message",
+      sessionId: session.id,
+      intent: {
+        kind: "message.submit",
+        reference: { id: "message", mediaType: null, digest: null },
+      },
+      provenance: userProvenance,
+    });
+    const observation = {
+      id: `native-receipt-event:${submitted.command.id}:accepted:200`,
+      sessionId: session.id,
+      attachmentId: opened.id,
+      occurredAt: 200,
+      provenance: piProvenance,
+      kind: "command.receipt" as const,
+      receipt: {
+        id: `native-receipt:${submitted.command.id}:accepted:200`,
+        commandId: submitted.command.id,
+        status: "accepted" as const,
+        acceptedAt: 200,
+        result: { kind: "message.submitted" as const, sessionId: session.id },
+      },
+    };
+    const first = await plane.observe(observation);
+    const replay = {
+      ...observation,
+      id: `native-receipt-event:${submitted.command.id}:accepted:100`,
+      receipt: {
+        ...observation.receipt,
+        id: `native-receipt:${submitted.command.id}:accepted:100`,
+        acceptedAt: 100,
+      },
+    };
+    expect(await plane.observe(replay)).toEqual(first);
+    expect(await ledger.transaction((tx) => tx.listReceipts(submitted.command.id))).toHaveLength(1);
+    await expect(plane.observe({ ...replay, attachmentId: "other" })).rejects.toThrow(
+      "routed attachment",
+    );
+    await expect(plane.observe({ ...replay, provenance: userProvenance })).rejects.toThrow(
+      "adapter pi",
+    );
+    for (const id of [
+      "unrelated-new-receipt-id",
+      `native-receipt:another-command:accepted:100`,
+      `native-receipt:${submitted.command.id}:accepted:101`,
+    ]) {
+      await expect(
+        plane.observe({
+          ...replay,
+          receipt: { ...replay.receipt, id },
+        }),
+      ).rejects.toThrow("not a legacy Pi acceptance replay");
+    }
+    await expect(
+      plane.observe({
+        ...observation,
+        receipt: { ...observation.receipt, id: "unrelated-same-timestamp" },
+      }),
+    ).rejects.toThrow("not a legacy Pi acceptance replay");
+    await expect(
+      plane.observe({
+        ...replay,
+        receipt: { ...replay.receipt, result: { kind: "message.submitted", sessionId: "other" } },
+      }),
+    ).rejects.toThrow("does not match command");
+    await expect(
+      plane.observe({
+        ...replay,
+        receipt: { ...replay.receipt, result: { ...replay.receipt.result, corrupt: true } },
+      } as SessionObservation),
+    ).rejects.toThrow("already accepted differently");
+    await expect(
+      plane.observe({
+        ...observation,
+        id: "same-id-different-time",
+        receipt: { ...observation.receipt, acceptedAt: 100 },
+      }),
+    ).rejects.toThrow("already recorded differently");
+    await plane.observe({
+      ...observation,
+      id: "completed-event",
+      receipt: {
+        id: "completed-receipt",
+        commandId: submitted.command.id,
+        status: "completed",
+        result: observation.receipt.result,
+      },
+    });
+    expect(await plane.observe(replay)).toEqual(first);
+    await plane.observe({
+      id: "replay-close",
+      sessionId: session.id,
+      attachmentId: opened.id,
+      occurredAt: 201,
+      provenance: piProvenance,
+      kind: "attachment.closed",
+      outcome: "completed",
+    });
+    const start = await plane.submit({
+      commandId: "replay-start",
+      sessionId: session.id,
+      intent: { kind: "executor.start", adapterId: "pi", continuity: "fresh" },
+      provenance: userProvenance,
+    });
+    const startAcceptance = {
+      ...observation,
+      id: "start-acceptance",
+      attachmentId: null,
+      receipt: {
+        ...observation.receipt,
+        id: `native-receipt:${start.command.id}:accepted:200`,
+        commandId: start.command.id,
+        result: { kind: "executor.start.requested" as const, sessionId: session.id },
+      },
+    };
+    await plane.observe(startAcceptance);
+    await expect(
+      plane.observe({
+        ...startAcceptance,
+        id: "start-recovery",
+        attachmentId: opened.id,
+        receipt: {
+          ...startAcceptance.receipt,
+          id: `native-receipt:${start.command.id}:accepted:100`,
+          acceptedAt: 100,
+        },
+      }),
+    ).rejects.toThrow("does not match accepted attachment evidence");
+    const transaction = ledger.transaction.bind(ledger);
+    ledger.transaction = (work) => transaction((tx) => work({ ...tx, listEvents: () => [] }));
+    await expect(plane.observe(replay)).rejects.toThrow("has no Session event");
+  });
+
+  it.each([
+    { adapterId: "pi", priorId: "unrelated-original-receipt-id" },
+    { adapterId: "opencode", priorId: "native-receipt:message:accepted:42" },
+  ])(
+    "does not alias a non-Pi route or a nonlegacy original receipt (%s)",
+    async ({ adapterId, priorId }) => {
+      const { ledger, plane } = composition();
+      const { session } = await plane.createSession(createRequest());
+      const provenance = {
+        ...adapterProvenance,
+        source: { ...adapterProvenance.source, id: adapterId },
+      };
+      const opened = { ...attachment(session.id), adapterId };
+      await plane.observe({
+        id: "open",
+        sessionId: session.id,
+        occurredAt: 1,
+        provenance,
+        kind: "attachment.opened",
+        attachment: opened,
+      });
+      await plane.submit({
+        commandId: "message",
+        sessionId: session.id,
+        intent: {
+          kind: "message.submit",
+          reference: { id: "message", mediaType: null, digest: null },
+        },
+        provenance: userProvenance,
+      });
+      const observation = {
+        id: "native-receipt-event:message:accepted:42",
+        sessionId: session.id,
+        attachmentId: opened.id,
+        occurredAt: 42,
+        provenance,
+        kind: "command.receipt" as const,
+        receipt: {
+          id: priorId,
+          commandId: "message",
+          status: "accepted" as const,
+          acceptedAt: 42,
+          result: { kind: "message.submitted" as const, sessionId: session.id },
+        },
+      };
+      await plane.observe(observation);
+      await expect(
+        plane.observe({
+          ...observation,
+          id: "native-receipt-event:message:accepted:21",
+          receipt: {
+            ...observation.receipt,
+            id: "native-receipt:message:accepted:21",
+            acceptedAt: 21,
+          },
+        }),
+      ).rejects.toThrow("not a legacy Pi acceptance replay");
+      expect(await ledger.transaction((tx) => tx.listReceipts("message"))).toHaveLength(1);
+    },
+  );
 
   it("persists adapter-bound intent without manufacturing a receipt, then appends adapter receipts as facts", async () => {
     const { ledger, plane } = composition();
@@ -604,6 +818,37 @@ describe("SessionEngine creation and explicit commands", () => {
     expect(completed.event.payload).toEqual({ kind: "model.selected", selection, tier: "deep" });
     await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
       modelTier: "deep",
+    });
+  });
+
+  it("writes a decision model's pick and why beside the selection, and only then (VC-432)", async () => {
+    const { plane } = composition();
+    const { session } = await plane.createSession(createRequest());
+    const selection = {
+      providerId: "openai-codex",
+      modelId: "gpt-5.6-sol",
+      reasoningLevel: "low" as const,
+    };
+    const auto = {
+      confidence: 0.7,
+      alternatives: [
+        { selection: { ...selection, reasoningLevel: "high" as const }, probability: 0.2 },
+      ],
+    };
+
+    await plane.submit({
+      commandId: "command-model-select-auto",
+      sessionId: session.id,
+      intent: { kind: "model.select", selection, auto },
+      provenance: userProvenance,
+    });
+
+    const selected = (await plane.listEvents({ sessionId: session.id })).find(
+      (event) => event.payload.kind === "model.selected",
+    );
+    expect(selected?.payload).toEqual({ kind: "model.selected", selection, auto });
+    await expect(plane.getSession({ sessionId: session.id })).resolves.toMatchObject({
+      modelAuto: auto,
     });
   });
 
@@ -972,6 +1217,281 @@ describe("SessionEngine creation and explicit commands", () => {
     });
   });
 
+  describe("a scheduled resume", () => {
+    const RESET = 50_000;
+    const systemProvenance: SessionEventProvenance = {
+      source: { kind: "system", id: "scheduled-resume", detail: null },
+      venue: localVenue,
+    };
+
+    /** A Session whose run stopped on a spent allowance that stated its reset. */
+    async function stoppedOnQuota(resetsAt: number | null = RESET) {
+      const composed = composition();
+      const { plane } = composed;
+      const { session } = await plane.createSession(createRequest());
+      const running = attachment(session.id);
+      await plane.observe({
+        id: "quota-open",
+        sessionId: session.id,
+        occurredAt: 1,
+        provenance: adapterProvenance,
+        kind: "attachment.opened",
+        attachment: running,
+      });
+      await plane.observe({
+        id: "quota-attention",
+        sessionId: session.id,
+        attachmentId: running.id,
+        occurredAt: 2,
+        provenance: adapterProvenance,
+        kind: "attention.raised",
+        attention: {
+          id: "attention-quota",
+          attachmentId: running.id,
+          kind: "adapter_unrecoverable",
+          detail: "429: Usage limit reached for 5 hour.",
+          diagnostic: null,
+          resetsAt,
+        },
+      });
+      const schedule = (commandId: string, overrides: Record<string, unknown> = {}) =>
+        plane.submit({
+          commandId,
+          sessionId: session.id,
+          intent: {
+            kind: "resume.schedule",
+            attentionId: "attention-quota",
+            attachmentId: running.id,
+            resumeAt: RESET,
+            ...overrides,
+          } as SessionCommand["intent"] & { kind: "resume.schedule" },
+          provenance: userProvenance,
+        });
+      return { ...composed, session, running, schedule };
+    }
+
+    it("accepts a schedule for the reset the Attention stated, as a completed receipt", async () => {
+      const { plane, session, schedule } = await stoppedOnQuota();
+
+      const scheduled = await schedule("schedule-1");
+
+      expect(scheduled.receipt).toMatchObject({
+        status: "completed",
+        result: { kind: "resume.scheduled", sessionId: session.id },
+      });
+      // The receipt IS the schedule: no fact is written between the two.
+      expect(scheduled.receiptEvent?.sequence).toBe(scheduled.commandEvent.sequence + 1);
+      // Idempotent: the same command replays rather than scheduling twice.
+      const replayed = await schedule("schedule-1");
+      expect(replayed.receipt).toEqual(scheduled.receipt);
+      const projection = await plane.getSession({ sessionId: session.id });
+      expect(
+        projection?.commands.filter(({ intent }) => intent.kind === "resume.schedule"),
+      ).toHaveLength(1);
+    });
+
+    it("refuses a schedule the failure did not offer", async () => {
+      const refusals = async (resetsAt: number | null, overrides: Record<string, unknown>) => {
+        const { schedule } = await stoppedOnQuota(resetsAt);
+        return (await schedule("schedule-x", overrides)).receipt;
+      };
+      const unavailable = { status: "rejected", code: "resume_unavailable" };
+      // A time the Attention did not state; an Attention stating none; an
+      // Attention that is not live; one on another attachment.
+      await expect(refusals(RESET, { resumeAt: RESET + 1 })).resolves.toMatchObject(unavailable);
+      await expect(refusals(null, {})).resolves.toMatchObject(unavailable);
+      await expect(refusals(RESET, { attentionId: "attention-gone" })).resolves.toMatchObject(
+        unavailable,
+      );
+      await expect(refusals(RESET, { attachmentId: "attachment-2" })).resolves.toMatchObject(
+        unavailable,
+      );
+    });
+
+    it("refuses a schedule for an attachment that has closed, or a non-quota Attention", async () => {
+      const { plane, session, running, schedule } = await stoppedOnQuota();
+      await plane.observe({
+        id: "quota-auth",
+        sessionId: session.id,
+        attachmentId: running.id,
+        occurredAt: 3,
+        provenance: adapterProvenance,
+        kind: "attention.raised",
+        attention: {
+          id: "attention-auth",
+          attachmentId: running.id,
+          kind: "auth_required",
+          detail: null,
+          diagnostic: null,
+        },
+      });
+      await expect(
+        schedule("schedule-auth", { attentionId: "attention-auth" }),
+      ).resolves.toMatchObject({ receipt: { status: "rejected", code: "resume_unavailable" } });
+      await plane.observe({
+        id: "quota-close",
+        sessionId: session.id,
+        attachmentId: running.id,
+        occurredAt: 4,
+        provenance: adapterProvenance,
+        kind: "attachment.closed",
+        outcome: "completed",
+      });
+      await expect(schedule("schedule-closed")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_unavailable" },
+      });
+    });
+
+    it("cancels the pending schedule, and refuses to cancel one that is not", async () => {
+      const { plane, session, schedule } = await stoppedOnQuota();
+      await schedule("schedule-1");
+      const cancel = (commandId: string, scheduleId: string) =>
+        plane.submit({
+          commandId,
+          sessionId: session.id,
+          intent: { kind: "resume.cancel", scheduleId },
+          provenance: userProvenance,
+        });
+
+      await expect(cancel("cancel-other", "schedule-0")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+      await expect(cancel("cancel-1", "schedule-1")).resolves.toMatchObject({
+        receipt: { status: "completed", result: { kind: "resume.cancelled" } },
+      });
+      await expect(cancel("cancel-2", "schedule-1")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+    });
+
+    it("judges a schedule's own retry as it records it, and refuses a cancel once it fired", async () => {
+      const retry = (quota: Awaited<ReturnType<typeof stoppedOnQuota>>) =>
+        quota.plane.submit({
+          commandId: "schedule-1:resume",
+          sessionId: quota.session.id,
+          intent: { kind: "executor.retry", attachmentId: quota.running.id },
+          provenance: systemProvenance,
+        });
+      const cancel = (quota: Awaited<ReturnType<typeof stoppedOnQuota>>) =>
+        quota.plane.submit({
+          commandId: "cancel-1",
+          sessionId: quota.session.id,
+          intent: { kind: "resume.cancel", scheduleId: "schedule-1" },
+          provenance: userProvenance,
+        });
+
+      // Still pending and untouched: the retry is the schedule's to make, and
+      // a cancel after it could no longer stop anything.
+      const fired = await stoppedOnQuota();
+      await fired.schedule("schedule-1");
+      expect((await retry(fired)).receipt?.status).not.toBe("rejected");
+      await expect(cancel(fired)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_fired" },
+      });
+
+      // Cancelled between the host's decision and its retry.
+      const cancelled = await stoppedOnQuota();
+      await cancelled.schedule("schedule-1");
+      await cancel(cancelled);
+      await expect(retry(cancelled)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+
+      // Taken back by hand in the same gap.
+      const continued = await stoppedOnQuota();
+      await continued.schedule("schedule-1");
+      await continued.plane.submit({
+        commandId: "message-by-hand",
+        sessionId: continued.session.id,
+        intent: {
+          kind: "message.submit",
+          reference: { id: "message-by-hand", mediaType: null, digest: null },
+        },
+        provenance: userProvenance,
+      });
+      await expect(retry(continued)).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_continued" },
+      });
+    });
+
+    it("settles once, with the schedule's own retry, even on an archived Session", async () => {
+      const { plane, session, schedule } = await stoppedOnQuota();
+      await schedule("schedule-1");
+      await plane.submit({
+        commandId: "archive",
+        sessionId: session.id,
+        intent: { kind: "session.archive" },
+        provenance: userProvenance,
+      });
+      const settle = (commandId: string, retryCommandId: string) =>
+        plane.submit({
+          commandId,
+          sessionId: session.id,
+          intent: {
+            kind: "resume.settle",
+            scheduleId: "schedule-1",
+            outcome: { kind: "resumed", retryCommandId },
+          },
+          provenance: systemProvenance,
+        });
+
+      await expect(settle("settle-wrong", "someone-else")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_outcome_invalid" },
+      });
+      await expect(settle("settle-1", "schedule-1:resume")).resolves.toMatchObject({
+        receipt: { status: "completed", result: { kind: "resume.settled" } },
+      });
+      await expect(settle("settle-2", "schedule-1:resume")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "resume_not_pending" },
+      });
+      // A skip settles an archived Session the same way.
+      const archivedSkip = await stoppedOnQuota();
+      await archivedSkip.schedule("schedule-1");
+      await archivedSkip.plane.submit({
+        commandId: "archive",
+        sessionId: archivedSkip.session.id,
+        intent: { kind: "session.archive" },
+        provenance: userProvenance,
+      });
+      await expect(
+        archivedSkip.plane.submit({
+          commandId: "settle-skip",
+          sessionId: archivedSkip.session.id,
+          intent: {
+            kind: "resume.settle",
+            scheduleId: "schedule-1",
+            outcome: { kind: "skipped", reason: "ended", detail: null },
+          },
+          provenance: systemProvenance,
+        }),
+      ).resolves.toMatchObject({ receipt: { status: "completed" } });
+      // A person's schedule on an archived Session is refused like any command.
+      await expect(archivedSkip.schedule("schedule-late")).resolves.toMatchObject({
+        receipt: { status: "rejected", code: "session_archived" },
+      });
+    });
+
+    it("never lets an adapter observe a scheduled resume's receipt", async () => {
+      const { plane, session, schedule } = await stoppedOnQuota();
+      const scheduled = await schedule("schedule-1");
+      await expect(
+        plane.observe({
+          id: "external-resume-receipt",
+          sessionId: session.id,
+          occurredAt: 9,
+          provenance: adapterProvenance,
+          kind: "command.receipt",
+          receipt: {
+            id: "receipt-external-resume",
+            commandId: scheduled.command.id,
+            status: "completed",
+            result: { kind: "resume.scheduled", sessionId: session.id },
+          },
+        }),
+      ).rejects.toThrow("cannot be externally observed");
+    });
+  });
+
   it("resumes getSession and listSessions from checkpoint tails without mutating reads", async () => {
     const stored = createInMemorySessionLedger();
     const cursors: Array<number | undefined> = [];
@@ -1060,7 +1580,7 @@ describe("SessionEngine creation and explicit commands", () => {
       },
     };
     const invalid = [
-      { ...checkpoint, version: 2 },
+      { ...checkpoint, version: 1 },
       { ...checkpoint, sessionId: "another-session" },
       missingProjection,
       { ...checkpoint, throughSequence: 0.5 },
@@ -1453,12 +1973,15 @@ describe("SessionEngine creation and explicit commands", () => {
     ]);
   });
 
-  it("uses SQLite BINARY ordering to break equal-time ticket signal ties", async () => {
+  it("breaks equal-time ticket signal ties by local acceptance order, not Session id (VC-512)", async () => {
     const { ledger, plane } = composition();
     const bmpId = "session-\uE000";
     const nonBmpId = "session-\u{10000}";
     await ledger.transaction((transaction) => {
-      for (const sessionId of [bmpId, nonBmpId]) {
+      // Accepted first is the Session id SQLite BINARY would rank HIGHER, so an
+      // ordering by id — or by occurredAt, which both signals share — would
+      // name the wrong signal "latest".
+      for (const sessionId of [nonBmpId, bmpId]) {
         transaction.insertSession({ ...sessionRecord(sessionId), ticketId: "ticket-1" });
         transaction.appendEvent({
           id: `signal-${sessionId}`,
@@ -1479,9 +2002,9 @@ describe("SessionEngine creation and explicit commands", () => {
     await expect(plane.listLatestTicketSignals({ projectId: "project-1" })).resolves.toEqual([
       {
         ticketId: "ticket-1",
-        sessionId: nonBmpId,
+        sessionId: bmpId,
         signal: "done",
-        reason: nonBmpId,
+        reason: bmpId,
         createdAt: 100,
       },
     ]);
@@ -3304,6 +3827,23 @@ describe("SessionEngine idempotency and defensive ledger reads", () => {
 });
 
 describe("InMemorySessionLedger", () => {
+  it("requires synchronous work while keeping transaction methods synchronous", () => {
+    const ledger = createInMemorySessionLedger();
+    expectTypeOf<
+      ReturnType<SessionLedgerTransaction["getSession"]>
+    >().toEqualTypeOf<Session | null>();
+    expectTypeOf<ReturnType<SessionLedgerTransaction["listSessions"]>>().toEqualTypeOf<
+      readonly Session[]
+    >();
+
+    // Type-check this function without calling it or opening a transaction.
+    const invalid = () => {
+      // @ts-expect-error -- Transaction callbacks must not return PromiseLike values.
+      return ledger.transaction(async () => "async result");
+    };
+    expectTypeOf(invalid).toBeFunction();
+  });
+
   it("exposes only a scoped transaction facade and closes captured facades", async () => {
     const ledger = createInMemorySessionLedger();
     expectTypeOf(ledger).toEqualTypeOf<SessionLedger>();
@@ -3704,6 +4244,9 @@ describe("the in-memory ledger's usage port", () => {
   });
 });
 
+/** A listing that sees the whole stored roster. */
+const everyRow = (rows: readonly Session[]): readonly Session[] => rows;
+
 /**
  * A project's whole roster, folded on the process that also serves every other
  * Session operation (VC-388).
@@ -3714,10 +4257,6 @@ describe("the in-memory ledger's usage port", () => {
  * behind it, and one that never returns to the event loop blocks the host for
  * the same span whether or not a skeleton is drawn over it.
  */
-/** The first {@link SESSION_LISTING_CACHE_LIMIT} rows of a roster: exactly a full cache. */
-const rosterAtCacheLimit = (rows: readonly Session[]): readonly Session[] =>
-  rows.slice(0, SESSION_LISTING_CACHE_LIMIT);
-
 describe("listSessions over a project roster (VC-388)", () => {
   async function roster(count: number) {
     const { plane } = composition();
@@ -3924,52 +4463,144 @@ describe("listSessions over a project roster (VC-388)", () => {
   });
 
   /**
-   * The cache's bound, which is the half of a cache that has to be proved
-   * rather than observed: a memo that never evicts also answers every
-   * assertion about hits and misses, and only grows.
+   * A project roster one Session larger than the cache's floor survives a
+   * repeat listing whole (VC-800): the limit is never below the roster.
    *
-   * The roster is grown by ONE past {@link SESSION_LISTING_CACHE_LIMIT} rather
-   * than by many, because the interesting boundary is exactly there: a roster
-   * at the limit must survive a repeat listing whole, and the first row over
-   * it must cost exactly one entry — the least recently listed one — and not
-   * the whole cache.
+   * A bound at the floor would fail this. The first listing would evict its
+   * own first row to store its last one. The repeat listing would then miss
+   * that first row and evict the second to store it, and so on to the end, so
+   * every visit would fold every Session.
    *
-   * Budgeted like the other roster-sized tests: it creates one Session more
-   * than the cache holds and folds that roster four times, which is under a
-   * second here and several under coverage instrumentation on a shared CI
-   * runner. The default five seconds timed out on main.
+   * Budgeted like the other roster-sized tests: hundreds of Sessions are well
+   * under a second here and several under coverage on a shared CI runner.
    */
   it(
-    "evicts the least recently listed Session once the cache is full",
+    "keeps a project roster larger than the floor whole across repeat listings",
     { timeout: 30_000 },
     async () => {
-      // One roster, listed through a moving window: at the cache's size, then
-      // one over it, then one row at a time to ask which entry survived.
-      let visible: (rows: readonly Session[]) => readonly Session[] = rosterAtCacheLimit;
-      const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
+      const { plane, folded } = foldWatchingComposition();
       for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
-        await plane.createSession(createRequest(`command-evict-${index}`));
+        await plane.createSession(createRequest(`command-roster-over-floor-${index}`));
       }
       const query = { projectId: "project-1", scope: "all" } as const;
 
       folded.length = 0;
-      const full = await plane.listSessions(query);
-      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+      await expect(plane.listSessions(query)).resolves.toHaveLength(
+        SESSION_LISTING_CACHE_LIMIT + 1,
+      );
+      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
 
-      // A roster that exactly fills the cache is served entirely from it: the
-      // limit holds this many, not this many minus one.
       folded.length = 0;
-      await expect(plane.listSessions(query)).resolves.toHaveLength(SESSION_LISTING_CACHE_LIMIT);
+      await expect(plane.listSessions(query)).resolves.toHaveLength(
+        SESSION_LISTING_CACHE_LIMIT + 1,
+      );
       expect(folded).toEqual([]);
+    },
+  );
 
-      // One Session more than the cache can hold. Only the newcomer is folded,
-      // and storing it pushes out the head of the insertion order — which is
-      // the first row of the listing, since a hit re-inserts in listing order.
-      visible = (rows) => rows;
+  /**
+   * The `volli session list` shape: every project listed at once, each roster
+   * under the floor and their sum over it. The bound is the SUM of the
+   * rosters. A per-listing bound would still let the two projects evict each
+   * other's rows, and the next round would fold them all again.
+   */
+  it(
+    "keeps several project rosters at once when together they exceed the floor",
+    { timeout: 30_000 },
+    async () => {
+      const { plane, folded } = foldWatchingComposition();
+      const half = (SESSION_LISTING_CACHE_LIMIT >> 1) + 1;
+      for (let index = 0; index < half; index += 1) {
+        await plane.createSession(createRequest(`command-first-project-${index}`));
+        await plane.createSession({
+          ...createRequest(`command-second-project-${index}`),
+          projectId: "project-2",
+        });
+      }
+      const everyProject = () =>
+        Promise.all(
+          ["project-1", "project-2"].map((projectId) =>
+            plane.listSessions({ projectId, scope: "all" }),
+          ),
+        );
+
       folded.length = 0;
-      const overflowing = await plane.listSessions(query);
-      expect(overflowing).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
-      expect(folded).toEqual([overflowing.at(-1)?.session.id]);
+      await everyProject();
+      expect(folded).toHaveLength(half * 2);
+
+      // Concurrently, and then one project after the other: neither order
+      // re-folds a Session that did not move.
+      folded.length = 0;
+      await everyProject();
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      await plane.listSessions({ projectId: "project-2", scope: "all" });
+      await plane.listSessions({ projectId: "project-1", scope: "all" });
+      expect(folded).toEqual([]);
+    },
+  );
+
+  /**
+   * Where nothing has counted a whole roster, the floor is the bound, and a
+   * listing larger than it must cost its overflow rather than its length.
+   * A Ticket-scoped listing counts no roster, so it reaches this case with the
+   * smallest setup.
+   *
+   * Trimming happens once the listing has folded its last row. Trimming while
+   * folding would evict the rows the next listing reads first, and that
+   * listing would then fold every row.
+   */
+  it(
+    "re-folds only the overflow of a listing larger than the floor",
+    { timeout: 30_000 },
+    async () => {
+      const { plane, folded } = foldWatchingComposition();
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        await plane.createSession(createRequest(`command-overflow-${index}`));
+      }
+      const query = { projectId: "project-1", scope: "ticket", ticketId: "ticket-1" } as const;
+
+      folded.length = 0;
+      const first = await plane.listSessions(query);
+      expect(folded).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
+
+      // The trim takes the least recently listed row, which is the first one,
+      // and the next listing re-folds exactly that row. A hit moves its row to
+      // the newest end, so the same row is the one trimmed again.
+      for (let visit = 0; visit < 2; visit += 1) {
+        folded.length = 0;
+        await expect(plane.listSessions(query)).resolves.toHaveLength(
+          SESSION_LISTING_CACHE_LIMIT + 1,
+        );
+        expect(folded).toEqual([first[0].session.id]);
+      }
+    },
+  );
+
+  /**
+   * The bound, which is the half of a cache that has to be proved rather than
+   * observed: a memo that never evicts also answers every assertion about hits
+   * and misses, and only grows. When a listed roster shrinks, the next listing
+   * trims the cache back to the floor, least recently listed first. Rosters
+   * do not shrink in the app, because Sessions go only with their project and
+   * a deleted project is not listed again. What this guards is that the bound
+   * still evicts at all.
+   */
+  it(
+    "trims the cache back to the floor when the roster it served shrinks",
+    { timeout: 30_000 },
+    async () => {
+      let visible: (rows: readonly Session[]) => readonly Session[] = everyRow;
+      const { plane, folded } = foldWatchingComposition((rows) => visible(rows));
+      for (let index = 0; index <= SESSION_LISTING_CACHE_LIMIT; index += 1) {
+        await plane.createSession(createRequest(`command-shrink-${index}`));
+      }
+      const query = { projectId: "project-1", scope: "all" } as const;
+      const full = await plane.listSessions(query);
+      expect(full).toHaveLength(SESSION_LISTING_CACHE_LIMIT + 1);
+
+      // The project now counts no Sessions, so the cache keeps only the floor.
+      visible = () => [];
+      await expect(plane.listSessions(query)).resolves.toEqual([]);
 
       // Which entry went, asked one row at a time so a miss cannot cascade into
       // the next row and blur the answer. The middle of the roster is still

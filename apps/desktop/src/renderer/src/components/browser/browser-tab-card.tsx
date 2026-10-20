@@ -19,12 +19,13 @@
  * here so a transcript of forty rows does not ask forty times per repaint.
  */
 import * as React from "react";
-import { errorMessage, type ActivityBrowse } from "@volli/shared";
+import { errorMessage, isBrowserTraceAction, type ActivityBrowse } from "@volli/shared";
 import { SpinnerGapIcon } from "@phosphor-icons/react/dist/csr/SpinnerGap";
 import { WarningCircleIcon } from "@phosphor-icons/react/dist/csr/WarningCircle";
 
 import type { BrowserTabPresentation, BrowserTabState } from "../../../../ipc/contract";
 import type { BrowserApi } from "@renderer/components/browser/browser-api";
+import type { BrowserTraceRequest } from "@renderer/components/browser/browser-trace-model";
 import { BrowserTabMark } from "@renderer/components/browser/browser-tab-mark";
 import { Button } from "@renderer/components/ui/button";
 import { toastError } from "@renderer/lib/toast";
@@ -41,6 +42,11 @@ export interface BrowserCardHost {
   api: BrowserApi;
   /** A Session's title by id, for naming a child that drives a tab. Null when unknown. */
   sessionTitle(sessionId: string): string | null;
+  /**
+   * Opens the Browser replay (VC-453) — the chat's modal. Absent where there
+   * is nowhere to open it, and the card then offers no Replay.
+   */
+  openTrace?(request: BrowserTraceRequest): void;
 }
 
 export const BrowserCardHostContext = React.createContext<BrowserCardHost | null>(null);
@@ -52,20 +58,38 @@ type PictureState = { kind: "loading" } | { kind: "ready"; dataUrl: string } | {
 /** Ids already asked for, whatever main said; bounded so a long Session does not hoard frames. */
 const PICTURES = new Map<string, Promise<string | null>>();
 const PICTURE_CACHE_LIMIT = 64;
+const PICTURE_READER_IDS = new WeakMap<object, number>();
+let nextPictureReaderId = 0;
 
 /** Test seam: forget every cached picture. */
 export function forgetBrowserPictures(): void {
   PICTURES.clear();
 }
 
-function pictureOf(api: BrowserApi, pictureId: string): Promise<string | null> {
-  const cached = PICTURES.get(pictureId);
+/**
+ * Asks for a picture ahead of showing it — the replay warms its neighbours so
+ * a step forward lands on a frame already in hand. Same cache, same bound.
+ */
+export function prefetchBrowserPicture(api: BrowserApi, pictureId: string): void {
+  void pictureOf(api, pictureId);
+}
+
+function pictureOf(api: Pick<BrowserApi, "picture">, pictureId: string): Promise<string | null> {
+  // A remote host may use the same id as another host. Cache by the reader
+  // as well as the picture so a card cannot show another Session's pixels.
+  let readerId = PICTURE_READER_IDS.get(api);
+  if (readerId === undefined) {
+    readerId = ++nextPictureReaderId;
+    PICTURE_READER_IDS.set(api, readerId);
+  }
+  const key = `${readerId}:${pictureId}`;
+  const cached = PICTURES.get(key);
   if (cached !== undefined) return cached;
   const pending = api
     .picture({ pictureId })
     .then((result) => (result.ok ? result.dataUrl : null))
     .catch(() => null);
-  PICTURES.set(pictureId, pending);
+  PICTURES.set(key, pending);
   while (PICTURES.size > PICTURE_CACHE_LIMIT) {
     const oldest = PICTURES.keys().next().value;
     if (oldest === undefined) break;
@@ -74,7 +98,10 @@ function pictureOf(api: BrowserApi, pictureId: string): Promise<string | null> {
   return pending;
 }
 
-export function useBrowserPicture(api: BrowserApi | null, pictureId: string | null): PictureState {
+export function useBrowserPicture(
+  api: Pick<BrowserApi, "picture"> | null,
+  pictureId: string | null,
+): PictureState {
   const [state, setState] = React.useState<PictureState>({ kind: "loading" });
   React.useEffect(() => {
     if (api === null || pictureId === null) {
@@ -96,8 +123,10 @@ export function useBrowserPicture(api: BrowserApi | null, pictureId: string | nu
 
 /* -------------------------------------------------------------------- card */
 
-/** `example.com/path` for the card's address line, or the raw text when it does not parse. */
-function displayUrl(url: string | null): string | null {
+/** `example.com/path` for the card's address line — and the replay's — or the raw text when it does not parse. */
+export function displayUrl(url: string): string;
+export function displayUrl(url: string | null): string | null;
+export function displayUrl(url: string | null): string | null {
   if (url === null) return null;
   try {
     const parsed = new URL(url);
@@ -135,6 +164,18 @@ export function BrowserTabCard({
           host.sessionTitle,
         );
   const driven = (live?.ownerSessionId ?? facet.ownerSessionId) !== null;
+  // A replay exists only for what a trace records: a call against a tab a
+  // Session owns (VC-453) — every browse row but a tab listing. The transcript is durable and so is the trace, so
+  // this needs no live tab — it is how a reopened chat replays after a relaunch.
+  const openTrace = host?.openTrace;
+  const replay =
+    host !== null &&
+    openTrace !== undefined &&
+    facet.tabId !== null &&
+    facet.ownerSessionId !== null &&
+    isBrowserTraceAction(facet.action)
+      ? () => openTrace({ sessionId: host.sessionId, tabId: facet.tabId, pictureId: facet.picture })
+      : null;
 
   const request = React.useCallback(
     async (operation: Promise<{ ok: true } | { ok: false; error: string }>, label: string) => {
@@ -181,10 +222,10 @@ export function BrowserTabCard({
           </span>
         </div>
       ) : null}
-      {facet.picture !== null ? <Picture state={picture} /> : null}
-      {host !== null && live !== undefined ? (
+      {facet.picture !== null ? <BrowserPicture state={picture} /> : null}
+      {host !== null && (live !== undefined || replay !== null) ? (
         <div className="flex flex-wrap items-center gap-1">
-          {live.createdBy === "session" ? (
+          {live?.createdBy === "session" ? (
             live.presentation === "headless" ? (
               <>
                 <Button
@@ -223,14 +264,23 @@ export function BrowserTabCard({
               </>
             )
           ) : null}
-          <Button
-            size="xs"
-            variant="ghost"
-            className="ml-auto"
-            onClick={() => void request(host.api.close({ tabId: live.tabId }), "close Browser Tab")}
-          >
-            Close
-          </Button>
+          {replay === null ? null : (
+            <Button size="xs" variant="ghost" onClick={replay}>
+              Replay
+            </Button>
+          )}
+          {live === undefined ? null : (
+            <Button
+              size="xs"
+              variant="ghost"
+              className="ml-auto"
+              onClick={() =>
+                void request(host.api.close({ tabId: live.tabId }), "close Browser Tab")
+              }
+            >
+              Close
+            </Button>
+          )}
         </div>
       ) : null}
     </div>
@@ -275,7 +325,14 @@ function PageError({ error }: { error: string }) {
   );
 }
 
-function Picture({ state }: { state: PictureState }) {
+/** The same bounded picture presentation for browser cards and returned tool images. */
+export function BrowserPicture({
+  state,
+  alt = "The page as the agent left it",
+}: {
+  state: PictureState;
+  alt?: string;
+}) {
   if (state.kind === "loading") {
     return <div className="h-24 animate-pulse rounded-sm bg-muted/50" aria-hidden />;
   }
@@ -284,7 +341,7 @@ function Picture({ state }: { state: PictureState }) {
   }
   return (
     <img
-      alt="The page as the agent left it"
+      alt={alt}
       src={state.dataUrl}
       draggable={false}
       className={cn("max-h-64 w-full rounded-sm border border-border/50 object-contain object-top")}

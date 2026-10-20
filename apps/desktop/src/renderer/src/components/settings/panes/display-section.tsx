@@ -20,6 +20,7 @@
  * developer OTLP export — a reader who went there to stop a dollar figure
  * appearing during a screen-share would be turning off an unrelated subsystem
  * and would still see the figure.
+ *
  */
 import { MonitorIcon } from "@phosphor-icons/react/dist/csr/Monitor";
 

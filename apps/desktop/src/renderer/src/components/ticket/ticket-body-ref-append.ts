@@ -16,6 +16,7 @@
 import { appendFileRef } from "@renderer/editor/file-refs";
 import { toastError } from "@renderer/lib/toast";
 import { isTicketBodyLoaded, useBoardStore } from "@renderer/stores/board";
+import { boardApi } from "@renderer/lib/board-protocol";
 
 /** The reads and writes this append needs — narrow and fake-able in tests. */
 export interface TicketBodyRefGateway {
@@ -27,7 +28,7 @@ export interface TicketBodyRefGateway {
 
 const defaultGateway: TicketBodyRefGateway = {
   readBody: async (input) => {
-    const result = await window.api.tickets.body(input);
+    const result = await boardApi().tickets.body(input);
     return result.ok ? { ok: true, body: result.body } : { ok: false };
   },
   reportFailure: (message) => {

@@ -1,9 +1,8 @@
 /**
- * Acceptance smoke for the Linear-style New-ticket composer — the *creation*
+ * Acceptance smoke for the New-ticket composer — the *creation*
  * half (kickoff/agent-launch lives in composer-kickoff-smoke.mjs).
  *
- * The composer being built (see the ui/ticket-creation-fix spec) replaces the
- * primitive New-ticket dialog with:
+ * The composer provides:
  *   • a header breadcrumb: a project chip (monogram + name,
  *     data-testid="composer-project-chip") → static "New ticket" text, plus
  *     Expand and Close buttons; clicking the chip opens a project menu that
@@ -39,6 +38,7 @@
  *
  * MANUALLY-RUN (needs a display + the built app); NOT wired into `vp test`.
  */
+import { execFileSync } from "node:child_process";
 import {
   assertProfileIsolated,
   columnHasCard,
@@ -49,6 +49,7 @@ import {
   makeGitRepo,
   makeScratch,
   readSeededProjects,
+  readMonacoText,
   seedProjects,
   sleep,
   typeIntoMonaco,
@@ -73,8 +74,43 @@ const titleInput = (page) => composer(page).getByPlaceholder("Ticket title");
 /** Click the header "New ticket" button; return whether the COMPOSER (not the old dialog) opened. */
 async function openComposerViaHeader(page) {
   await page.getByRole("button", { name: "New ticket", exact: true }).click();
-  await sleep(350);
-  return (await composer(page).count()) === 1;
+  const opened = await waitUntil(
+    "composer to open with an editable title",
+    async () =>
+      (await composer(page).count()) === 1 &&
+      (await titleInput(page).isVisible()) &&
+      (await titleInput(page).isEditable()),
+    { timeout: 3000 },
+  )
+    .then(() => true)
+    .catch(() => false);
+  if (opened) {
+    // Monaco and Radix finish mounting asynchronously. Deliver keyboard actions
+    // to the ready title, not to whichever element owned focus before the open.
+    await titleInput(page).focus();
+    await waitUntil(
+      "composer title to receive focus",
+      () => titleInput(page).evaluate((el) => el === document.activeElement),
+      { timeout: 3000 },
+    );
+  }
+  return opened;
+}
+
+/** Observe the product's reset + focus handoff; never focus the title for it. */
+async function waitForCreateMoreReset(page) {
+  return waitUntil(
+    "Create-more composer to reset title/description and return title focus",
+    async () =>
+      (await composer(page).count()) === 1 &&
+      (await titleInput(page).isEditable()) &&
+      (await titleInput(page).inputValue()) === "" &&
+      (await readMonacoText(composer(page))).trim() === "" &&
+      (await titleInput(page).evaluate((el) => el === document.activeElement)),
+    { timeout: 4000 },
+  )
+    .then(() => true)
+    .catch(() => false);
 }
 
 /** Close the composer and wait until no Radix dialog remains, so the next flow starts clean. */
@@ -109,6 +145,9 @@ async function main() {
 
     // Seed two real git-repo projects, then reload → import into SQLite.
     const alphaPath = await makeGitRepo(scratch, "alpha-");
+    // Reproduce a real branch name wider than the Options row, rather than
+    // only checking the default short branch that never exposed the overflow.
+    execFileSync("git", ["-C", alphaPath, "checkout", "-qb", "fix/worktree-identity-drift"]);
     const betaPath = await makeGitRepo(scratch, "beta-");
     await seedProjects(page, [
       { ...PROJECT_ALPHA, path: alphaPath },
@@ -177,11 +216,22 @@ async function main() {
         // destination chip binds the same `usesWorktree` field, and the base
         // chip is shown only while that destination is a worktree.
         await composer(page).getByRole("button", { name: "Ticket options" }).click();
+        await page
+          .getByRole("button", { name: "Base branch: fix/worktree-identity-drift" })
+          .waitFor();
         const baseChip = await page.getByRole("button", { name: "Base branch" }).count();
         const destinationChip = await page
           .getByRole("button", { name: "Working destination" })
           .count();
         const createMore = await page.getByRole("switch", { name: "Create more" }).count();
+        const branchFits = await page
+          .getByRole("button", { name: "Working destination: new worktree" })
+          .evaluate((button) => {
+            const options = button.closest('[data-slot="popover-content"]');
+            const bounds = options?.getBoundingClientRect();
+            const destination = button.getBoundingClientRect();
+            return Boolean(bounds && destination.right <= bounds.right - 8);
+          });
         await page.keyboard.press("Escape");
         const actionPicker = await composer(page)
           .getByRole("button", { name: "Choose what starts" })
@@ -208,6 +258,7 @@ async function main() {
           effortChip === 0 &&
           baseChip === 1 &&
           destinationChip === 1 &&
+          branchFits &&
           createMore === 1 &&
           // Plain Create is a visible peer of the primary again, not a menu row.
           createBtn === 1 &&
@@ -215,7 +266,7 @@ async function main() {
           kickoff === 1;
         return {
           ok,
-          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} modelPill=${modelPill} effortChip=${effortChip} base=${baseChip} destination=${destinationChip} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
+          detail: `root=${root} chip=${chip} newTicketText=${staticNewTicket} expand=${expandBtn} close=${closeBtn} title=${title} desc=${desc} status=${statusChip} priority=${priorityChip} labels=${labelsChip} harnessGone=${harnessChip === 0} modelPill=${modelPill} effortChip=${effortChip} base=${baseChip} destination=${destinationChip} branchFits=${branchFits} createMore=${createMore} create=${createBtn} kickoff=${kickoff}`,
         };
       },
     );
@@ -341,32 +392,35 @@ async function main() {
         const before = (await ticketsFor(page, alphaId)).length;
 
         const first = "Create-more first";
+        const firstBody = "First ticket body";
         await titleInput(page).fill(first);
+        await typeIntoMonaco(composer(page), firstBody);
         await createOnlyTicket(page);
-        // Dialog must STAY open and reset.
-        const stayedOpen = await waitUntil(
-          "dialog stays open + title resets after first create",
-          async () =>
-            (await composer(page).count()) === 1 && (await titleInput(page).inputValue()) === "",
-          { timeout: 4000 },
-        )
-          .then(() => true)
-          .catch(() => false);
+        // The title becoming blank alone is not readiness: Monaco must finish
+        // clearing and the product must return focus before the next entry.
+        const stayedOpen = await waitForCreateMoreReset(page);
         const focusedTitle = await titleInput(page).evaluate((el) => el === document.activeElement);
 
         const second = "Create-more second";
+        const secondBody = "Second ticket body";
         await titleInput(page).fill(second);
+        await typeIntoMonaco(composer(page), secondBody);
         await createOnlyTicket(page);
-        await sleep(500);
+        const secondReset = await waitForCreateMoreReset(page);
         await closeAnyDialog(page);
 
-        const titles = (await ticketsFor(page, alphaId)).map((t) => t.title);
+        const tickets = await ticketsFor(page, alphaId);
+        const titles = tickets.map((t) => t.title);
         const bothCreated = titles.includes(first) && titles.includes(second);
+        const bodiesCorrect =
+          tickets.find((t) => t.title === first)?.body === firstBody &&
+          tickets.find((t) => t.title === second)?.body === secondBody;
         const countGrew = titles.length === before + 2;
-        const ok = stayedOpen && focusedTitle && bothCreated && countGrew;
+        const ok =
+          stayedOpen && focusedTitle && secondReset && bothCreated && bodiesCorrect && countGrew;
         return {
           ok,
-          detail: `stayedOpen=${stayedOpen} focusedTitle=${focusedTitle} both=${bothCreated} count ${before}->${titles.length}`,
+          detail: `stayedOpen=${stayedOpen} focusedTitle=${focusedTitle} secondReset=${secondReset} both=${bothCreated} bodies=${bodiesCorrect} count ${before}->${titles.length}`,
         };
       },
     );
@@ -409,11 +463,14 @@ async function main() {
 
     // === 9. Escape closes the dialog (passes against today's dialog too) ======
     await attempt(9, "Escape closes the open dialog", async () => {
-      await page.getByRole("button", { name: "New ticket", exact: true }).click();
-      await sleep(300);
+      await openComposerViaHeader(page);
       const openCount = await page.getByRole("dialog").count();
       await page.keyboard.press("Escape");
-      await sleep(300);
+      await waitUntil(
+        "dialog to close after Escape",
+        async () => (await page.getByRole("dialog").count()) === 0,
+        { timeout: 3000 },
+      );
       const closedCount = await page.getByRole("dialog").count();
       return {
         ok: openCount === 1 && closedCount === 0,

@@ -1,0 +1,17 @@
+---
+/** The mark and name, three routes, and the download (BRAND.md §7.6). */
+import { DOCS_URL, REPOSITORY_URL } from "../data/links";
+import Mark from "./Mark.astro";
+---
+
+<header class="site-header">
+  <a class="brand" href="/" aria-label="Volli home">
+    <Mark size={22} />
+    <span>Volli</span>
+  </a>
+  <nav aria-label="Primary">
+    <a href={DOCS_URL}>Docs</a>
+    <a href={REPOSITORY_URL}>GitHub</a>
+    <a class="site-header-download" href="/download/">Download</a>
+  </nav>
+</header>

@@ -33,6 +33,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { cn } from "@renderer/lib/utils";
+import { notAvailableOn, remoteHostNow } from "@renderer/stores/remote-project";
 
 /**
  * The chip row's branch relationship: `base ▾ → destination ▾`.
@@ -64,6 +65,12 @@ export function useBranchListing(projectId: string): BranchListingState {
 
   React.useEffect(() => {
     const token = guard.claim();
+    // A remote project's refs are on its host (VC-711): this Mac lists none.
+    const host = remoteHostNow(projectId);
+    if (host !== null) {
+      setState({ status: "failed", error: notAvailableOn(host) });
+      return;
+    }
     setState({ status: "loading" });
     void (async () => {
       try {
@@ -198,6 +205,8 @@ function BaseBranchChip({
   );
   const label = baseChipLabel(value, state);
 
+  // Options has a fixed width; the base gives up space to the destination,
+  // while the full ref stays in the accessible name.
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
@@ -207,10 +216,12 @@ function BaseBranchChip({
           aria-label={`Base branch: ${label.spoken}`}
           variant="ghost"
           size="sm"
-          className={composerChipClass()}
+          className={cn(composerChipClass(), "min-w-0 flex-1 justify-start")}
         >
           <GitBranchIcon />
-          {label.text}
+          <span className="min-w-0 truncate" title={label.text}>
+            {label.text}
+          </span>
           <CaretDownIcon weight="bold" className="size-3" />
         </Button>
       </PopoverTrigger>
@@ -301,7 +312,7 @@ export function ComposerBranchRow({
   onUsesWorktreeChange,
 }: ComposerBranchRowProps) {
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-1">
+    <div className="flex w-full min-w-0 items-center gap-1">
       {usesWorktree ? (
         <>
           <BaseBranchChip state={state} value={baseBranch} onChange={onBaseBranchChange} />

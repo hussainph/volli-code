@@ -20,6 +20,7 @@
  *    where a person can see that and re-pin.
  */
 import {
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   automationOwnership,
   automationTriggerColumns,
   automationTriggerSchedule,
@@ -28,6 +29,7 @@ import {
   isAutomationRuntimeTier,
   isTicketStatus,
   modelTierRow,
+  nextScheduleOccurrence,
   scheduleSentence,
   TICKET_STATUS_LABELS,
   UNBOUND_RUN_LABEL,
@@ -36,6 +38,7 @@ import type {
   Automation,
   AutomationRun,
   AutomationRuntime,
+  AutomationSchedule,
   AutomationSkippedOccurrence,
   AutomationTrigger,
   TicketStatus,
@@ -172,6 +175,51 @@ export function runAutomationLabel(
 }
 
 /**
+ * How this Run STARTED — the trigger-facing half of a history row (VC-297).
+ *
+ * VC-297 asks for the originating record and its trigger on every row. The
+ * record is {@link runAutomationLabel} above; the trigger cannot be, because a
+ * Run stores no Trigger. Reading today's record for it would be the mistake
+ * {@link runModelLabel} already refuses next door — a Trigger can be edited
+ * after the Run happened and the record can be deleted outright, so today's
+ * Trigger is not the one that fired.
+ *
+ * What the Run does carry is its ATTENDANCE, and that is this fact: VC-112
+ * rules that nothing declares itself attended, so the answer is decided by
+ * whichever door accepted the invocation — see `AUTOMATION_RUN_ATTENDANCE`.
+ * A person clicking something is attended; the schedule timer and the agent's
+ * own Run verb are not.
+ *
+ * Which is why the unattended word is "Automatic" and never names a schedule:
+ * `unattended` covers the agent's Run verb too, and a Run another Session
+ * started never had a schedule to name. An old row carrying nothing reads as
+ * attended (`parseAutomationRunAttendance`), so there is no third word here.
+ */
+export function runStartLabel(run: Pick<AutomationRun, "attendance">): string {
+  return run.attendance === "unattended" ? "Automatic" : "By hand";
+}
+
+/**
+ * What an EMPTY history says — or `null` while it does not yet know (VC-297).
+ *
+ * "Nothing has run this Automation yet" is a claim about the past, and a cache
+ * that has never been read cannot make it. Each scope is its own read now, so
+ * a cold cache is the ordinary state every time the reader picks another
+ * record — and answering that with a sentence would state a fact the very next
+ * frame may contradict. The Ticket rail already draws this line for its own
+ * scoped read (`ticket-rail-automations.tsx`): say nothing until you know.
+ *
+ * `loaded` therefore means READ, not non-empty. An empty answer that landed is
+ * a real answer and gets its sentence; silence gets silence.
+ */
+export function historyEmptyCopy(automationId: string | null, loaded: boolean): string | null {
+  if (!loaded) return null;
+  return automationId === null
+    ? "Nothing has run in this project yet."
+    : "Nothing has run this Automation yet.";
+}
+
+/**
  * One project's Automations, split by Ownership with its own first.
  *
  * The order main already returns (own, then global, name-ordered within each)
@@ -249,10 +297,10 @@ export function parseLaneRowId(id: string): { status: TicketStatus; automationId
  *    arranging digits. Rank is what a lane owns.
  *  - **A drop on its own slot**, which changes no order at all.
  *
- * `visibleIds` is what the lane DRAWS as draggable, in drawn order: the armed
- * row pinned to slot 1 is not among them, and neither is anything ranked past
- * the digit cap. {@link columnRankAfterLaneDrop} is what puts the moved rows
- * back into the authored list without disturbing either.
+ * `visibleIds` is what the lane DRAWS as draggable, in drawn order — every
+ * offered row, digitless ones past the ninth included, except the armed row
+ * pinned to slot 1. {@link columnRankAfterLaneDrop} is what puts the moved rows
+ * back into the authored list without disturbing that pin's authored rank.
  */
 export function laneDropRank(input: {
   authoredIds: readonly string[];
@@ -381,3 +429,52 @@ export function skipReasonLabel(skip: Pick<AutomationSkippedOccurrence, "reason"
 export function skipCountLabel(skip: Pick<AutomationSkippedOccurrence, "missedCount">): string {
   return skip.missedCount > 1 ? `${skip.missedCount} occurrences` : "";
 }
+
+/**
+ * When a schedule next fires, read on this Mac's clock (VC-298).
+ *
+ * The instant is the shared `nextScheduleOccurrence` — the same function, the
+ * same stagger key (the Automation's id) and therefore the same answer the
+ * host timer arms for — never a second calendar walk here. Only the READING
+ * is local: the schedule keeps its stored zone, and the label prints that
+ * instant in `timeZone` with the zone's name, so 09:00 Asia/Kuwait set from a
+ * New York laptop says when that is in New York.
+ *
+ * The stagger is included, so an on-the-hour schedule may read a few minutes
+ * past: that is the minute it actually starts.
+ */
+export function nextScheduledRun(input: {
+  schedule: AutomationSchedule;
+  automationId: string;
+  now: number;
+  timeZone: string;
+}): { at: number; label: string } {
+  const at = nextScheduleOccurrence({
+    schedule: input.schedule,
+    staggerKey: input.automationId,
+    after: input.now,
+  });
+  const reading = new Date(at).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: input.timeZone,
+    timeZoneName: "short",
+  });
+  return { at, label: `Next: ${reading}` };
+}
+
+/**
+ * When a due time becomes a Skipped occurrence, said once at the schedule
+ * control (VC-298).
+ *
+ * The grace is the host timer's own constant rather than a number typed here,
+ * so the sentence cannot promise a window the scheduler does not keep. A due
+ * time outside it is recorded as a Skipped occurrence in Run history, never
+ * replayed.
+ */
+export const SCHEDULE_SKIPPED_OCCURRENCE_POLICY = `Runs up to ${
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS / 60_000
+} min late; skipped if Volli is closed or the Mac is asleep`;

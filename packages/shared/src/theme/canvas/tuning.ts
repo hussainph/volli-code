@@ -14,10 +14,7 @@
  * `settled.ts`. A disagreement with this table is an argument about the math; a
  * disagreement with that one is an argument about taste.
  *
- * Each value's own comment says what it is and what it costs. The measurement
- * runs — the alpha sweeps, the band probes, the arrangements that were tried and
- * dropped — live in `docs/plans/arc-theming-migration.md` § Appendix — measured
- * derivations, and every entry below that had one points at its heading.
+ * Each value's comment describes its effect on contrast, color or layering.
  */
 export const ARC_TUNING = {
   /**
@@ -35,7 +32,7 @@ export const ARC_TUNING = {
      * Below this a "light" canvas stops reading as light at all — at 0.66 a
      * saturated mid-tone wall strands BOTH inks near Lc 50. 0.80 is where the
      * band turns genuinely pastel; the last 0.03 is what the worst-case ink
-     * score needs once the base fill counts as a surface. Appendix § Light band.
+     * score needs once the base fill counts as a surface.
      */
     min: 0.83,
     /** Above it the pools wash out and the ink has nothing to bite on. */
@@ -54,7 +51,7 @@ export const ARC_TUNING = {
 
   /** Saturation, as a multiplier on the authored chroma. */
   chroma: {
-    /** Vibrancy 0 — Arc's leftmost frame, a near-neutral wash that keeps only a hint of hue. */
+    /** Vibrancy 0: a near-neutral wash that keeps only a hint of hue. */
     floor: 0.14,
     /** Vibrancy 1, light mode: slightly ABOVE the authored chroma, since the light band costs some. */
     lightGain: 1.05,
@@ -119,7 +116,6 @@ export const ARC_TUNING = {
    * target produces the frosted reading in both and it is the sign of the
    * lightness step that flips, not the model. That is also why the sink target
    * is derived rather than declared — see `liftTarget` in elevation.ts.
-   * Appendix § Lift: one mechanism, two signs.
    */
   lift: {
     /**
@@ -128,7 +124,7 @@ export const ARC_TUNING = {
      * Per-mode because the overlay composites in sRGB bytes, where the curve is
      * far steeper near black, so the same alpha buys much more lightness down
      * there. Dark's 0.5 is what brings its ΔL back inside the 0.070–0.119 band
-     * light delivers across the same seeds. Appendix § Lift alphas.
+     * light delivers across the same seeds.
      */
     liftAlpha: { light: 0.7, dark: 0.5 },
     /**
@@ -139,7 +135,7 @@ export const ARC_TUNING = {
      * on the FAR side of the canvas from the paper, and both of those move
      * lightness faster than their lifting counterpart does. 0.12 against light's
      * 0.7 is what makes the two walks the same length (+0.022 and +0.023 on the
-     * ember default). Appendix § Lift alphas.
+     * ember default).
      */
     sinkAlpha: { light: 0.3, dark: 0.12 },
     /**
@@ -154,7 +150,6 @@ export const ARC_TUNING = {
      * share would draw a hard edge along every wall of that frame — and that
      * edge is the sharp chrome the arrangement exists to remove. So the chrome
      * band and rail ARE the canvas, and the sidebar takes the entire alpha.
-     * Appendix § The frame, and the three arrangements it beat.
      */
     shares: [0, 1],
   },
@@ -171,8 +166,7 @@ export const ARC_TUNING = {
    * neutral shadow over a warm pastel desaturates the pixels under it, which
    * reads as dirt on the canvas rather than as an absence of light. Both rungs
    * sit BELOW every canvas their mode can produce — reusing light's 0.32 in dark
-   * would put the halo ABOVE a dim canvas and make it glow. Appendix § Shadow
-   * rungs.
+   * would put the halo ABOVE a dim canvas and make it glow.
    */
   shadow: {
     color: { light: { L: 0.32, C: 0.05 }, dark: { L: 0.06, C: 0.03 } },
@@ -235,7 +229,7 @@ export const ARC_TUNING = {
      * Backwards against the weight, exactly like
      * `LIGHT_FLOORS.labelTowardSecondary`: turning copy weight UP means the
      * tiers move toward the full ink, which is a smaller slide rather than a
-     * larger one. Appendix § The canvas ink ladder.
+     * larger one.
      */
     mutedTowardBase: { min: 0.34, max: 0.2 },
     /**
@@ -269,7 +263,7 @@ export const ARC_TUNING = {
      * Binding it is not a failure — it is the degradation. The ladder COMPRESSES
      * toward the head (see {@link maxReadableSlide}), so a canvas with no room
      * left shows two tiers or one rather than three unreadable ones, and no tier
-     * can ever cross another on the way. Appendix § The canvas ink ladder.
+     * can ever cross another on the way.
      */
     mutedFloor: 48,
   },

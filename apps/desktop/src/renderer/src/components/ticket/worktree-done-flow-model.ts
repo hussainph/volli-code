@@ -1,20 +1,21 @@
 /**
  * Pure resolver for the Done-flow rail's single adaptive split button
- * (docs/plans/done-flow.md "UI", decision #45). Given the latest worktree
+ * (decision #45). Given the latest worktree
  * status, the ticket's durable `prUrl`, and the local busy stage, it returns the
  * one primary action (label + disabled reason) and the always-listed chevron
  * menu (each verb with its own disabled reason). Raw status is formatted here,
- * never printed directly: it drives those actions and the compact Git-state
- * strip on the Diffs page. Kept side-effect-free and separate from
- * `ticket-repository-summary.tsx` so the rules are unit-testable without
- * mounting React or faking `window.api`.
+ * never printed directly: it drives those actions and the Git-state row of the
+ * repository card, which the Diffs page carries (VC-406). Kept side-effect-free
+ * and separate from `ticket-repository-summary.tsx` so the rules are
+ * unit-testable without mounting React or faking `window.api`.
  */
-import type { DiffStat } from "@volli/shared";
 
 /** The finer Details-rail worktree status (mirrors `WorktreeStatusResult["status"]`, apps/desktop/src/ipc/contract.ts). */
 export interface WorktreeStatusSnapshot {
   uncommitted: boolean;
   sequencerActive: boolean;
+  /** Index entries still unmerged — a stash-pop/squash conflict with no sequencer marker (VC-838). */
+  unmergedPaths: number;
   aheadOfBase: number | null;
   behindBase: number | null;
   /** Commits not yet on `origin/<branch>`; null when never pushed / no remote. */
@@ -67,8 +68,8 @@ export type DoneFlowStage = "idle" | "committing" | "pushing";
 
 /**
  * What the primary button does when clicked. `commit-pr` / `commit-push-updates`
- * are the stacked flows (their "stack includes a commit", so the sequencer rule
- * disables them); `create-pr` is the inert placeholder shown while loading or
+ * are the stacked flows (their "stack includes a commit", so the sequencer and
+ * unmerged-paths rules disable them); `create-pr` is the inert placeholder shown while loading or
  * when there is nothing to do — the button never vanishes, it just disables.
  */
 export type PrimaryActionKind =
@@ -98,7 +99,7 @@ export interface MenuAction {
   reason: string | null;
 }
 
-/** The three always-listed chevron-menu verbs (T3 Code's pattern — never hidden, disabled with reasons). */
+/** The three always-listed chevron-menu verbs (never hidden, disabled with reasons). */
 export interface DoneFlowMenu {
   commit: MenuAction;
   /** "Push & create draft PR" (no PR) or "Push updates" (PR exists). */
@@ -116,6 +117,7 @@ const REASON_LOADING = "Loading…";
 const REASON_NO_CHANGES = "No changes vs base yet";
 const REASON_BASE_UNRESOLVED = "Base branch not resolved";
 const REASON_SEQUENCER = "Merge in progress. Finish it in the terminal.";
+const REASON_UNMERGED = "Unresolved conflicts. Resolve them in the terminal.";
 const REASON_CLEAN_TREE = "Working tree clean";
 const REASON_NOTHING_TO_PUSH = "Nothing to push";
 const REASON_NO_PR_YET = "No PR yet";
@@ -139,8 +141,8 @@ function disabledMenu(item: MenuAction): MenuAction {
 /**
  * Resolves the primary action from status + prUrl, ignoring the busy stage
  * (overlaid afterwards). Priority order is the done-flow.md contract; the
- * sequencer rule is applied last so it can disable a commit-stack action that
- * otherwise resolved.
+ * sequencer and unmerged-paths rules are applied last so they can disable a
+ * commit-stack action that otherwise resolved.
  */
 function resolvePrimary(
   status: WorktreeStatusSnapshot | null,
@@ -178,23 +180,34 @@ function resolvePrimary(
     };
   }
 
-  // Sequencer disables only commit-stack actions; push-only and View PR stay
-  // enabled (pushing existing commits mid-rebase is safe).
-  if (
-    status.sequencerActive &&
-    (action.kind === "commit-pr" || action.kind === "commit-push-updates")
-  ) {
-    return { ...action, disabled: true, reason: REASON_SEQUENCER };
+  // Sequencer and unmerged paths disable only commit-stack actions; push-only
+  // and View PR stay enabled (pushing existing commits mid-rebase is safe).
+  const blocked = commitBlocker(status);
+  if (blocked !== null && (action.kind === "commit-pr" || action.kind === "commit-push-updates")) {
+    return { ...action, disabled: true, reason: blocked };
   }
   return action;
 }
 
-/** The Commit menu verb: enabled iff there's something to commit and no sequencer op is mid-flight. */
+/**
+ * Why a commit must not run now, or null. A sequencer op outranks unmerged
+ * paths (a conflicted merge has both, and "finish the merge" is the whole job);
+ * unmerged paths alone are a stash-pop/squash conflict (VC-838), which the
+ * one-click commit refuses for the same reason.
+ */
+function commitBlocker(status: WorktreeStatusSnapshot): string | null {
+  if (status.sequencerActive) return REASON_SEQUENCER;
+  if (status.unmergedPaths > 0) return REASON_UNMERGED;
+  return null;
+}
+
+/** The Commit menu verb: enabled iff there's something to commit and nothing blocks a commit. */
 function resolveCommitMenu(status: WorktreeStatusSnapshot | null): MenuAction {
   const base = { kind: "commit" as const, label: "Commit" };
   if (status === null) return { ...base, disabled: true, reason: REASON_LOADING };
   if (!status.uncommitted) return { ...base, disabled: true, reason: REASON_CLEAN_TREE };
-  if (status.sequencerActive) return { ...base, disabled: true, reason: REASON_SEQUENCER };
+  const blocked = commitBlocker(status);
+  if (blocked !== null) return { ...base, disabled: true, reason: blocked };
   return { ...base, disabled: false, reason: null };
 }
 
@@ -245,23 +258,4 @@ export function resolveDoneFlow(
           : { kind: "open-pr", label: "Open PR", disabled: true, reason: REASON_NO_PR_YET },
     },
   };
-}
-
-/**
- * "2 files · +11 −2", with a trailing "· +2 binary/untracked" clause when the
- * Change Set has files whose line counts are unknown (binary, or an untracked
- * path that raced or could not be read). `null` when there are no
- * changes vs base yet, so the caller can show its own "no changes" copy
- * instead of a hollow "0 files · +0 −0".
- *
- * This summarizes the Change Set, not `git diff base...HEAD`: it counts the
- * worktree's whole current outcome, uncommitted and untracked work included,
- * which is why it can differ from what a PR would contain.
- */
-export function formatChangeSetSummary(diff: DiffStat): string | null {
-  if (diff.files.length === 0) return null;
-  const specialCount = diff.files.filter((file) => file.insertions === null).length;
-  const fileCount = diff.files.length;
-  const base = `${fileCount} file${fileCount === 1 ? "" : "s"} · +${diff.insertions} −${diff.deletions}`;
-  return specialCount > 0 ? `${base} · +${specialCount} binary/untracked` : base;
 }

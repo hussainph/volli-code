@@ -21,7 +21,7 @@
 
 import type { ModelAccessSnapshot, ModelSelection } from "./agent-runtime";
 import { parseAutomationSchedule, type AutomationSchedule } from "./automation-schedule";
-import { isModelTier, type ModelTier } from "./model-access-policy";
+import { isAgentModelTier, type AgentModelTier } from "./model-access-policy";
 import { parseSessionModel } from "./project-identity";
 import { isTicketStatus, TICKET_STATUSES, type TicketStatus } from "./ticket";
 
@@ -53,10 +53,16 @@ export interface InvalidAutomationRuntime {
  *
  * A discriminated shape rather than a bare tier string in the same column,
  * so a stored value is never ambiguous about which of the three it is.
+ *
+ * The tier is an {@link AgentModelTier}, not the wider {@link ModelTier}
+ * (VC-431). A Run starts a Session, and `utility` is the slot for work nobody
+ * asked for — no Session may run on it — so the row a Run can name is the
+ * agent-facing set the editor already offers, stated in the type rather than
+ * only at the save door.
  */
 export interface AutomationRuntimeTier {
   kind: "tier";
-  tier: ModelTier;
+  tier: AgentModelTier;
 }
 
 /**
@@ -98,19 +104,26 @@ export function isValidAutomationRuntime(
 /**
  * A stored or transported Runtime, read in today's vocabulary.
  *
- * `null` is inherit. A whole pin is a pin. A tier THIS build knows is a tier.
- * Everything else — a partial pin, a tier from another build, bytes that were
- * never JSON — is the explicit invalid row with the raw value kept, and never
- * `null`: inherit still RUNS, so an unreadable Runtime coerced to it would
- * start a Session under a policy nobody chose. The one reader for the SQLite
- * column and any future transport, so the two cannot disagree about which
- * shapes are runnable.
+ * `null` is inherit. A whole pin is a pin. A tier a Run may START on is a
+ * tier. Everything else — a partial pin, a tier from another build, bytes that
+ * were never JSON — is the explicit invalid row with the raw value kept, and
+ * never `null`: inherit still RUNS, so an unreadable Runtime coerced to it
+ * would start a Session under a policy nobody chose. The one reader for the
+ * SQLite column and any future transport, so the two cannot disagree about
+ * which shapes are runnable.
+ *
+ * The tier test is the AGENT-facing one (VC-431), which is the same set the
+ * save door and the editor check. `utility` is the slot for work nobody asked
+ * for, so a record naming it — written by an older build, whose save door
+ * still admitted it, or by a door that bypassed the editor — reads back as the
+ * invalid row and REFUSES rather than starting a Session on the Utility row.
+ * Narrowing the save door alone would have left those rows running.
  */
 export function parseAutomationRuntime(raw: unknown): AutomationRuntime {
   if (raw === null) return null;
   if (typeof raw === "object" && (raw as { kind?: unknown }).kind === "tier") {
     const tier = (raw as { tier?: unknown }).tier;
-    return isModelTier(tier) ? { kind: "tier", tier } : { kind: "invalid", raw };
+    return isAgentModelTier(tier) ? { kind: "tier", tier } : { kind: "invalid", raw };
   }
   return parseSessionModel(raw) ?? { kind: "invalid", raw };
 }
@@ -392,6 +405,12 @@ export type AutomationRunRefusalCode =
   | "TICKET_NOT_FOUND"
   /** A Run that names the Project as its Target, and no such project (VC-130). */
   | "PROJECT_NOT_FOUND"
+  /**
+   * A Run in a project the person removed (VC-822). Removal detaches the
+   * project and keeps its Automations, so a schedule still comes due there;
+   * it is refused with this, and recorded as a skip, until the project is back.
+   */
+  | "PROJECT_REMOVED"
   | "RUN_IN_FLIGHT"
   | "MODEL_REQUIRED"
   /**
@@ -864,8 +883,18 @@ export function offeredAutomationsForColumn(
   return ranked;
 }
 
+/** What a column's pinned Offered list is composed from. */
+export interface OfferedAutomationsInput {
+  automations: readonly Automation[];
+  status: TicketStatus;
+  rankedAutomationIds?: readonly string[];
+  /** The armed record that is also switched on here, or `null`. */
+  effectiveArmedAutomationId?: string | null;
+}
+
 /**
- * The DRAG-TIME list for `status`: the digits `1`–`9`, in the order they read.
+ * The PINNED list for `status`, uncapped: the order the digits read, with every
+ * row past the ninth still in it.
  *
  * Two things happen to the authored rank here, and the ORDER of the two is the
  * rule rather than an implementation detail:
@@ -892,41 +921,49 @@ export function offeredAutomationsForColumn(
  * An `effectiveArmedAutomationId` this column does not offer is ignored rather
  * than an error — the same stale-arming tolerance {@link armedAutomationFor}
  * has, whose armed-first shape this generalises.
+ *
+ * The lane draws this whole list (rows past the ninth without a digit, so they
+ * stay visible and draggable); the drag reads its first nine through
+ * {@link offeredAutomationsInDigitOrder}. One list, cut in one place, so the
+ * digit a lane prints and the digit a drag answers cannot disagree.
  */
-export function offeredAutomationsInDigitOrder(input: {
-  automations: readonly Automation[];
-  status: TicketStatus;
-  rankedAutomationIds?: readonly string[];
-  /** The armed record that is also switched on here, or `null`. */
-  effectiveArmedAutomationId?: string | null;
-}): readonly Automation[] {
+export function offeredAutomationsInPinnedOrder(
+  input: OfferedAutomationsInput,
+): readonly Automation[] {
   const ranked = offeredAutomationsForColumn(
     input.automations,
     input.status,
     input.rankedAutomationIds ?? [],
   );
   const armed = ranked.find((automation) => automation.id === input.effectiveArmedAutomationId);
-  if (armed === undefined) return ranked.slice(0, MAX_OFFERED_DIGITS);
-  return [armed, ...ranked.filter((automation) => automation.id !== armed.id)].slice(
-    0,
-    MAX_OFFERED_DIGITS,
-  );
+  if (armed === undefined) return ranked;
+  return [armed, ...ranked.filter((automation) => automation.id !== armed.id)];
+}
+
+/**
+ * The DRAG-TIME list for `status`: the digits `1`–`9`, in the order they read —
+ * the first {@link MAX_OFFERED_DIGITS} rows of
+ * {@link offeredAutomationsInPinnedOrder}, so the pin lands before the cap.
+ */
+export function offeredAutomationsInDigitOrder(
+  input: OfferedAutomationsInput,
+): readonly Automation[] {
+  return offeredAutomationsInPinnedOrder(input).slice(0, MAX_OFFERED_DIGITS);
 }
 
 /**
  * The rank to STORE after a lane drop, given the lane's new drawn order.
  *
- * The lane draws the pinned, capped list; the record stores the authored,
- * uncapped one. Two rows are therefore on screen that this write must not
- * disturb — the armed row pinned to slot 1, and everything ranked past the
- * ninth, which is not drawn at all — so the arithmetic is "refill the slots the
- * lane actually moved" rather than "take the lane's list as the new order":
+ * The lane draws the pinned list; the record stores the authored one. The two
+ * differ by the armed row pinned to slot 1, which this write must not disturb,
+ * so the arithmetic is "refill the slots the lane actually moved" rather than
+ * "take the lane's list as the new order":
  *
  *  - every authored slot holding one of `reorderedIds` takes the next id from
  *    `reorderedIds`, in the lane's new order;
  *  - every other slot keeps its own occupant, which is exactly how the armed
- *    row keeps its authored rank (so disarming returns it there) and how a
- *    row past the digit cap keeps its place under rows it cannot see.
+ *    row keeps its authored rank (so disarming returns it there), and how
+ *    any authored id a caller leaves out of `reorderedIds` keeps its place.
  *
  * `reorderedIds` may name ids `authoredIds` does not; those are dropped, since
  * the authored list is what the record stores.

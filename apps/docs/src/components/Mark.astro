@@ -1,0 +1,42 @@
+---
+/**
+ * The Volli mark (apps/website/brand/BRAND.md §4): three bone bars and the
+ * ember card, drawn inline from the same glyph as the website's Mark.astro so
+ * it is crisp at any size and needs no image request.
+ *
+ * On the night the bars are bone. On the light theme bone would vanish into
+ * the page, so volli.css repaints them in ink through `--volli-mark-bar`; the
+ * ember card never changes.
+ */
+interface Props {
+  size?: number;
+}
+
+const { size = 22 } = Astro.props;
+const width = Math.round((size * 160) / 172);
+---
+
+<svg
+  class="volli-mark"
+  viewBox="48 42 160 172"
+  width={width}
+  height={size}
+  aria-hidden="true"
+  focusable="false"
+>
+  <rect class="volli-mark-bar" x="48" y="42" width="40" height="172" rx="18" fill="#F2EAE0"></rect>
+  <rect class="volli-mark-bar" x="108" y="42" width="40" height="100" rx="18" fill="#F2EAE0"></rect>
+  <rect x="108" y="158" width="40" height="44" rx="10" fill="#E8652A"></rect>
+  <rect class="volli-mark-bar" x="168" y="42" width="40" height="136" rx="18" fill="#F2EAE0"></rect>
+</svg>
+
+<style>
+  .volli-mark {
+    display: block;
+    flex: none;
+  }
+
+  .volli-mark-bar {
+    fill: var(--volli-mark-bar, #f2eae0);
+  }
+</style>

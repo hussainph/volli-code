@@ -12,9 +12,11 @@ import { EMPTY_TRANSCRIPT, type ChatSessionSlice } from "@volli/session-presenta
 import { useChatSessionsStore } from "@renderer/stores/chat-sessions";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 
+import { remoteHostOfSession } from "@renderer/lib/session-project";
 import { applyRemoteChatTitle, renameChatSession } from "./rename";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@renderer/lib/session-project", () => ({ remoteHostOfSession: vi.fn(() => null) }));
 
 const SESSION = {
   id: "chat-1",
@@ -30,7 +32,6 @@ const projection: SessionPresentationProjection = {
   session: SESSION,
   status: "open",
   liveExecutor: null,
-  authority: null,
   attention: { active: [], primary: null },
   interactions: { active: [], resolved: [] },
   signal: null,
@@ -39,6 +40,7 @@ const projection: SessionPresentationProjection = {
   turnActive: false,
   lastActivityAt: 0,
   bornTicketless: false,
+  scheduledResume: null,
 };
 
 const slice: ChatSessionSlice = {
@@ -67,6 +69,7 @@ function chatRow(overrides: Partial<ChatSessionRecord> = {}): SessionListingRow 
       bornTicketless: false,
       role: "ticket",
       parentSessionId: null,
+      model: null,
       ...overrides,
     },
     usage: EMPTY_SESSION_USAGE_SUMMARY,
@@ -276,5 +279,27 @@ describe("applyRemoteChatTitle", () => {
   it("trims, so a label never carries the model's stray whitespace", () => {
     applyRemoteChatTitle("chat-1", "  Parser fix  ");
     expect(cachedTitle("chat-1")).toBe("Parser fix");
+  });
+});
+
+describe("renaming a Session on a remote host (VC-713)", () => {
+  it("tells a person it is not available there, and skips the automatic title quietly", async () => {
+    const rename = vi.fn();
+    vi.stubGlobal("window", { api: { sessions: { rename } } });
+    vi.mocked(remoteHostOfSession).mockReturnValue("hetzner-1");
+    try {
+      await expect(renameChatSession("remote-chat", "New name")).resolves.toBe(false);
+      expect(toast.error).toHaveBeenCalledWith(
+        "Rename: Not available on hetzner-1 yet",
+        expect.anything(),
+      );
+      vi.mocked(toast.error).mockClear();
+      await expect(renameChatSession("remote-chat", "Auto", "first message")).resolves.toBe(false);
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(remoteHostOfSession).mockReturnValue(null);
+      vi.unstubAllGlobals();
+    }
   });
 });

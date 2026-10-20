@@ -13,8 +13,11 @@ import {
   buildAutomationRunItems,
   buildCommandPaletteItems,
   buildEditorCommandItems,
+  buildHostCommandItems,
+  buildNavigationCommandItems,
   paletteRunContext,
 } from "./command-palette-model";
+import { sessionRowMatch, slicePaletteSection } from "./command-palette-search";
 import { projectScope, ticketScope, type SessionContainer } from "@renderer/stores/sessions";
 
 function project(id: string, name: string, ticketPrefix: string): Project {
@@ -78,7 +81,7 @@ function terminal(overrides: Partial<SessionRecord> & { id: string }): SessionRe
     createdAt: 0,
     endedAt: overrides.endedAt === undefined ? 5_000 : overrides.endedAt,
     exitCode: overrides.exitCode ?? null,
-    lastActivityAt: 5_000,
+    lastActivityAt: overrides.lastActivityAt ?? 5_000,
     bornTicketless: overrides.bornTicketless ?? (overrides.ticketId ?? null) === null,
   };
 }
@@ -99,9 +102,36 @@ function chat(overrides: Partial<ChatSessionRecord> = {}): ChatSessionRecord {
     bornTicketless: false,
     role: "ticket",
     parentSessionId: null,
+    model: null,
     ...overrides,
   };
 }
+
+describe("the palette's host rows", () => {
+  it("are none with cloud off, both with it on, and no Add on a read-only hosts file", () => {
+    expect(buildHostCommandItems(false)).toEqual([]);
+    expect(buildHostCommandItems(true).map((item) => item.id)).toEqual([
+      "add-host",
+      "manage-hosts",
+    ]);
+    expect(buildHostCommandItems(true, false).map((item) => item.id)).toEqual(["manage-hosts"]);
+  });
+
+  it("offers each remote host's projects and sign-ins (VC-710)", () => {
+    const hosts = [{ id: "h1", name: "hetzner-1" }];
+    expect(buildHostCommandItems(false, true, hosts)).toEqual([]);
+    const items = buildHostCommandItems(true, true, hosts);
+    expect(items.map((item) => item.title)).toEqual([
+      "Open a project on hetzner-1…",
+      "Sign-ins on hetzner-1…",
+      "Add a host…",
+      "Manage hosts…",
+    ]);
+    expect(items[0]).toMatchObject({ id: "open-project", hostId: "h1", hostName: "hetzner-1" });
+    expect(items[1]).toMatchObject({ id: "sign-ins", hostId: "h1" });
+    expect(items[0]!.keywords).toContain("hetzner-1");
+  });
+});
 
 describe("buildCommandPaletteItems", () => {
   it("lists every ticket with current-project and recency ordering", () => {
@@ -170,6 +200,98 @@ describe("buildCommandPaletteItems", () => {
     ).toBeNull();
   });
 
+  it("orders Sessions current project first, then most recent, then by title (VC-303)", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const beta = project("p2", "Beta", "BET");
+
+    const result = buildCommandPaletteItems(
+      [alpha, beta],
+      {},
+      {},
+      alpha.id,
+      [
+        chat({ sessionId: "old", title: "Fix auth", ticketId: null, lastActivityAt: 100 }),
+        chat({ sessionId: "recent", title: "Fix auth", ticketId: null, lastActivityAt: 900 }),
+        chat({ sessionId: "a-tie", title: "Alpha tie", ticketId: null, lastActivityAt: 500 }),
+        chat({ sessionId: "b-tie", title: "Beta tie", ticketId: null, lastActivityAt: 500 }),
+        // The newest of all, but another project's: the project you are in
+        // still leads, exactly as it does for tickets.
+        chat({
+          sessionId: "elsewhere",
+          title: "Newest",
+          projectId: beta.id,
+          ticketId: null,
+          lastActivityAt: 9_000,
+        }),
+      ],
+      {},
+      {},
+      [terminal({ id: "closed", title: "Zed shell", lastActivityAt: 700 })],
+    );
+
+    expect(result.sessions.map((item) => item.sessionId)).toEqual([
+      "recent",
+      "closed",
+      "a-tie",
+      "b-tie",
+      "old",
+      "elsewhere",
+    ]);
+    expect(result.sessions.map((item) => item.lastActivityAt)).toEqual([
+      900, 700, 500, 500, 100, 9_000,
+    ]);
+  });
+
+  it("ranks the more recent of two similarly named Sessions first under a query", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const { sessions } = buildCommandPaletteItems([alpha], {}, {}, alpha.id, [
+      chat({ sessionId: "older", title: "Fix auth", ticketId: null, lastActivityAt: 100 }),
+      chat({ sessionId: "recent", title: "Fix auth flow", ticketId: null, lastActivityAt: 900 }),
+    ]);
+
+    // cmdk scores both titles the same for "fix auth", so the slice keeps the
+    // model's order — which, by title, would put the older "Fix auth" first.
+    const slice = slicePaletteSection(sessions, sessionRowMatch, "fix auth", false);
+    expect(slice.visible.map((entry) => entry.row.sessionId)).toEqual(["recent", "older"]);
+  });
+
+  it("reads an open tab's recency off its durable record, and as now without one", () => {
+    const alpha = project("p1", "Alpha", "ALP");
+    const tab = (sessionId: string, title: string) => ({
+      sessionId,
+      title,
+      scope: projectScope(alpha.id),
+      layout: { kind: "pane" as const, sessionId, exitCode: null },
+      activePaneId: sessionId,
+    });
+
+    const result = buildCommandPaletteItems(
+      [alpha],
+      {},
+      { [alpha.id]: container(tab("unrecorded", "Aardvark"), tab("live", "Live tab")) },
+      alpha.id,
+      [],
+      {},
+      {},
+      [
+        // The open tab's own record: live (no end), so it is not a row of its own.
+        terminal({ id: "live", endedAt: null, lastActivityAt: 4_000 }),
+        terminal({ id: "closed", title: "Closed earlier", lastActivityAt: 8_000 }),
+      ],
+      9_000,
+    );
+
+    // A tab opened a moment ago, before its record landed, leads rather than
+    // sinking below every closed record.
+    expect(
+      result.sessions.map((item) => [item.sessionId, item.lastActivityAt, item.destination]),
+    ).toEqual([
+      ["unrecorded", 9_000, "tab"],
+      ["closed", 8_000, "detail"],
+      ["live", 4_000, "tab"],
+    ]);
+  });
+
   it("adds durable chats and overlays a title that just changed in a resident client", () => {
     const alpha = project("p1", "Alpha", "ALP");
     const linked = ticket("t1", alpha.id, 1, "Fix auth", 10);
@@ -218,7 +340,11 @@ describe("buildCommandPaletteItems", () => {
   // taken for one a person opened. "Everywhere a Session appears" includes it
   // (VC-131).
   describe("who started each listed Session", () => {
-    const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+    const RUN: SessionProvenance = {
+      kind: "automation",
+      automationRunId: null,
+      automationName: "Nightly sweep",
+    };
     const CHILD: SessionProvenance = {
       kind: "session",
       parentSessionId: "session-parent",
@@ -456,7 +582,11 @@ describe("buildCommandPaletteItems", () => {
     });
 
     it("marks a closed terminal a Run started, like every other row", () => {
-      const RUN: SessionProvenance = { kind: "automation", automationName: "Nightly sweep" };
+      const RUN: SessionProvenance = {
+        kind: "automation",
+        automationRunId: null,
+        automationName: "Nightly sweep",
+      };
       const result = buildCommandPaletteItems(
         [alpha],
         { [alpha.id]: [linked] },
@@ -535,6 +665,46 @@ describe("buildAutomationRunItems", () => {
 
   it("offers no run rows without a target Ticket", () => {
     expect(buildAutomationRunItems([automation()], null)).toEqual([]);
+  });
+});
+
+describe("buildNavigationCommandItems", () => {
+  it("offers only Settings with no project selected", () => {
+    expect(buildNavigationCommandItems(null, [{ key: "skills", label: "Skills" }])).toEqual([
+      expect.objectContaining({ id: "settings", title: "Settings" }),
+    ]);
+  });
+
+  it("offers the selected project's pages, each Configure pane, then Settings (VC-303)", () => {
+    const items = buildNavigationCommandItems({ name: "Alpha" }, [
+      { key: "skills", label: "Skills", keywords: ["skill"] },
+      { key: "mcp", label: "MCP Servers" },
+    ]);
+
+    expect(items.map((item) => item.title)).toEqual([
+      "Home",
+      "Board view",
+      "List view",
+      "Configure",
+      "Configure → Skills",
+      "Configure → MCP Servers",
+      "Settings",
+    ]);
+    expect(items[0]).toMatchObject({ id: "home", hint: "Alpha" });
+    expect(items[4]).toMatchObject({
+      id: "configure-pane",
+      paneKey: "skills",
+      hint: "Alpha",
+      keywords: ["Skills", "skill"],
+    });
+    expect(items[5]).toMatchObject({ paneKey: "mcp", keywords: ["MCP Servers"] });
+    expect(buildNavigationCommandItems({ name: "Alpha" }).map((item) => item.id)).toEqual([
+      "home",
+      "board",
+      "list",
+      "configure",
+      "settings",
+    ]);
   });
 });
 

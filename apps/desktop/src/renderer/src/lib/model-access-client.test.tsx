@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  DEFAULT_CODE_MODE_POLICY,
   DEFAULT_COMPACTION_POLICY,
   EMPTY_MODEL_ACCESS_DEFAULTS,
   type ModelAccessSnapshot,
@@ -89,6 +90,8 @@ function testClient(overrides: Partial<ModelAccessClient> = {}): TestHandles {
       beginSignIn,
       compactionPolicy: overrides.compactionPolicy ?? (async () => DEFAULT_COMPACTION_POLICY),
       setCompactionPolicy: overrides.setCompactionPolicy ?? (async (policy) => policy),
+      codeModePolicy: overrides.codeModePolicy ?? (async () => DEFAULT_CODE_MODE_POLICY),
+      setCodeModePolicy: overrides.setCodeModePolicy ?? (async (policy) => policy),
       pickerView: overrides.pickerView ?? (async () => "all" as const),
       setPickerView: overrides.setPickerView ?? (async (view) => view),
     },

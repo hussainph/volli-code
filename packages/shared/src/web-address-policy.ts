@@ -67,23 +67,55 @@ function ipv4Octets(address: string): Ipv4Octets | undefined {
   return octets as unknown as Ipv4Octets;
 }
 
-/** Classify a dotted-quad IPv4 address against the IANA special-purpose registry. */
+/**
+ * Classify a dotted-quad IPv4 address against the IANA IPv4 Special-Purpose
+ * Address Registry (and the multicast and reserved blocks of the IPv4 address
+ * space registry beside it).
+ *
+ * Every registry entry whose "Globally Reachable" column is `False` is refused
+ * here, in registry order. The entries marked `True` — AS112 (192.31.196.0/24,
+ * 192.175.48.0/24) and AMT (192.52.193.0/24) — are ordinary public unicast and
+ * fall through to `public`. Two deliberate departures, both in the refusing
+ * direction: 192.0.0.0/24 is refused whole although two anycast /32s inside it
+ * (192.0.0.9, 192.0.0.10) are globally reachable, because no web document is
+ * served from a protocol anycast address; and the deprecated 6to4 relay
+ * anycast 192.88.99.0/24 is refused, because RFC 7526 retired it and what
+ * answers there now is whichever relay is nearest.
+ */
 function classifyIpv4(octets: Ipv4Octets): WebAddressVerdict {
-  const [a, b] = octets;
+  const [a, b, c] = octets;
   if (a === 0) return refuse("unspecified", "0.0.0.0/8 is not a routable destination.");
-  if (a === 127) return refuse("loopback", "127.0.0.0/8 is this machine.");
   if (a === 10) return refuse("private-use", "10.0.0.0/8 is a private network.");
-  if (a === 172 && b >= 16 && b <= 31)
-    return refuse("private-use", "172.16.0.0/12 is a private network.");
-  if (a === 192 && b === 168) return refuse("private-use", "192.168.0.0/16 is a private network.");
-  if (a === 169 && b === 254)
-    return refuse("link-local", "169.254.0.0/16 is link-local, and hosts cloud metadata.");
   if (a === 100 && b >= 64 && b <= 127)
     return refuse("carrier-grade-nat", "100.64.0.0/10 is carrier-grade NAT space.");
-  if (a === 192 && b === 0) return refuse("protocol-assignment", "192.0.0.0/24 is not public.");
+  if (a === 127) return refuse("loopback", "127.0.0.0/8 is this machine.");
+  if (a === 169 && b === 254)
+    return refuse("link-local", "169.254.0.0/16 is link-local, and hosts cloud metadata.");
+  if (a === 172 && b >= 16 && b <= 31)
+    return refuse("private-use", "172.16.0.0/12 is a private network.");
+  // Three octets, not two. 192.0.0.0/24 is the protocol-assignment slice and
+  // 192.0.2.0/24 is documentation, but the rest of 192.0.0.0/16 is ordinary
+  // public space: Automattic serves WordPress VIP from 192.0.64.0/18, so
+  // matching on `192.0` alone refused github.blog, slack.engineering and
+  // every other site hosted there as "not public".
+  if (a === 192 && b === 0 && c === 0)
+    return refuse("protocol-assignment", "192.0.0.0/24 is not public.");
+  if (a === 192 && b === 0 && c === 2)
+    return refuse("documentation", "192.0.2.0/24 is reserved for documentation.");
+  if (a === 192 && b === 88 && c === 99)
+    return refuse("reserved", "192.88.99.0/24 is the retired 6to4 relay anycast block.");
+  if (a === 192 && b === 168) return refuse("private-use", "192.168.0.0/16 is a private network.");
   if (a === 198 && (b === 18 || b === 19))
     return refuse("benchmarking", "198.18.0.0/15 is benchmarking space.");
-  if (a >= 224) return refuse("multicast", "224.0.0.0/4 and above are not unicast destinations.");
+  if (a === 198 && b === 51 && c === 100)
+    return refuse("documentation", "198.51.100.0/24 is reserved for documentation.");
+  if (a === 203 && b === 0 && c === 113)
+    return refuse("documentation", "203.0.113.0/24 is reserved for documentation.");
+  if (a >= 224 && a <= 239)
+    return refuse("multicast", "224.0.0.0/4 is multicast, not a unicast destination.");
+  // 240.0.0.0/4, with the limited broadcast address 255.255.255.255 at its top.
+  if (a >= 240)
+    return refuse("reserved", "240.0.0.0/4 is reserved, and holds the broadcast address.");
   return { outcome: "public" };
 }
 
@@ -165,9 +197,65 @@ function embeddedIpv4(high: number, low: number): Ipv4Octets {
   return [(high >> 8) & 0xff, high & 0xff, (low >> 8) & 0xff, low & 0xff];
 }
 
-/** Classify eight expanded IPv6 groups against the IANA special-purpose registry. */
+/**
+ * The IPv4 address a Teredo address (2001::/32) tunnels to.
+ *
+ * RFC 4380 lays the address out as prefix, server IPv4, flags, port, and the
+ * client's IPv4 — the last two stored bit-inverted. A Teredo packet reaches
+ * that client through a relay, so the client is the destination that has to
+ * pass the IPv4 policy; the server is checked too, because it is the other
+ * IPv4 host the exchange involves.
+ */
+function teredoEndpoints(groups: Ipv6Groups): readonly [Ipv4Octets, Ipv4Octets] {
+  return [embeddedIpv4(groups[2], groups[3]), embeddedIpv4(groups[6] ^ 0xffff, groups[7] ^ 0xffff)];
+}
+
+/** The first refusal among IPv4 endpoints, or `public` when every one is. */
+function classifyEmbedded(endpoints: readonly Ipv4Octets[]): WebAddressVerdict {
+  for (const endpoint of endpoints) {
+    const verdict = classifyIpv4(endpoint);
+    if (verdict.outcome === "refuse") return verdict;
+  }
+  return { outcome: "public" };
+}
+
+/**
+ * Classify the IETF protocol-assignment block, 2001::/23.
+ *
+ * The registry marks the /23 as a whole not globally reachable, and lists the
+ * few pieces inside it that are: three anycast /128s (PCP, TURN, DNS-SD SRP),
+ * AMT 2001:3::/32, AS112 2001:4:112::/48, ORCHIDv2 2001:20::/28 and Drone
+ * Remote ID 2001:30::/28. Those are admitted; Teredo is unpacked; benchmarking
+ * 2001:2::/48 is named; everything else in the /23 — deprecated ORCHID
+ * 2001:10::/28 and the unassigned remainder — is refused.
+ */
+function classifyProtocolAssignment(groups: Ipv6Groups): WebAddressVerdict {
+  const [, g1, g2, g3, g4, g5, g6, g7] = groups;
+  if (g1 === 0) return classifyEmbedded(teredoEndpoints(groups));
+  if (g1 === 1 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && g6 === 0 && g7 >= 1 && g7 <= 3)
+    return { outcome: "public" };
+  if (g1 === 2 && g2 === 0) return refuse("benchmarking", "2001:2::/48 is benchmarking space.");
+  if (g1 === 3) return { outcome: "public" };
+  if (g1 === 4 && g2 === 0x112) return { outcome: "public" };
+  if (g1 >= 0x20 && g1 <= 0x3f) return { outcome: "public" };
+  return refuse("protocol-assignment", "2001::/23 is reserved for IETF protocol assignments.");
+}
+
+/**
+ * Classify eight expanded IPv6 groups against the IANA IPv6 Special-Purpose
+ * Address Registry and the IPv6 address space registry.
+ *
+ * The space registry is the backstop: only 2000::/3 is allocated for global
+ * unicast, and everything outside it that the special-purpose registry does
+ * not name as reachable — 100::/64 discard-only, 5f00::/16 SRv6 SIDs, the
+ * rest of 64:ff9b::/32 and every unassigned prefix — is refused rather than
+ * listed one by one. Inside 2000::/3 the registry's non-reachable entries are
+ * refused by name, and the formats that carry an IPv4 destination (Teredo,
+ * 6to4, NAT64, mapped and compatible) are unpacked, so the address a socket
+ * would really reach is the one the IPv4 policy judges.
+ */
 function classifyIpv6(groups: Ipv6Groups): WebAddressVerdict {
-  const [g0, g1] = groups;
+  const [g0, g1, g2] = groups;
   const leadingZero = groups.slice(0, 5).every((group) => group === 0);
 
   // An IPv4 destination in IPv6 clothing. Both the mapped (`::ffff:a.b.c.d`)
@@ -188,30 +276,34 @@ function classifyIpv6(groups: Ipv6Groups): WebAddressVerdict {
   if ((g0 & 0xffc0) === 0xfe80) return refuse("link-local", "fe80::/10 is link-local.");
   if ((g0 & 0xfe00) === 0xfc00)
     return refuse("unique-local", "fc00::/7 is a private network, and hosts cloud metadata.");
-  if (g0 === 0x2001 && g1 === 0x0db8)
-    return refuse("documentation", "2001:db8::/32 is reserved for documentation.");
 
-  // The two transition formats that carry an IPv4 destination inside an IPv6
-  // address. Both are in the same IANA registry as everything above, and both
-  // are reached by ordinary routing where they are deployed, so the address a
-  // socket ends up talking to is the embedded one — which means the IPv4 policy
-  // has to be what answers for them, exactly as it does for `::ffff:a.b.c.d`.
-  //
-  // The local-use translation prefix is refused outright rather than unpacked:
-  // 64:ff9b:1::/48 is reserved for a network's *own* translator, so its
-  // embedded address is meaningful only inside that network.
+  // The two translation prefixes. 64:ff9b::/96 is the well-known NAT64 prefix,
+  // whose last 32 bits are the IPv4 address a gateway translates it to — so
+  // that address is what gets judged. 64:ff9b:1::/48 is reserved for a
+  // network's *own* translator, whose embedded address means something only
+  // inside that network, so it is refused outright rather than unpacked.
   if (g0 === 0x0064 && g1 === 0xff9b) {
-    if (groups[2] === 1)
-      return refuse("reserved", "64:ff9b:1::/48 is local-use translation space.");
-    // 64:ff9b::/96 — the well-known prefix, whose last 32 bits are the IPv4
-    // address a NAT64 gateway will translate this to.
-    if (groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0) {
+    if (g2 === 1) return refuse("reserved", "64:ff9b:1::/48 is local-use translation space.");
+    if (g2 === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0) {
       return classifyIpv4(embeddedIpv4(groups[6], groups[7]));
     }
   }
+
+  if (g0 === 0x0100 && g1 === 0 && g2 === 0 && groups[3] === 0)
+    return refuse("reserved", "100::/64 is discard-only space.");
+  if (g0 === 0x5f00)
+    return refuse("reserved", "5f00::/16 is reserved for SRv6 segment identifiers.");
+  if ((g0 & 0xe000) !== 0x2000)
+    return refuse("reserved", "Only 2000::/3 is allocated for global unicast; this is outside it.");
+
+  if (g0 === 0x2001 && g1 < 0x0200) return classifyProtocolAssignment(groups);
+  if (g0 === 0x2001 && g1 === 0x0db8)
+    return refuse("documentation", "2001:db8::/32 is reserved for documentation.");
+  if (g0 === 0x3fff && g1 < 0x1000)
+    return refuse("documentation", "3fff::/20 is reserved for documentation.");
   // 2002::/16 — 6to4, which carries its IPv4 address in the two groups after
-  // the prefix.
-  if (g0 === 0x2002) return classifyIpv4(embeddedIpv4(g1, groups[2]));
+  // the prefix and is reached through a relay to that address.
+  if (g0 === 0x2002) return classifyIpv4(embeddedIpv4(g1, g2));
 
   return { outcome: "public" };
 }

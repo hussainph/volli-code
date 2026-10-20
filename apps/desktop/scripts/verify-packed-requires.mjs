@@ -26,9 +26,16 @@
  * transitively through each kept package's own production `dependencies` —
  * the automated version of the "KEEP IN SYNC" comment above that whitelist,
  * so a whitelisted package quietly gaining a new dependency doesn't produce
- * the same class of crash one layer down.
+ * the same class of crash one layer down. A package main reaches by file path
+ * instead of by require() (Code Mode's sandbox worker, VC-471) is named in
+ * PATH_REACHED_PACKAGES below and seeds that same walk; a chunk requiring one
+ * fails, because it is inlined on purpose. And because main starts such a
+ * package's files from the unpacked tree beside app.asar, (4) it and every
+ * production dependency it reaches must be named in electron-builder.yml's
+ * asarUnpack — dropping an entry there fails here rather than as a sandbox
+ * error that only the packaged app shows.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { builtinModules } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -36,6 +43,21 @@ import { parse as parseYaml } from "yaml";
 
 const require = createRequire(import.meta.url);
 const DESKTOP_DIR = resolve(import.meta.dirname, "..");
+
+// electron-builder starts detection at apps/desktop, not at the workspace
+// root. vp exec supplies no pnpm user-agent, so missing desktop metadata
+// selects npm's collector over pnpm's isolated tree (VC-493). Keep the two
+// pins equal and fail the ordinary build before packaging can take that path.
+const desktopManifest = JSON.parse(readFileSync(join(DESKTOP_DIR, "package.json"), "utf8"));
+const rootManifest = JSON.parse(readFileSync(resolve(DESKTOP_DIR, "../../package.json"), "utf8"));
+if (
+  !rootManifest.packageManager?.startsWith("pnpm@") ||
+  desktopManifest.packageManager !== rootManifest.packageManager
+) {
+  throw new Error(
+    "verify-packed-requires: desktop packageManager must match the root pnpm pin so electron-builder uses the pnpm dependency collector.",
+  );
+}
 
 // `--dir <path>` overrides the directory scanned, defaulting to the real
 // build output. Exists so this script can be pointed at a scratch directory
@@ -125,6 +147,38 @@ if (!keepSetEntry) {
 }
 const keepSet = new Set(keepSetEntry.match(/^!node_modules\/!\((.*)\)\/\*\*$/)[1].split("|"));
 
+// A kept SCOPE can be narrowed by a second entry of the same shape one level
+// down — `!node_modules/@trpc/!(server)/**` keeps @trpc/server and drops the
+// rest of @trpc. Read too, so a package that entry drops is not counted as
+// shipped merely because its scope is listed: `@earendil-works` is kept for
+// pi-codemode alone, and a chunk that came to require pi-ai must still fail.
+const SCOPE_NARROWING = /^!node_modules\/(@[^/]+)\/!\((.*)\)\/\*\*$/;
+const scopeKeeps = new Map(
+  filesEntries
+    .filter((entry) => typeof entry === "string" && SCOPE_NARROWING.test(entry))
+    .map((entry) => {
+      const [, scope, names] = entry.match(SCOPE_NARROWING);
+      return [scope, new Set(names.split("|"))];
+    }),
+);
+
+// Packages main reaches BY FILE PATH rather than by require(), mapped to why.
+// No chunk names them, so the scan below would never seed the transitive walk
+// from them — and the files they import at runtime are exactly what a pruned
+// tree would silently lack. Each must be kept by the whitelist, its own
+// production dependencies are walked like a required package's, and a chunk
+// that DOES require one fails: these are inlined on purpose (vite.config.ts),
+// and whitelisting a package for its files is what would otherwise let a
+// broken runtime require() of it pass this check.
+//
+// The list lives in path-reached-packages.json, read here and by the notices
+// generator, which records each one as both bundled and shipped as files.
+const PATH_REACHED_PACKAGES = new Map(
+  Object.entries(
+    JSON.parse(readFileSync(resolve(import.meta.dirname, "path-reached-packages.json"), "utf8")),
+  ),
+);
+
 // Strips // and /* */ comments while leaving string/template contents intact,
 // so a JSDoc example like `* const keys = require('/path/to/key.json');`
 // (real text sitting in google-shared-*.cjs, copied in from google-auth-
@@ -182,8 +236,11 @@ function isRelativeSpecifier(specifier) {
 
 function isInKeepSet(packageName) {
   if (keepSet.has(packageName)) return true;
-  const scope = packageName.split("/")[0];
-  return packageName.startsWith("@") && keepSet.has(scope);
+  if (!packageName.startsWith("@")) return false;
+  const [scope, name] = packageName.split("/");
+  if (!keepSet.has(scope)) return false;
+  const narrowed = scopeKeeps.get(scope);
+  return narrowed === undefined || narrowed.has(name);
 }
 
 // Same candidate order Node's own CJS resolver tries for a relative
@@ -240,9 +297,28 @@ function resolvePackageDir(packageName, fromDir) {
       if (parent === dir) return null;
       dir = parent;
     }
-  } catch {
-    return null;
+  } catch (err) {
+    if (err?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") return null;
+    return installedPackageDir(packageName, paths);
   }
+}
+
+// Last resort for an ESM-only package whose `exports` offers CommonJS nothing
+// at all — no `require` or `default` condition, no "./package.json" — so both
+// lookups above refuse it (pi-codemode is one). Find its directory the way
+// Node's own lookup walks: the nearest node_modules/<name> above each start.
+function installedPackageDir(packageName, paths) {
+  for (const start of paths) {
+    let dir = start;
+    while (true) {
+      const candidate = join(dir, "node_modules", packageName);
+      if (existsSync(join(candidate, "package.json"))) return realpathSync(candidate);
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return null;
 }
 
 function productionDependencyNames(packageDir) {
@@ -284,6 +360,13 @@ for (const chunkFile of chunkFiles) {
     const packageName = packageNameFromSpecifier(specifier);
     if (IGNORED_PACKAGES.has(packageName)) continue;
 
+    if (PATH_REACHED_PACKAGES.has(packageName)) {
+      violations.push(
+        `${chunkFile} → ${specifier} → package "${packageName}" must stay bundled: ${PATH_REACHED_PACKAGES.get(packageName)}`,
+      );
+      continue;
+    }
+
     if (isInKeepSet(packageName)) {
       externalPackages.add(packageName);
       directSeeds.add(packageName);
@@ -293,6 +376,26 @@ for (const chunkFile of chunkFiles) {
       );
     }
   }
+}
+
+// electron-builder collects what apps/desktop's own `dependencies` reach, so a
+// package no chunk requires ships only while it is declared there.
+const desktopDependencies = new Set(productionDependencyNames(DESKTOP_DIR));
+for (const [packageName, reason] of PATH_REACHED_PACKAGES) {
+  if (!isInKeepSet(packageName)) {
+    violations.push(
+      `${packageName} → not in electron-builder.yml whitelist, but reached by path: ${reason}`,
+    );
+    continue;
+  }
+  if (!desktopDependencies.has(packageName)) {
+    violations.push(
+      `${packageName} → not in apps/desktop's dependencies, so electron-builder will not collect it: ${reason}`,
+    );
+    continue;
+  }
+  externalPackages.add(packageName);
+  directSeeds.add(packageName);
 }
 
 // Transitive completeness: walk every kept, directly-required package's own
@@ -320,6 +423,42 @@ while (queue.length > 0) {
     // The dep resolves from ITS parent's directory, not from apps/desktop —
     // that chaining is what lets the walk cross pnpm's isolation boundary.
     queue.push({ name: depName, fromDir: packageDir });
+  }
+}
+
+// (4) Path-reached packages are read from app.asar.unpacked, never through the
+// archive: a worker thread's ES module import resolves on the real filesystem,
+// so the package AND every dependency its files import must be unpacked, each
+// under an `asarUnpack` glob of the `**/node_modules/<name>/**` shape (or its
+// whole scope's). Walked from each package the same way the whitelist walk is.
+const asarUnpack = Array.isArray(buildConfig.asarUnpack) ? buildConfig.asarUnpack : [];
+function isUnpacked(packageName) {
+  const scope = packageName.startsWith("@") ? packageName.split("/")[0] : null;
+  return asarUnpack.some(
+    (entry) =>
+      entry === `**/node_modules/${packageName}/**` ||
+      (scope !== null && entry === `**/node_modules/${scope}/**`),
+  );
+}
+for (const [packageName, reason] of PATH_REACHED_PACKAGES) {
+  const reached = new Set([packageName]);
+  const pending = [{ name: packageName, fromDir: DESKTOP_DIR }];
+  while (pending.length > 0) {
+    const { name, fromDir } = pending.shift();
+    const packageDir = resolvePackageDir(name, fromDir);
+    if (!packageDir) continue;
+    for (const depName of productionDependencyNames(packageDir)) {
+      if (IGNORED_PACKAGES.has(depName) || reached.has(depName)) continue;
+      reached.add(depName);
+      pending.push({ name: depName, fromDir: packageDir });
+    }
+  }
+  for (const name of reached) {
+    if (!isUnpacked(name)) {
+      violations.push(
+        `${name} → not in electron-builder.yml asarUnpack, but ${name === packageName ? "" : `${packageName} imports it and `}main reaches it by path from app.asar.unpacked: ${reason}`,
+      );
+    }
   }
 }
 

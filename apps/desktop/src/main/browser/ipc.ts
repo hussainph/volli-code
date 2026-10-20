@@ -7,6 +7,7 @@ import type {
   BrowserTabOpenInput,
   BrowserTabSetBoundsInput,
   BrowserTabSetPresentationInput,
+  BrowserTracesInput,
   Result,
 } from "../../ipc/contract";
 import { BROWSER_IPC } from "../ipc-descriptors";
@@ -34,6 +35,13 @@ import type { BrowserTabHost } from "./tab-host";
  * this renderer's overlay freeze is simply the first consumer of the same read.
  * So the frame belongs on the host's API when a host becomes a server, and
  * nothing here assumes the client shares its machine.
+ *
+ * `traces` (VC-453) is the second read, and it takes the same argument as
+ * `picture`: a Browser Trace is host-recorded evidence of a machine resource,
+ * not a ledger fact or a command — no row, no receipt, nothing a future host
+ * must reconcile. Its payload is the portable `BrowserTrace` from
+ * `@volli/shared`, JSON-safe and naming its frames by picture id, so the same
+ * read moves onto a host's API unchanged when there is one to move to.
  */
 export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
   const handlers: IpcHandlerTable<BrowserIpcChannel> = {
@@ -100,6 +108,11 @@ export function registerBrowserTabIpcHandlers(host: BrowserTabHost): void {
     "volli:browser-picture": (input: BrowserPictureInput) => ({
       ok: true,
       dataUrl: host.pictureOf(input.pictureId),
+    }),
+    // A Session's replayable record (VC-453): steps only, frames by id above.
+    "volli:browser-traces": (input: BrowserTracesInput) => ({
+      ok: true,
+      traces: host.tracesOf(input.sessionId),
     }),
     // The person's hold controls (VC-239). Each is an explicit press on the
     // chrome pill or the cursor's label; nothing here is inferred from input

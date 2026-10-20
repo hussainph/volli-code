@@ -5,3 +5,6 @@
 # conflict into "take one side, re-run install" instead of a hand merge that can
 # silently produce a tree neither branch ever resolved.
 pnpm-lock.yaml linguist-generated=true merge=binary
+
+# Committed z.toJSONSchema projection; reviewed through its generator and gate.
+docs/protocol/protocol.schema.json linguist-generated=true

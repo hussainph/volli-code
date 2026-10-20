@@ -18,16 +18,25 @@ vi.mock("electron", () => ({
 }));
 
 import { writeUpdateChannel } from "./auto-update";
-import { openTestDb, type TestDb } from "./db/test-helpers";
-import { writeSecret } from "./db/secrets-repo";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
+import { writeSecret } from "@volli/host-core/db";
 import {
   collectSupportInfo,
+  describeLastUpdateCheck,
   registerSupportIpcHandlers,
   type SupportInfoDeps,
 } from "./support-info";
 
 /** Every field the support report is allowed to learn from main — nothing else may appear. */
-const ALLOWLIST = ["appVersion", "arch", "channel", "platform", "schemaVersion"];
+const ALLOWLIST = [
+  "appVersion",
+  "arch",
+  "channel",
+  "lastUpdateCheck",
+  "migrationHistory",
+  "platform",
+  "schemaVersion",
+];
 
 let fixture: TestDb | null = null;
 
@@ -46,8 +55,11 @@ function deps(overrides: Partial<SupportInfoDeps> = {}): SupportInfoDeps {
   return {
     appVersion: () => "0.2.0-canary.4",
     database: () => null,
+    // Matches the canary `appVersion` above, as `runningBuildKind` would derive it.
+    buildKind: "canary",
     platform: "darwin",
     arch: "arm64",
+    lastUpdateCheck: () => null,
     ...overrides,
   };
 }
@@ -87,8 +99,81 @@ describe("collectSupportInfo", () => {
     expect(info.schemaVersion).toBeGreaterThan(0);
   });
 
-  it("defaults a profile that never chose a line to stable", () => {
-    expect(collectSupportInfo(deps({ database: () => testDb() })).channel).toBe("stable");
+  it("says whether the migrations the file ran are the ones this build ships (VC-633)", () => {
+    const db = testDb();
+    expect(collectSupportInfo(deps({ database: () => db })).migrationHistory).toBe("consistent");
+    db.prepare("UPDATE migration_history SET fingerprint = ? WHERE version = 1").run(
+      "f".repeat(64),
+    );
+    expect(collectSupportInfo(deps({ database: () => db })).migrationHistory).toMatch(
+      /^diverged: this database ran a different migration than this build at 1\./,
+    );
+  });
+
+  it("reports the last update check, a failure only as its redacted summary (VC-294)", () => {
+    const raw = [
+      "Cannot find latest-mac.yml (https://github.com/acme/volli/releases/latest-mac.yml): HttpError: 404 ",
+      'Headers: { "x-github-request-id": "C0FF:EE", "set-cookie": "_gh_sess=abc" }',
+    ].join("\n");
+    const info = collectSupportInfo(
+      deps({
+        database: () => testDb(),
+        lastUpdateCheck: () => ({
+          at: Date.UTC(2026, 9, 18, 3),
+          result: "error",
+          version: null,
+          error: raw,
+        }),
+      }),
+    );
+
+    expect(info.lastUpdateCheck).toBe(
+      "2026-10-18T03:00:00.000Z, check failed: Cannot find latest-mac.yml: HttpError: 404",
+    );
+    for (const leak of ["https", "github.com", "C0FF", "_gh_sess", "Headers"]) {
+      expect(JSON.stringify(info), leak).not.toContain(leak);
+    }
+  });
+
+  it("words every last-check result on one line", () => {
+    const at = Date.UTC(2026, 9, 18, 3);
+    const iso = "2026-10-18T03:00:00.000Z";
+    expect(describeLastUpdateCheck(null)).toBe("none recorded");
+    expect(describeLastUpdateCheck({ at, result: "up-to-date", version: null, error: null })).toBe(
+      `${iso}, up to date`,
+    );
+    expect(
+      describeLastUpdateCheck({ at, result: "available", version: "0.3.0", error: null }),
+    ).toBe(`${iso}, found 0.3.0`);
+    expect(describeLastUpdateCheck({ at, result: "available", version: null, error: null })).toBe(
+      `${iso}, found an update`,
+    );
+    expect(describeLastUpdateCheck({ at, result: "error", version: null, error: null })).toBe(
+      `${iso}, check failed: Unknown error`,
+    );
+    expect(
+      describeLastUpdateCheck({ at, result: "download-error", version: "0.3.0", error: "ENOSPC" }),
+    ).toBe(`${iso}, download of 0.3.0 failed: ENOSPC`);
+    expect(
+      describeLastUpdateCheck({ at, result: "download-error", version: null, error: null }),
+    ).toBe(`${iso}, download failed: Unknown error`);
+  });
+
+  it("defaults a profile that never chose a line to the line its build follows (VC-851)", () => {
+    const db = testDb();
+    // A fresh canary install takes canaries — the report must not say Stable.
+    expect(collectSupportInfo(deps({ database: () => db })).channel).toBe("canary");
+    expect(
+      collectSupportInfo(
+        deps({ appVersion: () => "0.2.2", buildKind: "stable", database: () => db }),
+      ).channel,
+    ).toBe("stable");
+  });
+
+  it("reports an explicit Stable on a canary build as stable", () => {
+    const db = testDb();
+    writeUpdateChannel(db, "stable", 1_700_000_000_000);
+    expect(collectSupportInfo(deps({ database: () => db })).channel).toBe("stable");
   });
 
   // A launch whose database never opened is exactly when About is most worth
@@ -140,8 +225,12 @@ describe("collectSupportInfo", () => {
 
     collectSupportInfo(deps({ database: () => watched }));
 
-    expect(pragmas).toEqual(["user_version"]);
-    expect(statements).toEqual(["SELECT value FROM app_state WHERE key = ?"]);
+    expect(pragmas).toEqual(["user_version", "user_version"]);
+    expect(statements).toEqual([
+      "SELECT value FROM app_state WHERE key = ?",
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration_history'",
+      "SELECT version, fingerprint, origin FROM migration_history ORDER BY version",
+    ]);
     for (const sql of statements) {
       expect(sql.toLowerCase()).not.toContain("secret");
     }

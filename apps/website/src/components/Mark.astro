@@ -1,0 +1,33 @@
+---
+/**
+ * The Volli mark (BRAND.md §4): three bone bars and the ember card — a board
+ * with a card on the move. Drawn from `apps/desktop/build/icon-source.svg`'s
+ * glyph, so it is crisp at any size and needs no image request.
+ */
+interface Props {
+  size?: number;
+  class?: string;
+  /** Adds a class per bar so a page can build the mark in, bar by bar. */
+  build?: boolean;
+}
+
+const { size = 24, class: className, build = false } = Astro.props;
+const width = Math.round((size * 160) / 172);
+---
+
+<svg
+  class:list={["mark", className, { "mark--build": build }]}
+  viewBox="48 42 160 172"
+  width={width}
+  height={size}
+  aria-hidden="true"
+  focusable="false"
+>
+  <rect class="mark-bar mark-bar--1" x="48" y="42" width="40" height="172" rx="18" fill="#F2EAE0"
+  ></rect>
+  <rect class="mark-bar mark-bar--2" x="108" y="42" width="40" height="100" rx="18" fill="#F2EAE0"
+  ></rect>
+  <rect class="mark-card" x="108" y="158" width="40" height="44" rx="10" fill="#E8652A"></rect>
+  <rect class="mark-bar mark-bar--3" x="168" y="42" width="40" height="136" rx="18" fill="#F2EAE0"
+  ></rect>
+</svg>

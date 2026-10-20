@@ -107,6 +107,62 @@ describe("a real api-key sign-in", () => {
   });
 });
 
+/** Steps that decline the first question, recording what the flow said before it. */
+function declineSteps(): PiSignInSteps & { said: unknown[] } {
+  const said: unknown[] = [];
+  return {
+    said,
+    newId: () => "p1",
+    ask: () => Promise.reject(new Error("Sign-in cancel.")),
+    say: (event) => {
+      said.push(event);
+    },
+  };
+}
+
+describe("Sign in with ChatGPT, up to the browser (Pi 0.99)", () => {
+  /**
+   * The real `openai` OAuth flow, stopped at the first step a person would
+   * answer. Before it asks anything it needs this installation's device id,
+   * and it fails outright without one — which is what every Volli sign-in did
+   * until main passed one in. Nothing here reaches the network: the flow only
+   * builds an authorization URL and listens on loopback before the step the
+   * test declines.
+   */
+
+  it("fails without a device id, before asking anything", async () => {
+    const { models } = piOwnedModelAccess({ agentDir });
+    const steps = declineSteps();
+
+    await expect(
+      piSignIn(models).login("openai", "oauth", new AbortController().signal, steps),
+    ).rejects.toThrow("requires a device ID");
+    expect(steps.said).toEqual([]);
+  });
+
+  it("sends the installation's id as the agent host id", async () => {
+    const { models } = piOwnedModelAccess({ agentDir });
+    const steps = declineSteps();
+    const deviceId = "6F1C1A52-6A8E-4D55-9C3E-2F8F0F1D3B7A";
+
+    await expect(
+      piSignIn(models, { deviceId: () => deviceId }).login(
+        "openai",
+        "oauth",
+        new AbortController().signal,
+        steps,
+      ),
+    ).rejects.toThrow();
+    const opened = steps.said.find(
+      (event): event is { kind: "auth-url"; url: string } =>
+        (event as { kind?: string }).kind === "auth-url",
+    );
+    expect(new URL(opened!.url).searchParams.get("ext_agent_host_id")).toBe(
+      `urn:uuid:${deviceId.toLowerCase()}`,
+    );
+  });
+});
+
 describe("what the shipped providers actually ask for", () => {
   /**
    * The doc's open question, answered here so it cannot rot: every OAuth flow

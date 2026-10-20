@@ -1,36 +1,61 @@
+import { pageClientEventSink } from "./client-event-sink";
+import { assertRendererAppStateKey } from "./app-state-key-guard";
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { shell } from "electron";
-import type Database from "better-sqlite3";
-import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import {
-  parseSkillModes,
-  derivePrefix,
-  errorMessage,
-  validateAuthorityPolicyOverride,
-  LEGACY_BACKUP_APP_STATE_KEY,
-  PROJECT_COLORS,
-  sanitizeLegacyProjects,
-  USER_ACTOR,
-  validateUniquePrefix,
-  WORKTREE_MISSING_ON_DISK,
-} from "@volli/shared";
-import { attachBlob, sessionLinkBudgetRefusal } from "./blob-attach";
-import {
+  withTransaction,
   createBlobLink,
   deleteBlobLink,
   listLinkViews,
   listMaterializableLinks,
-} from "./db/blobs-repo";
+  listMcpOperations,
+  getAllAppState,
+  setAppState,
+  MIN_READER_VERSION_KEY,
+  listAllLabels,
+  countProjects,
+  getProjectById,
+  insertProject,
+  listProjects,
+  updateProjectAuthorityPolicy,
+  readSessionUnread,
+  writeSessionUnread,
+  prepared,
+  getTicketRow,
+  listAllTickets,
+  listWorktreePaths,
+  setTicketRetentionKeep,
+} from "@volli/host-core/db";
+import { statSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { shell } from "electron";
+import type Database from "better-sqlite3";
+import type { DbHandle } from "@volli/host-core";
+import { type DetachedWorkPort, createProject, relinkProject } from "@volli/host-core/board";
+import {
+  type HostMaintenance,
+  invalidateOrphanScan,
+  orphanScanReport,
+  resolveCleanupPlan,
+  getRetentionWatcher,
+} from "@volli/host-core/maintenance";
+import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
+import {
+  errorMessage,
+  validateAuthorityPolicyOverride,
+  LEGACY_BACKUP_APP_STATE_KEY,
+  sanitizeLegacyProjects,
+  WORKTREE_MISSING_ON_DISK,
+} from "@volli/shared";
+import { attachBlob, sessionLinkBudgetRefusal } from "@volli/host-core/files";
 
 import { DATA_CHANNELS, DATA_IPC } from "./ipc-descriptors";
-import type { AutoTitleRequest } from "./session-runtime/auto-title";
-import { listMcpOperations } from "./db/mcp-operations-repo";
-import { McpSettingsService } from "./mcp/settings";
-import { stopSessionById, SuperviseSessionError } from "./session-runtime/supervise-session";
-import type { StopSessionByIdPorts } from "./session-runtime/supervise-session";
-import type { AuthorityPolicyOverride, Label, Project, Ticket, TicketStatus } from "@volli/shared";
+import {
+  type AutoTitleRequest,
+  removeTicketToolOutput,
+  type StopSessionByIdPorts,
+} from "@volli/host-core/session-runtime";
+import { McpSettingsService } from "@volli/host-core/integrations";
+import type { AuthorityPolicyOverride, Label, Ticket } from "@volli/shared";
 import type {
   AppStateSetResult,
   ArchivedTicketsResult,
@@ -60,12 +85,17 @@ import type {
   McpServerInput,
   McpSetEnabledInput,
   McpSetToolsInput,
+  McpSignInInput,
+  McpSignInResult,
   ProjectAuthorityPolicyInput,
   ProjectAuthorityPolicyResult,
   ProjectCreateInput,
   ProjectCreateResult,
+  ProjectFolderResult,
   ProjectIdInput,
   ProjectMutationResult,
+  ProjectRelinkInput,
+  ProjectRelinkResult,
   ProjectSessionDefaultsInput,
   ProjectSkillModesInput,
   ProjectUpdateInput,
@@ -79,10 +109,12 @@ import type {
   RetentionStateResult,
   RetentionTtlResult,
   RetentionTtlSetInput,
+  SessionPeekContentInput,
+  SessionPeekContentResult,
+  SessionReadSetInput,
+  SessionReadSetResult,
   SessionRenameInput,
   SessionRenameResult,
-  SessionStopInput,
-  SessionStopResult,
   SessionsResult,
   SessionStartsInput,
   SessionStartsResult,
@@ -96,7 +128,6 @@ import type {
   TicketEventsResult,
   TicketIdInput,
   TicketLatestSignalsResult,
-  TicketMovedNotice,
   TicketMoveRequest,
   TicketResult,
   TicketSetLabelsInput,
@@ -130,60 +161,22 @@ import type {
   VenueSnapshotInput,
   VenueSnapshotResult,
 } from "../ipc/contract";
-import { getAllAppState, setAppState } from "./db/app-state-repo";
-import { deleteComment, getComment, listComments, updateComment } from "./db/comments-repo";
-import { listTicketEvents, listTicketStatusEntries } from "./db/events-repo";
-import { listAllLabels, listLabelsByProject, setLabelColor } from "./db/labels-repo";
-import {
-  countProjects,
-  deleteProject,
-  findProjectByPath,
-  getProjectById,
-  insertProject,
-  listProjects,
-  nextSortOrder,
-  reorderProjects,
-  updateProjectAuthorityPolicy,
-  updateProjectBaseBranch,
-  updateProjectSessionDefaults,
-  updateProjectSetupCommand,
-  updateProjectSkillModes,
-} from "./db/projects-repo";
 /**
  * Both listing channels build their rows through one roster-shaped read
  * (VC-131, VC-392). The provenance question lives beside the other Session read
  * models rather than here, so this handler stays dumb transport and the
  * performance harness can measure the same function the handler calls.
  */
-import { createDesktopSessionEngine, sessionListingRowsForRoster } from "./session-control";
-import { prepared } from "./db/prepared";
 import {
-  getTicket,
-  getTicketBody,
-  getTicketRow,
-  listAllTickets,
-  listArchivedTicketsByProject,
-  listTicketRosterByProject,
-  listWorktreePaths,
-  setTicketRetentionKeep,
-} from "./db/tickets-repo";
-import {
-  archiveTicketCommand,
-  createTicketCommand,
-  createTicketCommentCommand,
-  deleteTicketCommand,
-  interruptOnBackwardMove,
-  moveTicketCommand,
-  moveTicketsCommand,
-  setTicketLabelsCommand,
-  setTicketPriorityCommand,
-  unarchiveTicketCommand,
-  updateTicketFieldsCommand,
-} from "./ticket-commands";
-import { detectProjectBaseBranch } from "./project-base-branch";
-import { broadcastDataChanged } from "./broadcast";
-import { withTicketWake } from "./ticket-wake";
-import { invalidateOrphanScan, orphanScanReport, resolveCleanupPlan } from "./orphan-scan";
+  projectSessionListing,
+  publishSessionListingRow,
+  readSessionPeekContent,
+  ticketSessionListing,
+  type SessionListingSources,
+  type SessionPeekContentPorts,
+} from "@volli/host-core/sessions";
+import { broadcastDataChanged, broadcastSessionActivity, windowEventBus } from "./broadcast";
+import { deliverNotification } from "./notifications/runtime";
 import { exportDatabase } from "./menu";
 import {
   acquireDeletionLease,
@@ -206,31 +199,53 @@ import {
   readWorktreeDiff,
   readWorktreeStatus,
   resolveWorktreeTarget,
-  getTrimSettings,
   remove as removeWorktree,
   runNet,
   scanTrimTargets,
   setRetentionTtlDays,
   setTrimSettings,
   trimAllWorktrees,
-  trimFinishedWorktree,
   WorktreeChangeWatchManager,
-} from "./worktree";
-import { createCoalescer, RAIL_READ_SHARE_WINDOW_MS } from "./worktree/coalesce";
-import { getWorktreeSnapshots } from "./worktree/snapshot";
-import { credentialHelperIssues } from "./credential-helper-diagnostics";
-import { getRetentionWatcher } from "./retention-runtime";
-import {
+  createCoalescer,
+  RAIL_READ_SHARE_WINDOW_MS,
+  getWorktreeSnapshots,
+  credentialHelperIssues,
   canonicalize as canonicalizeWorktreePath,
   isInside as isInsideWorktreeHome,
-} from "./worktree/paths";
-import { isOwnedWorktreePath, ownedContainers } from "./worktree/containers";
-import { orphanCleanupEngine, worktreeDeps, worktreeHomeDir } from "./worktree-runtime";
+  isOwnedWorktreePath,
+  ownedContainers,
+  orphanCleanupEngine,
+  runGitCapturing,
+  worktreeHomeDir,
+} from "@volli/host-core/worktree";
+import { worktreeDeps } from "./worktree-host";
+import {
+  DESKTOP_WINDOW_POLICY,
+  invokeHandler,
+  type HostHandlerMap,
+  type HostHandlers,
+} from "@volli/host-core/handlers";
+
+/**
+ * The handler keys this channel table projects: the board's (VC-565), the
+ * move (VC-668) and the project's removal (VC-796).
+ */
+type BoardChannelKey =
+  | "ticket.move"
+  | "project.remove"
+  | Extract<keyof HostHandlers, `board.${string}`>;
+import type { HandlerCall } from "@volli/shared";
+
+/** The person at this desktop's own window, whose reply carries the board. */
+const DESKTOP_WINDOW_CALL: HandlerCall = { actor: { kind: "user" }, origin: "desktop-window" };
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
+import { hostLogger } from "@volli/host-core/log";
 
-/** The result of the main-process open+migrate attempt (`src/main/index.ts`), fed into {@link registerDataIpcHandlers}. */
-export type DbHandle = { ok: true; db: Database.Database } | { ok: false; error: string };
+const log = hostLogger("data-ipc");
+
+/** The result of the host's open+migrate attempt (`createHostCore`), fed into {@link registerDataIpcHandlers}. */
+export type { DbHandle };
 
 /**
  * The live SQLite database is its main file plus WAL-mode sidecars. A WAL
@@ -244,12 +259,6 @@ function databaseStorageBytes(dbPath: string): number {
     sizeBytes += statSync(`${dbPath}${suffix}`, { throwIfNoEntry: false })?.size ?? 0;
   }
   return sizeBytes;
-}
-
-function recordInterruptFailure(error: unknown): void {
-  console.error(
-    `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
-  );
 }
 
 // ---- bootstrap payload --------------------------------------------------
@@ -279,12 +288,10 @@ function buildBootstrapPayload(db: Database.Database): BootstrapPayload {
     ticketsByProject[project.id] = [];
     labelsByProject[project.id] = [];
   }
-  for (const ticket of listAllTickets(db)) {
-    (ticketsByProject[ticket.projectId] ??= []).push(ticket);
-  }
-  for (const label of listAllLabels(db)) {
-    (labelsByProject[label.projectId] ??= []).push(label);
-  }
+  // Only the projects on the rail: a removed project is detached, not deleted
+  // (VC-822), and its tickets and labels stay out of every window with it.
+  for (const ticket of listAllTickets(db)) ticketsByProject[ticket.projectId]?.push(ticket);
+  for (const label of listAllLabels(db)) labelsByProject[label.projectId]?.push(label);
 
   return { projects, ticketsByProject, labelsByProject, appState };
 }
@@ -305,85 +312,6 @@ export type { BusyWorktreeSite };
  * the hooks) stays terminal-only on purpose and never reaches here.
  */
 
-/**
- * Tickets whose worktree is being materialized RIGHT NOW (VC-98).
- *
- * `ensure` is git work measured in seconds, and the rail control that starts it
- * is the same one that can switch scope straight back off. That switch-off used
- * to be permitted mid-flight: `updateTicketFieldsCommand` freezes scope only
- * once `worktree_path` is stamped, and the stamp lands at the END of `ensure`.
- * So the off-write committed against a still-null path, `ensure` then stamped a
- * worktree onto a ticket that had just been scoped to the main checkout, and
- * the freeze made the contradiction PERMANENT — `uses_worktree` 0 beside a real
- * worktree on disk, with the destination control gone and no way back through
- * the UI. Holding the ticket here for the duration closes that window.
- */
-const materializingWorktrees = new Set<string>();
-
-/**
- * Materializes the worktree of a ticket that was just switched INTO worktree
- * scope (VC-98).
- *
- * `ensure` had exactly two callers, both Session boots, so switching scope on
- * for a ticket whose Session already existed recorded `usesWorktree: true` and
- * then had nothing create the checkout. Everything downstream believed the
- * flag: the board showed the ticket as isolated, `volli worktree status`
- * reported no worktree, and the agent already running went on writing to the
- * main checkout. Scope is now a promise this keeps.
- *
- * Deliberately NOT inside `updateTicketFieldsCommand`'s transaction: `ensure`
- * is git work, and no DB write may straddle it (ensure.ts). The flag is the
- * user's recorded intent and stands committed whatever git does next — which
- * is safe, because a ticket left worktree-scoped with no worktree refuses to
- * bind a Session anywhere else (`prepare`, #38) rather than quietly falling
- * back to the main checkout.
- *
- * Live Session bindings are left exactly where they are. A binding is fixed at
- * attach and re-pointing one under a running agent would move its working
- * directory mid-turn; the next attach picks up the materialized worktree on
- * its own, and `volli identify` warns any agent still standing outside it.
- */
-async function materializeSwitchedOnWorktree(
-  db: Database.Database,
-  ticketId: string,
-  committed: Ticket,
-): Promise<TicketResult> {
-  // Held across the whole await so a concurrent scope-off is refused rather
-  // than racing the identity stamp; released in `finally` so a throw cannot
-  // strand the ticket un-switchable forever.
-  materializingWorktrees.add(ticketId);
-  const outcome = await ensure(worktreeDeps(db), ticketId).finally(() => {
-    materializingWorktrees.delete(ticketId);
-  });
-  // A checkout appeared (or the attempt left one half-made): a last-known
-  // snapshot taken while the ticket had no worktree cannot describe it (VC-372).
-  getWorktreeSnapshots().invalidate(ticketId);
-  // Broadcast on BOTH outcomes, and before the answer on purpose. Success has a
-  // new identity stamp to show. Failure has a scope flag that really did change
-  // under a renderer that is about to revert it optimistically off the back of
-  // the error below — and the re-hydrate is what puts the true value back.
-  //
-  // It lands last because it is COARSER, not because it is queued first. That
-  // used to be an ordering argument — sent before the reply, so a round-trip
-  // could not outrun a message already on the wire — and the frame-window
-  // coalescer in `broadcast.ts` retired it: the invalidation now leaves up to
-  // 8ms after the reply, so the optimistic revert wins that race. The outcome is
-  // unchanged because the re-hydrate is a full SQLite bootstrap and the revert
-  // is one field: whichever order they arrive in, the bootstrap is the last word
-  // on that field. Nothing here may be rewritten to depend on arriving first.
-  broadcastDataChanged({ ticketId, projectId: committed.projectId, kind: "worktree" });
-  if (!outcome.ok) {
-    // Surfaced as a failed mutation so it reaches a toast rather than living
-    // only in the phase stream (CLAUDE.md: never swallow a failed mutation).
-    // The ticket stays worktree-scoped with no worktree, which is a state the
-    // app already knows how to be in — it is what every ticket looks like
-    // before its first Session — and the next session start retries `ensure`.
-    return { ok: false, error: `worktree scope is on, but ${outcome.error}` };
-  }
-  // Re-read: `ensure` stamped path/branch/base after `committed` was captured.
-  return { ok: true, ticket: getTicket(db, ticketId) ?? committed };
-}
-
 // ---- registration --------------------------------------------------------
 
 /**
@@ -398,7 +326,9 @@ async function materializeSwitchedOnWorktree(
 export function registerDataIpcHandlers(
   handle: DbHandle,
   options: {
-    detectBaseBranch?: (projectPath: string) => string | null;
+    detectBaseBranch?: (projectPath: string) => Promise<string | null>;
+    detachedWork?: DetachedWorkPort;
+    maintenance?: Pick<HostMaintenance, "retention" | "triggerRetention">;
     /**
      * Every directory a local execution surface is doing work in that could
      * block destroying `target`: the cwd of each live PTY, plus the worktree of
@@ -426,20 +356,16 @@ export function registerDataIpcHandlers(
      */
     releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
     /**
-     * Interrupts every live agent attachment of a ticket after a committed
-     * backward move. The manager records intent and confirmed Esc delivery in
-     * each Session ledger; it does not close the attachment or emit a planner
-     * lifecycle event. Absent (tests, degraded boot) means a no-op.
+     * The host's handler map (VC-668), as far as this legacy channel table
+     * still serves catalog commands: `volli:ticket-move` is the IPC projection
+     * of `handlers["ticket.move"]`, the one move every door reaches, its
+     * interrupts and armed arrival included, invoked under the desktop
+     * window's policy. VC-565 deletes the channel when the renderer moves onto
+     * the board router.
      */
-    interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
-    /**
-     * Reports a renderer move only after its status change committed. Main's
-     * pending-arrival coordinator is the production consumer; absent tests are
-     * a no-op.
-     */
-    onDeliberateMove?: (notice: TicketMovedNotice) => void;
+    handlers: HostHandlerMap;
     /** The app's single durable Session Engine. */
-    sessionEngine?: SessionEngine;
+    sessionEngine: SessionEngine | null;
     /**
      * The structured executor bindings this process holds right now. Session
      * attachments stay durably open across relaunch for lazy rehydration, so a
@@ -453,6 +379,8 @@ export function registerDataIpcHandlers(
      * boot) means the rename succeeds and nothing is refined.
      */
     autoTitle?: (input: AutoTitleRequest) => void;
+    /** Budgeted utility refinement, invoked only by the hover-peek content door. */
+    summarizePeek?: SessionPeekContentPorts["summarize"];
     /**
      * The live Session runtime's command door, for the person's stop
      * (VC-269): the interrupt and the release a stop performs after its
@@ -461,6 +389,14 @@ export function registerDataIpcHandlers(
      */
     sessionRuntime?: StopSessionByIdPorts["runtime"];
     /**
+     * Reads one durable transcript artifact, for the peek card's fold (VC-30).
+     * The same port `session peek` on the CLI socket is given, from the same
+     * store. Absent (tests, degraded boot) means a peek answers with its counts
+     * and no entries — honest about having no artifact store, rather than
+     * claiming a store looked and failed.
+     */
+    readTranscriptArtifact?: SessionPeekContentPorts["readArtifact"];
+    /**
      * The userData Blob-bytes root (VC-50). Absent in tests that never attach;
      * the attach handler is the only thing that reads it, and it fails honestly
      * rather than writing somewhere arbitrary.
@@ -468,7 +404,13 @@ export function registerDataIpcHandlers(
     blobsRoot?: string;
     /** Main-owned MCP settings/discovery service; injected in focused IPC tests. */
     mcpSettings?: McpSettingsService;
-  } = {},
+    /**
+     * Where Pi keeps its sidecars and the tool output saved beside them
+     * (VC-469). Archiving or deleting a ticket removes its Sessions' saved
+     * output. Absent (tests, degraded boot) means nothing is removed.
+     */
+    piSessionsDirectory?: string;
+  },
 ): void {
   if (!handle.ok) {
     registerDegradedIpcHandlers(DATA_CHANNELS, handle.error);
@@ -476,11 +418,25 @@ export function registerDataIpcHandlers(
   }
 
   const db = handle.db;
-  const sessionEngine = options.sessionEngine ?? createDesktopSessionEngine(db);
+  const sessionEngine = options.sessionEngine;
+  if (sessionEngine === null) throw new Error("Session Engine is unavailable");
   const liveAttachmentIds = (): ReadonlySet<string> =>
     new Set((options.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId));
+  const listingSources: SessionListingSources = {
+    db,
+    listSessions: (query) => sessionEngine.listSessions(query),
+    liveAttachmentIds,
+  };
   const blobsRootPath = options.blobsRoot ?? "";
   const mcpSettings = options.mcpSettings ?? new McpSettingsService({ db });
+  const retentionWatcher = () =>
+    options.maintenance?.retention ??
+    getRetentionWatcher(
+      db,
+      { events: windowEventBus, attention: { deliver: deliverNotification } },
+      () => worktreeDeps(db),
+    );
+
   const changeWatchManager = new WorktreeChangeWatchManager({
     // The rail's last-known snapshot (VC-372) listens to the same watch the
     // renderers do: coverage says whether an answer can be trusted at all, and
@@ -531,22 +487,32 @@ export function registerDataIpcHandlers(
     options.busyWorktreeSites === undefined ? {} : { busySites: options.busyWorktreeSites };
   const trimSweepDeps = () => ({ worktree: worktreeDeps(db), ...busySeam() });
 
-  const trimFinishedInBackground = (ticketId: string, projectId: string | undefined): void => {
-    void trimFinishedWorktree(
-      { worktree: worktreeDeps(db), now: () => Date.now(), ...busySeam() },
-      ticketId,
-    )
-      .then((outcome) => {
-        if (outcome.kind !== "trimmed") return;
-        // The checkout's contents moved under a ticket a rail may still be
-        // watching: its last-known snapshot is stale (VC-372).
-        getWorktreeSnapshots().invalidate(ticketId);
-        broadcastDataChanged({ ticketId, projectId, kind: "worktree" });
-      })
-      .catch((error: unknown) => {
-        console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
-      });
+  /**
+   * Drops a finished ticket's saved tool output (VC-469). Nobody asked for
+   * this and the archive or delete already happened, so a failure is logged
+   * rather than raised: the runtime's own bound still removes the files,
+   * oldest first, when room is needed.
+   */
+  const releaseTicketToolOutput = (ticketId: string): void => {
+    if (options.piSessionsDirectory === undefined) return;
+    try {
+      removeTicketToolOutput(db, options.piSessionsDirectory, ticketId);
+    } catch (error) {
+      log.warn("could not remove the ticket's saved tool output", { ticketId, error });
+    }
   };
+
+  /** One board command, as the desktop's own window asks it (VC-565, T13). */
+  const board = <Key extends BoardChannelKey>(
+    key: Key,
+    input: Parameters<HostHandlers[Key]>[0],
+  ): ReturnType<HostHandlers[Key]> =>
+    invokeHandler(
+      options.handlers,
+      DESKTOP_WINDOW_POLICY,
+      key,
+      ...([input, DESKTOP_WINDOW_CALL] as unknown as Parameters<HostHandlers[Key]>),
+    );
 
   const handlers: IpcHandlerTable<DataIpcChannel> = {
     "volli:data-bootstrap": (): BootstrapResult => {
@@ -565,14 +531,8 @@ export function registerDataIpcHandlers(
      * and hydrating that would clear a live slice off the board.
      */
     "volli:data-project-roster": (input: ProjectIdInput): ProjectRosterResult => {
-      if (getProjectById(db, input.projectId) === undefined) {
-        return { ok: false, error: "Unknown project" };
-      }
-      return {
-        ok: true,
-        tickets: listTicketRosterByProject(db, input.projectId),
-        labels: listLabelsByProject(db, input.projectId),
-      };
+      const { tickets, labels } = board("board.roster", { projectId: input.projectId });
+      return { ok: true, tickets, labels };
     },
 
     "volli:database": async (action?: DatabaseAction): Promise<DatabaseResult> => {
@@ -593,13 +553,14 @@ export function registerDataIpcHandlers(
     "volli:legacy-import": (request: LegacyImportRequest): LegacyImportResult => {
       // Idempotent-safe: only import into a genuinely empty projects
       // table; a second call (e.g. a relaunch racing the renderer) just
-      // hands back the current state instead of re-importing over it.
-      if (countProjects(db) > 0) {
+      // hands back the current state instead of re-importing over it. A
+      // removed project still holds its row (VC-822), so it counts here.
+      if (countProjects(db, "all") > 0) {
         return { ok: true, data: buildBootstrapPayload(db), imported: 0 };
       }
       const legacyProjects = sanitizeLegacyProjects(request.projects);
       const now = Date.now();
-      const run = db.transaction(() => {
+      withTransaction(db, () => {
         // Back up the raw source FIRST, in the same transaction: whatever
         // else happens, once this commits the untouched localStorage strings
         // live in SQLite, so boot can clear localStorage without ever making
@@ -620,92 +581,102 @@ export function registerDataIpcHandlers(
           });
         });
         for (const [key, value] of Object.entries(request.appState)) {
+          // Never the schema floor (VC-602): localStorage never held it, and a
+          // renderer-supplied value could lock builds out or let one in.
+          if (key === MIN_READER_VERSION_KEY) continue;
+          assertRendererAppStateKey(key);
           setAppState(db, key, value, now);
         }
       });
-      run();
       return { ok: true, data: buildBootstrapPayload(db), imported: legacyProjects.length };
     },
 
-    "volli:project-create": (input: ProjectCreateInput): ProjectCreateResult => {
-      const existing = findProjectByPath(db, input.path);
-      if (existing) {
-        return { ok: true, project: existing, created: false };
-      }
-      let stats;
-      try {
-        stats = statSync(input.path);
-      } catch {
-        return { ok: false, error: "Project path does not exist" };
-      }
-      if (!stats.isDirectory()) {
-        return { ok: false, error: "Project path is not a directory" };
-      }
-      const now = Date.now();
-      const ticketPrefix = derivePrefix(input.name);
-      const prefixValidation = validateUniquePrefix(ticketPrefix, listProjects(db));
-      if (!prefixValidation.ok) return { ok: false, error: prefixValidation.error };
-      const project: Project = {
-        id: randomUUID(),
-        name: input.name,
-        path: input.path,
-        ticketPrefix,
-        baseBranch: (options.detectBaseBranch ?? detectProjectBaseBranch)(input.path),
-        colorIndex: countProjects(db) % PROJECT_COLORS.length,
-        sortOrder: nextSortOrder(db),
-        createdAt: now,
-        updatedAt: now,
-      };
-      insertProject(db, project);
-      return { ok: true, project, created: true };
-    },
+    // The rules live in host-core (VC-623), shared with the operator's
+    // `volli project add` on a headless host: one validation, every door.
+    // A registration is announced (VC-822): adding a removed project's folder
+    // again brings back its board, which a window only reads on a change.
+    "volli:project-create": (input: ProjectCreateInput): Promise<ProjectCreateResult> =>
+      createProject(
+        {
+          db,
+          detectBaseBranch: options.detectBaseBranch,
+          onCreated: (project) => broadcastDataChanged({ projectId: project.id }),
+        },
+        input,
+      ),
 
-    "volli:project-remove": (id: string): ProjectMutationResult => {
-      deleteProject(db, id);
-      return { ok: true };
-    },
+    /**
+     * Whether one project's registered folder is still there (VC-430) — the
+     * read the recovery path hangs off. Cheap by construction: one row and one
+     * `stat`, so a surface may ask it whenever a project comes into view. The
+     * `stat` is awaited rather than blocking: a folder on an unmounted volume
+     * is exactly the case this channel exists for, and exactly the case where a
+     * synchronous read freezes the window.
+     */
+    "volli:project-folder-check": async (input: ProjectIdInput): Promise<ProjectFolderResult> => ({
+      ok: true,
+      ...(await board("board.projectFolder", { projectId: input.projectId })),
+    }),
 
-    "volli:project-update": (input: ProjectUpdateInput): ProjectUpdateResult => {
-      const now = Date.now();
-      let project = updateProjectBaseBranch(db, input.id, input.baseBranch, now);
-      if (!project) return { ok: false, error: "Unknown project" };
-      if (input.setupCommand !== undefined) {
-        // Same trim-to-null-on-empty semantics as the ticket-update worktree
-        // identity fields: an empty command means "skip the setup step".
-        const trimmed = input.setupCommand === null ? null : input.setupCommand.trim();
-        const normalized = trimmed === "" ? null : trimmed;
-        project = updateProjectSetupCommand(db, input.id, normalized, now);
-        if (!project) return { ok: false, error: "Unknown project" };
-      }
-      return { ok: true, project };
+    /**
+     * Points an existing project at the folder it moved to (VC-430).
+     *
+     * The whole judgement lives in `relinkProject`, including the refusal that
+     * matters most: a folder another project already tracks is never taken,
+     * because the alternative a person reaches for — adding the new folder —
+     * is exactly what mints the duplicate this channel exists to avoid.
+     *
+     * `busyWorktreeSites` is threaded through so the answer can warn about
+     * Sessions still running in the folder being left; it is the same supplier
+     * the destructive worktree paths ask, because "what is live in this
+     * directory" must have one answer in this process.
+     */
+    "volli:project-relink": async (input: ProjectRelinkInput): Promise<ProjectRelinkResult> => {
+      const outcome = await relinkProject(
+        { db, busyWorktreeSites: options.busyWorktreeSites },
+        { projectId: input.id, path: input.path },
+      );
+      if (!outcome.ok) return outcome;
+      // Every surface that reads a project path has to re-read: the rail, the
+      // file browsers, Configure, and the renderer's own root allowlist mirror.
+      broadcastDataChanged({ projectId: outcome.project.id });
+      return { ok: true, project: outcome.project, aftermath: outcome.aftermath };
     },
 
     /**
-     * Replaces this project's per-skill rules (VC-111). The whole map, because
-     * the surface holds every switch at once — see `ProjectSkillModesInput`.
-     * `updateProjectSkillModes` normalises, so an unknown mode or unspellable
-     * slug that somehow cleared the guard still cannot reach the column.
+     * The window's projection of the host's removal (VC-796): the project's
+     * live work stopped, then the project detached with its tickets and
+     * Sessions kept (VC-822), its feed ended and every window told. The
+     * renderer keeps only its own views' forgetting.
      */
-    "volli:project-skill-modes": (input: ProjectSkillModesInput): ProjectUpdateResult => {
-      const project = updateProjectSkillModes(
-        db,
-        input.id,
-        parseSkillModes(input.modes),
-        Date.now(),
-      );
-      if (!project) return { ok: false, error: "Unknown project" };
+    "volli:project-remove": async (id: string): Promise<ProjectMutationResult> => {
+      await board("project.remove", { projectId: id });
+      return { ok: true };
+    },
+
+    // The board's own commands (VC-565, T13): each channel is the desktop
+    // window's projection of one handler, which owns the write, its wakes,
+    // its feed rows and any announcement. These replies carry the row, so
+    // the handler echoes the window no `data-changed` (VC-668).
+    "volli:project-update": (input: ProjectUpdateInput): ProjectUpdateResult => {
+      const { project } = board("board.updateProject", {
+        projectId: input.id,
+        baseBranch: input.baseBranch,
+        ...(input.setupCommand === undefined ? {} : { setupCommand: input.setupCommand }),
+      });
       return { ok: true, project };
     },
 
-    /** Replaces this project's Chat model default (VC-111). */
+    "volli:project-skill-modes": (input: ProjectSkillModesInput): ProjectUpdateResult => {
+      const { project } = board("board.setSkillModes", { projectId: input.id, modes: input.modes });
+      return { ok: true, project };
+    },
+
     "volli:project-session-defaults": (input: ProjectSessionDefaultsInput): ProjectUpdateResult => {
-      const project = updateProjectSessionDefaults(
-        db,
-        input.id,
-        { model: input.model },
-        Date.now(),
-      );
-      if (!project) return { ok: false, error: "Unknown project" };
+      const { project } = board("board.setSessionDefaults", {
+        projectId: input.id,
+        model: input.model,
+      });
       return { ok: true, project };
     },
 
@@ -750,6 +721,7 @@ export function registerDataIpcHandlers(
       ok: true as const,
       servers: mcpSettings.list(input.projectId),
       operations: listMcpOperations(db, input.projectId),
+      access: mcpSettings.accessFor(input.projectId),
     }),
     "volli:mcp-test": (input: McpServerInput) => mcpSettings.test(input),
     "volli:mcp-save": (input: McpSaveInput) => mcpSettings.save(input),
@@ -757,308 +729,128 @@ export function registerDataIpcHandlers(
     "volli:mcp-set-enabled": (input: McpSetEnabledInput) => mcpSettings.setEnabled(input),
     "volli:mcp-set-tools": (input: McpSetToolsInput) => mcpSettings.setTools(input),
     "volli:mcp-remove": (input: McpServerIdInput) => mcpSettings.remove(input),
-
-    "volli:project-reorder": (orderedIds: string[]): ProjectMutationResult => {
-      reorderProjects(db, orderedIds, Date.now());
-      return { ok: true };
-    },
-
-    // Every ticket write below announces what it committed on the ticket wake
-    // bus (VC-85). The renderer door has to feed it for the same reason the
-    // agent door does: a waiter cares that a ticket moved, not who moved it,
-    // and a person dragging a card is a legitimate wake. `broadcastDataChanged`
-    // is untouched — the bus is additive, and a UI refresh and an agent wake
-    // are different needs that only look alike today.
-    "volli:ticket-create": (input: TicketCreateInput): TicketResult => {
-      const now = Date.now();
-      const ticketId = randomUUID();
-      return {
-        ok: true,
-        ticket: withTicketWake(db, ticketId, () =>
-          createTicketCommand(
-            db,
-            {
-              id: ticketId,
-              projectId: input.projectId,
-              title: input.title,
-              status: input.status,
-              priority: input.priority,
-              body: input.body,
-              labels: input.labels,
-              usesWorktree: input.usesWorktree,
-              preferredHarnessId: input.preferredHarnessId,
-              baseBranch: input.baseBranch,
-            },
-            { now, actor: { kind: "user" } },
-          ),
-        ),
-      };
-    },
-
-    "volli:ticket-move": (input: TicketMoveRequest): TicketsResult | Promise<TicketsResult> => {
-      const now = Date.now();
-      const actor = { kind: "user" } as const;
-      const ticketIds = "ticketIds" in input ? [...new Set(input.ticketIds)] : [input.ticketId];
-      // Snapshot every pre-move row BEFORE the atomic move. Both the armed
-      // arrival and backward interrupt are derived from durable truth, never
-      // renderer state.
-      const before = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
-
-      // One post-commit wake scope per selected ticket. Nesting is intentional:
-      // every mark is taken before the command, and every finally emits only
-      // after the command's one transaction has committed.
-      const runMove = () =>
-        "ticketIds" in input
-          ? moveTicketsCommand(db, input, { now, actor })
-          : moveTicketCommand(db, input, { now, actor });
-      const tickets = ticketIds.reduceRight<() => Ticket[]>(
-        (write, ticketId) => () => withTicketWake(db, ticketId, write),
-        runMove,
-      )();
-
-      const after = new Map(ticketIds.map((ticketId) => [ticketId, getTicketRow(db, ticketId)]));
-
-      // VC-340: a ticket that just landed in Done gives up its worktree's
-      // git-ignored content NOW rather than whenever the 60s retention poll next
-      // runs. Same act, same refusals, same durable event — the poll remains the
-      // backfill for everything already finished before this door existed.
-      for (const ticketId of ticketIds) {
-        const moved = after.get(ticketId);
-        if (moved === undefined || moved.status !== "done") continue;
-        if (before.get(ticketId)?.status === "done") continue;
-        trimFinishedInBackground(ticketId, moved.project_id);
-      }
-      // Main owns armed-column arrivals. A group drop is one deliberate move
-      // per selected Ticket, so every real column change reports independently
-      // with the same Option-drag choice.
-      for (const ticketId of ticketIds) {
-        const prior = before.get(ticketId);
-        const moved = after.get(ticketId);
-        if (
-          prior === undefined ||
-          moved === undefined ||
-          prior.status === moved.status ||
-          moved.status !== input.toStatus
-        ) {
-          continue;
-        }
-        try {
-          options.onDeliberateMove?.({
-            projectId: moved.project_id,
-            ticketId,
-            from: prior.status as TicketStatus,
-            to: input.toStatus,
-            ...(input.choice === undefined ? {} : { choice: input.choice }),
-          });
-        } catch (error) {
-          // The board transaction already committed. A pending-projection
-          // failure is evidence to log, not grounds to roll the move back.
-          console.error(
-            `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
-          );
-        }
-      }
-
-      // Interrupt all affected Sessions in parallel. A delivery failure cannot
-      // roll the already-committed board transaction back; it remains
-      // operational evidence rather than turning a successful move into a lie.
-      const pending: Promise<string[]>[] = [];
-      for (const ticketId of ticketIds) {
-        const row = before.get(ticketId);
-        const moved = after.get(ticketId);
-        if (
-          row === undefined ||
-          moved === undefined ||
-          moved.project_id !== input.projectId ||
-          row.status === moved.status ||
-          moved.status !== input.toStatus
-        ) {
-          continue;
-        }
-        try {
-          const interrupt = interruptOnBackwardMove(
-            {
-              ticketId,
-              fromStatus: row.status as TicketStatus,
-              toStatus: input.toStatus,
-            },
-            options.interruptTicketSessions,
-          );
-          if (interrupt instanceof Promise) pending.push(interrupt);
-        } catch (error) {
-          recordInterruptFailure(error);
-        }
-      }
-      if (pending.length === 0) return { ok: true, tickets };
-      return Promise.allSettled(pending).then((results) => {
-        for (const result of results) {
-          if (result.status === "rejected") recordInterruptFailure(result.reason);
-        }
-        return { ok: true, tickets };
+    // A sign-in waits on the person's browser for up to five minutes. It is
+    // not tied to this request: the pane's Cancel stops it for everyone
+    // waiting on it, an agent's question included.
+    "volli:mcp-sign-in": async (input: McpSignInInput): Promise<McpSignInResult> => {
+      // Only the fields a renderer may set: nothing it sends can stand in for
+      // the cancellation main owns.
+      const outcome = await mcpSettings.signIn({
+        projectId: input.projectId,
+        ...(input.serverId === undefined ? {} : { serverId: input.serverId }),
+        ...(input.server === undefined ? {} : { server: input.server }),
+        ...(input.secrets === undefined ? {} : { secrets: input.secrets }),
       });
+      return outcome.ok
+        ? { ok: true, message: outcome.message }
+        : { ok: false, cancelled: outcome.cancelled, error: outcome.message };
+    },
+    "volli:mcp-cancel-sign-in": (input: McpServerIdInput) => mcpSettings.cancelSignIn(input),
+    "volli:mcp-sign-out": (input: McpServerIdInput) => mcpSettings.signOut(input),
+    "volli:mcp-discard-draft": (input: McpServerIdInput) => mcpSettings.discardDraft(input),
+
+    "volli:ticket-create": (input: TicketCreateInput): TicketResult => ({
+      ok: true,
+      ticket: board("board.createTicket", input).ticket,
+    }),
+
+    // The desktop window's projection of the host's move, admitted by the
+    // desktop window's policy before the handler runs (synchronously, so the
+    // reply stays synchronous where the move's is). The reply carries the
+    // committed board, so the handler echoes it no board change.
+    "volli:ticket-move": (input: TicketMoveRequest): TicketsResult | Promise<TicketsResult> => {
+      const moved = board("ticket.move", input);
+      return moved instanceof Promise
+        ? moved.then((tickets) => ({ ok: true, tickets }))
+        : { ok: true, tickets: moved };
     },
 
-    "volli:ticket-set-priority": (input: TicketSetPriorityInput): TicketResult => {
-      const now = Date.now();
-      return {
-        ok: true,
-        ticket: withTicketWake(db, input.ticketId, () =>
-          setTicketPriorityCommand(db, input, { now, actor: { kind: "user" } }),
-        ),
-      };
-    },
+    "volli:ticket-set-priority": (input: TicketSetPriorityInput): TicketResult => ({
+      ok: true,
+      ticket: board("board.setPriority", input).ticket,
+    }),
 
+    // Switching a ticket into worktree scope makes its checkout before it
+    // answers (VC-98), so that one transition is asynchronous; every other
+    // update stays the synchronous write it has always been.
     "volli:ticket-update": (input: TicketUpdateInput): TicketResult | Promise<TicketResult> => {
-      const now = Date.now();
-      // The one write that can race the `ensure` a previous call is still
-      // running: switching scope back OFF before the identity stamp lands.
-      // Refused rather than queued — the user is asking to undo something that
-      // is already half-done on disk, and the honest answer is to say so while
-      // it finishes. Re-asserting `true` is a no-op and passes through.
-      if (input.usesWorktree === false && materializingWorktrees.has(input.ticketId)) {
-        return {
-          ok: false,
-          error:
-            "The ticket's worktree is still being created, so its worktree scoping can't change yet. Try again once it's ready.",
-        };
-      }
-      // Read BEFORE the write: the returned ticket shows scope as it now stands,
-      // which cannot tell "just switched on" from "was already on" — and only
-      // the transition materializes.
-      const before = getTicketRow(db, input.ticketId);
-      const ticket = withTicketWake(db, input.ticketId, () =>
-        updateTicketFieldsCommand(db, input, { now, actor: { kind: "user" } }),
-      );
-      // Only the one transition goes async. Every other update — a title, a
-      // body, a branch stamp — stays the synchronous write it has always been,
-      // the same split `volli:ticket-move` makes for its interrupt side effect.
-      const switchedOn =
-        before !== undefined && before.uses_worktree === 0 && ticket.usesWorktree === true;
-      if (switchedOn) return materializeSwitchedOnWorktree(db, input.ticketId, ticket);
-      // Switching OFF moves the ticket's Session destination too — from "an
-      // isolated worktree, not yet made" to the main checkout — with nothing
-      // async behind it. The same `worktree` broadcast the switch-on makes is
-      // what lets a ticket venue reader (the empty chat) stop waiting on a
-      // checkout that will never arrive and measure the one it now binds
-      // (VC-286). Only the transition broadcasts: re-asserting `false` moved
-      // nothing.
-      const switchedOff =
-        before !== undefined && before.uses_worktree !== 0 && ticket.usesWorktree === false;
-      if (switchedOff) {
-        broadcastDataChanged({
-          ticketId: input.ticketId,
-          projectId: ticket.projectId,
-          kind: "worktree",
-        });
-      }
-      return { ok: true, ticket };
+      const updated = board("board.updateTicket", input);
+      return updated instanceof Promise
+        ? updated.then(({ ticket }) => ({ ok: true, ticket }))
+        : { ok: true, ticket: updated.ticket };
     },
 
-    "volli:ticket-set-labels": (input: TicketSetLabelsInput): TicketResult => {
-      const now = Date.now();
-      return {
-        ok: true,
-        ticket: withTicketWake(db, input.ticketId, () =>
-          setTicketLabelsCommand(db, input, { now, actor: { kind: "user" } }),
-        ),
-      };
-    },
+    "volli:ticket-set-labels": (input: TicketSetLabelsInput): TicketResult => ({
+      ok: true,
+      ticket: board("board.setLabels", input).ticket,
+    }),
 
     "volli:ticket-archive": (input: TicketIdInput): Result => {
-      const now = Date.now();
-      const ticket = getTicketRow(db, input.ticketId);
-      withTicketWake(db, input.ticketId, () =>
-        archiveTicketCommand(db, input.ticketId, { now, actor: { kind: "user" } }),
-      );
-      // An archive KEEPS the checkout, which makes an archived ticket the
-      // longest-lived carrier of a dead dependency tree in the app (VC-340).
-      trimFinishedInBackground(input.ticketId, ticket?.project_id);
+      board("board.archiveTicket", { ticketId: input.ticketId });
       return { ok: true };
     },
 
-    "volli:ticket-unarchive": (input: TicketIdInput): TicketResult => {
-      const ticket = withTicketWake(db, input.ticketId, () =>
-        unarchiveTicketCommand(db, input.ticketId, {
-          now: Date.now(),
-          actor: { kind: "user" },
-        }),
-      );
-      return { ok: true, ticket };
-    },
+    "volli:ticket-unarchive": (input: TicketIdInput): TicketResult => ({
+      ok: true,
+      ticket: board("board.unarchiveTicket", { ticketId: input.ticketId }).ticket,
+    }),
 
     "volli:ticket-delete": (input: TicketIdInput): Result => {
-      deleteTicketCommand(db, input.ticketId);
+      board("board.deleteTicket", { ticketId: input.ticketId });
       return { ok: true };
     },
 
-    "volli:ticket-list-archived": (projectId: string): ArchivedTicketsResult => {
-      return { ok: true, tickets: listArchivedTicketsByProject(db, projectId) };
-    },
+    "volli:ticket-list-archived": (projectId: string): ArchivedTicketsResult => ({
+      ok: true,
+      tickets: board("board.archivedTickets", { projectId }),
+    }),
 
-    "volli:ticket-events": (input: TicketIdInput): TicketEventsResult => {
-      return { ok: true, events: listTicketEvents(db, input.ticketId) };
-    },
+    "volli:ticket-events": (input: TicketIdInput): TicketEventsResult => ({
+      ok: true,
+      events: board("board.ticketEvents", { ticketId: input.ticketId }),
+    }),
 
     /**
      * One ticket's body — what the refresh roster stopped carrying (VC-387).
      * Read by the ticket that is OPEN, on arrival and on each planning change
      * that names it, which is the only place a body is ever rendered.
      */
-    "volli:ticket-body": (input: TicketIdInput): TicketBodyResult => {
-      const body = getTicketBody(db, input.ticketId);
-      if (body === undefined) return { ok: false, error: "Unknown ticket" };
-      return { ok: true, body };
-    },
+    "volli:ticket-body": (input: TicketIdInput): TicketBodyResult => ({
+      ok: true,
+      body: board("board.ticketBody", { ticketId: input.ticketId }).body,
+    }),
 
     "volli:ticket-latest-signals": async (
       input: ProjectIdInput,
-    ): Promise<TicketLatestSignalsResult> => {
-      return {
-        ok: true,
-        signals: [...(await sessionEngine.listLatestTicketSignals({ projectId: input.projectId }))],
-      };
-    },
+    ): Promise<TicketLatestSignalsResult> => ({
+      ok: true,
+      signals: [...(await board("board.latestSignals", { projectId: input.projectId }))],
+    }),
 
-    "volli:ticket-status-entries": (input: ProjectIdInput): TicketStatusEntriesResult => {
-      return { ok: true, entries: listTicketStatusEntries(db, input.projectId) };
-    },
+    "volli:ticket-status-entries": (input: ProjectIdInput): TicketStatusEntriesResult => ({
+      ok: true,
+      entries: board("board.statusEntries", { projectId: input.projectId }),
+    }),
 
-    "volli:comment-list": (input: TicketIdInput): TicketCommentsResult => {
-      return { ok: true, comments: listComments(db, input.ticketId) };
-    },
+    "volli:comment-list": (input: TicketIdInput): TicketCommentsResult => ({
+      ok: true,
+      comments: board("board.comments", { ticketId: input.ticketId }),
+    }),
 
-    "volli:comment-create": (input: CommentCreateInput): TicketCommentResult => {
-      const comment = withTicketWake(db, input.ticketId, () =>
-        createTicketCommentCommand(
-          db,
-          {
-            ticketId: input.ticketId,
-            body: input.body,
-            // UI-originated: every comment posted through this renderer-facing
-            // channel is authored by the user. Agent-posted session summaries
-            // arrive later via the volli CLI, a different (not-yet-built) path.
-            commentActor: USER_ACTOR,
-            sessionId: input.sessionId,
-          },
-          { now: Date.now(), actor: { kind: "user" } },
-        ),
-      );
-      return { ok: true, comment };
-    },
+    // Every comment this channel posts is the person's: the handler authors it
+    // from the call, never from input.
+    "volli:comment-create": (input: CommentCreateInput): TicketCommentResult => ({
+      ok: true,
+      comment: board("board.createComment", input).comment,
+    }),
 
-    "volli:comment-update": (input: CommentUpdateInput): TicketCommentResult => {
-      const comment = updateComment(
-        db,
-        { commentId: input.commentId, body: input.body },
-        Date.now(),
-      );
-      if (!comment) return { ok: false, error: "Unknown comment" };
-      return { ok: true, comment };
-    },
+    "volli:comment-update": (input: CommentUpdateInput): TicketCommentResult => ({
+      ok: true,
+      comment: board("board.updateComment", input).comment,
+    }),
 
     "volli:comment-remove": (input: CommentIdInput): Result => {
-      if (!getComment(db, input.commentId)) return { ok: false, error: "Unknown comment" };
-      deleteComment(db, input.commentId);
+      board("board.removeComment", { commentId: input.commentId });
       return { ok: true };
     },
 
@@ -1147,7 +939,7 @@ export function registerDataIpcHandlers(
         // (VC-358): the Session it names already exists by the time this runs,
         // and its staged blobs must adopt it all-or-nothing — a retry that
         // half-adopted would leave the chat unsure what it is holding.
-        db.transaction(() => {
+        withTransaction(db, () => {
           for (const draft of input.blobs) {
             createBlobLink(
               db,
@@ -1165,7 +957,7 @@ export function registerDataIpcHandlers(
               now,
             );
           }
-        })();
+        });
         // The caller reads back the owner it named: the Ticket composer its
         // strip, the promoted chat its Session's — the links it just made and
         // any that were already there.
@@ -1181,29 +973,75 @@ export function registerDataIpcHandlers(
       }
     },
 
-    "volli:session-list": async (input: ProjectIdInput): Promise<SessionsResult> => {
-      const sessions = await sessionEngine.listSessions({
-        projectId: input.projectId,
-        scope: "all",
-      });
-      return {
-        ok: true,
-        sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
-      };
+    // The same bodies the host protocol's `session.listing` reads (VC-713),
+    // unbounded here: this window's own listing is whole.
+    "volli:session-list": async (input: ProjectIdInput): Promise<SessionsResult> => ({
+      ok: true,
+      sessions: await projectSessionListing(listingSources, input.projectId),
+    }),
+
+    "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => ({
+      ok: true,
+      sessions: await ticketSessionListing(listingSources, input.ticketId),
+    }),
+
+    /**
+     * A person's own read decision (VC-30).
+     *
+     * Two acts, in this order and for two different audiences. The receipt is
+     * persisted first, because it is the durable answer and everything else is
+     * a projection of it. Then the Session's listing row is re-published on
+     * `volli:session-activity` — the same broadcast the push channel uses,
+     * carrying a row built by the same `sessionListingRow` — because this write
+     * moves no ledger fact, so the activity watch has nothing to notice and the
+     * OTHER sidebar, the ticket rail and the second window would otherwise keep
+     * drawing the dot until something unrelated refreshed them.
+     *
+     * The caller already moved its own row optimistically; the answer is what it
+     * reverts to if this failed.
+     */
+    "volli:session-read-set": async (input: SessionReadSetInput): Promise<SessionReadSetResult> => {
+      const existing = await sessionEngine.getSession({ sessionId: input.sessionId });
+      if (existing === null) return { ok: false, error: "Unknown session" };
+      // Main's clock, never the renderer's: the receipt is main's record, and a
+      // stamp from a window with a skewed clock would date the dot wrongly for
+      // every other window.
+      writeSessionUnread(db, input.sessionId, input.unread ? Date.now() : null);
+      await publishSessionListingRow(
+        {
+          db,
+          getSession: (query) => sessionEngine.getSession(query),
+          liveAttachmentIds,
+          publish: broadcastSessionActivity,
+        },
+        input.sessionId,
+      );
+      return { ok: true, read: readSessionUnread(db, input.sessionId) };
     },
 
-    "volli:session-list-for-ticket": async (input: TicketIdInput): Promise<SessionsResult> => {
-      const ticket = getTicketRow(db, input.ticketId);
-      if (ticket === undefined) return { ok: true, sessions: [] };
-      const sessions = await sessionEngine.listSessions({
-        projectId: ticket.project_id,
-        scope: "ticket",
-        ticketId: input.ticketId,
-      });
-      return {
-        ok: true,
-        sessions: sessionListingRowsForRoster(db, sessions, liveAttachmentIds()),
-      };
+    /**
+     * One peek's content (VC-30): the Session's transcript tail plus its question.
+     * The default local read is immediate; an explicit refinement read can
+     * spend the host's utility budget while the client keeps local content visible.
+     *
+     * Straight through to `peek-content.ts`, which composes the engine fold the
+     * CLI's `session peek` already uses. No Session adoption or stream.
+     */
+    "volli:session-peek-content": async (
+      input: SessionPeekContentInput,
+    ): Promise<SessionPeekContentResult> => {
+      const content = await readSessionPeekContent(
+        {
+          listEvents: (query) => sessionEngine.listEvents(query),
+          ...(options.readTranscriptArtifact === undefined
+            ? {}
+            : { readArtifact: options.readTranscriptArtifact }),
+          getSession: (query) => sessionEngine.getSession(query),
+          ...(options.summarizePeek === undefined ? {} : { summarize: options.summarizePeek }),
+        },
+        input,
+      );
+      return { ok: true, content };
     },
 
     "volli:session-starts": async (input: SessionStartsInput): Promise<SessionStartsResult> => {
@@ -1245,7 +1083,7 @@ export function registerDataIpcHandlers(
         sessionId: input.sessionId,
         intent: { kind: "session.retitle", title: input.title.trim() },
         provenance: {
-          source: { kind: "user", id: "renderer", detail: null },
+          source: { kind: "user", id: "renderer", detail: { sessionOrigin: { kind: "user" } } },
           venue: { id: "local", kind: "local" },
         },
       });
@@ -1266,47 +1104,18 @@ export function registerDataIpcHandlers(
       return { ok: true };
     },
 
-    // The person's stop (VC-269): the agent tool's three acts behind a door
-    // the renderer can reach, with `{ kind: "user" }` as the durable actor.
-    // A refusal the operation words (unknown id, a terminal session, a
-    // not-live target, an unrecorded stop) is the error; anything else is a
-    // bug and throws.
-    "volli:session-stop": async (input: SessionStopInput): Promise<SessionStopResult> => {
-      const runtime = options.sessionRuntime;
-      if (runtime === undefined) {
-        return {
-          ok: false,
-          error: "Volli's Session runtime is not available this launch, so nothing was stopped.",
-        };
-      }
-      try {
-        const outcome = await stopSessionById(
-          { sessionEngine, runtime },
-          {
-            operationId: randomUUID(),
-            sessionId: input.sessionId,
-            ...(input.reason === undefined ? {} : { reason: input.reason.trim() }),
-          },
-        );
-        return {
-          ok: true,
-          interrupted: outcome.interrupted,
-          released: outcome.released,
-          failures: [...outcome.failures],
-        };
-      } catch (error) {
-        if (error instanceof SuperviseSessionError) return { ok: false, error: error.message };
-        throw error;
-      }
-    },
-
-    "volli:label-set-color": (input: LabelSetColorInput): LabelResult => {
-      const label = setLabelColor(db, input.labelId, input.color, Date.now());
-      if (!label) return { ok: false, error: "Unknown label" };
-      return { ok: true, label };
-    },
+    "volli:label-set-color": (input: LabelSetColorInput): LabelResult => ({
+      ok: true,
+      label: board("board.setLabelColor", input).label,
+    }),
 
     "volli:app-state-set": (key: string, value: string): AppStateSetResult => {
+      // The schema floor is the migration runner's alone (VC-602): a renderer
+      // write could lock older builds out of this database, or let them in.
+      if (key === MIN_READER_VERSION_KEY) {
+        return { ok: false, error: "This app state key is owned by the database." };
+      }
+      assertRendererAppStateKey(key);
       setAppState(db, key, value, Date.now());
       return { ok: true };
     },
@@ -1403,7 +1212,7 @@ export function registerDataIpcHandlers(
         refresh,
         // Read-only, and the same supplier the destructive paths use: an
         // occupied checkout is reported as KEPT rather than proposed and then
-        // refused after the confirmation (review C5).
+        // refused after the confirmation.
         busyWorktreeSites: options.busyWorktreeSites,
       });
       // The durable history, so Storage can say who removed a directory and
@@ -1440,12 +1249,12 @@ export function registerDataIpcHandlers(
       input: WorktreeOrphanCleanupInput,
     ): Promise<WorktreeOrphanCleanupResult> => {
       // The confirmed half, and a transport adapter over a command — nothing
-      // more (review S1). The renderer names a scan revision and item ids; main
+      // more. The renderer names a scan revision and item ids; main
       // resolves them against the proposal IT minted, so no client can point
-      // this channel at a directory no completed scan offered (review C1).
+      // this channel at a directory no completed scan offered.
       const engine = orphanCleanupEngine(db);
       // FIRST, before any live fact is consulted: has this exact command id
-      // already been answered? (VC-284 re-review S1, the rule
+      // already been answered? (VC-284, the rule
       // `automations/service.ts` follows.) A completed cleanup invalidates the
       // scan it ran against, so validating a retry against the CURRENT scan
       // would tell a caller whose reply was lost that its command was
@@ -1485,7 +1294,11 @@ export function registerDataIpcHandlers(
       try {
         outcome = await cleanupOrphans(
           {
-            worktree: worktreeDeps(db),
+            // The gate's reads are the one place the blocking runner is still
+            // wanted: it may not yield between its last look and the removal it
+            // admits. The removal and prune themselves run on `gitAsync`, so a
+            // large delete never stalls Electron main (VC-786).
+            worktree: { ...worktreeDeps(db), gateGit: runGitCapturing },
             engine,
             busyWorktreeSites: options.busyWorktreeSites,
             releaseAgentSites: options.releaseAgentSites,
@@ -1497,7 +1310,7 @@ export function registerDataIpcHandlers(
             // The window the confirmation was MEASURED against, carried from the
             // scan itself rather than re-read here: if the setting has moved
             // since, the executor must skip rather than apply a policy nobody
-            // confirmed (review C1/C2).
+            // confirmed.
             retentionDays: plan.retentionDays,
             items: plan.items,
             source: "settings",
@@ -1537,7 +1350,7 @@ export function registerDataIpcHandlers(
         return { ok: false, error: "That path is outside this project's worktree folder." };
       }
       // This is a destructive worktree act, so it takes the same lease the
-      // confirmed cleanup takes (VC-284 re-review C4). Without it, "serialized
+      // confirmed cleanup takes (VC-284). Without it, "serialized
       // against every start" was only true of one of the two routes that
       // delete a checkout — and two acts removing one directory, or a terminal
       // being born inside this one mid-delete, were both still possible.
@@ -1615,17 +1428,13 @@ export function registerDataIpcHandlers(
       return { ok: true, report };
     },
 
-    "volli:worktree-trim-settings-get": (): WorktreeTrimSettingsResult => {
-      return { ok: true, settings: getTrimSettings(db) };
-    },
-
     "volli:worktree-trim-settings-set": (
       input: WorktreeTrimSettingsInput,
     ): WorktreeTrimSettingsResult => {
       return { ok: true, settings: setTrimSettings(db, input, Date.now()) };
     },
 
-    // ---- Done flow (docs/plans/done-flow.md) --------------------------------
+    // ---- Done flow ----------------------------------------------------------
     // The Details-rail diff/commit/push-PR affordances. `status`/`diff` are
     // read-only (no broadcast); `commit` records an event and `push-pr` writes
     // `pr_url`, so both broadcast to re-hydrate every board.
@@ -1748,18 +1557,22 @@ export function registerDataIpcHandlers(
         case "missing-on-disk":
           return { ok: false, error: WORKTREE_MISSING_ON_DISK };
         case "ok":
-          return changeWatchManager.watch(sender, input.ticketId, resolved.target.worktreePath);
+          return changeWatchManager.watch(
+            pageClientEventSink(sender),
+            input.ticketId,
+            resolved.target.worktreePath,
+          );
       }
     },
 
     "volli:worktree-change-watch-pause": (input: TicketIdInput, sender): Result =>
-      changeWatchManager.pause(sender, input.ticketId),
+      changeWatchManager.pause(pageClientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-watch-resume": async (input: TicketIdInput, sender): Promise<Result> =>
-      changeWatchManager.resume(sender, input.ticketId),
+      changeWatchManager.resume(pageClientEventSink(sender), input.ticketId),
 
     "volli:worktree-change-unwatch": (input: TicketIdInput, sender): Result => {
-      changeWatchManager.unwatch(sender, input.ticketId);
+      changeWatchManager.unwatch(pageClientEventSink(sender), input.ticketId);
       return { ok: true };
     },
 
@@ -1820,7 +1633,7 @@ export function registerDataIpcHandlers(
     // (retention-runtime.ts) is shared with index.ts's start/stop + focus wiring.
 
     "volli:retention-state": (input: TicketIdInput): RetentionStateResult => {
-      const state = getRetentionWatcher(db).getState(input.ticketId);
+      const state = retentionWatcher().getState(input.ticketId);
       if (state === null) return { ok: false, error: "Unknown ticket" };
       return { ok: true, state };
     },
@@ -1840,7 +1653,7 @@ export function registerDataIpcHandlers(
 
     "volli:retention-dismiss": (input: TicketIdInput): RetentionDismissResult => {
       // In-memory, launch-scoped: the prompt is re-offered next launch.
-      getRetentionWatcher(db).dismiss(input.ticketId);
+      retentionWatcher().dismiss(input.ticketId);
       broadcastDataChanged({
         ticketId: input.ticketId,
         ...ticketScope(db, input.ticketId),
@@ -1864,6 +1677,7 @@ export function registerDataIpcHandlers(
         releaseAgentSites: options.releaseAgentSites,
       });
       if (!result.ok) return { ok: false, error: result.error };
+      releaseTicketToolOutput(input.ticketId);
       // Same as worktree-remove: the archived worktree's directory is gone, so
       // no window may keep a recursive watch pinned to it.
       changeWatchManager.unwatchTicket(input.ticketId);
@@ -1882,7 +1696,7 @@ export function registerDataIpcHandlers(
       const stored = setRetentionTtlDays(db, input.days, Date.now());
       // Every eligibility date the cached scan proposed was measured against the
       // OLD window, so that proposal no longer describes this app's policy
-      // (VC-284 re-review C1/C6). Dropping it supersedes the revision: a
+      // (VC-284). Dropping it supersedes the revision: a
       // confirmation still open from before the change is refused with
       // `scan-superseded` rather than silently applying a window nobody
       // reviewed, and the next read re-measures.
@@ -1895,7 +1709,8 @@ export function registerDataIpcHandlers(
 
     "volli:retention-poll": (): RetentionPollResult => {
       // Fire-and-forget: the poll runs async and broadcasts on change itself.
-      getRetentionWatcher(db).triggerNow();
+      if (options.maintenance === undefined) retentionWatcher().triggerNow();
+      else options.maintenance.triggerRetention();
       return { ok: true };
     },
   };

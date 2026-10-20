@@ -13,9 +13,7 @@
  * mono path line under pass 3's drawings read as thrown together rather than
  * composed. Four treatments, from silent to conversational — see {@link Caption}.
  *
- * VENUE IS DESIGNED FIVE WAYS (owner note: "unbalanced"), under the design-it-
- * twice discipline — radically different shapes under different constraints,
- * compared rather than iterated:
+ * VENUE HAS FIVE VISUAL VARIANTS, each with different density and balance:
  *
  *   stack       CONTROL. Two stacked reads in one card: loose over committed.
  *   figure      MINIMISE. One dominant numeral; everything else subordinate.
@@ -30,12 +28,6 @@
  * VENUE KEYS ON THE VENUE, NOT THE SESSION KIND. A ticket that runs in the main
  * checkout (no worktree — VC-96) draws main's tree and no branch bar, because
  * there is no branch to diff. That is why one visual can serve both scopes.
- *
- * DITHER-KIT WAS REMOVED (owner ruling: too much work). The record of why, so
- * nobody re-litigates it: its `ChartConfig` accepts only seven hard-coded colour
- * NAMES with no arbitrary-hex path, which the generated-canvas theming forbids;
- * its 23 vendored files tripped `vp lint` in 6 places; and it added d3-scale and
- * d3-shape to the desktop app's production dependencies for one chart.
  *
  * Fixtures are frozen; the board counts are this repo's real ones. The lab has
  * no main-process half (CLAUDE.md), so nothing here reads git or the ledger.
@@ -144,7 +136,7 @@ const TICKET_WORKTREE: Venue = {
       state: "modified",
     },
     { path: "packages/cli/src/session.ts", added: 9, removed: 1, state: "modified" },
-    { path: "docs/plans/auto-title.md", added: 27, removed: 0, state: "untracked" },
+    { path: "docs/auto-title.md", added: 27, removed: 0, state: "untracked" },
   ],
   diff: { added: 214, removed: 63, files: 4, base: "main" },
 };
@@ -397,7 +389,7 @@ function partOfDay(hour: number): string {
  * Greeters. Click to cycle — this is a lab affordance for browsing the set, not
  * a product interaction.
  *
- * The line that separates a greeter from the prose the owner killed: a greeter
+ * A greeter describes the next action, not the surrounding interface: it
  * does not EXPLAIN the surface. It opens a conversation. "Orchestrates from the
  * main checkout" is a description of the UI you are already looking at;
  * "Morning. What are we building?" is a question.

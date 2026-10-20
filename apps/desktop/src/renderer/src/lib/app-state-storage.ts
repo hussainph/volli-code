@@ -1,7 +1,7 @@
 /**
  * `StateStorage` backed by an in-memory cache + the preload bridge — replaces
  * localStorage for the ui/workspace zustand `persist` stores now that UI
- * prefs live in SQLite's `app_state` table (docs/CONCEPT.md decision #29).
+ * prefs live in SQLite's `app_state` table.
  *
  * `getItem` reads the cache synchronously so the ui/workspace stores can
  * rehydrate the moment `lib/boot.ts` seeds it from the bootstrap payload — no
@@ -25,7 +25,10 @@ const cache = new Map<string, string>();
  */
 export function seedAppStateCache(entries: Record<string, string>): void {
   for (const [key, value] of Object.entries(entries)) {
-    if (value !== "") cache.set(key, value);
+    if (value !== "") {
+      cache.set(key, value);
+      acknowledgedValues.delete(key);
+    }
   }
 }
 
@@ -58,25 +61,31 @@ interface PendingWrite {
 }
 const pendingWrites = new Map<string, PendingWrite>();
 const writesInFlight = new Map<string, Promise<boolean>>();
+/** Last bridge-acknowledged value per key, invalidated as soon as newer intent is scheduled. */
+const acknowledgedValues = new Map<string, string>();
 
 /**
  * Serializes writes to one key, so an older bridge call can never settle after
  * and overwrite a value whose durability a caller already observed.
  */
 function persistInOrder(key: string, value: string, failureVerb: string): Promise<boolean> {
+  acknowledgedValues.delete(key);
   const previous = writesInFlight.get(key);
   const write =
     previous === undefined
       ? persist(key, value, failureVerb)
       : previous.then(() => persist(key, value, failureVerb));
   writesInFlight.set(key, write);
-  void write.then(() => {
-    if (writesInFlight.get(key) === write) writesInFlight.delete(key);
+  void write.then((ok) => {
+    if (writesInFlight.get(key) !== write) return;
+    writesInFlight.delete(key);
+    if (ok && !pendingWrites.has(key)) acknowledgedValues.set(key, value);
   });
   return write;
 }
 
 function persistDebounced(key: string, value: string, failureVerb: string): void {
+  acknowledgedValues.delete(key);
   const existing = pendingWrites.get(key);
   if (existing !== undefined) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
@@ -106,7 +115,8 @@ export function flushPendingAppState(): void {
  * Flushes one key and resolves only when main has acknowledged every write to
  * it that was scheduled before this call. This is the durability barrier for
  * user intent that must survive before its renderer-only source is released;
- * a key with no scheduled write returns `false` rather than inventing an ack.
+ * A completed bridge acknowledgement remains valid for the unchanged value;
+ * a key never written (or with a newer failed value) still returns `false`.
  */
 export function flushPendingAppStateKey(key: string): Promise<boolean> {
   const pending = pendingWrites.get(key);
@@ -115,13 +125,46 @@ export function flushPendingAppStateKey(key: string): Promise<boolean> {
     pendingWrites.delete(key);
     return persistInOrder(key, pending.value, pending.failureVerb);
   }
-  return writesInFlight.get(key) ?? Promise.resolve(false);
+  return (
+    writesInFlight.get(key) ??
+    Promise.resolve(acknowledgedValues.get(key) === (cache.get(key) ?? ""))
+  );
+}
+
+/**
+ * The acknowledged form of {@link flushPendingAppState}: sends every pending
+ * write now and resolves once main has answered every write in flight, with
+ * whether all of them landed. Main asks for this before it destroys a window
+ * without an unload (VC-577: menu-bar mode), where `beforeunload` — and with
+ * it the flush below — never fires, and a draft typed inside the debounce
+ * window would otherwise exist nowhere but a renderer that is about to go.
+ */
+export async function flushAllPendingAppState(): Promise<boolean> {
+  let ok = true;
+  // Each key's in-flight write is the TAIL of its in-order chain
+  // (`persistInOrder`), so awaiting it waits out an older write's slow ack
+  // and then the latest value's own. Repeated until nothing is pending, so a
+  // write scheduled while this waited is answered for too.
+  do {
+    flushPendingAppState();
+    const results = await Promise.all(writesInFlight.values());
+    ok = ok && results.every(Boolean);
+  } while (pendingWrites.size > 0);
+  return ok;
+}
+
+/** Answers main's flush request through the preload bridge, when there is one. */
+export function installAppStateFlushResponder(
+  bridge: { onFlushRequest?: (flush: () => Promise<unknown>) => () => void } | undefined,
+): void {
+  bridge?.onFlushRequest?.(flushAllPendingAppState);
 }
 
 // Renderer-only module: flush pending prefs before the window tears down so a
 // last-moment zoom/resize isn't dropped by the debounce.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", flushPendingAppState);
+  installAppStateFlushResponder(window.api?.appState);
 }
 
 /**

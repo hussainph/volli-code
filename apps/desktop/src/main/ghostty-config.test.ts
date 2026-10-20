@@ -163,9 +163,9 @@ describe("readGhosttyAppearance", () => {
       makeDeps({ [XDG_ENTRY]: "config-file = missing.conf\nfont-size = 5" }),
     );
     expect(result.prefs.fontSize).toBe(5);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[ghostty-config] config-file not found"),
-    );
+    expect(warnSpy).toHaveBeenCalledWith("[ghostty] config warning", {
+      warning: expect.stringContaining("config-file not found"),
+    });
     warnSpy.mockRestore();
   });
 
@@ -362,7 +362,8 @@ describe("registerGhosttyConfigIpc", () => {
     expect(() => registerGhosttyConfigIpc(ipcDeps())).not.toThrow();
     expect(watchMock).toHaveBeenCalledTimes(4);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[ghostty-config] could not watch"),
+      "[ghostty] could not watch config directory",
+      expect.objectContaining({ dir: expect.any(String) }),
     );
     warnSpy.mockRestore();
   });
@@ -375,7 +376,8 @@ describe("registerGhosttyConfigIpc", () => {
 
     expect(() => registerGhosttyConfigIpc(ipcDeps())).not.toThrow();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[ghostty-config] could not create"),
+      "[ghostty] could not create project overlay directory",
+      expect.objectContaining({ dir: expect.any(String) }),
     );
     warnSpy.mockRestore();
   });
@@ -605,12 +607,12 @@ describe("readGhosttyAppearance — the Volli overlay chain", () => {
       expect(result.prefs.fontSize).toBe(14);
       expect(result.prefs.themeName).toBe("Ayu");
       // Warned per layer, in the same shape the entry configs already log.
-      expect(warnSpy).toHaveBeenCalledWith(
-        `[ghostty-config] config-file not found: ${OVERLAY_DIR}/gone.conf`,
-      );
-      expect(warnSpy).toHaveBeenCalledWith(
-        `[ghostty-config] config-file not found: ${PROJECTS_DIR}/also-gone.conf`,
-      );
+      expect(warnSpy).toHaveBeenCalledWith("[ghostty] config warning", {
+        warning: `config-file not found: ${OVERLAY_DIR}/gone.conf`,
+      });
+      expect(warnSpy).toHaveBeenCalledWith("[ghostty] config warning", {
+        warning: `config-file not found: ${PROJECTS_DIR}/also-gone.conf`,
+      });
       warnSpy.mockRestore();
     });
 
