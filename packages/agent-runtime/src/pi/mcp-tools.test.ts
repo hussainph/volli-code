@@ -79,8 +79,8 @@ describe("MCP Pi tool wrapper", () => {
     });
     const context = createContext({}, { codeGeneration: { strings: false, wasm: false } });
     // Match the renderer's script-src 'self': importing shared vocabulary must
-    // not compile Ajv validators on import. Discovery and frozen replay invoke
-    // validation later; renderer replay under CSP is a separate issue (VC-636).
+    // not compile Ajv validators on import. Discovery and durable host replay
+    // validate later; renderer presentation checks only the validated wire shape.
     expect(() => runInContext(bundled.outputFiles[0]!.text, context)).not.toThrow();
     expect(runInContext("typeof McpSchema.sanitizeMcpToolDefinition", context)).toBe("function");
   });

@@ -361,8 +361,8 @@ for (const [uri, validator] of [...JSON_SCHEMA_VALIDATORS]) {
   const alias = uri.replace(/^https?:/, uri.startsWith("https:") ? "http:" : "https:");
   // This fixed host-authored wrapper needs no meta-validation at registration.
   // Ajv would compile it eagerly and violate renderer CSP on module import.
-  // Server schemas still undergo validateSchema below at discovery and replay.
-  // Renderer replay's pre-existing CSP limitation is tracked separately (VC-636).
+  // Server schemas still undergo validateSchema below at discovery and durable
+  // host replay. Renderer presentation checks only their host-validated shape.
   validator.addMetaSchema({ $ref: uri }, alias, false);
   JSON_SCHEMA_VALIDATORS.set(alias, validator);
 }

@@ -90,6 +90,16 @@ function parseUnderCsp(event: SessionEvent): unknown {
 describe("renderer Session input under CSP", () => {
   it.each([
     undefined,
+    "",
+    ...[
+      "core",
+      "applicator",
+      "validation",
+      "unevaluated",
+      "format-annotation",
+      "content",
+      "meta-data",
+    ].map((meta) => `https://json-schema.org/draft/2020-12/meta/${meta}`),
     "http://json-schema.org/draft-07/schema#",
     "https://json-schema.org/draft/2019-09/schema",
     "https://json-schema.org/draft/2020-12/schema",

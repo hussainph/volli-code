@@ -835,7 +835,7 @@ describe("frozen MCP dialect replay (VC-621)", () => {
     const decoded = decodeSessionEventPayload(wire, "payload");
     expect(decoded).toEqual(payload);
     expect(encodeSessionJson(decoded)).toBe(encodeSessionJson(payload));
-    // This checks the ordinary renderer decoder, not CSP execution (VC-636).
+    // The browser-bundled CSP path is covered in session-event-codec-csp.test.ts.
     expect(parseRendererSessionEvent(rendererEvent({ payload: wire }), "event")).toMatchObject({
       ok: true,
       event: { payload },
