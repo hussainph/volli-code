@@ -1,5 +1,7 @@
-/** VC-322 built-app observational release probe; artifacts stay in the workspace.
+/** Built-app dialog focus and title-ring regression probe.
  * Run after pnpm build: node apps/desktop/e2e/vc322-accessibility-smoke.mjs
+ * Broader accessibility measurements are observational, not release sign-off.
+ * --observe disables the focus/title gate for exploratory measurements.
  * No provider calls, credentials, live profile, clipboard, or VoiceOver automation.
  */
 import { promises as fs } from "node:fs";
@@ -17,7 +19,7 @@ import {
 const output = resolve(
   process.argv.slice(2).find((arg) => !arg.startsWith("--")) ?? "evidence/vc322",
 );
-const gateFixes = process.argv.includes("--gate-fixes");
+const gateFixes = !process.argv.includes("--observe");
 await fs.mkdir(output, { recursive: true });
 const scratch = await fs.mkdtemp(join(output, "run-"));
 const userDataDir = join(scratch, "user-data");
@@ -382,8 +384,8 @@ try {
   await fs.writeFile(join(output, "report.json"), JSON.stringify(report, null, 2));
   await closeAppBounded(app);
 }
-// The broader release findings are observational and deliberately remain red.
-// Only opt-in fix regression checks determine this probe's process exit code.
+// The broader accessibility measurements remain observational. The CI runner
+// invokes probes without flags, so focus/title regressions must fail by default.
 if (gateFixes) {
   const dialogs = report.checks.slice(0, 2);
   const title = report.observations.find((item) => item.name === "ticket title focus")?.state;

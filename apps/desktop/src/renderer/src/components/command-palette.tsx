@@ -105,7 +105,11 @@ function PaletteDialog({
           <DialogPrimitive.Title className="sr-only">
             Search tickets, sessions, and commands
           </DialogPrimitive.Title>
-          <Command label="Search tickets, sessions, and commands" filter={commandPaletteFilter} loop>
+          <Command
+            label="Search tickets, sessions, and commands"
+            filter={commandPaletteFilter}
+            loop
+          >
             {children}
           </Command>
         </DialogPrimitive.Content>
