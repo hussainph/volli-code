@@ -1187,6 +1187,11 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       watches?: Watches;
       /** Session reads after this many succeed reject — the watch lookup's failure. */
       failLookupsAfter?: number;
+      caller?: RuntimeSessionIdentity;
+      durableCallerRole?: "project" | "ticket" | "subagent";
+      targetRole?: "project" | "ticket" | "subagent";
+      parentSessionId?: string | null;
+      liveChildren?: readonly string[];
     } = {},
   ) {
     let lookups = 0;
@@ -1210,11 +1215,24 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       now: () => 1_000,
       authorityPolicy: () => DEFAULT_AUTHORITY_POLICY,
       watches: () => options.watches ?? null,
-      delegate: () => null,
+      delegate: () =>
+        options.liveChildren === undefined
+          ? null
+          : ({
+              liveChildren: () => options.liveChildren!,
+            } as unknown as NonNullable<ReturnType<AgentToolDoorOptions["delegate"]>>),
       mcp: () => null,
       supervise: () =>
         ({
           sessionEngine: {
+            getSession: async () => ({
+              session: {
+                id: (options.caller ?? CALLER).sessionId,
+                projectId: "project-one",
+                ticketId: null,
+                role: options.durableCallerRole ?? (options.caller ?? CALLER).role,
+              },
+            }),
             listSessions: async () => {
               lookups += 1;
               if (options.failLookupsAfter !== undefined && lookups > options.failLookupsAfter) {
@@ -1226,6 +1244,8 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
                     id: TARGET_SESSION,
                     projectId: "project-one",
                     ticketId: null,
+                    role: options.targetRole ?? "project",
+                    parentSessionId: options.parentSessionId ?? null,
                     title: "Implementer",
                     createdAt: 1,
                   },
@@ -1297,9 +1317,139 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       verb: "session.stop" | "session.send",
       input: Record<string, unknown>,
       signal: AbortSignal = new AbortController().signal,
-    ) => door(CALLER, { verb, input, toolCallId: "tc-9" }, signal);
+    ) => door(options.caller ?? CALLER, { verb, input, toolCallId: "tc-9" }, signal);
     return { call, stops, sends };
   }
+
+  it.each([
+    { role: "subagent" as const, parent: TICKET_CALLER.sessionId, allowed: true },
+    { role: "subagent" as const, parent: "another-parent", allowed: false },
+    { role: "ticket" as const, parent: TICKET_CALLER.sessionId, allowed: false },
+    { role: "project" as const, parent: null, allowed: false },
+  ])(
+    "scopes Ticket steering to its delegated subagents: $role / $parent",
+    async ({ role, parent, allowed }) => {
+      const watches = recordingWatches();
+      const h = superviseHarness({
+        caller: TICKET_CALLER,
+        targetRole: role,
+        parentSessionId: parent,
+        watches,
+      });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Focus on the regression",
+        callerRole: "project", // Caller-supplied authority is ignored.
+      });
+      if (allowed) {
+        expect(result.text).toContain("Delivered into Session bbbbbbbb");
+        expect(h.sends).toHaveLength(1);
+        expect(watches.sessions).toEqual([
+          expect.objectContaining({
+            watcherSessionId: TICKET_CALLER.sessionId,
+            targetSessionId: TARGET_SESSION,
+          }),
+        ]);
+      } else {
+        expect(result.text).toContain("a ticket Session may steer only its own subagents");
+        expect(h.sends).toEqual([]);
+        expect(watches.sessions).toEqual([]);
+      }
+    },
+  );
+
+  it.each([
+    { targetRole: "project" as const, parent: null, allowed: false },
+    { targetRole: "subagent" as const, parent: "another-parent", allowed: false },
+    { targetRole: "subagent" as const, parent: CALLER.sessionId, allowed: true },
+  ])(
+    "keeps orphan Ticket steering scoped despite its project runtime identity: $targetRole / $parent",
+    async ({ targetRole, parent, allowed }) => {
+      // The attach resolver briefs a Ticket whose ticketId became null as a
+      // project Session, but its durable Role remains ticket after deletion.
+      const watches = recordingWatches();
+      const h = superviseHarness({
+        caller: CALLER,
+        durableCallerRole: "ticket",
+        targetRole,
+        parentSessionId: parent,
+        watches,
+      });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Focus on the regression",
+      });
+      if (allowed) {
+        expect(result.text).toContain("Delivered into Session");
+        expect(h.sends).toHaveLength(1);
+      } else {
+        expect(result.text).toContain("a ticket Session may steer only its own subagents");
+        expect(h.sends).toEqual([]);
+        expect(watches.sessions).toEqual([]);
+      }
+    },
+  );
+
+  it.each(["project", "ticket", "subagent"] as const)(
+    "allows Board steering of a %s Session",
+    async (targetRole) => {
+      const h = superviseHarness({ targetRole, parentSessionId: "another-parent" });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Carry on",
+      });
+      expect(result.text).toContain("Delivered into Session bbbbbbbb");
+      expect(h.sends).toHaveLength(1);
+    },
+  );
+
+  it.each([CALLER, TICKET_CALLER])(
+    "does not arm a second report for $role's active delegate",
+    async (caller) => {
+      const watches = recordingWatches();
+      const h = superviseHarness({
+        caller,
+        watches,
+        targetRole: "subagent",
+        parentSessionId: caller.sessionId,
+        liveChildren: [TARGET_SESSION],
+      });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Focus on the regression",
+      });
+      expect(h.sends).toHaveLength(1);
+      expect(result.text).toContain("Its delegation answer reports back");
+      expect(watches.sessions).toEqual([]);
+    },
+  );
+
+  it("does not arm a duplicate watch if the delegate answers during delivery", async () => {
+    const delivery = Promise.withResolvers<void>();
+    const watches = recordingWatches();
+    const state = { delivery: delivery.promise, watches, liveChildren: [TARGET_SESSION] };
+    const h = superviseHarness(state);
+    const sending = h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Focus",
+    });
+    await vi.waitFor(() => expect(h.sends).toHaveLength(1));
+    state.liveChildren = [];
+    delivery.resolve();
+    expect((await sending).text).toContain("Its delegation answer reports back");
+    expect(watches.sessions).toEqual([]);
+  });
+
+  it("still watches a target outside the caller's pending delegations", async () => {
+    const watches = recordingWatches();
+    const h = superviseHarness({ watches, liveChildren: ["another-child"] });
+    const result = await h.call("session.send", {
+      session: TARGET_SESSION.slice(0, 8),
+      message: "Carry on",
+    });
+    expect(result.text).toContain("A notice from Volli will arrive");
+    expect(watches.sessions).toHaveLength(1);
+  });
 
   it("confirms a delivered send even when arming its watch cannot read the target (VC-457)", async () => {
     const watches = recordingWatches();

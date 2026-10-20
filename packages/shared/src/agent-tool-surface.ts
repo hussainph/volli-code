@@ -59,9 +59,8 @@ import type { VerbToolKey } from "./verb-registry";
  *
  * `project` carries the agent-control family — start, stop, send (VC-86) —
  * because orchestrating work is what a Board Session is for. `ticket`
- * carries execution verbs and none of that family: merge submission is
- * VC-89's, credential-adjacent git is VC-45's, and a ticket executor that
- * needs stop over its own children is a VC-44 grant, never a bundle edit.
+ * carries execution verbs and delegation-scoped steering (VC-861), not
+ * project-wide supervision. Stop and start still require durable grants.
  *
  * `subagent` holds NO verb (VC-9), and each absence is a decision:
  *
@@ -79,11 +78,9 @@ import type { VerbToolKey } from "./verb-registry";
  * What it does hold is decided by {@link ROLE_CAPABILITY_POLICY}, which is the
  * capability half of the same decision.
  *
- * A `ticket` bundle without agent-control verbs is not a gap in this ticket;
- * it is the default property this map exists to make true. A Ticket Session can
- * receive an explicit durable grant at birth (VC-183), but that exception feeds
- * the `grants` parameter below and never edits this bundle map — a Ticket with
- * no such record still has nothing an injected instruction can call.
+ * A Ticket Session can receive an explicit durable grant at birth (VC-183)
+ * through the `grants` parameter below. Its bundled `session.send` is narrower:
+ * the operation permits only subagents that Ticket Session delegated.
  *
  * `watch` (VC-457) sits in BOTH working bundles, on VC-92's ruling on VC-85
  * that being told about work is a runtime property, not a privilege: an
@@ -162,8 +159,11 @@ const ROLE_VERB_BUNDLES: Readonly<Record<SessionRole, readonly VerbToolKey[]>> =
   // what makes it safe is the CHILD's bundle, not the parent's Role. It is
   // not the agent-control family — a subagent answers back here and cannot
   // act on anything else — so VC-92's pairing rule does not pull the rest of
-  // that family in with it.
-  ticket: Object.freeze(["session.delegate", "watch"]) as readonly VerbToolKey[],
+  // that family in with it. Steering (VC-861) is delegation-scoped at the
+  // operation: a Ticket Session may steer only its own subagents, never the
+  // other Sessions a Board Session supervises. This is birth membership only;
+  // an existing Session's recorded surface is not recomputed.
+  ticket: Object.freeze(["session.send", "session.delegate", "watch"]) as readonly VerbToolKey[],
   subagent: Object.freeze([]) as readonly VerbToolKey[],
 });
 

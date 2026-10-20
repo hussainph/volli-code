@@ -23,7 +23,7 @@ function capabilities(overrides: Partial<Parameters<typeof resolveAgentToolSurfa
 }
 
 describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", () => {
-  it("gives a Board Session the agent-control family and a Ticket Role's default bundle none", () => {
+  it("gives Board Sessions project-wide control and Ticket Sessions only delegated steering", () => {
     // The whole family travels together (VC-92's pairing rule; stop and send
     // joined start in VC-86, and `automation.run` rides with them per VC-134)
     // — shipping part of it would make the bundle no boundary.
@@ -50,11 +50,12 @@ describe("roleVerbBundle — Role decides what is in the room (VC-92, VC-162)", 
     // The default-bundle property is asserted as absence rather than prose. An
     // injected instruction telling a Ticket Session to start ten Sessions has
     // nothing to call, and a durable birth grant is the explicit exception
-    // (VC-183), never a bundle edit. Neither `watch` nor `session.delegate`
+    // (VC-183), never an implicit grant. Delegation-scoped steering is the
+    // narrow exception (VC-861). Neither `watch` nor `session.delegate`
     // is part of the agent-control family — being told controls nobody
     // (VC-85/VC-92, VC-457), and a subagent answers back here and can act on
     // nothing else (VC-9). The retired awaits are in no bundle (VC-457).
-    expect(roleVerbBundle("ticket")).toEqual(["session.delegate", "watch"]);
+    expect(roleVerbBundle("ticket")).toEqual(["session.send", "session.delegate", "watch"]);
     // A helper's bundle is the whole of its authority: nothing (VC-9).
     expect(roleVerbBundle("subagent")).toEqual([]);
   });
@@ -117,7 +118,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     ]);
   });
 
-  it("puts an ungranted Ticket Session in a room with no agent-control tool", () => {
+  it("gives a new Ticket Session delegation-scoped steering, not project-wide control", () => {
     const surface = resolveAgentToolSurface(capabilities({ role: "ticket" }));
     expect(surface).not.toContain("session.start");
     // VC-134's whole enforcement, stated as absence: an Automation Run fans a
@@ -128,7 +129,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
     // The watch tool is deliberately in this room too (VC-92's ruling on
     // VC-85, carried to VC-457): being told is a runtime property, not a
     // privilege, and what may wake it is policy data judged when armed.
-    expect(verbToolsOf(surface)).toEqual(["session.delegate", "watch"]);
+    expect(verbToolsOf(surface)).toEqual(["session.send", "session.delegate", "watch"]);
     // Its capability half is untouched: Role scopes the verbs, not the tools a
     // Session needs to do the work it was given.
     expect(surface).toEqual([
@@ -155,6 +156,7 @@ describe("resolveAgentToolSurface — the three sets, kept apart", () => {
       "classify",
       "codemode",
       "request_secret",
+      "session.send",
       "session.delegate",
       "watch",
     ]);
