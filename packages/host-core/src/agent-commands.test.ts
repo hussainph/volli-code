@@ -5081,6 +5081,7 @@ describe("agent command service", () => {
         baseBranch: "main",
         uncommitted: true,
         sequencerActive: false,
+        unmergedPaths: 0,
         aheadOfBase: 3,
         behindBase: 0,
         unpushed: 2,
@@ -5534,6 +5535,7 @@ describe("agent command service", () => {
       status: {
         uncommitted: false,
         sequencerActive: false,
+        unmergedPaths: 0,
         aheadOfBase: 0,
         behindBase: 0,
         unpushed: null,

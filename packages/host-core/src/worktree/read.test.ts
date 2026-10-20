@@ -256,6 +256,7 @@ describe("read verb contracts are unchanged by the async runner", () => {
       status: {
         uncommitted: true,
         sequencerActive: false,
+        unmergedPaths: 0,
         aheadOfBase: null,
         behindBase: null,
         unpushed: null,

@@ -290,7 +290,7 @@ export interface HostHandlerSignatures extends BoardHandlerSignatures {
     { shellId: string }
   >;
   readonly "project.reorder": HostHandler<{ orderedIds: readonly string[] }, null>;
-  /** Stops a project's live work, then deletes it (VC-796): `../project-remove`. */
+  /** Stops a project's live work, then detaches it (VC-796, VC-822): `../project-remove`. */
   readonly "project.remove": HostHandler<{ projectId: string }, null>;
   readonly "worktree.trimSettings": HostHandler<void, WorktreeTrimSettings>;
   /**
@@ -501,9 +501,9 @@ export interface HostHandlerOptions {
   readonly piSessionsDirectory?: string;
   /**
    * The live work this host holds for a project's Sessions, which removing
-   * the project stops before its delete (VC-796). Absent or null: a host that
-   * cannot stop it, where `project.remove` answers unavailable rather than
-   * deleting Sessions out from under their work.
+   * the project stops before it detaches it (VC-796, VC-822). Absent or null:
+   * a host that cannot stop it, where `project.remove` answers unavailable
+   * rather than hiding Sessions that are still working.
    */
   readonly projectLiveWork?: ProjectLiveWork | null;
   /**
@@ -852,6 +852,7 @@ function hostHandlerEntries(
             live: present(options.projectLiveWork ?? null, PROJECT_REMOVAL_UNAVAILABLE),
             disposeFeed: (id) => feed.dispose(id),
             announce: () => feed.untapped(() => ports.events.publish("data-changed", {})),
+            now,
           },
           projectId,
         );

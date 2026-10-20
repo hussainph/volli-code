@@ -1284,6 +1284,38 @@ describe("createAutomationRunner", () => {
     expect(h.creates).toEqual([]);
   });
 
+  // VC-822: removal detaches a project and keeps its Automations, so a
+  // schedule still comes due there. Its skip names the removal, not a
+  // project that was never there.
+  it("refuses a Run in a removed project as removed, ticket or project scope", async () => {
+    const h = harness({ projectRemoved: () => true });
+    const automation = await savedAutomation(h);
+    const removed = {
+      ok: false,
+      code: "PROJECT_REMOVED",
+      error: "The project was removed from Volli.",
+    };
+
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: h.projectId,
+        attendance: "unattended",
+      }),
+    ).resolves.toMatchObject(removed);
+    await expect(
+      h.runner.run({
+        commandId: randomUUID(),
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+        attendance: "attended",
+      }),
+    ).resolves.toMatchObject(removed);
+    expect(h.creates).toEqual([]);
+  });
+
   it("refuses an Automation owned by another project", async () => {
     const h = harness();
     const created = await h.engine.create({

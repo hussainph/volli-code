@@ -405,6 +405,12 @@ export type AutomationRunRefusalCode =
   | "TICKET_NOT_FOUND"
   /** A Run that names the Project as its Target, and no such project (VC-130). */
   | "PROJECT_NOT_FOUND"
+  /**
+   * A Run in a project the person removed (VC-822). Removal detaches the
+   * project and keeps its Automations, so a schedule still comes due there;
+   * it is refused with this, and recorded as a skip, until the project is back.
+   */
+  | "PROJECT_REMOVED"
   | "RUN_IN_FLIGHT"
   | "MODEL_REQUIRED"
   /**

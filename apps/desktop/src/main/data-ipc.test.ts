@@ -457,15 +457,21 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
-// VC-796: the channel projects the host's `project.remove`. The cascade takes
-// every Session of the project, so the live work they hold stops first, while
-// the row is still there, and every window (a second one included) is told.
+// VC-796: the channel projects the host's `project.remove`. The live work its
+// Sessions hold stops first, while the project is still on the rail, and
+// every window (a second one included) is told. VC-822: the project is then
+// detached, not deleted, so adding its folder again brings its board back.
 describe("project removal", () => {
+  function onRail(projectId: string): boolean {
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    return bootstrap.ok && bootstrap.data.projects.some(({ id }) => id === projectId);
+  }
+
   function liveWork(projectId: string, stillOpen: readonly string[] = []) {
     const stopped: string[] = [];
     const stop = (step: string) => {
-      // Each stop runs while the project, and so its Sessions, still exist.
-      expect(getProjectById(ctx.db, projectId)).toBeDefined();
+      // Each stop runs while the project is still on the rail.
+      expect(onRail(projectId)).toBe(true);
       stopped.push(step);
     };
     const live: ProjectLiveWork = {
@@ -481,7 +487,7 @@ describe("project removal", () => {
     return { live, stopped };
   }
 
-  it("stops the project's live work before deleting it, then tells every window", async () => {
+  it("stops the project's live work before detaching it, then tells every window", async () => {
     const projectId = createProject();
     const { live, stopped } = liveWork(projectId);
     registerDataIpcHandlers(
@@ -496,10 +502,60 @@ describe("project removal", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(stopped).toEqual(["bindings", "shells", "terminals", "tabs"]);
-    expect(getProjectById(ctx.db, projectId)).toBeUndefined();
+    expect(onRail(projectId)).toBe(false);
     // Untargeted, so a window that still holds the project re-reads the list
     // without it; the fan-out reaches every window, a second one included.
     await expectDataChanged({ entity: "tickets" });
+  });
+
+  // The defect (VC-822): the removal used to delete the row, and the cascades
+  // took the board and every Session with it. A re-add found nothing.
+  it("brings the board back when the same folder is added again", async () => {
+    const path = freshProjectDir();
+    const nothingRunning: ProjectLiveWork = {
+      releaseBindings: async () => ({ stillOpen: [] }),
+      disposeShells: () => undefined,
+      killTerminals: () => undefined,
+      closeBrowserTabs: () => undefined,
+      mcp: null,
+    };
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        sessionEngine: fixtureSessionEngine,
+        projectLiveWork: nothingRunning,
+        detectBaseBranch: async () => "main",
+      },
+    );
+    const added = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Kept",
+    });
+    if (!added.ok) throw new Error(added.error);
+    const ticket = createTicket(added.project.id);
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", added.project.id),
+    ).resolves.toEqual({ ok: true });
+
+    // Off every window's rail, its tickets with it.
+    const hidden = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(hidden.ok && hidden.data.projects).toEqual([]);
+    expect(hidden.ok && Object.keys(hidden.data.ticketsByProject)).toEqual([]);
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", { path, name: "Kept" }),
+    ).resolves.toMatchObject({ ok: true, created: false, project: { id: added.project.id } });
+
+    const back = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(back.ok && back.data.projects.map(({ id }) => id)).toEqual([added.project.id]);
+    expect(back.ok && back.data.ticketsByProject[added.project.id]).toEqual([
+      expect.objectContaining({ id: ticket.id, ticketNumber: ticket.ticketNumber }),
+    ]);
+    // Every window re-reads it: one that seeded an empty board on the add
+    // must not keep showing it empty.
+    await expectDataChanged({ projectId: added.project.id, entity: "tickets" });
   });
 
   it("keeps the project, and says why, when one of its Sessions will not stop", async () => {
@@ -521,7 +577,7 @@ describe("project removal", () => {
     });
 
     expect(stopped).toEqual(["bindings"]);
-    expect(getProjectById(ctx.db, projectId)).toBeDefined();
+    expect(onRail(projectId)).toBe(true);
     expectNoDataChange();
   });
 });
@@ -3719,6 +3775,7 @@ describe("the rail's last-known worktree snapshot (VC-372)", () => {
     status: {
       uncommitted: false,
       sequencerActive: false,
+      unmergedPaths: 0,
       aheadOfBase: 0,
       behindBase: 0,
       unpushed: null,

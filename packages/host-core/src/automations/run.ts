@@ -98,8 +98,14 @@ export interface AutomationRunnerPorts {
   /** The frozen Run projection that owns a pending delivery's launch title. */
   findRun(runId: string): AutomationRun | undefined;
   findTicket(ticketId: string): AutomationRunTicket | undefined;
-  /** Whether a Project scope names a project this host actually has. */
+  /** Whether a Project scope names a project this host has on its rail. */
   findProject(projectId: string): boolean;
+  /**
+   * Whether the project was removed (VC-822): detached, its Automations kept.
+   * A Run there is refused as `PROJECT_REMOVED` rather than as not found, so
+   * the skip a schedule records says what happened. Absent: never removed.
+   */
+  projectRemoved?(projectId: string): boolean;
   listRunsForTicket(ticketId: string): readonly AutomationRun[];
   /**
    * One Automation's Runs in one project that could still be live — the
@@ -260,6 +266,9 @@ export interface AutomationRunner {
 }
 
 /** One refusal shape, so the IPC layer never has to parse a bare string. */
+/** Read after "Skipped — " in a schedule's history, so it starts as a sentence. */
+const PROJECT_REMOVED_REFUSAL = "The project was removed from Volli.";
+
 function refuse(code: AutomationRunRefusalCode, error: string): AutomationRunRefusal {
   return { ok: false, code, error };
 }
@@ -665,6 +674,9 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
       const ticket = deps.findTicket(scope.ticketId);
       if (ticket === undefined)
         return refuse("TICKET_NOT_FOUND", "The requested Ticket was not found.");
+      if (deps.projectRemoved?.(ticket.projectId) === true) {
+        return refuse("PROJECT_REMOVED", PROJECT_REMOVED_REFUSAL);
+      }
       if (
         automation !== null &&
         automation.projectId !== null &&
@@ -685,6 +697,9 @@ export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationR
         }),
         priorRuns: deps.listRunsForTicket(ticket.id),
       };
+    }
+    if (deps.projectRemoved?.(scope.projectId) === true) {
+      return refuse("PROJECT_REMOVED", PROJECT_REMOVED_REFUSAL);
     }
     if (!deps.findProject(scope.projectId)) {
       return refuse("PROJECT_NOT_FOUND", "The requested project was not found.");

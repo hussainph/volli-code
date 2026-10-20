@@ -736,6 +736,7 @@ describe("background Done trim", () => {
         status: {
           uncommitted: false,
           sequencerActive: false,
+          unmergedPaths: 0,
           aheadOfBase: 0,
           behindBase: 0,
           unpushed: null,

@@ -3006,7 +3006,11 @@ export interface LegacyImportRequest {
 
 export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: number }>;
 
-/** `created: false` means an existing project at that path was selected instead of inserted. */
+/**
+ * `created: false` means an existing project at that path was selected instead
+ * of inserted: one already on the rail, or a removed one put back on it with
+ * its tickets and Sessions (VC-822).
+ */
 export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
 
 export type ProjectUpdateResult = Result<{ project: Project }>;
@@ -3320,13 +3324,16 @@ export type WorktreeRecreateResult = Result<{ worktreePath: string }>;
  * The finer Details-rail worktree status (done-flow §7 "dirty predicate
  * split"), returned by `volli:worktree-status`. Mirrors main's
  * `getWorktreeStatus` report: is the tree uncommitted, is a sequencer op
- * mid-flight (blocks one-click commit), and how far the branch has moved from
- * its base (`null` when the base is unknown or the count could not be read).
+ * mid-flight or are paths unmerged (either blocks one-click commit), and how
+ * far the branch has moved from its base (`null` when the base is unknown or
+ * the count could not be read).
  */
 export type WorktreeStatusResult = Result<{
   status: {
     uncommitted: boolean;
     sequencerActive: boolean;
+    /** Unmerged index entries (stash-pop/squash conflicts carry no sequencer marker). */
+    unmergedPaths: number;
     aheadOfBase: number | null;
     behindBase: number | null;
     /** Commits not yet on `origin/<branch>`; null when never pushed / no remote. */

@@ -13,7 +13,7 @@ import type Database from "better-sqlite3";
 import { displayTicketId } from "@volli/shared";
 import type { Logger } from "./log/logger";
 import { hostLogger } from "./log/root";
-import { getProjectById } from "./db/projects-repo";
+import { getProjectById, isProjectAttached, isProjectRemoved } from "./db/projects-repo";
 import { getTicket, getTicketRow } from "./db/tickets-repo";
 import {
   getAutomation,
@@ -139,7 +139,9 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
 
   const service = createAutomationService({
     engine,
-    findProject: (projectId) => getProjectById(db, projectId) !== undefined,
+    // A removed project is detached, not deleted (VC-822): its Automations
+    // stay, but none of them is edited, scheduled or run until it is back.
+    findProject: (projectId) => isProjectAttached(db, projectId),
     findAutomation: (automationId) => getAutomation(db, automationId),
     listAutomationsForProject: (projectId) => listAutomationsForProject(db, projectId),
     runsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
@@ -168,7 +170,8 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       findAutomation: (automationId) => getAutomation(db, automationId),
       findRun: (runId) => getAutomationRun(db, runId),
       findTicket: (ticketId) => getTicket(db, ticketId),
-      findProject: (projectId) => getProjectById(db, projectId) !== undefined,
+      findProject: (projectId) => isProjectAttached(db, projectId),
+      projectRemoved: (projectId) => isProjectRemoved(db, projectId),
       listRunsForTicket: (ticketId) => listRunsForTicket(db, ticketId),
       listPossiblyLiveProjectRunsForAutomation: (query) =>
         listPossiblyLiveProjectRunsForAutomation(db, query),
@@ -203,6 +206,8 @@ export function createHostAutomations(input: HostAutomationsInput): HostAutomati
       readTicket: (ticketId) => {
         const row = getTicketRow(db, ticketId);
         if (row === undefined || row.archived_at !== null) return undefined;
+        // An armed column in a removed project starts nothing (VC-822).
+        if (!isProjectAttached(db, row.project_id)) return undefined;
         const ticket = getTicket(db, ticketId);
         const project = getProjectById(db, row.project_id);
         if (ticket === undefined || project === undefined) return undefined;
