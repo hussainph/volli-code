@@ -69,6 +69,12 @@ async function fixture(birth: Surface, initial: Surface, supportsMidConvoSystemM
   let disposed = 0;
   const called: string[] = [];
   let onCall: (tool: string) => void = ignoreCall;
+  // The server's live Settings row, as the assembly reads it per call (VC-771).
+  let enabled = true;
+  let opened = 0;
+  const opener = createMcpProtocolClientOpener({
+    sources: () => ({ store: new MemoryMcpCredentialStore(), environment: {} }),
+  });
   const context = async (sessionId: string): Promise<PiRuntimeContext> => {
     const events = await engine.listEvents({ sessionId });
     const surface = effectiveToolSurface(events);
@@ -132,9 +138,11 @@ async function fixture(birth: Surface, initial: Surface, supportsMidConvoSystemM
             },
           },
         ],
-        open: createMcpProtocolClientOpener({
-          sources: () => ({ store: new MemoryMcpCredentialStore(), environment: {} }),
-        }),
+        open: (server, workspacePath, signal) => {
+          opened++;
+          return opener(server, workspacePath, signal);
+        },
+        configured: () => ({ enabled }),
       });
       return {
         call: async (request, signal, ask) => {
@@ -200,6 +208,10 @@ async function fixture(birth: Surface, initial: Surface, supportsMidConvoSystemM
     turn,
     called,
     disposed: () => disposed,
+    opened: () => opened,
+    setEnabled: (value: boolean) => {
+      enabled = value;
+    },
     select: (value: Surface) => {
       candidate = value;
     },
@@ -300,6 +312,58 @@ describe("Session tool refresh through Pi", { timeout: 20_000 }, () => {
     expect(JSON.stringify(f.script.requests[1]?.[0])).toBe(
       JSON.stringify(f.script.requests[0]?.[0]),
     );
+    await runtime.close();
+    expect(f.disposed()).toBe(2);
+  });
+
+  it("keeps a disabled server's tools through reattach and replay, answers by name, and works again once enabled (VC-771)", async () => {
+    const born: Surface = {
+      ...legacy,
+      tools: [...legacy.tools, tool.providerName],
+      mcpTools: [tool],
+      codeMode: {
+        ...legacy.codeMode!,
+        descriptionVersion: 2,
+        routes: { ...legacy.codeMode!.routes, [tool.providerName]: "deferred" },
+      },
+    };
+    const f = await fixture(born, born);
+    const lookup = {
+      tool: {
+        name: "codemode",
+        args: { code: "text(await tools.mcp__paper__lookup__12345678({}));" },
+      },
+    } as const;
+    f.replies.push(lookup, { text: "Looked up" });
+    await f.turn();
+    expect(f.opened()).toBe(1);
+    expect(JSON.stringify(f.script.requests[1])).toContain("lookup worked");
+    const head = JSON.stringify(f.script.requests[0]?.[0]);
+
+    // A person disables the server. The Session still attaches and replays.
+    f.setEnabled(false);
+    await f.reattach();
+    f.replies.push(lookup, { text: "Disabled" });
+    await f.turn();
+    const disabled = JSON.stringify(f.script.requests[3]);
+    expect(disabled).toContain(
+      "MCP tool lookup is unavailable: its server is disabled in Settings. Ask the person to enable it.",
+    );
+    // The new attachment neither started nor contacted the server.
+    expect(f.opened()).toBe(1);
+    // Its frozen tools keep the name, and the warm declarations are unchanged.
+    expect(JSON.stringify(f.script.requests[2]?.[0])).toBe(head);
+    const events = await f.engine.listEvents({ sessionId: f.sessionId });
+    expect(effectiveToolSurface(events)?.tools).toContain(tool.providerName);
+    expect(effectiveToolSurface(events)?.mcpTools).toEqual([tool]);
+
+    // Enabled again: the same call works on the same attachment.
+    f.setEnabled(true);
+    f.replies.push(lookup, { text: "Enabled" });
+    await f.turn();
+    expect(JSON.stringify(f.script.requests[5])).toContain("lookup worked");
+    expect(f.opened()).toBe(2);
+    expect(f.called).toEqual(["lookup", "lookup", "lookup"]);
     await runtime.close();
     expect(f.disposed()).toBe(2);
   });

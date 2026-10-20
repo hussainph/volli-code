@@ -22,6 +22,7 @@ export function RowAction({
   hint,
   icon: Icon,
   disabled,
+  destructive,
   onAct,
 }: {
   /**
@@ -37,6 +38,11 @@ export function RowAction({
   hint: string;
   icon: PhosphorIcon;
   disabled?: boolean;
+  /**
+   * An irreversible act, inked as one so it never reads as a sibling of the
+   * navigation beside it (VC-292).
+   */
+  destructive?: boolean;
   onAct: () => void;
 }) {
   return (
@@ -47,6 +53,7 @@ export function RowAction({
           variant="ghost"
           aria-label={label}
           disabled={disabled}
+          className={destructive ? "text-destructive hover:text-destructive" : undefined}
           onClick={onAct}
         >
           <Icon />

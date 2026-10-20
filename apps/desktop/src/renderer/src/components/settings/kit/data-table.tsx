@@ -334,14 +334,18 @@ export function TableSearch({
  * A string cell carries its own `title`, because a column narrow enough to be
  * scannable is narrow enough to truncate, and a truncated value the reader
  * cannot recover is worse than a wrapped one. This is the content itself on
- * hover, not a tutorial tooltip.
+ * hover, not a tutorial tooltip. A cell whose children are not a bare string
+ * (a name with a glyph beside it) passes the same text as `title` itself.
  */
 export function Cell({
   children,
+  title,
   muted,
   strong,
 }: {
   children: React.ReactNode;
+  /** The full text on hover, for a cell whose children are not a bare string. */
+  title?: string;
   muted?: boolean;
   /**
    * The row's identity column — the one word a reader scans the table BY.
@@ -352,7 +356,7 @@ export function Cell({
 }) {
   return (
     <span
-      title={typeof children === "string" ? children : undefined}
+      title={title ?? (typeof children === "string" ? children : undefined)}
       className={cn("min-w-0 truncate", muted && "text-muted-foreground", strong && "font-medium")}
     >
       {children}

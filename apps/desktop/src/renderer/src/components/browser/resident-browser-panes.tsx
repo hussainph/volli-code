@@ -6,6 +6,7 @@ import {
   browserViewportSnapshot,
   registerBrowserViewport,
   subscribeBrowserViewports,
+  type BrowserViewport,
 } from "@renderer/components/browser/browser-viewport-registry";
 import { TerminalViewportBox } from "@renderer/components/sessions/terminal-viewport-box";
 import { paneIdForElement } from "@renderer/components/split/split-view-grid";
@@ -17,12 +18,22 @@ import { useWorkspaceStore } from "@renderer/stores/workspace";
  * must include both the selected tab and its area's navigation visibility:
  * retained background panes must not publish over a hidden Home/Ticket surface.
  */
-export function BrowserPaneAnchor({ tabId, visible }: { tabId: string; visible: boolean }) {
+export function BrowserPaneAnchor({
+  tabId,
+  visible,
+  onClose,
+}: {
+  tabId: string;
+  visible: boolean;
+  onClose(): void;
+}) {
   const anchorRef = React.useRef<HTMLDivElement>(null);
+  const closeRef = React.useRef(onClose);
+  closeRef.current = onClose;
   React.useLayoutEffect(() => {
     const anchor = anchorRef.current;
     if (!visible || anchor === null) return;
-    return registerBrowserViewport(tabId, anchor);
+    return registerBrowserViewport(tabId, { anchor, close: () => closeRef.current() });
   }, [tabId, visible]);
 
   return <div ref={anchorRef} data-slot="browser-pane-anchor" className="absolute inset-0" />;
@@ -39,7 +50,7 @@ export function ResidentBrowserPanes({ api }: { api: BrowserApi }) {
   const receive = useBrowserTabsStore((state) => state.receive);
   const viewports = React.useSyncExternalStore(subscribeBrowserViewports, browserViewportSnapshot);
   const [positionedViewports, setPositionedViewports] = React.useState<
-    ReadonlyMap<string, HTMLElement>
+    ReadonlyMap<string, BrowserViewport>
   >(() => new Map());
   React.useLayoutEffect(() => {
     // Child viewport boxes have now positioned themselves. A same-size anchor
@@ -55,25 +66,27 @@ export function ResidentBrowserPanes({ api }: { api: BrowserApi }) {
       {Object.values(byId)
         .filter((tab) => tab.presentation === "tab")
         .map((tab) => {
-          const anchor = viewports.get(tab.tabId) ?? null;
+          const viewport = viewports.get(tab.tabId);
+          const anchor = viewport?.anchor ?? null;
+          // Native page clicks bypass renderer pointer capture. Replayed chords
+          // must start in the pane currently lending this resident its bounds.
+          const focusPane = () => {
+            const paneId = paneIdForElement(anchor);
+            if (paneId === null) return;
+            const workspace = useWorkspaceStore.getState();
+            if (tab.ticketId === null) workspace.focusHomePane(tab.projectId, paneId);
+            else workspace.focusTicketPane(tab.projectId, tab.ticketId, paneId);
+          };
           return (
-            <TerminalViewportBox
-              key={tab.tabId}
-              anchor={anchor}
-              onPointerDownCapture={() => {
-                const paneId = paneIdForElement(anchor);
-                if (paneId === null) return;
-                const workspace = useWorkspaceStore.getState();
-                if (tab.ticketId === null) workspace.focusHomePane(tab.projectId, paneId);
-                else workspace.focusTicketPane(tab.projectId, tab.ticketId, paneId);
-              }}
-            >
+            <TerminalViewportBox key={tab.tabId} anchor={anchor} onPointerDownCapture={focusPane}>
               <div className="flex h-full min-h-0 flex-col">
                 <BrowserPane
                   tab={tab}
-                  visible={anchor !== null && positionedViewports.get(tab.tabId) === anchor}
+                  visible={anchor !== null && positionedViewports.get(tab.tabId) === viewport}
                   api={api}
                   onTabState={receive}
+                  onClose={viewport?.close}
+                  onFocusPane={focusPane}
                 />
               </div>
             </TerminalViewportBox>

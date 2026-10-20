@@ -1,14 +1,12 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import { ClampedMarkdown } from "./clamped-markdown";
 
-// The renderer test project runs under Node with no DOM, and dompurify only
-// binds `sanitize` when a window exists. The clamp is the subject here, not
-// sanitization (unconditional in `Markdown`, per its own contract), so the
-// mock is the identity and the markdown pipeline downstream stays covered by
-// the app's runtime use.
-vi.mock("dompurify", () => ({ default: { sanitize: (raw: string) => raw } }));
+// jsdom because dompurify only binds `sanitize` when a window exists, and
+// `Markdown` builds its own sanitizer instance at import. The clamp is the
+// subject here, not sanitization — `markdown.test.tsx` pins that.
 
 /**
  * Static markup can only see the pre-measurement frame — the layout effect

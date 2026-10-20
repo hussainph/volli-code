@@ -181,6 +181,7 @@ function surface(ticket: boolean, { oldChat = false } = {}) {
     const resolution = resolveHomeTabs({
       tabIds: tabIds().filter((id) => id !== permanentTabId),
       recorded: provisional.activeOverrideTabId ?? recorded,
+      recordedOrder: [],
       containerActive: null,
       durableChatIds: [],
       browserTabsHydrated: true,

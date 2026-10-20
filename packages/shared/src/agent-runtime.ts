@@ -537,6 +537,11 @@ export interface RuntimeWebDocument {
   /** Whether the boundary cut the text short of the document's end. */
   truncated: boolean;
   /**
+   * The text before the character bound cut it, when that bound did (VC-237):
+   * for the runtime to save beside the Session, never to show the model.
+   */
+  whole?: RuntimeWholeText;
+  /**
    * How a GitHub page URL was read instead of as a page, when it was: a `blob`
    * URL as the raw file it shows, a `tree` URL as the listing GitHub's git
    * trees API gives for that directory. Set only when the answer came from the
@@ -544,6 +549,27 @@ export interface RuntimeWebDocument {
    * rather than prose, so the runtime states it in its own words.
    */
   via?: "github-raw-file" | "github-directory-listing";
+}
+
+/**
+ * The whole of a read whose bounded copy is what the model reads (VC-237).
+ *
+ * A host bound exists to keep one result small enough for a conversation, and
+ * a dense page is exactly where the part it cut is the part someone needs. So
+ * the host hands the runtime this beside the bounded copy, and the runtime
+ * saves it to the Session's own saved tool output and names the file in the
+ * result: the model reads the bounded copy, and the rest only by asking for
+ * it. Untrusted exactly as the bounded copy is, and never part of the content
+ * a model is sent.
+ */
+export interface RuntimeWholeText {
+  text: string;
+  /**
+   * Whether even this stops at one of Volli's own bounds short of the source's
+   * end — the most of a page a parse or a tree walk takes on, or the console a
+   * tab keeps — because the whole is still a bounded read, not an unbounded one.
+   */
+  bounded: boolean;
 }
 
 /**
@@ -674,6 +700,20 @@ export interface RuntimeBrowserSnapshot extends RuntimeBrowserPage {
   /** Whether the host cut the tree at its own bound before the page ended. */
   truncated: boolean;
   /**
+   * The tree printed past the bound that cut {@link snapshotText}, when one
+   * did (VC-237), for the runtime to save. Only the elements
+   * {@link snapshotText} shows carry refs in it: an element past the cut was
+   * never shown, so it has no ref to act on.
+   */
+  whole?: RuntimeWholeText;
+  /**
+   * Whether the tree exposed nothing at all (VC-277): the page has rendered no
+   * accessible structure yet, or draws without any. A read that failed or
+   * timed out never answers with this — it fails the call — so an empty
+   * {@link snapshotText} with this false is Volli's bound, never the page.
+   */
+  empty: boolean;
+  /**
    * An opaque id for the picture the host took of the page after this call
    * changed it, for the person's transcript card — never the bytes, which
    * stay with the host (VC-238). Null when nothing changed (a plain read) or
@@ -690,6 +730,16 @@ export interface RuntimeBrowserActResult extends RuntimeBrowserSnapshot {
    * was empty. Null altogether for page-level actions (press, scroll, wait).
    */
   target: { ref: string; name: string | null } | null;
+  /**
+   * What Volli saw move between the tab as the action found it and the fresh
+   * read after it (VC-277), so a click the page ignored reads differently
+   * from one that worked: the tab's URL, its navigation generation, and the
+   * accessibility tree's content — roles, names, values and states such as
+   * checked or expanded, but not focus, which every click moves. The tree is
+   * compared with the latest read before the action, so a page that changes
+   * by itself can read as changed.
+   */
+  changed: { url: boolean; generation: boolean; tree: boolean };
 }
 
 /**
@@ -777,6 +827,12 @@ export interface RuntimeBrowserConsoleMessage {
 export interface RuntimeBrowserConsole extends RuntimeBrowserPage {
   messages: readonly RuntimeBrowserConsoleMessage[];
   truncated: boolean;
+  /**
+   * The longer console the host keeps, when {@link messages} left part of it
+   * out (VC-237), for the runtime to save: every message it still holds,
+   * oldest first, each cut only to that longer record's own bound.
+   */
+  kept?: { messages: readonly RuntimeBrowserConsoleMessage[]; bounded: boolean };
 }
 
 /**
@@ -1209,7 +1265,7 @@ export interface SessionRuntimeSpec {
       signal: AbortSignal,
     ): Promise<"signed in" | "declined" | "still missing">;
     redact(text: string): string;
-    /** Whether images may carry a credential; absent means fail closed. */
+    /** Whether credential values are held; absent means shell spills are disabled. */
     hasValues?(): boolean;
   };
   /**

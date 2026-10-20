@@ -169,8 +169,9 @@ export type TicketEventPayload =
   /**
    * The retention pass trimmed the worktree's ignored content (VC-340).
    * `entries` is how many ignored paths were removed and `bytes` their apparent
-   * size; `kept` is how many ignored paths were PRESERVED as configuration,
-   * because that number is the difference between a trim and a `git clean -fdX`.
+   * size; `kept` is how many ignored paths were KEPT (preserved configuration,
+   * nested git repositories), because that number is the difference between a
+   * trim and a blind `git clean -fdX`.
    */
   | { kind: "worktree_trimmed"; entries: number; bytes: number; kept: number }
   | { kind: "attachment_added"; attachmentId: string; label: string }

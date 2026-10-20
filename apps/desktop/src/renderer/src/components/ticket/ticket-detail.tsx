@@ -1542,6 +1542,7 @@ export function TicketDetail({
               key={pane.id}
               tabId={paneBrowserTab.tabId}
               visible={split.panes.some((visiblePane) => visiblePane.activeTabId === tab.id)}
+              onClose={() => closeTab(tab)}
             />
           ) : null}
           {tab.kind === "session" ? (

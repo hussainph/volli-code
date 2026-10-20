@@ -2515,6 +2515,66 @@ describe("tab arrangement — Home (VC-189)", () => {
   });
 });
 
+describe("the strip's record — Home (VC-105)", () => {
+  const strip = ["chat:c1", "terminal-1", "chat:c2", "file:src/app.ts", "chat:c3"];
+
+  it("records the strip as drawn for that project only, and nothing else", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().previewHomeFile("project-a", "src/app.ts");
+    const files = store.getState().byProject["project-a"]?.projectFiles;
+    store.getState().recordHomeTabOrder("project-a", strip);
+
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual(strip);
+    // A receipt, not a drag: the preview tab is neither pinned nor moved.
+    expect(store.getState().byProject["project-a"]?.projectFiles).toBe(files);
+    expect(store.getState().byProject["project-b"]).toBeUndefined();
+  });
+
+  it("leaves the store by identity when the record already says it", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    const empty = store.getState();
+    store.getState().recordHomeTabOrder("project-a", []);
+    expect(store.getState()).toBe(empty);
+
+    store.getState().recordHomeTabOrder("project-a", strip);
+    const recorded = store.getState();
+    store.getState().recordHomeTabOrder("project-a", [...strip]);
+    expect(store.getState()).toBe(recorded);
+  });
+
+  it("sanitizes what it is handed", () => {
+    const store = createWorkspaceStore(createMemoryStorage());
+    store.getState().recordHomeTabOrder("project-a", ["chat:c1", "", "chat:c1", "chat:c2"]);
+
+    expect(store.getState().byProject["project-a"]?.homeTabOrder).toEqual(["chat:c1", "chat:c2"]);
+  });
+
+  it("brings the whole strip back across a relaunch, with the same tab in front", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().setHomeActiveTab("project-a", "chat:c2");
+    store.getState().recordHomeTabOrder("project-a", strip);
+
+    const rehydrated = createWorkspaceStore(storage).getState().byProject["project-a"];
+    // Verbatim, dead terminal included: whether an id still names anything is
+    // asked live against the listing (`home-tabs.ts`), never at rehydrate.
+    expect(rehydrated?.homeTabOrder).toEqual(strip);
+    expect(rehydrated?.homeActiveTab).toBe("chat:c2");
+  });
+
+  it("prunes a record whose strip emptied with the Board in front", () => {
+    const storage = createMemoryStorage();
+    const store = createWorkspaceStore(storage);
+    store.getState().recordHomeTabOrder("project-a", strip);
+    store.getState().recordHomeTabOrder("project-a", []);
+
+    const parsed = JSON.parse(storage.getItem("volli:workspace")!) as {
+      state: { byProject: Record<string, unknown> };
+    };
+    expect(parsed.state.byProject["project-a"]).toBeUndefined();
+  });
+});
+
 describe("tab arrangement — the ticket workspace (VC-189)", () => {
   it("records the strip's new order on that ticket's record", () => {
     const store = createWorkspaceStore(createMemoryStorage());

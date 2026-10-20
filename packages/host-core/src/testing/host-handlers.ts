@@ -28,7 +28,7 @@ import {
 import { createHostHandlers, type HostHandlers } from "../handlers/host-handlers";
 import type { RuntimeAutomations } from "../session-runtime/automations";
 import type { HostSessionPorts } from "../session-services";
-import { runGitCapturing, runGitCapturingAsync, type RunGit, type RunGitAsync } from "../worktree";
+import { runGitCapturingAsync, type RunGitAsync } from "../worktree";
 import type { BusyWorktreeSites } from "../worktree/activity";
 
 /** What a test may observe or substitute around a command. */
@@ -40,7 +40,6 @@ export interface TestHandlerPorts {
   readonly notify?: (request: NotificationRequest) => unknown;
   readonly onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
   readonly detachedWork?: DetachedWorkPort;
-  readonly git?: RunGit;
   readonly gitAsync?: RunGitAsync;
   readonly now?: () => number;
   /** Sees every policy verdict at the map, before the handler it admits. */
@@ -102,7 +101,6 @@ export function testHostHandlers(ports: TestHandlerPorts): HostHandlerMap {
       ? {
           worktree: {
             db: ports.db,
-            git: ports.git ?? runGitCapturing,
             gitAsync: ports.gitAsync ?? runGitCapturingAsync,
             blobsRoot: "",
           },

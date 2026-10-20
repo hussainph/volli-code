@@ -586,7 +586,7 @@ they are listed so the index accounts for every module in the bundle.
   shiki@4.4.3  MIT  [bundled into a chunk]
   signal-exit@3.0.7  ISC  [bundled into a chunk]
   sonner@2.0.8  MIT  [bundled into a chunk]
-  source-map-js@1.2.1  BSD-3-Clause  [node_modules tree]
+  source-map-js@1.2.2  BSD-3-Clause  [node_modules tree]
   space-separated-tokens@2.0.2  MIT  [bundled into a chunk]
   standardwebhooks@1.1.1  MIT  [bundled into a chunk]
   streamdown@2.6.0  Apache-2.0  [bundled into a chunk]
@@ -10825,7 +10825,7 @@ SOFTWARE.
 
 
 =========================================================================================================
-Packages: source-map-js@1.2.1
+Packages: source-map-js@1.2.2
 SPDX: BSD-3-Clause
 File: LICENSE
 ---------------------------------------------------------------------------------------------------------

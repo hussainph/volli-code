@@ -177,6 +177,9 @@ export interface SessionHarnessNotice {
    * Whether this announce named a DIFFERENT harness than the session was
    * already believed to be running. Not a gate on the notice — every launch is
    * broadcast — but the durable record only has to be repointed when it moved.
+   * A launch the wrapper minted an id for moves nothing until its own hook
+   * proves it, so it is announced with `false` and announced again, with
+   * `true`, when that proof lands and the record moves (VC-807).
    */
   changed: boolean;
   /** Epoch ms the announce was ingested (main's clock). */

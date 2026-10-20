@@ -130,6 +130,48 @@ export function markSpawnExited(db: Database.Database, id: string, exitedAt: num
   ).run(exitedAt, id);
 }
 
+/**
+ * Records that Volli SIGSTOPped the terminal tree this row names (`parkedAt`)
+ * or woke it (`null`) — VC-833. Only the first park time is kept while the
+ * mark stands: a breathe cycle re-parks an already-marked row every sweep, and
+ * re-writing the time would say the tree was frozen later than it was.
+ */
+export function markSpawnParked(db: Database.Database, id: string, parkedAt: number | null): void {
+  if (parkedAt === null) {
+    prepared<[string]>(
+      db,
+      "UPDATE spawned_processes SET parked_at = NULL WHERE id = ? AND parked_at IS NOT NULL",
+    ).run(id);
+    return;
+  }
+  prepared<[number, string]>(
+    db,
+    "UPDATE spawned_processes SET parked_at = ? WHERE id = ? AND parked_at IS NULL",
+  ).run(parkedAt, id);
+}
+
+/**
+ * Open terminal rows a launch before this one left marked parked: the trees a
+ * host that died without waking them left frozen. `parkedBefore` is this
+ * launch's start, so a park this launch made is never read as a stranded one.
+ */
+export function listParkedTerminalSpawns(
+  db: Database.Database,
+  parkedBefore: number,
+): SpawnLedgerEntry[] {
+  const rows = prepared<[number], SpawnRow>(
+    db,
+    `SELECT id, session_id, ticket_id, project_id, kind, pid, pgid, started_at, cwd, command
+       FROM spawned_processes
+      WHERE exited_at IS NULL AND kind = 'terminal' AND parked_at < ?
+      ORDER BY started_at ASC`,
+  ).all(parkedBefore);
+  return rows.flatMap((row) => {
+    const entry = spawnLedgerEntryFrom(row);
+    return entry === null ? [] : [entry];
+  });
+}
+
 /** Every row with no exit recorded, oldest first. */
 export function listOpenSpawns(db: Database.Database): SpawnLedgerEntry[] {
   const rows = prepared<[], SpawnRow>(

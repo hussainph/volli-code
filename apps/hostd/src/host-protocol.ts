@@ -34,7 +34,7 @@ import {
   createBoardChangeFeed,
   type BoardChangeFeed,
 } from "@volli/host-core/board";
-import { getProjectById, getTicketRow, listProjects, prepared } from "@volli/host-core/db";
+import { getTicketRow, isProjectAttached, listProjects, prepared } from "@volli/host-core/db";
 import { admittedHandlers, ROUTER_POLICY, type HostHandlerMap } from "@volli/host-core/handlers";
 import {
   HOST_CONNECTION_ONLY_FEATURES,
@@ -146,12 +146,16 @@ export function parseListen(value: string): HostProtocolBind | string {
   return { host, port };
 }
 
-/** The highest epoch this host records for a project, or null when it has no such project. */
+/**
+ * The highest epoch this host records for a project, or null when it has no
+ * such project on its rail: a removed project is detached, not deleted
+ * (VC-822), and no Workspace door serves it.
+ */
 export function servedWorkspace(
   db: Database.Database,
   workspaceId: string,
 ): ServedWorkspace | null {
-  if (getProjectById(db, workspaceId) === undefined) return null;
+  if (!isProjectAttached(db, workspaceId)) return null;
   // An aggregate answers one row, with a null epoch when there is none.
   const { epoch } = prepared<[string], { epoch: number | null }>(
     db,

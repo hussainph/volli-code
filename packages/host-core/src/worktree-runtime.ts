@@ -15,7 +15,6 @@ import { blobsRoot } from "./blob-store";
 import type { HostEventBus } from "./ports";
 import {
   createOrphanCleanupEngine,
-  runGitCapturing,
   runGitCapturingAsync,
   SqliteOrphanCleanupLedger,
 } from "./worktree";
@@ -61,7 +60,6 @@ export function worktreeDeps(
 ): WorktreePorts {
   return {
     db,
-    git: runGitCapturing,
     gitAsync: runGitCapturingAsync,
     home: resolveHome(),
     onPhase: (ticketId, phase) => broadcastPhase(ports.events, ticketId, phase),

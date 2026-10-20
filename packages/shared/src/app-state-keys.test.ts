@@ -92,6 +92,7 @@ describe("app_state key registry", () => {
       "volli:new-ticket-draft": "client-local VC-567",
       "volli:automation-editor-draft": "client-local stays",
       "volli:update-allow-prerelease": "client-local stays",
+      "volli:update-last-check": "client-local stays",
       "volli:notification-preferences": "client-local VC-578",
       "volli:model-picker-view": "client-local VC-572",
       "volli:vc354-perf:": "client-local stays",

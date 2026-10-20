@@ -11,6 +11,7 @@ import {
   registerBrowserViewport,
   subscribeBrowserViewports,
 } from "./browser-viewport-registry";
+import { runBrowserAppShortcut } from "./browser-app-shortcuts";
 import { BrowserPaneAnchor, ResidentBrowserPanes } from "./resident-browser-panes";
 import { useBrowserTabsStore } from "@renderer/stores/browser-tabs";
 
@@ -110,13 +111,18 @@ function address(): HTMLInputElement {
   return host.querySelector<HTMLInputElement>('input[placeholder="Enter a URL"]')!;
 }
 
-function renderAnchor(key: string | null, visible = true, paneId = "pane-a"): void {
+function renderAnchor(
+  key: string | null,
+  visible = true,
+  paneId = "pane-a",
+  onClose = vi.fn(),
+): void {
   act(() => {
     root.render(
       <>
         {key !== null && (
           <div key={key} data-pane-id={paneId}>
-            <BrowserPaneAnchor tabId="opaque-tab-a" visible={visible} />
+            <BrowserPaneAnchor tabId="opaque-tab-a" visible={visible} onClose={onClose} />
           </div>
         )}
         <ResidentBrowserPanes api={api} />
@@ -231,8 +237,8 @@ it("shows both pair members and hides only the anchor whose surface becomes inac
     act(() =>
       root.render(
         <>
-          <BrowserPaneAnchor tabId="opaque-tab-a" visible={firstVisible} />
-          <BrowserPaneAnchor tabId="opaque-tab-b" visible />
+          <BrowserPaneAnchor tabId="opaque-tab-a" visible={firstVisible} onClose={() => {}} />
+          <BrowserPaneAnchor tabId="opaque-tab-b" visible onClose={() => {}} />
           <ResidentBrowserPanes api={api} />
         </>,
       ),
@@ -277,8 +283,8 @@ it("unmounts only on removal or leaving strip presentation, not unrelated store 
 
 describe("browser viewport registry", () => {
   it("keeps snapshots stable and old cleanup cannot clear a replacement anchor", () => {
-    const first = document.createElement("div");
-    const second = document.createElement("div");
+    const first = { anchor: document.createElement("div"), close: vi.fn() };
+    const second = { anchor: document.createElement("div"), close: vi.fn() };
     const changed = vi.fn();
     const unsubscribe = subscribeBrowserViewports(changed);
     const empty = browserViewportSnapshot();
@@ -299,4 +305,42 @@ describe("browser viewport registry", () => {
     expect(changed).toHaveBeenCalledTimes(3);
     unsubscribe();
   });
+});
+
+it("routes native-page chords through the current surface without remounting the resident", () => {
+  receive(tab());
+  const staleClose = vi.fn();
+  const latestClose = vi.fn();
+  renderAnchor("home", true, "home-pane", staleClose);
+  renderAnchor("home", true, "home-pane", latestClose);
+  expect(runBrowserAppShortcut({ tabId: "opaque-tab-a", shortcut: { kind: "close-tab" } })).toBe(
+    true,
+  );
+  expect(latestClose).toHaveBeenCalledOnce();
+  expect(staleClose).not.toHaveBeenCalled();
+
+  receive(tab({ projectId: "project-b", ticketId: "ticket-b" }));
+  renderAnchor("ticket", true, "ticket-pane", latestClose);
+  runBrowserAppShortcut({
+    tabId: "opaque-tab-a",
+    shortcut: {
+      kind: "replay",
+      chord: {
+        key: "ArrowLeft",
+        code: "ArrowLeft",
+        metaKey: true,
+        ctrlKey: true,
+        altKey: false,
+        shiftKey: false,
+        repeat: false,
+      },
+    },
+  });
+  expect(focusTicketPane).toHaveBeenCalledWith("project-b", "ticket-b", "ticket-pane");
+  renderAnchor(null);
+  expect(runBrowserAppShortcut({ tabId: "opaque-tab-a", shortcut: { kind: "close-tab" } })).toBe(
+    false,
+  );
+  expect(latestClose).toHaveBeenCalledTimes(1);
+  expect(mounted).toHaveBeenCalledTimes(1);
 });

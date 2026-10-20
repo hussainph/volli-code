@@ -1072,6 +1072,10 @@ export function ChatPlane({
         .map((message) => message.id),
     );
     for (const [id, label] of deliveryLabels) if (label === "Pending") ids.add(id);
+    // Each id is stamped with the time it was first seen pending and keeps
+    // that stamp on every later pass, so re-running this memo cannot move a
+    // clock; only a new id reads the time.
+    // oxlint-disable-next-line react/purity -- first-seen stamp, idempotent per id
     const now = Date.now();
     const next = new Map([...ids].map((id) => [id, waitTimes.current.get(id) ?? now]));
     waitTimes.current = next;
@@ -2971,6 +2975,7 @@ export const ChatTurn = React.memo(function ChatTurn({
           // the names surface where they were actually delivered.
           <div
             className="flex flex-wrap items-center gap-1.5 pt-2 text-ui text-muted-foreground"
+            role="group"
             aria-label="Skills delivered with this message"
           >
             <BookOpenIcon aria-hidden className="size-3.5 shrink-0" />
@@ -2999,7 +3004,13 @@ export const ChatTurn = React.memo(function ChatTurn({
  * Refusals remain immediate; ordinary round trips never show waiting copy. */
 function MessageDelivery({ label, since }: { label: string; since: number | undefined }) {
   const failed = label === "Not delivered" || label === "Delivery unconfirmed";
-  const remaining = since === undefined ? 600 : Math.max(0, 600 - (Date.now() - since));
+  // The clock is read once, at mount, so the wait does not restart per render.
+  // A stamp present at mount ends the wait at `since + 600`. A stamp that
+  // arrives later can end it before `since + 600`, but never sooner than
+  // 600ms after the tab mounted.
+  const [mountedAt] = React.useState(() => Date.now());
+  const remaining =
+    since === undefined ? 600 : Math.min(600, Math.max(0, 600 - (mountedAt - since)));
   const waited = useDelayedPresence(!failed, remaining, remaining === 0);
   if (!failed && !waited) return null;
   const Icon = failed ? WarningIcon : ClockIcon;

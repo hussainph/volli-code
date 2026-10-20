@@ -21,7 +21,13 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { autoTitleFromKickoff, DEFAULT_KICKOFF_MESSAGE } from "@volli/shared";
-import type { Project, SessionOrigin, Ticket, TicketEventActor } from "@volli/shared";
+import type {
+  CommandReceipt,
+  Project,
+  SessionOrigin,
+  Ticket,
+  TicketEventActor,
+} from "@volli/shared";
 
 import type { SessionStartedNotice } from "@volli/shared";
 import { getTicket, insertTicket } from "../db/tickets-repo";
@@ -29,7 +35,12 @@ import { insertProject } from "../db/projects-repo";
 import { openTestDb, testProject, testTicket } from "../db/test-helpers";
 import type { TestDb } from "../db/test-helpers";
 import { StructuredSessionsError, type SessionStartInput } from "./sessions";
-import { startSessionModelOverride, startSessionOperation } from "./start-session";
+import {
+  KickoffRefusedError,
+  kickoffSubmitter,
+  startSessionModelOverride,
+  startSessionOperation,
+} from "./start-session";
 
 let ctx: TestDb | undefined;
 
@@ -45,12 +56,20 @@ const COMPOSE = {
   autoTitle: autoTitleFromKickoff,
 };
 
-function harness(overrides: { state?: "ready" | "needs-recovery"; startError?: unknown } = {}): {
+function harness(
+  overrides: {
+    state?: "ready" | "needs-recovery";
+    receipt?: CommandReceipt | null;
+    startError?: unknown;
+  } = {},
+): {
   project: Project;
   ticket: Ticket;
   ports: Parameters<typeof startSessionOperation>[0];
   startInputs: SessionStartInput[];
-  kickoffs: { sessionId: string; text: string; commandId: string; messageId: string }[];
+  kickoffs: Parameters<
+    NonNullable<Parameters<typeof startSessionOperation>[0]["submitSessionMessage"]>
+  >[0][];
   refinements: { sessionId: string; firstMessage: string; heuristicTitle: string }[];
   mutations: unknown[];
   notices: SessionStartedNotice[];
@@ -71,7 +90,7 @@ function harness(overrides: { state?: "ready" | "needs-recovery"; startError?: u
   insertTicket(ctx.db, ticket);
 
   const startInputs: SessionStartInput[] = [];
-  const kickoffs: { sessionId: string; text: string; commandId: string; messageId: string }[] = [];
+  const kickoffs: ReturnType<typeof harness>["kickoffs"] = [];
   const refinements: { sessionId: string; firstMessage: string; heuristicTitle: string }[] = [];
   const mutations: unknown[] = [];
   const notices: SessionStartedNotice[] = [];
@@ -94,7 +113,7 @@ function harness(overrides: { state?: "ready" | "needs-recovery"; startError?: u
           return {
             sessionId: STARTED_SESSION,
             state: overrides.state ?? ("ready" as const),
-            receipt: null,
+            receipt: overrides.receipt ?? null,
             throughSequence: 2,
             model: {
               providerId: "openai-codex",
@@ -179,6 +198,7 @@ describe("startSessionOperation", () => {
       sessionId: STARTED_SESSION,
       ticketDisplayId: "VC-1",
       state: "ready",
+      kickoff: "submitted",
       model: { providerId: "openai-codex", modelId: "gpt-5.6-sol", reasoningLevel: "high" },
       title: "Work on VC-1",
     });
@@ -298,15 +318,15 @@ describe("startSessionOperation", () => {
     expect(fixture.refinements).toEqual([]);
   });
 
-  it("makes zero refinement requests when the kickoff never went out", async () => {
+  it("makes zero refinement requests while the kickoff is only held", async () => {
     const fixture = harness({ state: "needs-recovery" });
 
     await start(fixture, { message: "Validate VC-52 before release" });
 
-    // A Session held for recovery has not sent this message and may never
-    // send it — titling from text nobody submitted would spend a model call
-    // on a conversation that did not happen. Same gate as the kickoff itself.
-    expect(fixture.kickoffs).toEqual([]);
+    // A Session held for recovery has not run this message and may never run
+    // it — titling from text no turn has read would spend a model call on a
+    // conversation that has not happened. Same gate as the kickoff itself.
+    expect(fixture.kickoffs.map(({ delivery }) => delivery)).toEqual(["queue"]);
     expect(fixture.refinements).toEqual([]);
   });
 
@@ -346,16 +366,90 @@ describe("startSessionOperation", () => {
     expect(fixture.notices[0]).toMatchObject({ actor: "session", actorTicket: "VC-2" });
   });
 
-  it("holds the kickoff back from a Session that needs recovery, but still reports it", async () => {
+  it("holds the kickoff of a Session that needs recovery under the ids a ready start spends (VC-799)", async () => {
     const fixture = harness({ state: "needs-recovery" });
 
-    const result = await start(fixture);
+    const result = await start(fixture, { operationId: "op-1", message: "Fix the flaky test" });
 
-    expect(result).toMatchObject({ sessionId: STARTED_SESSION, state: "needs-recovery" });
-    expect(fixture.kickoffs).toEqual([]);
+    expect(result).toMatchObject({
+      sessionId: STARTED_SESSION,
+      state: "needs-recovery",
+      attachFailure: "the attach reported no receipt",
+      kickoff: "held",
+    });
+    // Queued in the Session's own durable follow-up queue, which releases it at
+    // the next ready attach (the app's Retry), so the Retry runs it.
+    expect(fixture.kickoffs).toEqual([
+      {
+        sessionId: STARTED_SESSION,
+        text: "Fix the flaky test",
+        commandId: "op-1:kickoff",
+        messageId: "op-1:kickoff-message",
+        origin: { kind: "session", sessionId: "caller" },
+        delivery: "queue",
+      },
+    ]);
     // The Session exists durably either way, so the surfaces still learn of it.
     expect(fixture.mutations).toHaveLength(1);
     expect(fixture.notices).toHaveLength(1);
+  });
+
+  describe("says why the attach was not ready (VC-659)", () => {
+    const receipt = { id: "receipt-1", commandId: "start-1", recordedAt: 10, sequence: 10 };
+    it.each([
+      [
+        "the rejection's own diagnosis",
+        {
+          ...receipt,
+          status: "rejected" as const,
+          code: "location_unavailable",
+          detail:
+            "Couldn't prepare the worktree at /w/VC-1 — on branch other; this ticket's branch is volli/VC-1-ship-cli.",
+        },
+        "Couldn't prepare the worktree at /w/VC-1 — on branch other; this ticket's branch is volli/VC-1-ship-cli.",
+      ],
+      [
+        "the rejection code when it has no detail",
+        { ...receipt, status: "rejected" as const, code: "attach_failed", detail: null },
+        "attach_failed",
+      ],
+      [
+        "a receipt that never reconciled",
+        { ...receipt, status: "unreconciled" as const, detail: null },
+        "the attach is unreconciled",
+      ],
+    ])("with %s", async (_label, refused, failure) => {
+      const fixture = harness({ state: "needs-recovery", receipt: refused });
+
+      const result = await start(fixture);
+
+      expect(result).toMatchObject({ state: "needs-recovery", attachFailure: failure });
+      // Whatever refused the attach, the kickoff is held for the Retry (VC-799).
+      expect(fixture.kickoffs.map(({ delivery }) => delivery)).toEqual(["queue"]);
+    });
+  });
+
+  it("says a needs-recovery kickoff was not held when the queue refused it, and logs why", async () => {
+    const fixture = harness({ state: "needs-recovery" });
+    fixture.ports.submitSessionMessage = async () => {
+      throw new Error("The kickoff was refused (session_archived)");
+    };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await start(fixture);
+
+      expect(result).toMatchObject({ state: "needs-recovery", kickoff: "unsent" });
+      expect(errors).toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("has nothing to hold a kickoff with when no runtime delivers one", async () => {
+    const fixture = harness({ state: "needs-recovery" });
+    delete fixture.ports.submitSessionMessage;
+
+    expect(await start(fixture)).toMatchObject({ state: "needs-recovery", kickoff: "unsent" });
   });
 
   // Refusals are deliberately NOT translated here: the socket had a fixed
@@ -401,6 +495,80 @@ describe("startSessionOperation", () => {
     } finally {
       errors.mockRestore();
     }
+  });
+});
+
+/** A runtime that answers every command with `receipt`, recording what it was sent. */
+function kickoffRuntime(receipt: Record<string, unknown> | null) {
+  const commands: unknown[] = [];
+  return {
+    commands,
+    submit: kickoffSubmitter({
+      command: async (request) => {
+        commands.push(request);
+        return { receipt } as never;
+      },
+    }),
+  };
+}
+
+/**
+ * The kickoff port every start door is handed. It reads the receipt the
+ * runtime answers with, so a kickoff refused on a READY attach is reported
+ * rather than silent (VC-799).
+ */
+describe("kickoffSubmitter", () => {
+  const runtime = kickoffRuntime;
+  const input = {
+    sessionId: STARTED_SESSION,
+    text: "work",
+    commandId: "op:kickoff",
+    messageId: "op:kickoff-message",
+  };
+
+  it("submits one user message under the caller's ids, and settles on an accepted receipt", async () => {
+    const r = runtime({ status: "accepted" });
+
+    await expect(r.submit(input)).resolves.toBeUndefined();
+
+    expect(r.commands).toEqual([
+      {
+        origin: undefined,
+        commandId: "op:kickoff",
+        sessionId: STARTED_SESSION,
+        command: {
+          kind: "message.submit",
+          message: {
+            id: "op:kickoff-message",
+            role: "user",
+            parts: [{ type: "text", text: "work" }],
+          },
+        },
+      },
+    ]);
+  });
+
+  it("asks the runtime to queue it when told to hold it", async () => {
+    const r = runtime({ status: "accepted" });
+
+    await r.submit({ ...input, delivery: "queue" });
+
+    expect(r.commands[0]).toMatchObject({ command: { kind: "message.submit", delivery: "queue" } });
+  });
+
+  it("rejects with the refusal's own words when the runtime refused the kickoff", async () => {
+    await expect(
+      runtime({ status: "rejected", code: "no_live_executor", detail: "No live executor" }).submit(
+        input,
+      ),
+    ).rejects.toThrow("The kickoff was refused (no_live_executor): No live executor");
+    await expect(
+      runtime({ status: "rejected", code: "session_archived", detail: null }).submit(input),
+    ).rejects.toThrow("The kickoff was refused (session_archived)");
+    // A distinct error, so a caller can tell a durable refusal from a lost send.
+    await expect(
+      runtime({ status: "rejected", code: "session_archived", detail: null }).submit(input),
+    ).rejects.toBeInstanceOf(KickoffRefusedError);
   });
 });
 

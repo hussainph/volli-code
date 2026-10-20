@@ -31,13 +31,17 @@ import type {
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
 import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
 import { isHostHandlerMap } from "./handlers/handler-map";
-import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
+import type {
+  AgentCommandContext,
+  EnvSessionIdentity,
+  PendingHarnessLaunch,
+} from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
 import type { DoorActor } from "./agent-dispatch/resolution";
 import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
 import { terminalSessionRecord } from "./session-control";
-import { runGitCapturing, runGitCapturingAsync } from "./worktree";
+import { runGitCapturingAsync } from "./worktree";
 
 export {
   composeProjectBrief,
@@ -77,14 +81,20 @@ export function createAgentCommandService(
   // detached); the global `crypto.randomUUID` would lose its Crypto `this` when
   // called via this alias and throw "Value of 'this' must be of type Crypto".
   const newId = options.newId ?? randomUUID;
-  const git = options.git ?? runGitCapturing;
-  // Keep the default physically asynchronous. A custom synchronous test seam
-  // may still serve status/diff reads, but sync and radar must never fall back
-  // to it for a hook-bearing or whole-worktree operation.
+  // Keep the default physically asynchronous: every worktree verb this door
+  // serves runs on it, and there is no synchronous runner to fall back to.
   const gitAsync = options.gitAsync ?? runGitCapturingAsync;
   const worktreeExists = options.worktreeExists ?? existsSync;
   const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
+  /**
+   * The launch each Session's wrapper minted an id for that has not yet proved
+   * itself (VC-807). In memory, like the watermarks: a pending launch is worth
+   * something for the second or so between a wrapper's mint and the harness's
+   * own startup hook, and a restart in between costs that one launch its
+   * promotion — its hooks still write the seed they report.
+   */
+  const pendingLaunches = new Map<string, PendingHarnessLaunch>();
   /**
    * How this door decides whether `VOLLI_SESSION` is a claim or an
    * authentication (VC-163).
@@ -238,12 +248,12 @@ export function createAgentCommandService(
         options,
         now,
         newId,
-        git,
         gitAsync,
         worktreeExists,
         sessionEngine,
         watermarks,
         terminalUpdateLocks,
+        pendingLaunches,
         projects,
         loadProjections,
         loadSessions,
