@@ -33,9 +33,9 @@ allowBuilds:
   workerd: true
 
 catalog:
-  "@types/node": ^26.3.0
-  "@types/react": ^19.2.18
-  "@types/react-dom": ^19.2.5
+  "@types/node": ^26.6.5
+  "@types/react": ^19.3.0
+  "@types/react-dom": ^19.3.0
   typescript: ~7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@0.3.0
   vite-plus: 0.3.0
@@ -82,6 +82,12 @@ minimumReleaseAgeExclude:
 
 overrides:
   vite: "catalog:"
+  # Pi 1.3 renames durable provider ids (including azure-openai-responses).
+  # Keep the reviewed 1.0 runtime family until a compatibility migration lands;
+  # its internal ^1.0.0 ranges must not silently select the newer family.
+  "@earendil-works/pi-ai@^1.0.0": "1.0.0"
+  "@earendil-works/pi-telemetry@^1.0.0": "1.0.0"
+  "@earendil-works/chord@^1.0.0": "1.0.0"
   # VC-598 / GHSA-p98j-92pf-mc4p: Monaco 0.57.0 pins vulnerable 3.4.15
   # exactly, so re-resolution cannot select patched 3.4.16. Latest stable
   # Monaco is still 0.57.0; scope this version override to that parent only.
@@ -112,13 +118,13 @@ overrides:
   # incrementally-updated checkouts hoisted 4.4.3 and typecheck broke against
   # @streamdown/code's shiki-3 types while fresh CI installs stayed green.
   #
-  # 4.4.3 IS that deliberate retake (VC-211, taking over Dependabot #418): the
-  # desktop app's shiki/@shikijs/{langs,monaco,themes} pins moved to 4.4.3 in
-  # the same commit, so this value moves with them. The override stays rather
-  # than being deleted — without it the next shiki 4.4.x release re-splits the
+  # 4.4.3 was the deliberate retake (VC-211, taking over Dependabot #418).
+  # The desktop app's shiki/@shikijs/{langs,monaco,themes} pins now move to
+  # 4.5.0 together with this override. The override stays rather than being
+  # deleted — without it the next shiki 4.x release re-splits the
   # tree exactly as before, because the app pins exactly while the transitive
   # ranges float. Keep this equal to the desktop pins; never let them drift.
-  "shiki@^4": "4.4.3"
+  "shiki@^4": "4.5.0"
 
 packageExtensions:
   vite-plus@*:
