@@ -200,11 +200,13 @@ export async function remove(
       await withRepositoryWorktreeTurn(project.path, () => git(args, project.path));
     } catch (caught) {
       const message =
-        caught instanceof GitError && caught.stderr.trim()
-          ? caught.stderr.trim()
-          : caught instanceof Error
-            ? caught.message
-            : String(caught);
+        caught instanceof GitError && caught.timedOut
+          ? caught.message
+          : caught instanceof GitError && caught.stderr.trim()
+            ? caught.stderr.trim()
+            : caught instanceof Error
+              ? caught.message
+              : String(caught);
       return err(`Couldn't remove the worktree: ${message}`);
     }
 

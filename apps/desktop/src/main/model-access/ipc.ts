@@ -13,10 +13,13 @@
  * is not, because the interesting failures are exactly the ones where a person
  * would want the argument printed.
  *
- * The owner mapping is per `WebContents` and identity-based. A window that
- * closes mid-flow takes its attempts with it — otherwise a login parked on a
- * question nobody can see would hold the provider's one attempt slot for the
- * life of the process, and the row in the *next* window would refuse to start.
+ * The owner mapping is per page and identity-based. A page that goes away
+ * mid-flow — its window closed, a reload, a renderer crash — takes its attempts
+ * with it, and the flow's abort closes any loopback callback server it started.
+ * Otherwise a login parked on a question nobody can see would hold the
+ * provider's one attempt slot (and its fixed callback port) until the window
+ * closed, and the row on the reloaded page, which no longer knows the attempt
+ * id, would refuse to start (VC-831).
  */
 
 import type { WebContents } from "electron";
@@ -30,6 +33,7 @@ import {
   type IpcHandlerTable,
 } from "../ipc-registry";
 import { ModelAccessSignInService, type SignInOwner } from "@volli/host-core/session-runtime";
+import { onDocumentGone } from "../document-lifetime";
 
 const SIGN_IN_EVENT = "volli:model-access-sign-in" satisfies VolliIpcEvent;
 
@@ -55,21 +59,27 @@ export function registerModelAccessIpcHandlers(
   }
 
   /**
-   * One owner per window, kept by identity because that is what the service
+   * One owner per page, kept by identity because that is what the service
    * compares. A fresh object per call would make every attempt unabandonable.
+   * The entry goes with the page, so a reloaded page gets a fresh owner.
    */
   const owners = new Map<WebContents, SignInOwner>();
   const ownerFor = (sender: WebContents): SignInOwner => {
     const existing = owners.get(sender);
     if (existing !== undefined) return existing;
+    // Once its page is gone an owner says nothing more: the abandoned attempt
+    // still settles, but the page that would hear it is a reloaded one that
+    // never began it, and would hold its unclaimed updates forever.
+    let pageGone = false;
     const owner: SignInOwner = {
       send: (update: ModelAccessSignInUpdate): void => {
-        if (sender.isDestroyed()) return;
+        if (pageGone || sender.isDestroyed()) return;
         sender.send(SIGN_IN_EVENT, update);
       },
     };
     owners.set(sender, owner);
-    sender.once("destroyed", () => {
+    onDocumentGone(sender, () => {
+      pageGone = true;
       owners.delete(sender);
       service.abandonOwner(owner);
     });

@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { applyPatch } from "diff";
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -282,7 +283,8 @@ describe("vendored read contracts", () => {
       read.execute("read", { path: null as unknown as string }, () => {}, { env }, ...inert),
     ).rejects.toThrow(TypeError);
     const failure = new FileError("permission_denied", "binary denied");
-    const binary = vi.spyOn(env, "readBinaryFile").mockResolvedValue(err(failure));
+    // VC-801: `read` opens a bounded reader rather than reading the file whole.
+    const binary = vi.spyOn(env, "openFileReader").mockResolvedValue(err(failure));
     await expect(
       read.execute("read", { path: "note.txt" }, () => {}, { env }, ...inert),
     ).rejects.toBe(failure);
@@ -548,11 +550,111 @@ describe("vendored edit tool input and filesystem safety", () => {
     expect(result.details).toMatchObject({
       firstChangedLine: 2,
       diff: expect.stringContaining("+2 A and B"),
-      patch: expect.stringContaining("-‘alpha’ and ‘beta’  \n+A and B\n"),
+      patch: expect.stringContaining("-‘alpha’ and ‘beta’  \r\n+A and B\r\n"),
     });
   });
 
-  it.each(["fileInfo", "readTextFile", "writeFile"] as const)(
+  // Each case compares on-disk BYTES. The reported patch must apply to the
+  // original bytes and reproduce exactly what landed on disk.
+  it.each([
+    {
+      name: "a CRLF-first file keeps its LF line",
+      before: "a\r\nb\nc\r\n",
+      edits: [{ oldText: "c", newText: "C" }],
+      after: "a\r\nb\nC\r\n",
+    },
+    {
+      name: "an LF-first file keeps its CRLF lines",
+      before: "a\nb\r\nc\r\nd\n",
+      edits: [{ oldText: "a", newText: "A" }],
+      after: "A\nb\r\nc\r\nd\n",
+    },
+    {
+      name: "lone carriage returns stay carriage returns",
+      before: "10%\r20%\r30%\ndone\n",
+      edits: [{ oldText: "done", newText: "finished" }],
+      after: "10%\r20%\r30%\nfinished\n",
+    },
+    {
+      name: "a CRLF-only file writes CRLF on inserted lines",
+      before: "one\r\ntwo\r\nthree\r\n",
+      edits: [{ oldText: "two", newText: "2a\n2b" }],
+      after: "one\r\n2a\r\n2b\r\nthree\r\n",
+    },
+    {
+      name: "an edit on a lone-CR line keeps that line's ending",
+      before: "10%\r20%\r30%\ndone\n",
+      edits: [{ oldText: "20%", newText: "20%\n25%" }],
+      after: "10%\r20%\r25%\r30%\ndone\n",
+    },
+    {
+      name: "an unterminated last line takes the preceding line's ending",
+      before: "10%\r20%",
+      edits: [{ oldText: "20%", newText: "20%\n30%" }],
+      after: "10%\r20%\r30%",
+    },
+    {
+      name: "a fuzzy edit in a mixed file rewrites only its own line",
+      before: "\ufeff‘keep’  \r\nchange “this”  \n‘tail’\t\r\n",
+      edits: [{ oldText: 'change "this"', newText: "changed" }],
+      after: "\ufeff‘keep’  \r\nchanged\n‘tail’\t\r\n",
+    },
+  ])("leaves bytes outside the edited lines untouched: $name", async ({ before, edits, after }) => {
+    const env = await workspace();
+    const file = join(env.cwd, "file.txt");
+    await writeFile(file, before);
+    const result = await createEditTool().execute(
+      "edit",
+      { path: "file.txt", edits },
+      () => {},
+      { env },
+      ...inert,
+    );
+    const onDisk = await readFile(file);
+    expect(onDisk.equals(Buffer.from(after, "utf8"))).toBe(true);
+    expect(applyPatch(before, result.details?.patch ?? "")).toBe(onDisk.toString("utf8"));
+    expect(text(result)).toBe(`Successfully replaced ${edits.length} block(s) in file.txt.`);
+  });
+
+  it("refuses a mixed-ending edit whose only change would be a line ending", async () => {
+    const env = await workspace();
+    const file = join(env.cwd, "file.txt");
+    await writeFile(file, "a\r\nb\n");
+    await expect(
+      createEditTool().execute(
+        "edit",
+        { path: "file.txt", edits: [{ oldText: "a\nb", newText: "a\nb" }] },
+        () => {},
+        { env },
+        ...inert,
+      ),
+    ).rejects.toThrow("replacement produced identical content");
+    expect((await readFile(file)).equals(Buffer.from("a\r\nb\n"))).toBe(true);
+  });
+
+  it("refuses to rewrite a file that is not valid UTF-8 and leaves its bytes unchanged", async () => {
+    const env = await workspace();
+    const file = join(env.cwd, "latin1.txt");
+    // "café" in Latin-1 / Windows-1252, then a line the edit targets.
+    const bytes = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a, 0x6f, 0x6c, 0x64, 0x0a]);
+    await writeFile(file, bytes);
+    const write = vi.spyOn(env, "writeFile");
+    await expect(
+      createEditTool().execute(
+        "edit",
+        { path: "latin1.txt", edits: [{ oldText: "old", newText: "new" }] },
+        () => {},
+        { env },
+        ...inert,
+      ),
+    ).rejects.toThrow(
+      "Could not edit file: latin1.txt. The file is not valid UTF-8, so it was left unchanged.",
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect((await readFile(file)).equals(bytes)).toBe(true);
+  });
+
+  it.each(["fileInfo", "readBinaryFile", "writeFile"] as const)(
     "retains typed %s failure as an edit error cause",
     async (method) => {
       const env = await workspace();
@@ -623,8 +725,8 @@ describe("vendored edit tool input and filesystem safety", () => {
           return result;
         });
       } else if (stage === "after-read") {
-        const read = env.readTextFile.bind(env);
-        vi.spyOn(env, "readTextFile").mockImplementation(async (...args) => {
+        const read = env.readBinaryFile.bind(env);
+        vi.spyOn(env, "readBinaryFile").mockImplementation(async (...args) => {
           const result = await read(...args);
           controller.abort();
           return result;

@@ -9,7 +9,6 @@
 // injectable execFile (so its own tests inject a stub too).
 
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   PARK_BREATHE_WINDOW_MS,
   PARK_CPU_BUSY_PERCENT,
@@ -17,6 +16,7 @@ import {
   PARK_QUIET_SAMPLES_REQUIRED,
   PARK_SWEEP_INTERVAL_MS,
 } from "@volli/shared";
+import { INVENTORY_TIMEOUT_MS } from "../process/inventory";
 
 export interface ProcessInspector {
   /**
@@ -28,7 +28,7 @@ export interface ProcessInspector {
   cpuPercents(pids: readonly number[]): Promise<Map<number, number>>;
   /**
    * Subset of `pids` holding a TCP LISTEN socket, via one
-   * `lsof -a -nP -iTCP -sTCP:LISTEN -p <comma-list>` call.
+   * `lsof -a -nP -iTCP -sTCP:LISTEN -w -p <comma-list>` call.
    */
   listeningPids(pids: readonly number[]): Promise<Set<number>>;
   /** ESRCH-safe `process.kill` wrapper; returns false if the pid was gone. */
@@ -66,19 +66,42 @@ function parsePids(out: string): number[] {
  * The real inspector, over an injectable `execFile` (defaulting to the Node
  * one). `pgrep`/`ps`/`lsof` all exit 1 to mean "no matches" — that is an empty
  * result here, never an error; any other failure propagates.
+ *
+ * Every call is bounded by {@link INVENTORY_TIMEOUT_MS}, the bound the orphan
+ * inventory gives the same tools (VC-833). An `lsof` blocked on an unresponsive
+ * network mount never exits; unbounded, it held the sweep's `sweeping` flag
+ * forever and auto-park silently stopped for the rest of the launch. At the
+ * bound the child is SIGKILLed and the call rejects on our own timer rather
+ * than on `execFile`'s, which only reports once the child has actually closed —
+ * and a child stuck in the kernel may not close for a long time yet.
  */
 export function createProcessInspector(execFileImpl: typeof execFile = execFile): ProcessInspector {
-  const run = promisify(execFileImpl);
-
   /** Runs a command, mapping an exit-1 ("no matches") into empty stdout. */
-  async function capture(file: string, args: string[]): Promise<string> {
-    try {
-      const { stdout } = await run(file, args);
-      return stdout;
-    } catch (error) {
-      if (isExitCode1(error)) return "";
-      throw error;
-    }
+  function capture(file: string, args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      const settle = (finish: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        finish();
+      };
+      const child = execFileImpl(file, args, { encoding: "utf8" }, (error, stdout) => {
+        settle(() => {
+          if (error === null) resolve(stdout);
+          else if (isExitCode1(error)) resolve("");
+          else reject(error);
+        });
+      });
+      if (settled) return;
+      timer = setTimeout(() => {
+        settle(() => {
+          child.kill("SIGKILL");
+          reject(new Error(`${file} did not finish within ${INVENTORY_TIMEOUT_MS} ms`));
+        });
+      }, INVENTORY_TIMEOUT_MS);
+    });
   }
 
   async function descendants(pid: number): Promise<number[]> {
@@ -109,7 +132,17 @@ export function createProcessInspector(execFileImpl: typeof execFile = execFile)
   async function listeningPids(pids: readonly number[]): Promise<Set<number>> {
     const found = new Set<number>();
     if (pids.length === 0) return found;
-    const out = await capture("lsof", ["-a", "-nP", "-iTCP", "-sTCP:LISTEN", "-p", pids.join(",")]);
+    // `-w`, as the inventory's request: a warning about a process `lsof` may not
+    // inspect is not a finding, and it must not turn "no listener" into a failure.
+    const out = await capture("lsof", [
+      "-a",
+      "-nP",
+      "-iTCP",
+      "-sTCP:LISTEN",
+      "-w",
+      "-p",
+      pids.join(","),
+    ]);
     const wanted = new Set(pids);
     for (const line of out.split("\n")) {
       const fields = line.trim().split(/\s+/);

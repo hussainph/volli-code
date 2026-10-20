@@ -494,9 +494,10 @@ describe("removeProject", () => {
     expect(useBoardStore.getState().ticketsByProject[only.id]).toBeUndefined();
   });
 
-  it("kills the removed project's live PTYs and forgets its terminal sessions", async () => {
-    // removeProject must tear PTYs down explicitly (no terminal view is
-    // mounted here — or in headless flows — to do it as an unmount side effect).
+  it("forgets the removed project's terminal sessions, leaving their PTYs to the host", async () => {
+    // The host's `project.remove` ended the PTYs before its detach (VC-796),
+    // for every window; the store only forgets this window's views of them,
+    // with no terminal view mounted to do it as an unmount side effect.
     // Keeps `appState` in the stub too: zustand's `persist` middleware writes
     // through on EVERY action call, even a logical no-op (see the module doc
     // above) — removeProject's cascade always touches useWorkspaceStore.
@@ -514,10 +515,10 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(useSessionsStore.getState().byOwner[only.id]).toBeUndefined();
-    expect(kill).toHaveBeenCalledWith("s1");
+    expect(kill).not.toHaveBeenCalled();
   });
 
-  it("kills the removed project's ticket-scoped sessions too", async () => {
+  it("forgets the removed project's ticket-scoped sessions too", async () => {
     const kill = vi
       .fn<(sessionId: string) => Promise<{ ok: boolean }>>()
       .mockResolvedValue({ ok: true });
@@ -539,7 +540,7 @@ describe("removeProject", () => {
     await store.getState().removeProject(only.id);
 
     expect(useSessionsStore.getState().byOwner["tk1"]).toBeUndefined();
-    expect(kill).toHaveBeenCalledWith("ts1");
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it("disposes the removed project's own ticketless chat clients", async () => {

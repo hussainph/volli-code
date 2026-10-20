@@ -31,51 +31,59 @@ import type { UpdateLastCheck, UpdateUiState } from "../ipc/contract";
 import { setAppState, prepared } from "@volli/host-core/db";
 
 /**
- * The `app_state` key behind the prerelease toggle (default OFF). Canary
- * releases are prerelease-suffixed tags (`v0.2.0-canary.3`) that
- * electron-builder auto-marks as GitHub pre-releases, so with the toggle off
- * a public install only ever sees full releases; the dogfood install flips
- * this on once to absorb canaries too.
+ * The `app_state` key behind the release-channel choice. Canary releases are
+ * prerelease-suffixed tags (`v0.2.0-canary.3`) that electron-builder
+ * auto-marks as GitHub pre-releases.
  *
  * Settings → Updates owns this now (VC-111). It used to say "no UI yet" and
  * print a `sqlite3` INSERT to run by hand against the app's own live database
  * — which is not a setting, it is a workaround, and it asked people to write
  * to a WAL-mode db underneath a running process.
  *
- * The toggle only ever WIDENS the update surface, so it is applied one-way:
- * `true` forces prereleases on, `false`/absent leaves electron-updater's own
- * default in place. That default is already the right policy per install
- * kind — `true` when the RUNNING build's version carries a prerelease
- * component (a canary install exists only because someone opted into
- * canaries) and `false` for stable versions. Forcing `false` onto a canary
- * install would strand it: its checks would read the stable-only feed
- * (`releases/latest`), which 404s while only prereleases exist, and it
- * would never follow the canary line it came from.
+ * Three states, not two (VC-851):
+ * - absent (or anything but an exact JSON `true`/`false`) — this install has
+ *   never chosen, so electron-updater's own version-derived default stands:
+ *   `allowPrerelease = true` on a canary BUILD (a canary install exists only
+ *   because someone opted into canaries), `false` on a stable one. The
+ *   setting reads back as that same line, so a fresh canary install says
+ *   Canary rather than claiming a Stable it is not following;
+ * - `true` — the person chose Canary; prereleases forced on;
+ * - `false` — the person chose Stable; prereleases forced OFF at launch, on a
+ *   canary build too. That used to be skipped (one-way apply) for fear of
+ *   stranding a canary install on a stable-only feed that 404'd while no full
+ *   release existed; full releases ship now, so a canary build told "stable"
+ *   reads `releases/latest`, finds an older stable, stays put (electron-updater
+ *   never downgrades), and moves onto the next stable release that is newer
+ *   than it. Before VC-851 the choice was written and then never honoured.
  */
 export const UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY = "volli:update-allow-prerelease";
 
 /**
- * Reads the prerelease toggle. Anything other than a present, well-formed
- * JSON `true` — absent row, `false`, malformed JSON — means OFF: the toggle
- * widens what an install will update to, so it must fail closed.
+ * Reads the explicit prerelease choice: `true`/`false` for a stored exact JSON
+ * `true`/`false`, `null` for "never chosen" — an absent row, and anything else
+ * (`"1"`, malformed JSON) too. `null` never widens anything: it leaves the
+ * updater's version-derived default in place, which is `false` on every stable
+ * build, so a corrupt row still cannot open a stable install to prereleases.
  */
-export function readAllowPrerelease(db: Database.Database): boolean {
+export function readAllowPrerelease(db: Database.Database): boolean | null {
   const row = prepared<[string], { value: string }>(
     db,
     "SELECT value FROM app_state WHERE key = ?",
   ).get(UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY);
-  if (row === undefined) return false;
+  if (row === undefined) return null;
+  let parsed: unknown;
   try {
-    return (JSON.parse(row.value) as unknown) === true;
+    parsed = JSON.parse(row.value);
   } catch {
-    return false;
+    return null;
   }
+  return typeof parsed === "boolean" ? parsed : null;
 }
 
 /**
  * The two release lines, as the setting names them. `UpdateChannel` in the IPC
- * contract is the same vocabulary; this is where it meets the one-way boolean
- * the updater actually consumes.
+ * contract is the same vocabulary; this is where it meets the boolean the
+ * updater actually consumes.
  */
 export type UpdateChannelName = "stable" | "canary";
 
@@ -92,27 +100,40 @@ export function runningBuildKind(
   return currentVersion.prerelease.length > 0 ? "canary" : "stable";
 }
 
-/** Which line this install follows, read back off the same key the updater uses. */
-export function readUpdateChannel(db: Database.Database): UpdateChannelName {
-  return readAllowPrerelease(db) ? "canary" : "stable";
+/**
+ * Which line this install follows, read back off the same key the updater
+ * uses: the explicit choice when there is one, otherwise the line the running
+ * build's updater defaults to — Canary on a canary build, Stable otherwise.
+ * Settings → Updates and the support report both read this, so neither can
+ * claim Stable on a fresh canary install that is taking canaries (VC-851).
+ */
+export function readUpdateChannel(
+  db: Database.Database,
+  buildKind: ExperimentBuildKind,
+): UpdateChannelName {
+  const choice = readAllowPrerelease(db);
+  if (choice !== null) return choice ? "canary" : "stable";
+  return buildKind === "canary" ? "canary" : "stable";
 }
 
 /**
  * Moves this install between release lines, and returns where it landed.
  *
- * Writes the EXACT `true`/`false` JSON {@link readAllowPrerelease} tests for.
- * That reader fails closed on anything else — `"1"`, `"yes"`, a bare `true`
- * with whitespace — so a writer that produced any of them would be a switch
- * that moves on screen and changes nothing, which is the specific failure the
- * round-trip test above exists to prevent.
+ * Writes the JSON boolean {@link readAllowPrerelease} reads as a choice.
+ * Anything that does not parse to a boolean — `"1"`, `"yes"`, malformed JSON —
+ * reads as "never chosen" and follows the running build's line, so a writer
+ * that produced one would be a switch that moves on screen and changes
+ * nothing; the round-trip test exists to prevent exactly that.
  *
  * Entering canary reaches the RUNNING updater too, when the caller hands it
  * over — without that, "Check now" pressed right after switching silently
- * checked the stable feed until the next launch. The live apply is one-way,
- * exactly like startup's: `false` is never assigned, so leaving canary takes
- * effect at the next LAUNCH on a stable install and — deliberately — never
- * forces a canary install off the prerelease feed (see the stranding note on
- * the key above). Nothing here downgrades an installed canary build either.
+ * checked the stable feed until the next launch. Leaving canary is NOT applied
+ * live: narrowing the running updater mid-run would make a re-check answer
+ * "up to date" over a canary it has already staged, and the staged-update
+ * phases are not this setting's to disturb. It takes effect at the next
+ * launch, where startup assigns the stored `false` — on a canary build too
+ * (VC-851). Nothing here downgrades an installed canary build: it stays until
+ * a newer stable release is out, which is what Settings → Updates says.
  */
 export function writeUpdateChannel(
   db: Database.Database,
@@ -214,11 +235,12 @@ export interface AutoUpdateDeps {
   isPackaged: boolean;
   updater: AutoUpdaterLike;
   /**
-   * The one persisted policy input — see {@link readAllowPrerelease}. Applied
-   * one-way: `true` widens to prereleases, `false` defers to the updater's
-   * version-derived default (see the note on the app_state key above).
+   * The one persisted policy input — see {@link readAllowPrerelease}. An
+   * explicit choice is assigned either way; `null` (never chosen, or no db)
+   * leaves the updater's version-derived default in place (see the note on
+   * the app_state key above).
    */
-  allowPrerelease: boolean;
+  allowPrerelease: boolean | null;
   /** The running build's version (`app.getVersion()`) — the "from" of any update. */
   currentVersion: string;
   /**
@@ -357,13 +379,14 @@ export function startAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   const { updater } = deps;
   updater.autoDownload = true;
   updater.autoInstallOnAppQuit = true;
-  // One-way widen — never assign `false` over the updater's version-derived
-  // default (see UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY's doc for why).
-  if (deps.allowPrerelease) updater.allowPrerelease = true;
+  // An explicit choice wins either way — a canary build told "stable" must
+  // actually leave the canary feed (VC-851). Never chosen keeps the updater's
+  // version-derived default (see UPDATE_ALLOW_PRERELEASE_APP_STATE_KEY's doc).
+  if (deps.allowPrerelease !== null) updater.allowPrerelease = deps.allowPrerelease;
   // The effective policy, logged up front: "why did/didn't this install see
   // the canary?" must be answerable from the log alone.
   deps.log(
-    `[updater] allowPrerelease=${String(updater.allowPrerelease)} (toggle=${String(deps.allowPrerelease)})`,
+    `[updater] allowPrerelease=${String(updater.allowPrerelease)} (toggle=${deps.allowPrerelease === null ? "unset" : String(deps.allowPrerelease)})`,
   );
 
   updater.on("checking-for-update", () => {

@@ -58,6 +58,7 @@ export {
   deleteProject,
   getProjectById,
   insertProject,
+  isProjectAttached,
   listProjects,
   reorderProjects,
   updateProjectAppearance,

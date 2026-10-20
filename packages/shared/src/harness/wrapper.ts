@@ -78,6 +78,9 @@ function resumePattern(token: string): string {
   return `${shellSingleQuote(token)}|${shellSingleQuote(`${token}=`)}*`;
 }
 
+/** A name the shell can expand as `${NAME:-}`. */
+const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 /**
  * The wrapper for `adapter`, to be written into `binDir`.
  *
@@ -96,7 +99,10 @@ function resumePattern(token: string): string {
  * the id has to be WRITTEN somewhere to be worth anything — `harness_session_id`
  * is what every future resume reads — and a `/bin/sh` that minted its own would
  * still have to make a second call to report it, in a script whose one job is
- * to get out of the way of the agent it is about to exec.
+ * to get out of the way of the agent it is about to exec. The app holds the id
+ * as PENDING until the launch proves itself with its own startup hook, so an
+ * invocation that never becomes a session cannot overwrite the seed of one that
+ * did.
  *
  * Failure degrades to no id at all: the session flag is omitted and the harness
  * launches unpinned (no resume seed for that launch), because the alternative —
@@ -170,6 +176,29 @@ export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput
     "",
   );
 
+  // A run NESTED inside a running harness of this kind — `claude -p` or
+  // `claude mcp list` fired by a live claude's own Bash tool. It inherits PATH
+  // and `VOLLI_SESSION`, so it lands here, but the Volli session belongs to the
+  // run that spawned it: announcing would repoint that session, minting would
+  // spend its resume seed, and the injected hooks would report the nested run's
+  // turns as the parent's. So it gets exactly what a harness outside Volli gets.
+  //
+  // The harness's own markers are the evidence. Volli scrubs them from every
+  // terminal it spawns (`scrubInheritedSessionEnv`), so here they can only have
+  // come from a running harness above this process. A name that is not a shell
+  // name is skipped rather than rendered: `${…}` around it would be a syntax
+  // error, and a wrapper that cannot parse is a harness that cannot launch.
+  const markers = adapter.sessionMarkers.filter((name) => SHELL_NAME.test(name));
+  if (markers.length > 0) {
+    lines.push(
+      `# Nested inside a running ${adapter.label}: this session is that run's, not ours.`,
+      `if ${markers.map((name) => `[ -n "\${${name}:-}" ]`).join(" || ")}; then`,
+      '  exec "$volli_real" "$@"',
+      "fi",
+      "",
+    );
+  }
+
   const envEntries = Object.entries(input.env);
   if (envEntries.length > 0) {
     lines.push(
@@ -239,8 +268,47 @@ export function renderWrapperScript(adapter: HarnessAdapter, input: WrapperInput
   // its own wait on the socket, so a wedged app costs a moment, not the agent.
   const mint = `volli_harness_session=$(${verb} --mint </dev/null 2>/dev/null) || volli_harness_session=''`;
 
+  // An invocation that only asks the harness about itself — `--version`,
+  // `--help`, `mcp list` — is not a launch, and neither call may treat it as
+  // one: the announce would repoint the running harness, and the mint would
+  // hand a launch that never happens the resume seed. See
+  // {@link HarnessAdapter.nonSessionArgv}. Everything else about the
+  // invocation is untouched; only Volli stops being told about it.
+  const nonSessionFlags = adapter.nonSessionArgv?.flags ?? [];
+  const nonSessionSubcommands = adapter.nonSessionArgv?.subcommands ?? [];
+  const scansForNonSession = nonSessionFlags.length > 0 || nonSessionSubcommands.length > 0;
+  if (scansForNonSession) {
+    lines.push("# Asking the harness about itself is not a launch.", "volli_launch=1");
+    if (nonSessionFlags.length > 0) {
+      lines.push(
+        'for volli_arg in "$@"; do',
+        "  case $volli_arg in",
+        `    ${nonSessionFlags.map((flag) => shellSingleQuote(flag)).join("|")})`,
+        "      volli_launch=0",
+        "      break",
+        "      ;;",
+        "  esac",
+        "done",
+      );
+    }
+    if (nonSessionSubcommands.length > 0) {
+      lines.push(
+        'case "${1:-}" in',
+        `  ${nonSessionSubcommands.map((word) => shellSingleQuote(word)).join("|")})`,
+        "    volli_launch=0",
+        "    ;;",
+        "esac",
+      );
+    }
+    lines.push("");
+  }
+
   if (sessionIdFlag !== null) lines.push("volli_harness_session=''");
-  lines.push('if [ -n "${VOLLI_SOCKET:-}" ]; then');
+  lines.push(
+    scansForNonSession
+      ? 'if [ "$volli_launch" = 1 ] && [ -n "${VOLLI_SOCKET:-}" ]; then'
+      : 'if [ -n "${VOLLI_SOCKET:-}" ]; then',
+  );
   if (sessionIdFlag === null) {
     lines.push(`  ${announce}`);
   } else if (scansForUserResume) {

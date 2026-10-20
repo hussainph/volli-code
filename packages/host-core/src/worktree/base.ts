@@ -1,7 +1,7 @@
 /**
  * Base-branch resolution (worktree-support §5): deterministic and OFFLINE.
  * Precedence — `ticket.baseBranch` → `project.base_branch` →
- * `detectProjectBaseBranch()`. The resolved NAME is stamped back onto the
+ * `detectProjectBaseBranchAsync()`. The resolved NAME is stamped back onto the
  * ticket row so the record is permanent; the resolved START POINT (what `git
  * worktree add -b` branches from) prefers the local ref and falls back to the
  * remote-tracking ref `refs/remotes/origin/<name>` only when no local branch
@@ -65,7 +65,7 @@ export async function resolveBaseBranch(
   // the local head". WHICH remote it names decides what gets stamped, and the
   // asymmetry is not tidiness: every later reader of `ticket.baseBranch` speaks
   // to `origin` and only `origin` — `fetchBase` runs `git fetch origin <base>`,
-  // `resolveComparisonRef` probes `refs/remotes/origin/<base>`, and the PR is
+  // `resolveComparisonRefAsync` probes `refs/remotes/origin/<base>`, and the PR is
   // opened with `gh pr create --base <base>` against origin's repo.
   //
   // Only `origin/` is stripped. For `origin/main` the prefix is redundant and

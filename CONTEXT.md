@@ -192,7 +192,9 @@ with `volli session answer <handle>` naming the rest), so the child's prose
 never reads as the parent's user (VC-457). The parent is never parked on it,
 nothing bounds the child's time, and stopping the parent stops its children. A
 child a person resumes after that notice reports to its parent again when the
-resumed turn ends. The Session
+resumed turn ends; a turn a host notice opens in it (its own shell exiting, a
+Browser Tab event) does not, unless a person or another Session steers a
+message into that turn (VC-809). The Session
 Presentation Contract projects that notice into the parent's transcript as a
 quiet host-authored receipt row, not as a Turn in the person's voice. This row
 records the delegation outcome; it is not a listing of the child. While work is
@@ -475,7 +477,10 @@ SIGKILL. The three names ride one port, appended last to the vocabulary. A
 shell belongs to the Session that started it — a subagent never sees its
 parent's — is capped per Session, runs inside the workspace, is spawned
 through the same environment record and the same attachment identity the
-`execute` tool gets, and is killed when the attachment ends. Every shell
+`execute` tool gets, and is killed when the attachment ends — a subagent's
+already when a turn of it completes, silently, so a shell it left running
+cannot reopen it after its parent has the answer (VC-809); its exited shells'
+output is forgotten at that point too. Every shell
 result restates the Session's live shells, because the tool calls are the
 durable record; shells are live resources, not ledger facts, and do not
 survive a relaunch. The Activity Island's shells cluster reads them through
@@ -980,7 +985,9 @@ ticket is a pure status change. Arming is a property of the column, not of the
 Automation, so one Automation may be armed in one column and merely offered in
 another. It is local to the machine that set it and never travels with the
 project. Arming a column is not retroactive: it governs tickets that arrive
-afterward, never those already sitting there. The column-header bolt is always
+afterward, never those already sitting there. A countdown whose window elapsed
+while the app was closed starts nothing at the next launch; it waits for a
+person's Retry, because nobody was shown its Cancel. The column-header bolt is always
 visible: outline when unarmed, filled when armed. A filled, muted bolt with
 “automatic triggers off” keeps the arming distinct from permission to fire.
 _Avoid_: default automation (collides with project defaults and the default base branch)

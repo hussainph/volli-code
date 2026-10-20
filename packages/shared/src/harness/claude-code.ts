@@ -68,4 +68,21 @@ export const claudeCodeAdapter: HarnessAdapter = {
     "CLAUDE_CODE_EXECPATH",
     "CLAUDE_PID",
   ],
+  // Read off `claude --help`, 2.1.x. Housekeeping only: the background-session
+  // verbs (`attach`, `agents`, `stop`, ...) are left out, and so is `config`,
+  // which this version no longer has (it would be read as a prompt).
+  nonSessionArgv: {
+    flags: ["--version", "-v", "--help", "-h"],
+    subcommands: [
+      "mcp",
+      "doctor",
+      "update",
+      "upgrade",
+      "install",
+      "auth",
+      "setup-token",
+      "plugin",
+      "plugins",
+    ],
+  },
 };

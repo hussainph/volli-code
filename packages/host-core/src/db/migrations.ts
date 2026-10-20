@@ -17,7 +17,15 @@
 import { BOARD_COMMAND_RECEIPTS_MIGRATION } from "./board-receipts-migration";
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
+import {
+  applyProjectRemovedColumn,
+  PROJECT_REMOVED_COLUMN_MIGRATION,
+} from "./project-removed-migration";
 import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
+import {
+  applySpawnLedgerParkedColumn,
+  SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
+} from "./spawn-ledger-parked-migration";
 import { WEB_CREDENTIAL_SOURCE_MIGRATION } from "./web-credential-migration";
 import {
   LOCKED_FINGERPRINTS,
@@ -2798,6 +2806,18 @@ export const MIGRATIONS: readonly Migration[] = [
     version: 62,
     name: "board command receipts — idempotent board commands by command id (VC-565)",
     sql: BOARD_COMMAND_RECEIPTS_MIGRATION,
+  },
+  {
+    version: 63,
+    name: "spawned_processes.parked_at — terminals a crash left SIGSTOPped (VC-833)",
+    sql: SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
+    apply: applySpawnLedgerParkedColumn,
+  },
+  {
+    version: 64,
+    name: "projects.removed_at — removing a project detaches it instead of deleting (VC-822)",
+    sql: PROJECT_REMOVED_COLUMN_MIGRATION,
+    apply: applyProjectRemovedColumn,
   },
 ];
 

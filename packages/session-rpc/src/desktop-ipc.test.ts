@@ -79,6 +79,7 @@ describe("the desktop's IPC exposure", () => {
       "board.setLabelColor",
       "shells.moveToBackground",
       "project.reorder",
+      "project.remove",
       "worktree.trimSettings",
       "hosts.snapshot",
       "hosts.subscribe",

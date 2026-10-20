@@ -1195,6 +1195,10 @@ function useComposerPicker(input: {
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
     if (state === null) return false;
+    // Never mid-word: while an IME composes, Enter accepts its candidate, the
+    // arrows walk its list and Escape closes it. Those keys are the IME's, and
+    // `PromptInputTextarea` runs this before its own composition guard.
+    if (event.nativeEvent.isComposing) return false;
     if (event.key === "Escape") {
       event.preventDefault();
       // The app's Esc guard would read this as "leave the surface". Closing a
