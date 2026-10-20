@@ -1188,6 +1188,7 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       /** Session reads after this many succeed reject — the watch lookup's failure. */
       failLookupsAfter?: number;
       caller?: RuntimeSessionIdentity;
+      durableCallerRole?: "project" | "ticket" | "subagent";
       targetRole?: "project" | "ticket" | "subagent";
       parentSessionId?: string | null;
       liveChildren?: readonly string[];
@@ -1224,6 +1225,14 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
       supervise: () =>
         ({
           sessionEngine: {
+            getSession: async () => ({
+              session: {
+                id: (options.caller ?? CALLER).sessionId,
+                projectId: "project-one",
+                ticketId: null,
+                role: options.durableCallerRole ?? (options.caller ?? CALLER).role,
+              },
+            }),
             listSessions: async () => {
               lookups += 1;
               if (options.failLookupsAfter !== undefined && lookups > options.failLookupsAfter) {
@@ -1341,6 +1350,38 @@ describe("session_stop and session_send through the Agent Tool Surface", () => {
             targetSessionId: TARGET_SESSION,
           }),
         ]);
+      } else {
+        expect(result.text).toContain("a ticket Session may steer only its own subagents");
+        expect(h.sends).toEqual([]);
+        expect(watches.sessions).toEqual([]);
+      }
+    },
+  );
+
+  it.each([
+    { targetRole: "project" as const, parent: null, allowed: false },
+    { targetRole: "subagent" as const, parent: "another-parent", allowed: false },
+    { targetRole: "subagent" as const, parent: CALLER.sessionId, allowed: true },
+  ])(
+    "keeps orphan Ticket steering scoped despite its project runtime identity: $targetRole / $parent",
+    async ({ targetRole, parent, allowed }) => {
+      // The attach resolver briefs a Ticket whose ticketId became null as a
+      // project Session, but its durable Role remains ticket after deletion.
+      const watches = recordingWatches();
+      const h = superviseHarness({
+        caller: CALLER,
+        durableCallerRole: "ticket",
+        targetRole,
+        parentSessionId: parent,
+        watches,
+      });
+      const result = await h.call("session.send", {
+        session: TARGET_SESSION.slice(0, 8),
+        message: "Focus on the regression",
+      });
+      if (allowed) {
+        expect(result.text).toContain("Delivered into Session");
+        expect(h.sends).toHaveLength(1);
       } else {
         expect(result.text).toContain("a ticket Session may steer only its own subagents");
         expect(h.sends).toEqual([]);

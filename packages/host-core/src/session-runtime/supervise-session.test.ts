@@ -8,7 +8,7 @@ import {
   SuperviseSessionError,
   supervisionMarker,
 } from "./supervise-session";
-import type { SuperviseSessionPorts } from "./supervise-session";
+import type { SendSessionPorts } from "./supervise-session";
 
 const CALLER = "aaaaaaaa-0000-0000-0000-000000000000";
 const TARGET = "bbbbbbbb-0000-0000-0000-000000000000";
@@ -75,9 +75,10 @@ function ports(
   overrides: Partial<{
     submit: ReturnType<typeof vi.fn>;
     command: ReturnType<typeof vi.fn>;
+    caller: SessionProjection | null;
   }> = {},
 ): {
-  ports: SuperviseSessionPorts;
+  ports: SendSessionPorts;
   submit: ReturnType<typeof vi.fn>;
   command: ReturnType<typeof vi.fn>;
 } {
@@ -86,10 +87,15 @@ function ports(
   return {
     ports: {
       sessionEngine: {
+        getSession: vi.fn(async () =>
+          overrides.caller === undefined
+            ? projection({ session: { ...projection().session, id: CALLER } })
+            : overrides.caller,
+        ),
         listSessions: vi.fn(async () => projections),
         submit,
-      } as unknown as SuperviseSessionPorts["sessionEngine"],
-      runtime: { command } as unknown as SuperviseSessionPorts["runtime"],
+      } as unknown as SendSessionPorts["sessionEngine"],
+      runtime: { command } as unknown as SendSessionPorts["runtime"],
     },
     submit,
     command,
@@ -300,7 +306,6 @@ describe("stopSessionOperation", () => {
 function sendInput(overrides: Partial<Parameters<typeof sendSessionMessageOperation>[1]> = {}) {
   return {
     operationId: "op-2",
-    callerRole: "project" as const,
     callerSessionId: CALLER,
     projectId: "project-1",
     handle: TARGET.slice(0, 8),
@@ -311,23 +316,45 @@ function sendInput(overrides: Partial<Parameters<typeof sendSessionMessageOperat
 
 describe("sendSessionMessageOperation", () => {
   it("refuses subagent steering even if a frozen surface granted the verb", async () => {
-    const { ports: p, command } = ports([projection({ attachments: [openAttachment()] })]);
-    await expect(
-      sendSessionMessageOperation(p, sendInput({ callerRole: "subagent" })),
-    ).rejects.toThrow("A subagent Session cannot steer other Sessions");
+    const { ports: p, command } = ports([projection({ attachments: [openAttachment()] })], {
+      caller: projection({ session: { ...projection().session, id: CALLER, role: "subagent" } }),
+    });
+    await expect(sendSessionMessageOperation(p, sendInput())).rejects.toThrow(
+      "A subagent Session cannot steer other Sessions",
+    );
     expect(command).not.toHaveBeenCalled();
   });
 
   it("fails closed for an unknown caller Role, even for an own subagent", async () => {
-    const { ports: p, command } = ports([
-      projection({
-        session: { ...projection().session, role: "subagent", parentSessionId: CALLER },
-        attachments: [openAttachment()],
-      }),
-    ]);
-    await expect(
-      sendSessionMessageOperation(p, sendInput({ callerRole: "future-role" as never })),
-    ).rejects.toThrow("may steer only its own subagents");
+    const { ports: p, command } = ports(
+      [
+        projection({
+          session: { ...projection().session, role: "subagent", parentSessionId: CALLER },
+          attachments: [openAttachment()],
+        }),
+      ],
+      {
+        caller: projection({
+          session: { ...projection().session, id: CALLER, role: "future-role" as never },
+        }),
+      },
+    );
+    await expect(sendSessionMessageOperation(p, sendInput())).rejects.toThrow(
+      "may steer only its own subagents",
+    );
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    null,
+    projection({ session: { ...projection().session, id: CALLER, projectId: "other-project" } }),
+  ])("refuses an unavailable or out-of-project caller: %j", async (caller) => {
+    const { ports: p, command } = ports([projection({ attachments: [openAttachment()] })], {
+      caller,
+    });
+    await expect(sendSessionMessageOperation(p, sendInput())).rejects.toThrow(
+      "The calling Session is unavailable in this project",
+    );
     expect(command).not.toHaveBeenCalled();
   });
 

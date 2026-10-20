@@ -96,7 +96,7 @@ import {
   stopSessionOperation,
   SuperviseSessionError,
 } from "./session-runtime/supervise-session";
-import type { SuperviseSessionPorts } from "./session-runtime/supervise-session";
+import type { SendSessionPorts } from "./session-runtime/supervise-session";
 
 /**
  * The Automation half of this door (VC-134): what a project lists, and the one
@@ -160,7 +160,7 @@ export interface AgentToolDoorOptions extends Omit<
    * Sessions facade: the runtime is composed after this door is. `null` reads
    * as "no structured runtime this launch" and each tool refuses in words.
    */
-  supervise: () => SuperviseSessionPorts | null;
+  supervise: () => SendSessionPorts | null;
   /**
    * The delegation host (VC-9), resolved per call on the same terms: it holds
    * the process's live subagent registry and is composed after this door.
@@ -627,7 +627,6 @@ async function sendSessionTool(
       sendSessionMessageOperation(ports, {
         operationId,
         callerSessionId: session.sessionId,
-        callerRole: session.role,
         projectId: session.projectId,
         handle: handle.value,
         message: message.value,

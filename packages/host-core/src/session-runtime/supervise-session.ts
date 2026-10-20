@@ -69,7 +69,7 @@
  */
 
 import { shortSessionId } from "@volli/shared";
-import type { CommandReceipt, SessionProjection, SessionRole } from "@volli/shared";
+import type { CommandReceipt, SessionProjection } from "@volli/shared";
 import type { SessionEngine, SessionRuntime, StopSessionOutcome } from "@volli/session-engine";
 import { stopResolvedSession, SuperviseSessionError } from "@volli/session-engine";
 export { stopSessionById, SuperviseSessionError } from "@volli/session-engine";
@@ -171,9 +171,11 @@ export async function stopSessionOperation(
   });
 }
 
+export interface SendSessionPorts extends SuperviseSessionPorts {
+  sessionEngine: SuperviseSessionPorts["sessionEngine"] & Pick<SessionEngine, "getSession">;
+}
+
 export interface SendSessionInput extends SuperviseTargetInput {
-  /** Bound by the tool door, never read from the caller's arguments. */
-  callerRole: SessionRole;
   /** Idempotency key: the message command id derives from it. */
   operationId: string;
   message: string;
@@ -205,7 +207,7 @@ export function supervisionMarker(callerSessionId: string): string {
 
 /** Steer a message into another Session's live attachment. */
 export async function sendSessionMessageOperation(
-  ports: SuperviseSessionPorts,
+  ports: SendSessionPorts,
   input: SendSessionInput,
 ): Promise<SendSessionOutcome> {
   const message = input.message.trim();
@@ -213,12 +215,22 @@ export async function sendSessionMessageOperation(
     throw new SuperviseSessionError("`message` must be non-empty text.");
   }
   const target = await resolveTarget(ports, input);
-  if (input.callerRole === "subagent") {
+  // Runtime identity describes the attachment's brief, not durable authority:
+  // a Ticket whose ticketId was nulled on deletion attaches as project. Its
+  // Role remains ticket, so losing the Ticket must not grant Board steering.
+  const caller = await ports.sessionEngine.getSession({ sessionId: input.callerSessionId });
+  if (caller === null || caller.session.projectId !== input.projectId) {
+    throw new SuperviseSessionError(
+      "The calling Session is unavailable in this project; nothing was sent.",
+    );
+  }
+  const callerRole = caller.session.role;
+  if (callerRole === "subagent") {
     throw new SuperviseSessionError("A subagent Session cannot steer other Sessions.");
   }
   if (
-    input.callerRole !== "project" &&
-    (input.callerRole !== "ticket" ||
+    callerRole !== "project" &&
+    (callerRole !== "ticket" ||
       target.session.role !== "subagent" ||
       target.session.parentSessionId !== input.callerSessionId)
   ) {
