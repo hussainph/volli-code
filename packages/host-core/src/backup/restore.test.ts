@@ -21,22 +21,23 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { blobFilePath, blobsRoot } from "@volli/host-core/blob-store";
+import { blobFilePath, blobsRoot } from "../blob-store";
 import { packArchive, unpackArchive } from "./archive";
-import { MIGRATIONS } from "@volli/host-core/db/migrations";
-import { openRawDb } from "@volli/host-core/db/test-helpers";
-import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
+import { MIGRATIONS } from "../db/migrations";
+import { createSqliteSessionFollowUpLedger } from "../db/session-follow-up-repo";
+import { openRawDb } from "../db/test-helpers";
+import { MIN_READER_VERSION_KEY } from "../db/schema-compatibility";
 import {
   FileTranscriptArtifactStore,
   sessionTranscriptsRoot,
-} from "@volli/host-core/session-runtime/transcript-artifacts";
+} from "../session-runtime/transcript-artifacts";
 import {
   fileSecretKey,
   SECRET_KEY_FILE_NAME,
   SECRET_STORE_FILE_NAME,
   SecretStore,
-} from "@volli/host-core/secrets";
-import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
+} from "../secrets";
+import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { createBackupBundle } from "./bundle";
 import { RESTORE_CREDENTIALS, restoreBackupBundle } from "./restore";
 import { createFixtureProfile } from "./test-fixture";
@@ -96,6 +97,60 @@ function restoredDb(root: string) {
 }
 
 describe("restoreBackupBundle — a clean restore", () => {
+  it("preserves pending host follow-ups and their release boundary", async () => {
+    source = createFixtureProfile();
+    await createSqliteSessionFollowUpLedger(source.db).transaction("session-root", (state) => {
+      state.entries.push({
+        id: "pending",
+        commandId: "queue-command",
+        deliveryCommandId: "follow-up:session-root:queue-command",
+        state: "queued",
+        message: {
+          id: "pending",
+          role: "user",
+          parts: [{ type: "text", text: "Pending after restore" }],
+        },
+      });
+      state.releasedBoundary = "idle:previous-turn";
+      state.revision += 1;
+    });
+    const bytes = createBackupBundle({
+      db: source.db,
+      blobsRoot: source.blobsRoot,
+      transcriptsRoot: source.transcriptsRoot,
+      appVersion: "test",
+      now: 1_700_000_000_000,
+    }).bytes;
+    const target = targetProfile();
+    const result = await restoreBackupBundle({
+      bundle: bytes,
+      profileRoot: target.root,
+      projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+      now: 1_800_000_000_000,
+    });
+    expect(result.ok).toBe(true);
+    const db = restoredDb(target.root);
+    try {
+      expect(
+        await createSqliteSessionFollowUpLedger(db).transaction("session-root", (state) => ({
+          entries: state.entries,
+          boundary: state.releasedBoundary,
+        })),
+      ).toMatchObject({
+        entries: [
+          {
+            id: "pending",
+            state: "queued",
+            deliveryCommandId: "follow-up:session-root:queue-command",
+          },
+        ],
+        boundary: "idle:previous-turn",
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("puts back every record, in order, with its fields and artifacts intact", async () => {
     const bytes = bundleBytes();
     const target = targetProfile();
@@ -361,34 +416,73 @@ describe("restoreBackupBundle — a clean restore", () => {
   it("puts the previous profile back when the swap fails partway through", async () => {
     const bytes = bundleBytes();
     const target = targetProfile();
-    const now = 1_800_000_000_000;
-    // The live profile has a blob directory of its own, and the place it
-    // would be set aside to is already a non-empty directory, so the swap's
-    // FIRST move succeeds for volli.db and then fails on `blobs`. Every check
-    // has passed by this point; the only thing left to go wrong is the swap.
+    // The live profile has a blob directory of its own. The swap fails after
+    // the database family and both directories are set aside and the staged
+    // blobs are already installed: every check has passed, and the only
+    // thing left to go wrong is the swap itself.
     mkdirSync(join(blobsRoot(target.root), "aa"), { recursive: true });
     writeFileSync(join(blobsRoot(target.root), "aa", "old-blob"), "old");
-    const replacedPath = join(target.root, `.volli-replaced-${now}`);
-    mkdirSync(join(replacedPath, "blobs", "occupied"), { recursive: true });
-    writeFileSync(join(replacedPath, "blobs", "occupied", "file"), "x");
     const before = readFileSync(join(target.root, "volli.db"));
+    const steps: string[] = [];
 
     const result = await restoreBackupBundle({
       bundle: bytes,
       profileRoot: target.root,
       projectPaths: makeCheckouts(mapping(target.checkoutPath)),
-      now,
+      now: 1_800_000_000_000,
+      faults: (step) => {
+        steps.push(step);
+        if (step === "swap:install:session-transcripts") throw new Error("injected swap failure");
+      },
     });
 
+    expect(steps).toContain("swap:install:blobs");
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problems[0]?.message).toMatch(/current profile is unchanged/);
     // The claim in that message has to be true: the database is back where it
-    // was, with the same bytes, and the old blob directory is intact.
+    // was, with the same bytes, the old blob directory is intact, and nothing
+    // stops the next launch.
     expect(readFileSync(join(target.root, "volli.db")).equals(before)).toBe(true);
-    expect(existsSync(join(blobsRoot(target.root), "aa", "old-blob"))).toBe(true);
+    expect(readdirSync(blobsRoot(target.root), { recursive: true })).toEqual(["aa", "aa/old-blob"]);
+    expect(existsSync(join(target.root, "volli.db.recovery-pending"))).toBe(false);
     expect(readdirSync(target.root).some((name) => name.startsWith(".volli-restore-"))).toBe(false);
+    expect(readdirSync(target.root).some((name) => name.startsWith(".volli-replaced-"))).toBe(
+      false,
+    );
   });
+
+  it("refuses to swap under a running app instead of detaching its writer", async () => {
+    const bytes = bundleBytes();
+    const target = targetProfile();
+    const writer = openRawDb(join(target.root, "volli.db"));
+    try {
+      writer.pragma("journal_mode = WAL");
+      writer.exec("CREATE TABLE still_mine (value TEXT)");
+      const result = await restoreBackupBundle({
+        bundle: bytes,
+        profileRoot: target.root,
+        projectPaths: makeCheckouts(mapping(target.checkoutPath)),
+        now: 1_800_000_000_000,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.problems[0]?.message).toMatch(/current profile is unchanged.*in use/);
+      // The app's handle still writes to the live file, not a set-aside one.
+      writer.exec("INSERT INTO still_mine VALUES ('after the refusal')");
+    } finally {
+      writer.close();
+    }
+    const reopened = openRawDb(join(target.root, "volli.db"));
+    try {
+      expect(reopened.prepare("SELECT value FROM still_mine").all()).toEqual([
+        { value: "after the refusal" },
+      ]);
+    } finally {
+      reopened.close();
+    }
+    expect(existsSync(join(target.root, "volli.db.recovery-pending"))).toBe(false);
+  }, 15_000);
 });
 
 /**

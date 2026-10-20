@@ -1,7 +1,7 @@
 import type { BackgroundShellIdInput, Result, ShellIpcChannel } from "../../ipc/contract";
 import { SHELL_IPC } from "../ipc-descriptors";
 import { registerGuardedIpcHandlers, type IpcHandlerTable } from "../ipc-registry";
-import type { BackgroundShellHost } from "@volli/host-core/shell/background-shell-host";
+import type { BackgroundShellHost } from "@volli/host-core/session-runtime";
 
 /**
  * Registers the renderer's three background shell doors against the one

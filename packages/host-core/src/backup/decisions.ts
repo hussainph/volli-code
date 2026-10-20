@@ -26,8 +26,14 @@
  * for the app to fill when it next creates the resource.
  */
 
-import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "@volli/host-core/secrets";
-import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
+import {
+  CREDENTIAL_INVENTORY_FILE_NAME,
+  CREDENTIAL_KEYCHAIN_KEY_FILE_NAME,
+  CREDENTIAL_LOCK_FILE_NAME,
+  SECRET_KEY_FILE_NAME,
+  SECRET_STORE_FILE_NAME,
+} from "../secrets";
+import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 
 /** What a backup does with one persisted table. */
 export type BackupDecisionKind = "include" | "rebuild" | "exclude";
@@ -119,6 +125,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     table: "sessions",
     decision: "include",
     reason: "Session identity, role and parentage — durable ahead of any executor.",
+  },
+  {
+    table: "session_follow_up_queue",
+    decision: "include",
+    reason:
+      "Pending follow-ups, mutation receipts and release evidence cannot be rebuilt; omitting them loses accepted work or duplicates replay.",
   },
   {
     table: "host_notice_outbox",
@@ -312,12 +324,18 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason:
       "The append-only audit of MCP installs and removals (VC-380). Included because it is the only record of a server that was REMOVED, which is exactly the one a restored profile cannot reconstruct from configuration; it holds provenance notes and outcomes, never a credential.",
   },
-  // ---- Volli Cloud identity (VC-550, docs/plans/host-identity.md) ----------
+  // ---- Volli Cloud identity (VC-550) ---------------------------------------
   {
     table: "workspace_epochs",
     decision: "include",
     reason:
       "Which host held authority over each workspace at each epoch. The counter must never restart, or a restored workspace could reissue an epoch the old host already used.",
+  },
+  {
+    table: "board_command_receipts",
+    decision: "exclude",
+    reason:
+      "Short-lived retry receipts for board commands, keyed to Clients of this host. A restore is a new host whose Clients resnapshot, so no retry crosses it.",
   },
   {
     table: "host_identity",
@@ -355,6 +373,12 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     reason:
       "One row, re-established at restore from the metering boundary in the data document; a fresh migration would claim complete coverage.",
   },
+  {
+    table: "migration_history",
+    decision: "rebuild",
+    reason:
+      "Which migrations THIS file ran, with their fingerprints (VC-633). A restore builds a new file by migrating it, and those migrations write its history; the source file's lineage says nothing about the new one.",
+  },
   // ---- Excluded ------------------------------------------------------------
   {
     table: "worktree_cleanup_commands",
@@ -378,6 +402,18 @@ export const TABLE_BACKUP_DECISIONS: readonly TableBackupDecision[] = [
     table: "secrets",
     decision: "exclude",
     reason: "Credentials. A backup must never carry them, encrypted or not.",
+  },
+  {
+    table: "web_credential_source",
+    decision: "exclude",
+    reason:
+      "The web keys' source lineage and revision (VC-643): status about `secrets`, which no bundle carries. A restore starts a new lineage, so no mirror sealed for the old database can pass for current.",
+  },
+  {
+    table: "web_credential_mirror",
+    decision: "exclude",
+    reason:
+      "The receipt of the last sealed web-key mirror (VC-643): expendable status about a credential file that never travels; rebuilt from `secrets` on the next boot.",
   },
   {
     table: "legacy_safe_storage_secrets",
@@ -430,6 +466,7 @@ export const BACKUP_INCLUDED_TABLES: readonly string[] = [
   "ticket_events",
   "ticket_event_sequence",
   "sessions",
+  "session_follow_up_queue",
   "host_notice_outbox",
   "session_delegations",
   "session_verb_grants",
@@ -586,7 +623,9 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
   {
     area: `${SECRET_STORE_FILE_NAME}*`,
     decision: "exclude",
-    reason: "Machine-bound secret ciphertext (VC-481); credentials never travel in backups.",
+    // Includes a credential reset's `.locked-<time>-<random>` archive (VC-641).
+    reason:
+      "Machine-bound secret ciphertext (VC-481), and any sealed store a reset set aside (VC-641); credentials never travel in backups.",
   },
   {
     // A headless host's key (VC-559). A bundle that carried it would carry the
@@ -595,6 +634,28 @@ export const PROFILE_FILE_DECISIONS: readonly ProfileFileDecision[] = [
     decision: "exclude",
     reason:
       "A headless host's secret key (VC-559); a backup never carries what opens a credential.",
+  },
+  {
+    // The typed sealed inventory (VC-642), its temporaries and any archive a
+    // reset set aside: the same rule as the Session store above.
+    area: `${CREDENTIAL_INVENTORY_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "The typed sealed credential inventory (VC-642) and anything a reset set aside; credentials never travel in backups.",
+  },
+  {
+    // Desktop's keychain-wrapped data key for the typed inventory (VC-643):
+    // useless without the keychain, and still never carried.
+    area: `${CREDENTIAL_KEYCHAIN_KEY_FILE_NAME}*`,
+    decision: "exclude",
+    reason:
+      "The keychain-wrapped key to the typed credential inventory (VC-643); a backup never carries what opens a credential.",
+  },
+  {
+    area: CREDENTIAL_LOCK_FILE_NAME,
+    decision: "exclude",
+    reason:
+      "The credential lock (VC-642): an empty file whose kernel lock coordinates processes. Not data.",
   },
   {
     area: "browser-pictures",

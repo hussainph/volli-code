@@ -36,8 +36,8 @@ import type {
   TicketBodyMutation,
 } from "@volli/shared";
 
-import { getRegisteredHarness } from "@volli/host-core/db/harness-registry-repo";
-import { findLabelByName } from "@volli/host-core/db/labels-repo";
+import { getRegisteredHarness } from "../db/harness-registry-repo";
+import { findLabelByName } from "../db/labels-repo";
 import {
   createTicketCommand,
   createTicketCommentCommand,
@@ -45,12 +45,12 @@ import {
   setTicketLabelsCommand,
   setTicketPriorityCommand,
   updateTicketFieldsCommand,
-} from "@volli/host-core/ticket-commands";
-import { executeTicketMove } from "../ticket-move";
+} from "../ticket-commands";
 import { emitTicketWakesSince, withTicketWake } from "../ticket-wake";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
 import { dryRunResponse } from "./preview";
+import type { SocketDecode } from "./projection";
 import {
   attributedActor,
   invalidPriorityResponse,
@@ -314,15 +314,16 @@ export async function ticketUpdateVerb(
   }
 }
 
-/** `volli ticket move` — a ticket to another column. */
-export async function ticketMoveVerb(
-  context: AgentCommandContext,
-  request: AgentRequest,
-): Promise<AgentResponse> {
-  const { options, projects, now, actor: attribution } = context;
+/**
+ * `volli ticket move` — a ticket to another column: the socket's projection
+ * of the host's `ticket.move` handler (VC-668). This maps the request (the
+ * display id, the column, a no-op or dry-run preview) and the answer (the
+ * moved ticket); the move and every effect it has are the handler's.
+ */
+export const ticketMoveDecode: SocketDecode<"ticket.move"> = (context, request) => {
+  const { options, projects, actor: attribution } = context;
   const resolvedActor = attributedActor(attribution);
   if (!resolvedActor.ok) return resolvedActor.response;
-  const actor = resolvedActor.actor;
   const resolved = ticketForDisplayId(options.db, projects, request.args["id"]);
   if (!resolved.ok) return resolved.response;
   const to = request.args["to"];
@@ -356,30 +357,21 @@ export async function ticketMoveVerb(
     label: moveDisplayId,
   });
   if (movePreview !== null) return movePreview;
-  try {
-    const moved = await executeTicketMove(
-      {
-        worktree: { db: options.db, git: context.git, gitAsync: context.gitAsync, blobsRoot: "" },
-        now,
-        busySites: options.busyWorktreeSites,
-        interruptTicketSessions: options.interruptTicketSessions,
-        onDeliberateMove: options.onDeliberateMove,
-        onMutation: options.onMutation,
-        notify: options.notify,
-      },
-      { projectId: resolved.project.id, ticketId: resolved.ticket.id, toStatus: to },
-      { now: now(), actor },
-    );
-    const ticket = moved.find(({ id }) => id === resolved.ticket.id)!;
-    return {
+  return {
+    input: { projectId: resolved.project.id, ticketId: resolved.ticket.id, toStatus: to },
+    call: { actor: resolvedActor.actor },
+    reply: (tickets) => ({
       v: 1,
       ok: true,
-      data: { ticket: agentTicket(ticket, resolved.project) },
-    };
-  } catch (error) {
-    return failure("MUTATION_FAILED", errorMessage(error));
-  }
-}
+      data: {
+        ticket: agentTicket(
+          tickets.find(({ id }) => id === resolved.ticket.id)!,
+          resolved.project,
+        ),
+      },
+    }),
+  };
+};
 
 /** `volli ticket comment` — a comment on a ticket. */
 export async function ticketCommentVerb(

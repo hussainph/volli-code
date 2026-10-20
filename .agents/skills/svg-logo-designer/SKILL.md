@@ -30,7 +30,6 @@ When a user requests a logo, gather comprehensive design requirements:
    - Target audience
    - Brand personality (modern, classic, playful, serious, etc.)
    - Brand values and messaging
-   - Competitors (for differentiation)
 
 2. **Design Preferences**
    - Logo type:

@@ -1,15 +1,12 @@
 # Process and API boundaries
 
-**Decision (2026-08-14): Electron main is a host, not the product API.**
+**Electron main is a host, not the product API.**
 
-The product is the durable core — commands as persisted intent, idempotent
-acceptance with receipts, immutable events, projections over them. Electron
-main is one process that *hosts* that core and exposes it through one
-transport (Electron IPC) to one client (the renderer). Nothing about the core
-is allowed to know it is being hosted by Electron. The second host is now
-chosen: **`hostd`, serving the host protocol** to desktop, web/phone and CLI
-clients. The [Volli Cloud ruling](plans/volli-cloud.md) (VC-486, 2026-10-03)
-chooses one authority per workspace; this is direction, not built behavior.
+The product is the durable core: persisted commands, idempotent acceptance with
+receipts, immutable events and projections. Electron main hosts it through IPC;
+`hostd` hosts the same services through the [host protocol](host-protocol.md).
+The core never depends on Electron. A Workspace has one authority; the transport
+or viewing device does not create another.
 
 Two corollaries that settle recurring questions:
 
@@ -28,8 +25,7 @@ Two corollaries that settle recurring questions:
 
 ## Standing rules (review criteria)
 
-These keep the multiplayer door open at near-zero cost. They are rules for
-review, not a project to execute — none of them asks anyone to build sync.
+These rules apply to every durable domain surface and transport.
 
 1. **Every new durable id is a UUID, a content hash, or a string scoped by a
    session/attachment UUID.** Never a bare local counter, never anything
@@ -45,6 +41,12 @@ review, not a project to execute — none of them asks anyone to build sync.
    adjacency — "immediately preceded by event X" — as an implicit position. A
    future authority assigns final order and local logs rebase onto it; code
    that quietly assumed local order was final is the code that breaks.
+   The Workspace change-feed cursor is not such a sequence and sits outside
+   this rule (VC-630; `docs/host-protocol.md`, "Workspace change
+   feed"). With one authority it is that authority's delivery
+   order for one Workspace and epoch, used only to resume a subscription. Its
+   changes name state, never a delta, so no reducer reads meaning from their
+   order or adjacency either.
 
 3. **RPC payloads stay JSON-safe.** The Electron transport carries `Date`,
    `Map`, and `undefined` by structured clone; an HTTP transport would mangle
@@ -53,7 +55,7 @@ review, not a project to execute — none of them asks anyone to build sync.
    the latter is `never` at every router seam, including subscription yields.
    `SessionRouterJsonSafety` in `packages/session-rpc/src/index.ts` is the
    existing example, and session-rpc re-exports the types for compatibility.
-   See `docs/plans/host-protocol.md` for the opaque-type/runtime-validation limit.
+   See `docs/host-protocol.md` for the opaque-type/runtime-validation limit.
 
 4. **A receipt is local acceptance, not eternal finality.** UI code may
    render "accepted" from a receipt; it may not be written so that a remote
@@ -62,23 +64,42 @@ review, not a project to execute — none of them asks anyone to build sync.
 
 5. **No new raw IPC for new domain surfaces.** New features take the command
    → event → projection shape with IPC as a dumb transport, the way Sessions
-   already work. The existing raw channels migrate opportunistically when a
-   surface is touched — never as a big-bang rewrite.
+   already work. From VC-564 on, a new domain command is one entry in the
+   command catalog: a Verb Registry entry with a `catalog` declaration, bound
+   to one router procedure built by its area's `createCatalogBuilders`
+   family (VC-630; `docs/host-protocol.md`, "Command catalog"), whose
+   handler calls a context port the composition root wires to host-core. IPC, the agent
+   socket, tools and the WebSocket project it and carry no behavior of their
+   own. A command only the desktop's own window calls is a desktop-only
+   entry instead (`DESKTOP_ENTRIES`, VC-608): no public ceremony, policy from
+   its channel's VC-574 placement, host commands additive-only and client-local entries bundle-scoped, served over the generic IPC
+   bridge from the same handler map (`docs/host-protocol.md`, "Both
+   tiers"; the template is `packages/session-rpc/src/desktop-router.ts`). The
+   existing raw channels migrate
+   opportunistically when a surface is touched — never as a big-bang rewrite;
+   under the `cloud` flag, an area's channels are deleted when that area moves.
 
 6. **Host code never imports `electron`.** This applies to
    `packages/host-core`, `packages/host-protocol` and `apps/hostd`. They host
    the same core without depending on Electron.
 
 7. **No new shared/business state in `app_state`.** Every new key must be
-   classified as device-local or workspace state. Workspace state belongs
-   behind the workspace authority, not in the device-local catch-all.
+   classified as client-local, host, or workspace state (mixed keys name both
+   halves as `split`). Host is host-level state shared by every workspace on
+   that host, in the host-level file defined by `host-identity.md`.
+   Workspace state belongs behind the workspace authority, not in the
+   client-local catch-all. The typed inventory is
+   `packages/shared/src/app-state-keys.ts`, enforced by
+   `packages/shared/src/app-state-keys.test.ts` and the typed repo writers;
+   channel placements live in `apps/desktop/src/ipc/placement.ts`, enforced by
+   `apps/desktop/src/ipc/placement.test.ts`.
 
 ## Shipped SQLite migrations
 
 SQL and original TypeScript `apply` source (including referenced helpers) are frozen in `packages/host-core/src/db/migrations.lock.json`; edits to shipped entries require a new migration, never a rewritten lock. Keep frozen helpers/constants byte-identical (including shared runtime helpers); new behavior gets new names, leaving old applies bound to the original implementations. Formatter/tool upgrades must preserve these source slices, not regenerate shipped hashes.
 Append the next contiguous version to `MIGRATIONS`, then run `pnpm --filter @volli/host-core migrations:lock` and commit its single new version line; the script refuses to rewrite existing entries, and concurrent claims on the same number conflict on that line.
 Tests enforce versions 1..N with no exceptions (023/024 reconcile historical lineages, not numbering gaps); schema-head consumers derive the last version from `MIGRATIONS` (`SCHEMA_HEAD`).
-**A migration that breaks older readers says so (VC-602).** An older build opens a database newer than its head without migrating it unless the file's minimum reader version (`app_state` key `volli:min-reader-version`) is above that head, in which case it refuses before writing anything. A migration declares `raisesMinReader: true` when a build that does not know it could no longer read, write or back up the file safely; additive migrations leave it off. The declaration is part of the migration's lock fingerprint. Unique constraints over older-written columns and derived state without a rebuild path count as breaking. The rule for what counts as breaking is above `MIGRATIONS` in `packages/host-core/src/db/migrations.ts`.
+**A migration that breaks older readers says so (VC-602).** An older build opens a database newer than its head without migrating it unless the file's minimum reader version (`app_state` key `volli:min-reader-version`) is above that head, in which case it refuses before writing anything. A migration declares `raisesMinReader: true` when a build that does not know it could no longer read, write or back up the file safely; additive migrations leave it off. The declaration is part of the migration's lock fingerprint. Unique constraints over older-written columns and derived state without a rebuild path count as breaking. The rule for what counts as breaking is above `MIGRATIONS` in `packages/host-core/src/db/migrations.ts`. CI's `N-1 compatibility` lanes hold the classification to a real previous build (the latest release, the latest canary and the PR's base, VC-633): it writes to a compatible head profile, or refuses a floor-raised one byte-identically, and no floor raise lands while the latest release or canary predates the guard.
 
 ## SQLite transaction ownership
 
@@ -129,7 +150,7 @@ all reads, including cached readers and lazy iterator stepping.
 
 Boot-time sole-owner migrations, recovery and backup/restore connections remain
 direct and are not runtime shared-handle exceptions. No runtime allowlist is
-needed. See [the write-path inventory](research/sqlite-ownership-vc551.md).
+needed.
 **The boot window is the only unguarded time, and nothing from it outlives
 boot:** a statement handle created on the runtime handle before the guard is
 installed must not be retained past `openVolliDb`. The guard re-wraps the
@@ -141,31 +162,11 @@ raw transaction controls, nesting and the packaged handler. Cross-ledger work
 is proved by `packages/host-core/src/db/transaction-gate-ledgers.test.ts`, which
 composes the Session, Automation and cleanup ledgers in the Linux packages lane.
 
-## The chosen path, for context
+## Workspace authority
 
-The [Volli Cloud ruling](plans/volli-cloud.md) chooses **one authority per
-workspace**. Single-host workspaces need no relay; multiplayer is membership,
-per-actor capabilities and presence on that one authority over the host
-protocol. Plain local Volli stays offline; a remote workspace is read-only
-while its host is unavailable, unless the workspace is moved by fenced
-promotion.
-
-### History — relay superseded for single-host workspaces
-
-The earlier path, retained here as history, was a
-**server-authoritative event relay**: the local ledger is unchanged, a server
-becomes the sole sequencer for shared history, clients pull–rebase–push.
-Single-player is untouched and never requires the network. CRDT-everywhere
-was evaluated and rejected for this domain — every production system with a
-reachable server (Linear, Figma, Zulip, LiveStore) converged on
-server-assigned order, and machine-bound resources (terminals, worktrees,
-executors) get supervised or streamed, never multiplayed. The research record
-and the claim-by-claim validation live in
-`.volli/artifacts/multiplayer-readiness/`.
-
-The earlier deferral, also historical, was: until a multiplayer product shape
-is chosen, sync protocol, CRDTs, tenancy/identity, presence, cloud infrastructure
-and schema pre-reservation are **not** being built (a nullable scope column plus
-one constant backfill is free whenever a server actually exists). The ruling
-now sets that product shape and its milestones; this is not a standing ban on
-the chosen identity, presence or cloud work.
+One authority owns each Workspace. Clients speak its API, never its database.
+Plain local work remains offline. A remote Workspace is read-only while its host
+is unavailable; moving authority requires authenticated fenced promotion, never
+silent failover, a guessed larger epoch or merging conflicting histories.
+Machine-bound resources are supervised or streamed, not shared by replaying
+filesystem paths on the viewing device.

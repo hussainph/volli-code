@@ -1,7 +1,7 @@
 /**
  * The sentinel-gated setup-command state machine (worktree-support §6). The
  * setup command runs in the session's live terminal AFTER the PTY spawns — never
- * as the pane's primary process (cmux #5032) — so `ensure` (ensure.ts) ends at
+ * as the pane's primary process — so `ensure` (ensure.ts) ends at
  * `ready` with the identity and deliberately does NOT run setup. Historically
  * pty.ts owned the whole machine inline: arming the watch, writing the sentinel
  * line, scanning output tails, driving `setting-up → ready | failed`, and
@@ -16,12 +16,15 @@
  * a throwing insert is caught, logged, and never escapes the pty hot path).
  */
 import type Database from "better-sqlite3";
-import { errorMessage, trimWorktreeFailureStderr } from "@volli/shared";
+import { trimWorktreeFailureStderr } from "@volli/shared";
 import type { WorktreePhase } from "@volli/shared";
 
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
+import { recordTicketEvent } from "../db/events-repo";
 import { setPhase } from "./phase";
 import { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("worktree-setup");
 
 /**
  * The cap on the retained setup-output tail. Installs are slow and chatty; only
@@ -32,7 +35,7 @@ import { buildSetupSentinelLine, parseSetupSentinel } from "./setup";
 const SETUP_TAIL_MAX_CHARS = 16_000;
 
 /** The deps a setup run needs: the db (for the failure event) and the phase broadcast. */
-export interface SetupRunDeps {
+export interface SetupRunPorts {
   db: Database.Database;
   /** The phase-broadcast seam (wired to IPC by worktreeDeps); undefined in some tests. */
   onPhase?: (ticketId: string, phase: WorktreePhase) => void;
@@ -86,7 +89,7 @@ export interface SetupRun {
  * handle. The caller writes {@link SetupRun.commandLine} to the PTY, then drives
  * the handle through {@link SetupRun.feed} / {@link SetupRun.handleExit}.
  */
-export function createSetupRun(deps: SetupRunDeps, params: SetupRunParams): SetupRun {
+export function createSetupRun(deps: SetupRunPorts, params: SetupRunParams): SetupRun {
   const now = deps.now ?? Date.now;
   let tail = "";
   let settled = false;
@@ -109,7 +112,7 @@ export function createSetupRun(deps: SetupRunDeps, params: SetupRunParams): Setu
         now(),
       );
     } catch (error) {
-      console.error(`[volli] failed to record setup failure: ${errorMessage(error)}`);
+      log.error("failed to record setup failure", { ticketId: params.ticketId, error });
     }
   }
 

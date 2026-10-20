@@ -25,7 +25,7 @@ import type {
 
 import type { AutomationEngine } from "./engine";
 
-export interface AutomationServiceDeps {
+export interface AutomationServicePorts {
   engine: AutomationEngine;
   findProject(projectId: string): boolean;
   findAutomation(automationId: string): Automation | undefined;
@@ -53,7 +53,7 @@ export interface AutomationServiceDeps {
    * Something about the set of Automations this host may fire on its own
    * changed — a record written or deleted, or a switch flipped (VC-130).
    *
-   * Separate from {@link AutomationServiceDeps.onMutation}, which tells OTHER
+   * Separate from {@link AutomationServicePorts.onMutation}, which tells OTHER
    * WINDOWS that the shared record moved. This one tells THIS HOST's timer to
    * re-read, and the two are deliberately different fan-outs: the switch is
    * machine-local and broadcasts nothing, yet it is exactly what decides
@@ -142,7 +142,7 @@ function scheduleChanged(before: AutomationTrigger, after: AutomationTrigger): b
  * mutation to the command/event/projection core. It has no Electron IPC
  * knowledge; an IPC handler is only one caller of this service.
  */
-export function createAutomationService(deps: AutomationServiceDeps) {
+export function createAutomationService(deps: AutomationServicePorts) {
   async function writeProblem(input: {
     name: string;
     instructions: string;

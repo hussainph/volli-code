@@ -17,6 +17,20 @@ export interface SessionTranscriptArtifact {
 export interface TranscriptArtifactStore {
   write(artifact: SessionTranscriptArtifact): Promise<TranscriptReference>;
   read(reference: TranscriptReference): Promise<SessionTranscriptArtifact>;
+  /**
+   * The artifact's size as UTF-8 canonical JSON — what it adds to a frame on
+   * the wire — read from what the store persisted beside the body, never by
+   * reading the body (VC-315). A history window is selected from these sizes
+   * and only then hydrated, so a body outside the window is never read and an
+   * unreadable one outside it cannot fail the window.
+   *
+   * `null` when the store cannot say (the artifact is missing, or its size
+   * metadata is unreadable): the window then treats the frame as too large to
+   * join a window that already holds one, so it is read only on a page of its
+   * own. Must not throw. A store without this method is measured by reading
+   * each candidate body, as before VC-315.
+   */
+  byteLength?(reference: TranscriptReference): Promise<number | null>;
 }
 
 class InMemoryTranscriptArtifactStore implements TranscriptArtifactStore {
@@ -51,7 +65,14 @@ class InMemoryTranscriptArtifactStore implements TranscriptArtifactStore {
     if (!encoded) throw new Error(`Transcript artifact ${reference.id} was not found`);
     return JSON.parse(encoded) as SessionTranscriptArtifact;
   }
+
+  async byteLength(reference: TranscriptReference): Promise<number | null> {
+    const encoded = this.#artifacts.get(reference.id);
+    return encoded === undefined ? null : utf8.encode(encoded).length;
+  }
 }
+
+const utf8 = new TextEncoder();
 
 export function createInMemoryTranscriptArtifactStore(): TranscriptArtifactStore {
   return new InMemoryTranscriptArtifactStore();

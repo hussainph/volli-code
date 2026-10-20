@@ -17,12 +17,13 @@ import {
 import {
   deleteMcpServer,
   getMcpServer,
+  getMcpServerEnabled,
   listMcpServers,
   markMcpServerRefreshFailure,
   putMcpServer,
   selectedMcpToolDefinitions,
-} from "@volli/host-core/db/mcp-servers-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
+} from "../db/mcp-servers-repo";
+import { getProjectById, isProjectAttached } from "../db/projects-repo";
 import { createMcpProtocolClientOpener } from "./client";
 import { MemoryMcpCredentialStore, type McpCredentialStore } from "./credential-store";
 import {
@@ -33,6 +34,7 @@ import {
 } from "./credentials";
 import { discoverMcpServer, type OpenMcpProtocolClient } from "./discovery";
 import { McpOAuthBroker, mcpOAuthServer, type McpSignInOutcome } from "./oauth";
+import { disconnectMcpServer } from "./session-host";
 
 /**
  * A failure that a person can unblock carries `blocked`, so a caller can route
@@ -146,6 +148,11 @@ export class McpSettingsService {
   readonly #store: McpCredentialStore;
   readonly #environment: () => Readonly<Record<string, string | undefined>>;
   readonly #oauth: McpOAuthBroker;
+  readonly #surfaceRevisions = new Map<string, number>();
+  readonly #configured = new Map<
+    string,
+    { revision: number; value: { readonly enabled: boolean } | undefined }
+  >();
 
   constructor(options: McpSettingsOptions) {
     this.#db = options.db;
@@ -214,8 +221,34 @@ export class McpSettingsService {
     return listMcpServers(this.#db, projectId);
   }
 
+  /**
+   * Whether one server is configured in a project now, and enabled: what a
+   * running attachment checks before every call to it (VC-771). Remembered
+   * until the project's MCP settings next change, which every write here
+   * marks, so a call reads SQLite only after a person changed something.
+   */
+  configured(projectId: string, serverId: string): { readonly enabled: boolean } | undefined {
+    const key = `${projectId}\u0000${serverId}`;
+    const revision = this.surfaceRevision(projectId);
+    const known = this.#configured.get(key);
+    if (known !== undefined && known.revision === revision) return known.value;
+    const enabled = getMcpServerEnabled(this.#db, projectId, serverId);
+    const value = enabled === undefined ? undefined : { enabled };
+    this.#configured.set(key, { revision, value });
+    return value;
+  }
+
   selectedTools(projectId: string): readonly McpToolDefinition[] {
     return selectedMcpToolDefinitions(this.#db, projectId);
+  }
+
+  /** In-process invalidation only; a relaunch starts with no cached Session checks. */
+  surfaceRevision(projectId: string): number {
+    return this.#surfaceRevisions.get(projectId) ?? 0;
+  }
+
+  #surfaceChanged(projectId: string): void {
+    this.#surfaceRevisions.set(projectId, this.surfaceRevision(projectId) + 1);
   }
 
   /**
@@ -361,6 +394,8 @@ export class McpSettingsService {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       });
+      this.#surfaceChanged(input.projectId);
+      if (!saved.enabled) disconnectMcpServer(saved.id);
       this.#keepSecrets(saved, pending);
       return { ok: true, server: saved };
     } catch (error) {
@@ -516,14 +551,16 @@ export class McpSettingsService {
   setEnabled(input: { projectId: string; serverId: string; enabled: boolean }): McpServerResult {
     const existing = this.#owned(input.projectId, input.serverId);
     if (!existing.ok) return existing;
-    return {
-      ok: true,
-      server: putMcpServer(this.#db, {
-        ...existing.server,
-        enabled: input.enabled,
-        updatedAt: this.#now(),
-      }),
-    };
+    const server = putMcpServer(this.#db, {
+      ...existing.server,
+      enabled: input.enabled,
+      updatedAt: this.#now(),
+    });
+    this.#surfaceChanged(input.projectId);
+    // Sessions that hold its tools keep them, but a server a person turned off
+    // stops running for them too (VC-771).
+    if (!input.enabled) disconnectMcpServer(input.serverId);
+    return { ok: true, server };
   }
 
   setTools(input: {
@@ -540,18 +577,17 @@ export class McpSettingsService {
         return { ok: false, error: `Enabled MCP tool ${name} was not discovered.` };
       }
     }
-    return {
-      ok: true,
-      server: putMcpServer(this.#db, {
-        ...existing.server,
-        catalog: existing.server.catalog.map((tool) =>
-          Object.assign({}, tool, {
-            enabled: tool.definition !== null && selected.has(tool.name),
-          }),
-        ),
-        updatedAt: this.#now(),
-      }),
-    };
+    const server = putMcpServer(this.#db, {
+      ...existing.server,
+      catalog: existing.server.catalog.map((tool) =>
+        Object.assign({}, tool, {
+          enabled: tool.definition !== null && selected.has(tool.name),
+        }),
+      ),
+      updatedAt: this.#now(),
+    });
+    this.#surfaceChanged(input.projectId);
+    return { ok: true, server };
   }
 
   /**
@@ -566,8 +602,38 @@ export class McpSettingsService {
     if (!deleteMcpServer(this.#db, input.projectId, input.serverId)) {
       return { ok: false, error: "MCP server not found." };
     }
+    this.#surfaceChanged(input.projectId);
     this.#store.delete(input.serverId);
+    disconnectMcpServer(input.serverId);
     return { ok: true };
+  }
+
+  /**
+   * Before a project is removed (VC-796): ends every sign-in still in flight
+   * for its servers, and names them so {@link forgetRemovedServers} can drop
+   * their credentials once the project is detached. A Session's own
+   * connections are its attachment's, and close when its binding is released.
+   */
+  disconnectProject(projectId: string): readonly string[] {
+    const serverIds = this.list(projectId).map(({ id }) => id);
+    for (const serverId of serverIds) this.#oauth.cancelSignIn(serverId);
+    return serverIds;
+  }
+
+  /**
+   * After a project is removed: every credential its servers held, for the
+   * reason {@link remove} drops one server's. A removed project is detached,
+   * not deleted (VC-822), so its server rows stay, but no Settings screen
+   * shows them any more. A server whose project is still on the rail (the
+   * removal did not commit) keeps its own.
+   */
+  forgetRemovedServers(serverIds: readonly string[]): void {
+    for (const serverId of serverIds) {
+      const server = getMcpServer(this.#db, serverId);
+      if (server === undefined || !isProjectAttached(this.#db, server.projectId)) {
+        this.#store.delete(serverId);
+      }
+    }
   }
 
   #prepare(

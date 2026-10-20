@@ -1,6 +1,6 @@
 # Linux host development and CI
 
-## The host lane already exists
+## Linux host CI
 
 `.github/workflows/ci.yml`'s **Test (packages)** job runs on Ubuntu 24.04 using
 plain Node/Vitest at the exact `.nvmrc` version, not the Electron executable:
@@ -68,19 +68,18 @@ imports `broadcast` after each test to dispose the coalescer, after hoisted mock
 have taken effect. That teardown is relevant even for a test file whose own
 graph has no Electron edge. Filesystem,
 PTY, native-library and macOS-specific behavior still require their own checks.
-The VC-552 inventory comment records the module lists and test caveats.
 
 ## Development image
 
 The image in `.devcontainer/host/Dockerfile` is a **development toolchain**, not
 a production hostd deployment. Its multi-architecture base is pinned by digest;
-its Node version must equal `.nvmrc` (currently 24.15.0), and Corepack installs
+its Node version must equal `.nvmrc` (currently 24.21.0), and Corepack installs
 the root manifest's exact pnpm version. It includes git/SSH, Python/make/g++ for
 native compilation, fonts and Chromium runtime libraries. It contains neither
 Electron, Chromium itself, source code, installed workspace dependencies nor
 credentials. Apt lists and the npm cache are removed. It runs as non-root `node`.
 
-Build locally or on the Linux dogfood box from the repository root:
+Build on a development machine or Linux host from the repository root:
 
 ```sh
 docker build -f .devcontainer/host/Dockerfile -t volli-host-dev .
@@ -100,14 +99,16 @@ native postinstall must not run in this host-only checkout. The devcontainer kee
 the root dependency store in a named Docker volume. On Linux the bind mount must
 be writable by uid 1000 (`node`); adjust the container user/mount permissions
 for your own checkout if needed. No production secrets are baked or mounted.
-Standalone Chromium provisioning belongs to the browser/worker ticket; these
-libraries support it without installing another browser in every dev image.
+Standalone Chromium provisioning is separate from the development toolchain;
+these libraries support it without installing a browser in every dev image.
 
-The previous 24.13.0 `.nvmrc` pin could not install the current dependency graph:
-jsdom 30.0.1 requires Node ^24.15.0 in the 24.x line, and `engineStrict` rejects
-older versions. The host lane/image therefore use 24.15.0, and the root
-`engines.node` floor is ^24.15.0 too. The host lane's exact-version install
-checks the full graph rather than inferring compatibility from the caret range.
+The host lane/image use Node 24.21.0, and the root `engines.node` floor is
+^24.16.0. Node 24.16.0 added libuv 1.52.1, including the Linux PTY premature-EOF
+fix (libuv#4992/#4997); the older 24.15.0 pin could lose a shell's final output
+before node-pty delivered exit (VC-639). Electron 44 already includes this fix.
+The host lane's exact-version install checks the full graph rather than inferring
+compatibility from the caret range. The residual libuv#5165 case needs libuv
+1.53.0; revisit once Node ships that version (nodejs/node#66282).
 
 When bumping Node, update `.nvmrc`, the Dockerfile's tag and multi-arch digest
 together; the image build catches drift. A root `packageManager` bump also

@@ -28,6 +28,7 @@
  * web ports do.
  */
 
+import { addAbortListener } from "node:events";
 import { isAbsolute, resolve } from "node:path";
 
 import {
@@ -69,7 +70,20 @@ export interface AgentShellPortOptions {
    * every toolchain on its own default.
    */
   concurrencyEnv?: () => Promise<Record<string, string>>;
-  secretEnvironment?: () => Readonly<Record<string, string>>;
+  secretEnvironment?: (
+    signal?: AbortSignal,
+  ) => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
+}
+
+/** Host hooks need not cooperate with cancellation; do not keep a withdrawn start waiting. */
+async function untilAborted<T>(pending: T | Promise<T>, signal: AbortSignal): Promise<T> {
+  const aborted = Promise.withResolvers<never>();
+  const listener = addAbortListener(signal, () => aborted.reject(signal.reason));
+  try {
+    return await Promise.race([pending, aborted.promise]);
+  } finally {
+    listener[Symbol.dispose]();
+  }
 }
 
 export function createAgentShellPort(options: AgentShellPortOptions): AgentShellPort {
@@ -103,14 +117,15 @@ export function createAgentShellPort(options: AgentShellPortOptions): AgentShell
       // Built at the spawn, as `exec` builds its own at every call, so a
       // PATH adopted after attach reaches the next shell the way it reaches
       // the next execute.
+      const budget = await untilAborted(options.concurrencyEnv?.(), input.signal);
+      input.signal.throwIfAborted();
+      const secrets = await untilAborted(options.secretEnvironment?.(input.signal), input.signal);
       const env = sessionCommandEnvironment(process.env, {
         identity: options.identity,
         pathPrefixes: options.pathPrefixes,
-        environment: {
-          ...(await options.concurrencyEnv?.()),
-          ...options.secretEnvironment?.(),
-        },
+        environment: { ...budget, ...secrets },
       });
+      input.signal.throwIfAborted();
       const started = await options.host.start(owner, {
         command: input.command,
         cwd,

@@ -51,7 +51,7 @@ export interface SignInOwner {
   send(update: ModelAccessSignInUpdate): void;
 }
 
-export interface ModelAccessSignInDeps {
+export interface ModelAccessSignInPorts {
   /**
    * Login and logout over the same collection the runtime holds. Sharing it is
    * not an optimization: `login` writes through that collection's credential
@@ -98,7 +98,7 @@ export class ModelAccessSignInService {
   /** The one-at-a-time rule, indexed by what it is one of. */
   readonly #byProvider = new Map<string, Attempt>();
 
-  constructor(deps: ModelAccessSignInDeps) {
+  constructor(deps: ModelAccessSignInPorts) {
     this.#pi = deps.pi;
     this.#newId = deps.newId ?? (() => crypto.randomUUID());
   }

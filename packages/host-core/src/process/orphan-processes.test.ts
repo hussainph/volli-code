@@ -9,7 +9,7 @@ import type {
   WorktreeRef,
 } from "@volli/shared";
 
-import { OrphanProcessService, type OrphanProcessDeps } from "./orphan-processes";
+import { OrphanProcessService, type OrphanProcessPorts } from "./orphan-processes";
 
 const NOW = 1_800_000_000_000;
 const HOUR = 3_600_000;
@@ -61,7 +61,7 @@ interface Harness {
   inventory: { facts: ProcessFact[] };
 }
 
-interface HarnessOptions extends Partial<OrphanProcessDeps> {
+interface HarnessOptions extends Partial<OrphanProcessPorts> {
   /** The ledger rows this launch believes are still open. */
   rows?: SpawnLedgerEntry[];
 }

@@ -28,10 +28,8 @@ type MessagePart = UIMessage["parts"][number];
 /* ---------------------------------------------------------------- segments */
 
 /**
- * A row inside a bundle. Reasoning is not special: it is a row like any other,
- * with its own glyph and its own disclosure, which is where Cursor and t3code
- * both landed. A standalone "Thought" header above the machinery said the same
- * thing twice and gave the transcript a second left edge to disagree about.
+ * A row inside a bundle. Reasoning has its own glyph and disclosure,
+ * using the same alignment as tool rows without a redundant group header.
  */
 export type BundleRow =
   | {
@@ -239,10 +237,9 @@ function settleThoughts(segments: readonly ChatSegment[]): ChatSegment[] {
 /**
  * Whether the turn still owes the reader a sign of life.
  *
- * The placeholder lives here, at the turn, rather than inside the reasoning row
- * — the arrangement OpenCode's desktop client, Codex and t3code all converged
- * on. It means a reasoning part is free to render nothing until it actually has
- * words, instead of being the thing that has to hold the floor while empty.
+ * The placeholder belongs to the turn rather than the reasoning row.
+ * A reasoning part can render nothing until it has words without hiding
+ * the indication that the turn is still awaiting output.
  */
 export function isAwaitingFirstOutput(messages: readonly UIMessage[]): boolean {
   const turns = groupTurns(messages);

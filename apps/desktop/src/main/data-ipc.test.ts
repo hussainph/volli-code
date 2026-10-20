@@ -56,29 +56,40 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
+import {
+  MIN_READER_VERSION_KEY,
+  recordAutomationRun,
+  recordSessionStartedOnce,
+  readSessionProvenance,
+  readSessionUnread,
+  recordMcpOperation,
+  insertProject,
+  getProjectById,
+} from "@volli/host-core/db";
 
 // Keep the production detector entrypoints observable. Project-create tests
 // usually inject a detector; this seam also verifies the uninjected default.
-const { detectAsync, detectSync } = vi.hoisted(() => ({
+const { detectAsync } = vi.hoisted(() => ({
   detectAsync: vi.fn<(path: string) => Promise<string | null>>(),
-  detectSync: vi.fn<(path: string) => string | null>(),
 }));
 
-vi.mock("@volli/host-core/project-base-branch", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@volli/host-core/project-base-branch")>()),
+vi.mock("../../../../packages/host-core/src/project-base-branch", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../../packages/host-core/src/project-base-branch")
+  >()),
   detectProjectBaseBranchAsync: detectAsync,
-  detectProjectBaseBranch: detectSync,
 }));
 
 // Hoisted above module evaluation, like ipc.test.ts, so the electron mock
 // factory can capture into them. `dataChangedSends` collects every
 // volli:data-changed fan-out so the broadcast-on-mutation assertions can see it.
-const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch } = vi.hoisted(
-  () => ({
+const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWatch, appMode } =
+  vi.hoisted(() => ({
+    appMode: { isPackaged: false },
     handlers: new Map<string, (...args: never[]) => unknown>(),
     dataChangedSends: [] as Array<{ channel: string; payload: unknown }>,
     showItemInFolder: vi.fn(),
@@ -89,6 +100,10 @@ const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWa
      * coverage and change reports the real manager sends.
      */
     worktreeWatch: {
+      /** The client the last `watch` was asked for, as the IPC door built it. */
+      client: undefined as
+        | { onceClosed(listener: () => void): void; removeCloseListener(l: () => void): void }
+        | undefined,
       options: undefined as
         | {
             onCoverageChange?: (ticketId: string, covered: boolean) => void;
@@ -96,8 +111,7 @@ const { handlers, dataChangedSends, showItemInFolder, showSaveDialog, worktreeWa
           }
         | undefined,
     },
-  }),
-);
+  }));
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -109,6 +123,9 @@ vi.mock("electron", () => ({
   // this — a stable stand-in path is enough since none of the mocked worktree
   // functions below actually read it.
   app: {
+    get isPackaged() {
+      return appMode.isPackaged;
+    },
     getPath: () => "/volli-test-userdata",
   },
   // The worktree remove/orphan-delete broadcasts fan out over BrowserWindow;
@@ -134,7 +151,7 @@ vi.mock("electron", () => ({
 // shell out; `worktree-runtime`'s `worktreeDeps` stays real (it just builds a
 // plain deps object and never touches BrowserWindow unless `onPhase` fires,
 // which the mocked functions below never call).
-vi.mock("@volli/host-core/worktree", async () => ({
+vi.mock("../../../../packages/host-core/src/worktree/index", async () => ({
   remove: vi.fn(),
   listBranches: vi.fn(),
   // The rail reads. Mocked so the coalescing/dedup assertions below can count
@@ -158,30 +175,30 @@ vi.mock("@volli/host-core/worktree", async () => ({
   // NOT mocked: the cleanup command core and its SQLite ledger are what the
   // channel's receipts and durable history come from, and a stand-in would
   // answer a different question than the one production asks (VC-284 S1).
-  ...(await vi.importActual<typeof import("@volli/host-core/worktree/cleanup-engine")>(
-    "@volli/host-core/worktree/cleanup-engine",
-  )),
-  ...(await vi.importActual<typeof import("@volli/host-core/worktree/cleanup-ledger")>(
-    "@volli/host-core/worktree/cleanup-ledger",
-  )),
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/cleanup-engine")
+  >("../../../../packages/host-core/src/worktree/cleanup-engine")),
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/cleanup-ledger")
+  >("../../../../packages/host-core/src/worktree/cleanup-ledger")),
   // NOT mocked: the activity guard is what these handler tests are asserting
   // about, and a hand-rolled stand-in would answer a different question than
   // the one production asks (it canonicalizes both paths).
-  ...(await vi.importActual<typeof import("@volli/host-core/worktree/activity")>(
-    "@volli/host-core/worktree/activity",
+  ...(await vi.importActual<typeof import("../../../../packages/host-core/src/worktree/activity")>(
+    "../../../../packages/host-core/src/worktree/activity",
   )),
   // NOT mocked either: the deletion lease is the serialization the manual
-  // delete and the cleanup share (VC-284 review C4), and a stand-in would let
+  // delete and the cleanup share (VC-284), and a stand-in would let
   // this channel claim a lease discipline it does not have.
-  ...(await vi.importActual<typeof import("@volli/host-core/worktree/deletion-lease")>(
-    "@volli/host-core/worktree/deletion-lease",
-  )),
+  ...(await vi.importActual<
+    typeof import("../../../../packages/host-core/src/worktree/deletion-lease")
+  >("../../../../packages/host-core/src/worktree/deletion-lease")),
   // The scope-switch materialize path (VC-98). Mocked like every other git
   // verb here; the ensure pipeline itself is covered by `worktree/ensure.test.ts`.
   ensure: vi.fn(),
-  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps` and by the
-  // commit/push handlers' deps — needs a stub export so that value import
-  // doesn't throw under strict ESM mocking.
+  // Referenced (not called) by `worktree-runtime`'s `worktreeDeps`, the
+  // commit/push handlers' deps and the orphan cleanup's gate port — needs a
+  // stub export so that value import doesn't throw under strict ESM mocking.
   runGitCapturing: vi.fn(),
   runGitCapturingAsync: vi.fn(),
   runNet: vi.fn(),
@@ -194,7 +211,6 @@ vi.mock("@volli/host-core/worktree", async () => ({
   // thing against real `git worktree add` checkouts.
   scanTrimTargets: vi.fn(async () => ({ worktrees: [] })),
   trimAllWorktrees: vi.fn(),
-  getTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: true })),
   setTrimSettings: vi.fn(() => ({ keepPatterns: [".env"], trimOnFinish: false })),
   // Constructed at registration time; these tests exercise no watch channel, so
   // a no-op stand-in keeps real `fs.watch` handles out of the suite. It does
@@ -206,7 +222,8 @@ vi.mock("@volli/host-core/worktree", async () => ({
     constructor(options: (typeof worktreeWatch)["options"] = undefined) {
       worktreeWatch.options = options;
     }
-    watch = vi.fn((_sender: unknown, ticketId: string) => {
+    watch = vi.fn((client: (typeof worktreeWatch)["client"], ticketId: string) => {
+      worktreeWatch.client = client;
       worktreeWatch.options?.onCoverageChange?.(ticketId, true);
       return { ok: true as const };
     });
@@ -220,29 +237,28 @@ vi.mock("@volli/host-core/worktree", async () => ({
 }));
 
 import { flushDataChangedForTest } from "./broadcast";
-import { registerDataIpcHandlers } from "./data-ipc";
-import { watchSessionActivity } from "@volli/host-core/session-control";
-import { createTestSessionEngine } from "./test-session-engine";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { recordAutomationRun } from "@volli/host-core/db/automations-repo";
-import { recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
-import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
-import { readSessionUnread } from "@volli/host-core/db/session-read-repo";
-import { recordMcpOperation } from "@volli/host-core/db/mcp-operations-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testSession } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { resetOrphanScanForTest } from "@volli/host-core/orphan-scan";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
-import { worktreesHome } from "@volli/host-core/worktree-runtime";
-import { projectContainerName } from "@volli/host-core/worktree/containers";
+import { registerDataIpcHandlers } from "./data-ipc.test-support";
+import type { ProjectLiveWork } from "@volli/host-core/handlers";
+import { watchSessionActivity } from "@volli/host-core/sessions";
 import {
+  createTestSessionEngine,
+  insertSession,
+  openTestDb,
+  testProject,
+  testSession,
+  type TestDb,
+  resetOrphanScanForTest,
+  resetWorktreeSnapshotsForTest,
+  resetDeletionLeasesForTest,
+} from "@volli/host-core/testing";
+import type { AutoTitleRequest } from "@volli/host-core/session-runtime";
+import {
+  worktreesHome,
+  projectContainerName,
   archiveAndClean,
   cleanupOrphans,
   commitTicketRemaining,
   ensure,
-  getTrimSettings,
   listBranches,
   readWorktreeBaseFile,
   readWorktreeChangeSet,
@@ -256,15 +272,16 @@ import {
   setTrimSettings,
   trimAllWorktrees,
   trimFinishedWorktree,
-} from "@volli/host-core/worktree";
-import { resetWorktreeSnapshotsForTest } from "@volli/host-core/worktree/snapshot";
-import { orphanCleanupEngine } from "@volli/host-core/worktree-runtime";
-import {
+  orphanCleanupEngine,
   acquireDeletionLease,
-  resetDeletionLeasesForTest,
-} from "@volli/host-core/worktree/deletion-lease";
-import { updateTicketFieldsCommand } from "@volli/host-core/ticket-commands";
-import { subscribeTicketWake, type TicketWake } from "@volli/host-core/ticket-wake";
+  runGitCapturing,
+  runGitCapturingAsync,
+} from "@volli/host-core/worktree";
+import {
+  updateTicketFieldsCommand,
+  subscribeTicketWake,
+  type TicketWake,
+} from "@volli/host-core/board";
 import {
   EMPTY_SESSION_USAGE_SUMMARY,
   MAX_INLINE_IMAGE_BYTES,
@@ -272,6 +289,9 @@ import {
   roleImpliedByTicket,
 } from "@volli/shared";
 import type { BlobAttachResult, BlobLinksResult } from "../ipc/contract";
+
+/** No executor binding is open: these rows rest at not-live. */
+const noOpenBindings = () => [];
 
 /** Fake IPC event; unused by any data-ipc handler, but every handler signature expects one. */
 const fakeEvent = { sender: {} };
@@ -318,6 +338,7 @@ function freshProjectDir(): string {
 }
 
 beforeEach(() => {
+  appMode.isPackaged = false;
   handlers.clear();
   vi.resetAllMocks();
   dataChangedSends.length = 0;
@@ -335,7 +356,11 @@ beforeEach(() => {
   fixtureSessionEngine = createTestSessionEngine(ctx.db);
   registerDataIpcHandlers(
     { ok: true, db: ctx.db },
-    { sessionEngine: fixtureSessionEngine, detectBaseBranch: async () => null },
+    {
+      sessionEngine: fixtureSessionEngine,
+      detectBaseBranch: async () => null,
+      busyWorktreeSites: async () => [],
+    },
   );
 });
 
@@ -432,6 +457,131 @@ describe("volli:database", () => {
  * path, and that bargain is only honest if something refuses it earlier, where a
  * person is present to be told.
  */
+// VC-796: the channel projects the host's `project.remove`. The live work its
+// Sessions hold stops first, while the project is still on the rail, and
+// every window (a second one included) is told. VC-822: the project is then
+// detached, not deleted, so adding its folder again brings its board back.
+describe("project removal", () => {
+  function onRail(projectId: string): boolean {
+    const bootstrap = invoke<BootstrapResult>("volli:data-bootstrap");
+    return bootstrap.ok && bootstrap.data.projects.some(({ id }) => id === projectId);
+  }
+
+  function liveWork(projectId: string, stillOpen: readonly string[] = []) {
+    const stopped: string[] = [];
+    const stop = (step: string) => {
+      // Each stop runs while the project is still on the rail.
+      expect(onRail(projectId)).toBe(true);
+      stopped.push(step);
+    };
+    const live: ProjectLiveWork = {
+      releaseBindings: async () => {
+        stop("bindings");
+        return { stillOpen };
+      },
+      disposeShells: () => stop("shells"),
+      killTerminals: () => stop("terminals"),
+      closeBrowserTabs: () => stop("tabs"),
+      mcp: null,
+    };
+    return { live, stopped };
+  }
+
+  it("stops the project's live work before detaching it, then tells every window", async () => {
+    const projectId = createProject();
+    const { live, stopped } = liveWork(projectId);
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, projectLiveWork: live },
+    );
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", projectId),
+    ).resolves.toEqual({ ok: true });
+
+    expect(stopped).toEqual(["bindings", "shells", "terminals", "tabs"]);
+    expect(onRail(projectId)).toBe(false);
+    // Untargeted, so a window that still holds the project re-reads the list
+    // without it; the fan-out reaches every window, a second one included.
+    await expectDataChanged({ entity: "tickets" });
+  });
+
+  // The defect (VC-822): the removal used to delete the row, and the cascades
+  // took the board and every Session with it. A re-add found nothing.
+  it("brings the board back when the same folder is added again", async () => {
+    const path = freshProjectDir();
+    const nothingRunning: ProjectLiveWork = {
+      releaseBindings: async () => ({ stillOpen: [] }),
+      disposeShells: () => undefined,
+      killTerminals: () => undefined,
+      closeBrowserTabs: () => undefined,
+      mcp: null,
+    };
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      {
+        sessionEngine: fixtureSessionEngine,
+        projectLiveWork: nothingRunning,
+        detectBaseBranch: async () => "main",
+      },
+    );
+    const added = await invoke<Promise<ProjectCreateResult>>("volli:project-create", {
+      path,
+      name: "Kept",
+    });
+    if (!added.ok) throw new Error(added.error);
+    const ticket = createTicket(added.project.id);
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", added.project.id),
+    ).resolves.toEqual({ ok: true });
+
+    // Off every window's rail, its tickets with it.
+    const hidden = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(hidden.ok && hidden.data.projects).toEqual([]);
+    expect(hidden.ok && Object.keys(hidden.data.ticketsByProject)).toEqual([]);
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectCreateResult>>("volli:project-create", { path, name: "Kept" }),
+    ).resolves.toMatchObject({ ok: true, created: false, project: { id: added.project.id } });
+
+    const back = invoke<BootstrapResult>("volli:data-bootstrap");
+    expect(back.ok && back.data.projects.map(({ id }) => id)).toEqual([added.project.id]);
+    expect(back.ok && back.data.ticketsByProject[added.project.id]).toEqual([
+      expect.objectContaining({ id: ticket.id, ticketNumber: ticket.ticketNumber }),
+    ]);
+    // Every window re-reads it: one that seeded an empty board on the add
+    // must not keep showing it empty.
+    await expectDataChanged({ projectId: added.project.id, entity: "tickets" });
+  });
+
+  it("keeps the project, and says why, when one of its Sessions will not stop", async () => {
+    const projectId = createProject();
+    const { live, stopped } = liveWork(projectId, ["session-1"]);
+    registerDataIpcHandlers(
+      { ok: true, db: ctx.db },
+      { sessionEngine: fixtureSessionEngine, projectLiveWork: live },
+    );
+    flushDataChangedForTest();
+    dataChangedSends.length = 0;
+
+    await expect(
+      invoke<Promise<ProjectMutationResult>>("volli:project-remove", projectId),
+    ).resolves.toEqual({
+      ok: false,
+      error:
+        "A Session in this project is still running, so nothing was removed. Stop it and try again.",
+    });
+
+    expect(stopped).toEqual(["bindings"]);
+    expect(onRail(projectId)).toBe(true);
+    expectNoDataChange();
+  });
+});
+
 describe("MCP settings IPC", () => {
   it("routes typed project-scoped settings operations through the main-owned service", async () => {
     const list = vi.fn(() => [{ id: "server-1" }]);
@@ -658,7 +808,6 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
     const path = freshProjectDir();
     const branch = deferredBranch();
     detectAsync.mockReturnValue(branch.promise);
-    detectSync.mockReturnValue("sync-default");
     registerDataIpcHandlers({ ok: true, db: ctx.db }, { sessionEngine: fixtureSessionEngine });
 
     const pending = invoke<Promise<ProjectCreateResult>>("volli:project-create", {
@@ -666,7 +815,6 @@ describe("volli:project-create — workspace-unique ticket prefixes", () => {
       name: "Volli Code",
     });
     await vi.waitFor(() => expect(detectAsync).toHaveBeenCalledExactlyOnceWith(path));
-    expect(detectSync).not.toHaveBeenCalled();
     expect(invoke<BootstrapResult>("volli:data-bootstrap")).toMatchObject({
       ok: true,
       data: { projects: [] },
@@ -2214,7 +2362,7 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
     });
   });
 
-  // The other door (review r2): an archive KEEPS the checkout, which makes an
+  // An archive KEEPS the checkout, which makes an
   // archived ticket the longest-lived carrier of a dead dependency tree, so the
   // wiring is held here and not only in the primitive's own suite.
   it("trims the ticket's worktree when the ticket is archived", () => {
@@ -2313,7 +2461,13 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
 
     expect(result.ok && result.tickets[0]?.status).toBe("todo");
     expect(logFailure).toHaveBeenCalledWith(
-      "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
+      "[ticket-move] failed to interrupt ticket sessions after committed move",
+      expect.objectContaining({
+        error: expect.objectContaining({
+          name: "Error",
+          message: "terminal interrupt unavailable",
+        }),
+      }),
     );
   });
 
@@ -2340,7 +2494,13 @@ describe("volli:ticket-move — backward-move interrupt (issue #78)", () => {
 
     expect(result.ok && result.tickets[0]?.status).toBe("todo");
     expect(logFailure).toHaveBeenCalledWith(
-      "[volli] failed to interrupt ticket sessions after committed move: terminal interrupt unavailable",
+      "[ticket-move] failed to interrupt ticket sessions after committed move",
+      expect.objectContaining({
+        error: expect.objectContaining({
+          name: "Error",
+          message: "terminal interrupt unavailable",
+        }),
+      }),
     );
   });
 });
@@ -2614,6 +2774,7 @@ describe("volli:session-list / volli:session-list-for-ticket", () => {
     const sessionEngine = createTestSessionEngine(ctx.db, { now: () => 500 });
     const pushed = new Map<string, SessionListingRow>();
     const watch = watchSessionActivity(sessionEngine, {
+      listOpenNativeBindings: noOpenBindings,
       publish: ({ row }) => pushed.set(rowId(row), row),
       // The expression `index.ts` passes, unchanged.
       provenanceOf: (born) => readSessionProvenance(ctx.db, born),
@@ -3573,6 +3734,28 @@ describe("volli:worktree-change-watch (VC-369)", () => {
       await invoke<Promise<Result>>("volli:worktree-change-watch", { ticketId: "t1" }),
     ).toEqual({ ok: false, error: "This ticket has no worktree." });
   });
+
+  // VC-831: the watch is the page's, not the window's — a reload keeps the
+  // WebContents, so a watch closed only on `destroyed` outlived its page.
+  it("closes the subscription when the page that opened it goes away", async () => {
+    vi.mocked(resolveWorktreeTarget).mockReturnValue({
+      kind: "ok",
+      target: { displayId: "VC-1", worktreePath: "/wt/VC-1", branch: "b", baseBranch: "main" },
+    } as never);
+    const sender = new EventEmitter();
+    const handler = handlers.get("volli:worktree-change-watch") as unknown as (
+      event: unknown,
+      input: unknown,
+    ) => Promise<Result>;
+    expect(await handler({ sender }, { ticketId: "t1" })).toMatchObject({ ok: true });
+
+    const closed = vi.fn();
+    worktreeWatch.client?.onceClosed(closed);
+    sender.emit("did-navigate-in-page");
+    expect(closed).not.toHaveBeenCalled();
+    sender.emit("did-navigate");
+    expect(closed).toHaveBeenCalledOnce();
+  });
 });
 
 /**
@@ -3592,6 +3775,7 @@ describe("the rail's last-known worktree snapshot (VC-372)", () => {
     status: {
       uncommitted: false,
       sequencerActive: false,
+      unmergedPaths: 0,
       aheadOfBase: 0,
       behindBase: 0,
       unpushed: null,
@@ -4221,6 +4405,12 @@ describe("volli:worktree-orphans", () => {
       expect(result).toEqual({ ok: true, run, receipt });
       expect(vi.mocked(cleanupOrphans)).toHaveBeenCalledWith(
         expect.objectContaining({
+          // The blocking runner reaches the gate's reads and nothing else; the
+          // removal and the prune ride the async one (VC-786).
+          worktree: expect.objectContaining({
+            gateGit: runGitCapturing,
+            gitAsync: runGitCapturingAsync,
+          }),
           busyWorktreeSites: noBusySites,
           releaseAgentSites: noAgentSites,
           engine: expect.anything(),
@@ -4230,7 +4420,7 @@ describe("volli:worktree-orphans", () => {
           scanRevision: "rev-1",
           // The ids as the caller sent them, kept so a retry is decidable from
           // the durable record alone, and the window the proposal was measured
-          // against (re-review S1/C1).
+          // against.
           requestedItemIds: ["rev-1:worktree:0", "rev-1:metadata:0"],
           retentionDays: 14,
           source: "settings",
@@ -4330,7 +4520,7 @@ describe("volli:worktree-orphans", () => {
       expect(vi.mocked(cleanupOrphans)).not.toHaveBeenCalled();
     });
 
-    // The gateway rule (re-review S1). A cleanup invalidates the scan it ran
+    // A cleanup invalidates the scan it ran
     // against, so a retry validated against the CURRENT scan is told its
     // command was superseded — a completed deletion reported as a failure, with
     // a second deletion the obvious next step. The durable record answers
@@ -4508,11 +4698,8 @@ describe("the build-artifact channels", () => {
     expectNoDataChange();
   });
 
-  it("reads and writes the trim settings", async () => {
-    const read = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-get");
-    expect(read).toEqual({ ok: true, settings: { keepPatterns: [".env"], trimOnFinish: true } });
-    expect(vi.mocked(getTrimSettings)).toHaveBeenCalled();
-
+  // The read is `worktree.trimSettings` on the bridge (VC-608).
+  it("writes the trim settings", async () => {
     const written = await invoke<WorktreeTrimSettingsResult>("volli:worktree-trim-settings-set", {
       trimOnFinish: false,
     });
@@ -4691,7 +4878,7 @@ describe("volli:worktree-orphan-delete", () => {
     );
 
     expect(result).toEqual({ ok: true });
-    // Asked TWICE, and the second time is the point (VC-284 re-review C4):
+    // Recheck occupancy after releasing the bindings (VC-284):
     // releasing the bindings takes time, and the answer from before that await
     // is not an answer about the instant of the delete.
     expect(asked).toEqual([canonical, canonical]);
@@ -4733,7 +4920,7 @@ describe("volli:worktree-orphan-delete", () => {
     const target = ownedPath("VC-7-contended");
     mkdirSync(target, { recursive: true });
     // A cleanup is mid-removal on this exact directory; the manual delete takes
-    // the same lease, so it skips rather than racing it (VC-284 re-review C4).
+    // the same lease, so it skips rather than racing it (VC-284).
     const held = acquireDeletionLease(realpathSync.native(target));
 
     const result = await invoke<Promise<WorktreeOrphanDeleteResult>>(
@@ -4845,13 +5032,6 @@ describe("descriptor guard rejections reach the caller through the envelope, one
     });
   });
 
-  it("single string-array-arg shape: rejects a non-array", () => {
-    expect(invoke<ProjectMutationResult>("volli:project-reorder", "not-an-array")).toEqual({
-      ok: false,
-      error: "Invalid project order",
-    });
-  });
-
   it("single object-arg shape: rejects garbage — e.g. ticket-move", () => {
     expect(invoke<TicketsResult>("volli:ticket-move", "nope")).toEqual({
       ok: false,
@@ -4873,25 +5053,85 @@ describe("descriptor guard rejections reach the caller through the envelope, one
     expect(
       ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
     ).toBeUndefined();
-    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:other", "1")).toEqual({
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:ui", "1")).toEqual({
       ok: true,
     });
+  });
+
+  it("refuses an unclassified renderer key (VC-574)", () => {
+    expect(invoke<AppStateSetResult>("volli:app-state-set", "volli:unclassified", "1")).toEqual({
+      ok: false,
+      error: "[volli] Unregistered or retired app_state write: volli:unclassified",
+    });
+    expect(
+      ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get("volli:unclassified"),
+    ).toBeUndefined();
+  });
+
+  it("preserves unregistered renderer and legacy writes byte-for-byte when packaged (VC-574)", () => {
+    appMode.isPackaged = true;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(invoke("volli:app-state-set", "volli:unclassified", "raw renderer value")).toEqual({
+        ok: true,
+      });
+      ctx.db.exec("DELETE FROM projects");
+      expect(
+        invoke("volli:legacy-import", {
+          projects: [],
+          appState: { "volli:unclassified-legacy": "raw legacy value" },
+          rawBackup: {},
+        }),
+      ).toMatchObject({ ok: true });
+      expect(
+        ctx.db
+          .prepare(
+            "SELECT key, value FROM app_state WHERE key LIKE 'volli:unclassified%' ORDER BY key",
+          )
+          .all(),
+      ).toEqual([
+        { key: "volli:unclassified", value: "raw renderer value" },
+        { key: "volli:unclassified-legacy", value: "raw legacy value" },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("refuses an unclassified legacy key and rolls back the import (VC-574)", () => {
+    ctx.db.exec("DELETE FROM projects");
+    expect(
+      invoke("volli:legacy-import", {
+        projects: [],
+        appState: { "volli:ui": "registered", "volli:unclassified": "1" },
+        rawBackup: { "volli:ui": "source" },
+      }),
+    ).toEqual({
+      ok: false,
+      error: "[volli] Unregistered or retired app_state write: volli:unclassified",
+    });
+    expect(
+      ctx.db
+        .prepare("SELECT key FROM app_state WHERE key IN (?, ?, ?)")
+        .all("volli:ui", "volli:unclassified", "volli:legacy-backup"),
+    ).toEqual([]);
   });
 
   it("drops the schema floor from a legacy import and keeps the rest (VC-602)", () => {
     ctx.db.exec("DELETE FROM projects");
     const result = invoke<{ ok: boolean }>("volli:legacy-import", {
       projects: [],
-      appState: { [MIN_READER_VERSION_KEY]: "58", "volli:imported": "1" },
+      appState: { [MIN_READER_VERSION_KEY]: "58", "volli:ui": "1" },
       rawBackup: {},
     });
     expect(result.ok).toBe(true);
     expect(
       ctx.db.prepare("SELECT 1 FROM app_state WHERE key = ?").get(MIN_READER_VERSION_KEY),
     ).toBeUndefined();
-    expect(
-      ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:imported'").get(),
-    ).toEqual({ value: "1" });
+    expect(ctx.db.prepare("SELECT value FROM app_state WHERE key = 'volli:ui'").get()).toEqual({
+      value: "1",
+    });
   });
 
   it("optional-object-arg shape: rejects a non-object argument", () => {

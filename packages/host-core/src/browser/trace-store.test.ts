@@ -7,7 +7,7 @@ import {
   type BrowserTraceFrame,
   type BrowserTracePersistence,
   type BrowserTraceStepInput,
-  type BrowserTraceStoreDependencies,
+  type BrowserTraceStorePorts,
 } from "./trace-store";
 
 /**
@@ -50,7 +50,7 @@ const jpeg = (label: string, id = label): BrowserTraceFrame => ({
 });
 
 function store(
-  options: Partial<Omit<BrowserTraceStoreDependencies, "persist">> & {
+  options: Partial<Omit<BrowserTraceStorePorts, "persist">> & {
     persist?: BrowserTracePersistence | null;
   } = {},
 ): BrowserTraceStore {

@@ -63,6 +63,8 @@ export type HarnessCommand =
       attachmentId: string;
       message: UIMessage;
       delivery: NativeMessageDelivery;
+      /** Queued steering must refuse if this turn ended, never open/join another turn. */
+      targetTurnId?: string;
       /**
        * How long the dispatch waits before it answers (VC-324). Optional and
        * absent by default, which is `"turn"` — the behaviour every caller but

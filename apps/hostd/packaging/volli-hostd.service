@@ -7,15 +7,25 @@
 #     --shell /bin/bash volli
 #   sudo tar -xzf volli-hostd-*-linux-x64.tar.gz -C /opt/volli-hostd \
 #     --strip-components=1 --no-same-owner      # root-owned, not the builder's uid
-#   sudo install -m 644 volli-hostd.service /etc/systemd/system/
-#   sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd
-#   journalctl -u volli-hostd -o cat | jq .
+#   sudo install -m 644 volli-hostd.service volli-hostd.socket /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now volli-hostd.socket volli-hostd
+#   journalctl -u volli-hostd -o cat | jq -R 'fromjson?'
+#
+# An operator (a person, never the service account) writes over SSH with a
+# token root issues, and reaches the socket through the service's group:
+#   sudo volli-hostd operator-token --for <login>
+#   sudo usermod -aG volli <login>
+#   VOLLI_SOCKET=/run/volli-hostd.sock volli project add <path>
+# README.md, "Operators".
 
 [Unit]
 Description=Volli headless host (volli-hostd)
 Documentation=https://github.com/hussainph/volli-code/blob/main/apps/hostd/README.md
 Wants=network-online.target
 After=network-online.target
+# systemd binds the agent socket (volli-hostd.socket), as root, in root's /run.
+Requires=volli-hostd.socket
+After=volli-hostd.socket
 
 [Service]
 Type=simple
@@ -33,7 +43,12 @@ Environment=VOLLI_HOSTD_LOG_LEVEL=info
 # directory does not carry it (docs/secrets.md, "Headless hosts"). Install it
 # with: sudo install -o volli -g volli -m 600 key /etc/volli-hostd/session-secrets.key
 #Environment=VOLLI_SECRET_KEY_FILE=/etc/volli-hostd/session-secrets.key
-ExecStart=/opt/volli-hostd/bin/volli-hostd --data-dir /var/lib/volli-hostd
+# hostd reads /etc/volli-hostd-operators (root's; ProtectSystem= keeps /etc
+# read-only to it anyway) and refuses to boot if the service could write it.
+# --socket only names the socket systemd passes in (LISTEN_FDS); hostd serves
+# that and never binds, renames or removes the pathname itself.
+ExecStart=/opt/volli-hostd/bin/volli-hostd --data-dir /var/lib/volli-hostd \
+  --socket /run/volli-hostd.sock
 # SIGTERM stops accepting work, drains in-flight requests (10 s at most),
 # checkpoints the WAL and closes the database. hostd's own deadline is 30 s.
 KillSignal=SIGTERM
@@ -49,6 +64,11 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectSystem=full
+# /home, /root and /run/user are invisible. Nothing hostd or a Session uses
+# lives there: HOME, Pi's auth.json, the push key and the Ticket worktrees
+# (~/.volli/worktrees) are under /var/lib/volli-hostd, and project checkouts
+# go in /srv (docs/runbooks/hostd-box.md). Operators' tokens stay out of reach.
+ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
@@ -63,7 +83,15 @@ CapabilityBoundingSet=
 # The agent socket, outbound HTTPS and git, and the interface lookups Node
 # and git make. No raw or packet sockets.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-RestrictNamespaces=yes
+# Namespaces: only the three the agent browser's sandbox makes (VC-619).
+# Chromium's Linux sandbox puts each renderer in new user, PID and network
+# namespaces; with RestrictNamespaces=yes it cannot, and refuses to start
+# ("No usable sandbox!"). The alternative, --no-sandbox, runs every web page
+# with this service's whole reach, so the unit allows these three and denies
+# the rest (mount, IPC, UTS, cgroup, time). On Ubuntu 23.10+ the binary also
+# needs packaging/volli-chromium.apparmor; scripts/probe-chromium-sandbox.sh
+# checks both against this file.
+RestrictNamespaces=user pid net
 SystemCallArchitectures=native
 # Not MemoryDenyWriteExecute=: V8's JIT needs writable executable memory.
 

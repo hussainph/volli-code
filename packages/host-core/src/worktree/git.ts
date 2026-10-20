@@ -36,19 +36,19 @@
  *    `git add -A` and `git commit`, which ride the same seam because the Done
  *    flow drives them together. All of them are bounded at 120 s, and one push
  *    holding a slot here would starve every 8 s local read queued behind it.
- *  - {@link runGitCapturing} and its callers — `harness-workspace.ts` most
- *    concretely, whose per-file `ls-files` and `rev-parse --git-common-dir`
- *    run on a Session start. So a Session start can hold one synchronous child
- *    BESIDE this bound's five, and the honest ceiling is five admitted async
- *    children plus whatever the synchronous runner is doing. That runner
- *    bounds itself by blocking the main thread — which is the whole reason the
- *    async runner exists, and why the ordering of worktree CHANGES is a
- *    separate concern handled in `repository-turn.ts` rather than here.
+ *  - {@link runGitCapturing}, whose one production caller is the confirmed
+ *    orphan cleanup's final gate (`cleanup.ts`) — reads only, since VC-786
+ *    moved that cleanup's `worktree remove` and `prune` onto this bound. So the
+ *    honest ceiling is five admitted async children plus at most one gate read.
+ *    That runner bounds itself by blocking the main thread — which is the
+ *    whole reason the async runner exists, and why the ordering of worktree
+ *    CHANGES is a separate concern handled in `repository-turn.ts` rather than
+ *    here.
  *  - git children this process did not start: the user's own terminal, a
  *    second Volli install, and the agents Volli runs. Nothing in one process
  *    can bound those, and this bound does not pretend to.
  */
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 import type { RunGit } from "../project-base-branch";
@@ -67,7 +67,7 @@ const execFileAsync = promisify(execFile);
 export const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
- * The hard deadline for one local git child. Git still runs hooks, signing
+ * The hard deadline for one local git READ. Git still runs hooks, signing
  * helpers, and filters for local commands; each can wait forever unless the
  * process that launched it owns a deadline. Accepted socket requests disable
  * their transport timeout, so this runner is the local bound that lets sync
@@ -76,14 +76,49 @@ export const GIT_MAX_BUFFER = 64 * 1024 * 1024;
  * It is a deadline for one CHILD, not for one CALL. Since VC-389 a caller may
  * also wait for a slot (see {@link GIT_MAX_CONCURRENT_CHILDREN}), and that
  * wait is not counted here — the clock starts when the child spawns.
+ *
+ * It does NOT apply to the local mutations — see
+ * {@link GIT_MUTATION_TIMEOUT_MS} for why a read's bound is the wrong one there.
  */
 export const GIT_COMMAND_TIMEOUT_MS = 8_000;
 
 /**
+ * The backstop for one local git MUTATION: `worktree add`/`remove`/`prune`/
+ * `repair` and `merge` (including `--abort`) — see {@link isLocalMutation}.
+ *
+ * These are not bounded local reads (VC-785). `worktree add` is a whole
+ * checkout plus whatever smudge filters (git-lfs) and `post-checkout` hooks the
+ * repository installs; `worktree remove` deletes a checkout, ignored build
+ * output and all; `merge` runs `pre-merge-commit`/`commit-msg` hooks. Each can
+ * honestly take longer than {@link GIT_COMMAND_TIMEOUT_MS} on a large or busy
+ * repository, and killing one part-way is far worse than waiting: the checkout
+ * is left half-made with its admin dir still `locked initializing`, a remove
+ * leaves a part-deleted checkout the ticket still points at, a merge leaves
+ * `index.lock` behind for every later command.
+ *
+ * 120 s matches `net.ts`'s bound, which already carries the other local
+ * hook-running mutations (`git add -A`, `git commit`). It stays a deadline,
+ * because the repository's turn (`repository-turn.ts`) requires every change
+ * inside it to be bounded.
+ *
+ * When it fires, the child's whole process group gets SIGTERM first — which git
+ * catches to delete its lockfiles and a half-made worktree — and only after
+ * {@link GIT_MUTATION_KILL_GRACE_MS} SIGKILL.
+ */
+export const GIT_MUTATION_TIMEOUT_MS = 120_000;
+
+/**
+ * How long a mutation that overran {@link GIT_MUTATION_TIMEOUT_MS} has, after
+ * SIGTERM, to clean up and exit before its process group is SIGKILLed. Git's
+ * own cleanup is a few unlinks and a directory removal; the grace exists for a
+ * hook that ignores SIGTERM, which is what SIGKILL is still for.
+ */
+export const GIT_MUTATION_KILL_GRACE_MS = 5_000;
+
+/**
  * How many git children this module may have in flight at once — the async
  * ones it admits, not every git child in the process. The module comment above
- * names what sits outside it, and `harness-workspace.ts`'s synchronous reads
- * are the one that runs on the same Session start.
+ * names what sits outside it.
  *
  * The bound exists because the old synchronous runner was quietly doing a
  * second job. Because it blocked the main thread, only one git command could
@@ -108,10 +143,14 @@ export const GIT_COMMAND_TIMEOUT_MS = 8_000;
  *
  * What it does NOT bound is the wait: {@link GIT_COMMAND_TIMEOUT_MS} is the
  * deadline for one CHILD, so a queued caller's worst case is roughly that
- * deadline times the queue ahead of it over the slot count. That is acceptable
- * here because everything in this pool is a bounded local read — and it is
- * precisely why `net.ts`'s 120 s network verbs are deliberately a separate
- * pool: one push holding a slot would starve every 8 s local read behind it.
+ * deadline times the queue ahead of it over the slot count. The local
+ * mutations share this pool under their own longer backstop
+ * ({@link GIT_MUTATION_TIMEOUT_MS}): a `worktree add` is the heaviest child a
+ * Session start runs, which is exactly what the bound exists to queue, and in
+ * the ordinary case it finishes in seconds. Only a mutation that hangs holds a
+ * slot for long, and it takes all five hanging at once to starve the reads.
+ * `net.ts`'s network verbs stay a separate pool because a slow network is the
+ * ordinary case for them, not the pathological one.
  */
 export const GIT_MAX_CONCURRENT_CHILDREN = 5;
 
@@ -222,18 +261,306 @@ function gitFailure(caught: unknown, args: readonly string[], timeoutMs: number)
 }
 
 /**
- * Default synchronous worktree git runner. Since VC-383 it has ONE deliberate
- * consumer on a user path: the confirmed orphan cleanup's gate (`cleanup.ts`),
- * which may not yield between its last look and the delete. Everything else a
+ * Whether a local git command CHANGES the repository, and so takes the
+ * mutation backstop and the polite stop rather than a read's 8 s SIGKILL. Keyed
+ * on the same command vocabulary {@link localGitArgs} admits; everything else it
+ * admits is a read.
+ */
+function isLocalMutation(args: readonly string[]): boolean {
+  const [command, operation] = args[0] === "--no-optional-locks" ? args.slice(1) : args;
+  if (command === "merge") return true;
+  return command === "worktree" && operation !== "list";
+}
+
+/**
+ * Runs one mutation child under its backstop, stopping it so git can clean up.
+ *
+ * Not execFile: its timeout signals only the direct child, and a kill git
+ * cannot catch is what strands the lockfiles and half-made worktrees VC-785 is
+ * about. Here the child leads its own process group, so the hooks, filters and
+ * the `reset --hard` that `worktree add` runs as a grandchild are signalled
+ * with it — SIGTERM first, which every git process catches to remove its
+ * locks and junk, then SIGKILL for whatever is still alive after the grace.
+ *
+ * Settles on `close`, like execFile, and judges success by GIT's own exit
+ * status: a git that exited 0 succeeded even if something it left behind held
+ * its pipes until the backstop reaped it.
+ */
+function runMutationChild(
+  file: string,
+  args: readonly string[],
+  cwd: string,
+  timeoutMs: number,
+  graceMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const ownGroup = process.platform !== "win32";
+    const child = spawn(file, [...args], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: ownGroup,
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let timedOut = false;
+    let settled = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    const signal = (name: NodeJS.Signals): void => {
+      try {
+        if (ownGroup && child.pid !== undefined) process.kill(-child.pid, name);
+        else child.kill(name);
+      } catch {
+        // ESRCH: everything in the group has already exited.
+      }
+    };
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      signal("SIGTERM");
+      graceTimer = setTimeout(() => signal("SIGKILL"), graceMs);
+    }, timeoutMs);
+    const finish = (outcome: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      clearTimeout(graceTimer);
+      outcome();
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes <= GIT_MAX_BUFFER) stdout.push(chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes <= GIT_MAX_BUFFER) stderr.push(chunk);
+    });
+    child.on("error", (error) => finish(() => reject(error)));
+    child.on("close", (code) =>
+      finish(() => {
+        const captured = Buffer.concat(stderr).toString("utf8");
+        if (code === 0) {
+          resolve(Buffer.concat(stdout).toString("utf8"));
+          return;
+        }
+        reject({
+          stderr: captured,
+          killed: timedOut,
+          message: `Command failed: ${[file, ...args].join(" ")}\n${captured}`,
+        } satisfies CapturedGitFailure);
+      }),
+    );
+  });
+}
+
+/**
+ * This is a local-operation runner, not an arbitrary git CLI door. Array args
+ * prevent shell injection but do not stop git interpreting a ref as an option
+ * (notably --upload-pack). Keep the command/option vocabulary owned here; refs
+ * and repository paths must be operands, never a way to extend that vocabulary.
+ * Network verbs belong to net.ts and are intentionally not admitted here.
+ */
+function localGitArgs(args: readonly string[]): string[] {
+  const rest = [...args];
+  const global = rest[0] === "--no-optional-locks" ? [rest.shift()!] : [];
+  const command = rest.shift();
+  const reject = (): never => {
+    throw new GitError("Unsafe or unsupported local git arguments.", "", args);
+  };
+  const operand = (value: string): string => {
+    if (value.length === 0 || value.startsWith("-") || value.includes("\0")) reject();
+    return value;
+  };
+  const finish = (prefix: string[], values: string[], separator = "--"): string[] => [
+    ...global,
+    ...prefix,
+    ...(values.length > 0 ? [separator, ...values.map(operand)] : []),
+  ];
+
+  // These two reads deliberately put options AFTER refs. Preserve --not's
+  // ordering: moving it before the branch would invert the reachability test.
+  if (command === "log") {
+    if (rest[0] === "-1" && rest[1] === "--format=%ct" && rest.length === 3) {
+      return [...global, command, "-1", "--format=%ct", operand(rest[2]!), "--"];
+    }
+    const tail = ["--remotes", "--max-count=1", "--format=%H"];
+    if (
+      (rest.length === 5 || rest.length === 6) &&
+      rest[1] === "--not" &&
+      tail.every((value, index) => rest[rest.length - 3 + index] === value)
+    ) {
+      operand(rest[0]!);
+      if (rest.length === 6) operand(rest[2]!);
+      return [...global, command, ...rest, "--"];
+    }
+    return reject();
+  }
+  if (command === "for-each-ref") {
+    if (
+      rest.length !== 3 ||
+      rest[1] !== "--sort=-committerdate" ||
+      rest[2] !== "--format=%(refname:short)"
+    ) {
+      return reject();
+    }
+    return finish([command, rest[1]!, rest[2]!], [rest[0]!]);
+  }
+  if (command === "config") {
+    const readHelper = [
+      "--includes",
+      "--null",
+      "--show-scope",
+      "--show-origin",
+      "--get-all",
+      "credential.helper",
+    ];
+    if (rest.length !== readHelper.length || !rest.every((value, i) => value === readHelper[i])) {
+      return reject();
+    }
+    return [...global, command, ...readHelper];
+  }
+
+  let prefix: string[];
+  let flags: readonly string[];
+  let maxOperands: number;
+  let separator = "--";
+  switch (command) {
+    case "rev-parse":
+      prefix = [command];
+      flags = ["--verify", "--quiet", "--git-dir", "--git-common-dir", "--git-path"];
+      maxOperands = 1;
+      separator = "--end-of-options";
+      break;
+    case "diff":
+      prefix = [command];
+      flags = ["--numstat", "--raw", "--name-only", "--diff-filter=U", "-z", "-M"];
+      maxOperands = 2;
+      separator = "--end-of-options";
+      break;
+    case "rev-list":
+      prefix = [command];
+      flags = ["--count", "--left-right"];
+      maxOperands = 1;
+      separator = "--end-of-options";
+      break;
+    case "merge-base":
+      prefix = [command];
+      flags = [];
+      maxOperands = 2;
+      break;
+    case "merge":
+      prefix = [command];
+      flags = ["--no-edit", "--abort"];
+      maxOperands = 1;
+      break;
+    case "show":
+      prefix = [command];
+      flags = [];
+      maxOperands = 1;
+      separator = "--end-of-options";
+      break;
+    case "cat-file":
+      prefix = [command];
+      flags = ["-e"];
+      maxOperands = 1;
+      break;
+    case "symbolic-ref":
+      prefix = [command];
+      flags = ["--quiet"];
+      maxOperands = 1;
+      break;
+    case "branch":
+      prefix = [command];
+      flags = ["--show-current"];
+      maxOperands = 0;
+      break;
+    case "status":
+      prefix = [command];
+      flags = ["--porcelain", "--porcelain=v2", "-z", "-uall"];
+      maxOperands = 0;
+      break;
+    case "ls-files":
+      prefix = [command];
+      flags = ["-z", "-o", "-i", "--cached", "--others", "--exclude-standard", "--directory"];
+      maxOperands = Number.POSITIVE_INFINITY;
+      break;
+    case "submodule":
+      if (rest.shift() !== "status") return reject();
+      prefix = [command, "status"];
+      flags = [];
+      maxOperands = 0;
+      break;
+    case "worktree": {
+      const operation = rest.shift();
+      if (operation === "add") {
+        prefix = [command, operation];
+        if (rest[0] === "-b") {
+          rest.shift();
+          prefix.push("-b", operand(rest.shift() ?? ""));
+        }
+        flags = [];
+        maxOperands = 2;
+      } else if (operation === "remove") {
+        prefix = [command, operation];
+        flags = ["--force"];
+        maxOperands = 1;
+      } else if (operation === "repair") {
+        prefix = [command, operation];
+        flags = [];
+        maxOperands = Number.POSITIVE_INFINITY;
+      } else if (operation === "list" || operation === "prune") {
+        prefix = [command, operation];
+        flags = operation === "list" ? ["--porcelain"] : [];
+        maxOperands = 0;
+      } else {
+        return reject();
+      }
+      break;
+    }
+    default:
+      return reject();
+  }
+  while (rest.length > 0 && flags.includes(rest[0]!)) prefix.push(rest.shift()!);
+  const literalPaths = command === "ls-files" && rest[0] === "--";
+  if (rest[0] === "--" || rest[0] === "--end-of-options") rest.shift();
+  if (rest.length > maxOperands) return reject();
+  // --git-path consumes the following token as its own value, not a revision.
+  if (command === "rev-parse" && prefix.includes("--git-path")) {
+    if (rest.length !== 1 || prefix.at(-1) !== "--git-path") return reject();
+    return [...global, ...prefix, operand(rest[0]!)];
+  }
+  // Without --verify, rev-parse echoes --end-of-options to stdout.
+  // Refs still pass operand(), which refuses option-prefixed values.
+  if (command === "rev-parse" && !prefix.includes("--verify")) {
+    return [...global, ...prefix, ...rest.map(operand)];
+  }
+  // A caller may supply a literal option-looking filename after ls-files' --.
+  // It is safe there, unlike a ref or worktree repository operand.
+  if (literalPaths) {
+    if (rest.some((value) => value.length === 0 || value.includes("\0"))) return reject();
+    return [...global, ...prefix, "--", ...rest];
+  }
+  return finish(prefix, rest, separator);
+}
+
+/**
+ * The synchronous worktree git runner. It has ONE deliberate consumer: the
+ * confirmed orphan cleanup's final gate (`cleanup.ts`), whose READS may not
+ * yield between its last look and the mutation it admits. It reaches that gate
+ * on its own port (`OrphanCleanupWorktreePorts.gateGit`) and rides no shared
+ * deps bundle, so no other path can pick it up by accident (VC-786). The
+ * cleanup's `worktree remove` and `prune` themselves, and everything else a
  * person or a timer reaches — the scan, remove, trim, commit, the harness
- * workspace, every rail read — runs on {@link runGitCapturingAsync}, because a
+ * workspace, every rail read — run on {@link runGitCapturingAsync}, because a
  * sync child on Electron main is the beachball. Reaching for this one for a new
- * read is the wrong default; every child still has the same deadline as the
- * async runner, so a malformed local hook cannot freeze Electron indefinitely.
+ * read is the wrong default. Every child here has the READ deadline
+ * ({@link GIT_COMMAND_TIMEOUT_MS}) and its SIGKILL, which is why no mutation may
+ * run on it: the async runner's longer, polite mutation backstop is
+ * deliberately not offered on a thread that blocks.
  */
 export const runGitCapturing: RunGit = (args, cwd) => {
   try {
-    return execFileSync("git", args, {
+    return execFileSync("git", localGitArgs(args), {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -251,8 +578,19 @@ export const runGitCapturing: RunGit = (args, cwd) => {
 export interface GitCapturingAsyncRunnerOptions {
   /** Executable to run; production uses git and tests can supply a hung child. */
   readonly file?: string;
-  /** Positive deadline for one child process. */
+  /** Positive deadline for one read child. */
   readonly timeoutMs?: number;
+  /** Positive backstop for one mutation child ({@link GIT_MUTATION_TIMEOUT_MS}). */
+  readonly mutationTimeoutMs?: number;
+  /** Positive SIGTERM-to-SIGKILL grace for an overrun mutation. */
+  readonly mutationKillGraceMs?: number;
+}
+
+function positiveDeadline(value: number, what: string): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${what} must be a positive finite number.`);
+  }
+  return value;
 }
 
 /**
@@ -263,19 +601,39 @@ export interface GitCapturingAsyncRunnerOptions {
  * other work, and the deadline kills the child so the command eventually
  * answers. The factory lets the suite prove that behavior against a real hung
  * spawn at a short deadline without weakening production's bound.
+ *
+ * Reads and mutations get different deadlines and different stops (VC-785):
+ * a read is SIGKILLed at {@link GIT_COMMAND_TIMEOUT_MS}; a mutation
+ * ({@link isLocalMutation}) runs to {@link GIT_MUTATION_TIMEOUT_MS} and is then
+ * stopped with SIGTERM to its process group so git can clean up after itself.
  */
 export function createGitCapturingAsyncRunner(
   options: GitCapturingAsyncRunnerOptions = {},
 ): RunGitAsync {
   const file = options.file ?? "git";
-  const timeoutMs = options.timeoutMs ?? GIT_COMMAND_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new Error("Git command timeout must be a positive finite number.");
-  }
+  const timeoutMs = positiveDeadline(
+    options.timeoutMs ?? GIT_COMMAND_TIMEOUT_MS,
+    "Git command timeout",
+  );
+  const mutationTimeoutMs = positiveDeadline(
+    options.mutationTimeoutMs ?? GIT_MUTATION_TIMEOUT_MS,
+    "Git mutation timeout",
+  );
+  const mutationKillGraceMs = positiveDeadline(
+    options.mutationKillGraceMs ?? GIT_MUTATION_KILL_GRACE_MS,
+    "Git mutation kill grace",
+  );
   return (args, cwd) =>
     withGitChildSlot(async () => {
+      const mutation = isLocalMutation(args);
+      const deadline = mutation ? mutationTimeoutMs : timeoutMs;
       try {
-        const { stdout } = await execFileAsync(file, [...args], {
+        // A non-git executable is the existing test seam for hung children.
+        const safeArgs = file === "git" ? localGitArgs(args) : [...args];
+        if (mutation) {
+          return await runMutationChild(file, safeArgs, cwd, deadline, mutationKillGraceMs);
+        }
+        const { stdout } = await execFileAsync(file, safeArgs, {
           cwd,
           encoding: "utf8",
           maxBuffer: GIT_MAX_BUFFER,
@@ -286,7 +644,7 @@ export function createGitCapturingAsyncRunner(
         });
         return stdout;
       } catch (caught) {
-        throw gitFailure(caught, args, timeoutMs);
+        throw gitFailure(caught, args, deadline);
       }
     });
 }
@@ -298,8 +656,19 @@ export function createGitCapturingAsyncRunner(
  */
 export const runGitCapturingAsync: RunGitAsync = createGitCapturingAsyncRunner();
 
-/** Pulls a captured stderr excerpt off any thrown error, for `worktree_failed` events. */
+/**
+ * Pulls a captured stderr excerpt off any thrown error, for `worktree_failed` events.
+ *
+ * A timed-out child's stderr is whatever it had printed when it was stopped —
+ * often git's own progress — so the timeout itself is appended LAST: the event
+ * keeps the trailing slice of a long excerpt, and the reason it stopped must be
+ * the part that survives.
+ */
 export function stderrOf(error: unknown): string {
+  if (error instanceof GitError && error.timedOut) {
+    const captured = error.stderr.trim();
+    return captured.length > 0 ? `${captured}\n${error.message}` : error.message;
+  }
   if (error instanceof GitError && error.stderr.trim().length > 0) return error.stderr;
   if (error instanceof Error) return error.message;
   return String(error);

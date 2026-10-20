@@ -8,10 +8,10 @@ import {
 } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { createModelAutoSelect } from "./auto-select";
-import { createDesktopDecisions } from "./desktop";
+import { createHostDecisions } from "./host-decisions";
 import { DECISION_MODEL_APP_STATE_KEY } from "./settings";
 
 const PROJECT = "proj-auto";
@@ -85,7 +85,7 @@ function classifier(answer: { choice: string; confidence: number } | "fail") {
 
 function port(built: DecisionClassifier) {
   const billed: Array<{ purpose: string; usage: SessionUsage }> = [];
-  const decisions = createDesktopDecisions({
+  const decisions = createHostDecisions({
     db: fixture.db,
     models: {
       getModelOfType: () => ({}),

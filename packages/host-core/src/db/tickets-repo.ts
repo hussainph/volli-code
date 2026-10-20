@@ -20,6 +20,9 @@ import {
   type TicketSummary,
 } from "@volli/shared";
 import { prepared } from "./prepared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("db");
 
 export interface TicketRow {
   id: string;
@@ -57,7 +60,7 @@ export interface TicketRow {
  * this guard an unknown status reaches the renderer's `groupTicketsByStatus`,
  * which has no fallback bucket for it and throws on every board render —
  * so a row that fails this check is dropped rather than mapped, with one
- * `console.warn` identifying the ticket id and the bad status for
+ * warning identifying the ticket id and the bad status for
  * visibility at the dev level.
  *
  * Takes the two columns it reads rather than a whole {@link TicketRow}, so the
@@ -66,7 +69,7 @@ export interface TicketRow {
  */
 function hasKnownStatus(row: Pick<TicketRow, "id" | "status">): boolean {
   if (isTicketStatus(row.status)) return true;
-  console.warn(`[volli] dropping ticket ${row.id} with unknown status "${row.status}"`);
+  log.warn("dropping ticket with unknown status", { ticketId: row.id, status: row.status });
   return false;
 }
 
@@ -370,19 +373,27 @@ export function listWorktreePaths(db: Database.Database): string[] {
 
 /**
  * Every ticket checkout with the Ticket it belongs to — what the orphan process
- * sweep attributes a working directory by (VC-341).
+ * sweep attributes a working directory by (VC-341), and what the orphan scan
+ * names a still-claimed folder by (VC-292).
  *
  * The display id rides along because that is the only name a person reading a
  * list of runaway processes can act on: "something under
  * `~/.volli/worktrees/volli-code-f373/VC-341-.../` is holding 2.9 GB" is a path,
- * while "VC-341 is holding 2.9 GB" is a Ticket they can open. Archived tickets
- * are included for the same reason {@link listWorktreePaths} includes them: a
+ * while "VC-341 is holding 2.9 GB" is a Ticket they can open. The title and the
+ * archived flag are for the Storage row, which leads with the ticket and has to
+ * say when it is off the board and cannot be opened. Archived tickets are
+ * included for the same reason {@link listWorktreePaths} includes them: a
  * retained worktree is still a directory a process can be standing in, and its
  * processes are the ones most likely to have been forgotten.
  */
-export function listWorktreeRefs(
-  db: Database.Database,
-): Array<{ path: string; ticketId: string; ticketDisplayId: string; projectId: string }> {
+export function listWorktreeRefs(db: Database.Database): Array<{
+  path: string;
+  ticketId: string;
+  ticketDisplayId: string;
+  ticketTitle: string;
+  archived: boolean;
+  projectId: string;
+}> {
   const rows = prepared<
     [],
     {
@@ -391,11 +402,14 @@ export function listWorktreeRefs(
       projectId: string;
       ticketPrefix: string;
       ticketNumber: number;
+      title: string;
+      archivedAt: number | null;
     }
   >(
     db,
     `SELECT t.worktree_path AS worktree_path, t.id AS ticketId, t.project_id AS projectId,
-            p.ticket_prefix AS ticketPrefix, t.ticket_number AS ticketNumber
+            p.ticket_prefix AS ticketPrefix, t.ticket_number AS ticketNumber,
+            t.title AS title, t.archived_at AS archivedAt
        FROM tickets t JOIN projects p ON p.id = t.project_id
       WHERE t.worktree_path IS NOT NULL`,
   ).all();
@@ -403,6 +417,8 @@ export function listWorktreeRefs(
     path: row.worktree_path,
     ticketId: row.ticketId,
     ticketDisplayId: displayTicketId(row.ticketPrefix, row.ticketNumber),
+    ticketTitle: row.title,
+    archived: row.archivedAt !== null,
     projectId: row.projectId,
   }));
 }

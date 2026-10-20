@@ -41,6 +41,19 @@ describe("SpawnLedger", () => {
     expect(ledger.listOpen()).toEqual([]);
   });
 
+  it("marks a terminal parked and woken, and lists what an earlier launch left parked", () => {
+    const { db } = testDb();
+    const ledger = new SpawnLedger(db, { createId: () => "row-1" });
+    ledger.recordSpawn({ ...spawn, kind: "terminal" });
+
+    ledger.markParked("row-1", NOW);
+    expect(ledger.listParkedTerminals(NOW + 1)).toEqual([
+      { id: "row-1", ...spawn, kind: "terminal" },
+    ]);
+    ledger.markParked("row-1", null);
+    expect(ledger.listParkedTerminals(NOW + 1)).toEqual([]);
+  });
+
   it("prunes with its own clock", () => {
     const { db } = testDb();
     const ledger = new SpawnLedger(db, {
@@ -58,22 +71,29 @@ describe("SpawnLedger", () => {
     expect(ledger.listOpen()).toEqual([]);
     expect(ledger.prune()).toBe(0);
     expect(() => ledger.markExited("row-1")).not.toThrow();
+    expect(() => ledger.markParked("row-1", NOW)).not.toThrow();
+    expect(ledger.listParkedTerminals(NOW)).toEqual([]);
   });
 
   it("reports a failed write instead of failing the spawn that asked for it", () => {
     const { db } = testDb();
-    const errors: string[] = [];
-    const ledger = new SpawnLedger(db, { createId: () => "row-1", onError: (m) => errors.push(m) });
+    const errors: Array<Record<string, unknown>> = [];
+    const ledger = new SpawnLedger(db, {
+      createId: () => "row-1",
+      onError: (msg, fields) => errors.push({ msg, ...fields }),
+    });
     ledger.recordSpawn(spawn);
     // A duplicate id is the cheapest real write failure; every door behaves the
     // same way when SQLite refuses.
     expect(ledger.recordSpawn(spawn)).toBeNull();
     db.close();
     ledger.markExited("row-1");
+    ledger.markParked("row-1", NOW);
     expect(ledger.listOpen()).toEqual([]);
+    expect(ledger.listParkedTerminals(NOW)).toEqual([]);
     expect(ledger.prune()).toBe(0);
-    expect(errors).toHaveLength(4);
-    expect(errors[0]).toContain("pid 321");
+    expect(errors).toHaveLength(6);
+    expect(errors[0]).toMatchObject({ msg: "could not record spawned pid", pid: 321 });
   });
 
   it("warns on the main log when no reporter was supplied", () => {

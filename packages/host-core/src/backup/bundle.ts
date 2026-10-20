@@ -25,11 +25,11 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 
-import { blobFilePath } from "@volli/host-core/blob-store";
+import { blobFilePath } from "../blob-store";
 import {
   createFileTranscriptArtifactStore,
   transcriptReferenceForId,
-} from "@volli/host-core/session-runtime/transcript-artifacts";
+} from "../session-runtime/transcript-artifacts";
 import { ArchiveError, isSafeArchivePath, packArchive, unpackArchive } from "./archive";
 import type { ArchiveEntry } from "./archive";
 import {

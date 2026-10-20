@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 // making this mock transparent everywhere except that one test.
 const { eventWriteFailure } = vi.hoisted(() => ({ eventWriteFailure: { armed: false } }));
 
-vi.mock("@volli/host-core/db/events-repo", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@volli/host-core/db/events-repo")>();
+vi.mock("./events-repo", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./events-repo")>();
   return {
     ...actual,
     recordTicketEvent: (...args: Parameters<typeof actual.recordTicketEvent>) => {
@@ -25,13 +25,13 @@ import {
   listComments,
   listRecentComments,
   updateComment,
-} from "@volli/host-core/db/comments-repo";
-import { listTicketEvents } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
+} from "./comments-repo";
+import { listTicketEvents } from "./events-repo";
+import { insertProject } from "./projects-repo";
 import { insertSession } from "../session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { openTestDb, testProject, testSession, testTicket } from "./test-helpers";
+import type { TestDb } from "./test-helpers";
+import { insertTicket } from "./tickets-repo";
 
 let ctx: TestDb;
 

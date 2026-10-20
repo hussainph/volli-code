@@ -13,7 +13,7 @@ import {
   buildExportDocument,
   defaultExportFilename,
   serializeExportDocument,
-} from "@volli/host-core/db/export";
+} from "@volli/host-core/db";
 
 /**
  * Installs the application menu. Everything is the standard macOS template

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ComponentProps } from "react";
+import { act, useImperativeHandle, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import type { Automation, BlobLinkView, Project, ModelSelection } from "@volli/shared";
@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
     setSelection: () => {},
   },
   branches: { status: "loading" },
+  editorFocus: vi.fn(),
 }));
 vi.mock("@renderer/hooks/use-file-index", () => ({ useFileIndex: () => mocks.files }));
 vi.mock("@renderer/hooks/use-attachments", () => ({ useAttachments: () => mocks.attachments }));
@@ -54,17 +55,26 @@ vi.mock("./submit", () => ({
   runCreateWithAutomation: vi.fn(async () => ({ created: false })),
 }));
 vi.mock("@renderer/components/editor/monaco-document-editor", () => ({
-  MonacoDocumentEditor: ({
+  MonacoDocumentEditor: function MonacoDouble({
     value,
     onChange,
     ariaLabel,
-  }: ComponentProps<typeof MonacoDocumentEditor>) => (
-    <textarea
-      aria-label={ariaLabel}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-    />
-  ),
+    ref,
+  }: ComponentProps<typeof MonacoDocumentEditor>) {
+    // The title's Enter hands focus to the body through this handle.
+    useImperativeHandle(ref, () => ({
+      focus: mocks.editorFocus,
+      insertAtCursor: () => false,
+      markSaved: () => {},
+    }));
+    return (
+      <textarea
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  },
 }));
 vi.mock("./composer-chips", () => ({
   ComposerChips: ({ createMore, onCreateMoreChange }: ComponentProps<typeof ComposerChips>) => (
@@ -190,6 +200,27 @@ async function chord(shiftKey = false, ctrlKey = false) {
     ),
   );
 }
+
+/**
+ * VC-806: Chromium on macOS delivers the Enter that accepts an IME candidate
+ * as a `keydown` with `isComposing` set. That keystroke is the IME's, so the
+ * title keeps the caret; a plain Enter still moves on to the body.
+ */
+it.each([
+  ["composing", true, false],
+  ["plain", false, true],
+] as const)("a %s Enter in the title (isComposing=%s)", async (_, isComposing, moves) => {
+  const event = new KeyboardEvent("keydown", {
+    key: "Enter",
+    isComposing,
+    keyCode: isComposing ? 229 : 13,
+    bubbles: true,
+    cancelable: true,
+  });
+  await act(async () => host.querySelector("input")!.dispatchEvent(event));
+  expect(mocks.editorFocus).toHaveBeenCalledTimes(moves ? 1 : 0);
+  expect(event.defaultPrevented).toBe(moves);
+});
 
 it("sends the default primary action through kickoff, by click and by ⇧⌘Enter", async () => {
   await click("Submit");
@@ -463,3 +494,45 @@ it.each([
     ).toBe(false);
   },
 );
+
+/**
+ * Read-only (VC-576): a composer already open when p1's host goes away keeps
+ * its draft and submits nothing — by button or chord — and says why above the
+ * footer. Back online, it submits as before.
+ */
+it("refuses every submission while the project's host cannot serve, keeping the draft", async () => {
+  const { useExperimentsStore } = await import("@renderer/stores/experiments");
+  const { useHostConnectionStore } = await import("@renderer/stores/host-connection");
+  const { createFakeHostSource, hostSnapshot, remoteHost } =
+    await import("@renderer/stores/host-sources");
+  const remote = createFakeHostSource(
+    hostSnapshot([remoteHost("h1", "hetzner-1")], { p1: "h1", p2: "h1" }),
+  );
+  useExperimentsStore.setState({ snapshot: { cloud: { enabled: true, source: "storage" } } });
+  const detach = useHostConnectionStore.getState().attach(remote);
+  try {
+    await act(async () =>
+      remote.setHost("h1", { link: { status: "offline", since: 0, retryAt: null } }),
+    );
+    const note = host.querySelector('[data-slot="host-read-only-note"]');
+    expect(note?.textContent).toBe("Can’t reach hetzner-1 · Read-only");
+    const create = [...host.querySelectorAll("button")].find((el) => el.textContent === "Create");
+    expect(create?.disabled).toBe(true);
+    await chord();
+    await chord(true);
+    await click("Saved");
+    await chord(true);
+    expect(runPlainCreate).not.toHaveBeenCalled();
+    expect(runKickoff).not.toHaveBeenCalled();
+    expect(runCreateWithAutomation).not.toHaveBeenCalled();
+    expect(host.querySelector("input")?.value).toBe("Typed ticket");
+
+    await act(async () => remote.setHost("h1", { link: { status: "open" } }));
+    expect(host.querySelector('[data-slot="host-read-only-note"]')).toBeNull();
+    await chord();
+    expect(runPlainCreate).toHaveBeenCalledOnce();
+  } finally {
+    detach();
+    useExperimentsStore.setState({ snapshot: null });
+  }
+});

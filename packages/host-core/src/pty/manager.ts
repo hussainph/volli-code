@@ -1,4 +1,4 @@
-import type { SessionOrigin } from "@volli/shared";
+import type { SessionOrigin, SessionExecutionVenue } from "@volli/shared";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -45,7 +45,7 @@ import {
   runGitCapturingAsync,
   UNDER_DELETION_REFUSAL,
 } from "../worktree";
-import type { EnsureOutcome, RunGitAsync, SetupRun, WorktreeDeps } from "../worktree";
+import type { EnsureOutcome, RunGitAsync, SetupRun, WorktreePorts } from "../worktree";
 import { worktreesHome } from "../worktree-runtime";
 import { isInside } from "../worktree/paths";
 import { composeWorktreeLaunchCommand } from "./launch";
@@ -53,7 +53,7 @@ import { createOutputPipeline } from "./output";
 import type { OutputPipeline, OutputSink } from "./output";
 import { createCommandRun } from "./command-run";
 import type { CommandRunOutcome } from "./command-run";
-import { ParkController } from "./park-controller";
+import { ParkController, type ParkLedger } from "./park-controller";
 import {
   terminalNativeReference,
   terminalSessionRecord,
@@ -61,6 +61,9 @@ import {
 } from "../session-control";
 import { resolveScope } from "./scope";
 import type { SessionScope } from "./scope";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("pty");
 
 // Structural subset of node-pty we depend on — declared here so nothing in
 // this module needs a value import of node-pty: the native module loads only
@@ -153,6 +156,8 @@ interface Session {
   parkedManually: boolean;
   /** Consecutive CPU-quiet sweeps observed; parks at `quietSamplesRequired`. */
   quietCpuSamples: number;
+  /** The shell's spawn-ledger row, which carries the durable parked mark (VC-833). */
+  spawnLedgerId: string | null;
   /**
    * The sentinel-gated command this session is currently running for Volli
    * rather than for the user, or `null`.
@@ -213,45 +218,112 @@ export interface HarnessWorkspaceFilesInput {
 
 /**
  * What the terminal supervisor asks of the host it runs in (VC-560). Desktop
- * passes `desktopPtyHost()` (`apps/desktop/src/main/pty/ipc.ts`): the window
+ * passes `desktopPtyPorts()` (`apps/desktop/src/main/pty/ipc.ts`): the window
  * event bus, `worktree-host.ts`, and the harness-file writer, whose module
  * (`harness-workspace.ts`) has not moved into host-core yet. A headless host
  * passes its own bus, `host.worktrees.deps`, and the same writer once it moves.
  */
-export interface PtyHost {
+export interface PtyManagerPorts {
+  /** Provenance only; desktop callers retain the local default. */
+  readonly venue?: SessionExecutionVenue;
   /** Announces planning changes (`data-changed`) to every client. */
   readonly events: HostEventBus;
   /** The host's worktree bundle (`host.worktrees.deps`). */
-  worktreeDeps(db: Database.Database): WorktreeDeps;
+  worktreeDeps(db: Database.Database): WorktreePorts;
   /** Writes a worktree's per-harness hook files, reporting each one it refused. */
   ensureHarnessWorkspaceFiles(
     input: HarnessWorkspaceFilesInput,
   ): Promise<{ refused: readonly { harnessId: string; path: string; reason: string }[] }>;
 }
 
+/** The spawn ledger as the terminal door uses it: the spawn rows plus the parked mark. */
+type TerminalSpawnLedger = SpawnLedgerPort & ParkLedger;
+
 /** Records nothing: the spawn ledger a test that is not about the ledger wants. */
-const NO_SPAWN_LEDGER: SpawnLedgerPort = {
+const NO_SPAWN_LEDGER: TerminalSpawnLedger = {
   recordSpawn: () => null,
   markExited: () => {},
+  markParked: () => {},
 };
 
 const TERMINAL_VENUE = { id: "local", kind: "local" as const };
 
-function terminalSystemProvenance(origin?: SessionOrigin) {
+/**
+ * What a {@link PtyManager} is built from (VC-627: one options object in place
+ * of the old positional constructor). The first four are required; every other
+ * field keeps the default its positional parameter had.
+ */
+export interface PtyManagerOptions {
+  /** What this supervisor asks of its host ({@link PtyManagerPorts}). */
+  readonly host: PtyManagerPorts;
+  /**
+   * The app database, or `null` when it failed to open. Every session
+   * persists a durable record, so with no db `create` fails outright
+   * (surfacing {@link PtyManagerOptions.dbError}).
+   */
+  readonly db: Database.Database | null;
+  /** The open failure to report when `db` is `null`. */
+  readonly dbError: string;
+  /**
+   * The host's composed engine, or `null` in degraded mode. Required: the
+   * supervisor never constructs a writer.
+   */
+  readonly sessionEngine: SessionEngine | null;
+  /**
+   * Process-tree inspection seam. Defaults to the real inspector; tests inject
+   * a fake so no `ps`/`pgrep`/`lsof` ever spawn.
+   */
+  readonly inspector?: ProcessInspector;
+  /**
+   * Warm-park tuning; a disabled config makes every park path a no-op.
+   * Defaults to {@link parkConfigFromEnv} over `process.env`.
+   */
+  readonly parkConfig?: ParkConfig;
+  /** The agent CLI's per-terminal environment (VC-163). Defaults to `null`. */
+  readonly agentRuntime?: AgentRuntimeEnvironment | null;
+  /**
+   * The userData attachment-bytes root (issue #77 PR 2) a non-worktree
+   * ticket's kickoff materializes from before spawn — see `resolveScope`.
+   * Defaults to `""` (never used in production; `registerTerminalIpcHandlers`
+   * always resolves the real path) so tests that never seed attachments need
+   * not pass it.
+   */
+  readonly blobsRootPath?: string;
+  /**
+   * Where each spawned shell is recorded so a sweep after a crash can still say
+   * whose process it is (VC-341), and whether Volli left its tree SIGSTOPped
+   * (VC-833). Defaults to the ledger that remembers nothing, which is what
+   * every test that is not about the ledger wants.
+   */
+  readonly spawnLedger?: TerminalSpawnLedger;
+  /**
+   * The process's one reader of who is working (VC-339, VC-403), shared with
+   * the structured door rather than built here. Defaults to `null`, which
+   * budgets nothing — what a test that is not about the budget wants.
+   */
+  readonly concurrencyEnvReader?: SessionConcurrencyEnvReader | null;
+  /**
+   * The venue terminal provenance records. Wins over {@link PtyManagerPorts.venue};
+   * absent, the host's venue applies, else desktop's `local`/`local`.
+   */
+  readonly venue?: SessionExecutionVenue;
+}
+
+function terminalSystemProvenance(venue: SessionExecutionVenue, origin?: SessionOrigin) {
   return {
     source: {
       kind: "system" as const,
       id: "desktop-terminal",
       detail: origin === undefined ? null : { sessionOrigin: origin },
     },
-    venue: TERMINAL_VENUE,
+    venue,
   };
 }
 
-function terminalAdapterProvenance() {
+function terminalAdapterProvenance(venue: SessionExecutionVenue) {
   return {
     source: { kind: "adapter" as const, id: "terminal", detail: null },
-    venue: TERMINAL_VENUE,
+    venue,
   };
 }
 
@@ -306,47 +378,31 @@ export class PtyManager {
    */
   private readonly concurrencyEnvReader: SessionConcurrencyEnvReader | null;
 
-  /**
-   * @param host       what this supervisor asks of its host ({@link PtyHost}).
-   * @param db         the app database, or `null` when it failed to open. Every
-   *                   session persists a durable record, so with no db `create`
-   *                   fails outright (surfacing {@link dbError}).
-   * @param dbError    the open failure to report when `db` is `null`.
-   * @param sessionEngine the host's composed engine, or `null` in degraded mode.
-   *                   Required: the supervisor never constructs a writer.
-   * @param inspector  process-tree inspection seam (real by default; tests
-   *                   inject a fake so no `ps`/`pgrep`/`lsof` ever spawn).
-   * @param parkConfig warm-park tuning; disabled config makes every park path a
-   *                   no-op. Additive with defaults so existing callers/tests
-   *                   need not pass it.
-   * @param blobsRootPath the userData attachment-bytes root (issue #77
-   *                   PR 2) a non-worktree ticket's kickoff materializes from
-   *                   before spawn — see `resolveScope`. Defaults to `""`
-   *                   (never used in production; `registerTerminalIpcHandlers`
-   *                   always resolves the real path) so existing tests/callers
-   *                   that never seed attachments need not pass it.
-   * @param spawnLedger where each spawned shell is recorded so a sweep after a
-   *                   crash can still say whose process it is (VC-341).
-   *                   Defaults to the ledger that remembers nothing, which is
-   *                   what every test that is not about the ledger wants.
-   * @param concurrencyEnvReader the process's one reader of who is working
-   *                   (VC-339, VC-403), shared with the structured door rather
-   *                   than built here. Defaults to `null`, which budgets
-   *                   nothing — what a test that is not about the budget wants.
-   */
-  constructor(
-    private readonly host: PtyHost,
-    private readonly db: Database.Database | null,
-    private readonly dbError: string,
-    private readonly sessionEngine: SessionEngine | null,
-    private readonly inspector: ProcessInspector = createProcessInspector(),
-    private readonly parkConfig: ParkConfig = parkConfigFromEnv(process.env, process.platform),
-    private readonly agentRuntime: AgentRuntimeEnvironment | null = null,
-    private readonly blobsRootPath: string = "",
-    private readonly spawnLedger: SpawnLedgerPort = NO_SPAWN_LEDGER,
-    concurrencyEnvReader: SessionConcurrencyEnvReader | null = null,
-  ) {
-    this.concurrencyEnvReader = concurrencyEnvReader;
+  private readonly host: PtyManagerPorts;
+  private readonly db: Database.Database | null;
+  private readonly dbError: string;
+  private readonly sessionEngine: SessionEngine | null;
+  private readonly inspector: ProcessInspector;
+  private readonly parkConfig: ParkConfig;
+  private readonly agentRuntime: AgentRuntimeEnvironment | null;
+  private readonly blobsRootPath: string;
+  private readonly spawnLedger: TerminalSpawnLedger;
+  /** The explicit {@link PtyManagerOptions.venue}, when one was given. */
+  private readonly venueOverride: SessionExecutionVenue | undefined;
+
+  /** What this supervisor is built from: see {@link PtyManagerOptions}. */
+  constructor(options: PtyManagerOptions) {
+    this.host = options.host;
+    this.db = options.db;
+    this.dbError = options.dbError;
+    this.sessionEngine = options.sessionEngine;
+    this.inspector = options.inspector ?? createProcessInspector();
+    this.parkConfig = options.parkConfig ?? parkConfigFromEnv(process.env, process.platform);
+    this.agentRuntime = options.agentRuntime ?? null;
+    this.blobsRootPath = options.blobsRootPath ?? "";
+    this.spawnLedger = options.spawnLedger ?? NO_SPAWN_LEDGER;
+    this.concurrencyEnvReader = options.concurrencyEnvReader ?? null;
+    this.venueOverride = options.venue;
     // The controller shares this manager's live session map and mutates each
     // session's park fields in place. `flush` and `pushParkState` stay here —
     // they touch the output pipeline and the client — and every current
@@ -361,7 +417,17 @@ export class PtyManager {
         const session = this.sessions.get(id);
         if (session !== undefined) this.pushParkState(session, id);
       },
+      ledger: this.spawnLedger,
     });
+  }
+
+  /**
+   * The venue this supervisor's terminals record in their provenance: the
+   * explicit option, else the host's, else desktop's `local`/`local`. Read at
+   * call time, as `host.venue` always was.
+   */
+  private get venue(): SessionExecutionVenue {
+    return this.venueOverride ?? this.host.venue ?? TERMINAL_VENUE;
   }
 
   /**
@@ -408,13 +474,15 @@ export class PtyManager {
         git: runGitCapturingAsync,
       });
       for (const refusal of result.refused) {
-        console.warn(
-          `[volli] ${refusal.harnessId} will not report events in ${worktreePath}: ` +
-            `${refusal.path} — ${refusal.reason}`,
-        );
+        log.warn("harness will not report events in this worktree", {
+          harnessId: refusal.harnessId,
+          worktreePath,
+          path: refusal.path,
+          reason: refusal.reason,
+        });
       }
     } catch (error) {
-      console.error(`[volli] failed to write harness workspace files: ${errorMessage(error)}`);
+      log.error("failed to write harness workspace files", { error });
     }
   }
 
@@ -489,7 +557,7 @@ export class PtyManager {
           role: roleImpliedByTicket(scope.ticketId),
           parentSessionId: null,
           title: scope.title,
-          provenance: terminalSystemProvenance({ kind: "user" }),
+          provenance: terminalSystemProvenance(this.venue, { kind: "user" }),
         });
         sessionId = created.session.id;
         if (
@@ -524,12 +592,12 @@ export class PtyManager {
           sessionId,
           ...(startCommandId === undefined ? {} : { commandId: startCommandId }),
           occurredAt: Date.now(),
-          provenance: terminalSystemProvenance(),
+          provenance: terminalSystemProvenance(this.venue),
           attachment: {
             id: attachmentId,
             sessionId,
             adapterId: "terminal",
-            venue: TERMINAL_VENUE,
+            venue: this.venue,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(detail),
             // A terminal companion carries no Authority Snapshot, and never
@@ -546,9 +614,10 @@ export class PtyManager {
           },
         });
       } catch (recordError) {
-        console.error(
-          `[volli] failed to record terminal attachment failure for ${sessionId}: ${errorMessage(recordError)}`,
-        );
+        log.error("failed to record terminal attachment failure", {
+          sessionId,
+          error: recordError,
+        });
       }
     };
     let start: Awaited<ReturnType<SessionEngine["submit"]>>;
@@ -561,7 +630,7 @@ export class PtyManager {
           adapterId: "terminal",
           continuity: scope.resume === null ? "fresh" : "native_resume",
         },
-        provenance: terminalSystemProvenance({ kind: "user" }),
+        provenance: terminalSystemProvenance(this.venue, { kind: "user" }),
       });
       startCommandId = start.command.id;
     } catch (error) {
@@ -631,12 +700,12 @@ export class PtyManager {
       }
     }
 
-    // A directory a destructive worktree act is holding right now (VC-284
-    // review C4). The orphan cleanup takes a lease over the exact path it is
+    // A directory a destructive worktree act is holding right now (VC-284).
+    // The orphan cleanup takes a lease over the exact path it is
     // about to remove and keeps it across its awaits, so a terminal cannot be
     // born inside a checkout that is mid-deletion.
     //
-    // TAKEN, not merely asked (re-review C4): everything between here and the
+    // TAKEN, not merely asked: everything between here and the
     // spawn awaits — harness files, the lazy `node-pty` import, a stat, a mkdir
     // — and a cleanup that acquires during those awaits would remove a
     // directory this terminal has already been cleared to start in. Holding a
@@ -822,12 +891,12 @@ export class PtyManager {
           sessionId,
           commandId: start.command.id,
           occurredAt: now,
-          provenance: terminalSystemProvenance(),
+          provenance: terminalSystemProvenance(this.venue),
           attachment: {
             id: attachmentId,
             sessionId,
             adapterId: "terminal",
-            venue: TERMINAL_VENUE,
+            venue: this.venue,
             continuity: scope.resume === null ? "fresh" : "native_resume",
             native: terminalNativeReference(terminalDetail),
             // No Snapshot, for the reason spelled out on the failure path above:
@@ -875,6 +944,7 @@ export class PtyManager {
         parkedPids: null,
         parkedManually: false,
         quietCpuSamples: 0,
+        spawnLedgerId: ledgerId,
         setupRun: null,
         attachmentId,
         terminalDetail,
@@ -1032,13 +1102,14 @@ export class PtyManager {
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
-        provenance: terminalSystemProvenance(),
+        provenance: terminalSystemProvenance(this.venue),
         outcome: exitCode === 0 ? "completed" : "failed",
       });
     } catch (error) {
-      console.error(
-        `[volli] failed to close terminal attachment ${session.attachmentId}: ${errorMessage(error)}`,
-      );
+      log.error("failed to close terminal attachment", {
+        attachmentId: session.attachmentId,
+        error,
+      });
     }
   }
 
@@ -1076,13 +1147,14 @@ export class PtyManager {
         sessionId,
         attachmentId: session.attachmentId,
         occurredAt,
-        provenance: terminalAdapterProvenance(),
+        provenance: terminalAdapterProvenance(this.venue),
         exitCode,
       });
     } catch (error) {
-      console.error(
-        `[volli] failed to record exit code for terminal attachment ${session.attachmentId}: ${errorMessage(error)}`,
-      );
+      log.error("failed to record terminal attachment exit code", {
+        attachmentId: session.attachmentId,
+        error,
+      });
     }
   }
 
@@ -1393,7 +1465,10 @@ export class PtyManager {
           commandId: randomUUID(),
           sessionId,
           intent: { kind: "executor.interrupt", attachmentId: session.attachmentId },
-          provenance: terminalSystemProvenance({ kind: "volli", reason: "supervision" }),
+          provenance: terminalSystemProvenance(this.venue, {
+            kind: "volli",
+            reason: "supervision",
+          }),
         });
         if (command.receipt !== null) continue;
         session.pty.write("\x1b");
@@ -1401,7 +1476,7 @@ export class PtyManager {
           id: randomUUID(),
           sessionId,
           occurredAt: Date.now(),
-          provenance: terminalAdapterProvenance(),
+          provenance: terminalAdapterProvenance(this.venue),
           kind: "command.receipt",
           attachmentId: session.attachmentId,
           receipt: {
@@ -1422,7 +1497,7 @@ export class PtyManager {
               id: randomUUID(),
               sessionId,
               occurredAt: Date.now(),
-              provenance: terminalAdapterProvenance(),
+              provenance: terminalAdapterProvenance(this.venue),
               kind: "command.receipt",
               attachmentId: session.attachmentId,
               receipt: {
@@ -1433,14 +1508,12 @@ export class PtyManager {
               },
             });
           } catch (receiptError) {
-            console.error(
-              `[volli] failed to record interrupt receipt for ${sessionId}: ${errorMessage(receiptError)}`,
-            );
+            log.error("failed to record interrupt receipt", { sessionId, error: receiptError });
           }
         }
         // One session's dead pty must never block interrupting the rest; it
         // simply isn't reported as interrupted.
-        console.error(`[volli] failed to interrupt session ${sessionId}: ${errorMessage(error)}`);
+        log.error("failed to interrupt session", { sessionId, error });
       }
     }
     return interrupted;
@@ -1568,6 +1641,20 @@ export class PtyManager {
     } catch (error) {
       return { ok: false, error: errorMessage(error) };
     }
+  }
+
+  /**
+   * Kills the live sessions among `sessionIds`, whichever window holds them,
+   * and names the ones it killed: a removed project's terminals (VC-796),
+   * which the host ends before it detaches the project (VC-822). An id with
+   * no live session is skipped.
+   */
+  killSessions(sessionIds: ReadonlySet<string>): string[] {
+    const killed = Array.from(this.sessions.keys()).filter((sessionId) =>
+      sessionIds.has(sessionId),
+    );
+    for (const sessionId of killed) this.killSession(sessionId);
+    return killed;
   }
 
   /** Kills every live session. Wired to `before-quit`. */

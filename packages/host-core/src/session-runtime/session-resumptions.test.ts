@@ -1,18 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
 import type { SessionRole } from "@volli/shared";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { insertProject } from "../db/projects-repo";
+import { insertTicket } from "../db/tickets-repo";
 import {
   listTicketEvents,
   recordTicketEvent,
   currentTicketEventCursor,
   firstMatchingTicketEventAfter,
-} from "@volli/host-core/db/events-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
+} from "../db/events-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 import { createSqliteSessionLedger } from "../session-control/sqlite-ledger";
 import { watchSessionActivity } from "../session-control/activity-watch";
 import { catchUpSessionResumptions, observeSessionResumptions } from "./session-resumptions";
+
+/** No executor binding is open: these rows rest at not-live. */
+const noOpenBindings = () => [];
 
 let ctx: TestDb;
 afterEach(() => ctx.cleanup());
@@ -210,6 +213,7 @@ describe("Session resumption catch-up", () => {
     const watch = watchSessionActivity(
       { ...f.engine, getSession: async () => projection },
       {
+        listOpenNativeBindings: noOpenBindings,
         publish: publishRow,
         observe: (current) => {
           observeSessionResumptions(ctx.db, current, { publish: vi.fn(), report });

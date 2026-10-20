@@ -12,7 +12,7 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { blobFilePath } from "@volli/host-core/blob-store";
+import { blobFilePath } from "../blob-store";
 import { packArchive, unpackArchive } from "./archive";
 import {
   BACKUP_BUNDLE_FORMAT,

@@ -11,24 +11,34 @@
  * - **connectivity**: `ALWAYS_ONLINE`.
  * - **client** and **trash**: absent. host-core refuses those requests with
  *   its typed "needs the desktop app" errors, and never deletes instead.
- * - **listOpenNativeBindings** and **observeScheduledResume**: there is no
- *   Session runtime in hostd yet, so nothing is bound and nothing resumes.
  */
-import { format } from "node:util";
 
 import { ALWAYS_ONLINE } from "@volli/agent-runtime";
-import { HEADLESS_ATTENTION, NO_POWER_EVENTS, type HostCorePorts } from "@volli/host-core";
+import { HEADLESS_ATTENTION, NO_POWER_EVENTS } from "@volli/host-core/ports";
+import type { HostCorePorts } from "@volli/host-core";
+import type { DataChangeScope } from "@volli/shared";
 
 import type { HostdLogger } from "./log";
 
-export function headlessPorts(logger: HostdLogger): HostCorePorts {
+/**
+ * `onDataChanged` hears every `data-changed` a host-core writer announces: the
+ * board's change feed stamps them (VC-565), so a Client following the feed
+ * learns of an agent's write as of a person's. No window is told: none exists.
+ */
+export function headlessPorts(
+  logger: HostdLogger,
+  onDataChanged: (scope: DataChangeScope) => void = () => {},
+): HostCorePorts {
   return {
     log: {
-      error: (...args: unknown[]) => logger.error(format(...args), { source: "host-core" }),
-      warn: (...args: unknown[]) => logger.warn(format(...args), { source: "host-core" }),
+      error: (msg, fields) => logger.error(msg, { source: "host-core", ...fields }),
+      warn: (msg, fields) => logger.warn(msg, { source: "host-core", ...fields }),
     },
     events: {
-      publish: (topic) => logger.debug("event dropped: no client connected", { topic }),
+      publish: (topic, payload) => {
+        if (topic === "data-changed") onDataChanged(payload as DataChangeScope);
+        logger.debug("event dropped: no client connected", { topic });
+      },
     },
     attention: {
       deliver: (request) => {
@@ -43,7 +53,5 @@ export function headlessPorts(logger: HostdLogger): HostCorePorts {
     },
     power: NO_POWER_EVENTS,
     connectivity: ALWAYS_ONLINE,
-    listOpenNativeBindings: () => [],
-    observeScheduledResume: () => undefined,
   };
 }

@@ -1,9 +1,8 @@
 # @volli/host-core
 
-The host's services, composed without Electron. Volli Cloud
-([ruling](../../docs/plans/volli-cloud.md)) runs one host program everywhere:
-Electron main today, `apps/hostd` next. Both call `createHostCore` and wire
-what it returns. Electron main keeps only window-only work.
+The host's services, composed without Electron. Electron main and `apps/hostd`
+both call `createHostCore`, `start()` and
+`stop(reason)`. Electron main keeps the quit gates, deadline and native exit.
 
 ```ts
 import { createHostCore, throwTransactionViolation, type HostCorePorts } from "@volli/host-core";
@@ -19,9 +18,12 @@ const host = createHostCore(
     dataDir: "/var/lib/volli",
     onTransactionViolation: throwTransactionViolation,
     devDiagnostics: false,
+    processReaders: { liveSessionIds: () => [], openTerminalCwds: () => [] },
   },
 );
-if (!host.database.ok) console.error(host.database.error);
+if (host.kind === "degraded") console.error(host.database.error);
+await host.start();
+await host.stop("shutdown");
 ```
 
 ## Rules
@@ -45,158 +47,268 @@ if (!host.database.ok) console.error(host.database.error);
 
 ## What is here
 
-| Path                     | Exports                                                                                                                                        | Moved in |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `src/index.ts`           | `createHostCore`, `defaultDatabasePath`, `DbHandle`, the guard handlers                                                                        | VC-553   |
-| `src/db/`                | `@volli/host-core/db` (`openVolliDb`), `@volli/host-core/db/<file>` (migrations, repos, `transaction-gate`, `test-helpers`)                    | VC-553   |
-| `src/db-open-failure.ts` | `DbOpenFailure` (typed, on `HostCore.databaseFailure`); the sentence a failed open is answered with                                            | VC-553   |
-| `src/ports/`             | `@volli/host-core/ports`: the event bus, attention delivery, power, client-capability, trash and secret-key ports, with their headless answers | VC-554   |
-| `src/pty/`               | `@volli/host-core/pty/*`: the terminal supervisor and its stream contract ([Terminals](#terminals))                                            | VC-560   |
-| `scripts/`               | `pnpm --filter @volli/host-core migrations:lock`                                                                                               | VC-553   |
+host-core's interface is its `exports` map: the root, one entry per cluster,
+and `./testing`. Each cluster entry (`src/entries/<cluster>.ts`) is an
+explicit list of re-exports: a name is public because a client (desktop,
+`hostd`, a bench) or a client's test imports it as that cluster's API.
+Everything else is an implementation detail.
 
-VC-612 adds `src/session-control/` (`@volli/host-core/session-control` and
-`@volli/host-core/session-control/*`), `src/session-control/session-wake.ts`,
-`src/session-concurrency.ts` and the outbox/resumption adapters under
-`src/session-runtime/` (`@volli/host-core/session-runtime/*`).
+| Entry                              | Owns (under `src/`)                                                                                                                                                                                                                                                                                                                                                                                                         | What a client takes from it                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@volli/host-core`                 | `index.ts`, `host-lifecycle.ts`, `db-open-failure.ts`, `runtime-services.ts`, `session-services.ts`                                                                                                                                                                                                                                                                                                                         | `createHostCore`, `HostCore`/`LiveHostCore`, `HostCorePorts`, `defaultDatabasePath`, `DbHandle`, the transaction-guard handlers                                  |
+| `@volli/host-core/ports`           | `ports/`                                                                                                                                                                                                                                                                                                                                                                                                                    | The [ports](#ports) and their headless answers (`HEADLESS_ATTENTION`, `NO_POWER_EVENTS`)                                                                         |
+| `@volli/host-core/db`              | `db/`                                                                                                                                                                                                                                                                                                                                                                                                                       | `openVolliDb`, migrations, the transaction gate, the repositories ([Persistence](#persistence))                                                                  |
+| `@volli/host-core/secrets`         | `secrets/`                                                                                                                                                                                                                                                                                                                                                                                                                  | `SecretStore`, `SecretService`, the file key and the sealed credential module ([Secrets](#secrets))                                                              |
+| `@volli/host-core/sessions`        | `session-control/`, `sessions/`, `session-concurrency.ts`, `session-tokens.ts`                                                                                                                                                                                                                                                                                                                                              | Listing rows, peek content, the concurrency env reader, Session tokens. Never a Session writer ([Session composition](#session-composition))                     |
+| `@volli/host-core/session-runtime` | `session-runtime/`, `shell/`, `model-access/`, `host-sign-ins/`, `decision/`, `session-env.ts`, `pi-session-orphans.ts`, `pi-tool-output.ts`, `verb-input.ts`                                                                                                                                                                                                                                                               | The staged runtime: assembly, facade, agents, Automations adapter, lifecycle; model access preferences; sign-ins on a host; background shells                    |
+| `@volli/host-core/integrations`    | `mcp/`, `codemode/`, `web/`, `observability/`                                                                                                                                                                                                                                                                                                                                                                               | MCP settings and dispatch, Code Mode config and sandbox assets, Web Access, the observability sink and exporters                                                 |
+| `@volli/host-core/log`             | `log/`                                                                                                                                                                                                                                                                                                                                                                                                                      | The structured log: `hostLogger`, `installHostLog`, the trace context (`withTrace`, `withLogContext`) and the sinks ([The log](#the-log))                        |
+| `@volli/host-core/files`           | `volli-fs.ts`, `file-search.ts`, `file-services.ts`, `blob-*.ts`, `turn-attachments.ts`, `prompt-templates.ts`, `skills.ts`                                                                                                                                                                                                                                                                                                 | File reads/writes/watches, search, blobs, templates, skills. Their result types are `@volli/shared` wire types                                                   |
+| `@volli/host-core/worktree`        | `worktree/`, `worktree-runtime.ts`, `credential-helper-diagnostics.ts`                                                                                                                                                                                                                                                                                                                                                      | Git, ensure/trim/remove, snapshots, activity, the cleanup engine and leases                                                                                      |
+| `@volli/host-core/board`           | `board/`, `project-*.ts`, `ticket-*.ts`, `detached-work.ts`                                                                                                                                                                                                                                                                                                                                                                 | Project create/relink/roots, ticket commands, [ticket moves](#ticket-moves) and wakes, [the Board module](#the-board-module)'s feed and receipts                 |
+| `@volli/host-core/handlers`        | `handlers/`                                                                                                                                                                                                                                                                                                                                                                                                                 | `createHostHandlers`, `invokeHandler`, `admittedHandlers`, the door policies: the [one handler map](#the-handler-map) every door projects                        |
+| `@volli/host-core/pty`             | `pty/`                                                                                                                                                                                                                                                                                                                                                                                                                      | `PtyManager` and the warm park ([Terminals](#terminals))                                                                                                         |
+| `@volli/host-core/browser`         | `browser/`                                                                                                                                                                                                                                                                                                                                                                                                                  | The backend interface, `BrowserTabRegistry`, the CDP controller, picture and trace stores ([Browser backend](#browser-backend))                                  |
+| `@volli/host-core/automations`     | `automations/`, `automation-services.ts`                                                                                                                                                                                                                                                                                                                                                                                    | The Automation service and its types                                                                                                                             |
+| `@volli/host-core/agents`          | `agent-*.ts`, `agent-dispatch/`, `watches.ts`, `harness-*.ts`, `host-profile.ts`                                                                                                                                                                                                                                                                                                                                            | The agent socket, its verb door, the CLI shim and app profile lock, harness registry and installs                                                                |
+| `@volli/host-core/maintenance`     | `backup/`, `process/`, `maintenance-services.ts`, `database-recovery.ts`, `retention-runtime.ts`, `orphan-scan.ts`, `quiet-windows.ts`, `login-*.ts`, `host-shutdown.ts`, `shutdown-deadline.ts`                                                                                                                                                                                                                            | Backup documents, database recovery, process reaping, retention, quiet windows, login PATH, the shutdown deadline                                                |
+| `@volli/host-core/testing`         | `testing/`, `db/test-helpers.ts`, `session-control/test-support.ts`, `backup/test-fixture.ts`, `secrets/test-support/`; it also re-exports test-only names of production modules: `db/recovery-pending.ts`, `session-control/sqlite-ledger.ts`, `session-control/checkpoint-diagnostics.ts`, and the `*ForTest` resets of `worktree/deletion-lease.ts`, `worktree/snapshot.ts`, `orphan-scan.ts` and `retention-runtime.ts` | Test fixtures, the standalone Session ledger and test engine, the database-recovery marker, the checkpoint failure reporter, module-state resets. **Tests only** |
 
-VC-557 adds the file services under `src/`, mirroring their former desktop
-paths: `volli-fs.ts`, `file-search.ts`, `blob-{attach,collect,import,protocol}.ts`,
-`turn-attachments.ts`, `prompt-templates.ts` and `skills.ts`. Their named subpath
-exports are `@volli/host-core/<file>`. `createHostCore` composes `fileServices`
-(the watch managers and client/trash adapters). The desktop IPC door is
-`main/volli-fs-ipc.ts`; protocol registration, native external-app launch and
-pickers also remain desktop-owned. The file-boundary tests run here against
-real directories and symlinks; desktop IPC integration tests stay with the door.
-Protected blob/template coverage moves with its tests at the same 100% gates.
-`blob-store.ts` and `blob-materialize.ts` belong to VC-556, not this move.
-VC-556 adds `src/worktree/` (`@volli/host-core/worktree` and
-`@volli/host-core/worktree/*`), `worktree-runtime`, `project-base-branch`,
-`project-relink`, `project-roots`, `blob-store`, `blob-materialize`,
-`ticket-commands` and `credential-helper-diagnostics` at matching subpath
-exports. `host.worktrees.deps(db)` captures the host's event bus and `dataDir`;
-desktop callers not yet moved pass those same facts through `worktree-host.ts`.
-`repository-turn.ts` is byte-identical: its per-process ordering has not changed.
-Repository-turn and project-relink coverage run here at 100%, beside their
-tests. The ensure test also runs here, including its host-core blob importer.
-Project roots remain in desktop's 100% gate: host-core tests reach the registry,
-but desktop's IPC/PTY tests still cover branches this package does not.
+`scripts/` holds `pnpm --filter @volli/host-core migrations:lock` and the N-1
+compatibility driver.
 
-VC-559 adds `src/secrets/` (`@volli/host-core/secrets`): `SecretStore`, moved
-from desktop, and the headless file-key adapter. The secret-key port it seals
-through is `src/ports/secret-key.ts`.
+**The interface rules** (`src/package-interface.test.ts` enforces each). Every
+import guard here, and desktop's and hostd's, finds module edges with
+`scripts/module-edges.mjs`: static and dynamic imports, re-exports, `require`
+and `vi.mock`, in `'`, `"` and backtick quoting.
 
-VC-555 completes `src/session-runtime/` (`@volli/host-core/session-runtime`
-and `/*`), and moves the agent runtime wiring, agent tools, Session environment
-and tokens, Pi sidecar/tool-output cleanup, harness installation and login-shell
-PATH helpers. `src/mcp/`, `src/codemode/`, `src/web/`, `src/decision/` and the
-model sign-in service are exported as `@volli/host-core/<cluster>/*`;
-`verb-input` is exported directly. IPC adapters and their integration tests,
-Web Access's legacy `safeStorage` migration, and Pi tests that compose desktop
-secret services stay in desktop.
+- Inside the package, files import each other by relative path, never
+  `@volli/host-core/...`, and never through an entry. An entry is the
+  outside's view.
+- An entry holds only `export { … } from` lines: no `export *`, no
+  declarations, no wildcard subpath in `package.json`.
+- A client needs a name an entry does not list: add it to that entry.
+- An entry may list a name that only tests import when the name is that
+  cluster's public API (a repository, a service, a type a test drives the
+  cluster through). Pure test support (fixtures, standalone constructors,
+  `*ForTest` resets of module state) goes in `./testing`, even when it lives in
+  a production module.
+- Test support never reaches production code. Inside host-core no non-test
+  file imports it; desktop and `hostd` each guard their own sources
+  (`host-core-testing-boundary.test.ts`).
+- The Session writer's constructors (`createSqliteSessionLedger`,
+  `SqliteSessionLedger`, `createSessionEngine`, `createHostSessionEngine`,
+  `createTestSessionEngine`) are in no production entry. The guard reads
+  every entry `package.json` serves except `./testing`, the root included,
+  and follows aliases, `export *` and namespace re-exports to the declared
+  name. A running host's one writer comes from `createHostCore`; a test that
+  needs a standalone one takes `createTestSessionEngine` or the ledger from
+  `./testing`. This closes the typed, accidental second writer. A deliberate
+  one is still possible: raw SQL through `LiveHostCore.database` is outside
+  what an interface can fence, and out of this rule's scope.
+- A client's wire types live in `@volli/shared`, not here: desktop's IPC
+  contract, preload and renderer import nothing from host-core
+  (`apps/desktop/src/main/client-wire-boundary.test.ts`).
+- A test that mocks or spies on a host-core module names that module's file
+  (`vi.mock("…/packages/host-core/src/worktree/index", …)`), not its entry:
+  mocking the entry would leave host-core's own importers on the real module.
+- A script run by plain `node` imports its one Node-loadable file by path
+  (`db/session-storage-digest.ts`, `db/session-event-provenance.ts`), since an
+  entry's extensionless re-exports need a bundler's resolver.
 
-VC-561 adds `src/browser/` (`@volli/host-core/browser/*`): the agent browser's
-engine-agnostic half. `cdp-controller`, `snapshot-format`, `agent-coordinator`,
-the picture and trace stores and their disks, and `trace-steps` moved
-byte-identical; `agent-port` moved without its Electron wire. See
-[Browser backend](#browser-backend).
+### Naming
 
-VC-622's first desktop-only slice adds `session-runtime/assembly`: synchronous,
-inert Pi attachment assembly over the host's existing engine, model access,
-MCP/Code Mode/Web Access owners, secret service and attachment identities. Browser
-and shell ports are construction inputs; birth membership derives from those
-capabilities, preserving desktop's shipped tool order. Venue and sandbox assets
-are explicit options. The runtime and peek share one transcript artifact store.
-Session facade/agent commands, recovery gating and the single composition
-`close()` are the next desktop-only slice; hostd does not run Sessions yet.
+One convention for what a module asks for and what it is (VC-632):
 
-`host.runtimeServices` holds staged constructors for model access, decisions,
-MCP, Web Access and model sign-in. Desktop invokes them in its original boot
-order, so legacy web keys migrate before any store reads them, and sign-in
-keeps the same Pi collection as the runtime. Session locations take `events`
-and `dataDir`, using that same event bus and user-data directory for worktree
-materialization and publication; they never import desktop's broadcast adapter.
-The retained
-`createDesktop*` names are compatibility names, not Electron dependencies.
+- **`…Port`** is one capability host-core asks for, which a host or another
+  module implements (`PowerPort`, `TrashPort`, `SecretKeyPort`).
+  **`…Ports`** is the set of them a constructor takes (`HostCorePorts`,
+  `PtyManagerPorts`, `WorktreePorts`). `Deps` and `Dependencies` are retired
+  for `Ports`.
+- **`…Options`** is policy and configuration: values, and hooks with a
+  default (`HostCoreOptions`, `PtyManagerOptions`).
+- **`…Host`** is a host-core service that owns live resources and serves them
+  (`BackgroundShellHost`, `McpSessionHost`, `PiRuntimeHost`,
+  `ScheduledResumeHost`). It is never what something asks of its host; that is
+  a `Ports`.
+- **`…Backend`** is one engine behind an interface that has more than one
+  (`BrowserBackend`, its agent-facing slice `AgentBrowserBackend`,
+  `CredentialKeyBackend`).
+- **No `Desktop` in host-core names.** host-core runs under desktop and
+  `hostd` alike. A host-specific adapter is named in its host (desktop's
+  `desktopPtyPorts`, hostd's `headlessPorts`); host-core's own constructors
+  are `create…`/`createHost…`, and per-host policy is `Host…`
+  (`HostMcpDispatch`, `HostCodeMode`, `HostDecisions`).
+- **No file named after another package.** The single-instance profile lock,
+  runtime paths and CLI shim are `host-profile.ts`, not `agent-runtime.ts`
+  beside `@volli/agent-runtime`.
+- **Door** keeps its glossary meaning (`CONTEXT.md`): one entrance a caller
+  reaches host behavior through (an IPC handler, a socket verb, an agent
+  tool), never the behavior itself.
 
-Code Mode's worker and `quickjs.wasm` paths still come from the host's injected
-app/resources directories, never the moved module's directory. Desktop keeps
-its packaging dependencies and `asarUnpack` entries. The moved sandbox test
-copies the real packages into the flat unpacked layout and runs a program;
-CI also checks both files in the unsigned packaged app before core e2e.
+### Lifecycle and maintenance
 
-MCP credentials retain their standalone mode-0600 `mcp-credentials.json` file
-and format. They do not use `SecretStore`; changing that storage would not be a
-pure move. Pi's secret-wait publisher type is exported by `secrets`, and its
-turn-attachment type lives in `session-runtime/turn-attachments`.
+- **Stop.** `host.stop` has one interface and two policies. Both disarm
+  producers and maintenance, join the existing runtime and socket drains
+  (concurrent on desktop, sequential on `hostd`), and stop the activity
+  timer. The default `drain-and-close` policy also joins in-flight start,
+  maintenance and detached Done-trims, then checkpoints and closes SQLite.
+  Desktop explicitly selects `desktop-quit`: no new writer joins,
+  background-shell close, Automation settlement, checkpoint or DB close;
+  process exit keeps main's historical behavior. Deadlines stay at the
+  process edge: desktop 15 s with an Immediate native exit, `hostd` 30 s.
+- **The live host** owns `maintenance` (one spawn ledger, the orphan-process
+  service, retention, automatic reap, and the one-shot SIGCONT at `start()` of
+  terminal trees a previous launch left parked — VC-833), `secretStore`, `worktreeDeps`, and a
+  lazy `terminals.manager` when a terminal port exists (otherwise an explicit
+  unavailable variant). A degraded host carries its classified failure, not
+  nullable live services; recovery stays available for it. Desktop starts
+  maintenance after first paint and triggers retention on focus; `hostd`
+  starts it at readiness. The retention watch is shared per database with
+  IPC, keeping dismissal state and read-only behavior.
+- **Backup.** Formats, redactions, credential exclusions and the
+  minimum-reader marker guard are as shipped. Migration rollback backups and
+  backup retention run through the shared open/migration path; there is no
+  periodic bundle scheduler.
+- **Desktop keeps** the recovery screens, dialogs, restart and `app.quit`
+  (recovery's IPC door is `main/database-recovery-ipc.ts`), and
+  `main/quit-gate.ts`: synchronous refusals, the accepted-update latch, the
+  microtask verdict and the Immediate before native exit. Host shutdown stops
+  watches and notices, drains both Session owners, closes every MCP process
+  group, and only then flushes observability; its 15-second aggregate deadline
+  is `shutdown-deadline.ts`. `quiet-windows.ts` is Node-only policy over
+  injected structural interfaces; native windows and activation stay desktop's.
 
-VC-558 (slice 1) adds `src/automations/`, `src/agent-dispatch/`,
-`agent-commands`, `agent-tool-door`, `agent-socket`, `agent-watch`, `watches`,
-`ticket-wake` and the Electron-free `harness-registry`, all at matching subpath
-exports. Tests move with them except the Automation IPC and harness-runtime
-integration tests, which still compose desktop modules.
+### The Session runtime
 
-`host.automations` stages engine, service, runner, armed-arrival and scheduler
-construction in the original boot order. `host.agentServices` stages the verb
-and tool doors and watches over the same event and attention ports. The scheduler
-reads host facts and Node timers only; it never asks whether a window exists.
-`createHostAgentSocket` (`@volli/host-core/agent-services`) composes the early
-socket lifecycle before database boot. Its caller still supplies the unchanged
-`<dataDir>/volli.sock` path; mode 0600, v1 NDJSON, request limits, shutdown drain
-and the verb table are unchanged. Desktop retains `automations/ipc.ts` and the
-socket's app-quit adapter (`agent-socket-quit.ts`); host-core never holds an app
-lifecycle. Backup, recovery and maintenance remain for VC-618 (slice 2).
+- **Staged constructors.** `session-runtime/assembly` builds the inert Pi
+  attachment over the host's one engine, model access, MCP/Code Mode/Web Access
+  owners, secret service and attachment identities. Browser and shell ports
+  are construction inputs, and birth membership derives from those
+  capabilities in desktop's shipped tool order. Venue and sandbox assets are
+  explicit options. The runtime and peek share one transcript artifact store.
+  `session-runtime/context` resolves attach-time briefs and frozen inputs.
+  `session-runtime/facade` and `session-runtime/agents` add skills, model,
+  Sessions, titler, peek, the kickoff submit and delegation recovery staging.
+  Desktop and `hostd` use the same constructors; their adapters supply
+  host-owned ports and pre-execution hooks, never separate executors.
+- **Recovery before consumers.** `session-runtime/lifecycle` installs the
+  quit hold synchronously, then recovers stale attachments, delegations,
+  durable shell notices and scheduled resume. Only `await lifecycle.ready()`
+  issues `RecoveredSessionServices`, the opaque proof that public tool/watch
+  doors, CLI Session ports, the renderer's listing/peek/stop hooks, the
+  Session RPC edge and runtime Automations require. One idempotent `close()`
+  stops producers, releases power listeners and drains notices, RPC, runtime,
+  MCP and observability; it also waits for an in-flight recovery sweep. Quit
+  cancellation is a typed outcome, and the boot sweep stops at async
+  boundaries, leaving unswept bindings for the next launch.
+- **`host.runtimeServices`** holds the staged constructors for model access,
+  decisions, MCP, Web Access and model sign-in. Desktop invokes them in its
+  original boot order, so legacy web keys migrate before any store reads
+  them, and sign-in keeps the runtime's Pi collection. Code Mode's worker and
+  `quickjs.wasm` paths come from the host's injected directories; desktop
+  keeps their packaging (`asarUnpack`), and CI checks both files in the
+  unsigned packaged app before core e2e.
+- MCP credentials keep their standalone mode-0600 `mcp-credentials.json`, not
+  `SecretStore`.
 
-VC-560 adds `src/pty/` (`@volli/host-core/pty/*`): the terminal supervisor
-(`manager.ts`, `PtyManager`), its output pipeline, warm park (`park.ts`,
-`park-controller.ts`), launch scope, launch line and offered-command run. The
-Electron IPC adapter (`apps/desktop/src/main/pty/ipc.ts`) stays in desktop and
-constructs the supervisor; see [Terminals](#terminals). `park.ts` moves into
-this gate with its test.
+### Automations and the agent socket
 
-VC-618 (VC-558 slice 2) adds `src/backup/` (`@volli/host-core/backup/*`),
-`src/process/` (`@volli/host-core/process/*`), `database-recovery`,
-`retention-runtime`, `orphan-scan`, `quiet-windows`, `host-shutdown` and
-`shutdown-deadline` at matching subpath exports. Backup files are byte-identical:
-format, redactions, credential exclusions and the minimum-reader marker guard
-are unchanged. Warm park was already moved by VC-560 into `src/pty/park.ts`;
-its desktop quit/confirm door remains in `main/pty/ipc.ts`.
+`createHostAutomations` owns one engine/service, its runner, armed arrivals
+and scheduler, started at recovered readiness. Execution is an explicit
+idle/unavailable/ready variant. After timer producers stop, `settled()` joins
+recovery, attempts and Run boots before SQLite closes.
+`createHostAgentCommands` builds the socket verb door over the host's
+[handler map](#the-handler-map); `session-runtime/agents`
+owns the lazy tool door and watches. `createHostAgentSocket` composes the
+early socket lifecycle before database boot, on the caller's
+`<dataDir>/volli.sock`: mode 0600, v1 NDJSON, request limits, shutdown drain.
+Desktop keeps `automations/ipc.ts` and its socket app-quit adapter; host-core
+never holds an app lifecycle.
 
-`host.maintenance` stages recovery, spawn-ledger, orphan-process and retention
-construction at desktop's original boot points. Retention and process alerts use
-`events`/`attention`; no maintenance scheduler needs a window. Desktop still
-starts them after first paint and triggers retention on focus. The retention
-singleton keeps its first construction and shared dismissal state across IPC and
-host reads, including the original read-only behavior without reclaim seams.
+### Files, worktrees and secrets
 
-Recovery's IPC door is `main/database-recovery-ipc.ts`; recovery screens, dialogs,
-restart and `app.quit` stay desktop-owned. `main/quit-gate.ts` keeps synchronous
-refusals, the accepted-update latch, the microtask verdict and the Immediate
-before native exit. Host shutdown stops watches/notices, drains both Session
-owners, closes all MCP process groups and only then flushes observability. Its
-unchanged 15-second aggregate deadline is in `shutdown-deadline.ts`. The existing
-desktop quit/socket tests still hold that file at 100%; process coverage moved
-with its tests at the same 100% gate. Recovery's integration test stays desktop
-because it still composes IPC. All backup tests now run here: VC-561 moved the
-file-decision test's last desktop dependency, `browser/picture-disk`.
-`quiet-windows.ts` is unchanged, Node-only policy over injected structural
-interfaces; actual native windows and activation still belong to desktop.
+- `createHostCore` composes `fileServices` (the watch managers and the
+  client/trash adapters). File-boundary tests run here against real
+  directories and symlinks.
+- `host.worktrees.deps(db)` captures the host's event bus and `dataDir`;
+  desktop callers not yet moved pass the same facts through `worktree-host.ts`.
+  Session locations take `events` and `dataDir` for worktree materialization
+  and publication, and never import desktop's broadcast adapter.
+  `worktree/repository-turn.ts` keeps its per-process ordering. Project roots
+  stay in desktop's 100% gate: desktop's IPC/PTY tests cover branches this
+  package's do not.
+- `secrets/` holds `SecretStore`, the headless file key, and the typed sealed
+  credential module: the credential lock, the durable file contract, the key
+  id and `VHC1` envelope over the keyring port (`ports/credential-keyring.ts`)
+  and the typed inventory. See
+  [docs/secrets.md](../../docs/secrets.md#the-typed-credential-module-vc-642).
+  Pi's secret-wait publisher type is exported by `secrets`, and its
+  turn-attachment type lives in `session-runtime/turn-attachments`.
+
+### What stays in desktop
+
+IPC doors and their integration tests (`main/volli-fs-ipc.ts`,
+`main/pty/ipc.ts` with the warm-park quit/confirm door, `automations/ipc.ts`),
+protocol registration, native external-app launch, pickers and dialogs, and
+Web Access's legacy `safeStorage` migration. A desktop test that still composes
+desktop modules stays in desktop and imports host-core's entries.
+
+## The log
+
+One structured, correlated log (VC-699; HP § Tracing and logs). A module
+takes a logger for its component at module scope and writes identifiers and
+counts:
+
+```ts
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("publish");
+log.info("branch pushed", { ticketId, branch }); // never a payload, a prompt or a secret
+```
+
+- **The host installs the destination, once** (`installHostLog({ level, sink })`):
+  hostd's JSON lines on stdout, the desktop's rotating files. Before any
+  install (tests, benches, scripts) lines go to the console at `warn`, or
+  `VOLLI_LOG_LEVEL`.
+- **Every line is redacted** (`redactLogFields`, `@volli/shared`): credential-named
+  fields lose any value but a count, and strings lose credential-shaped text.
+- **Correlation is ambient, for a request's own chain.** A door opens
+  `withTrace(peerTrace, { door, … }, handle)` per request; code deeper in adds
+  what it knows with `withLogContext({ sessionId })`. Lines carry both without a
+  parameter threaded through.
+- **Background work never inherits it.** Anything long-lived a request starts
+  (an executor's attachment, a listener, an interval) starts detached with
+  `withRootLogContext({ sessionId, … })`, and joins a trace only by identifier
+  (`log/correlation`: a command's trace, a turn's trace). The Session runtime's
+  executor is wrapped so (`correlatedExecutor`). A line with no such join
+  carries its ids and no trace.
+- **Generic doors log error summaries** (`logErrorSummary`: class name and
+  code), never an error's message.
+- **Cheap, and never fatal.** The level check runs before anything is built;
+  the file sink only queues on the caller's stack, and a disk failure disables
+  it with one warning.
+- **No bare console.** Production code in host-core and Electron main logs only
+  through a host logger; `src/log/no-console.test.ts` (and its twin in
+  `apps/desktop/src/main/log/`) fails on a `console.*` call outside tests and
+  the log module itself. A seam that takes a log function takes the logger's
+  `(msg, fields)` shape, never `Pick<Console, …>`.
 
 ## Ports
 
 A port is what host-core asks of the process hosting it. Each port lives in
-`src/ports/` (`@volli/host-core/ports`, re-exported from the root). Desktop's
+`src/ports/` (`@volli/host-core/ports`). Desktop's
 Electron adapter does exactly what desktop did before the port existed.
 
-| Port (`HostCorePorts`)                             | Asks for                                                                                          | Desktop adapter                                                                                    | Headless host passes                                                                |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `events: HostEventBus`                             | Announce a fact to every client: `publish(topic, payload)`, topics in `HostEventMap`              | `windowEventBus` (`main/broadcast.ts`): `volli:<topic>` to every live window                       | Its protocol's broadcast                                                            |
-| `attention`                                        | Raise an alert with a person (`deliver`), and which Sessions a focused client shows               | `notifications/runtime.ts`: native notification, preferences, focused-target suppression           | `HEADLESS_ATTENTION`: every alert `unsupported`, nothing focused                    |
-| `power: PowerPort`                                 | Sleep and wake (`suspend`, `resume`, `unlock-screen`, `user-did-become-active`)                   | Electron's `powerMonitor` itself                                                                   | `NO_POWER_EVENTS`                                                                   |
-| `connectivity`                                     | The network, for retry policy. This is `ConnectivityPort` from `@volli/agent-runtime`, not a copy | `createConnectivityPort({ net, powerMonitor })`                                                    | `ALWAYS_ONLINE` from `@volli/agent-runtime`                                         |
-| `trash?`                                           | Move a host file to recoverable Trash (`TrashPort`)                                               | `(path) => shell.trashItem(path)`, unchanged                                                       | Nothing. Requests reject with `TrashUnavailableError`; never permanent deletion     |
-| `client?`                                          | Open a link, reveal a file, the clipboard, menus (`ClientCapabilityPort`)                         | `createElectronClientCapabilities()` (`main/client-capabilities.ts`): `shell`, `clipboard`, `Menu` | Nothing. `host.client` refuses each request with `ClientCapabilityUnavailableError` |
-| `log`                                              | Errors and warnings                                                                               | `console`                                                                                          | Its logger                                                                          |
-| `listOpenNativeBindings`, `observeScheduledResume` | The live runtime's bindings and the scheduled-resume host, bound after the runtime exists         | Late-bound closures in `index.ts`                                                                  | Its runtime's                                                                       |
+| Port (`HostCorePorts`) | Asks for                                                                                          | Desktop adapter                                                                                    | Headless host passes                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `events: HostEventBus` | Announce a fact to every client: `publish(topic, payload)`, topics in `HostEventMap`              | `windowEventBus` (`main/broadcast.ts`): `volli:<topic>` to every live window                       | Its protocol's broadcast                                                            |
+| `attention`            | Raise an alert with a person (`deliver`), and which Sessions a focused client shows               | `notifications/runtime.ts`: native notification, preferences, focused-target suppression           | `HEADLESS_ATTENTION`: every alert `unsupported`, nothing focused                    |
+| `power: PowerPort`     | Sleep and wake (`suspend`, `resume`, `unlock-screen`, `user-did-become-active`)                   | Electron's `powerMonitor` itself                                                                   | `NO_POWER_EVENTS`                                                                   |
+| `connectivity`         | The network, for retry policy. This is `ConnectivityPort` from `@volli/agent-runtime`, not a copy | `createConnectivityPort({ net, powerMonitor })`                                                    | `ALWAYS_ONLINE` from `@volli/agent-runtime`                                         |
+| `trash?`               | Move a host file to recoverable Trash (`TrashPort`)                                               | `(path) => shell.trashItem(path)`, unchanged                                                       | Nothing. Requests reject with `TrashUnavailableError`; never permanent deletion     |
+| `client?`              | Open a link, reveal a file, the clipboard, menus (`ClientCapabilityPort`)                         | `createElectronClientCapabilities()` (`main/client-capabilities.ts`): `shell`, `clipboard`, `Menu` | Nothing. `host.client` refuses each request with `ClientCapabilityUnavailableError` |
+| `log`                  | Errors and warnings                                                                               | `console`                                                                                          | Its logger                                                                          |
 
 **How a moved service asks for a port.** Its `create<Cluster>(ports, options)`
 takes only the ports it uses, as a `Pick<HostCorePorts, …>`.
@@ -249,24 +361,47 @@ to the `SecretStore` it builds rather than to `createHostCore`. See
 ### Session composition
 
 `createHostCore` returns `sessionLedger`, `hostNoticeOutbox`, `sessionWakeBus`,
-`sessionReadWatch`, `sessionActivityWatch` and `sessionEngine`. They are all
-`null` when the database is degraded. The outbox shares the engine's one
+`sessionReadWatch`, `sessionActivityWatch` and `sessionEngine` on the live
+host; a degraded host has none of them. The outbox shares the engine's one
 transaction writer. The wake bus decorates the engine inside the activity
 watch: committed facts fan out before a listing row becomes dirty. Resumption
-history, unattended Run notifications and read receipts observe in their
-original order, before the row is built.
+history, unattended Run notifications, scheduled resume and read receipts
+observe in their original order, before the row is built.
 
 `HostCorePorts` extends `HostSessionPorts`, which holds the ports Session
-composition uses: `events`, `attention`, `log`, `listOpenNativeBindings` and
-`observeScheduledResume`. Its adapters are captured, not called during
-construction, so desktop can bind notifications and the runtime
-after the database is known. Desktop wires `onFocusedSessionsChanged` to the
-returned read watch, and supplies the runtime-dependent scheduled-resume
-observer after the runtime exists. Engine construction is private to the
-Sessions module (`src/sessions/engine.ts`, not a package export). It requires
-the shared ledger; terminal, data and runtime consumers must receive the
-composed engine and never construct a fallback. The wake decorator lives beside
-the activity watch in `src/session-control/`.
+composition uses: `events`, `attention` and `log`. Its adapters are captured,
+not called during construction, so desktop can bind notifications after the
+database is known. Desktop wires `onFocusedSessionsChanged` to the returned
+read watch.
+
+The live-work watch (`liveWork`, `session-control/live-work.ts`, VC-577) is
+fed by the activity watch's `observeEvent` port: every committed turn fact,
+synchronously as its write resolves, never the 60 ms coalesced fold (which
+only seeds a Session no fact has reached yet). It counts Sessions with a turn
+open on a binding this process holds, Sessions with work the runtime accepted
+but whose turn has not opened (`HostedSessionRuntime.pendingTurnStarts`:
+admitted messages, retries, compactions, follow-up drains), and running
+background shells, which the composition root feeds from the shell host's
+state feed. Desktop's menu-bar quit decision reads it synchronously, and
+`tryBeginIdleExit()` takes the runtime's start latch (`holdTurnStarts`) in the
+same call when nothing is live: new starts are then refused before any effect
+and queued follow-ups wait, durable, for the next launch. Armed Automations
+are deliberately not live work.
+
+Two facts arrive later and are not ports, because host-core answers both
+itself: which executor bindings are open (a listing row is live only while one
+is) and each folded projection for scheduled resume. They are
+`SessionRuntimeWiring` (`session-services.ts`). The runtime assembly wires the
+open bindings when it builds the Session runtime, and the lifecycle wires
+scheduled resume when it is built, each into the services that own the engine
+it was given. Until then nothing is open and nothing is scheduled. (They were
+ports, `listOpenNativeBindings` and `observeScheduledResume`, that desktop and
+`hostd` late-bound to those same host-core objects; VC-632 removed them.)
+
+Engine construction is private to the Sessions module (`src/sessions/engine.ts`,
+in no entry). It requires the shared ledger; terminal, data and runtime
+consumers receive the composed engine and never construct a fallback. The wake
+decorator lives beside the activity watch in `src/session-control/`.
 
 Coverage entries for the activity/read/peek watches, concurrency budget and
 `db/export.ts` run here at unchanged 100% thresholds. The export test and
@@ -306,6 +441,44 @@ until its remaining desktop dependencies move.
     head and carries only this build's columns, so a newer build can restore
     it and migrate it up. Bundles never carry the floor; a restore's
     migrations derive it.
+- **Applied-migration history (VC-633, migration 060).** `migration_history`
+  records each version the file ran with its `migrations.lock.json`
+  fingerprint, in the transaction that applied it. Versions run before 060
+  are backfilled with no fingerprint. Every open compares the history with
+  this build's lock (`src/db/migration-history.ts`). If another lineage ran a
+  different migration under a number this build ships, or stamped a version
+  past 060 without recording it, the open **warns and never refuses**: one
+  `[volli] migration history` log line, and a `Migration history:` line in
+  About's support report. It needs no floor raise, because older builds never
+  apply a migration to a newer file, so they can't leave it wrong. Bundles
+  don't carry it; a restore's migrations write the new file's own.
+- **Free space before a migration (VC-633).** `migrate` checks `statfs` on the
+  database's directory before the safety copy: twice the database (WAL
+  included) plus 64 MiB. It refuses with `InsufficientDiskSpaceError`, which
+  names what it needs and what is free, before anything is written
+  (`src/db/disk-preflight.ts`). `openVolliDb` measures before it opens a
+  writable handle, so a refusal at startup leaves the db and its WAL
+  byte-identical. Only a measurement that worked can refuse: when `statfs`
+  fails (ENOSYS, EIO, an unsupported filesystem) it logs one warning and the
+  migration goes ahead. The budget assumes `temp_store = MEMORY`, which
+  startup and a restore's staging handle both set; with file-backed temp
+  storage VACUUM needs a third copy on disk. A box's rollback is to that safety copy:
+  [hostd README](../../apps/hostd/README.md#upgrading-and-rolling-back).
+- **N-1 compatibility (VC-633).** CI's `N-1 compatibility` lanes run a
+  previous build, from its own shipped sources, against a profile this build
+  migrated to head (`src/db/n1-compatibility.test.ts`, driven by
+  `scripts/n1/`): the newest `vX.Y.Z` release, the newest `vX.Y.Z-canary.N`
+  canary (what a canary tester drops back to) and the PR's base. N-1 must
+  open the profile, save and clear a credential, create and move a ticket,
+  create a Session and make a bundle, and this build must read and back up
+  what it left; or, when the floor is above N-1's head, N-1 must refuse with
+  the db and WAL byte-identical. A release or canary from before the guard
+  cannot refuse, so no `raisesMinReader` migration may land while it is the
+  latest of its channel: cut a release (or canary) containing VC-602 first. A shipped build's known fault is listed, by commit, in
+  `KNOWN_HAZARDS` and asserted exactly. Run it locally with
+  `node scripts/n1/prepare.mjs --release --out ../../.scratch/n1` (or
+  `--canary`, or `--ref <commit>`), then
+  `VOLLI_N1_MANIFEST=<printed path> vp test run src/db/n1-compatibility.test.ts`.
 - **Transaction ownership (VC-551).** No transaction spans an `await`. Use
   `withTransaction` / `settleTransaction` from `db/transaction-gate`.
   `openVolliDb` installs the ownership guard after migrations, with the handler
@@ -314,7 +487,7 @@ until its remaining desktop dependencies move.
     `logTransactionViolation` when `app.isPackaged`.
   - **A headless host passes `throwTransactionViolation`.** Nobody is watching
     its log while a bug corrupts a transaction.
-  - Tests use `openTestDb()` from `@volli/host-core/db/test-helpers`, which
+  - Tests use `openTestDb()` from `@volli/host-core/testing`, which
     installs the throwing handler.
 - **The boot-window rule.** Before the guard is installed, migrations and open
   checks run on the raw handle. No statement handle created in that window
@@ -364,16 +537,15 @@ restore, and where Pi's `auth.json` lives for `hostd` are in
 ### Terminals
 
 `PtyManager` (`src/pty/manager.ts`) supervises every live PTY. It is built by
-the host with a `PtyHost` (the event bus, the worktree bundle, and the
+the host with a `PtyManagerPorts` (the event bus, the worktree bundle, and the
 harness-file writer whose module is still desktop's) plus
 the runtime pieces the host composes: the agent runtime environment, spawn
 ledger and concurrency reader. Desktop builds it in `registerTerminalIpcHandlers`
-with `desktopPtyHost()`; `hostd` will build it with its own. A degraded
+with `desktopPtyPorts()`; `hostd` will build it with its own. A degraded
 database still yields a supervisor whose `create` answers with the open error.
 
-**The stream contract.** M2's terminal ticket (VC-568) exposes this over the
-host protocol's [binary framing](../../docs/plans/host-protocol.md#binary-framing);
-the supervisor is shaped for it but ships no transport.
+**The stream contract (VC-568).** The supervisor exposes terminal streams to
+host-protocol binary framing but owns no transport.
 
 - **One client per terminal.** A terminal's stream is attached to at most one
   `HostClientEventSink`. Only that client receives its output, exit and park
@@ -430,10 +602,10 @@ Agent browser tools speak CDP through a `BrowserTabController`
 they need, they ask of a `BrowserBackend` (`browser/backend.ts`), so the engine
 is the one thing that changes between hosts:
 
-| Backend                                               | Engine and CDP wire                                                                      |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Desktop `BrowserTabHost` (`main/browser/tab-host.ts`) | `WebContentsView`s; each tab's app-private `webContents.debugger` (`webcontents-cdp.ts`) |
-| Headless host                                         | Standalone Chromium over a CDP pipe (VC-619)                                             |
+| Backend                                                  | Engine and CDP wire                                                                                 |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Desktop `BrowserTabHost` (`main/browser/tab-host.ts`)    | `WebContentsView`s; each tab's app-private `webContents.debugger` (`webcontents-cdp.ts`)            |
+| `ChromiumBrowserBackend` (`browser/chromium-backend.ts`) | Standalone Chromium; one CDP connection over `--remote-debugging-pipe`, flattened sessions (VC-619) |
 
 - **The interface.** Tab lifecycle with the VC-238 ownership fields
   (`BrowserTabState`, now in `@volli/shared`), a `CdpTransport` per tab
@@ -456,10 +628,144 @@ is the one thing that changes between hosts:
 - **The security stance (VC-110).** A backend's CDP wire is private to the
   engine it drives. Never `--remote-debugging-port`: no loopback endpoint
   through which another local process could reach a tab.
+- **The parity suite.** `browser/test-support/backend-suite.ts` drives the real
+  port and the agent-runtime browser tools against a loopback fixture: every
+  verb, its result shape, refusals, holds, caps, cancellation and dispose.
+  A backend passes it unchanged. `chromium-backend.test.ts` runs it against
+  Chromium, in CI's Linux `Test (packages)` lane.
+
+### Chromium
+
+`new ChromiumBrowserBackend(ports, options)` launches its browser on the first
+tab and keeps it until `dispose()`. Every option is the host's to state:
+
+- **`executablePath`.** host-core finds and downloads nothing. The recommended
+  build is Playwright's Chrome for Testing, pinned by the lockfile's
+  `playwright-core` (a devDependency here, never imported at runtime) and
+  installed with `playwright-core install chromium --no-shell`: the full
+  build, which runs new headless. Never `chromium-headless-shell`, the old
+  headless. The same revision runs on dev Macs, CI and a Linux box, where
+  Ubuntu ships Chromium only as a snap.
+- **`profileRoot`.** Each launch makes a private 0700 profile directory under
+  it (`volli-chromium-<host pid>-<random>`) and removes it however the browser
+  ends. Nothing a page stores outlives the browser. A host killed outright
+  leaves its directory; the next backend on the same root sweeps every
+  profile whose host is gone.
+- **`noSandbox`.** `false` everywhere a host can provide user namespaces,
+  which is every host Volli ships for: the hostd systemd unit allows the three
+  Chromium's sandbox makes, and on Ubuntu 23.10+ the binary needs the AppArmor
+  profile in `apps/hostd/packaging/volli-chromium.apparmor`
+  (`apps/hostd/README.md`, "Running under systemd"). `true` only in a
+  container that cannot, and a launch without the sandbox logs a warning
+  every time. CI runs sandboxed.
+
+- **`deviceScaleFactor`**: device pixels per CSS pixel every page is drawn
+  at (`--force-device-scale-factor`). 2 makes a high-DPI viewer's screencast
+  sharp, at four times the pixels for every tab and agent screenshots at 2×
+  (as a Retina desktop's are); 1 on a host no high-DPI viewer looks at.
+- **`screencastQuality`**: the JPEG quality of screencast frames.
+
+What the backend owns, beyond the registry's policy:
+
+- **One shutdown, however the browser ends.** The browser leads its own
+  process group and starts with an allowlisted environment (no host
+  secrets). A close, a failed launch, an exit or crash, and a pipe that fails
+  or overflows all run the same finalization: every waiting command rejects,
+  the streams close, the whole group gets SIGTERM, a grace, then SIGKILL
+  (survivors of the leader included), the child is reaped and the profile
+  removed. The backend forgets the browser's tabs, and the next tab launches
+  another. A host that runs browsers relies on no service manager for this.
+- **A bounded pipe.** Inbound frames, pending commands, unsent output bytes
+  (the writable's own buffer is the only queue) and every command's time are
+  bounded (`CdpPipeLimits`); a withdrawn or timed-out command leaves the
+  pending map at once. An oversized frame is a broken browser: the pipe
+  closes, which finalizes it.
+- **Ids are ours.** `open` returns synchronously; Chromium's target is created
+  behind the entry's `ready` promise, and every engine call waits on it.
+- **Contexts by `browserSessionPartition`.** A Session's tabs share their
+  Ticket's (or Project's) browser context and nobody else's; the person's tabs
+  use the default one. Downloads and every permission are denied per context.
+- **Chrome facts from events.** url, title, loading and history are tracked
+  for the synchronous `liveChrome`; the generation bumps on main-frame
+  navigation start. A read refreshes the title first, because Chromium reports
+  a script's title change late; that read is bounded and follows the caller's
+  withdrawal. An empty title is a real title.
+- **Page-driven navigation is HTTP(S)-only, with one residual.** Every
+  document request and redirect hop is checked before it is sent (`Fetch`),
+  on the page's session and on every out-of-process iframe's, which attaches
+  paused and runs only once its guard is installed. A nonopaque main frame's
+  own cancelable non-HTTP(S) navigation (including its `blob:`) is canceled
+  synchronously by the Navigation API, in an isolated world installed before
+  page scripts. The page stays put, as desktop's `will-navigate` keeps it:
+  cancellation does not race a Node/CDP `Page.stopLoading` round trip
+  (VC-708). A binding scoped to that isolated world reports only the fixed
+  refusal notice; it exposes no page-world host API. Cancellation is observable
+  as `navigateerror`; allowed document headers and scripts are not rewritten. HTTP(S) in-page
+  state/hash updates and downloads keep their existing policy layers.
+  Opaque/sandboxed pages, other initiators, non-cancelable or absent navigate
+  events, and engines without that API still require the CDP request stop;
+  a commit that slips past is still sent to `about:blank`. Chromium itself
+  refuses `file:`, `chrome:` and top-level `data:`.
+
+  **The residual (not desktop parity):** same-process `data:`, `blob:` and
+  `srcdoc` iframes make no network request, so no `Fetch` guard sees them,
+  and CDP has no per-frame pre-commit refusal; they run, where desktop's
+  `will-frame-navigate` refuses them. None gains a privilege the page lacks
+  (`blob:` and `srcdoc` share its origin, `data:` is opaque). The candidates
+  were rejected: injecting a `frame-src` CSP through `Fetch` response
+  interception rewrites every document's headers, is visible to the page
+  (`securitypolicyviolation`) and still misses `srcdoc`; removing the frame
+  element races the commit and changes the page's DOM. A test pins the
+  behavior (`chromium-backend.test.ts`, "guards frames"). Before people use
+  hostd’s browser, enforce the iframe-navigation rule or retain the explicitly
+  attached lent-view fallback; do not assume desktop navigation parity (VC-571).
+
+- **Popups never run.** Every new page is attached paused; one with an opener
+  is closed, and its URL becomes a product tab under the opener's provenance
+  and caps.
+- **Dialogs nobody can answer get the safe answer, said aloud.** An alert is
+  acknowledged; a confirm or prompt is declined (`false`, `null`); a
+  leave-page prompt (`beforeunload`) is declined, so the tab stays, as
+  desktop's does — Volli never approves leaving a page that guards unsaved
+  work. Each is recorded in the console with its outcome, and a refused
+  departure also sets the tab's error, which every agent answer carries.
+  Closing a tab runs no unload veto.
+- **A frame source for viewers** (`attachScreencast`, `browser/screencast.ts`),
+  by host-protocol.md § Binary framing; VC-571 carries it over the binary
+  channel, never the event bus or a tRPC subscription. Per-tab attach and
+  detach; JPEG, with encoding, viewport and device scale factor as attach
+  metadata (re-stated when they change); latest wins, at most one unsent frame
+  per attachment, stale frames dropped whole before they are numbered;
+  Chromium's frames acked on arrival; `next(signal)` cancels, and the tab
+  closing or going headless ends every attachment. A viewer asks for a scale
+  (2 on Retina) and gets the highest any attachment asked for, up to the
+  browser's own. Each tab's cast is reconfigured by one serial, coalescing
+  worker: from a request (attach, detach, resize, scale) no frame is offered
+  until a cast of the new shape has started, and only then do attachments
+  hear the new metadata; every frame's real JPEG size is checked against the
+  live cast, and one from before (or of another scale) is dropped, though
+  every frame is still acked. A zero-viewer stop is always the last word. The
+  person's input arrives through `viewerInput` (pointer with the DOM
+  `buttons` mask, so a drag is a drag; wheel, keys, committed text and IME
+  composition) and closes the transcript camera for desktop's quiet window;
+  it never takes or moves the agent hold. A shown tab's JavaScript dialog,
+  while a viewer is attached, waits for the person: `pendingDialog`,
+  `respondToDialog` and each attachment's `onDialog` carry it, and nobody
+  answering within `CHROMIUM_DIALOG_ANSWER_TIMEOUT_MS` (or the last viewer
+  leaving) gets the safe answer. These are optional `BrowserBackend`
+  members, refused for a headless tab: the seam stays open to capabilities
+  one engine has and another does not.
+- **The parity bench** (`chromium-parity.test.ts`) measures, at 1× and 2×,
+  input-to-frame latency (p50, p95) for a click and for typing and frames per
+  second while scrolling and animating, at the frame-source level on loopback.
+  It always prints `[volli] chromium parity`; `VOLLI_CHROMIUM_PARITY_ASSERT=1`
+  holds it to the bar (p95 ≤ 100 ms, ≥ 30 fps).
+- **No wake policy.** Each tab is its own window, never occluded, and the
+  launch turns background throttling off.
 
 ## Ticket moves
 
-`executeTicketMove` (`@volli/host-core/ticket-move`, VC-629) is the whole
+`executeTicketMove` (`ticket-move.ts`, VC-629; since VC-668 reachable only through the handler map) is the whole
 Deliberate move: atomic single/group write, post-commit Ticket wakes, immediate
 background Done trim, armed arrivals, non-user Doing notification, and backward
 Session interrupts. IPC and `ticket.move` only resolve/map their inputs and
@@ -476,13 +782,82 @@ The renderer still receives the board projection in its reply, not a new
 agent projection and targeted invalidation. There is no new receipt ledger or
 migration; backward-interrupt receipts remain Session evidence.
 
-This is a handler seam for the future command catalog, not a second catalog.
-The pre-change audit on VC-629 records remaining projection/delivery and harness
-policy differences for the board-area migration.
+Since VC-668 the move is the host's `ticket.move` handler: `createHostHandlers`
+assembles its ports once (the busy supplier, interrupts, the armed arrival,
+attention and the event bus), so neither door wires them. The desktop window's
+call carries `origin: "desktop-window"`, which keeps the reply-carries-the-board
+rule above; every other caller's change is published. No production entry
+serves `executeTicketMove`, and `package-interface.test.ts` refuses any
+production importer of it but the handler map.
+
+## The Board module
+
+`src/board/` (VC-565) is the board's commands and feed. `createBoardHandlers`
+(`commands.ts`) builds every `board.*` handler, and `ticket.move`, for the
+handler map: each is the whole command (T13), owning its clock, attribution,
+transaction and receipt, ticket wakes, the worktree materialization of a
+switch into worktree scope, its rows on the Workspace change feed (naming the
+Client's `commandId`) and its `data-changed` announcement, which it never
+echoes to the desktop window that asked unless the change moved a checkout.
+Doors hold no repository: desktop's legacy board channels, the board router
+and the socket's `ticket.move` all invoke the map.
+
+- `receipts.ts`: `board_command_receipts` (migration 062), written in the
+  effect's own transaction (a move's through `TicketMoveSeam`). Same
+  `commandId` and intent replays: the recorded outcome with the resource as it
+  stands now; another intent is a branded `CommandIntentConflict`. Seven days
+  is a hard expiry (an expired receipt never answers); excluded from backups.
+- `change-feed.ts`: `BoardChangeFeed`, one in-memory feed per Workspace with an
+  opaque `epoch:instance:seq` cursor, a compacted 2,048-entity window, and
+  resume-or-resnapshot. The epoch is read on every use: a changed epoch, or a
+  removed Workspace (`dispose`), ends the feed and tells its followers to
+  resnapshot. A root makes one, hands it to `createHostHandlers`
+  (`boardFeed`) and feeds it every `data-changed` its bus carries
+  (`noteDataChanged`): desktop through `tapDataChanged` (`broadcast.ts`), hostd
+  through `headlessPorts`.
+- `resources.ts`: `boardResourceWorkspace(db)`, the board's half of a root's
+  `resourceWorkspace` port.
+
+The contract: HP § Command catalog, "The board (VC-565)", and § Workspace
+change feed.
+
+## The handler map
+
+`createHostHandlers(ports, services)` (`@volli/host-core/handlers`, VC-668)
+builds the host's one map from key to the whole command: every public
+catalog key and every desktop-only key (`DESKTOP_ENTRIES`, VC-608), whose
+policy is its channel's VC-574 placement. A
+composition root calls it once with the recovered services (database, runtime,
+Sessions facade, Model Access, Automations, busy-worktree guard, and
+desktop's experiments and interrupts) and hands the same object to every door:
+the routers' `ctx.handlers`, the socket's `handlers` option (whose
+`AGENT_VERB_TABLE` binds a catalog key only through `projectHandler`), and
+any legacy IPC channel that still serves a catalog command. `HostHandlers` is
+total over both tiers' keys, so a missing handler fails `pnpm typecheck`; a
+service a host lacks makes its handlers throw `OperationUnavailableError`
+rather than leaving a hole.
+
+Desktop main also passes `remoteHosts` (`RemoteHostsPort`,
+`handlers/remote-hosts-port.ts`, VC-700): its registry of hosts added over
+SSH, behind the desktop-only `hosts.*` and `hostAdd.*` keys. hostd passes
+none, so those answer unavailable there.
+
+The map it returns is sealed (`HostHandlerMap`, `handlers/handler-map.ts`):
+no entry is callable. A door reaches one only through
+`invokeHandler(map, policy, …)` or the `admittedHandlers(map, policy)` view,
+and the door's `HandlerPolicy` runs first; a refusal throws
+`HandlerRefusedError` and the handler never runs. The policies:
+`ROUTER_POLICY` for a router's context, `DESKTOP_WINDOW_POLICY` for a legacy
+desktop IPC channel (`handlers/policies.ts`), and the socket's per-request
+`socketHandlerPolicy`, its coordination policy judged again at the map
+(`agent-dispatch/admission.ts`). Tests build the real map over a test
+database with `testHostHandlers`, or seal their own entries with
+`sealTestHandlers` (`./testing`). The contract: HP § Command catalog, "One
+handler map".
 
 ## Moving a service cluster in
 
-This is the pattern for every later move (VC-554 onward). A move is a **pure
+Use this pattern when relocating a service cluster (VC-554). A move is a **pure
 move**: no behavior change, no migration, and the app is identical with the
 `cloud` flag off.
 
@@ -499,10 +874,16 @@ move**: no behavior change, no migration, and the app is identical with the
    import paths; don't restyle. `git diff -M --stat origin/main...HEAD`
    should read as renames, so that open PRs touching the old paths can
    re-sync.
-3. **Export the cluster** as `./<cluster>` and `./<cluster>/*` in
-   `package.json`, then rewrite importers mechanically: `./<cluster>/x`
-   becomes `@volli/host-core/<cluster>/x`. Leave no re-export shims at the
-   old paths. A shim turns the rename into an add.
+3. **Rewrite importers by relative path.** Inside host-core, a moved file and
+   everything that imports it use relative paths (`../<cluster>/x`), never
+   the package's own name and never an entry: a self-name import makes `x`
+   impossible to stop exporting. `src/package-interface.test.ts` fails on
+   one, and `node scripts/codemods/host-core-relative-imports.mjs` rewrites
+   it. Importers outside the package (desktop, `hostd`) import from the
+   cluster's entry, `@volli/host-core/<cluster>`: add each name they use to
+   `src/entries/<cluster>.ts`, or a new entry and its `package.json` export
+   for a new cluster. Test support goes in `src/testing/index.ts`. Leave no
+   re-export shims at the old paths. A shim turns the rename into an add.
 4. **Move construction.** The cluster's construction leaves the
    `app.whenReady` closure for `createHostCore`, or for a
    `create<Cluster>(ports, options)` that `createHostCore` calls, and appears
@@ -514,7 +895,7 @@ move**: no behavior change, no migration, and the app is identical with the
 5. **Tests move with the code.**
    - A test whose imports all land in host-core moves with `git mv`.
    - A test that still composes desktop modules stays in desktop at its old
-     path and imports from `@volli/host-core`. It moves in the ticket that
+     path and imports from host-core's entries. It moves in the ticket that
      moves its last desktop dependency. For example,
      `apps/desktop/src/main/volli-fs-ipc.test.ts` still composes the desktop
      IPC adapter.
@@ -527,7 +908,7 @@ move**: no behavior change, no migration, and the app is identical with the
 7. **Fix every path reference.** `rg` the old directory across:
    - e2e and bench scripts (`ssrLoadModule("/apps/desktop/src/main/...")`, `load("src/main/...")`);
    - `apps/desktop/scripts`;
-   - docs (`BOUNDARIES.md`, `CLAUDE.md`/`AGENTS.md`, the cloud plans).
+   - contributor docs (`BOUNDARIES.md`, `CLAUDE.md`/`AGENTS.md`).
 8. **Lockfile.** A new dependency here uses the same specifier desktop
    already resolves. The `pnpm-lock.yaml` diff is importer entries only, with
    no version changes.

@@ -2,18 +2,12 @@
  * Where MCP credentials rest: one user-only file beside the profile database
  * (VC-470).
  *
- * WHY A FILE, AND NOT THE KEYCHAIN OR THE DATABASE. The database is out by the
- * ticket's own rule — a token must never reach the project database, a backup
- * bundle, `mcp_operations`, an audit record or a transcript, and the database
- * is what backups copy. The keychain is out by this repository's own finding
- * (`docs/research/env-credential-ux-architecture-review.md`): Electron's
- * `safeStorage` raised a macOS prompt on every access whenever the build's
- * signature had changed, guarded little, and was removed from Web Access for
- * exactly that reason. What every peer does — Pi's `auth.json` and
- * `mcp-auth.json`, opencode, Codex — is a file readable only by the user, and
- * that is this: `mcp-credentials.json`, mode 0600, written whole and renamed
- * into place so a crash mid-write leaves the previous file rather than half of
- * a new one. Backups exclude it by name (`backup/decisions.ts`).
+ * WHY A FILE. Tokens must never reach the project database, backup bundles,
+ * `mcp_operations`, audit records or transcripts. A user-only file also avoids
+ * per-access keychain prompts when a development build's signature changes.
+ * `mcp-credentials.json`, mode 0600, is written whole and renamed into place so
+ * a crash leaves the previous file rather than a partial new one. Backups
+ * exclude it by name (`backup/decisions.ts`).
  *
  * WHAT IT HOLDS, per server id:
  * - `secrets` — values a person typed into Settings, by slot
@@ -45,6 +39,9 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("mcp");
 
 /** pi-mcp's persisted OAuth state, minus the two fields that live only in memory. */
 export interface McpStoredOAuthState {
@@ -331,9 +328,10 @@ export class FileMcpCredentialStore extends RecordStore {
     } catch {
       // Nothing more to do: the next write replaces it.
     }
-    console.warn(
-      `[volli] MCP credential file ${this.#path} could not be read; moved aside to ${aside}. Sign in again or re-enter the stored values in Settings.`,
-    );
+    log.warn("mcp credential file could not be read; moved aside", {
+      path: this.#path,
+      aside,
+    });
     return {};
   }
 }

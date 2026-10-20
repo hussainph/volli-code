@@ -25,7 +25,7 @@
  * a verb.
  */
 
-import type { AgentCommandBindingId } from "@volli/shared";
+import type { AgentCommandBindingId, SocketHandlerKey } from "@volli/shared";
 
 import type { AgentVerbHandler } from "./context";
 import { doctorVerb, modelListVerb, notifyVerb, promptBaselineVerb } from "./app-verbs";
@@ -33,6 +33,8 @@ import { conflictsVerb } from "./conflicts-verb";
 import { costVerb } from "./cost-verb";
 import { hookVerb, sessionHarnessVerb, sessionLinkVerb } from "./harness-verbs";
 import { labelMergeVerb } from "./label-verbs";
+import { projectAddVerb } from "./project-verbs";
+import { sessionStartVerb } from "./operator-session-start";
 import {
   boardVerb,
   identifyVerb,
@@ -54,11 +56,12 @@ import {
 import {
   ticketCommentVerb,
   ticketCreateVerb,
-  ticketMoveVerb,
+  ticketMoveDecode,
   ticketSignalVerb,
   ticketUpdateVerb,
 } from "./ticket-verbs";
 import { worktreeDiffVerb, worktreeStatusVerb, worktreeSyncVerb } from "./worktree-verbs";
+import { projectHandler, type ProjectedVerbBinding } from "./projection";
 
 /**
  * Whether the dispatch resolves `VOLLI_SESSION` to an identity before calling
@@ -102,9 +105,19 @@ export interface AgentVerbBinding {
   readonly envSession: EnvSessionPolicy;
 }
 
-/** Every socket binding, in the order the Verb Registry declares them. */
+/**
+ * Every socket binding, in the order the Verb Registry declares them.
+ *
+ * A verb that is also a catalog command ({@link SocketHandlerKey}) must be a
+ * {@link ProjectedVerbBinding}: `projectHandler`'s projection of the host's
+ * `handlers[key]` (VC-668), so a second implementation of a command both
+ * doors serve does not compile. Every other verb keeps its own handler until
+ * its area makes it a catalog entry.
+ */
 export const AGENT_VERB_TABLE: {
-  readonly [Id in AgentCommandBindingId]: AgentVerbBinding;
+  readonly [Id in AgentCommandBindingId]: Id extends SocketHandlerKey
+    ? ProjectedVerbBinding<Id>
+    : AgentVerbBinding;
 } = {
   identify: { handle: identifyVerb, envSession: "resolve" },
   board: { handle: boardVerb, envSession: "resolve" },
@@ -113,7 +126,7 @@ export const AGENT_VERB_TABLE: {
   "ticket.events": { handle: ticketEventsVerb, envSession: "resolve" },
   "ticket.create": { handle: ticketCreateVerb, envSession: "resolve" },
   "ticket.update": { handle: ticketUpdateVerb, envSession: "resolve" },
-  "ticket.move": { handle: ticketMoveVerb, envSession: "resolve" },
+  "ticket.move": projectHandler("ticket.move", { decode: ticketMoveDecode, envSession: "resolve" }),
   "ticket.comment": { handle: ticketCommentVerb, envSession: "resolve" },
   // Identity is the whole requirement, exactly as it is for the two session
   // signals below: a verdict needs a signer, not a terminal attachment, so the
@@ -136,6 +149,9 @@ export const AGENT_VERB_TABLE: {
   // run in a bash pipeline actually cheap.
   conflicts: { handle: conflictsVerb, envSession: "resolve" },
   "project.list": { handle: projectListVerb, envSession: "resolve" },
+  // The person's bootstrap write (VC-623). Reads no Session; `resolve` only so
+  // the dispatch computes the actor it attributes, like every other write.
+  "project.add": { handle: projectAddVerb, envSession: "resolve" },
   "label.list": { handle: labelListVerb, envSession: "resolve" },
   // Reads Tickets and labels and writes both; no Session is in the answer.
   // `envSession` still resolves, because the merge is attributed history.
@@ -146,6 +162,7 @@ export const AGENT_VERB_TABLE: {
   // against it. Everything else the answer needs is one indexed read of the
   // usage projection — no Session history is folded to price a pass.
   cost: { handle: costVerb, envSession: "resolve" },
+  "session.start": { handle: sessionStartVerb, envSession: "skip" },
   "session.list": { handle: sessionListVerb, envSession: "resolve" },
   "session.show": { handle: sessionShowVerb, envSession: "resolve" },
   // The one verb that reads BOTH halves of the roster (VC-79), off one fold

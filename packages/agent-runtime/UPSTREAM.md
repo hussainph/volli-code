@@ -26,8 +26,7 @@ Direct dependencies, pinned exactly:
   `CodemodeSandbox`, `loadQuickJSWasm`, `renderDeclarations`/`renderToolSample`
   and `parseCodemodeSource`; the coding agent's codemode extension (exposure,
   `tool_search`, the session store) is not. Keep it on the same release as
-  `pi-agent-core`. Volli's layer over it is `src/codemode/`, and the design is
-  `docs/research/code-mode-vc-471.md`.
+  `pi-agent-core`. Volli's layer over it is `src/codemode/`.
 
 `@earendil-works/chord` and `@earendil-works/pi-telemetry` are now direct,
 exact-pinned `1.0.0` dependencies for the owned compatibility modules.
@@ -35,8 +34,8 @@ Cancellation uses chord's `Context`, `BACKGROUND_CONTEXT` and `withAbortSignal`.
 Telemetry remains a no-op in this embedding: no exporter or network code is
 added. `diff@8.0.4` and `typebox@1.3.27` are exact baseline dependencies of the
 copied edit/tool contracts. The coding-agent TUI, client and protocol packages
-remain absent. No `@earendil-works/pi-durable` dependency is introduced; VC-497
-owns that investigation. Desktop's independent `pi-mcp` pin is not changed.
+remain absent. There is no `@earendil-works/pi-durable` dependency. Desktop
+pins `pi-mcp` independently.
 
 ## Process sandbox runtime
 
@@ -44,10 +43,9 @@ Direct dependency, pinned exactly to `0.0.74`, used by the injectable
 `ScopedExecutionEnv`:
 
 - `@anthropic-ai/sandbox-runtime` — https://github.com/anthropic-experimental/sandbox-runtime,
-  Apache-2.0, maintained macOS Seatbelt process boundary used by Claude Code.
+  Apache-2.0, macOS Seatbelt process boundary.
   Its access policy is inherited by bash children rather than reimplemented in
-  Volli. This is the smallest maintained Node-seam dependency that supplies the
-  approved Claude Code-style boundary without building a custom sandbox.
+  Volli.
 
 When explicitly injected, `ScopedExecutionEnv` supplies a canonical worktree
 and sanitized environment, uses SRT's policy for worktree-only writes,
@@ -89,8 +87,7 @@ The deleted `pi-agent-core@0.99.2` patch is folded into owned TypeScript:
 - `vendor/pi-harness/session/jsonl/storage.ts`: V4 binary/newline-batched replay
   yields after 8 ms, preserving recovered state, UTF-8/BOM, torn-tail repair,
   and corrupt-line numbering. Covered by `src/pi/sidecar-load.test.ts` and
-  retained SessionRepo conformance tests. The original write-up remains
-  `docs/research/perf/pi-sidecar-rebind-yield-vc462.md`.
+  retained SessionRepo conformance tests.
 
 All paths above are under `src/pi/`. See the vendor README for npm/source-map
 provenance, MIT notice, every retained module and the omitted harness paths.
@@ -184,7 +181,10 @@ request: those endpoints carry prompts in their own `instructions`/`system` and
 JSON-only (`JsonValue` arrays readonly). Runtime tools already produced JSON,
 so only test fixtures needed retyping. `ExecutionEnv` gained
 `openTextLineReader`; `ScopedExecutionEnv` returns `not_supported`, as it does
-for `readTextLines`.
+for `readTextLines`. (VC-801 later added a Volli-owned `openFileReader`, which
+`read` uses; `ScopedExecutionEnv` guards and delegates it like
+`readBinaryFile`, and `refusingCredentialReads` refuses it for credential
+files.)
 
 The optional `Model.inputLimits` and `Model.promptCache` fields (0.87) are used
 only by Pi's coding-agent for image resizing and cache warming.
@@ -205,8 +205,8 @@ tarballs:
   `ToolResultMessage` carries no `structuredContent`, so the sidecar and the
   token estimate are unchanged by them. `afterToolCall` drops a result's
   `structuredContent` when it replaces `content` without it. The MCP wrapper
-  uses all three, and follows Codex in also showing the model the structured
-  data as compact JSON unless a text block already carries it; see
+  uses all three, also showing the model the structured data as compact JSON
+  unless a text block already carries it; see
   `docs/mcp.md`, "What a call returns".
 - **`runToolCall`** runs one call through argument preparation, validation and
   both hooks without emitting events. Used by Code Mode for each nested call, preserving argument validation and
@@ -236,7 +236,7 @@ tarballs:
   classifier and no chat model. Model Access is a chat-model page, so it leaves
   out any provider that lists models but no chat ones (a provider listing
   nothing yet, such as a dynamic one before its first refresh, stays).
-  Classifier models get their own Settings slot in VC-478.
+  Classifier models use a separate Settings slot (VC-478).
 - **Transitive:** `openai` 6.40 → 7.19 (pi-ai's OpenAI adapters; this runtime
   does not import it). Notices regenerated.
 - **Unchanged and re-checked:** the patched compaction and storage modules,

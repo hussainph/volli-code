@@ -15,6 +15,10 @@ interface QuietApp {
   dock?: { hide(): void };
 }
 
+interface MenuBarDockApp {
+  dock?: { hide(): void; show(): unknown };
+}
+
 interface QuietWindow {
   show(): void;
   showInactive(): void;
@@ -49,6 +53,27 @@ export function applyQuietAppPolicy(app: QuietApp, policy: QuietWindowPolicy): v
 /** Prevent activation after the one compositor window has been revealed. */
 export function sealQuietAppActivation(app: QuietApp, policy: QuietWindowPolicy): void {
   if (policy.useAccessoryActivation) app.setActivationPolicy("prohibited");
+}
+
+/**
+ * Menu-bar mode's Dock exit (VC-577). A quiet process is an accessory whose
+ * activation is prohibited from its first window on, and `dock.hide()` would
+ * reset that activation policy: under the policy the Dock is already hidden,
+ * so nothing is touched.
+ */
+export function hideDockForMenuBar(app: MenuBarDockApp, policy: QuietWindowPolicy): void {
+  if (policy.useAccessoryActivation) return;
+  app.dock?.hide();
+}
+
+/**
+ * Menu-bar mode's Dock return. `dock.show()` makes the process a regular,
+ * activatable app — exactly what a quiet smoke must never become — so under
+ * the policy it is skipped and the window's own reveal re-seals activation.
+ */
+export function showDockAfterMenuBar(app: MenuBarDockApp, policy: QuietWindowPolicy): void {
+  if (policy.useAccessoryActivation) return;
+  void app.dock?.show();
 }
 
 /** Reveal one app window without taking focus or intercepting the host pointer. */

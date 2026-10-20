@@ -18,7 +18,7 @@
  * written as separate automations. The add control says that out loud —
  * `Add alongside` — rather than adding a step and then asking how it joins.
  *
- * Skills open inline on `/`. Rename is Linear-shaped. Runtime dials stay
+ * Skills open inline on `/`. Rename is inline. Runtime dials stay
  * decoupled — harness, model, a weighted effort slider — with the composed
  * launch on hover.
  * ──────────────────────────────────────────────────────────────────────────

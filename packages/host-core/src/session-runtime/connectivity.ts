@@ -20,7 +20,7 @@
  */
 
 import type { ConnectivityPort } from "@volli/agent-runtime";
-import type { PowerPort } from "@volli/host-core/ports";
+import type { PowerPort } from "../ports";
 
 /** How often a turn waiting for the network re-asks whether it is back. */
 export const ONLINE_POLL_MS = 2_000;

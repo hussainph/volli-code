@@ -10,6 +10,9 @@ import {
 } from "@volli/shared";
 
 import { connectionProblemIn } from "./credentials";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("mcp");
 
 export interface McpProtocolTool {
   name: string;
@@ -115,9 +118,11 @@ export async function discoverMcpServer(
       // to ask a person to do, but someone wondering why a tool is untyped
       // finds the reason in the main-process log.
       if (sanitized.ok && sanitized.outputSchemaRejected !== undefined) {
-        console.warn(
-          `[mcp] ${input.server.name}: left off the output schema of ${bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS)} (${sanitized.outputSchemaRejected})`,
-        );
+        log.warn("left off a tool's output schema", {
+          server: input.server.name,
+          tool: bounded(tool.name, MCP_TOOL_NAME_MAX_CHARS),
+          reason: sanitized.outputSchemaRejected,
+        });
       }
       // Display-only: a server's labels sort a catalog in Settings and are
       // never part of the definition a Session freezes (see McpToolHints).

@@ -7,10 +7,10 @@ import type {
 } from "@volli/session-engine";
 import type { SessionEvent, SessionInput } from "@volli/shared";
 
-import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
 import { createSessionWakeBus, type SessionWake } from "./session-wake";
 
 let ctx: TestDb;
@@ -75,6 +75,10 @@ function writingEngine(db: TestDb["db"]): {
       append("s-one", { kind: "session.retitled", title: "input" });
       return {} as SessionInput;
     },
+    recordToolRefresh: async () => {
+      append("s-one", { kind: "session.retitled", title: "tools" });
+      return {} as SessionEvent;
+    },
     observe: async () => {
       append("s-one", { kind: "turn.completed", attachmentId: "a-1", turnId: "t-1" });
       return {} as SessionEvent;
@@ -135,6 +139,7 @@ const MUTATIONS: ReadonlyArray<[name: string, call: (engine: SessionEngine) => P
   [
     ["createSession", (engine) => engine.createSession({} as never)],
     ["getOrRecordSessionInput", (engine) => engine.getOrRecordSessionInput({} as never)],
+    ["recordToolRefresh", (engine) => engine.recordToolRefresh({} as never)],
     ["observe", (engine) => engine.observe({} as never)],
     ["submit", (engine) => engine.submit({} as never)],
     ["completeModelSelection", (engine) => engine.completeModelSelection({} as never)],
@@ -149,6 +154,7 @@ describe("the Session wake bus", () => {
     // appends it and hands back only the command and receipt events.
     expect(wakes.map(({ event }) => event.payload.kind)).toEqual([
       "session.archived",
+      "session.retitled",
       "session.retitled",
       "turn.completed",
       "session.signaled",

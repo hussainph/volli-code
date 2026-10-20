@@ -15,7 +15,7 @@
 import type Database from "better-sqlite3";
 import type { WorktreeTrimSettings, WorktreeTrimSettingsInput } from "@volli/shared";
 
-import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
+import { getAllAppState, setAppState } from "../db/app-state-repo";
 import { DEFAULT_TRIM_KEEP_PATTERNS } from "./trim";
 
 /** The `app_state` key the trim settings JSON lives under. */

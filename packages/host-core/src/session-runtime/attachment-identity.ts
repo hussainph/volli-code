@@ -30,16 +30,14 @@ export interface AttachmentIdentities {
   release(attachmentId: string): void;
 }
 
-export interface AttachmentIdentityDependencies {
+export interface AttachmentIdentityPorts {
   mint(input: { sessionId: string; attachmentId: string }): string;
   revoke(attachmentId: string): void;
   /** The Ticket's display id (e.g. `VC-270`), or `null` when the Ticket cannot be named. */
   ticketDisplayIdOf(ticketId: string): string | null;
 }
 
-export function createAttachmentIdentities(
-  deps: AttachmentIdentityDependencies,
-): AttachmentIdentities {
+export function createAttachmentIdentities(deps: AttachmentIdentityPorts): AttachmentIdentities {
   const byAttachment = new Map<string, PiSessionEnvIdentity>();
   return {
     resolve(input) {

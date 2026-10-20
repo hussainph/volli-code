@@ -1,10 +1,12 @@
+import type { RendererLogEntry } from "@volli/shared";
+import type { IpcRequest, IpcResponse } from "@volli/host-protocol/ipc";
 import type {
   FileMutationResult,
   FileReadResult,
   FileWriteResult,
   FileSearchResult,
   ArtifactCreateResult,
-} from "@volli/host-core/file-types";
+} from "@volli/shared";
 export type {
   FileMutationResult,
   FileContent,
@@ -15,7 +17,7 @@ export type {
   FileSearchLimit,
   FileSearchResult,
   ArtifactCreateResult,
-} from "@volli/host-core/file-types";
+} from "@volli/shared";
 export type { FileChangedEvent, DirChangedEvent } from "@volli/shared";
 // The Electron IPC catalog: every channel this app speaks, declared once.
 //
@@ -81,7 +83,12 @@ export type {
 } from "@volli/shared";
 
 import type { ExternalAppId } from "../external-app-ids";
-import type { SecretReplaceInput, SecretSubmitInput, SecretsResult } from "./secrets";
+import type {
+  CredentialsResult,
+  SecretReplaceInput,
+  SecretSubmitInput,
+  SecretsResult,
+} from "./secrets";
 
 import type {
   WorktreeBranchListing,
@@ -176,8 +183,6 @@ import type {
   SessionListingRow,
   SessionPeekContent,
   SessionReadState,
-  SessionRpcIpcRequest,
-  SessionRpcIpcResponse,
   SessionUsageGrouping,
   SessionUsageReport,
   SessionUsageScope,
@@ -627,7 +632,7 @@ export interface WorktreeOrphansInput {
 
 /**
  * The Storage pane's confirmed cleanup, as a COMMAND rather than a list of
- * paths (VC-284 review, S1/C1).
+ * paths (VC-284).
  *
  * It carries no paths at all. `scanRevision` names the read-only scan a person
  * reviewed, `itemIds` selects items out of the proposal main itself minted for
@@ -845,8 +850,6 @@ export interface VolliDataIpcContract {
   "volli:project-folder-check": { args: [input: ProjectIdInput]; result: ProjectFolderResult };
   /** Deletes a project; cascades its tickets/labels/events in SQLite. */
   "volli:project-remove": { args: [id: string]; result: ProjectMutationResult };
-  /** Rewrites rail `sort_order` to `0..n-1` following `orderedIds`. */
-  "volli:project-reorder": { args: [orderedIds: string[]]; result: ProjectMutationResult };
 
   "volli:ticket-create": { args: [input: TicketCreateInput]; result: TicketResult };
   "volli:ticket-move": { args: [input: TicketMoveRequest]; result: TicketsResult };
@@ -1004,8 +1007,10 @@ export interface VolliDataIpcContract {
    * untouched — pruning is the confirmed orphan cleanup's act, not this one's.
    */
   "volli:worktree-trim": { args: []; result: WorktreeTrimResult };
-  /** The preserved-configuration allowlist and the automatic-trim opt-out. */
-  "volli:worktree-trim-settings-get": { args: []; result: WorktreeTrimSettingsResult };
+  /**
+   * Writes the preserved-configuration allowlist and the automatic-trim
+   * opt-out. Read through `worktree.trimSettings` on the bridge (VC-608).
+   */
   "volli:worktree-trim-settings-set": {
     args: [input: WorktreeTrimSettingsInput];
     result: WorktreeTrimSettingsResult;
@@ -1396,7 +1401,7 @@ export type CliIpcChannel = keyof VolliCliIpcContract;
 // ---- support metadata -------------------------------------------------------
 
 /**
- * The five facts a support report needs and the renderer cannot know (VC-293).
+ * The facts a support report needs and the renderer cannot know (VC-293, VC-633, VC-294).
  *
  * An ALLOWLIST, and written as a closed shape for that reason: every field is
  * named here, main assembles exactly these, and the report prints them. The
@@ -1419,6 +1424,20 @@ export interface SupportInfo {
   arch: string;
   /** SQLite's `PRAGMA user_version`. A report is unavailable when it cannot be read. */
   schemaVersion: number;
+  /**
+   * What the file's applied-migration history says against this build's lock
+   * (VC-633): one sentence, `consistent` or the versions another lineage ran.
+   * Version numbers and words only; never a row of data.
+   */
+  migrationHistory: string;
+  /**
+   * The updater's last answered check (VC-294) as one line: its ISO time and
+   * result, a failure only as `summarizeUpdateFailure`'s redacted sentence —
+   * never the raw updater text, which can carry feed URLs and response
+   * headers. "none recorded" when there is none. Not required: a report is
+   * complete without it.
+   */
+  lastUpdateCheck: string;
 }
 
 export type SupportInfoResult = Result<{ info: SupportInfo }>;
@@ -1507,6 +1526,21 @@ export interface AppearanceSetProjectInput {
  */
 export type { FirstPaintHint };
 
+/**
+ * What the renderer reports after every durable paint: the {@link FirstPaintHint}
+ * main stores for the next launch, plus the one color main needs live and
+ * cannot derive itself.
+ *
+ * `planeBackground` is the painted `--background` token (not `--card`): the rung
+ * the workbench inset and a Browser pane's plane are drawn in (VC-302). It
+ * differs from the hint's `background`, which is the canvas's base fill at the
+ * window edge. Main hands it to Browser Tab views live and never stores it, so
+ * it is checked on its own and a bad value never costs the stored hint.
+ */
+export interface FirstPaintReport extends FirstPaintHint {
+  planeBackground?: string;
+}
+
 export type ThemeStateResult = Result<{ value: ThemeStatePayload }>;
 export type ThemeSetProjectResult = Result<{ project: Project; value: ThemeStatePayload }>;
 /**
@@ -1556,8 +1590,9 @@ export interface VolliThemeIpcContract {
    * Records what the renderer actually resolved and painted, so the NEXT launch
    * can construct its window with the right edge color and the right mode class
    * before anything runs. A hint, never an authority — see {@link FirstPaintHint}.
+   * Also carries the live card color for Browser Tab planes ({@link FirstPaintReport}).
    */
-  "volli:theme-first-paint-set": { args: [input: FirstPaintHint]; result: Result };
+  "volli:theme-first-paint-set": { args: [input: FirstPaintReport]; result: Result };
   /** Rewrites keys in a Volli ghostty overlay — global or per-project. Never the user's own config. */
   "volli:theme-terminal-overlay-write": {
     args: [input: TerminalOverlayWriteInput];
@@ -1649,11 +1684,14 @@ export interface VolliWebAccessIpcContract {
     result: WebAccessResult;
   };
   /**
-   * Stores the Brave API key. The one inbound secret on this surface.
+   * Stores one keyed provider's API key. The one inbound secret on this surface.
    *
-   * It crosses once, is encrypted with the OS keychain, and is never echoed,
-   * returned, logged, or included in an error string. A machine that cannot
-   * encrypt refuses rather than storing it in the clear.
+   * It crosses once and is never echoed, returned, logged, or included in an
+   * error string. It is saved in the profile database, in the clear, which
+   * stays its one source of truth until the read switch (VC-644); a sealed
+   * copy follows (VC-643), and the answer's `sealing` says whether that copy
+   * is current ("saved; sealing pending" when it is not). Nothing here claims
+   * the key is encrypted.
    */
   "volli:web-access-set-key": {
     args: [provider: KeyedWebAccessProvider, key: string];
@@ -1980,12 +2018,12 @@ export type BrowserTabStateEvent =
  * started and read them are the durable record.
  */
 /**
- * One background shell as the host holds it. Defined beside the host that
- * produces it (`@volli/host-core/shell/background-shell-host`, VC-622) and
- * re-exported here so the renderer contract stays in one place.
+ * One background shell as the host holds it. Client wire vocabulary in
+ * `@volli/shared` (VC-632), re-exported here so the renderer contract stays in
+ * one place; this contract never depends on host-core.
  */
-export type { BackgroundShellState } from "@volli/host-core/shell/background-shell-host";
-import type { BackgroundShellState } from "@volli/host-core/shell/background-shell-host";
+export type { BackgroundShellState } from "@volli/shared";
+import type { BackgroundShellState } from "@volli/shared";
 
 /**
  * A complete shell snapshot pushed on start and on exit, or the id of a shell
@@ -2432,9 +2470,27 @@ export interface VolliSystemIpcContract {
  * Where the updater is in its check→download→install lifecycle, as the
  * renderer's download icon renders it. `idle` covers both "never checked" and
  * "checked, up to date" — either way there is nothing to show or do beyond
- * offering a manual check.
+ * offering a manual check. Which of the two it is lives in
+ * {@link UpdateUiState.lastCheck}, not here.
  */
 export type UpdatePhase = "idle" | "checking" | "downloading" | "downloaded" | "error";
+
+/**
+ * What the most recent check that ANSWERED said (VC-294): the feed had
+ * nothing newer, had a newer version (whose download then began), the check
+ * failed, or the download it started failed. Main persists it, so Settings →
+ * Updates' Status row can still say "Up to date · 3h ago" or "Check failed"
+ * after a relaunch.
+ */
+export interface UpdateLastCheck {
+  /** When the check settled (epoch ms). */
+  at: number;
+  result: "up-to-date" | "available" | "error" | "download-error";
+  /** The version on offer when `available`, or the one whose download failed; null otherwise. */
+  version: string | null;
+  /** The failure's message when `error` or `download-error`; null otherwise. */
+  error: string | null;
+}
 
 /**
  * The updater's whole user-facing state (VC-59): one snapshot the renderer
@@ -2457,6 +2513,8 @@ export interface UpdateUiState {
   percent: number | null;
   /** The last failure's message while `error`; null otherwise. */
   error: string | null;
+  /** The last answered check, this run or a previous one; null when none was ever recorded. */
+  lastCheck: UpdateLastCheck | null;
 }
 
 export type UpdateStateResult = Result<{ state: UpdateUiState }>;
@@ -2489,6 +2547,11 @@ export type UpdateLiveWorkResult = Result<{
   busyCommands: string[];
   /** Open structured agent Sessions — turns open right now, a plane that outlives any one PTY. */
   openAgentSessions: number;
+  /**
+   * Running background shells (VC-577) — a dev server a turn started. Counted
+   * only with the `cloud` flag on, from the host's live work; 0 otherwise.
+   */
+  backgroundShells: number;
   /** Display names of editor tabs holding unsaved drafts — the one thing a restart destroys unrecoverably. */
   unsavedDrafts: string[];
 }>;
@@ -2525,16 +2588,17 @@ export type UpdateIpcChannel = keyof VolliUpdateIpcContract;
  * The native Session tRPC edge (`src/main/session-rpc-ipc.ts`): ONE invoke
  * channel carrying every routed procedure, because the router — not this
  * contract — is where a Session procedure's input and output are declared.
- * The wire shapes live in `session-rpc-wire.ts`; the renderer's terminating
- * tRPC link is the only thing that should ever speak them directly.
+ * The wire shapes are the router-generic bridge's (`@volli/host-protocol/ipc`,
+ * VC-608); the renderer's terminating tRPC link is the only thing that should
+ * ever speak them directly.
  */
 export interface VolliSessionRpcIpcContract {
-  /** Runs one routed procedure; `session.subscribe` acknowledges with a subscription id instead. */
-  "volli:session-rpc": { args: [request: SessionRpcIpcRequest]; result: SessionRpcIpcResponse };
+  /** Runs one served procedure; a subscription acknowledges with a subscription id instead. */
+  "volli:session-rpc": { args: [request: IpcRequest]; result: IpcResponse };
 }
 
 /**
- * The 4 send-based channels (`ipcRenderer.send`, not `invoke`) — declared
+ * The send-based channels (`ipcRenderer.send`, not `invoke`) — declared
  * separately from {@link VolliInvokeContract} because they have no result to
  * await.
  */
@@ -2564,6 +2628,15 @@ export interface VolliSendContract {
   // stopping the frames, which the renderer is already listening for — an ack
   // would only be a second way to learn the same thing, later.
   "volli:session-rpc-cancel": { args: [subscriptionId: string] };
+  // Send-based (ipcRenderer.send, not invoke): a renderer warning or error
+  // for main's log (VC-699). Nobody waits on a log line, and an invoke per
+  // line would put a round-trip on the path of whatever is failing.
+  "volli:renderer-log": { args: [entry: RendererLogEntry] };
+  // Send-based (ipcRenderer.send, not invoke): the renderer's answer to a
+  // `volli:client-state-flush` push (VC-577) — every pending client-local
+  // write it held has been acknowledged by main. Main asked, so main is the
+  // one waiting; an invoke from the renderer would have no question to answer.
+  "volli:client-state-flushed": { args: [requestId: string] };
 }
 
 /**
@@ -2628,6 +2701,10 @@ export interface VolliSecretIpcContract {
   "volli:secret-decline": { args: [id: string]; result: Result };
   "volli:secret-revoke": { args: [id: string]; result: Result };
   "volli:secret-replace": { args: [input: SecretReplaceInput]; result: Result };
+  /** Tries locked stored secrets again (VC-641). */
+  "volli:secrets-unlock": { args: []; result: CredentialsResult };
+  /** Sets locked stored secrets aside, kept, and starts empty (VC-641). */
+  "volli:secrets-reset": { args: []; result: CredentialsResult };
 }
 
 export type SecretIpcChannel = keyof VolliSecretIpcContract;
@@ -2672,6 +2749,12 @@ export type VolliIpcChannel = keyof VolliInvokeContract | keyof VolliSendContrac
 /** Channel names for main→renderer push events (`webContents.send`). */
 export type VolliIpcEvent =
   | "volli:fullscreen-changed"
+  // Main is about to destroy this window without an unload (VC-577: menu-bar
+  // mode, after the quit's confirms already answered), so `beforeunload` will
+  // not flush the debounced client-local writes. The renderer sends them now
+  // and answers `volli:client-state-flushed` with the request id once main
+  // has acknowledged every one; main waits for that, bounded, then destroys.
+  | "volli:client-state-flush"
   | "volli:browser-tab-state"
   // A background shell started, exited, or was forgotten with its Session's
   // attachment (VC-270): one push, one store, the island's shell feed.
@@ -2765,7 +2848,7 @@ export type VolliIpcEvent =
   // them, instead of within ten seconds of it.
   | "volli:session-activity"
   // Ordered frames for one live Session RPC subscription — see
-  // {@link SessionRpcIpcEvent}. Every subscription shares this channel and is
+  // `IpcEvent` (`@volli/host-protocol/ipc`). Every subscription shares this channel and is
   // told apart by the id main acknowledged the request with.
   | "volli:session-rpc-event"
   // The updater's user-facing state changed (VC-59) — one full {@link
@@ -2923,7 +3006,11 @@ export interface LegacyImportRequest {
 
 export type LegacyImportResult = Result<{ data: BootstrapPayload; imported: number }>;
 
-/** `created: false` means an existing project at that path was selected instead of inserted. */
+/**
+ * `created: false` means an existing project at that path was selected instead
+ * of inserted: one already on the rail, or a removed one put back on it with
+ * its tickets and Sessions (VC-822).
+ */
 export type ProjectCreateResult = Result<{ project: Project; created: boolean }>;
 
 export type ProjectUpdateResult = Result<{ project: Project }>;
@@ -3146,8 +3233,7 @@ export type WorktreeRemoveResult = Result;
 export type WorktreeBranchesResult = Result<WorktreeBranchListing>;
 
 /**
- * The orphan scan/cleanup DOMAIN vocabulary is `@volli/shared`'s (VC-284
- * review S1): the run projection, its item states, the acceptance receipt and
+ * The orphan scan/cleanup DOMAIN vocabulary is `@volli/shared`'s (VC-284): the run projection, its item states, the acceptance receipt and
  * the rejection codes describe the act itself, not the wire it crosses, so the
  * core that mints and folds them never imports this catalog. They are
  * re-exported here because every desktop process reads the channel types from
@@ -3238,13 +3324,16 @@ export type WorktreeRecreateResult = Result<{ worktreePath: string }>;
  * The finer Details-rail worktree status (done-flow §7 "dirty predicate
  * split"), returned by `volli:worktree-status`. Mirrors main's
  * `getWorktreeStatus` report: is the tree uncommitted, is a sequencer op
- * mid-flight (blocks one-click commit), and how far the branch has moved from
- * its base (`null` when the base is unknown or the count could not be read).
+ * mid-flight or are paths unmerged (either blocks one-click commit), and how
+ * far the branch has moved from its base (`null` when the base is unknown or
+ * the count could not be read).
  */
 export type WorktreeStatusResult = Result<{
   status: {
     uncommitted: boolean;
     sequencerActive: boolean;
+    /** Unmerged index entries (stash-pop/squash conflicts carry no sequencer marker). */
+    unmergedPaths: number;
     aheadOfBase: number | null;
     behindBase: number | null;
     /** Commits not yet on `origin/<branch>`; null when never pushed / no remote. */

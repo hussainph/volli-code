@@ -10,11 +10,16 @@
  * slice. Session commands and boot recovery move behind this assembly next.
  */
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { BrowserPictureStore } from "../browser/picture-store";
+import { browserPictureDisk, browserPicturesRoot } from "../browser/picture-disk";
 import type { PiModelAccess, CodeModeSandboxAssets } from "@volli/agent-runtime";
 import { piExecutionEnv, refusingCredentialReads } from "@volli/agent-runtime";
 import type { SessionEngine } from "@volli/session-engine";
 import {
   shortSessionId,
+  verbToolsOf,
+  verbEntry,
   type McpToolDefinition,
   type ObservabilitySink,
   type SessionEvent,
@@ -28,9 +33,9 @@ import { prepareTurnAttachments } from "../turn-attachments";
 import type { AgentToolDoor } from "../agent-tool-door";
 import { McpSessionHost, serversForFrozenMcpTools } from "../mcp/session-host";
 import type { McpSettingsService } from "../mcp/settings";
-import type { DesktopMcpDispatch } from "../mcp/dispatch-policy";
-import type { DesktopCodeMode } from "../codemode/dev-config";
-import type { DesktopDecisions } from "../decision/desktop";
+import type { HostMcpDispatch } from "../mcp/dispatch-policy";
+import type { HostCodeMode } from "../codemode/dev-config";
+import type { HostDecisions } from "../decision/host-decisions";
 import type { WebAccessSettings } from "../web/settings";
 import { webPortsFor } from "../web/ports";
 import type { SecretService } from "../secrets/service";
@@ -44,11 +49,19 @@ import type { SessionToolSurfacePorts } from "./sessions";
 import { readCompactionPolicy } from "./model-access-preferences";
 import { createPiRuntimeHost, type PiAdapterOptions } from "./pi-adapter";
 import {
-  createDesktopSessionRuntime,
+  createHostSessionRuntime,
   createFileTranscriptArtifactStore,
   sessionTranscriptsRoot,
 } from "./index";
 import { resolveHostToolSurface } from "./host-capabilities";
+import { wireSessionRuntime } from "../session-services";
+import {
+  effectiveToolSurface,
+  declarationToolSurface,
+  additiveToolRefresh,
+  foldToolRefreshes,
+} from "./tool-refresh";
+import { codeModeRefreshGate } from "./tool-refresh-gate";
 
 export interface RuntimeAssemblyOptions {
   dbHandle: DbHandle;
@@ -57,14 +70,16 @@ export interface RuntimeAssemblyOptions {
   dataDir: string;
   binDir: string;
   venue: SessionExecutionVenue;
-  hostPorts: Pick<HostCorePorts, "events" | "connectivity">;
+  hostPorts: Pick<HostCorePorts, "events" | "connectivity" | "log">;
   modelAccess: PiModelAccess | null;
-  decisions: DesktopDecisions | null;
+  decisions: HostDecisions | null;
   webAccess: WebAccessSettings | null;
   mcpSettings: McpSettingsService | null;
-  mcpDispatch: DesktopMcpDispatch;
-  codeMode: DesktopCodeMode;
+  mcpDispatch: HostMcpDispatch;
+  codeMode: HostCodeMode;
   codeModeSandbox?: CodeModeSandboxAssets;
+  /** Desktop's screenshot store; headless hosts use the same disk path and bounds. */
+  pictures?: BrowserPictureStore;
   observability: ObservabilitySink | null;
   delegation: TicketSessionDelegationStore | null;
   secrets: SecretService;
@@ -89,28 +104,12 @@ export interface RuntimeAssemblyOptions {
 export function recordedToolSurface(
   events: readonly SessionEvent[],
 ): readonly SessionToolId[] | null {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.tools;
-    }
-  }
-  return null;
+  return effectiveToolSurface(events)?.tools ?? null;
 }
 
 /** Exact sanitized MCP definitions frozen beside the dynamic tool names. */
 export function recordedMcpTools(events: readonly SessionEvent[]): readonly McpToolDefinition[] {
-  for (const event of events) {
-    if (
-      event.payload.kind === "session.input.recorded" &&
-      event.payload.input.kind === "tool-surface"
-    ) {
-      return event.payload.input.mcpTools ?? [];
-    }
-  }
-  return [];
+  return effectiveToolSurface(events)?.mcpTools ?? [];
 }
 
 export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
@@ -121,7 +120,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
     binDir,
     venue,
     modelAccess: piModelAccess,
-    decisions: desktopDecisions,
+    decisions: hostDecisions,
     webAccess,
     mcpSettings,
     mcpDispatch,
@@ -133,6 +132,20 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
     shells,
     browser,
   } = options;
+  const refreshGate = codeModeRefreshGate<
+    NonNullable<Awaited<ReturnType<RuntimeAssemblyOptions["resolveRuntimeContext"]>>>
+  >({
+    revision: async ({ projectId, parentId }) =>
+      JSON.stringify([
+        mcpSettings?.surfaceRevision(projectId) ?? 0,
+        codeMode.revision(),
+        webAccess?.surfaceRevision() ?? 0,
+        (await hostDecisions?.offersClassify(projectId)) ?? false,
+        parentId === null
+          ? null
+          : await sessionEngine!.latestEventSequence({ sessionId: parentId }),
+      ]),
+  });
   const sessionToolSurface: SessionToolSurfacePorts | null =
     webAccess !== null && sessionEngine !== null && sessionDelegation !== null
       ? {
@@ -163,7 +176,7 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           resolveMcp: (projectId) =>
             mcpDispatch.forNewSession(mcpSettings?.selectedTools(projectId) ?? []),
           resolveClassify: (projectId) =>
-            desktopDecisions?.offersClassify(projectId) ?? Promise.resolve(false),
+            hostDecisions?.offersClassify(projectId) ?? Promise.resolve(false),
           // A parent's own frozen record, read to bound its child (VC-9).
           recorded: async (sessionId) =>
             recordedToolSurface(await sessionEngine.listEvents({ sessionId })),
@@ -189,6 +202,9 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                 // At birth, freeze the wire spelling too. The old mcp_* names
                 // remain available only to Sessions whose record predates this marker.
                 mcpManagementNames: "server",
+                refreshDescriptions: true,
+                // Declaration changes apply only at new birth, never on legacy backfill.
+                ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
                 ...(mcpTools.length === 0 ? {} : { mcpTools }),
                 ...(codeModeSurface === undefined ? {} : { codeMode: codeModeSurface }),
               },
@@ -200,14 +216,23 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           },
         }
       : null;
+  const pictures =
+    options.pictures ??
+    new BrowserPictureStore({
+      createId: randomUUID,
+      now: Date.now,
+      persist: browserPictureDisk(browserPicturesRoot(dataDir)),
+    });
   const piSessionsDirectory = join(dataDir, "pi-sessions");
   const piRuntimeHost =
     dbHandle.ok &&
+    sessionEngine !== null &&
     piModelAccess !== null &&
     sessionToolSurface !== null &&
     sessionDelegation !== null
       ? createPiRuntimeHost({
           sessionDataDir: piSessionsDirectory,
+          persistActivityImage: (sessionId, image) => pictures.keepActivityImage(sessionId, image),
           models: piModelAccess.models,
           credentials: piModelAccess.credentials,
           catalogReady: piModelAccess.catalogReady,
@@ -248,6 +273,13 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           // (`harness-runtime.ts`).
           executionEnvFactory: async (workspacePath, identity) => {
             await options.beforeExecution();
+            const runtimeContext =
+              shells === undefined ? null : await options.resolveRuntimeContext(identity.sessionId);
+            const canMoveBash =
+              runtimeContext !== null &&
+              (["shell_start", "shell_output", "shell_kill"] as const).every((tool) =>
+                runtimeContext.toolSurface.includes(tool),
+              );
             // The Session's own name rides beside the PATH recovery:
             // `VOLLI_SESSION`/`VOLLI_TICKET` in a structured Session's shell,
             // exactly as `agentSessionEnv` exports them into a spawned PTY —
@@ -258,13 +290,40 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
             // the same token — see `attachment-identity.ts`.
             return refusingCredentialReads(
               await piExecutionEnv(workspacePath, {
+                ...(shells === undefined || !canMoveBash || runtimeContext === null
+                  ? {}
+                  : {
+                      foregroundExecutor: (input) =>
+                        shells.runForeground(
+                          {
+                            sessionId: identity.sessionId,
+                            attachmentId: identity.attachmentId,
+                            projectId: runtimeContext.projectId,
+                            ticketId: runtimeContext.ticketId,
+                          },
+                          {
+                            command: input.command,
+                            shellConfig: input.shellConfig,
+                            cwd: input.cwd,
+                            env: input.env,
+                            title: null,
+                          },
+                          {
+                            toolCallId: input.toolCallId,
+                            timeout: input.timeout,
+                            signal: input.signal,
+                            onChunk: input.onOutput,
+                            onReady: input.onReady,
+                          },
+                        ),
+                    }),
                 pathPrefixes: [binDir],
                 identity: attachmentIdentities.resolve(identity),
                 // This Session's concurrency budget (VC-339), computed at attach
                 // from the Sessions working now — under the identity above, which
                 // is what keeps a machine fact from ever posing as who is running.
                 environment: await options.concurrencyEnvFor(identity.sessionId),
-                secretEnvironment: () => secrets.environment(identity.sessionId),
+                secretEnvironment: (signal) => secrets.environmentAsync(identity.sessionId, signal),
                 // The execution environment is owned by this attachment and its
                 // cleanup runs on every close path. Revoke there so a copied
                 // token cannot outlive the structured attachment that held it.
@@ -296,17 +355,18 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     // machine, so it self-limits by the budget that is true when it
                     // starts (VC-339).
                     concurrencyEnv: () => options.concurrencyEnvFor(scope.sessionId),
-                    secretEnvironment: () => secrets.environment(scope.sessionId),
+                    secretEnvironment: (signal) =>
+                      secrets.environmentAsync(scope.sessionId, signal),
                   }),
               }),
           // The Session's decision port (VC-478), bound to the Session and its
           // project at attach. Membership is the frozen record's; this only
           // answers it. Absent when the database never opened.
-          ...(desktopDecisions === null
+          ...(hostDecisions === null
             ? {}
             : {
                 resolveClassifyPort: (scope: { sessionId: string; projectId: string }) =>
-                  desktopDecisions.classifyPort(scope),
+                  hostDecisions.classifyPort(scope),
               }),
           resolveSecretPort: ({ sessionId, projectId, wait, allowInjection }) =>
             secrets.port(
@@ -327,13 +387,16 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
               : (scope) => {
                   const host = new McpSessionHost({
                     workspacePath: scope.workspacePath,
-                    // Snapshot only the configuration the frozen surface needs.
-                    // Current enablement selects new Sessions; a missing record
-                    // refuses attachment instead of advertising an unusable tool.
+                    // Retained names survive missing configuration; calls return
+                    // a named unavailable result for removed servers.
                     servers: serversForFrozenMcpTools(
                       mcpSettings.list(scope.projectId),
                       scope.mcpTools,
                     ),
+                    // Read at every call, so a server a person disables or
+                    // removes answers by name and is never contacted, and one
+                    // they enable again works with no reattach (VC-771).
+                    configured: (serverId) => mcpSettings.configured(scope.projectId, serverId),
                     // Credentials are resolved per connection and tokens per
                     // request, so this attachment sees a sign-in or a stored
                     // value a person adds while it runs (VC-470).
@@ -362,8 +425,72 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
                     port: host.rawPort,
                     close: () => host.close(),
                   });
-                  return { call: host.routed(bound.call).call, dispose: bound.dispose };
+                  const routed = host.routed(bound.call);
+                  return {
+                    call: routed.call,
+                    dispose: bound.dispose,
+                  };
                 },
+          releaseRuntimeContext: (sessionId) => refreshGate.forget(sessionId),
+          refreshRuntimeContext: (sessionId, request) =>
+            refreshGate.check(sessionId, request, async (rememberIdentity) => {
+              const { trigger, model } = request;
+              const projection = await sessionEngine.getSession({ sessionId });
+              const events = await sessionEngine.listEvents({ sessionId });
+              const current = effectiveToolSurface(events);
+              // Do not overwrite a newer build's unknown additions on downgrade.
+              if (foldToolRefreshes(events).future) return null;
+              if (projection === null || current === null) return null;
+              const session = projection.session;
+              const parentId = session.role === "subagent" ? session.parentSessionId : null;
+              await rememberIdentity({ projectId: session.projectId, parentId });
+              const parent =
+                parentId === null
+                  ? null
+                  : effectiveToolSurface(await sessionEngine.listEvents({ sessionId: parentId }));
+              // Delegates inherit their parent's effective definitions, never a
+              // project selection that the parent has not acquired yet.
+              const mcpTools =
+                parentId === null
+                  ? (sessionToolSurface.resolveMcp?.(session.projectId) ?? [])
+                  : (parent?.mcpTools ?? []);
+              const birth = codeMode.birth(model, mcpTools);
+              const grants = verbToolsOf(current.tools).filter(
+                (tool) => verbEntry(tool)?.retired === undefined,
+              );
+              const tools = sessionToolSurface.resolve(
+                session.role,
+                session.role === "subagent" ? [] : grants,
+                parentId === null ? undefined : (parent?.tools ?? []),
+                mcpTools,
+                birth,
+                await sessionToolSurface.resolveClassify?.(session.projectId),
+              );
+              const candidateCodeMode = codeMode.surfaceFor(birth, tools, mcpTools);
+              const candidate = {
+                kind: "tool-surface" as const,
+                tools,
+                ...(tools.includes("ask_user") ? { askUserQuestions: true as const } : {}),
+                ...(mcpTools.length === 0 ? {} : { mcpTools }),
+                ...(candidateCodeMode === undefined ? {} : { codeMode: candidateCodeMode }),
+              };
+              const refresh = additiveToolRefresh(
+                current,
+                candidate,
+                trigger,
+                declarationToolSurface(events) ?? current,
+              );
+              await sessionEngine.recordToolRefresh({
+                sessionId,
+                trigger,
+                ...refresh,
+                provenance: { source: { kind: "system", id: "pi-runtime", detail: null }, venue },
+              });
+              // Return durable desired bindings even after a prior adoption
+              // failed. The runtime compares against its adopted spec to no-op.
+              const context = await options.resolveRuntimeContext(sessionId);
+              return context === null ? null : { ...context, model };
+            }),
           // What this profile can honestly bind now, read once per attachment.
           // The durable Session record decides whether either port belongs in
           // the tool array; this live answer supplies closures only. Missing a
@@ -413,9 +540,11 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
   const transcriptArtifacts = createFileTranscriptArtifactStore(transcriptDirectory);
   const sessionRuntime =
     dbHandle.ok && sessionEngine !== null && piRuntimeHost !== null
-      ? createDesktopSessionRuntime({
+      ? createHostSessionRuntime({
+          venue,
           db: dbHandle.db,
           events: options.hostPorts.events,
+          log: options.hostPorts.log,
           dataDir,
           transcriptDirectory,
           executor: piRuntimeHost.adapter,
@@ -424,7 +553,16 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
           ...(agentObservability === null ? {} : { observability: agentObservability }),
         })
       : null;
+  if (sessionEngine !== null && sessionRuntime !== null) {
+    wireSessionRuntime(sessionEngine, {
+      openNativeBindings: () => sessionRuntime.openNativeBindings(),
+      pendingTurnStarts: () => sessionRuntime.pendingTurnStarts(),
+      holdTurnStarts: () => sessionRuntime.holdTurnStarts(),
+      releaseTurnStarts: () => sessionRuntime.releaseTurnStarts(),
+    });
+  }
   return {
+    pictures,
     sessionToolSurface,
     piRuntimeHost,
     sessionRuntime,

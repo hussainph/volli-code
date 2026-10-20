@@ -126,7 +126,7 @@ function topicText(topic: HelpTopicName, options: HelpRenderOptions): string {
     "volli conflicts before you schedule: it names the active worktrees that touch the same paths, so two sessions are not sent at one file and told to reconcile it afterwards.",
     "volli worktree sync when a branch is behind its base. It merges, reports conflicts per path, and returns — staleness is a note to act on, not a verdict, and this is the act.",
     "Nothing waits, and nothing needs to. Sleeping in a shell to poll is how sessions wedge, and a tool call that parks holds the person's chat hostage, so work you are not doing yourself reports to you as a notice from Volli: read mid-turn if you are working, or opening a new turn if you have ended yours. session_delegate's notice carries the subagent's answer. session_start, automation_run and session_send watch the Session they open or steer — its next turn ending, its done/blocked signal, its stop. The watch tool covers the rest: other Sessions, and tickets' moves, comments and signals. Changes that land together arrive as one notice.",
-    "session list defaults to active plus activity in the last 24h; --all, --since and --state narrow or expand it. session show reads metadata and who started it. An idle parent with pendingSubagents is waiting on its helpers, not done. Triage a fleet from session list — working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes, or — while a tool runs — past that tool's own timeout (an hour if it set none).",
+    "session list defaults to active plus activity in the last 24h; --all, --since and --state narrow or expand it. session show reads metadata, who started it and its latest done/blocked signal (age and quoted reason); session answer appends that signal when present. Both include signal: {kind, reason, at, ageMs} or null in --json. An idle parent with pendingSubagents is waiting on its helpers, not done. Triage a fleet from session list — working, waiting (with what on), interrupted (with why), idle, or stopped, plus the age of the last durable fact — and spend session peek only where that age looks wrong. A wedged turn also self-reports: the watchdog records a blocked signal after ten silent minutes, or — while a tool runs — past that tool's own timeout (an hour if it set none).",
     "Supervision is tool-tier: starting, stopping, and steering another Session are named tools in the Board Session's tool bundle (session_start, session_stop, session_send), never shell commands — typing them here answers WRONG_DOOR by design.",
     "",
   ].join("\n");
@@ -196,32 +196,74 @@ function compactOptionsUsage(entry: VerbEntry): string {
 }
 
 function usageLine(entry: VerbEntry, mode: "reference" | "detail"): string {
+  const label = `<${entry.positionalLabel ?? "id"}>`;
   const id =
-    entry.positionalId === undefined ? "" : entry.positionalId === "optional" ? " [<id>]" : " <id>";
+    entry.positionalId === undefined
+      ? ""
+      : entry.positionalId === "optional"
+        ? ` [${label}]`
+        : ` ${label}`;
   const opts = mode === "reference" ? fullOptionsUsage(entry) : compactOptionsUsage(entry);
   const extra = entry.extraUsage === undefined ? "" : ` ${entry.extraUsage}`;
   const prefix = mode === "reference" ? "" : "volli ";
   return `${prefix}${cliVerbName(entry.key)}${id}${opts.length > 0 ? ` ${opts}` : ""}${extra}`;
 }
 
-function doorLabel(entry: VerbEntry): string {
+function doorLabel(entry: VerbEntry, runtime: AgentHelpRuntime): string {
   const cli = entry.accessModes.includes("cli");
   const tool = entry.accessModes.includes("tool");
-  if (cli && tool) return "Agent CLI and Agent Tool Surface";
+  const route = toolRouteLabel(runtime.surface?.routes?.[entry.key]);
+  if (cli && tool) return `Agent CLI and Agent Tool Surface (${route})`;
   if (cli) return "Agent CLI";
-  if (tool) return "Agent Tool Surface (named tool; not shell-executable)";
+  if (tool) return `Agent Tool Surface (${route}; not shell-executable)`;
   // `hostApi` needs no door word yet: `verbTier` refuses a hostApi-only entry
   // until the External Agent Surface defines its governance, so command detail
   // cannot render one. The surface that lifts that refusal names its own door.
   return "app only (no agent door)";
 }
 
+/** Labels an open output route without interpreting missing/new values as direct. */
+export function toolRouteLabel(route: string | undefined): string {
+  switch (route) {
+    case "direct":
+      return "direct (named tool only)";
+    case "both":
+      return "both (named tool or codemode)";
+    case "code":
+      return "code (through codemode only)";
+    case "deferred":
+      return "deferred (through codemode only; searchTools / describeTool)";
+    case "hidden":
+      return "hidden (unavailable)";
+    default:
+      return "route unknown";
+  }
+}
+
 function runtimeSurfaceLines(runtime: AgentHelpRuntime): string[] {
   if (runtime.surface !== null) {
-    return [
-      `Resolved Session Role: ${runtime.surface.role}`,
-      `Frozen Agent Tool Surface: ${runtime.surface.tools.length === 0 ? "(empty)" : runtime.surface.tools.join(", ")}`,
+    const surface = runtime.surface;
+    const lines = [
+      `Resolved Session Role: ${surface.role}`,
+      `Frozen Agent Tool Surface: ${surface.tools.length === 0 ? "(empty)" : ""}`,
     ];
+    const groups = new Map<string, string[]>();
+    for (const tool of surface.tools) {
+      const route = surface.routes?.[tool];
+      const server = surface.mcpServerIds?.[tool];
+      const line = `  ${tool} — ${toolRouteLabel(route)}`;
+      if (server !== undefined && (route === "code" || route === "deferred")) {
+        const group = `mcp:${server} — through codemode only`;
+        const rows = groups.get(group) ?? [];
+        rows.push(line);
+        groups.set(group, rows);
+      } else {
+        lines.push(line);
+      }
+    }
+    for (const [heading, rows] of groups)
+      lines.push(`  ${heading}`, ...rows.map((row) => `  ${row}`));
+    return lines;
   }
   if (runtime.surfaceUnknownReason !== null) {
     return [
@@ -236,7 +278,7 @@ function toolAvailability(entry: VerbEntry, runtime: AgentHelpRuntime): string |
   if (runtime.surface !== null) {
     const roleName = SESSION_ROLE_NAMES[runtime.surface.role];
     return runtime.surface.tools.includes(entry.key)
-      ? `Tool availability: carried by this ${roleName}'s frozen Agent Tool Surface.`
+      ? `Tool availability: carried by this ${roleName}'s frozen Agent Tool Surface; ${toolRouteLabel(runtime.surface.routes?.[entry.key])}.`
       : `Tool availability: not carried by this ${roleName}'s frozen Agent Tool Surface.`;
   }
   return runtime.surfaceUnknownReason === null
@@ -337,7 +379,7 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
   const lines = [
     `${cliVerbName(entry.key)} — ${entry.summary}`,
     "",
-    `Door: ${doorLabel(entry)}`,
+    `Door: ${doorLabel(entry, runtime)}`,
     `Verb tier: ${tier ?? "none"}`,
   ];
   const availability = toolAvailability(entry, runtime);
@@ -352,7 +394,10 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
       }
     }
   } else if (entry.tool !== undefined) {
-    lines.push("", `Tool: ${entry.tool.name}`);
+    lines.push(
+      "",
+      `Tool: ${entry.tool.name} — ${toolRouteLabel(runtime.surface?.routes?.[entry.key])}`,
+    );
     if (entry.tool.input.length > 0) {
       lines.push("", "Input:");
       lines.push(...toolInputLines(entry.tool.input));
@@ -379,7 +424,15 @@ function commandDetail(entry: VerbEntry, runtime: AgentHelpRuntime): string {
   if (onCli && entry.example !== undefined) lines.push("", `Example: ${entry.example}`);
   if (entry.notes !== undefined && entry.notes.length > 0) {
     lines.push("", "Notes:");
-    for (const note of entry.notes) lines.push(`- ${note}`);
+    // Registry notes predate Code Mode and describe a named-tool door. Keep
+    // their semantics, but do not present that historical door as a direct call.
+    for (const note of entry.notes) {
+      lines.push(
+        `- ${note
+          .replaceAll("Agents use the named tool", "Agents use the Agent Tool Surface")
+          .replaceAll("Runs as a named tool", "Runs through the Agent Tool Surface")}`,
+      );
+    }
   }
   return `${lines.join("\n")}\n`;
 }
@@ -393,12 +446,16 @@ function groupWords(entries: readonly VerbEntry[]): Set<string> {
   return words;
 }
 
-function groupDetail(word: string, entries: readonly VerbEntry[]): string {
+function groupDetail(
+  word: string,
+  entries: readonly VerbEntry[],
+  runtime: AgentHelpRuntime,
+): string {
   const subcommands = entries
     .map((entry) => ({
       name: cliVerbName(entry.key),
       summary: entry.summary,
-      door: doorLabel(entry),
+      door: doorLabel(entry, runtime),
     }))
     .filter((subcommand) => subcommand.name.startsWith(`${word} `));
   const width = Math.max(...subcommands.map((subcommand) => subcommand.name.length));
@@ -453,7 +510,7 @@ export function resolveHelp(
   }
   const first = path[0]!;
   if (groupWords(discoverable).has(first)) {
-    return { ok: true, text: groupDetail(first, discoverable) };
+    return { ok: true, text: groupDetail(first, discoverable, options.runtime ?? STATIC_RUNTIME) };
   }
   if (path.length === 1 && isTopic(first)) {
     return { ok: true, text: topicText(first, options) };

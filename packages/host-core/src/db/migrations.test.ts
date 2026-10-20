@@ -15,17 +15,23 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
-import {
-  BACKUP_RETENTION_LOG_PREFIX,
-  migrationBackupCandidatePattern,
-  pruneMigrationBackups,
-} from "./backup-retention";
-import { MIGRATION_COMPACTION_LOG_PREFIX } from "./migration-compaction";
+import { migrationBackupCandidatePattern, pruneMigrationBackups } from "./backup-retention";
 import { verifyMigrationBackup } from "./backup-integrity";
 import { internSessionEventProvenance } from "./session-event-provenance";
 import { currentSessionEventSequence } from "./session-events-cursor-repo";
-import { openRawDb } from "./test-helpers";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { applyMigrationsByHand, openRawDb } from "./test-helpers";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
+import type { LogLevel } from "@volli/shared";
+import { captureHostLog, type CapturedHostLog } from "../testing/log";
 import { MIGRATIONS, migrate } from "./migrations";
 
 /**
@@ -36,11 +42,22 @@ import { MIGRATIONS, migrate } from "./migrations";
 const LATEST_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version;
 
 let dir: string;
+let hostLog: CapturedHostLog;
+
+beforeEach(() => {
+  hostLog = captureHostLog();
+});
 
 afterEach(() => {
+  hostLog.restore();
   vi.restoreAllMocks();
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
+
+/** One structured line exactly as the host log records it, at any time. */
+function logLine(level: LogLevel, component: string, msg: string, fields: object): unknown {
+  return { ts: expect.any(String), level, component, msg, ...fields };
+}
 
 function tempDbPath(dbBasename = "volli.db"): string {
   dir = mkdtempSync(join(tmpdir(), "volli-migrations-test-"));
@@ -77,9 +94,7 @@ function indexExists(db: Database.Database, index: string): boolean {
 function buildV2DbWithRows(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 2)) {
-    db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 2);
   db.pragma("user_version = 2");
 
   db.prepare(
@@ -101,9 +116,7 @@ function buildV2DbWithRows(dbPath: string): Database.Database {
 function buildV4DbWithRows(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 4)) {
-    db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 4);
   db.pragma("user_version = 4");
 
   db.prepare(
@@ -133,9 +146,7 @@ function buildV4DbWithRows(dbPath: string): Database.Database {
 function buildV5DbWithSession(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 5)) {
-    db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 5);
   db.pragma("user_version = 5");
   db.prepare(
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -156,9 +167,7 @@ function buildV5DbWithSession(dbPath: string): Database.Database {
 function buildV6DbWithTicket(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 6)) {
-    db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 6);
   db.pragma("user_version = 6");
   db.prepare(
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -175,9 +184,7 @@ function buildV6DbWithTicket(dbPath: string): Database.Database {
 function buildV7DbWithProject(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 7)) {
-    db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 7);
   db.pragma("user_version = 7");
   db.prepare(
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -190,9 +197,7 @@ function buildV7DbWithProject(dbPath: string): Database.Database {
 function buildV8DbWithTicket(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 8)) {
-    db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 8);
   db.pragma("user_version = 8");
   db.prepare(
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -240,9 +245,7 @@ function sessionRowDump(db: Database.Database): string {
 function buildV10DbWithTicket(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 10)) {
-    db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 10);
   db.pragma("user_version = 10");
   db.prepare(
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -465,8 +468,6 @@ describe("migrate — fresh install", () => {
     writeFileSync(`${dbPath}.backup-v3`, "older existing copy");
     writeFileSync(`${dbPath}.backup-v7`, "existing copy");
     writeFileSync(`${dbPath}.backup-v7-wal`, "existing sidecar");
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     migrate(db, dbPath);
 
@@ -474,10 +475,7 @@ describe("migrate — fresh install", () => {
     expect(readFileSync(`${dbPath}.backup-v3`, "utf8")).toBe("older existing copy");
     expect(readFileSync(`${dbPath}.backup-v7`, "utf8")).toBe("existing copy");
     expect(readFileSync(`${dbPath}.backup-v7-wal`, "utf8")).toBe("existing sidecar");
-    const retentionLogs = [...infoSpy.mock.calls, ...errorSpy.mock.calls].filter(
-      ([prefix]) => prefix === BACKUP_RETENTION_LOG_PREFIX,
-    );
-    expect(retentionLogs).toEqual([]);
+    expect(hostLog.of("backup-retention")).toEqual([]);
     db.close();
   });
 
@@ -593,7 +591,6 @@ describe("migrate — post-success compaction", () => {
       }
       return originalExec(source);
     });
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     migrate(db, dbPath);
 
@@ -605,16 +602,15 @@ describe("migrate — post-success compaction", () => {
     expect(afterBytes).toBeLessThan(beforeBytes);
     expect(sessionRowDump(db)).toBe(digestBeforeVacuum);
     expect(digestBeforeVacuum).toContain('"id":"s1"');
-    expect(infoSpy.mock.calls).toContainEqual([
-      MIGRATION_COMPACTION_LOG_PREFIX,
-      {
+    expect(hostLog.of("migration-compaction")).toContainEqual(
+      logLine("info", "migration-compaction", "database compacted", {
         ran: true,
         beforeBytes,
         afterBytes,
         freelistBefore: expect.any(Number),
         reason: `compacted: freeBytes=${freeBytesBeforeVacuum} thresholdBytes=${thresholdBytes}`,
-      },
-    ]);
+      }),
+    );
     db.close();
   });
 
@@ -624,21 +620,21 @@ describe("migrate — post-success compaction", () => {
     db.pragma("journal_mode = WAL");
     migrate(db, dbPath, { toVersion: 40 });
     const execSpy = vi.spyOn(db, "exec");
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    hostLog.records.length = 0;
 
     migrate(db, dbPath);
 
     expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
-    expect(infoSpy.mock.calls).toContainEqual([
-      MIGRATION_COMPACTION_LOG_PREFIX,
+    expect(hostLog.of("migration-compaction")).toContainEqual(
       expect.objectContaining({
+        level: "info",
         ran: false,
         beforeBytes: expect.any(Number),
         afterBytes: "unknown",
         freelistBefore: expect.any(Number),
         reason: expect.stringMatching(/^below threshold: freeBytes=\d+ thresholdBytes=\d+$/),
       }),
-    ]);
+    );
     db.close();
   });
 
@@ -648,18 +644,20 @@ describe("migrate — post-success compaction", () => {
     db.pragma("journal_mode = WAL");
     migrate(db, dbPath, { toVersion: 40 });
     const execSpy = vi.spyOn(db, "exec");
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    hostLog.records.length = 0;
 
     migrate(db, dbPath, { toVersion: 40 });
 
     expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
-    expect(infoSpy).toHaveBeenCalledExactlyOnceWith(MIGRATION_COMPACTION_LOG_PREFIX, {
-      ran: false,
-      beforeBytes: expect.any(Number),
-      afterBytes: "unknown",
-      freelistBefore: "unknown",
-      reason: "no pending migrations",
-    });
+    expect(hostLog.of("migration-compaction")).toEqual([
+      logLine("info", "migration-compaction", "compaction skipped", {
+        ran: false,
+        beforeBytes: expect.any(Number),
+        afterBytes: "unknown",
+        freelistBefore: "unknown",
+        reason: "no pending migrations",
+      }),
+    ]);
     db.close();
   });
 
@@ -683,7 +681,6 @@ describe("migrate — post-success compaction", () => {
       }
       return originalExec(source);
     });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     expect(() => migrate(db, dbPath)).not.toThrow();
 
@@ -692,14 +689,15 @@ describe("migrate — post-success compaction", () => {
     expect(existsSync(`${dbPath}.backup-v40`)).toBe(true);
     expect(existsSync(`${dbPath}.backup-v1`)).toBe(false);
     expect(existsSync(`${dbPath}.backup-v2`)).toBe(true);
-    expect(errorSpy.mock.calls).toContainEqual([
-      MIGRATION_COMPACTION_LOG_PREFIX,
+    expect(hostLog.of("migration-compaction")).toContainEqual(
       expect.objectContaining({
+        level: "error",
+        msg: "migration compaction failed",
         ran: false,
         afterBytes: "unknown",
         reason: "VACUUM failed: SQLITE_FULL: database or disk is full",
       }),
-    ]);
+    );
     db.close();
   });
 
@@ -708,19 +706,18 @@ describe("migrate — post-success compaction", () => {
     const db = openRawDb(dbPath);
     db.pragma("journal_mode = WAL");
     const execSpy = vi.spyOn(db, "exec");
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     migrate(db, dbPath);
 
     expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
-    expect(infoSpy.mock.calls).toContainEqual([
-      MIGRATION_COMPACTION_LOG_PREFIX,
+    expect(hostLog.of("migration-compaction")).toContainEqual(
       expect.objectContaining({
+        level: "info",
         ran: false,
         freelistBefore: "unknown",
         reason: "fresh database",
       }),
-    ]);
+    );
     db.close();
   });
 
@@ -730,16 +727,11 @@ describe("migrate — post-success compaction", () => {
     db.pragma("journal_mode = WAL");
     db.exec("CREATE TABLE sessions (id TEXT)");
     const execSpy = vi.spyOn(db, "exec");
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     expect(() => migrate(db, dbPath)).toThrow();
 
     expect(execSpy.mock.calls.filter(([source]) => source === "VACUUM")).toEqual([]);
-    const compactionLogs = [...infoSpy.mock.calls, ...errorSpy.mock.calls].filter(
-      ([prefix]) => prefix === MIGRATION_COMPACTION_LOG_PREFIX,
-    );
-    expect(compactionLogs).toEqual([]);
+    expect(hostLog.of("migration-compaction")).toEqual([]);
     expect(db.pragma("user_version", { simple: true })).toBe(2);
     db.close();
   });
@@ -946,16 +938,14 @@ describe("migrate — backup integrity", () => {
       if (source === "wal_checkpoint(TRUNCATE)") zeroPage(dbPath, page);
       return result;
     });
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       expect(() => migrate(db, dbPath)).toThrow(/safety copy.*Recovery action/);
       expect(db.pragma("user_version", { simple: true })).toBe(2);
       expect(readFileSync(`${dbPath}.backup-v2`)).toEqual(previous);
       expect(existsSync(`${dbPath}.backup-v1`)).toBe(true);
       expect(readdirSync(dir).filter((name) => name.endsWith(".corrupt"))).toHaveLength(1);
-      expect(errorSpy).toHaveBeenCalledWith(
-        BACKUP_RETENTION_LOG_PREFIX,
-        expect.objectContaining({ action: "quarantined" }),
+      expect(hostLog.of("backup-retention")).toContainEqual(
+        expect.objectContaining({ level: "error", action: "quarantined" }),
       );
     } finally {
       db.close();
@@ -1293,16 +1283,15 @@ describe("migrate — safety-copy retention", () => {
     mkdirSync(`${dbPath}.backup-v1`);
     writeFileSync(`${dbPath}.backup-v1-wal`, "evidence");
     copyFileSync(dbPath, `${dbPath}.backup-v10`);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     expect(() => migrate(db, dbPath)).not.toThrow();
 
     expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     expect(existsSync(`${dbPath}.backup-v1`)).toBe(true);
     expect(readFileSync(`${dbPath}.backup-v1-wal`, "utf8")).toBe("evidence");
-    expect(errorSpy).toHaveBeenCalledWith(
-      BACKUP_RETENTION_LOG_PREFIX,
+    expect(hostLog.of("backup-retention")).toContainEqual(
       expect.objectContaining({
+        level: "error",
         action: "failed",
         operation: "verify",
         name: "volli.db.backup-v1",
@@ -1337,9 +1326,7 @@ describe("migrate — 004 to 005 upgrade path (ticket-number counter backfill)",
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 4)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 4);
     db.pragma("user_version = 4");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -1456,9 +1443,7 @@ describe("migrate — 011 to 012 upgrade path (legacy terminal rows)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 11)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 11);
     db.pragma("user_version = 11");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -1483,9 +1468,7 @@ describe("migrate — 012 to 013 upgrade path (per-surface theme override)", () 
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 12)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 12);
     db.pragma("user_version = 12");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -1535,9 +1518,7 @@ describe("migrate — 013 to 014 upgrade path (per-project canvas + appearance)"
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 13)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 13);
     db.pragma("user_version = 13");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -1612,7 +1593,7 @@ describe("migrate — 014 to 015 upgrade path (registered harnesses)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 14)) db.exec(migration.sql);
+    applyMigrationsByHand(db, (m) => m.version <= 14);
     db.pragma("user_version = 14");
 
     migrate(db, dbPath);
@@ -1666,7 +1647,7 @@ describe("migrate — 015 to 018 upgrade path (terminal reset)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 15)) db.exec(migration.sql);
+    applyMigrationsByHand(db, (m) => m.version <= 15);
     db.pragma("user_version = 15");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -1710,7 +1691,7 @@ describe("migrate — 016 to 017 upgrade path (harness channel)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 16)) db.exec(migration.sql);
+    applyMigrationsByHand(db, (m) => m.version <= 16);
     db.pragma("user_version = 16");
     db.prepare(
       `INSERT INTO registered_harnesses
@@ -1773,9 +1754,7 @@ describe("migrate — 017 to 018 Session ledger reset", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((entry) => entry.version <= 16)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (entry) => entry.version <= 16);
     db.pragma("user_version = 16");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -1812,9 +1791,7 @@ describe("migrate — 017 to 018 Session ledger reset", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((entry) => entry.version <= 17)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (entry) => entry.version <= 17);
     db.pragma("user_version = 17");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -1875,9 +1852,7 @@ describe("migrate — 018 to 019 upgrade path (per-project runtime preferences)"
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 18)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 18);
     db.pragma("user_version = 18");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -1936,9 +1911,7 @@ describe("migrate — 019 to 020 upgrade path (web access)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 19)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 19);
     db.pragma("user_version = 19");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -2001,9 +1974,7 @@ describe("migrate — 019 to 020 upgrade path (web access)", () => {
 function buildV22DbWithACiphertext(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 22)) {
-    db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 22);
   db.pragma("user_version = 22");
   db.prepare("INSERT INTO secrets (name, ciphertext, updated_at) VALUES (?, ?, ?)").run(
     "web-access.exa.api-key",
@@ -2063,9 +2034,7 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 22)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 22);
     db.pragma("user_version = 22");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -2087,7 +2056,7 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
   });
 
   it("reconciles a branch-lineage database — agent columns at 23, web keys never ran", () => {
-    // The VC-111 dogfood profile: its original migration 23 was the
+    // The VC-111 branch-lineage profile: its original migration 23 was the
     // agent-config DDL, so the columns exist, `user_version` says 23, and the
     // web-keys rebuild never happened. A plain-SQL 024 re-added the column
     // and killed the boot ("duplicate column name: skill_modes"); the
@@ -2096,9 +2065,7 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 22)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 22);
     const agentConfig = MIGRATIONS.find((m) => m.version === 24);
     if (agentConfig === undefined) throw new Error("migration 024 missing");
     db.exec(agentConfig.sql);
@@ -2137,9 +2104,7 @@ describe("migrate — 022 to 024 upgrade path (per-project agent configuration)"
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((m) => m.version <= 23)) {
-      db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (m) => m.version <= 23);
     db.pragma("user_version = 23");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -2236,11 +2201,7 @@ function seededAutomationsDb(dbPath: string): Database.Database {
 function buildCurrentV25Db(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  const throughCurrentMain = MIGRATIONS.filter((candidate) => candidate.version <= 25);
-  for (const migration of throughCurrentMain) {
-    if (migration.apply !== undefined) migration.apply(db);
-    else db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (candidate) => candidate.version <= 25);
   db.pragma("user_version = 25");
   db.prepare(
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -2258,10 +2219,7 @@ function buildCurrentV25Db(dbPath: string): Database.Database {
 function buildLegacyAutomationV25Db(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 24)) {
-    if (migration.apply !== undefined) migration.apply(db);
-    else db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (candidate) => candidate.version <= 24);
   db.exec(`
     CREATE TABLE automations (
       id           TEXT PRIMARY KEY,
@@ -2467,10 +2425,7 @@ describe("migration 026 — Automations command ledger and projections", () => {
 function buildCurrentV26Db(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 26)) {
-    if (migration.apply !== undefined) migration.apply(db);
-    else db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (candidate) => candidate.version <= 26);
   db.pragma("user_version = 26");
   db.prepare(
     `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -2604,10 +2559,7 @@ describe("migration 029 — durable Ticket Event sequence", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 28)) {
-      if (migration.apply !== undefined) migration.apply(db);
-      else db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (candidate) => candidate.version <= 28);
     db.pragma("user_version = 28");
     db.prepare(
       `INSERT INTO projects (id, name, path, ticket_prefix, color_index, sort_order, row_version, created_at, updated_at)
@@ -2920,10 +2872,7 @@ describe("migration 033 — a Run's attendance", () => {
 function buildLineageWithout020(dbPath: string): Database.Database {
   const db = openRawDb(dbPath);
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((m) => m.version <= 34 && m.version !== 20)) {
-    if (migration.apply !== undefined) migration.apply(db);
-    else db.exec(migration.sql);
-  }
+  applyMigrationsByHand(db, (m) => m.version <= 34 && m.version !== 20);
   db.pragma("user_version = 34");
   return db;
 }
@@ -3289,10 +3238,7 @@ describe("migration 036 — Automation Session mint provenance (VC-225)", () => 
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 35)) {
-      if (migration.apply !== undefined) migration.apply(db);
-      else db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (candidate) => candidate.version <= 35);
     db.pragma("user_version = 35");
 
     const acceptedPlan = { sessionOperationId: "accepted-session" };
@@ -3430,10 +3376,7 @@ describe("migrate — 039, the delegation-extensions reconciler (VC-204)", () =>
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 30)) {
-      if (migration.apply !== undefined) migration.apply(db);
-      else db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (candidate) => candidate.version <= 30);
     db.exec(`
       CREATE TABLE session_delegation_extensions (
         parent_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -3474,10 +3417,7 @@ describe("migrate — 041, sessions.parent_session_id as ledger data (VC-9)", ()
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 40)) {
-      if (migration.apply !== undefined) migration.apply(db);
-      else db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (candidate) => candidate.version <= 40);
     db.pragma("user_version = 40");
     seedTicket(db);
     const insertSession = db.prepare(
@@ -3509,10 +3449,7 @@ describe("migrate — 040, sessions.role as data (VC-9)", () => {
     const dbPath = tempDbPath();
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 39)) {
-      if (migration.apply !== undefined) migration.apply(db);
-      else db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (candidate) => candidate.version <= 39);
     db.pragma("user_version = 39");
     seedTicket(db);
     const insertSession = db.prepare(
@@ -3580,10 +3517,7 @@ describe("migration 044 — durable Session Event sequence", () => {
   function buildV43WithInterleavedEvents(dbPath: string): Database.Database {
     const db = openRawDb(dbPath);
     db.pragma("foreign_keys = ON");
-    for (const migration of MIGRATIONS.filter((candidate) => candidate.version <= 43)) {
-      if (migration.apply !== undefined) migration.apply(db);
-      else db.exec(migration.sql);
-    }
+    applyMigrationsByHand(db, (candidate) => candidate.version <= 43);
     db.pragma("user_version = 43");
     seedTicket(db);
     seedProvenance(db);
@@ -3603,14 +3537,34 @@ describe("migration 044 — durable Session Event sequence", () => {
     return db;
   }
 
-  it("keeps the kind index equal to the log after every migration, including future repairs", () => {
-    const dbPath = tempDbPath();
-    const db = buildV43WithInterleavedEvents(dbPath);
-    try {
-      // Walk every migration rather than maintaining a list of repair versions.
-      // Future migrations also have to retain the synchronization trigger.
-      for (const migration of MIGRATIONS.filter((candidate) => candidate.version >= 44)) {
+  describe.sequential("keeps the kind index equal to the log after every migration, including future repairs", () => {
+    let fixtureDir: string;
+    let dbPath: string;
+    let db: Database.Database;
+    let previousVersion = 43;
+
+    beforeAll(() => {
+      // Own this directory for the whole walk, outside tempDbPath's per-test
+      // cleanup. Every case observes the same interleaved event history.
+      fixtureDir = mkdtempSync(join(tmpdir(), "volli-kind-index-walk-"));
+      dbPath = join(fixtureDir, "volli.db");
+      db = buildV43WithInterleavedEvents(dbPath);
+    });
+    afterAll(() => {
+      db?.close();
+      if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
+    });
+
+    // VC-717: at an 8 ms flush delay on CI, the original 19-step test still
+    // took 5427 ms after optimizing fixture setup. Give each real migration
+    // its own case, not a growing sum under one timeout. Explicit sequential
+    // execution preserves the original walk and its mutation assertions.
+    it.each(MIGRATIONS.filter((candidate) => candidate.version >= 44))(
+      "migration $version",
+      (migration) => {
+        expect(db.pragma("user_version", { simple: true })).toBe(previousVersion);
         migrate(db, dbPath, { toVersion: migration.version });
+        previousVersion = migration.version;
         expectKindIndexMatchesLog(db);
         if (migration.version >= 57) {
           const cursors = db
@@ -3632,10 +3586,8 @@ describe("migration 044 — durable Session Event sequence", () => {
           ).toEqual(cursors);
           expect(currentSessionEventSequence(db)).toBe(highWater);
         }
-      }
-    } finally {
-      db.close();
-    }
+      },
+    );
   });
 
   it("repairs pre-057 kind drift without reassigning cursors or reusing deleted positions", () => {

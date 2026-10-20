@@ -20,8 +20,9 @@ const COOKIE_FLAGS = ["secure", "httponly", "partitioned"];
 const BEARER_SECRET = /\bbearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const AUTHORIZATION_HEADER_SECRET = /\bauthorization\s*:\s*(basic|bearer)\s+[^\s,;|&()<>]+/gi;
 // Start at the fixed scheme delimiter and stay within one authority, so a
-// failed match cannot rescan a long scheme or cross into a URL path.
-const URL_USERINFO_SECRET = /(:\/\/)[^\s/\\?#"'<>]*@/g;
+// failed match cannot rescan a long scheme or cross into a URL path. Quotes
+// and other punctuation before @ may be credentials, not prose delimiters.
+const URL_USERINFO_SECRET = /(:\/\/)[^\s/]*@/g;
 const COMMAND_BASIC_AUTH_PREFIX = /(?:^|[\s;|&()])(?:--(?:proxy-)?user(?:[ \t]+|=)|-[uU][ \t]*)/g;
 // Consume a whole name even without an assignment. Requiring a separator in
 // this regex would retry each hyphen-delimited suffix of a long near miss.

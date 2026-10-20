@@ -18,22 +18,30 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
-import { AGENT_COMMAND_BINDINGS, verbEntry } from "@volli/shared";
+import { AGENT_COMMAND_BINDINGS, verbEntry, makeAgentError } from "@volli/shared";
 import type {
+  AgentRequest,
   AgentResponse,
   SessionProjection,
+  SessionReadVerb,
   SessionRecord,
   TicketEventActor,
 } from "@volli/shared";
 
 import { AGENT_VERB_TABLE } from "./agent-dispatch/table";
-import { coordinationRefusal } from "./agent-dispatch/admission";
-import type { AgentCommandContext, EnvSessionIdentity } from "./agent-dispatch/context";
+import { coordinationRefusal, socketHandlerPolicy } from "./agent-dispatch/admission";
+import { isHostHandlerMap } from "./handlers/handler-map";
+import type {
+  AgentCommandContext,
+  EnvSessionIdentity,
+  PendingHarnessLaunch,
+} from "./agent-dispatch/context";
 import { agentCommandPreflight } from "./agent-dispatch/preview";
 import { doorActor, requestActor } from "./agent-dispatch/resolution";
-import { getProjectAuthorityPolicy, listProjects } from "@volli/host-core/db/projects-repo";
-import { terminalSessionRecord } from "@volli/host-core/session-control";
-import { runGitCapturing, runGitCapturingAsync } from "@volli/host-core/worktree";
+import type { DoorActor } from "./agent-dispatch/resolution";
+import { getProjectAuthorityPolicy, getProjectById, listProjects } from "./db/projects-repo";
+import { terminalSessionRecord } from "./session-control";
+import { runGitCapturingAsync } from "./worktree";
 
 export {
   composeProjectBrief,
@@ -48,6 +56,11 @@ import type { AgentCommandService, AgentCommandServiceOptions } from "./agent-di
 export function createAgentCommandService(
   options: AgentCommandServiceOptions,
 ): AgentCommandService {
+  // JS callers must fail closed too: without the map there is no move, and
+  // a socket that answered one some other way would be a second handler.
+  if (!isHostHandlerMap(options.handlers)) {
+    throw new Error("The host's handler map is required.");
+  }
   const now = options.now ?? Date.now;
   /**
    * The newest fire-time main has ingested per session — the same watermark the
@@ -68,14 +81,20 @@ export function createAgentCommandService(
   // detached); the global `crypto.randomUUID` would lose its Crypto `this` when
   // called via this alias and throw "Value of 'this' must be of type Crypto".
   const newId = options.newId ?? randomUUID;
-  const git = options.git ?? runGitCapturing;
-  // Keep the default physically asynchronous. A custom synchronous test seam
-  // may still serve status/diff reads, but sync and radar must never fall back
-  // to it for a hook-bearing or whole-worktree operation.
+  // Keep the default physically asynchronous: every worktree verb this door
+  // serves runs on it, and there is no synchronous runner to fall back to.
   const gitAsync = options.gitAsync ?? runGitCapturingAsync;
   const worktreeExists = options.worktreeExists ?? existsSync;
   const sessionEngine = options.sessionEngine;
   const terminalUpdateLocks = new Map<string, Promise<void>>();
+  /**
+   * The launch each Session's wrapper minted an id for that has not yet proved
+   * itself (VC-807). In memory, like the watermarks: a pending launch is worth
+   * something for the second or so between a wrapper's mint and the harness's
+   * own startup hook, and a restart in between costs that one launch its
+   * promotion — its hooks still write the seed they report.
+   */
+  const pendingLaunches = new Map<string, PendingHarnessLaunch>();
   /**
    * How this door decides whether `VOLLI_SESSION` is a claim or an
    * authentication (VC-163).
@@ -101,8 +120,17 @@ export function createAgentCommandService(
     options.readAuthorityPolicy ??
     ((projectId: string) => getProjectAuthorityPolicy(options.db, projectId));
 
-  return {
-    async execute(request): Promise<AgentResponse> {
+  const service = {
+    /**
+     * One request, through the one pipeline. `workspaceId` is
+     * `executeInWorkspace`'s alone (the service's type does not offer it):
+     * it scopes the roster to that one project and its Sessions, so a handle
+     * in any other Workspace resolves exactly as an absent one does.
+     */
+    async execute(
+      request: AgentRequest,
+      workspaceId: string | null = null,
+    ): Promise<AgentResponse> {
       // Both answers below precede every read: a preview must be refused before
       // the work that would perform it, and a capability probe must not be able
       // to fail for a reason that has nothing to do with the capability.
@@ -118,8 +146,20 @@ export function createAgentCommandService(
       // Identity first, and it costs a map lookup: no database, no Session
       // Engine. That is what lets the `hook` hot path be judged without paying
       // for the identity resolution its table entry deliberately skips.
-      const door = doorActor(request, verifyToken);
-      const projects = listProjects(options.db);
+      const door = doorActor(request, verifyToken, options.verifyOperatorToken);
+      if (verbEntry(request.cmd)?.operatorCli === true && door.kind !== "operator") {
+        return {
+          v: 1,
+          ok: false,
+          error: makeAgentError(
+            "WRONG_DOOR",
+            "Agents start Sessions through the named session_start tool. This CLI door requires a verified hostd operator token.",
+          ),
+        };
+      }
+      const projects = listProjects(options.db).filter(
+        (project) => workspaceId === null || project.id === workspaceId,
+      );
       // Every Session of every project — lazy and memoized (VC-403). Nothing
       // is folded until a handler calls `context.loadProjections()` or
       // `context.loadSessions()`, and calling either twice (or calling both —
@@ -185,7 +225,7 @@ export function createAgentCommandService(
       // registry declaration, so a verb added later is judged by what it
       // declares rather than by whether someone remembered to list it.
       const refusal = coordinationRefusal(readPolicy, projects, envSession, request, door);
-      if (refusal !== null) return refusal;
+      if (refusal !== null) return auditOperatorWrite(door, request, refusal);
       // Attribution is resolved only for a verb that will WRITE attributed
       // history — a coordination verb whose table entry also resolved the
       // identity. Both halves of that condition are load-bearing:
@@ -198,7 +238,8 @@ export function createAgentCommandService(
       //   `session.link`, `session.harness`) resolve their own terminal record
       //   and write no ticket history, so they need no attribution either.
       let actor: TicketEventActor | null = null;
-      if (binding.envSession === "resolve" && verbEntry(request.cmd)?.actor === "session") {
+      const writer = verbEntry(request.cmd)?.actor;
+      if (binding.envSession === "resolve" && (writer === "session" || writer === "user")) {
         const resolved = requestActor(door, envSession);
         if (!resolved.ok) return resolved.response;
         actor = resolved.actor;
@@ -207,12 +248,12 @@ export function createAgentCommandService(
         options,
         now,
         newId,
-        git,
         gitAsync,
         worktreeExists,
         sessionEngine,
         watermarks,
         terminalUpdateLocks,
+        pendingLaunches,
         projects,
         loadProjections,
         loadSessions,
@@ -220,8 +261,51 @@ export function createAgentCommandService(
         envSessionTerminal,
         authenticatedSessionId: door.kind === "session" ? door.sessionId : null,
         actor,
+        handlerPolicy: socketHandlerPolicy(request, () =>
+          coordinationRefusal(readPolicy, projects, envSession, request, door),
+        ),
       };
-      return binding.handle(context, request);
+      return auditOperatorWrite(door, request, await binding.handle(context, request));
     },
+    executeInWorkspace: (
+      verb: SessionReadVerb,
+      workspaceId: string,
+      args: Record<string, unknown>,
+    ) =>
+      service.execute(
+        // No `VOLLI_SESSION`, no token, no cwd: the WebSocket's actor was
+        // authenticated by its own door, and these reads need none of them.
+        // The project is forced, never taken from the caller (VC-663, D4):
+        // named by its path, the one selector no other project can share.
+        {
+          v: 1,
+          cmd: verb,
+          args: { ...args, project: getProjectById(options.db, workspaceId)?.path ?? workspaceId },
+          ctx: { cwd: "/", env: {} },
+        },
+        workspaceId,
+      ),
   };
+  return service;
+
+  /**
+   * Reports an operator's write to the host's audit line (VC-623), and hands
+   * the response back untouched. A read is not reported: the audit is of what
+   * the person CHANGED, and a busy operator's `ticket list` is not that.
+   */
+  function auditOperatorWrite(
+    door: DoorActor,
+    request: AgentRequest,
+    response: AgentResponse,
+  ): AgentResponse {
+    if (door.kind === "operator" && verbEntry(request.cmd)?.actor !== "any") {
+      options.onOperatorWrite?.({
+        login: door.login,
+        cmd: request.cmd,
+        ok: response.ok,
+        code: response.ok ? null : response.error.code,
+      });
+    }
+    return response;
+  }
 }

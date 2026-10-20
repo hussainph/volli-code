@@ -23,9 +23,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
 import { runGitCapturing } from "./git";
 import { readWorktreeDiff, readWorktreeStatus, resolveWorktreeTarget } from "./read";
 import { scriptedGit } from "./scripted-git";
@@ -256,6 +256,7 @@ describe("read verb contracts are unchanged by the async runner", () => {
       status: {
         uncommitted: true,
         sequencerActive: false,
+        unmergedPaths: 0,
         aheadOfBase: null,
         behindBase: null,
         unpushed: null,
@@ -288,9 +289,9 @@ describe("read verb contracts are unchanged by the async runner", () => {
 describe("resolveWorktreeTarget", () => {
   it("answers the on-disk identity without spawning git", () => {
     stampTicket();
-    const { git, calls } = scriptedGit(() => "");
+    const { calls } = scriptedGit(() => "");
 
-    const resolved = resolveWorktreeTarget({ db: ctx.db, git }, "t1");
+    const resolved = resolveWorktreeTarget({ db: ctx.db }, "t1");
 
     expect(resolved).toMatchObject({
       kind: "ok",

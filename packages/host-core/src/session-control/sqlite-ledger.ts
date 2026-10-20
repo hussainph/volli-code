@@ -38,9 +38,13 @@ import {
   sameCommandReceipt,
   UnknownSessionEventKindError,
 } from "@volli/shared";
-import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
-import { prepared } from "@volli/host-core/db/prepared";
-import { settleTransaction } from "@volli/host-core/db/transaction-gate";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
+import { prepared } from "../db/prepared";
+import { settleTransaction } from "../db/transaction-gate";
+import { logSessionEvents } from "./session-event-log";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-ledger");
 
 type SqlRow = Record<string, unknown>;
 
@@ -52,16 +56,23 @@ export class SqliteSessionLedger implements SessionLedger {
   constructor(private readonly db: Database.Database) {}
 
   transaction<T>(work: (transaction: SessionLedgerTransaction) => Synchronous<T>): Promise<T> {
-    return settleTransaction(this.db, () => {
+    let appended: readonly SessionEvent[] = [];
+    const settled = settleTransaction(this.db, () => {
       let open = true;
       const transaction = new SqliteSessionLedgerTransaction(this.db, () => open);
       try {
         const value = work(transaction);
         transaction.assertReceiptEventPairs();
+        appended = transaction.appended;
         return value;
       } finally {
         open = false;
       }
+    });
+    // Logged once committed, inside the operation that appended them (VC-699).
+    return settled.then((value) => {
+      if (appended.length > 0) logSessionEvents(appended);
+      return value;
     });
   }
 }
@@ -70,8 +81,29 @@ export function createSqliteSessionLedger(db: Database.Database): SessionLedger 
   return new SqliteSessionLedger(db);
 }
 
+/** Read-only delivery evidence from an already-owned synchronous DB transaction. */
+export function readSqliteSessionCommandEvidence(
+  db: Database.Database,
+  sessionId: string,
+  commandId: string,
+): {
+  command: SessionCommand | null;
+  receipts: readonly CommandReceipt[];
+  events: readonly SessionEvent[];
+} {
+  if (!db.inTransaction) throw new Error("Session command evidence requires a transaction");
+  const reader = new SqliteSessionLedgerTransaction(db, () => db.inTransaction);
+  return {
+    command: reader.getCommand(commandId),
+    receipts: reader.listReceipts(commandId),
+    events: reader.listEvents({ sessionId }),
+  };
+}
+
 class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
   readonly #touchedSessionIds = new Set<string>();
+  /** Every fact this transaction appended, in order: logged once it commits. */
+  readonly appended: SessionEvent[] = [];
 
   constructor(
     private readonly db: Database.Database,
@@ -424,6 +456,7 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       payload: encodeSessionJson(event.payload),
     });
     this.projectAttachmentClosure(event);
+    this.appended.push(event);
     // Projected in the same transaction that appends the fact. A projection
     // written afterwards would have a window in which the ledger and its read
     // model disagree, and the disagreement would survive a crash.
@@ -568,8 +601,10 @@ class SqliteSessionLedgerTransaction implements SessionLedgerTransaction {
       // Named, not just counted: the whole point of dropping is that this build
       // no longer knows the kind, so the kind is the only thing that identifies
       // what a reader is missing.
-      const names = [...retiredKinds].toSorted().join(", ");
-      console.warn(`[session-ledger] skipped ${dropped} event(s) of retired kind(s): ${names}`);
+      log.warn("skipped events of retired kinds", {
+        dropped,
+        kinds: [...retiredKinds].toSorted(),
+      });
     }
     return decoded;
   }

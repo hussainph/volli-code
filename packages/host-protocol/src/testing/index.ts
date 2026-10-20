@@ -9,8 +9,11 @@ import { afterEach, describe } from "vite-plus/test";
 import { WebSocketServer } from "ws";
 
 import { readHostError, type HostError } from "../errors";
+import { ipcLink } from "../ipc/link";
+import { createIpcServer, type IpcServerContext } from "../ipc/server";
+import type { IpcEvent, IpcPeer, IpcRequest, IpcResponse } from "../ipc/wire";
 
-/** One way a client reaches a router: Electron IPC, an in-process WebSocket, or a future transport. */
+/** One way a client reaches a router: in-process IPC, a loopback WebSocket, or a future transport. */
 export interface ContractLink<Host, Router extends AnyRouter> {
   readonly name: string;
   open(host: Host): Promise<ContractConnection<Router>>;
@@ -64,9 +67,8 @@ export interface WebSocketContractLinkOptions<Host, Router extends AnyRouter> {
 export function webSocketContractLink<Host, Router extends AnyRouter>(
   options: WebSocketContractLinkOptions<Host, Router>,
 ): ContractLink<Host, Router> {
-  return {
-    name: "websocket",
-    async open(host) {
+  return servedWebSocketContractLink<Host, Router>({
+    async serve(host) {
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       await once(server, "listening");
       applyWSSHandler<Router>({
@@ -76,11 +78,49 @@ export function webSocketContractLink<Host, Router extends AnyRouter>(
           options.createContext(host, { connectionParams: info.connectionParams }),
       });
       const { port } = server.address() as AddressInfo;
-      const socket = createWSClient({
+      return {
         url: `ws://127.0.0.1:${port}`,
-        ...(options.connectionParams === undefined
-          ? {}
-          : { connectionParams: options.connectionParams }),
+        async close() {
+          for (const peer of server.clients) peer.terminate();
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+        },
+      };
+    },
+    ...(options.connectionParams === undefined
+      ? {}
+      : { connectionParams: () => options.connectionParams! }),
+  });
+}
+
+/** A server a host's own code started for one connection: where it listens, and its stop. */
+export interface ServedWebSocket {
+  readonly url: string;
+  close(): Promise<void>;
+}
+
+export interface ServedWebSocketContractLinkOptions<Host> {
+  /**
+   * Starts the real server, the one production composes, for this host
+   * fixture. The harness never builds a context itself: whatever the server's
+   * handshake mints is what the cases are judged as.
+   */
+  serve(host: Host): Promise<ServedWebSocket>;
+  /** This connection's `connectionParams`, built per connection (a hello carries a fresh nonce). */
+  connectionParams?(host: Host): Record<string, string>;
+}
+
+/** The stock tRPC WebSocket client against a server the host's own code serves. */
+export function servedWebSocketContractLink<Host, Router extends AnyRouter>(
+  options: ServedWebSocketContractLinkOptions<Host>,
+): ContractLink<Host, Router> {
+  return {
+    name: "websocket",
+    async open(host) {
+      const server = await options.serve(host);
+      const connectionParams = options.connectionParams?.(host);
+      const socket = createWSClient({
+        url: server.url,
+        ...(connectionParams === undefined ? {} : { connectionParams }),
       });
       return {
         client: createTRPCClient<Router>({
@@ -90,12 +130,112 @@ export function webSocketContractLink<Host, Router extends AnyRouter>(
         }),
         async close() {
           await socket.close();
-          for (const peer of server.clients) peer.terminate();
-          await new Promise<void>((resolve) => server.close(() => resolve()));
+          await server.close();
         },
       };
     },
   };
+}
+
+/**
+ * A bridge a host's own code registered for one connection: the server half
+ * of `@volli/host-protocol/ipc-server`, or the desktop's real Electron
+ * registration behind a fake `ipcMain`.
+ */
+export interface ServedIpc {
+  request(peer: IpcPeer, request: IpcRequest): Promise<IpcResponse>;
+  cancel(peer: IpcPeer, subscriptionId: string): void;
+  close(): Promise<void>;
+}
+
+export interface ServedIpcContractLinkOptions<Host> {
+  /** Registers the real bridge, the one production composes, for this host fixture. */
+  serve(host: Host): Promise<ServedIpc>;
+}
+
+let nextPeerId = 1;
+
+/**
+ * The real client link ({@link ipcLink}) against a bridge the host's own code
+ * serves, joined the way Electron joins them: every request, reply and push
+ * is a structured clone, a push arrives later (a microtask, in order), and
+ * closing the connection destroys the peer, so the server's teardown runs as
+ * it does when a window closes.
+ */
+export function servedIpcContractLink<Host, Router extends AnyRouter>(
+  options: ServedIpcContractLinkOptions<Host>,
+): ContractLink<Host, Router> {
+  return {
+    name: "ipc",
+    async open(host) {
+      const served = await options.serve(host);
+      const pushes = new Set<(event: IpcEvent) => void>();
+      const teardown = new Set<() => void>();
+      let destroyed = false;
+      const peer: IpcPeer = {
+        id: nextPeerId++,
+        isDestroyed: () => destroyed,
+        send: (event) => {
+          const copy = structuredClone(event);
+          queueMicrotask(() => {
+            for (const push of pushes) push(copy);
+          });
+        },
+        onDestroyed: (listener) => {
+          teardown.add(listener);
+          return () => teardown.delete(listener);
+        },
+      };
+      return {
+        client: createTRPCClient<Router>({
+          links: [
+            ipcLink<Router>({
+              request: async (request) =>
+                structuredClone(await served.request(peer, structuredClone(request))),
+              // The link holds its one listener for the connection's life;
+              // `close()` drops it with the rest of the connection.
+              onEvent: (listener) => {
+                pushes.add(listener);
+                return pushes.delete.bind(pushes, listener);
+              },
+              cancel: (subscriptionId) => served.cancel(peer, subscriptionId),
+            }),
+          ],
+        }),
+        async close() {
+          destroyed = true;
+          pushes.clear();
+          for (const listener of teardown) listener();
+          await served.close();
+        },
+      };
+    },
+  };
+}
+
+export interface IpcContractLinkOptions<Host, Router extends AnyRouter> {
+  router: Router;
+  /** The router context for one call, as the composition root builds it for its own window. */
+  createContext(host: Host): IpcServerContext<Router>;
+}
+
+/**
+ * The router behind the generic IPC bridge's server half, every path served:
+ * an area's cases run over IPC exactly as over {@link webSocketContractLink},
+ * with no procedure list of their own.
+ */
+export function ipcContractLink<Host, Router extends AnyRouter>(
+  options: IpcContractLinkOptions<Host, Router>,
+): ContractLink<Host, Router> {
+  return servedIpcContractLink<Host, Router>({
+    serve: async (host) =>
+      createIpcServer({
+        routers: [options.router],
+        // oxlint-disable-next-line no-underscore-dangle -- every path the router publishes.
+        served: Object.keys(options.router._def.procedures),
+        createContext: () => options.createContext(host),
+      }),
+  });
 }
 
 /** How a recorded subscription ended. */

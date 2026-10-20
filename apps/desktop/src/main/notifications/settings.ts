@@ -41,7 +41,7 @@
  * The failure latch is PROCESS-LOCAL on purpose. It describes this launch's
  * delivery, not a preference, and a stored one would outlive the state that
  * caused it — a person who fixed their System Settings would be told forever
- * about a refusal from last week. And it is CURRENT on purpose (round 5): a
+ * about a refusal from last week. And it is CURRENT on purpose: a
  * later alert the OS reports as shown retires it, because the fault it
  * described is demonstrably not the state of things any more, and a Settings
  * page still showing it would be asking the person to fix what already works.

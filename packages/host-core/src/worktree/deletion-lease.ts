@@ -1,7 +1,7 @@
 /**
- * The per-path deletion lease (VC-284 review C4) — two-sided.
+ * The per-path deletion lease (VC-284) — two-sided.
  *
- * The window the review found: cleanup asked "is anything running in here?",
+ * The race this lease prevents: cleanup asks "is anything running in here?",
  * then awaited the release of every agent binding rooted in the directory, and
  * only then removed it. A terminal created during that await starts in a
  * directory that is about to stop existing, and no re-check placed before the
@@ -12,8 +12,7 @@
  * harness files, a lazy `node-pty` import and a `mkdir` before it spawns; a
  * cleanup passes its last check and awaits a durable write before it removes.
  * Either one can be overtaken inside those awaits by the other. So the two
- * sides are SERIALIZED rather than ordered, and both take a lease
- * (re-review C4):
+ * sides are SERIALIZED rather than ordered, and both take a lease:
  *
  *  - a DELETE lease is taken by every act that destroys a worktree directory —
  *    the confirmed cleanup, the manual orphan delete — and it refuses if

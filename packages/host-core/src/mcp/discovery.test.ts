@@ -75,9 +75,11 @@ describe("discoverMcpServer", () => {
       ["untyped", null, undefined],
     ]);
     expect(catalog[1]?.enabled).toBe(true);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      '[mcp] Fixture: left off the output schema of mistyped (output schema root type must be "object")',
-    );
+    expect(warn).toHaveBeenCalledExactlyOnceWith("[mcp] left off a tool's output schema", {
+      server: "Fixture",
+      tool: "mistyped",
+      reason: 'output schema root type must be "object"',
+    });
     warn.mockRestore();
   });
 

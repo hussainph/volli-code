@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { openTestDb, type TestDb } from "../db/test-helpers";
 import { DEFAULT_TRIM_KEEP_PATTERNS } from "./trim";
 import { defaultTrimSettings, getTrimSettings, setTrimSettings } from "./trim-settings";
 

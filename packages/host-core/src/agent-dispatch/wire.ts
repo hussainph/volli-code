@@ -11,8 +11,8 @@ import type Database from "better-sqlite3";
 import { displayTicketId, readSessionOrigin, shortSessionId, TICKET_STATUSES } from "@volli/shared";
 import type { Project, SessionOrigin, Ticket } from "@volli/shared";
 
-import { listTicketEvents } from "@volli/host-core/db/events-repo";
-import { getTicket, listTicketsByProject } from "@volli/host-core/db/tickets-repo";
+import { listTicketEvents } from "../db/events-repo";
+import { getTicket, listTicketsByProject } from "../db/tickets-repo";
 
 export function agentTicket(ticket: Ticket, project: Project): Record<string, unknown> {
   return {

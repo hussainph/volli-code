@@ -20,10 +20,8 @@
  *
  * ## The two faders
  *
- * Vibrancy and grain are MATCHING VERTICAL FADERS flanking the pad — an owner
- * decision that reversed the earlier track-and-knob split, trading the grain
- * dial's textured face for a symmetric instrument (the pad wears the live
- * grain layer now, so the readout the face carried was not lost). Both are
+ * Vibrancy and grain are MATCHING VERTICAL FADERS flanking the pad. The pad
+ * wears the live grain layer, so the readout is part of the canvas. Both are
  * the platform's own slider, stood upright ({@link WaveSlider}): a unit value
  * has a position along a line, so clicking anywhere on the track to jump
  * there is the fastest way to set it, and the native control brings that, the
@@ -197,10 +195,8 @@ interface GrabOffset {
  * `CLICK_SLOP` is what makes a press and a drag two gestures rather than one:
  * nothing moves until the pointer has travelled that far, and a release before
  * it does is reported to `onClick` instead — an orb is PROMOTED by a press and
- * MOVED by a drag, two things one control has to be able to do. (The grain
- * dial was this hook's second user until the owner traded it for a fader;
- * `onClick` stays optional because omitting it is what "a press means nothing
- * here" looks like.)
+ * MOVED by a drag, two things one control has to be able to do. `onClick` is
+ * optional: omitting it makes a press without a drag a no-op.
  *
  * `onSettle` fires once at the end of any gesture that actually moved, which is
  * the editor's single settlement per drag — every intermediate frame is a
@@ -440,7 +436,7 @@ function PadChip({ children }: { children: React.ReactNode }) {
 /**
  * −/+ — how many colours the canvas carries, floating at the pad's foot.
  *
- * On the pad rather than in a row of their own (the Arc arrangement): they
+ * On the pad rather than in a row of their own (the pad arrangement): they
  * add and remove ORBS, and the orbs are right there. The hex chips that used
  * to restate every stop are gone with the move — the orbs already show the
  * colours, promotion is a press on an orb, and the primary's hex lives in
@@ -683,8 +679,8 @@ function Wave({ stand, ink, clip }: { stand: number; ink: string; clip?: string 
 /**
  * A unit value as a VERTICAL wave fader — one on each side of the pad.
  *
- * Vibrancy and grain flank the canvas they tune (the owner's call, trading
- * the grain dial for symmetry): two of the same control bracketing the
+ * Vibrancy and grain flank the canvas they tune: two matching controls
+ * bracketing the
  * picture, rising together, instead of one track and one knob sharing a row
  * under it. The wave still earns its place on both — its amplitude ramps
  * with the value, and "how vivid" and "how grainy" are both intensities the
@@ -935,7 +931,7 @@ export function CanvasEditor({ scope, canvas, resolved, mode, onCanvasChange }: 
   return (
     <>
       {/*
-       * THE ARC ARRANGEMENT, symmetric. The pad is the whole subject and
+       * THE PAD ARRANGEMENT, symmetric. The pad is the whole subject and
        * everything hangs off it: the mode choice floats at its head, −/+
        * float at its foot (they add and remove the orbs right above them),
        * and the two unit values stand as VERTICAL wave faders flanking the

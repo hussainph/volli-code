@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { SESSION_LISTING_FOLD_CHUNK } from "@volli/session-engine";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
 import { createTestSessionEngine } from "../testing/session-engine";
 
 const immediates = vi.hoisted(() => ({ scheduled: 0 }));

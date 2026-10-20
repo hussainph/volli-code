@@ -28,7 +28,6 @@ import {
   type AutomationRunRefusalCode,
   type AutomationRunTarget,
   type ChatSessionRecord,
-  type CommandReceipt,
   type PromptResource,
   type PromptTemplate,
   type SkillReference,
@@ -36,12 +35,17 @@ import {
 } from "@volli/shared";
 
 import type { AutomationEngine, AutomationRunDelivery, AutomationRunPlan } from "./engine";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
+import { attachRefusal } from "../session-runtime/attach-refusal";
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import {
   StructuredSessionsError,
   type SessionModelOverride,
   type Sessions,
-} from "@volli/host-core/session-runtime/sessions";
+} from "../session-runtime/sessions";
+import type { LogFields } from "../log/logger";
+import { hostLogger } from "../log/root";
+
+const automationLog = hostLogger("automations");
 
 /** The composer's `/` supply for one project — templates and ruled skills, one read. */
 export interface AutomationPromptSupply {
@@ -86,7 +90,7 @@ export type InstructionDeliveryResult = {
   } | null;
 };
 
-export interface AutomationRunnerDeps {
+export interface AutomationRunnerPorts {
   /** The transport-neutral command/event/projection core. */
   engine: AutomationEngine;
   /** Projection reads belong to the host, never to IPC. */
@@ -94,15 +98,27 @@ export interface AutomationRunnerDeps {
   /** The frozen Run projection that owns a pending delivery's launch title. */
   findRun(runId: string): AutomationRun | undefined;
   findTicket(ticketId: string): AutomationRunTicket | undefined;
-  /** Whether a Project scope names a project this host actually has. */
+  /** Whether a Project scope names a project this host has on its rail. */
   findProject(projectId: string): boolean;
+  /**
+   * Whether the project was removed (VC-822): detached, its Automations kept.
+   * A Run there is refused as `PROJECT_REMOVED` rather than as not found, so
+   * the skip a schedule records says what happened. Absent: never removed.
+   */
+  projectRemoved?(projectId: string): boolean;
   listRunsForTicket(ticketId: string): readonly AutomationRun[];
   /**
-   * One Automation's Runs in one project — the single-flight subject for a Run
-   * that names no Ticket. A schedule cannot ask "is this Ticket busy", so it
-   * asks whether an earlier Run of itself is still working here.
+   * One Automation's Runs in one project that could still be live — the
+   * single-flight subject for a Run that names no Ticket. A schedule cannot ask
+   * "is this Ticket busy", so it asks whether an earlier Run of itself is still
+   * working here.
+   *
+   * Only the Runs whose durable Session facts leave working or waiting
+   * possible (VC-816): a long-lived schedule has thousands of Runs, and every
+   * one handed here costs a projection read before this Run can start. The
+   * guard still reads each Run returned, and that read decides.
    */
-  listProjectRunsForAutomation(input: {
+  listPossiblyLiveProjectRunsForAutomation(input: {
     automationId: string;
     projectId: string;
   }): readonly AutomationRun[];
@@ -147,8 +163,8 @@ export interface AutomationRunnerDeps {
   refineAutoTitle?(input: AutoTitleRequest): void;
   /** Fired after the complete Run projection exists. */
   onRunStarted?(event: { run: AutomationRun; projectId: string }): void;
-  /** Detached-half diagnostics; defaults to `console.error`. */
-  log?(message: string): void;
+  /** Detached-half diagnostics; defaults to the host log at `error`. */
+  log?(msg: string, fields?: LogFields): void;
 }
 
 export type RunAutomationOutcome =
@@ -250,22 +266,11 @@ export interface AutomationRunner {
 }
 
 /** One refusal shape, so the IPC layer never has to parse a bare string. */
+/** Read after "Skipped — " in a schedule's history, so it starts as a sentence. */
+const PROJECT_REMOVED_REFUSAL = "The project was removed from Volli.";
+
 function refuse(code: AutomationRunRefusalCode, error: string): AutomationRunRefusal {
   return { ok: false, code, error };
-}
-
-/**
- * Why an attach was not ready, in words, from the receipt it answered with.
- *
- * A rejected attach carries the diagnosis a person needs — an unpreparable
- * worktree names the path and git's reason — and that sentence is the reason
- * this Run has no first turn. The other statuses have no such sentence, so they
- * are named as what they are rather than dressed up as one.
- */
-function attachRefusal(receipt: CommandReceipt | null): string {
-  if (receipt === null) return "the attach reported no receipt";
-  if (receipt.status === "rejected") return receipt.detail ?? receipt.code;
-  return `the attach is ${receipt.status}`;
 }
 
 interface InstructionDeliveryFailure {
@@ -331,8 +336,8 @@ function runRefusalCode(value: string | undefined): AutomationRunRefusalCode | n
   }
 }
 
-export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRunner {
-  const log = deps.log ?? ((message: string) => console.error(message));
+export function createAutomationRunner(deps: AutomationRunnerPorts): AutomationRunner {
+  const log = deps.log ?? automationLog.error;
   /**
    * A local fast-path latch keeps two clicks in one host from interleaving
    * before SQLite's accepted-command projection sees the first. The ledger is
@@ -349,7 +354,9 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     // Never inspect only the newest Run. An older Session can be resumed after
     // a newer Run has gone idle; every Run-owned Session must be quiet before a
     // Ticket gets another Run. An unreadable projection fails closed rather
-    // than accidentally admitting a second live worker.
+    // than accidentally admitting a second live worker. A schedule's list
+    // arrives already narrowed to the Runs whose Sessions could still be live
+    // (VC-816), so a Run it omits is never read and cannot refuse here.
     for (const run of runs) {
       // "stopped" admits a new Run exactly as "idle" does: a supervisor ending
       // an earlier Run's work is the opposite of that work still being live —
@@ -393,9 +400,10 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         detail,
       });
     } catch (error) {
-      log(
-        `[volli] automation Run ${delivery.runId} could not record its first-message failure: ${errorMessage(error)}`,
-      );
+      log("automation run could not record its first-message failure", {
+        runId: delivery.runId,
+        error,
+      });
     }
   }
 
@@ -404,9 +412,9 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     try {
       const run = deps.findRun(delivery.runId);
       if (run === undefined) {
-        log(
-          `[volli] automation Run ${delivery.runId} could not refine its Session title: the Run was not found`,
-        );
+        log("automation run could not refine its session title: the run was not found", {
+          runId: delivery.runId,
+        });
         return;
       }
       deps.refineAutoTitle({
@@ -419,9 +427,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       // Like every failure inside auto-titling, this is detached background
       // work: the launch fallback already stands, so delivery continues and
       // the diagnostic stays out of the person's mutation surfaces.
-      log(
-        `[volli] automation Run ${delivery.runId} could not refine its Session title: ${errorMessage(error)}`,
-      );
+      log("automation run could not refine its session title", { runId: delivery.runId, error });
     }
   }
 
@@ -451,9 +457,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       // next ready attach reconciles/replays safely after a crash or recovery.
       const detail = `The Automation Run's first message could not be delivered: ${errorMessage(error)}`;
       await reportDeliveryFailure(delivery, detail);
-      log(
-        `[volli] automation Run ${delivery.runId} could not deliver its Instructions: ${errorMessage(error)}`,
-      );
+      log("automation run could not deliver its instructions", { runId: delivery.runId, error });
       return;
     }
 
@@ -463,9 +467,10 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     const failure = instructionDeliveryFailure(result);
     if (failure !== null) {
       await reportDeliveryFailure(delivery, failure.detail);
-      log(
-        `[volli] automation Run ${delivery.runId} first-message receipt is ${failure.status}; retaining its delivery intent`,
-      );
+      log("automation run first-message receipt not accepted; retaining its delivery intent", {
+        runId: delivery.runId,
+        status: failure.status,
+      });
       return;
     }
 
@@ -474,9 +479,10 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
     } catch (error) {
       // The turn itself succeeded. Keep the intent recoverable, but do not turn
       // a bookkeeping failure after delivery into a false Session Attention.
-      log(
-        `[volli] automation Run ${delivery.runId} could not mark its Instructions delivered: ${errorMessage(error)}`,
-      );
+      log("automation run could not mark its instructions delivered", {
+        runId: delivery.runId,
+        error,
+      });
     }
   }
 
@@ -493,11 +499,8 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         origin: { kind: "automation", automationRunId: run.id, automationName: run.automationName },
       });
       if (attached.state !== "ready") {
-        // VC-220. This early return used to be wordless, and it is the whole of
-        // what the owner saw: a Run mints its Session, the attach is refused,
-        // and the only thing that would have delivered the Instructions gives
-        // up in silence — while the door has already answered `ok` and the Run
-        // row already links to a Session with nothing in it.
+        // VC-220. The door has already answered `ok` and the Run row links to
+        // its minted Session, so an attach refusal must be logged explicitly.
         //
         // The delivery intent is deliberately left pending: the attach is what
         // failed, so the next ready attach (the Session's own Retry, or the
@@ -506,14 +509,15 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         // said here, and the Session itself carries the failure Attention that
         // makes it `error` for VC-133's notification rule
         // (`session-runtime.ts`'s `#failAttach`).
-        log(
-          `[volli] automation Run ${run.id} could not attach its Session: ${attachRefusal(attached.receipt)}`,
-        );
+        log("automation run could not attach its session", {
+          runId: run.id,
+          reason: attachRefusal(attached.receipt),
+        });
         return;
       }
       await resumeDeliveryForSession(run.sessionId);
     } catch (error) {
-      log(`[volli] automation Run ${run.id} could not attach its Session: ${errorMessage(error)}`);
+      log("automation run could not attach its session", { runId: run.id, error });
     }
   }
 
@@ -670,6 +674,9 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       const ticket = deps.findTicket(scope.ticketId);
       if (ticket === undefined)
         return refuse("TICKET_NOT_FOUND", "The requested Ticket was not found.");
+      if (deps.projectRemoved?.(ticket.projectId) === true) {
+        return refuse("PROJECT_REMOVED", PROJECT_REMOVED_REFUSAL);
+      }
       if (
         automation !== null &&
         automation.projectId !== null &&
@@ -690,6 +697,9 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
         }),
         priorRuns: deps.listRunsForTicket(ticket.id),
       };
+    }
+    if (deps.projectRemoved?.(scope.projectId) === true) {
+      return refuse("PROJECT_REMOVED", PROJECT_REMOVED_REFUSAL);
     }
     if (!deps.findProject(scope.projectId)) {
       return refuse("PROJECT_NOT_FOUND", "The requested project was not found.");
@@ -715,7 +725,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       priorRuns:
         automation === null
           ? []
-          : deps.listProjectRunsForAutomation({
+          : deps.listPossiblyLiveProjectRunsForAutomation({
               automationId: automation.id,
               projectId: scope.projectId,
             }),
@@ -791,7 +801,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       } catch (error) {
         // Composer behavior: an unreadable supply leaves the literal text in
         // place instead of changing the saved Instructions or refusing work.
-        log(`[volli] automation Run could not read the prompt supply: ${errorMessage(error)}`);
+        log("automation run could not read the prompt supply", { error });
       }
       const expanded = expandCommandInvocation(instructions, supply.templates, supply.skills);
       const accepted = await deps.engine.acceptRun({
@@ -875,7 +885,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
       for (const plan of plans) {
         const outcome = await executePlan(plan);
         if (!outcome.ok) {
-          log(`[volli] automation Run ${plan.runId} could not recover: ${outcome.error}`);
+          log("automation run could not recover", { runId: plan.runId, error: outcome.error });
           continue;
         }
         // The intent was committed before the original caller got success;
@@ -899,9 +909,7 @@ export function createAutomationRunner(deps: AutomationRunnerDeps): AutomationRu
           });
           if (attached.state === "ready") await resumeDeliveryForSession(sessionId);
         } catch (error) {
-          log(
-            `[volli] automation delivery for Session ${sessionId} could not recover: ${errorMessage(error)}`,
-          );
+          log("automation delivery could not recover", { sessionId, error });
         }
       }
     },

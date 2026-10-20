@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { openTestDb } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { openTestDb } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
 import {
   BACKUP_DATA_FORMAT,
   BACKUP_DATA_VERSION,

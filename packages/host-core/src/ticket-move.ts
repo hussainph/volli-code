@@ -9,7 +9,6 @@
  */
 import {
   displayTicketId,
-  errorMessage,
   TICKET_STATUS_LABELS,
   type DeliberateMoveChoice,
   type DataChangedEvent,
@@ -19,6 +18,7 @@ import {
   type TicketMovedNotice,
   type TicketStatus,
 } from "@volli/shared";
+import type { DetachedWorkPort } from "./detached-work";
 import { getProjectById } from "./db/projects-repo";
 import { getTicket, getTicketRow, listTicketsByProject } from "./db/tickets-repo";
 import {
@@ -27,9 +27,13 @@ import {
   moveTicketsCommand,
   type TicketCommandContext,
 } from "./ticket-commands";
+import { withTransaction } from "./db/transaction-gate";
 import { withTicketWake } from "./ticket-wake";
-import { trimFinishedWorktree, type TrimFinishDeps } from "./worktree";
+import { trimFinishedWorktree, type TrimFinishPorts } from "./worktree";
 import { getWorktreeSnapshots } from "./worktree/snapshot";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("ticket-move");
 
 export type TicketMoveCommandInput = {
   projectId: string;
@@ -40,29 +44,54 @@ export type TicketMoveCommandInput = {
   | { ticketIds: string[]; toIndex: number }
 );
 
-export interface TicketMovePorts extends TrimFinishDeps {
+export interface TicketMovePorts extends TrimFinishPorts {
   interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
   onDeliberateMove?: (notice: TicketMovedNotice) => void;
   onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
   notify?: (request: NotificationRequest) => unknown;
+  /**
+   * Where the detached Done trim enrols itself, so the host's shutdown can
+   * drain it before the database closes (VC-627). Absent means untracked —
+   * the trim still runs, exactly as before, but nothing waits for it.
+   */
+  detachedWork?: DetachedWorkPort;
+}
+
+/**
+ * What a caller that keeps its own record of a move adds to it (VC-565): the
+ * Board module's receipt and feed rows. `inTransaction` runs inside the
+ * move's own transaction, after its write, so whatever it records commits or
+ * rolls back with the move; `committed` runs after COMMIT and before any
+ * wake, notice or interrupt, so nothing the move sets off can observe the
+ * move without what the caller recorded.
+ */
+export interface TicketMoveSeam {
+  readonly inTransaction?: () => void;
+  readonly committed?: () => void;
 }
 
 /** The archive path shares the same best-effort trim, without being a move. */
 export function trimFinishedTicketInBackground(
-  ports: Pick<TicketMovePorts, "worktree" | "now" | "busySites" | "onMutation">,
+  ports: Pick<TicketMovePorts, "worktree" | "now" | "busySites" | "onMutation" | "detachedWork">,
   ticketId: string,
   projectId: string | undefined,
 ): void {
+  // A committed Done move still succeeds, but missing activity evidence can
+  // never authorize the detached destructive act.
+  if (typeof ports.busySites !== "function") return;
   // Start now, do not put a filesystem walk on the board reply's critical path.
-  void trimFinishedWorktree(ports, ticketId)
+  // The tracked promise is the whole chain, through its own failure log, so a
+  // drain waits for the trim's event write and the publish after it.
+  const work = trimFinishedWorktree(ports, ticketId)
     .then((outcome) => {
       if (outcome.kind !== "trimmed") return;
       getWorktreeSnapshots().invalidate(ticketId);
       ports.onMutation?.({ ticketId, projectId, kind: "worktree" });
     })
     .catch((error: unknown) => {
-      console.error(`[volli] could not trim the worktree of ${ticketId}:`, errorMessage(error));
+      log.error("could not trim the ticket's worktree", { ticketId, error });
     });
+  ports.detachedWork?.track(work);
 }
 
 function moveNotificationBody(kind: TicketEventActorKind, via: string | null): string {
@@ -79,15 +108,14 @@ function moveNotificationBody(kind: TicketEventActorKind, via: string | null): s
 }
 
 function recordInterruptFailure(error: unknown): void {
-  console.error(
-    `[volli] failed to interrupt ticket sessions after committed move: ${errorMessage(error)}`,
-  );
+  log.error("failed to interrupt ticket sessions after committed move", { error });
 }
 
 export function executeTicketMove(
   ports: TicketMovePorts,
   input: TicketMoveCommandInput,
   context: TicketCommandContext,
+  seam: TicketMoveSeam = {},
 ): Ticket[] | Promise<Ticket[]> {
   const db = ports.worktree.db;
   const ticketIds = "ticketIds" in input ? [...new Set(input.ticketIds)] : [input.ticketId];
@@ -102,16 +130,34 @@ export function executeTicketMove(
     before.get(input.ticketId)?.project_id === input.projectId &&
     before.get(input.ticketId)?.status === input.toStatus
   ) {
+    // Nothing moves, but a caller's record of the no-op is still kept.
+    if (seam.inTransaction !== undefined) withTransaction(db, seam.inTransaction);
+    seam.committed?.();
     return listTicketsByProject(db, input.projectId);
   }
   const toIndex =
     input.toIndex ??
     listTicketsByProject(db, input.projectId).filter((ticket) => ticket.status === input.toStatus)
       .length;
-  const runMove = () =>
+  const writeMove = () =>
     "ticketIds" in input
       ? moveTicketsCommand(db, { ...input, toIndex }, context)
       : moveTicketCommand(db, { ...input, toIndex }, context);
+  // The caller's record joins the move's transaction; its post-commit step
+  // runs inside every ticket's wake, so before any wake fans out.
+  const runMove = (): Ticket[] => {
+    const inTransaction = seam.inTransaction;
+    const moved =
+      inTransaction === undefined
+        ? writeMove()
+        : withTransaction(db, () => {
+            const written = writeMove();
+            inTransaction();
+            return written;
+          });
+    seam.committed?.();
+    return moved;
+  };
   const tickets = ticketIds.reduceRight<() => Ticket[]>(
     (write, ticketId) => () => withTicketWake(db, ticketId, write),
     runMove,
@@ -143,9 +189,7 @@ export function executeTicketMove(
         ...(input.choice === undefined ? {} : { choice: input.choice }),
       });
     } catch (error) {
-      console.error(
-        `[volli] failed to record armed-column arrival after committed move: ${errorMessage(error)}`,
-      );
+      log.error("failed to record armed-column arrival after committed move", { error });
     }
     // Operational guardrail: only non-user arrivals into Doing notify. Actor
     // policy, not transport policy, so a renderer move remains silent.

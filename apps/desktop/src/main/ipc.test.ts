@@ -32,7 +32,7 @@ vi.mock("electron", () => ({
 }));
 
 import { registerIpcHandlers } from "./ipc";
-import { isWithinRoots } from "@volli/host-core/project-roots";
+import { isWithinRoots } from "@volli/host-core/board";
 
 /** Fake IPC event; `sender` only matters to the mocked BrowserWindow lookup. */
 const fakeEvent = { sender: {} };
@@ -205,13 +205,13 @@ describe("volli:list-directory", () => {
     });
   });
 
-  it("types a symlinked directory as a file in listings", async () => {
+  it("types a symlinked directory as a file in listings, and marks it a link", async () => {
     syncRoots([root]);
     await expect(listDirectory(join(root, "links"))).resolves.toEqual({
       ok: true,
       entries: [
         { name: "real-dir", kind: "dir" },
-        { name: "linked", kind: "file" },
+        { name: "linked", kind: "file", link: true },
       ],
     });
   });
@@ -264,7 +264,7 @@ describe("volli:list-directory", () => {
     const fakeHome = await fs.realpath(await fs.mkdtemp(join(os.tmpdir(), "volli-ipc-wthome-")));
     process.env["VOLLI_WORKTREE_HOME_DIR"] = fakeHome;
     try {
-      const { worktreesHome } = await import("@volli/host-core/worktree-runtime");
+      const { worktreesHome } = await import("@volli/host-core/worktree");
       const wtDir = join(worktreesHome(), "proj", "T-1-slug");
       await fs.mkdir(wtDir, { recursive: true });
       await fs.writeFile(join(wtDir, "note.md"), "hi");

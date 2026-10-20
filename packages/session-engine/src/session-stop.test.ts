@@ -192,7 +192,7 @@ describe("stopSessionById", () => {
     expect(refused.command).not.toHaveBeenCalled();
   });
 
-  // Fix-first (review c5714a22): a not-live target — no open structured
+  // A not-live target — no open structured
   // attachment, so nothing for the runtime acts to touch — must be refused by
   // name rather than durably recorded as a quiet no-op success. This is the
   // "already-idle/done child" case the island's stop button races against.

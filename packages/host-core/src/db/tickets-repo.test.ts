@@ -210,9 +210,10 @@ describe("unknown-status rows are dropped at the hydrate boundary (#29)", () => 
 
     expect(tickets.map((t) => t.id)).toEqual([good.id]);
     // Asserted before mockRestore(), which also clears recorded calls.
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(`dropping ticket ${bad.id} with unknown status "bogus"`),
-    );
+    expect(warnSpy).toHaveBeenCalledWith("[db] dropping ticket with unknown status", {
+      ticketId: bad.id,
+      status: "bogus",
+    });
     warnSpy.mockRestore();
   });
 
@@ -230,9 +231,10 @@ describe("unknown-status rows are dropped at the hydrate boundary (#29)", () => 
     // The roster spells its columns out instead of `SELECT *`, so it is the one
     // read that could have quietly skipped the shared status guard.
     expect(roster.map((t) => t.id)).toEqual([good.id]);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(`dropping ticket ${bad.id} with unknown status "bogus"`),
-    );
+    expect(warnSpy).toHaveBeenCalledWith("[db] dropping ticket with unknown status", {
+      ticketId: bad.id,
+      status: "bogus",
+    });
     warnSpy.mockRestore();
   });
 

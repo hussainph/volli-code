@@ -115,7 +115,7 @@ export function TicketCardContent({
   );
 }
 
-// Sibling shift while a drag reorders the column: Linear-crisp, well under
+// Sibling shift while a drag reorders the column: crisp, well under
 // 300ms (dnd-kit's 250ms default reads floaty). Shared by the board card and
 // the list row so the two views' drag feel stays one value. The curve is
 // `--ease-out` by reference, not by re-typing it: this used to be the literal

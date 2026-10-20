@@ -3,8 +3,15 @@
  * output ring, its read cursor and its record, keyed by the Session that
  * owns it — the shell half of what `browser/tab-host.ts` is for tabs.
  *
- * WHAT A SHELL IS. `/bin/bash -c <command>`, spawned detached in its own
- * process group with stdout and stderr piped and stdin closed, through the
+ * FOREGROUND CALLS (VC-757). `runForeground` owns the same child and retained
+ * output, privately keyed by Session and tool call. Until `moveForeground`
+ * atomically promotes it, it is neither published, capped nor announced. A
+ * move clears the bash deadline and cancellation binding, answers the call
+ * with a tail and id, and keeps the original process and spawn-ledger row.
+ *
+ * WHAT A SHELL IS. `/bin/bash -c <command>` for shell_start; foreground calls
+ * use the executor's resolved shell and command transport. Spawned detached
+ * in its own process group with stdout and stderr piped, through the
  * environment the caller built — the port hands in the same record the
  * `execute` tool's child gets, and this module never reads `process.env`. No
  * PTY: a shell a person types into is the terminal, and a read-only tail does
@@ -14,9 +21,9 @@
  * {@link SHELL_OUTPUT_MAX_BYTES}; a read cursor, so a read returns only what
  * arrived since the last one and a poll loop costs the same context every
  * time; `startedAt`, `exitedAt`, the exit code and the signal. An exited
- * shell's record and tail stay readable until its Session's attachment ends,
- * so a model that comes back to a finished build can still read how it
- * finished.
+ * shell's record and tail stay readable until its Session's attachment ends —
+ * a Subagent Session's only until its turn completes (VC-809) — so a model
+ * that comes back to a finished build can still read how it finished.
  *
  * WHAT IT REFUSES. The per-Session cap, a shell another Session owns (unknown
  * rather than forbidden — a shell this Session cannot touch is one it was
@@ -49,11 +56,15 @@
  * {@link SHELL_KILL_GRACE_MS}. {@link disposeSession} is the attachment's end
  * — stop, done, detach, replace, relaunch, all through the adapter's one
  * release path — and kills every shell the Session started and forgets them.
+ * A Subagent Session's completed turn calls it too (VC-809), so a shell it
+ * left running cannot reopen it after its parent has the answer.
  * Shells are live resources, not ledger facts: nothing here survives a
  * relaunch, and nothing is written to the database. The record flips to
  * `exited` on the child's `close`, not its `exit` — the two are not ordered
  * against each other, and marking a fast command exited on `exit` alone can
- * beat its last stdout chunk into the ring.
+ * beat its last stdout chunk into the ring. Private foreground calls instead
+ * finish after leader exit and a 100ms stdio idle grace (or normal close),
+ * then close their own pipes; promotion withdraws that foreground-only wait.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -63,6 +74,7 @@ import { ShellRefusal, SHELL_MAX_PER_SESSION } from "@volli/agent-runtime";
 import {
   redactPayloadSecrets,
   shellCommandLine,
+  type BackgroundShellState,
   type RuntimeShellRecord,
   type SpawnLedgerPort,
 } from "@volli/shared";
@@ -74,6 +86,12 @@ import {
   SHELL_NOTIFY_LINE_MAX_CHARS,
   type ShellNotifyPattern,
 } from "./notify-pattern";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("background-shell");
+
+/** The renderer's snapshot of one shell is client wire vocabulary (`@volli/shared`, VC-632). */
+export type { BackgroundShellState } from "@volli/shared";
 
 /** Bytes retained per shell — the PTY peek's own bound (`pty/output.ts`). */
 export const SHELL_OUTPUT_MAX_BYTES = 256_000;
@@ -83,33 +101,13 @@ export const SHELL_TAIL_MAX_BYTES = 64_000;
 export const SHELL_START_SETTLE_MS = 1_000;
 /** How long SIGTERM gets before SIGKILL. */
 export const SHELL_KILL_GRACE_MS = 5_000;
+/** Foreground leader exit gets the executor's 100ms idle window to drain final bytes. */
+const FOREGROUND_EXIT_STDIO_GRACE_MS = 100;
 
 /** How long an exit waits for the model to have read it itself before a notice is sent. */
 export const SHELL_EXIT_NOTICE_GRACE_MS = 1_000;
 /** The most of a shell's output an exit notice carries: its last few kilobytes. */
 export const SHELL_NOTICE_TAIL_MAX_BYTES = 4_000;
-/**
- * One background shell as the renderer sees it: the host's whole snapshot of a
- * live or finished shell. Defined here beside the host that produces it; the
- * desktop's IPC contract re-exports it (`apps/desktop/src/ipc/contract.ts`).
- */
-export interface BackgroundShellState {
-  /** Host-minted opaque id, never a pid. */
-  shellId: string;
-  sessionId: string;
-  projectId: string;
-  ticketId: string | null;
-  /** The command as the model gave it; the island shows its first line. */
-  command: string;
-  title: string | null;
-  state: "running" | "exited";
-  /** Exit code once exited; `null` while running and when a signal ended it. */
-  code: number | null;
-  signal: string | null;
-  startedAt: number;
-  exitedAt: number | null;
-  pid: number;
-}
 
 /** The longest label a notice names a shell by, in characters. */
 export const SHELL_NOTICE_LABEL_MAX_CHARS = 80;
@@ -162,6 +160,8 @@ export interface BackgroundShellStartInput {
   title: string | null;
   /** The whole environment the child gets; nothing is added here. */
   env: Record<string, string>;
+  /** Foreground executor's resolved shell; shell_start retains its bash default. */
+  shellConfig?: { shell: string; args: string[]; commandTransport?: "argv" | "stdin" };
   /**
    * Tell the Session the first time this appears in a line of output (VC-495).
    * Judged before anything is spawned: a pattern the host will not run is a
@@ -170,7 +170,32 @@ export interface BackgroundShellStartInput {
   notifyOn?: ShellNotifyPattern;
 }
 
-export interface BackgroundShellHostDependencies {
+/** Foreground timeout is in seconds, matching the bash tool. */
+export interface ForegroundShellOptions {
+  toolCallId: string;
+  timeout?: number;
+  signal: AbortSignal;
+  /** Retained, redacted snapshots for clients that do not own a capture. */
+  onOutput?(text: string): void;
+  /** Executor-internal bytes; the tool's existing capture/redactor owns their publication. */
+  onChunk?(chunk: Uint8Array): void;
+  onReady?(control: { pauseOutput(): void; resumeOutput(): void }): void;
+}
+
+export interface ForegroundShellResult {
+  output: string;
+  code: number | null;
+  signal: string | null;
+  background?: { shellId: string };
+}
+
+interface ForegroundRun {
+  entry?: ShellEntry;
+  cancel(message: string): void;
+  promote(): ForegroundShellResult;
+}
+
+export interface BackgroundShellHostPorts {
   /** The renderer's feed: a whole snapshot on every change of state. */
   publishState(state: BackgroundShellState): void;
   /** The renderer's feed: a shell the host forgot. */
@@ -282,10 +307,13 @@ class OutputRing {
 }
 
 interface ShellEntry {
+  cwd: string;
   owner: BackgroundShellOwner;
   record: RuntimeShellRecord;
   pid: number;
   child: ChildProcess;
+  /** Only private foreground pipes may be closed without waiting for inherited writers. */
+  foreground: boolean;
   ring: OutputRing;
   /** Each pipe retains its own bounded, uncut redaction/UTF-8 context. */
   stdout: NoticeOutput;
@@ -293,7 +321,7 @@ interface ShellEntry {
   /** Settles when the child exits, however it exits. */
   exited: Promise<void>;
   /** Told on every chunk, for the settle window. */
-  onOutput: Set<() => void>;
+  onOutput: Set<(chunk: Buffer) => void>;
   /**
    * `start` has handed the model its first answer. An exit before that is in
    * the answer itself (its record is copied after this flips), so only an exit
@@ -313,6 +341,10 @@ interface ShellEntry {
 
 export class BackgroundShellHost {
   private readonly shells = new Map<string, ShellEntry>();
+  /** Foreground calls are private until promoted; never part of the shell cap or feed. */
+  private readonly foreground = new Map<string, Map<string, ForegroundRun>>();
+  /** Disposed attachments can still have a kill in flight; retain those processes until close. */
+  private readonly processes = new Set<ShellEntry>();
   private readonly createId: () => string;
   private readonly now: () => number;
   private readonly settleMs: number;
@@ -322,7 +354,7 @@ export class BackgroundShellHost {
   private readonly ledger: SpawnLedgerPort;
   private readonly exitNoticeGraceMs: number;
 
-  constructor(private readonly deps: BackgroundShellHostDependencies) {
+  constructor(private readonly deps: BackgroundShellHostPorts) {
     this.ledger = deps.ledger ?? NO_SPAWN_LEDGER;
     this.createId = deps.createId ?? randomUUID;
     this.now = deps.now ?? Date.now;
@@ -380,7 +412,27 @@ export class BackgroundShellHost {
     owner: BackgroundShellOwner,
     input: BackgroundShellStartInput,
   ): Promise<{ shell: RuntimeShellRecord; pid: number; output: string }> {
-    const live = this.ownedBy(owner.sessionId).filter((entry) => entry.record.state === "running");
+    this.requireOpen();
+    this.requireCapacity(owner.sessionId);
+    const entry = await this.spawnShell(owner, input, true);
+    await this.settle(entry);
+    // Flipped in the same synchronous block that copies the record below: an
+    // exit lands either before it (and is in the answer) or after (and is news).
+    entry.returned = true;
+    const { output } = entry.ring.readNew();
+    return { shell: { ...entry.record }, pid: entry.pid, output: this.safeOutput(output) };
+  }
+
+  private requireOpen(): void {
+    if (this.closing !== undefined)
+      throw new ShellRefusal(
+        "shell.closing",
+        "The host is stopping; no new background shell can start.",
+      );
+  }
+
+  private requireCapacity(sessionId: string): void {
+    const live = this.ownedBy(sessionId).filter((entry) => entry.record.state === "running");
     if (live.length >= SHELL_MAX_PER_SESSION) {
       throw new ShellRefusal(
         "shell.limit",
@@ -389,6 +441,14 @@ export class BackgroundShellHost {
           .join(", ")}): kill one with shell_kill, or reuse one.`,
       );
     }
+  }
+
+  /** Both modes own the same child, output, process group and spawn-ledger lifecycle. */
+  private async spawnShell(
+    owner: BackgroundShellOwner,
+    input: BackgroundShellStartInput,
+    background: boolean,
+  ): Promise<ShellEntry> {
     let notifyTest: ((line: string) => boolean) | null = null;
     if (input.notifyOn !== undefined) {
       const compiled = compileNotifyPattern(input.notifyOn);
@@ -401,12 +461,24 @@ export class BackgroundShellHost {
       notifyTest = compiled.test;
     }
     const shellId = this.createId();
-    const child = spawn("/bin/bash", ["-c", input.command], {
-      cwd: input.cwd,
-      env: input.env,
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const config = input.shellConfig ?? { shell: "/bin/bash", args: ["-c"] };
+    const commandFromStdin = config.commandTransport === "stdin";
+    const child = spawn(
+      config.shell,
+      commandFromStdin ? config.args : [...config.args, input.command],
+      {
+        cwd: input.cwd,
+        env: input.env,
+        detached: true,
+        stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
+      },
+    );
+    if (commandFromStdin) {
+      // A shell can exit before consuming its script. Match the executor's
+      // transport: close stdin at EOF and let child exit report that outcome.
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(input.command);
+    }
     const pid = child.pid;
     if (pid === undefined) {
       // Node reports a failed spawn as an `error` event with no pid; the
@@ -440,7 +512,7 @@ export class BackgroundShellHost {
       exitedAt: null,
     };
     const ring = new OutputRing(this.outputMaxBytes);
-    const onOutput = new Set<() => void>();
+    const onOutput = new Set<(chunk: Buffer) => void>();
     const notifyOn = input.notifyOn;
     const stdout = new NoticeOutput((text) => this.redactNoticeText(text), this.outputMaxBytes);
     const stderr = new NoticeOutput((text) => this.redactNoticeText(text), this.outputMaxBytes);
@@ -468,7 +540,7 @@ export class BackgroundShellHost {
       ring.append(chunk);
       output.feed(chunk);
       matchOutput(output, watch);
-      for (const listener of onOutput) listener();
+      for (const listener of onOutput) listener(chunk);
     };
     child.stdout?.on("data", (chunk: Buffer) => receive(stdout, stdoutWatch, chunk));
     child.stderr?.on("data", (chunk: Buffer) => receive(stderr, stderrWatch, chunk));
@@ -480,6 +552,7 @@ export class BackgroundShellHost {
         record.signal = signal;
         record.exitedAt = this.now();
         if (ledgerId !== null) this.ledger.markExited(ledgerId, record.exitedAt);
+        this.processes.delete(entry);
         if (this.shells.has(shellId)) {
           this.deps.publishState(this.stateOf(entry));
           stdout.finish();
@@ -507,10 +580,12 @@ export class BackgroundShellHost {
       child.once("error", () => settle(null, null));
     });
     const entry: ShellEntry = {
+      cwd: input.cwd,
       owner,
       record,
       pid,
       child,
+      foreground: !background,
       ring,
       stdout,
       stderr,
@@ -518,15 +593,213 @@ export class BackgroundShellHost {
       onOutput,
       returned: false,
     };
-    this.shells.set(shellId, entry);
-    this.deps.publishState(this.stateOf(entry));
+    this.processes.add(entry);
+    if (background) {
+      this.shells.set(shellId, entry);
+      this.deps.publishState(this.stateOf(entry));
+    }
+    return entry;
+  }
 
-    await this.settle(entry);
-    // Flipped in the same synchronous block that copies the record below: an
-    // exit lands either before it (and is in the answer) or after (and is news).
-    entry.returned = true;
-    const { output } = ring.readNew();
-    return { shell: { ...record }, pid, output: this.safeOutput(output) };
+  /** Run privately until exit, cancellation, or an atomic move to the background. */
+  runForeground(
+    owner: BackgroundShellOwner,
+    input: BackgroundShellStartInput,
+    options: ForegroundShellOptions,
+  ): Promise<ForegroundShellResult> {
+    return new Promise((resolve, reject) => {
+      this.requireOpen();
+      if (options.signal.aborted)
+        throw Object.assign(new Error("Command aborted"), { code: "aborted", output: "" });
+      if (
+        options.timeout !== undefined &&
+        (!Number.isFinite(options.timeout) ||
+          options.timeout <= 0 ||
+          options.timeout > 2_147_483.647)
+      )
+        throw new Error(
+          "Invalid timeout: must be a positive finite number of seconds within the timer limit",
+        );
+      let calls = this.foreground.get(owner.sessionId);
+      if (calls?.has(options.toolCallId))
+        throw new Error("This foreground shell call is already running");
+      if (calls === undefined) {
+        calls = new Map();
+        this.foreground.set(owner.sessionId, calls);
+      }
+      const sessionCalls = calls;
+      let active = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let drainTimer: ReturnType<typeof setTimeout> | undefined;
+      let outputPaused = false;
+      const leaderExited = (): boolean =>
+        run.entry !== undefined &&
+        (run.entry.child.exitCode !== null || run.entry.child.signalCode !== null);
+      const finish = (): void => {
+        if (!active) return;
+        const entry = run.entry!;
+        const result = {
+          output: snapshot(),
+          code: entry.child.exitCode ?? entry.record.code,
+          signal: entry.child.signalCode ?? entry.record.signal,
+        };
+        cleanup();
+        // A grandchild can retain the pipes long after bash exits. Foreground
+        // completion follows the leader, unlike a promoted/background record.
+        entry.child.stdout?.destroy();
+        entry.child.stderr?.destroy();
+        resolve(result);
+      };
+      const drainAfterExit = (): void => {
+        clearTimeout(drainTimer);
+        drainTimer = setTimeout(() => {
+          // The executor may be spilling output: do not discard unread bytes
+          // during its backpressure pause. Cancellation has its own bound.
+          if (outputPaused) drainAfterExit();
+          else finish();
+        }, FOREGROUND_EXIT_STDIO_GRACE_MS);
+      };
+      const snapshot = (): string => this.safeOutput(run.entry?.ring.all() ?? "");
+      const update = (chunk: Buffer): void => {
+        try {
+          options.onChunk?.(chunk);
+          if (options.onOutput !== undefined) options.onOutput(snapshot());
+          if (active && leaderExited()) drainAfterExit();
+        } catch (error) {
+          cancel(
+            error instanceof Error ? error.message : "Shell output callback failed",
+            "callback_error",
+          );
+        }
+      };
+      const cleanup = (): void => {
+        active = false;
+        clearTimeout(timer);
+        clearTimeout(drainTimer);
+        options.signal.removeEventListener("abort", abort);
+        run.entry?.child.removeListener("exit", drainAfterExit);
+        run.entry?.onOutput.delete(update);
+        sessionCalls.delete(options.toolCallId);
+        if (sessionCalls.size === 0) this.foreground.delete(owner.sessionId);
+      };
+      const cancel = (
+        message: string,
+        code: "aborted" | "timeout" | "callback_error" = "aborted",
+      ): void => {
+        if (!active) return;
+        const output = snapshot();
+        cleanup();
+        if (run.entry !== undefined) {
+          run.entry.endedBy = "agent";
+          void this.terminate(run.entry);
+        }
+        // The executor already captured these bytes. Keep status separate from
+        // output so its error result cannot duplicate the entire retained ring.
+        reject(Object.assign(new Error(message.slice(0, 500)), { code, output }));
+      };
+      const abort = (): void => cancel("Command aborted");
+      const run: ForegroundRun = {
+        cancel,
+        promote: () => {
+          const entry = run.entry!;
+          cleanup();
+          entry.foreground = false;
+          const { text: output } = lastBytes(this.safeOutput(entry.ring.all()), this.tailMaxBytes);
+          entry.ring.readNew();
+          entry.returned = true;
+          this.shells.set(entry.record.shellId, entry);
+          // Capture backpressure belonged to the foreground reader, not the moved process.
+          entry.child.stdout?.resume();
+          entry.child.stderr?.resume();
+          const result: ForegroundShellResult = {
+            output,
+            code: null,
+            signal: null,
+            background: { shellId: entry.record.shellId },
+          };
+          resolve(result);
+          this.deps.publishState(this.stateOf(entry));
+          return result;
+        },
+      };
+      sessionCalls.set(options.toolCallId, run);
+      options.signal.addEventListener("abort", abort, { once: true });
+      if (options.timeout !== undefined) {
+        timer = setTimeout(
+          () => cancel(`Command timed out after ${options.timeout} seconds`, "timeout"),
+          options.timeout * 1_000,
+        );
+      }
+      void this.spawnShell(owner, input, false).then(
+        (entry) => {
+          run.entry = entry;
+          if (!active) {
+            entry.endedBy = "agent";
+            void this.terminate(entry);
+            return;
+          }
+          entry.onOutput.add(update);
+          entry.child.once("exit", drainAfterExit);
+          // Register before onReady, which can synchronously move or cancel.
+          void entry.exited.then(finish);
+          if (leaderExited()) drainAfterExit();
+          try {
+            options.onReady?.({
+              pauseOutput: () => {
+                if (!active) return;
+                outputPaused = true;
+                entry.child.stdout?.pause();
+                entry.child.stderr?.pause();
+              },
+              resumeOutput: () => {
+                if (!active) return;
+                outputPaused = false;
+                entry.child.stdout?.resume();
+                entry.child.stderr?.resume();
+                if (leaderExited()) drainAfterExit();
+              },
+            });
+          } catch (error) {
+            cancel(
+              error instanceof Error ? error.message : "Shell ready callback failed",
+              "callback_error",
+            );
+          }
+        },
+        (error: unknown) => {
+          if (!active) return;
+          cleanup();
+          reject(error);
+        },
+      );
+    });
+  }
+
+  /** A running, uncancelled call with room in the background shell cap. */
+  foregroundAvailable(sessionId: string, toolCallId: string): boolean {
+    const entry = this.foreground.get(sessionId)?.get(toolCallId)?.entry;
+    return (
+      this.closing === undefined &&
+      entry?.record.state === "running" &&
+      entry.child.exitCode === null &&
+      entry.child.signalCode === null &&
+      this.ownedBy(sessionId).filter((shell) => shell.record.state === "running").length <
+        SHELL_MAX_PER_SESSION
+    );
+  }
+
+  /** No await: state/cap checks and promotion happen in one event-loop turn. */
+  moveForeground(sessionId: string, toolCallId: string): { shellId: string } {
+    this.requireOpen();
+    const run = this.foreground.get(sessionId)?.get(toolCallId);
+    const entry = run?.entry;
+    if (entry === undefined)
+      throw new ShellRefusal("shell.unknown", "No running foreground shell belongs to this call.");
+    this.requireCapacity(sessionId);
+    if (!this.foregroundAvailable(sessionId, toolCallId))
+      throw new ShellRefusal("shell.exited", "This foreground shell already exited.");
+    run!.promote();
+    return { shellId: entry.record.shellId };
   }
 
   /**
@@ -572,10 +845,7 @@ export class BackgroundShellHost {
     try {
       this.deps.onNotice?.(notice);
     } catch (error) {
-      console.error(
-        "[volli] background shell notice failed:",
-        error instanceof Error ? error.message : String(error),
-      );
+      log.error("background shell notice failed", { error });
     }
   }
 
@@ -693,6 +963,14 @@ export class BackgroundShellHost {
     );
     if ((await Promise.race([entry.exited, grace])) === "grace") {
       signalGroup(entry.pid, "SIGKILL");
+      if (entry.foreground) {
+        // An escaped grandchild may be in its own group yet still hold our
+        // pipes. After the kill grace, private foreground cleanup must not
+        // join that unrelated writer forever. Background shells keep their
+        // existing close-based drain semantics, including after promotion.
+        entry.child.stdout?.destroy();
+        entry.child.stderr?.destroy();
+      }
       await entry.exited;
     }
   }
@@ -706,6 +984,25 @@ export class BackgroundShellHost {
   }
 
   // ---- the renderer's doors: every shell, unscoped by Session -------------
+
+  /** Every running shell cwd, including shells between a turn and attachment cleanup. */
+  liveCwds(): string[] {
+    return [...this.processes].map((entry) => entry.cwd);
+  }
+
+  private closing: Promise<void> | undefined;
+  /** Headless shutdown joins the kills before the spawn ledger's database closes. */
+  close(): Promise<void> {
+    if (this.closing !== undefined) return this.closing;
+    const entries = [...new Set([...this.processes, ...this.shells.values()])];
+    for (const calls of this.foreground.values()) {
+      for (const run of calls.values()) run.cancel("Command aborted: the host is stopping");
+    }
+    for (const entry of entries) this.cancelExitNotice(entry);
+    this.shells.clear();
+    this.closing = Promise.all(entries.map((entry) => this.terminate(entry))).then(() => undefined);
+    return this.closing;
+  }
 
   listAll(): BackgroundShellState[] {
     return [...this.shells.values()].map((entry) => this.stateOf(entry));
@@ -727,8 +1024,8 @@ export class BackgroundShellHost {
   }
 
   /**
-   * The attachment's end: kill every shell the Session started and forget
-   * them. Fire-and-forget on the kill, because release must not wait on a
+   * The attachment's end — or a Subagent Session's completed turn (VC-809):
+   * kill every shell the Session started and forget them. Fire-and-forget on the kill, because release must not wait on a
    * process that ignores SIGTERM — the SIGKILL still follows after the grace.
    *
    * A Session that has ended is told nothing (VC-495): an exit notice still
@@ -736,6 +1033,9 @@ export class BackgroundShellHost {
    * what keeps a match or an exit that lands later quiet.
    */
   disposeSession(sessionId: string): void {
+    for (const run of this.foreground.get(sessionId)?.values() ?? []) {
+      run.cancel("Command aborted: the Session attachment ended");
+    }
     for (const entry of this.ownedBy(sessionId)) {
       this.cancelExitNotice(entry);
       this.shells.delete(entry.record.shellId);

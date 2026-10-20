@@ -45,10 +45,13 @@ import {
   sessionWedge,
   shortSessionId,
 } from "@volli/shared";
-import type { SessionInFlightTool, SessionProjection } from "@volli/shared";
+import type { SessionInFlightTool, SessionProjection, SessionExecutionVenue } from "@volli/shared";
 import type { SessionEngine } from "@volli/session-engine";
 
 import type { NotificationRequest } from "@volli/shared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-watchdog");
 
 /** How often the scan runs. Coarse on purpose: the verdict is minutes-grained. */
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
@@ -62,6 +65,7 @@ export interface SessionWatchdogBinding {
 }
 
 export interface SessionWatchdogPorts {
+  venue?: SessionExecutionVenue;
   /** The executors this process holds open — the runtime's own binding list. */
   listBindings(): readonly SessionWatchdogBinding[];
   /** One Session's durable state; live progress comes from the binding above. */
@@ -89,7 +93,7 @@ export interface SessionWatchdogPorts {
   thresholdMs?: number;
   intervalMs?: number;
   now?: () => number;
-  /** Diagnostics seam. Defaults to `console.error`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -105,7 +109,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
   const intervalMs = ports.intervalMs ?? DEFAULT_SCAN_INTERVAL_MS;
   const now = ports.now ?? (() => Date.now());
   const onError =
-    ports.onError ?? ((error: unknown) => console.error("[volli] session watchdog:", error));
+    ports.onError ?? ((error: unknown) => log.error("session watchdog failed", { error }));
   /** The episode each Session last tripped on: the live progress instant it was silent from. */
   const tripped = new Map<string, number>();
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -152,7 +156,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
           id: "session-watchdog",
           detail: { sessionOrigin: { kind: "volli", reason: "supervision" } },
         },
-        venue: { id: "local", kind: "local" },
+        venue: ports.venue ?? { id: "local", kind: "local" },
       },
     });
     ports.notify?.({
@@ -160,7 +164,7 @@ export function createSessionWatchdog(ports: SessionWatchdogPorts): SessionWatch
       title: "Session may be wedged",
       body: `${projection.session.title ?? `Session ${shortSessionId(sessionId)}`} has an open turn with no runtime progress for ${minutes}m${overdue}.`,
       // The Session, and whatever inside it a person can actually act on
-      // (round 2). A wedge is very often a broken transport, and the Attention
+      // A wedge is very often a broken transport, and the Attention
       // carrying that failure is the thing worth landing on — sending someone
       // to the top of a Session and leaving them to find it is what a deep link
       // is supposed to prevent. Derived with the same rule a window uses to

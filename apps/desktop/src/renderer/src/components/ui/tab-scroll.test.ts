@@ -169,7 +169,7 @@ describe("tabOverflow", () => {
     expect(tabOverflow({ ...port, scrollLeft: 0.4 }).atStart).toBe(true);
   });
 
-  /* THE FEEDBACK LOOP THIS FUNCTION EXISTS TO NOT HAVE (VC-288 review). The
+  /* THE FEEDBACK LOOP THIS FUNCTION EXISTS TO NOT HAVE (VC-288). The
      affordances mount inside the strip and take width from the scroller, so a
      rule measured against the SCROLLER is a rule whose own answer changed the
      quantity it read. `areaWidth` — the box that holds the scroller and both

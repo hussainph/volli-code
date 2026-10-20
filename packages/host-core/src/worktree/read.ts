@@ -39,8 +39,8 @@ import type Database from "better-sqlite3";
 import { displayTicketId, type ChangeSetSnapshot, type DiffStat } from "@volli/shared";
 import type { WorktreeDiffMode } from "@volli/shared";
 
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { getProjectById } from "../db/projects-repo";
+import { getTicketRow } from "../db/tickets-repo";
 import {
   changeSetPaths,
   changeSetSnapshot,
@@ -51,24 +51,17 @@ import { resolveChangeSetBaseRevision } from "./comparison-ref";
 import { diffStat } from "./diff";
 import { runGitCapturingAsync, stderrOf } from "./git";
 import { getWorktreeStatus, type WorktreeStatusReport } from "./status";
-import type { RunGit, RunGitAsync } from "./types";
+import type { RunGitAsync } from "./types";
 
 /**
  * The narrow deps the read verbs need — a structural subset of {@link
- * import("./types").WorktreeDeps} (which satisfies it), so the IPC door passes
+ * import("./types").WorktreePorts} (which satisfies it), so the IPC door passes
  * its full `worktreeDeps(db)` unchanged. `worktreeExists` is the disk-existence
  * seam (defaults to node's `existsSync`); the CLI door threads its own scripted
  * predicate through it so tests can stamp a fictional worktree path.
  */
-export interface WorktreeReadDeps {
+export interface WorktreeReadPorts {
   db: Database.Database;
-  /**
-   * The synchronous runner. No read verb in this module uses it any more
-   * (VC-369 moved the last two, status and diff, onto {@link gitAsync}); it
-   * stays on the bundle because callers pass their full `WorktreeDeps`, whose
-   * write paths still have it.
-   */
-  git?: RunGit;
   /**
    * The non-blocking runner EVERY read verb here uses. Defaults to the real
    * {@link runGitCapturingAsync} — never to a wrapper around `git`, which
@@ -143,7 +136,7 @@ export interface ReadTarget {
  * resolved {@link ReadTarget} to compose a git query from.
  */
 export function resolveWorktreeTarget(
-  deps: WorktreeReadDeps,
+  deps: WorktreeReadPorts,
   ticketId: string,
 ): WorktreeReadFailure | { kind: "ok"; target: ReadTarget } {
   const ticket = getTicketRow(deps.db, ticketId);
@@ -179,7 +172,7 @@ export function resolveWorktreeTarget(
  * `missing-on-disk`, never the errs-dirty `uncommitted: true`.
  */
 export async function readWorktreeStatus(
-  deps: WorktreeReadDeps,
+  deps: WorktreeReadPorts,
   ticketId: string,
 ): Promise<WorktreeStatusRead> {
   const resolved = resolveWorktreeTarget(deps, ticketId);
@@ -207,7 +200,7 @@ export async function readWorktreeStatus(
  * known base) surfaces as `diff-error` carrying the real message.
  */
 export async function readWorktreeDiff(
-  deps: WorktreeReadDeps,
+  deps: WorktreeReadPorts,
   ticketId: string,
   mode: WorktreeDiffMode,
 ): Promise<WorktreeDiffRead> {
@@ -235,7 +228,7 @@ export async function readWorktreeDiff(
  * discriminates no-worktree / missing-on-disk, then runs {@link changeSetSnapshot}.
  */
 export async function readWorktreeChangeSet(
-  deps: WorktreeReadDeps,
+  deps: WorktreeReadPorts,
   ticketId: string,
 ): Promise<WorktreeChangeSetRead> {
   const resolved = resolveWorktreeTarget(deps, ticketId);
@@ -257,7 +250,7 @@ export async function readWorktreeChangeSet(
  * while scheduling must not miss a path merely because it appears late.
  */
 export async function readWorktreeChangeSetPaths(
-  deps: WorktreeReadDeps,
+  deps: WorktreeReadPorts,
   ticketId: string,
 ): Promise<WorktreeChangeSetPathsRead> {
   const resolved = resolveWorktreeTarget(deps, ticketId);
@@ -286,7 +279,7 @@ export async function readWorktreeChangeSetPaths(
  * re-resolving would silently pair one side of a diff with a different base.
  */
 export async function readWorktreeBaseFile(
-  deps: WorktreeReadDeps,
+  deps: WorktreeReadPorts,
   ticketId: string,
   path: string,
   pinnedRevision?: string,

@@ -28,7 +28,7 @@ import {
   registerGuardedIpcHandlers,
   type IpcHandlerTable,
 } from "../ipc-registry";
-import type { WebAccessSettings, WebAccessSettingsView } from "@volli/host-core/web/settings";
+import type { WebAccessSettings, WebAccessSettingsView } from "@volli/host-core/integrations";
 
 /**
  * Every handler answers with the whole view rather than an acknowledgement: one

@@ -81,6 +81,7 @@ import type {
   RuntimeBrowserSnapshot,
 } from "@volli/shared";
 
+import { hostLogger } from "../log/root";
 import type { BrowserAgentCoordinator } from "./agent-coordinator";
 import {
   BrowserSessionTabLimitError,
@@ -97,27 +98,35 @@ import type { BrowserTabController, CdpTransport, TabCursorDriver } from "./cdp-
 import { traced } from "./trace-steps";
 import type { BrowserTraceStepInput } from "./trace-store";
 
+const log = hostLogger("browser");
+
 /**
  * What the port asks of the host — the registry and navigation surface, as a
  * structural subset of {@link BrowserBackend} so tests can answer it with a
  * plain record and production hands the backend itself.
  */
-export interface AgentBrowserHost {
+export interface AgentBrowserBackend {
   /** Host-wide Browser operation queues and shared debugger lifetimes. */
   agentOperations: BrowserAgentCoordinator;
+  /**
+   * Why every agent Browser call is refused right now, or null (VC-577): the
+   * desktop closed its windows, and the tabs with them, for menu-bar mode.
+   * Optional: a backend that is never closed under a running turn has none.
+   */
+  unavailableReason?(): string | null;
   list(scope: { projectId: string; ticketId?: string }): BrowserTabState[];
   open(input: BrowserTabCreateOptions): BrowserTabState;
   navigate(tabId: string, url: string): BrowserTabState;
   back(tabId: string): BrowserTabState;
   forward(tabId: string): BrowserTabState;
   reload(tabId: string): BrowserTabState;
-  consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated">;
+  consoleOf(tabId: string): Pick<RuntimeBrowserConsole, "messages" | "truncated" | "kept">;
   /** A live picture of the tab for the transcript card, or null when the host declined to look. */
   capturePicture(tabId: string, signal?: AbortSignal): Promise<string | null>;
   /** Keeps a model-requested screenshot for the person; answers the picture's id. */
   keepScreenshot(tabId: string, base64Png: string): string;
-  /** Closes the headless tabs one Session owns; a shown tab is the person's and stays. */
-  closeHeadlessOwnedBy(sessionId: string): string[];
+  /** Closes unheld headless tabs one Session owns, optionally limited to captured ids. */
+  closeHeadlessOwnedBy(sessionId: string, tabIds?: readonly string[]): string[];
   /** The hold doors (VC-239); see `BrowserTabRegistry.hold` and its siblings. */
   hold(tabId: string, holder: BrowserSessionHolder): BrowserHoldOutcome;
   releaseHold(tabId: string, holder: BrowserSessionHolder, why?: BrowserHoldEnd): void;
@@ -140,13 +149,13 @@ export interface AgentBrowserPort extends RuntimeBrowserPort {
   release(input: { tabId: string; signal: AbortSignal }): Promise<{ tabId: string }>;
   /** Always carried here; the adapter strips it for a surface frozen before it (VC-364). */
   find(input: { tabId: string; query: string; signal: AbortSignal }): Promise<RuntimeBrowserFind>;
-  /** The Session's turn completed or was interrupted: every hold it has ends now. */
-  turnEnded(): void;
+  /** Ends holds; a completed delegate also closes its captured headless tabs. */
+  turnEnded(options?: { closeHeadlessOwned: boolean }): void;
   dispose(): void;
 }
 
 export interface AgentBrowserPortOptions {
-  host: AgentBrowserHost;
+  host: AgentBrowserBackend;
   /** The Session's product scope, fixed at attachment and never the model's to name. */
   scope: { projectId: string; ticketId: string | null };
   /**
@@ -272,6 +281,10 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     async (input) => {
       const signal = AbortSignal.any([input.signal, lifetime.signal]);
       signal.throwIfAborted();
+      // Refused in words before anything is touched: a closed browser never
+      // grows a hidden stage window, and the model learns why (VC-577).
+      const closed = options.host.unavailableReason?.() ?? null;
+      if (closed !== null) throw new BrowserRefusal("browser.closed", closed);
       return await run({ ...input, signal });
     };
 
@@ -335,6 +348,31 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
     options.host
       .list({ projectId: options.scope.projectId })
       .filter((tab) => tab.createdBy === "user" || ownedHere(tab));
+
+  const headlessOwned = (): string[] =>
+    visible()
+      .filter(
+        (tab) =>
+          tab.createdBy === "session" &&
+          tab.ownerSessionId === session.sessionId &&
+          tab.presentation === "headless",
+      )
+      .map((tab) => tab.tabId);
+
+  const closeCaptured = (tabId: string): void => {
+    try {
+      const closed = options.host.closeHeadlessOwnedBy(session.sessionId, [tabId]);
+      if (closed.length > 0) releaseWake(tabId);
+    } catch (error) {
+      // Automatic resource cleanup must not cost the delegate its answer or
+      // turn a queued native failure into an unreported rejection.
+      log.warn("headless Browser tab cleanup failed", {
+        sessionId: session.sessionId,
+        tabId,
+        error,
+      });
+    }
+  };
 
   const resolve = (tabId: string): BrowserTabState => {
     const tab = visible().find((candidate) => candidate.tabId === tabId);
@@ -414,6 +452,10 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
       snapshotText: printed.text,
       generation: printed.generation,
       truncated: printed.truncated,
+      // What the bound cut rides beside the cut text for the runtime to save
+      // (VC-237); the model is never sent it.
+      ...(printed.whole === undefined ? {} : { whole: printed.whole }),
+      empty: printed.empty,
       picture,
     };
   };
@@ -579,6 +621,11 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
           const tab = takeHold(resolve(input.tabId));
           keepAwake(tab.tabId);
           const ready = await syncedController(tab, controller, input.signal);
+          // The page as the action finds it (VC-277): compared with the fresh
+          // read below, it is what tells a click the page ignored from one
+          // that worked. The tree is the latest read's — the one the ref came
+          // from — rather than an extra read on every action.
+          const before = { url: tab.url, generation: ready.generation, tree: ready.treeDigest };
           const acted = await ready.act(
             {
               generation: input.generation,
@@ -598,7 +645,15 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
             "possible-navigation",
             true,
           );
-          return { ...snap, target: acted.target };
+          return {
+            ...snap,
+            target: acted.target,
+            changed: {
+              url: snap.url !== before.url,
+              generation: snap.generation !== before.generation,
+              tree: ready.treeDigest !== before.tree,
+            },
+          };
         }),
       );
     },
@@ -634,6 +689,7 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         ...pageOf(tab),
         messages: record.messages,
         truncated: record.truncated,
+        ...(record.kept === undefined ? {} : { kept: record.kept }),
       };
     },
     acquire: async (input) => {
@@ -661,19 +717,26 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         return { tabId: tab.tabId };
       });
     },
-    turnEnded: () => {
-      // Put each release behind work already queued for that tab. A new turn's
-      // work queues behind this barrier and therefore takes a fresh hold.
-      const ending = [...heldTabs];
+    turnEnded: (endingOptions) => {
+      if (lifetime.signal.aborted) return;
+      // Capture now, before the completion observation can start another turn.
+      // Never sweep the Session later: that would include a resumed turn's tabs.
+      const closing = new Set(endingOptions?.closeHeadlessOwned === true ? headlessOwned() : []);
+      const ending = new Set([...heldTabs, ...closing]);
       heldTabs.clear();
       for (const tabId of ending) {
+        // Release and destruction share the tab's host-wide input barrier.
+        // Eligibility is checked again there: a person may show or take it
+        // while a key-up or mouse-up is still finishing.
         options.host.agentOperations.afterCurrent(tabId, () => {
           options.host.releaseHold(tabId, session, "turn-end");
+          if (closing.has(tabId)) closeCaptured(tabId);
         });
       }
     },
     dispose: () => {
       if (lifetime.signal.aborted) return;
+      const closing = headlessOwned();
       lifetime.abort(new Error("The Browser port was disposed with its Session attachment"));
       heldTabs.clear();
       options.host.agentOperations.releaseOwner(owner, () => {
@@ -682,11 +745,13 @@ export function createAgentBrowserPort(options: AgentBrowserPortOptions): AgentB
         // Holds go with the attachment, and the Session leaves the colour
         // wheel; the host does both in one door.
         options.host.forgetSession(session);
-        // Then the tabs themselves. A headless tab's life is bound to the
-        // attachment (VC-238): nobody can see it, so nothing but this Session
-        // could ever close it. Shown tabs are the person's and outlive it.
-        // After forgetSession, so a closing tab's hold is already gone.
-        options.host.closeHeadlessOwnedBy(session.sessionId);
+        // Then eligible tabs themselves. Shown tabs and tabs held by the
+        // person or another attachment outlive this attachment. Completed
+        // delegates may have already retired their unheld headless tabs.
+        // After forgetSession, so this attachment's holds are already gone.
+        for (const tabId of closing) {
+          options.host.agentOperations.afterCurrent(tabId, () => closeCaptured(tabId));
+        }
       });
     },
   };

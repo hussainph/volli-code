@@ -18,29 +18,26 @@ import type {
 import { createAutomationEngine } from "./engine";
 import type { AutomationRunPlan } from "./engine";
 import { createAutomationRunner } from "./run";
-import type { AutomationRunnerDeps } from "./run";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
+import type { AutomationRunnerPorts } from "./run";
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
 import { SqliteAutomationLedger } from "./sqlite-ledger";
 import {
   getAutomation,
   getAutomationRun,
   listAutomationsForProject,
-  listProjectRunsForAutomation,
+  listPossiblyLiveProjectRunsForAutomation,
   listRunsForTicket,
   recordAutomationRun,
-} from "@volli/host-core/db/automations-repo";
-import { listTicketEvents, recordSessionStartedOnce } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { readSessionProvenance } from "@volli/host-core/db/session-provenance-repo";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import {
-  sessionCreateCommandId,
-  StructuredSessionsError,
-} from "@volli/host-core/session-runtime/sessions";
-import type { SessionStartInput } from "@volli/host-core/session-runtime/sessions";
+} from "../db/automations-repo";
+import { listTicketEvents, recordSessionStartedOnce } from "../db/events-repo";
+import { insertProject } from "../db/projects-repo";
+import { readSessionProvenance } from "../db/session-provenance-repo";
+import { insertSession } from "../session-control/test-support";
+import { openTestDb, testProject, testSession, testTicket } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
+import { sessionCreateCommandId, StructuredSessionsError } from "../session-runtime/sessions";
+import type { SessionStartInput } from "../session-runtime/sessions";
 
 let ctx: TestDb;
 
@@ -84,7 +81,8 @@ interface Harness {
     resources: readonly PromptResource[];
   }>;
   refinements: AutoTitleRequest[];
-  logs: string[];
+  /** What the runner logged: each line's message and its fields. */
+  logs: Array<Record<string, unknown>>;
   deliveryFailures: Array<{ sessionId: string; commandId: string; detail: string }>;
   projectId: string;
   ticketId: string;
@@ -93,7 +91,7 @@ interface Harness {
   attachReceipt: CommandReceipt | null;
 }
 
-function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
+function harness(overrides: Partial<AutomationRunnerPorts> = {}): Harness {
   ctx = openTestDb();
   const project = testProject();
   insertProject(ctx.db, project);
@@ -113,7 +111,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
   const attaches: string[] = [];
   const delivered: Harness["delivered"] = [];
   const refinements: Harness["refinements"] = [];
-  const logs: string[] = [];
+  const logs: Harness["logs"] = [];
   const deliveryFailures: Harness["deliveryFailures"] = [];
   const sessionsByOperation = new Map<string, string>();
   let nextSession = 0;
@@ -130,7 +128,8 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     },
     findProject: (candidate) => candidate === project.id,
     listRunsForTicket: (ticketId) => listRunsForTicket(ctx.db, ticketId),
-    listProjectRunsForAutomation: (input) => listProjectRunsForAutomation(ctx.db, input),
+    listPossiblyLiveProjectRunsForAutomation: (input) =>
+      listPossiblyLiveProjectRunsForAutomation(ctx.db, input),
     sessions: {
       create: async (input) => {
         creates.push(input);
@@ -140,7 +139,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
           sessionsByOperation.set(input.operationId, sessionId);
           // The fake facade mints the Session ROW as well as the id, because a
           // Run that names no Ticket is scoped to its project through exactly
-          // this row (`listProjectRunsForAutomation`) — a fake that skipped it
+          // this row (`listPossiblyLiveProjectRunsForAutomation`) — a fake that skipped it
           // would leave the schedule's own single-flight guard untestable.
           insertSession(ctx.db, testSession(input.projectId, input.ticketId, { id: sessionId }));
           ctx.db
@@ -183,7 +182,7 @@ function harness(overrides: Partial<AutomationRunnerDeps> = {}): Harness {
     },
     readSessionActivity: async () => "idle",
     refineAutoTitle: (input) => refinements.push(input),
-    log: (message) => logs.push(message),
+    log: (msg, fields) => logs.push({ msg, ...fields }),
     ...overrides,
   });
 
@@ -1159,7 +1158,9 @@ describe("createAutomationRunner", () => {
 
     expect(h.delivered[0]?.text).toBe(automation.instructions);
     expect(h.delivered[0]?.resources).toEqual([]);
-    expect(h.logs.join("\n")).toMatch(/prompt supply/);
+    expect(h.logs).toEqual([
+      expect.objectContaining({ msg: "automation run could not read the prompt supply" }),
+    ]);
   });
 
   /* ------------------------- the Project as the Target (VC-130) --------- */
@@ -1283,6 +1284,38 @@ describe("createAutomationRunner", () => {
     expect(h.creates).toEqual([]);
   });
 
+  // VC-822: removal detaches a project and keeps its Automations, so a
+  // schedule still comes due there. Its skip names the removal, not a
+  // project that was never there.
+  it("refuses a Run in a removed project as removed, ticket or project scope", async () => {
+    const h = harness({ projectRemoved: () => true });
+    const automation = await savedAutomation(h);
+    const removed = {
+      ok: false,
+      code: "PROJECT_REMOVED",
+      error: "The project was removed from Volli.",
+    };
+
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: h.projectId,
+        attendance: "unattended",
+      }),
+    ).resolves.toMatchObject(removed);
+    await expect(
+      h.runner.run({
+        commandId: randomUUID(),
+        target: { kind: "automation", automationId: automation.id },
+        ticketId: h.ticketId,
+        modelOverride: null,
+        attendance: "attended",
+      }),
+    ).resolves.toMatchObject(removed);
+    expect(h.creates).toEqual([]);
+  });
+
   it("refuses an Automation owned by another project", async () => {
     const h = harness();
     const created = await h.engine.create({
@@ -1352,6 +1385,122 @@ describe("createAutomationRunner", () => {
     await h.runner.settled();
     expect(outcome.ok).toBe(true);
     expect(h.creates).toHaveLength(2);
+  });
+
+  /**
+   * Seeds `count` earlier Runs of `automationId` whose Sessions are quiet by
+   * their durable facts: each structured attachment opened and closed, and no
+   * turn, question or user-blocking Attention left open. This is what months
+   * of a finished hourly schedule leave behind.
+   */
+  function seedQuietRuns(h: Harness, automationId: string, count: number): string[] {
+    const sessionIds: string[] = [];
+    const insertSessionRow = ctx.db.prepare(
+      `INSERT INTO sessions (id, project_id, ticket_id, role, title, created_at)
+       VALUES (?, ?, NULL, 'project', 'Finished Run', ?)`,
+    );
+    const insertClosedAttachment = ctx.db.prepare(
+      `INSERT INTO session_attachments
+         (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
+          native_detail, observed_kind, failure, created_sequence, closed_sequence)
+       VALUES (?, ?, 'pi', 'local', 'local', 'fresh', NULL, NULL, 'opened', NULL, 1, 2)`,
+    );
+    ctx.db.transaction(() => {
+      for (let index = 0; index < count; index += 1) {
+        const sessionId = `quiet-session-${index}`;
+        insertSessionRow.run(sessionId, h.projectId, index);
+        insertClosedAttachment.run(`quiet-attachment-${index}`, sessionId);
+        recordAutomationRun(
+          ctx.db,
+          {
+            automationId,
+            automationName: "Two-opinion review",
+            ticketId: null,
+            sessionId,
+            model: RESOLVED,
+          },
+          index,
+        );
+        sessionIds.push(sessionId);
+      }
+    })();
+    return sessionIds;
+  }
+
+  it("reads only the Runs that could still be live, however long the schedule has run (VC-816)", async () => {
+    // 5,000 quiet Runs: about seven months of an hourly schedule. Before
+    // VC-816 the guard read every one of their projections, one after another,
+    // before this Run could start.
+    const reads: string[] = [];
+    let live: "working" | "idle" = "working";
+    let liveSessionId: string | null = null;
+    const h = harness({
+      readSessionActivity: async (sessionId) => {
+        reads.push(sessionId);
+        return sessionId === liveSessionId ? live : "idle";
+      },
+    });
+    const automation = await savedAutomation(h);
+    seedQuietRuns(h, automation.id, 5_000);
+    // One earlier Run is still attached: the harness's Session row holds an
+    // open attachment, which is what a live Run's Session has.
+    const first = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+    if (!first.ok) throw new Error(`refused: ${first.error}`);
+    liveSessionId = first.run.sessionId;
+    reads.length = 0;
+
+    await expect(
+      h.runner.runForProject({
+        commandId: randomUUID(),
+        automationId: automation.id,
+        projectId: h.projectId,
+        attendance: "attended",
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "RUN_IN_FLIGHT" });
+    expect(reads).toEqual([liveSessionId]);
+
+    // The same single read admits the next Run once the live one goes quiet.
+    live = "idle";
+    reads.length = 0;
+    const next = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+    expect(next.ok).toBe(true);
+    expect(reads).toEqual([liveSessionId]);
+  });
+
+  it("does not let one unreadable finished Session refuse every later Run (VC-816)", async () => {
+    const reads: string[] = [];
+    const h = harness({
+      readSessionActivity: async (sessionId) => {
+        reads.push(sessionId);
+        throw new Error("checkpoint written by a newer build");
+      },
+    });
+    const automation = await savedAutomation(h);
+    seedQuietRuns(h, automation.id, 1);
+
+    const outcome = await h.runner.runForProject({
+      commandId: randomUUID(),
+      automationId: automation.id,
+      projectId: h.projectId,
+      attendance: "attended",
+    });
+    await h.runner.settled();
+
+    expect(outcome.ok).toBe(true);
+    expect(reads).toEqual([]);
+    expect(h.creates).toHaveLength(1);
   });
 });
 
@@ -1530,7 +1679,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     ]);
     expect(h.refinements).toEqual([expect.objectContaining({ sessionId: outcome.run.sessionId })]);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} first-message receipt is rejected; retaining its delivery intent`,
+      {
+        msg: "automation run first-message receipt not accepted; retaining its delivery intent",
+        runId: outcome.run.id,
+        status: "rejected",
+      },
     ]);
   });
 
@@ -1565,7 +1718,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     ]);
     expect(h.refinements).toEqual([expect.objectContaining({ sessionId: outcome.run.sessionId })]);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not deliver its Instructions: Pi delivery socket closed`,
+      {
+        msg: "automation run could not deliver its instructions",
+        runId: outcome.run.id,
+        error: expect.objectContaining({ message: "Pi delivery socket closed" }),
+      },
     ]);
   });
 
@@ -1587,7 +1744,10 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     expect(h.delivered).toHaveLength(1);
     expect(h.refinements).toEqual([]);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not refine its Session title: the Run was not found`,
+      {
+        msg: "automation run could not refine its session title: the run was not found",
+        runId: outcome.run.id,
+      },
     ]);
   });
 
@@ -1612,15 +1772,17 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     if (!outcome.ok) throw new Error("refused");
     expect(h.delivered).toHaveLength(1);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not refine its Session title: titler unavailable`,
+      {
+        msg: "automation run could not refine its session title",
+        runId: outcome.run.id,
+        error: expect.objectContaining({ message: "titler unavailable" }),
+      },
     ]);
   });
 
   it("says so when the attach that would have delivered them is refused", async () => {
-    // The owner's Run, at the seam. Its Session was minted, its attach was
-    // rejected — an unpreparable worktree — and the boot half returned without
-    // a word: the door had already answered `ok`, the Run row linked to a
-    // Session with nothing in it, and there was no line anywhere saying why.
+    // The Run's Session exists but attach cannot prepare its worktree. The
+    // accepted Run must still report why no Instructions were delivered.
     //
     // The intent is deliberately still owed (the attach failed, not the
     // delivery), so the Session's own Retry and the next launch's recovery
@@ -1655,7 +1817,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
     expect(h.delivered).toEqual([]);
     expect(h.refinements).toEqual([]);
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not attach its Session: Couldn't prepare the worktree at /w/VC-1 — no such table: blob_links`,
+      {
+        msg: "automation run could not attach its session",
+        runId: outcome.run.id,
+        reason: "Couldn't prepare the worktree at /w/VC-1 — no such table: blob_links",
+      },
     ]);
     expect(
       ctx.db
@@ -1683,7 +1849,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
 
     if (!outcome.ok) throw new Error("refused");
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not attach its Session: the attach reported no receipt`,
+      {
+        msg: "automation run could not attach its session",
+        runId: outcome.run.id,
+        reason: "the attach reported no receipt",
+      },
     ]);
   });
 
@@ -1711,7 +1881,11 @@ describe("every Run door delivers its Instructions as the kickoff turn (VC-220)"
 
     if (!outcome.ok) throw new Error("refused");
     expect(h.logs).toEqual([
-      `[volli] automation Run ${outcome.run.id} could not attach its Session: the attach is unreconciled`,
+      {
+        msg: "automation run could not attach its session",
+        runId: outcome.run.id,
+        reason: "the attach is unreconciled",
+      },
     ]);
   });
 });

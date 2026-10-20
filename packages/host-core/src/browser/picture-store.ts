@@ -28,6 +28,8 @@
  */
 
 export const BROWSER_PICTURE_LIVE_LIMIT = 48;
+/** Divisible by three, so base64 chunks concatenate without interior padding. */
+export const BROWSER_PICTURE_CHUNK_BYTES = 192 * 1024;
 
 /**
  * How long a `browser_screenshot` the model asked for stays on disk, and how
@@ -38,7 +40,12 @@ export const BROWSER_PICTURE_LIVE_LIMIT = 48;
 export const BROWSER_PICTURE_PERSIST_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
 export const BROWSER_PICTURE_PERSIST_LIMIT = 400;
 
-export type BrowserPictureMime = "image/jpeg" | "image/png";
+export type BrowserPictureMime =
+  | "image/jpeg"
+  | "image/png"
+  | "image/gif"
+  | "image/webp"
+  | "image/bmp";
 
 /** What a persisted picture is of, kept beside its bytes so the sink is self-describing. */
 export interface BrowserPictureRecord {
@@ -54,12 +61,14 @@ export interface BrowserPictureRecord {
 export interface BrowserPicturePersistence {
   write(bytes: Uint8Array, record: BrowserPictureRecord): void;
   read(id: string): { bytes: Uint8Array; mime: BrowserPictureMime } | null;
+  /** Bounded offset read; optional for older injected sinks that only implement `read`. */
+  readChunk?(id: string, offset: number): { bytes: Uint8Array; byteLength: number } | null;
   /** Every picture the sink still holds, for rehydration and the sweep. */
   list(): readonly BrowserPictureRecord[];
   remove(id: string): void;
 }
 
-export interface BrowserPictureStoreDependencies {
+export interface BrowserPictureStorePorts {
   createId: () => string;
   now: () => number;
   /** Absent means nothing outlives the live set — every test and a build with no disk. */
@@ -99,7 +108,7 @@ export class BrowserPictureStore {
   private readonly persistLimit: number;
   private readonly persistMaxAgeMs: number;
 
-  constructor(private readonly deps: BrowserPictureStoreDependencies) {
+  constructor(private readonly deps: BrowserPictureStorePorts) {
     this.liveLimit = deps.liveLimit ?? BROWSER_PICTURE_LIVE_LIMIT;
     this.persistLimit = deps.persistLimit ?? BROWSER_PICTURE_PERSIST_LIMIT;
     this.persistMaxAgeMs = deps.persistMaxAgeMs ?? BROWSER_PICTURE_PERSIST_MAX_AGE_MS;
@@ -137,6 +146,54 @@ export class BrowserPictureStore {
     return id;
   }
 
+  /** Code Mode uses the same bounded disk lifetime as an explicit browser screenshot. */
+  keepActivityImage(sessionId: string, image: { data: string; mimeType: string }): string | null {
+    if (
+      this.deps.persist === undefined ||
+      !["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"].includes(image.mimeType)
+    )
+      return null;
+    return this.put({
+      tabId: `codemode:${sessionId}`,
+      generation: 0,
+      ownerSessionId: sessionId,
+      mime: image.mimeType as BrowserPictureMime,
+      bytes: Buffer.from(image.data, "base64"),
+      persist: true,
+    });
+  }
+
+  /** Bounded chunks keep even a maximum-size run below the host's 2 MiB wire frame cap. */
+  readActivityImage(
+    sessionId: string,
+    pictureId: string,
+    offset = 0,
+  ): {
+    data: string | null;
+    mimeType: string | null;
+    nextOffset: number | null;
+  } {
+    const record = this.minted.get(pictureId);
+    // Refuse unknown ids, other Sessions and malformed offsets before reading any bytes.
+    if (
+      record === undefined ||
+      record.ownerSessionId !== sessionId ||
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      offset % 3 !== 0
+    ) {
+      return { data: null, mimeType: null, nextOffset: null };
+    }
+    const chunk = this.activityChunkOf(pictureId, offset);
+    if (chunk === null) return { data: null, mimeType: null, nextOffset: null };
+    const end = offset + chunk.bytes.length;
+    return {
+      data: Buffer.from(chunk.bytes).toString("base64"),
+      mimeType: record.mime,
+      nextOffset: end === chunk.byteLength ? null : end,
+    };
+  }
+
   /** The picture as an `<img src>`, or null when nothing here or on disk answers to the id. */
   dataUrl(id: string): string | null {
     const held = this.bytesOf(id);
@@ -154,6 +211,22 @@ export class BrowserPictureStore {
     const held = this.bytesOf(id);
     const record = this.describe(id);
     return held === null || record === null ? null : { bytes: held.bytes, record };
+  }
+
+  private activityChunkOf(
+    id: string,
+    offset: number,
+  ): { bytes: Uint8Array; byteLength: number } | null {
+    // Do not load a persisted image in full on each chunk, nor keep another byte cache.
+    const sink = this.deps.persist;
+    if (!this.live.has(id) && sink?.readChunk !== undefined) return sink.readChunk(id, offset);
+    // Live pictures and older injected persistence seams retain their original read path.
+    const held = this.bytesOf(id);
+    if (held === null || offset >= held.bytes.length) return null;
+    return {
+      bytes: held.bytes.subarray(offset, offset + BROWSER_PICTURE_CHUNK_BYTES),
+      byteLength: held.bytes.length,
+    };
   }
 
   private bytesOf(id: string): { bytes: Uint8Array; mime: BrowserPictureMime } | null {

@@ -57,6 +57,44 @@ describe("retention runtime ports", () => {
     expect(watch.getState("t1")?.prState).toBe("merged");
   });
 
+  it("isolates observation, ports and database handles for concurrent hosts", async () => {
+    const first = fixture();
+    const second = openTestDb();
+    const secondEvents = { publish: vi.fn() };
+    try {
+      insertProject(second.db, testProject({ id: "p1", path: "/repo" }));
+      insertTicket(
+        second.db,
+        testTicket("p1", {
+          id: "t1",
+          status: "needs_review",
+          branch: "other",
+          worktreePath: "/repo/other",
+        }),
+      );
+      updateTicketFields(second.db, "t1", { prUrl: "https://example.com/pull/2" }, 1);
+      const a = getRetentionWatcher(first.db, first, first.worktree);
+      const b = getRetentionWatcher(
+        second.db,
+        { events: secondEvents, attention: HEADLESS_ATTENTION },
+        () =>
+          worktreeDeps(second.db, { events: secondEvents }, { dataDir: dirname(second.dbPath) }),
+      );
+      expect(b).not.toBe(a);
+      a.dismiss("t1");
+      expect(b.getState("t1")?.dismissed).not.toBe(true);
+      // Closing one host must not poison the other host's next poll.
+      first.db.close();
+      b.triggerNow();
+      await b.settled();
+      expect(secondEvents.publish).toHaveBeenCalledWith("data-changed", {});
+      expect(first.events.publish).not.toHaveBeenCalled();
+      b.stop();
+    } finally {
+      second.cleanup();
+    }
+  });
+
   it("keeps the first lazy singleton and dismissal across desktop IPC and host reads", () => {
     const { db, events, attention, worktree } = fixture();
     const watch = getRetentionWatcher(db, { events, attention }, worktree);

@@ -1,19 +1,27 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { createTestSessionEngine } from "../testing/session-engine";
 import { insertSession } from "../session-control/test-support";
-import { testProject, testSession, testTicket, openTestDb } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { testProject, testSession, testTicket, openTestDb } from "./test-helpers";
+import type { TestDb } from "./test-helpers";
 import { DEFAULT_AUTHORITY_POLICY } from "@volli/shared";
 import {
+  countProjects,
   deleteProject,
+  detachProject,
+  findProjectByPath,
+  findRemovedProjectByPrefix,
   getProjectAuthorityPolicy,
   getProjectById,
   insertProject,
+  isProjectAttached,
+  isProjectRemoved,
+  listProjects,
+  reattachProject,
   updateProjectAuthorityPolicy,
   updateProjectSkillModes,
   updateProjectSessionDefaults,
-} from "@volli/host-core/db/projects-repo";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+} from "./projects-repo";
+import { insertTicket } from "./tickets-repo";
 
 let ctx: TestDb;
 
@@ -69,6 +77,66 @@ describe("deleteProject", () => {
       expect(ctx.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
     }
     expect(ctx.db.pragma("foreign_key_check")).toEqual([]);
+  });
+});
+
+/**
+ * VC-822: removing a project detaches it (migration 064). Every listing stops
+ * returning it while its row, and everything hanging off it, stays.
+ */
+describe("detachProject / reattachProject", () => {
+  function rowOf(id: string) {
+    return ctx.db
+      .prepare("SELECT removed_at, sort_order, row_version, updated_at FROM projects WHERE id = ?")
+      .get(id);
+  }
+
+  it("hides a removed project from every listing, but not from an id or path lookup", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "a", path: "/a", sortOrder: 0, ticketPrefix: "AA" }));
+    insertProject(ctx.db, testProject({ id: "b", path: "/b", sortOrder: 1, ticketPrefix: "BB" }));
+    insertTicket(ctx.db, testTicket("a", { id: "t1" }));
+
+    expect(detachProject(ctx.db, "a", 50)).toBe(true);
+
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["b"]);
+    expect(countProjects(ctx.db)).toBe(1);
+    expect(countProjects(ctx.db, "all")).toBe(2);
+    expect(isProjectAttached(ctx.db, "a")).toBe(false);
+    expect(isProjectAttached(ctx.db, "b")).toBe(true);
+    expect(isProjectAttached(ctx.db, "missing")).toBe(false);
+    // Removed is its own answer: an unknown id is not a removed project.
+    expect(isProjectRemoved(ctx.db, "a")).toBe(true);
+    expect(isProjectRemoved(ctx.db, "b")).toBe(false);
+    expect(isProjectRemoved(ctx.db, "missing")).toBe(false);
+    // It keeps its prefix for its return; one on the rail is not "removed".
+    expect(findRemovedProjectByPrefix(ctx.db, "AA")).toMatchObject({ id: "a" });
+    expect(findRemovedProjectByPrefix(ctx.db, "BB")).toBeUndefined();
+    expect(getProjectById(ctx.db, "a")).toMatchObject({ id: "a" });
+    expect(findProjectByPath(ctx.db, "/a")).toMatchObject({ id: "a" });
+    expect(rowOf("a")).toEqual({ removed_at: 50, sort_order: 0, row_version: 2, updated_at: 50 });
+    // Nothing cascaded.
+    expect(ctx.db.prepare("SELECT id FROM tickets WHERE project_id = 'a'").all()).toEqual([
+      { id: "t1" },
+    ]);
+  });
+
+  it("detaches once, and re-attaches only a removed project, at the end of the rail", () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "a", path: "/a", sortOrder: 0 }));
+    insertProject(ctx.db, testProject({ id: "b", path: "/b", sortOrder: 1 }));
+
+    expect(reattachProject(ctx.db, "a", 60)).toBe(false);
+    expect(detachProject(ctx.db, "a", 50)).toBe(true);
+    expect(detachProject(ctx.db, "a", 55)).toBe(false);
+    expect(detachProject(ctx.db, "missing", 55)).toBe(false);
+    expect(rowOf("a")).toMatchObject({ removed_at: 50 });
+
+    expect(reattachProject(ctx.db, "a", 60)).toBe(true);
+    expect(reattachProject(ctx.db, "missing", 60)).toBe(false);
+
+    expect(rowOf("a")).toEqual({ removed_at: null, sort_order: 2, row_version: 3, updated_at: 60 });
+    expect(listProjects(ctx.db).map(({ id }) => id)).toEqual(["b", "a"]);
   });
 });
 

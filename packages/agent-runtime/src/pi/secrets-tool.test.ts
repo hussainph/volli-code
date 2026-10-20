@@ -1,7 +1,13 @@
+import { getEventListeners } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type AgentTool, type AgentToolResult } from "@earendil-works/pi-agent-core";
-import { BACKGROUND_CONTEXT, type ExecutionEnv } from "./harness-env";
+import {
+  BACKGROUND_CONTEXT,
+  NodeExecutionEnv,
+  withAbortSignal,
+  type ExecutionEnv,
+} from "./harness-env";
 import { Type } from "@earendil-works/pi-ai";
 import {
   codeModeSurfaceFor,
@@ -260,11 +266,89 @@ describe("tool result credential boundary", () => {
     expect(updates).toEqual([final]);
     expect(JSON.stringify(final)).not.toContain(SECRET);
     expect(final.structuredContent).toEqual({ token: "[redacted]" });
-    expect(final.content[1]).toEqual({
-      type: "text",
-      text: "[Image withheld while secure credentials are enabled.]",
-    });
+    expect(final.content[1]).toEqual(result.content[1]);
     expect(JSON.stringify(result)).toContain(SECRET); // Never mutate a tool's object.
+  });
+
+  it("scrubs image-shaped structured data and content image metadata in results and updates", async () => {
+    const image = {
+      type: "image" as const,
+      data: SECRET,
+      mimeType: `image/${SECRET}`,
+      token: SECRET,
+      [SECRET]: { type: "image", data: SECRET, mimeType: SECRET },
+    };
+    const result = {
+      content: [image],
+      details: { type: "image", token: SECRET },
+      structuredContent: { type: "image", data: SECRET, mimeType: SECRET, token: SECRET },
+    };
+    const updates: AgentToolResult<unknown>[] = [];
+    const final = await redactToolResults(
+      fixtureTool(async (_id, _params, _signal, update) => {
+        update?.(result);
+        return result;
+      }),
+      secretPort(),
+    ).execute("image-metadata", {}, signal, (update) => updates.push(update));
+    const expected = {
+      content: [
+        {
+          type: "image",
+          data: SECRET,
+          mimeType: "image/[redacted]",
+          token: "[redacted]",
+          "[redacted]": { type: "image", data: "[redacted]", mimeType: "[redacted]" },
+        },
+      ],
+      details: { type: "image", token: "[redacted]" },
+      structuredContent: {
+        type: "image",
+        data: "[redacted]",
+        mimeType: "[redacted]",
+        token: "[redacted]",
+      },
+    };
+    expect(final).toEqual(expected);
+    expect(updates).toEqual([expected]);
+    expect(image.token).toBe(SECRET);
+  });
+
+  it.each([
+    null,
+    SECRET,
+    { token: SECRET },
+    { type: "text", text: SECRET },
+    { type: "image", token: SECRET },
+    { type: "image", data: { token: SECRET }, mimeType: "image/png" },
+    { type: "image", data: SECRET },
+    { type: "image", data: SECRET, mimeType: 123 },
+  ])("scrubs malformed content image entries normally (%j)", async (block) => {
+    const result = { content: [block], details: undefined } as unknown as AgentToolResult<unknown>;
+    const updates: AgentToolResult<unknown>[] = [];
+    const final = await redactToolResults(
+      fixtureTool(async (_id, _params, _signal, update) => {
+        update?.(result);
+        return result;
+      }),
+      secretPort(),
+    ).execute("malformed-image", {}, signal, (update) => updates.push(update));
+    expect(JSON.stringify(final)).not.toContain(SECRET);
+    expect(final.content[0]).toEqual(
+      JSON.parse(JSON.stringify(block).replaceAll(SECRET, "[redacted]")),
+    );
+    expect(updates).toEqual([final]);
+  });
+
+  it("scrubs malformed non-array content normally", async () => {
+    const result = {
+      content: { type: "image", data: SECRET },
+    } as unknown as AgentToolResult<unknown>;
+    const final = await redactToolResults(
+      fixtureTool(async () => result),
+      secretPort(),
+    ).execute("malformed-content", {}, signal);
+    expect(final.content).toEqual({ type: "image", data: "[redacted]" });
   });
 
   it.each([new Error(`failure ${SECRET}`, { cause: new Error(SECRET) }), SECRET])(
@@ -388,6 +472,168 @@ describe("tool result credential boundary", () => {
 });
 
 describe("dynamic credential environment", () => {
+  it("awaits credentials at each exec before spawning, preserving identity and caller precedence", async () => {
+    const root = await mkdtemp(join(process.cwd(), ".volli-secrets-test-"));
+    let held = Promise.withResolvers<Readonly<Record<string, string>>>();
+    const secretEnvironment = vi.fn(() => held.promise);
+    const exec = vi.spyOn(NodeExecutionEnv.prototype, "exec");
+    const env = await piExecutionEnv(root, {
+      secretEnvironment,
+      environment: { API_TOKEN: "regular", OVERRIDDEN: "regular" },
+      identity: {
+        sessionId: "identity",
+        ticketDisplayId: "VC-653",
+        sessionToken: "identity-token",
+      },
+    });
+    try {
+      for (const token of ["first", "second"]) {
+        held = Promise.withResolvers<Readonly<Record<string, string>>>();
+        exec.mockClear();
+        const pending = env.exec(
+          'printf "%s" "$API_TOKEN"',
+          { env: { OVERRIDDEN: "caller" } },
+          BACKGROUND_CONTEXT,
+        );
+        expect(exec).not.toHaveBeenCalled();
+        held.resolve({
+          API_TOKEN: token,
+          OVERRIDDEN: "secret",
+          VOLLI_SESSION: "secret-session",
+          VOLLI_TICKET: "secret-ticket",
+          VOLLI_SESSION_TOKEN: "secret-token",
+        });
+        await pending;
+        expect(exec).toHaveBeenCalledExactlyOnceWith(
+          'printf "%s" "$API_TOKEN"',
+          expect.objectContaining({
+            inheritEnv: false,
+            env: expect.objectContaining({
+              API_TOKEN: token,
+              OVERRIDDEN: "caller",
+              VOLLI_SESSION: "identity",
+              VOLLI_TICKET: "VC-653",
+              VOLLI_SESSION_TOKEN: "identity-token",
+            }),
+          }),
+          BACKGROUND_CONTEXT,
+        );
+      }
+      expect(secretEnvironment).toHaveBeenCalledTimes(2);
+    } finally {
+      exec.mockRestore();
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a failed credential read without calling the spawning implementation", async () => {
+    const root = await mkdtemp(join(process.cwd(), ".volli-secrets-test-"));
+    const held = Promise.withResolvers<Readonly<Record<string, string>>>();
+    const failure = new Error("credential read failed");
+    const exec = vi.spyOn(NodeExecutionEnv.prototype, "exec");
+    const env = await piExecutionEnv(root, { secretEnvironment: () => held.promise });
+    try {
+      const pending = env.exec("echo must-not-run", undefined, BACKGROUND_CONTEXT);
+      const rejected = expect(pending).rejects.toBe(failure);
+      expect(exec).not.toHaveBeenCalled();
+      held.reject(failure);
+      await rejected;
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      exec.mockRestore();
+      await env.cleanup(BACKGROUND_CONTEXT);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("withdraws promptly without resolving an uncooperative credential hook or spawning", async () => {
+    const held = Promise.withResolvers<Readonly<Record<string, string>>>();
+    const withdrawn = new AbortController();
+    const failure = new Error("call withdrawn");
+    const secretEnvironment = vi.fn(() => held.promise);
+    const exec = vi.spyOn(NodeExecutionEnv.prototype, "exec");
+    const env = await piExecutionEnv(process.cwd(), { secretEnvironment });
+    try {
+      const pending = env.exec(
+        "echo must-not-run",
+        undefined,
+        withAbortSignal(withdrawn.signal, BACKGROUND_CONTEXT),
+      );
+      const rejected = expect(pending).rejects.toBe(failure);
+      expect(secretEnvironment).toHaveBeenCalledExactlyOnceWith(withdrawn.signal);
+      withdrawn.abort(failure);
+      await rejected;
+      expect(exec).not.toHaveBeenCalled();
+      expect(getEventListeners(withdrawn.signal, "abort")).toEqual([]);
+    } finally {
+      exec.mockRestore();
+      await env.cleanup(BACKGROUND_CONTEXT);
+    }
+  }, 1_000);
+
+  it.each(["before", "in hook", "after resolution"] as const)(
+    "does not spawn when aborted %s the credential wait",
+    async (when) => {
+      const withdrawn = new AbortController();
+      const failure = new Error("call withdrawn");
+      const held = Promise.withResolvers<Readonly<Record<string, string>>>();
+      const secretEnvironment = vi.fn(() => {
+        if (when === "in hook") withdrawn.abort(failure);
+        return held.promise;
+      });
+      const exec = vi.spyOn(NodeExecutionEnv.prototype, "exec");
+      const env = await piExecutionEnv(process.cwd(), { secretEnvironment });
+      try {
+        if (when === "before") withdrawn.abort(failure);
+        const pending = env.exec(
+          "echo must-not-run",
+          undefined,
+          withAbortSignal(withdrawn.signal, BACKGROUND_CONTEXT),
+        );
+        const rejected = expect(pending).rejects.toBe(failure);
+        if (when === "after resolution") {
+          held.resolve({});
+          withdrawn.abort(failure);
+        }
+        await rejected;
+        expect(secretEnvironment).toHaveBeenCalledTimes(when === "before" ? 0 : 1);
+        expect(exec).not.toHaveBeenCalled();
+        expect(getEventListeners(withdrawn.signal, "abort")).toEqual([]);
+      } finally {
+        exec.mockRestore();
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    },
+    1_000,
+  );
+
+  it.each(["resolve", "reject"] as const)(
+    "forwards the signal and releases its listener when credentials %s",
+    async (outcome) => {
+      const controller = new AbortController();
+      const failure = new Error("credential read failed");
+      const secretEnvironment = vi.fn(async () => {
+        if (outcome === "reject") throw failure;
+        return {};
+      });
+      const env = await piExecutionEnv(process.cwd(), { secretEnvironment });
+      try {
+        const pending = env.exec(
+          "true",
+          undefined,
+          withAbortSignal(controller.signal, BACKGROUND_CONTEXT),
+        );
+        if (outcome === "reject") await expect(pending).rejects.toBe(failure);
+        else expect((await pending).ok).toBe(true);
+        expect(secretEnvironment).toHaveBeenCalledExactlyOnceWith(controller.signal);
+        expect(getEventListeners(controller.signal, "abort")).toEqual([]);
+      } finally {
+        await env.cleanup(BACKGROUND_CONTEXT);
+      }
+    },
+  );
+
   it("layers secrets over regular variables and below identity, evaluating each command", () => {
     let token = "first";
     const options = {
@@ -455,22 +701,35 @@ describe("dynamic credential environment", () => {
 });
 
 describe("credential output privacy before disk spill", () => {
-  it.each([false, true, "failed"] as const)(
-    "only withholds images once values exist (%s)",
+  it.each([false, true, "failed", "missing"] as const)(
+    "passes content images through without redacting base64 data (%s)",
     async (active) => {
       const image = { type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" };
+      const redact = vi.fn((text: string) => text.replaceAll(image.data, "[redacted]"));
       const port = {
         ...secretPort(),
-        hasValues: () => {
-          if (active === "failed") throw new Error("unavailable");
-          return active;
-        },
+        redact,
+        ...(active === "missing"
+          ? {}
+          : {
+              hasValues: () => {
+                if (active === "failed") throw new Error("unavailable");
+                return active;
+              },
+            }),
       };
+      const updates: AgentToolResult<unknown>[] = [];
       const result = await redactToolResults(
-        fixtureTool(async () => ({ content: [image], details: undefined })),
+        fixtureTool(async (_id, _params, _signal, update) => {
+          const rawResult = { content: [image], details: undefined };
+          update?.(rawResult);
+          return rawResult;
+        }),
         port,
-      ).execute("c", {}, signal);
-      expect(result.content[0]?.type).toBe(active === false ? "image" : "text");
+      ).execute("c", {}, signal, (update) => updates.push(update));
+      expect(result.content[0]).toEqual(image);
+      expect(updates[0]?.content[0]).toEqual(image);
+      expect(redact).not.toHaveBeenCalledWith(image.data);
     },
   );
   it("passes through ordinary environments and disables spill dynamically, failing closed", async () => {

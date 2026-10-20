@@ -125,3 +125,69 @@ describe("requestActor", () => {
     });
   });
 });
+
+/**
+ * The operator rung (VC-623): a hostd-issued token proves the person, and only
+ * for a request that carries no Session evidence whatsoever.
+ */
+/** A host that issued `op-1` to alice. */
+const verifyOperator = (token: string) => (token === "op-1" ? { login: "alice" } : null);
+
+describe("doorActor with an operator verifier", () => {
+  it("proves the person for a token the host issued", () => {
+    expect(doorActor(request({ operatorToken: "op-1" }), verify, verifyOperator)).toEqual({
+      kind: "operator",
+      login: "alice",
+    });
+  });
+
+  it("makes a token the host did not issue nobody, never a Session", () => {
+    expect(doorActor(request({ operatorToken: "op-2" }), verify, verifyOperator)).toEqual({
+      kind: "unauthenticated",
+    });
+    // An empty one is no token at all.
+    expect(doorActor(request({ operatorToken: "" }), verify, verifyOperator)).toEqual({
+      kind: "unauthenticated",
+    });
+  });
+
+  it("never reads an operator token beside any Session evidence", () => {
+    const read: string[] = [];
+    const watching = (token: string) => {
+      read.push(token);
+      return { login: "alice" };
+    };
+    // A valid Session token wins outright, exactly as without the field.
+    expect(
+      doorActor(
+        request({ session: "session-1", token: "token-1", operatorToken: "op-1" }),
+        verify,
+        watching,
+      ),
+    ).toEqual({ kind: "session", sessionId: "session-1" });
+    // An invalid one, an empty one, or a bare claim stay unauthenticated.
+    for (const env of [
+      { token: "forged", operatorToken: "op-1" },
+      { token: "", operatorToken: "op-1" },
+      { session: "session-1", operatorToken: "op-1" },
+    ]) {
+      expect(doorActor(request(env), verify, watching), JSON.stringify(env)).toEqual({
+        kind: "unauthenticated",
+      });
+    }
+    expect(read).toEqual([]);
+  });
+
+  it("accepts none when no verifier is wired, as on desktop", () => {
+    expect(doorActor(request({ operatorToken: "op-1" }), verify)).toEqual({
+      kind: "unauthenticated",
+    });
+  });
+
+  it("attributes the person as the user actor, needing no Session", () => {
+    expect(requestActor({ kind: "operator", login: "alice" }, null)).toEqual({
+      ok: true,
+      actor: { kind: "user" },
+    });
+  });
+});

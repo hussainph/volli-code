@@ -1,0 +1,67 @@
+{
+  "sourceRevision": "49fc56278edba86607999b7c1d366e87ac02a800",
+  "api": "Independent git archive origin/main; production startHostProtocolListener + raw ws; test-only verifier; captured before hostModels exists",
+  "sent": [
+    {
+      "method": "connectionParams",
+      "data": {
+        "volli-hello": "{\"scope\":\"host\",\"protocol\":{\"min\":1,\"max\":1},\"client\":{\"kind\":\"desktop\",\"version\":\"pre-vc729-main\"},\"features\":[\"host.workspaces\",\"host.model-defaults\"],\"credential\":\"fixture-not-a-secret\",\"nonce\":\"ddQ5JpEKXpD5hbcSG_afrX_mxiOLMEf8PTcvSpiceaU\"}"
+      }
+    },
+    {
+      "id": 1,
+      "method": "query",
+      "params": {
+        "path": "protocol.hostWelcome"
+      }
+    },
+    {
+      "id": 2,
+      "method": "query",
+      "params": {
+        "path": "hostModels.defaults"
+      }
+    }
+  ],
+  "received": [
+    {
+      "id": 1,
+      "result": {
+        "type": "data",
+        "data": {
+          "scope": "host",
+          "protocolVersion": 1,
+          "host": {
+            "id": "7e8d9c0b-1a2f-4e3d-9c4b-5a6f7e8d9c0b",
+            "version": "pre-vc729-main"
+          },
+          "actor": {
+            "kind": "device",
+            "deviceId": "8a9b0c1d-2e3f-4a5b-9c6d-7e8f9a0b1c2d",
+            "scope": "host"
+          },
+          "features": [
+            "host.workspaces"
+          ],
+          "proof": null
+        }
+      }
+    },
+    {
+      "id": 2,
+      "error": {
+        "code": -32004,
+        "message": "No \"query\"-procedure on path \"hostModels.defaults\"",
+        "data": {
+          "code": "NOT_FOUND",
+          "httpStatus": 404,
+          "path": "hostModels.defaults",
+          "hostError": {
+            "code": "NOT_FOUND",
+            "message": "No \"query\"-procedure on path \"hostModels.defaults\""
+          }
+        }
+      }
+    }
+  ]
+}

@@ -18,17 +18,21 @@ import { FlaskIcon } from "@phosphor-icons/react/dist/csr/Flask";
 import { GearSixIcon } from "@phosphor-icons/react/dist/csr/GearSix";
 import { GlobeIcon } from "@phosphor-icons/react/dist/csr/Globe";
 import { InfoIcon } from "@phosphor-icons/react/dist/csr/Info";
+import { ListMagnifyingGlassIcon } from "@phosphor-icons/react/dist/csr/ListMagnifyingGlass";
 import { PaletteIcon } from "@phosphor-icons/react/dist/csr/Palette";
 import { PlugsIcon } from "@phosphor-icons/react/dist/csr/Plugs";
 import { TreeStructureIcon } from "@phosphor-icons/react/dist/csr/TreeStructure";
-import { EXPERIMENTS, MODEL_TIER_ROWS } from "@volli/shared";
+import { EXPERIMENTS, MODEL_TIER_ROWS, type ExperimentSnapshot } from "@volli/shared";
 
+import { LogViewer } from "@renderer/components/logs/log-viewer";
 import { AgentObservabilitySettings } from "@renderer/components/pages/agent-observability-settings";
 import { AppearanceSettings } from "@renderer/components/pages/appearance-settings";
 import { ExperimentalSettings } from "@renderer/components/pages/experimental-settings";
 import { ModelAccessSettings } from "@renderer/components/pages/model-access-settings";
 import { WebAccessSettings } from "@renderer/components/pages/web-access-settings";
 import type { PrefGroup } from "@renderer/components/settings/kit";
+import { hasVisibleExperiments } from "@renderer/stores/experiments";
+import { hostsCategory } from "./hosts-category";
 import { AboutPane } from "./panes/about-pane";
 import { DisplaySection } from "./panes/display-section";
 import { GeneralPane } from "./panes/general-pane";
@@ -61,7 +65,25 @@ export function resolveSettingsCategory(key: string | undefined): string | undef
   return key;
 }
 
-export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] {
+export interface SettingsGroupsOptions {
+  /** The host's effective experiment availability. Hidden until the first answer. */
+  readonly experiments?: ExperimentSnapshot | null;
+  /**
+   * Shows System → Logs, the end-to-end log viewer (VC-699): dev builds, and
+   * product builds with the `cloud` experiment on (`useLogViewerEnabled`).
+   */
+  readonly logs?: boolean;
+  /**
+   * Shows Services → Hosts, the hosts this Mac added over SSH (VC-700): only
+   * with the `cloud` experiment on.
+   */
+  readonly hosts?: boolean;
+}
+
+export function settingsGroups(
+  signInProviderId?: string,
+  options: SettingsGroupsOptions = {},
+): readonly PrefGroup[] {
   return [
     {
       key: "preferences",
@@ -157,6 +179,7 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
       key: "services",
       label: "Services",
       categories: [
+        ...(options.hosts === true ? [hostsCategory()] : []),
         {
           key: MODELS_CATEGORY_KEY,
           label: "Models",
@@ -326,21 +349,48 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
           ],
           content: <AgentObservabilitySettings />,
         },
-        {
-          key: "experimental",
-          label: "Experimental",
-          icon: FlaskIcon,
-          keywords: [
-            "experiment",
-            "experiments",
-            "flags",
-            "feature flags",
-            "cloud",
-            "unstable",
-            ...EXPERIMENTS.map((experiment) => experiment.label.toLowerCase()),
-          ],
-          content: <ExperimentalSettings />,
-        },
+        ...(options.logs === true
+          ? [
+              {
+                key: "logs",
+                label: "Logs",
+                icon: ListMagnifyingGlassIcon,
+                // One stream wants the whole width.
+                fill: true,
+                keywords: [
+                  "log",
+                  "logs",
+                  "trace",
+                  "trace id",
+                  "debug",
+                  "host",
+                  "hosts",
+                  "jsonl",
+                  "export",
+                ],
+                content: <LogViewer />,
+              },
+            ]
+          : []),
+        ...(hasVisibleExperiments(options.experiments ?? null)
+          ? [
+              {
+                key: "experimental",
+                label: "Experimental",
+                icon: FlaskIcon,
+                keywords: [
+                  "experiment",
+                  "experiments",
+                  "flags",
+                  "feature flags",
+                  ...EXPERIMENTS.filter(
+                    ({ id }) => options.experiments?.[id].visible !== false,
+                  ).flatMap((experiment) => [experiment.id, experiment.label.toLowerCase()]),
+                ],
+                content: <ExperimentalSettings />,
+              },
+            ]
+          : []),
         {
           key: "updates",
           label: "Updates",
@@ -354,6 +404,8 @@ export function settingsGroups(signInProviderId?: string): readonly PrefGroup[] 
             "stable",
             "check now",
             "current version",
+            "status",
+            "retry",
           ],
           content: <UpdatesPane />,
         },

@@ -92,7 +92,7 @@ export interface LoginShellProbe {
   requireCleanExit: boolean;
 }
 
-/** The limits {@link LoginShellProbeDeps.runShell} enforces on one spawn. */
+/** The limits {@link LoginShellProbePorts.runShell} enforces on one spawn. */
 export type ShellRunLimits = Pick<LoginShellProbe, "timeoutMs" | "maxOutputBytes">;
 
 /**
@@ -181,7 +181,7 @@ export interface LoginShellRun {
   signal: NodeJS.Signals | null;
 }
 
-export interface LoginShellProbeDeps {
+export interface LoginShellProbePorts {
   env: Record<string, string | undefined>;
   /** Runs the shell. `null` when it could not be run at all. */
   runShell(
@@ -253,7 +253,7 @@ async function runLoginShell(
   }
 }
 
-function processDeps(): LoginShellProbeDeps {
+function processDeps(): LoginShellProbePorts {
   return { env: process.env, runShell: runLoginShell };
 }
 
@@ -325,7 +325,7 @@ export function parseLoginShellPathOutput(stdout: string): string | null {
  */
 export async function probeLoginShellPath(
   probe: LoginShellProbe,
-  deps: LoginShellProbeDeps = processDeps(),
+  deps: LoginShellProbePorts = processDeps(),
 ): Promise<string | null> {
   const { file, args } = resolveShell(deps.env);
   const shellArgs = [
@@ -373,7 +373,7 @@ let cached: Promise<string | null> | undefined;
  * and introduces no second notion of the truth — on a boot that has already
  * detected harnesses, the pass is a cache read.
  */
-export function loginShellPath(deps: LoginShellProbeDeps = processDeps()): Promise<string | null> {
+export function loginShellPath(deps: LoginShellProbePorts = processDeps()): Promise<string | null> {
   if (cached !== undefined) return cached;
   const attempt = probeLoginShellPath(DETECTION_PROBE, deps);
   cached = attempt;

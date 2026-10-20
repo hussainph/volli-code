@@ -15,7 +15,11 @@ import {
   type DragOverEvent,
   type DragStartEvent,
   type MeasuringConfiguration,
+  KeyboardCode,
+  type KeyboardSensorOptions,
+  type PointerSensorOptions,
 } from "@dnd-kit/core";
+import { guardWrite, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { motion } from "motion/react";
 import {
@@ -114,6 +118,12 @@ interface DragState {
   ticketIds: string[];
   preview: Ticket[];
   hiddenAtStart: TicketStatus[];
+  /**
+   * The one column every lifted ticket already stands in, or `null` for a group
+   * drawn from several. A release there is not an arrival, so its Offered rows
+   * are drawn inert — it starts nothing whatever row the picker names.
+   */
+  originStatus: TicketStatus | null;
   /** Final slot in the preview, ready for the atomic persistence call. */
   drop: DropTarget | null;
 }
@@ -394,6 +404,22 @@ function DragOverlayBody({
  * (see `TicketDialogHost`); the context menu each card must keep is the rest.
  * This is a cheap correct boundary, not the fix for either.
  */
+const POINTER_DRAG: PointerSensorOptions = { activationConstraint: { distance: 4 } };
+/** A pointer that never travels far enough: a read-only board lifts nothing. */
+const POINTER_NEVER: PointerSensorOptions = {
+  activationConstraint: { distance: Number.POSITIVE_INFINITY },
+};
+const KEYBOARD_DRAG: KeyboardSensorOptions = { coordinateGetter: sortableKeyboardCoordinates };
+/** No key starts a keyboard drag on a read-only board. */
+const KEYBOARD_NEVER: KeyboardSensorOptions = {
+  coordinateGetter: sortableKeyboardCoordinates,
+  keyboardCodes: {
+    start: [],
+    cancel: [KeyboardCode.Esc],
+    end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab],
+  },
+};
+
 export const Board = React.memo(function Board({
   projectId,
   ticketPrefix,
@@ -538,6 +564,9 @@ export const Board = React.memo(function Board({
   // pill that stands in for an EMPTY one. An empty column can be armed, so the
   // pill has to be able to grow the same picker; what a column offers is a fact
   // about the column, never about how much of it is on screen.
+  // Fixed for the whole gesture, so it is a primitive dependency rather than
+  // the drag state itself, which changes on every slot the card crosses.
+  const originStatus = drag?.originStatus ?? null;
   const offeredPanelFor = React.useCallback(
     (status: TicketStatus): ColumnOfferedPanelProps | undefined =>
       showsOfferedList(picker, status)
@@ -546,9 +575,10 @@ export const Board = React.memo(function Board({
             expanded: isPickerColumn(picker, status),
             highlighted: highlightedIndex(picker, pickerColumns, status),
             armedId: offeredByStatus.armed[status],
+            inert: status === originStatus,
           }
         : undefined,
-    [picker, pickerColumns, offeredByStatus],
+    [picker, pickerColumns, offeredByStatus, originStatus],
   );
   // One column is being aimed at, and the rest — standing or collapsed — are
   // not the question.
@@ -678,9 +708,15 @@ export const Board = React.memo(function Board({
   // distance: 4 keeps plain clicks (selection, context menu) working — the
   // drag only activates after pointer travel through the browser event
   // pipeline. Keyboard drags come free with the sortable coordinate getter.
+  //
+  // Read-only (VC-576): a move is a write, so no drag can start while the
+  // project's host cannot serve — the same two sensors, set never to
+  // activate (dnd-kit wants the sensor list's size fixed). Cards still open
+  // and select.
+  const canWrite = useCanWrite(projectId);
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(PointerSensor, canWrite ? POINTER_DRAG : POINTER_NEVER),
+    useSensor(KeyboardSensor, canWrite ? KEYBOARD_DRAG : KEYBOARD_NEVER),
   );
 
   const tickets = drag?.preview ?? storeTickets;
@@ -916,6 +952,9 @@ export const Board = React.memo(function Board({
       ticketIds,
       preview: storeTickets,
       hiddenAtStart: hidden,
+      originStatus: selectedTickets.every((ticket) => ticket.status === activeTicket.status)
+        ? activeTicket.status
+        : null,
       drop: null,
     });
     // A drag may BEGIN with ⌥ already down, and that drag never sees a keydown.
@@ -1005,6 +1044,9 @@ export const Board = React.memo(function Board({
     frozen.current = null;
     setDrag(null);
     if (drop === null) return;
+    // A drag that began before the host went away lands nowhere; the card
+    // goes back and the reason shows.
+    if (!guardWrite(projectId)) return;
 
     if (completed.ticketIds.length === 1) {
       void useBoardStore
@@ -1133,14 +1175,16 @@ export const Board = React.memo(function Board({
                 data-board-ticket-count={visible.length}
                 className={cn(
                   // Columns cap below full height so a strip of canvas stays
-                  // grab-able under them (Trello-style mouse pan). Scrollbar is
+                  // grab-able under them (mouse pan). Scrollbar is
                   // hidden — drag / shift-wheel / trackpad replace it.
                   "flex min-h-0 flex-1 items-start gap-4 overflow-x-auto px-gutter pb-4",
                   "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
                   panning ? "cursor-grabbing select-none" : "cursor-grab",
                 )}
               >
-                {boardBare ? <BoardEmpty className="min-h-0 flex-1 self-stretch" /> : null}
+                {boardBare ? (
+                  <BoardEmpty projectId={projectId} className="min-h-0 flex-1 self-stretch" />
+                ) : null}
                 {shown.map((status) => (
                   <BoardColumn
                     key={status}
@@ -1154,8 +1198,8 @@ export const Board = React.memo(function Board({
                     // column for rendering. Drag mechanics stay unchanged — a drop
                     // still writes the manual `order` (see handleDragEnd), but under
                     // a non-manual sort the displayed position is sort-driven, so the
-                    // card snaps to its sorted slot after the drop (Linear behaves the
-                    // same). "manual" remains the true drag-reorder mode.
+                    // card snaps to its sorted slot after the drop. "manual" remains
+                    // the true drag-reorder mode.
                     tickets={sortedGroups[status]}
                     projectId={projectId}
                     ticketPrefix={ticketPrefix}

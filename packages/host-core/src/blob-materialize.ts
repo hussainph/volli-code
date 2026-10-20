@@ -44,7 +44,7 @@ import {
 } from "@volli/shared";
 
 import { blobFilePath } from "./blob-store";
-import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
+import { listMaterializableLinks } from "./db/blobs-repo";
 
 /** Whether `path` exists, without throwing ENOENT at the caller. */
 async function pathExists(path: string): Promise<boolean> {

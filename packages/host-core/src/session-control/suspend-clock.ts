@@ -21,8 +21,8 @@ import {
   suspendedMsWithin,
 } from "@volli/shared";
 
-/** The announcements this reads: the host's power port, subscribe-only. */
-export type PowerEvents = Pick<PowerPort, "on">;
+/** The announcements this reads and releases when its runtime closes. */
+export type PowerEvents = Pick<PowerPort, "on" | "removeListener">;
 
 /**
  * Every announcement that proves the machine is awake. `resume` is the one
@@ -36,6 +36,7 @@ const AWAKE_EVENTS = ["resume", "unlock-screen", "user-did-become-active"] as co
 export interface SuspendClock {
   /** Milliseconds the machine was suspended inside `[from, to]`. */
   suspendedMsWithin(from: number, to: number): number;
+  close(): void;
 }
 
 export function createSuspendClock(
@@ -43,15 +44,19 @@ export function createSuspendClock(
   now: () => number = () => Date.now(),
 ): SuspendClock {
   let ledger = EMPTY_SUSPEND_LEDGER;
-  power.on("suspend", () => {
+  const suspend = () => {
     ledger = suspendLedgerSuspended(ledger, now());
-  });
-  for (const event of AWAKE_EVENTS) {
-    power.on(event, () => {
-      ledger = suspendLedgerResumed(ledger, now());
-    });
-  }
+  };
+  const resume = () => {
+    ledger = suspendLedgerResumed(ledger, now());
+  };
+  power.on("suspend", suspend);
+  for (const event of AWAKE_EVENTS) power.on(event, resume);
   return {
     suspendedMsWithin: (from, to) => suspendedMsWithin(ledger, from, to),
+    close: () => {
+      power.removeListener("suspend", suspend);
+      for (const event of AWAKE_EVENTS) power.removeListener(event, resume);
+    },
   };
 }

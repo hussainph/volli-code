@@ -19,41 +19,41 @@
  */
 import { randomUUID } from "node:crypto";
 
-import {
-  errorMessage,
-  type SpawnLedgerEntry,
-  type SpawnLedgerPort,
-  type SpawnLedgerSpawn,
-} from "@volli/shared";
+import { type SpawnLedgerEntry, type SpawnLedgerPort, type SpawnLedgerSpawn } from "@volli/shared";
 import type Database from "better-sqlite3";
 
 import {
   listOpenSpawns,
+  listParkedTerminalSpawns,
   markSpawnExited,
+  markSpawnParked,
   pruneSpawnLedger,
   recordSpawn,
 } from "../db/spawn-ledger-repo";
+import type { LogFields } from "../log/logger";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("spawn-ledger");
 
 export interface SpawnLedgerOptions {
   now?: () => number;
   createId?: () => string;
   /** Where a failed write is reported; defaults to a warning on the main log. */
-  onError?: (message: string) => void;
+  onError?: (msg: string, fields?: LogFields) => void;
 }
 
 export class SpawnLedger implements SpawnLedgerPort {
   readonly #db: Database.Database | null;
   readonly #now: () => number;
   readonly #createId: () => string;
-  readonly #onError: (message: string) => void;
+  readonly #onError: (msg: string, fields?: LogFields) => void;
 
   /** `null` for a launch whose database never opened: every call becomes a no-op. */
   constructor(db: Database.Database | null, options: SpawnLedgerOptions = {}) {
     this.#db = db;
     this.#now = options.now ?? Date.now;
     this.#createId = options.createId ?? randomUUID;
-    this.#onError =
-      options.onError ?? ((message: string) => console.warn(`[spawn-ledger] ${message}`));
+    this.#onError = options.onError ?? log.warn;
   }
 
   /** The row's id, or `null` when nothing was written — the caller then has nothing to mark. */
@@ -64,7 +64,7 @@ export class SpawnLedger implements SpawnLedgerPort {
       recordSpawn(this.#db, id, spawn);
       return id;
     } catch (error) {
-      this.#onError(`could not record pid ${spawn.pid}: ${errorMessage(error)}`);
+      this.#onError("could not record spawned pid", { pid: spawn.pid, error });
       return null;
     }
   }
@@ -74,7 +74,32 @@ export class SpawnLedger implements SpawnLedgerPort {
     try {
       markSpawnExited(this.#db, id, exitedAt);
     } catch (error) {
-      this.#onError(`could not close row ${id}: ${errorMessage(error)}`);
+      this.#onError("could not close spawn row", { rowId: id, error });
+    }
+  }
+
+  /**
+   * Marks the row's terminal tree SIGSTOPped (`parkedAt`) or running again
+   * (`null`), so a launch that dies without waking it can be recovered by the
+   * next one (VC-833).
+   */
+  markParked(id: string, parkedAt: number | null): void {
+    if (this.#db === null) return;
+    try {
+      markSpawnParked(this.#db, id, parkedAt);
+    } catch (error) {
+      this.#onError("could not record a terminal's park state", { rowId: id, error });
+    }
+  }
+
+  /** Open terminal rows a launch before `parkedBefore` left marked parked (VC-833). */
+  listParkedTerminals(parkedBefore: number): SpawnLedgerEntry[] {
+    if (this.#db === null) return [];
+    try {
+      return listParkedTerminalSpawns(this.#db, parkedBefore);
+    } catch (error) {
+      this.#onError("could not read the parked terminals", { error });
+      return [];
     }
   }
 
@@ -84,7 +109,7 @@ export class SpawnLedger implements SpawnLedgerPort {
     try {
       return listOpenSpawns(this.#db);
     } catch (error) {
-      this.#onError(`could not read the ledger: ${errorMessage(error)}`);
+      this.#onError("could not read the spawn ledger", { error });
       return [];
     }
   }
@@ -95,7 +120,7 @@ export class SpawnLedger implements SpawnLedgerPort {
     try {
       return pruneSpawnLedger(this.#db, this.#now());
     } catch (error) {
-      this.#onError(`could not prune: ${errorMessage(error)}`);
+      this.#onError("could not prune the spawn ledger", { error });
       return 0;
     }
   }

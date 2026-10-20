@@ -200,7 +200,8 @@ async function backgroundOpening(page, ticketId, { since = Date.now(), marker } 
       const response = await page.evaluate(
         (id) =>
           window.api.sessionRpc.request({
-            procedure: "session.snapshot",
+            path: "session.snapshot",
+            type: "query",
             input: { sessionId: id },
           }),
         sessionId,

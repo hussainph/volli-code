@@ -40,11 +40,22 @@ import {
 import type { CdpTransport } from "./cdp-controller";
 import type { BrowserPictureStore } from "./picture-store";
 import type { BrowserTraceStepInput, BrowserTraceStore } from "./trace-store";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("browser");
 
 export const BROWSER_TITLE_MAX_CHARS = 512;
 export const BROWSER_ERROR_MAX_CHARS = 1_024;
+/** The most recent console messages one read shows a model, and their characters. */
 export const BROWSER_CONSOLE_MAX_MESSAGES = 100;
 export const BROWSER_CONSOLE_MAX_CHARS = 30_000;
+/**
+ * The console a tab keeps (VC-237): far more than one read shows, so the
+ * runtime can save what a read left out, and still a bound — a page can log
+ * forever, and this is memory every open tab holds.
+ */
+const BROWSER_CONSOLE_KEPT_MAX_MESSAGES = 1_000;
+const BROWSER_CONSOLE_KEPT_MAX_CHARS = 256_000;
 
 /** Keeps page-owned chrome facts bounded and on one renderer/model-owned line. */
 function boundedBrowserTitle(title: string): string {
@@ -74,7 +85,7 @@ function boundedBrowserError(error: string | null): string | null {
  * What the registry needs of its host, whatever the engine. A backend's own
  * dependencies extend this with its construction surfaces.
  */
-export interface BrowserTabRegistryDependencies {
+export interface BrowserTabRegistryPorts {
   createId: () => string;
   publishState: (event: BrowserTabState) => void;
   publishClosed: (tabId: string) => void;
@@ -106,7 +117,9 @@ export type BrowserTabChrome = Pick<
 /** The registry's record of one tab. A backend's entry extends it with its engine's handles. */
 export interface BrowserTabRecord {
   state: BrowserTabState;
+  /** The console as kept, oldest first, within the kept bounds. */
   console: RuntimeBrowserConsoleMessage[];
+  /** Whether the kept console has lost anything to its bounds. */
   consoleTruncated: boolean;
   /** Live agent holds against background throttling; see {@link BrowserTabRegistry.holdAwake}. */
   wakeLeases: number;
@@ -129,7 +142,7 @@ export interface BrowserTabRecord {
  */
 export abstract class BrowserTabRegistry<
   E extends BrowserTabRecord,
-  D extends BrowserTabRegistryDependencies = BrowserTabRegistryDependencies,
+  D extends BrowserTabRegistryPorts = BrowserTabRegistryPorts,
 > implements BrowserBackend {
   protected readonly tabs = new Map<string, E>();
   /** Shared Browser tool queues and CDP wire lifetimes, keyed by tab. */
@@ -143,7 +156,7 @@ export abstract class BrowserTabRegistry<
    * wheel is not blocked by Sessions nobody will see again.
    */
   private readonly sessionColors = new Map<string, string>();
-  /** Names learned from {@link BrowserTabRegistryDependencies.sessionName}, so a second hold does not ask twice. */
+  /** Names learned from {@link BrowserTabRegistryPorts.sessionName}, so a second hold does not ask twice. */
   private readonly sessionNames = new Map<string, string>();
 
   /** `D` is the backend's own dependencies, which extend the registry's. */
@@ -191,6 +204,41 @@ export abstract class BrowserTabRegistry<
     return entry;
   }
 
+  /**
+   * Why agent Browser calls are refused right now, or null when they are not
+   * (VC-577). Set when the desktop closes every window for menu-bar mode: the
+   * tabs went with them, and a turn that keeps running must be told so in
+   * words, not left waiting on a tab or a stage window that cannot exist.
+   */
+  private closedReason: string | null = null;
+
+  unavailableReason(): string | null {
+    return this.closedReason;
+  }
+
+  /** Close every tab and refuse agent Browser calls with `reason` until {@link reopenForAgents}. */
+  closeAllForAgents(reason: string): void {
+    this.closedReason = reason;
+    this.closeAll();
+  }
+
+  /** A window is back: agents may open tabs again. */
+  reopenForAgents(): void {
+    this.closedReason = null;
+  }
+
+  /**
+   * Live tabs a Session is using: born to one, or held by one right now. What
+   * closing every tab would take away from running agents (VC-577).
+   */
+  sessionTabCount(): number {
+    let count = 0;
+    for (const entry of this.tabs.values()) {
+      if (entry.state.ownerSessionId !== null || entry.hold?.kind === "session") count += 1;
+    }
+    return count;
+  }
+
   /** The holder as the renderer sees it, for the overlay's label and colour. */
   heldBy(tabId: string): BrowserTabHolder | null {
     const entry = this.tabs.get(tabId);
@@ -235,14 +283,14 @@ export abstract class BrowserTabRegistry<
   }
 
   protected recordConsole(entry: E, message: RuntimeBrowserConsoleMessage): void {
-    const text = message.text.slice(0, BROWSER_CONSOLE_MAX_CHARS);
+    const text = message.text.slice(0, BROWSER_CONSOLE_KEPT_MAX_CHARS);
     if (text.length !== message.text.length) entry.consoleTruncated = true;
     entry.console.push({ ...message, text });
 
     let chars = entry.console.reduce((total, one) => total + one.text.length, 0);
     while (
-      entry.console.length > BROWSER_CONSOLE_MAX_MESSAGES ||
-      chars > BROWSER_CONSOLE_MAX_CHARS
+      entry.console.length > BROWSER_CONSOLE_KEPT_MAX_MESSAGES ||
+      chars > BROWSER_CONSOLE_KEPT_MAX_CHARS
     ) {
       const removed = entry.console.shift();
       chars -= removed?.text.length ?? 0;
@@ -638,7 +686,7 @@ export abstract class BrowserTabRegistry<
     try {
       traces.record(step);
     } catch (error) {
-      console.warn(`[volli] Browser Trace step for tab ${step.tabId} was not recorded:`, error);
+      log.warn("browser trace step was not recorded", { tabId: step.tabId, error });
     }
   }
 
@@ -673,26 +721,67 @@ export abstract class BrowserTabRegistry<
     };
   }
 
-  /** Page console and renderer-failure evidence recorded from the moment the tab exists. */
+  /**
+   * Page console and renderer-failure evidence recorded from the moment the
+   * tab exists: the most recent messages within the bounds one read shows,
+   * each cut to them, and — when that left any of the kept console out — the
+   * whole kept console beside it (VC-237), for the runtime to save.
+   */
   consoleOf(tabId: string): {
     messages: RuntimeBrowserConsoleMessage[];
     truncated: boolean;
+    kept?: { messages: RuntimeBrowserConsoleMessage[]; bounded: boolean };
   } {
     const entry = this.requireTab(tabId);
+    const messages: RuntimeBrowserConsoleMessage[] = [];
+    let chars = 0;
+    let cut = false;
+    // Newest first, as many as fit: what keeping only the bounds' worth
+    // would have left.
+    for (let index = entry.console.length - 1; index >= 0; index -= 1) {
+      const message = entry.console[index]!;
+      const text = message.text.slice(0, BROWSER_CONSOLE_MAX_CHARS);
+      if (
+        messages.length === BROWSER_CONSOLE_MAX_MESSAGES ||
+        chars + text.length > BROWSER_CONSOLE_MAX_CHARS
+      ) {
+        cut = true;
+        break;
+      }
+      if (text.length !== message.text.length) cut = true;
+      messages.push({ ...message, text });
+      chars += text.length;
+    }
+    messages.reverse();
     return {
-      messages: entry.console.map((message) => ({ ...message })),
-      truncated: entry.consoleTruncated,
+      messages,
+      truncated: entry.consoleTruncated || cut,
+      ...(cut
+        ? {
+            kept: {
+              messages: entry.console.map((message) => ({ ...message })),
+              bounded: entry.consoleTruncated,
+            },
+          }
+        : {}),
     };
   }
 
   /**
-   * Closes the headless tabs one Session owns, when its attachment ends
-   * (VC-238). A tab a person has shown — previewed or promoted — is theirs to
-   * close and survives the Session, the trade Claude Code's Chrome integration
-   * makes too: pages you may still be reading stay open. Returns what closed.
+   * Closes unheld, headless agent tabs one Session owns on attachment disposal
+   * or delegated task completion. Shown tabs and anybody else's hold survive.
+   * A turn end passes its captured ids so later turns' tabs cannot be swept.
+   * Callers serialize behind input and release their own holds first.
    */
-  closeHeadlessOwnedBy(sessionId: string): string[] {
-    return this.closeHeadlessWhere((state) => state.ownerSessionId === sessionId);
+  closeHeadlessOwnedBy(sessionId: string, tabIds?: readonly string[]): string[] {
+    const captured = tabIds === undefined ? null : new Set(tabIds);
+    return this.closeHeadlessWhere(
+      (state) =>
+        state.createdBy === "session" &&
+        state.ownerSessionId === sessionId &&
+        state.heldBy === null &&
+        (captured === null || captured.has(state.tabId)),
+    );
   }
 
   /** Closes every headless agent tab of one Ticket, when the Ticket is archived. */

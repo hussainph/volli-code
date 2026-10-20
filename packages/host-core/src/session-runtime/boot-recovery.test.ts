@@ -29,8 +29,20 @@ function session(
 interface Recorder {
   engine: BootRecoveryEngine;
   observed: SessionObservation[];
+  queried: string[];
   reconciled: Array<{ sessionId: string; attachmentId: string }>;
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
+}
+
+/** A promise the test settles at an exact step — no sleeps, no polling. */
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function recorder(
@@ -39,16 +51,21 @@ function recorder(
   reconcile?: (input: { sessionId: string; attachmentId: string }) => Promise<void>,
 ): Recorder {
   const observed: SessionObservation[] = [];
+  const queried: string[] = [];
   const reconciled: Array<{ sessionId: string; attachmentId: string }> = [];
   return {
     observed,
+    queried,
     reconciled,
     reconcile: async (input) => {
       reconciled.push(input);
       await reconcile?.(input);
     },
     engine: {
-      listSessions: async ({ projectId }) => byProject[projectId] ?? [],
+      listSessions: async ({ projectId }) => {
+        queried.push(projectId);
+        return byProject[projectId] ?? [];
+      },
       observe: async (observation) => {
         observed.push(observation);
         if (observe) await observe(observation);
@@ -61,6 +78,7 @@ function sweep(
   target: Recorder,
   projectIds: readonly string[],
   onError = vi.fn(),
+  shouldStop?: () => boolean,
 ): { run: Promise<number>; onError: ReturnType<typeof vi.fn> } {
   let sequence = 0;
   return {
@@ -72,11 +90,61 @@ function sweep(
       newId: () => `event-${++sequence}`,
       now: () => 1_700_000_000_000,
       onError,
+      ...(shouldStop === undefined ? {} : { shouldStop }),
     }),
   };
 }
 
 describe("closeStaleAttachments", () => {
+  it("uses explicit legacy ownership for terminal close, structured reconcile and permission retirement", async () => {
+    const legacy = { id: "/run/old/volli.sock", kind: "remote" as const };
+    const target = recorder(
+      {
+        p: [
+          {
+            ...session(
+              "structured",
+              [attachment({ id: "pi-old", adapterId: "pi", venue: legacy })],
+              true,
+            ),
+            interactions: {
+              active: [{ id: "lost-permission", attachmentId: "pi-old", kind: "permission" }],
+            },
+          },
+          session("terminal", [attachment({ venue: legacy })]),
+          session("foreign", [
+            attachment({ id: "worker", venue: { id: "worker-uuid", kind: "remote" } }),
+          ]),
+        ],
+      },
+      undefined,
+      () => Promise.reject(new Error("lost sidecar")),
+    );
+    const onError = vi.fn();
+    let sequence = 0;
+    expect(
+      await closeStaleAttachments({
+        engine: target.engine,
+        venue: { id: "host-uuid", kind: "remote" },
+        ownsLegacyVenue: (venue) => venue.kind === "remote" && venue.id === legacy.id,
+        reconcile: target.reconcile,
+        projectIds: ["p"],
+        newId: () => `legacy-${++sequence}`,
+        now: () => 1_000,
+        onError,
+      }),
+    ).toBe(2);
+    expect(target.reconciled).toEqual([{ sessionId: "structured", attachmentId: "pi-old" }]);
+    expect(target.observed.map(({ kind, attachmentId }) => ({ kind, attachmentId }))).toEqual([
+      { kind: "interaction.cancelled", attachmentId: "pi-old" },
+      { kind: "attention.raised", attachmentId: "pi-old" },
+      { kind: "attachment.closed", attachmentId: "pi-old" },
+      { kind: "attachment.closed", attachmentId: "attachment-1" },
+    ]);
+    expect(target.observed[0]?.provenance.venue).toEqual(legacy);
+    expect(onError).toHaveBeenCalledExactlyOnceWith("pi-old", expect.any(Error));
+  });
+
   it("closes a stale local terminal attachment as an interrupted, system-provenanced fact", async () => {
     const target = recorder({ "project-1": [session("session-1", [attachment()], true)] });
 
@@ -164,7 +232,7 @@ describe("closeStaleAttachments", () => {
     expect(target.observed).toEqual([]);
   });
 
-  it("retires only host permission questions parked on the recovered attachment", async () => {
+  it("retires permission and model questions only on the recovered attachment", async () => {
     const lost = session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true);
     const target = recorder({
       "project-1": [
@@ -175,6 +243,7 @@ describe("closeStaleAttachments", () => {
               { id: "budget-ask:lost", attachmentId: "pi-1", kind: "permission" },
               { id: "ask-user:model", attachmentId: "pi-1", kind: "question" },
               { id: "confirm-ask:elsewhere", attachmentId: "pi-2", kind: "permission" },
+              { id: "ask-user:elsewhere", attachmentId: "pi-2", kind: "question" },
             ],
           },
         },
@@ -183,8 +252,9 @@ describe("closeStaleAttachments", () => {
     await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);
     expect(target.observed).toMatchObject([
       { kind: "interaction.cancelled", interactionId: "budget-ask:lost", reason: "abandoned" },
+      { kind: "interaction.cancelled", interactionId: "ask-user:model", reason: "abandoned" },
     ]);
-    expect(target.observed).toHaveLength(1);
+    expect(target.observed).toHaveLength(2);
   });
 
   it("reports a failed permission retirement and keeps recovering", async () => {
@@ -220,7 +290,7 @@ describe("closeStaleAttachments", () => {
   });
 
   it.each(["already-interrupted", "failed-reconcile", "closed"])(
-    "retires abandoned host permissions after %s",
+    "retires abandoned permissions and model questions after %s",
     async (state) => {
       const lost = session(
         "session-1",
@@ -245,6 +315,7 @@ describe("closeStaleAttachments", () => {
                     attachmentId: "pi-1",
                     kind: "permission",
                   },
+                  { id: "ask-user:lost", attachmentId: "pi-1", kind: "question" },
                 ],
               },
             },
@@ -262,6 +333,13 @@ describe("closeStaleAttachments", () => {
             event.kind === "interaction.cancelled" && event.interactionId === "budget-ask:lost",
         ),
       ).toBe(true);
+      expect(target.observed).toContainEqual(
+        expect.objectContaining({
+          kind: "interaction.cancelled",
+          interactionId: "ask-user:lost",
+          reason: "abandoned",
+        }),
+      );
     },
   );
 
@@ -371,4 +449,173 @@ describe("closeStaleAttachments", () => {
     expect(onError.mock.calls[0][0]).toBe("broken");
     expect(onError.mock.calls[0][1]).toBeInstanceOf(Error);
   });
+
+  // Verifier note (VC-622 a3): the sweep used to keep sweeping after close.
+  // Once the host is closing it must start no new attachment or project work;
+  // a1, already in flight, finishes, and everything else waits for next launch.
+  it("starts no new attachment or project query once the host is closing", async () => {
+    let closing = false;
+    const target = recorder(
+      {
+        "project-1": [
+          session("session-1", [attachment({ id: "a1" }), attachment({ id: "a2" })], true),
+        ],
+        "project-2": [session("session-2", [attachment({ id: "a3" })])],
+      },
+      async (observation) => {
+        if (observation.kind === "attachment.closed" && observation.attachmentId === "a1") {
+          closing = true;
+        }
+      },
+    );
+
+    await expect(
+      sweep(target, ["project-1", "project-2"], vi.fn(), () => closing).run,
+    ).resolves.toBe(1);
+    expect(target.queried).toEqual(["project-1"]);
+    expect(target.observed.map(({ kind, attachmentId }) => ({ kind, attachmentId }))).toEqual([
+      { kind: "attention.raised", attachmentId: "a1" },
+      { kind: "attachment.closed", attachmentId: "a1" },
+    ]);
+  });
+
+  it.each(["permission", "permissions", "attention"])(
+    "starts no more durable work after closing during %s retirement",
+    async (stage) => {
+      const atWrite = deferred();
+      const release = deferred();
+      let closing = false;
+      const lost = session(
+        "s",
+        [attachment({ adapterId: stage === "attention" ? "terminal" : "pi" })],
+        true,
+      );
+      const target = recorder(
+        {
+          p: [
+            {
+              ...lost,
+              interactions: {
+                active: [
+                  { id: "first", attachmentId: "attachment-1", kind: "permission" },
+                  ...(stage === "permissions"
+                    ? [{ id: "second", attachmentId: "attachment-1", kind: "permission" as const }]
+                    : []),
+                ],
+              },
+            },
+          ],
+        },
+        async () => {
+          atWrite.resolve();
+          await release.promise;
+        },
+      );
+      const { run } = sweep(target, ["p"], vi.fn(), () => closing);
+      await atWrite.promise;
+      closing = true;
+      release.resolve();
+      await expect(run).resolves.toBe(0);
+      expect(target.observed.map(({ kind }) => kind)).toEqual([
+        stage === "attention" ? "attention.raised" : "interaction.cancelled",
+      ]);
+      expect(target.reconciled).toEqual([]);
+    },
+  );
+
+  it("answers nothing and queries nothing when the host is already closing", async () => {
+    const target = recorder({ "project-1": [session("session-1", [attachment()])] });
+
+    await expect(sweep(target, ["project-1"], vi.fn(), () => true).run).resolves.toBe(0);
+    expect(target.queried).toEqual([]);
+    expect(target.observed).toEqual([]);
+  });
+
+  // A reconcile rejected because the runtime closed is a stop, not a lost
+  // sidecar: no failure report, no partial_turn_interrupted, no forced close —
+  // the next launch finds the binding and reconciles it.
+  it("leaves an in-flight structured turn untouched when closing rejects its reconcile", async () => {
+    const parkedAt = deferred();
+    const release = deferred();
+    let closing = false;
+    let parkedCalls = 0;
+    const target = recorder(
+      { "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true)] },
+      undefined,
+      async () => {
+        parkedCalls += 1;
+        if (parkedCalls === 1) {
+          parkedAt.resolve();
+          await release.promise;
+        }
+      },
+    );
+    const onError = vi.fn();
+    const { run } = sweep(target, ["project-1"], onError, () => closing);
+    await parkedAt.promise;
+    closing = true;
+    release.reject(new Error("runtime closed during shutdown"));
+    await expect(run).resolves.toBe(0);
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(target.observed).toEqual([]);
+    await expect(sweep(target, ["project-1"]).run).resolves.toBe(0);
+    expect(target.reconciled).toEqual([
+      { sessionId: "session-1", attachmentId: "pi-1" },
+      { sessionId: "session-1", attachmentId: "pi-1" },
+    ]);
+  });
+
+  // Supplying the flag changes nothing about real failures while the host is
+  // still up: a failed reconcile is still reported, still records its
+  // Attention, and still closes the unusable attachment.
+  it("keeps the failure fallback when shouldStop is supplied but not closing", async () => {
+    const target = recorder(
+      { "project-1": [session("session-1", [attachment({ id: "pi-1", adapterId: "pi" })], true)] },
+      undefined,
+      async () => Promise.reject(new Error("sidecar missing")),
+    );
+    const onError = vi.fn();
+
+    await expect(sweep(target, ["project-1"], onError, () => false).run).resolves.toBe(1);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(target.observed).toMatchObject([
+      { kind: "attention.raised", attachmentId: "pi-1" },
+      { kind: "attachment.closed", attachmentId: "pi-1" },
+    ]);
+  });
+});
+
+it("recovers only the supplied headless venue, leaving other hosts alone", async () => {
+  const venue = { id: "hostd-one", kind: "remote" as const };
+  const target = recorder({
+    p: [
+      session(
+        "s",
+        [
+          attachment({ id: "ours", adapterId: "pi", venue }),
+          attachment({ id: "terminal", venue }),
+          attachment({ id: "other", adapterId: "pi", venue: { id: "hostd-two", kind: "remote" } }),
+          attachment({ id: "desktop", adapterId: "pi" }),
+        ],
+        true,
+      ),
+    ],
+  });
+  await closeStaleAttachments({
+    engine: target.engine,
+    reconcile: target.reconcile,
+    projectIds: ["p"],
+    now: () => 100,
+    newId: () => "id",
+    onError: vi.fn(),
+    venue,
+  });
+  expect(target.reconciled).toEqual([{ sessionId: "s", attachmentId: "ours" }]);
+  expect(target.observed).toHaveLength(2);
+  expect(
+    target.observed.every(
+      (event) => event.attachmentId === "terminal" && event.provenance.venue?.id === "hostd-one",
+    ),
+  ).toBe(true);
 });

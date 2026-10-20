@@ -1,8 +1,9 @@
+import { getEventListeners } from "node:events";
 import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sessionCommandEnvironment, ShellRefusal } from "@volli/agent-runtime";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { createAgentShellPort, type AgentShellPort } from "./agent-port";
 import { BackgroundShellHost } from "./background-shell-host";
@@ -100,6 +101,74 @@ describe("createAgentShellPort", () => {
       `session-1\nVC-270\n${identity.sessionToken}\n${expected["PATH"]}\n`,
     );
   });
+
+  it("awaits credentials before spawning and layers them above the budget but below identity", async () => {
+    const held = Promise.withResolvers<Readonly<Record<string, string>>>();
+    const secretEnvironment = vi.fn(() => held.promise);
+    const { port: shell, host } = port({
+      concurrencyEnv: async () => ({ API_TOKEN: "budget", VOLLI_SESSION: "budget" }),
+      secretEnvironment,
+    });
+    const start = vi.spyOn(host, "start");
+    const command =
+      "printenv API_TOKEN; printenv VOLLI_SESSION; printenv VOLLI_TICKET; printenv VOLLI_SESSION_TOKEN";
+    const pending = shell.start({ command, signal });
+    // Let the budget resolve so the credential hook is the pending operation.
+    await vi.waitFor(() => expect(secretEnvironment).toHaveBeenCalledExactlyOnceWith(signal));
+    expect(start).not.toHaveBeenCalled();
+    held.resolve({
+      API_TOKEN: "resolved-secret",
+      VOLLI_SESSION: "secret-session",
+      VOLLI_TICKET: "secret-ticket",
+      VOLLI_SESSION_TOKEN: "secret-token",
+    });
+    const started = await pending;
+    expect(start).toHaveBeenCalledOnce();
+    expect(started.output).toBe(`resolved-secret\nsession-1\nVC-270\n${identity.sessionToken}\n`);
+  });
+
+  it("rejects a failed credential read without spawning", async () => {
+    const held = Promise.withResolvers<Readonly<Record<string, string>>>();
+    const failure = new Error("credential read failed");
+    const { port: shell, host } = port({ secretEnvironment: () => held.promise });
+    const start = vi.spyOn(host, "start");
+    const pending = shell.start({ command: "echo must-not-run", signal });
+    const rejected = expect(pending).rejects.toBe(failure);
+    held.reject(failure);
+    await rejected;
+    expect(start).not.toHaveBeenCalled();
+    expect(host.list("session-1")).toEqual([]);
+  });
+
+  it.each(["concurrency", "secrets"] as const)(
+    "does not spawn a call withdrawn while awaiting %s",
+    async (waitingOn) => {
+      const held = Promise.withResolvers<Record<string, string>>();
+      const secretEnvironment = vi.fn(() => (waitingOn === "secrets" ? held.promise : {}));
+      const { port: shell, host } = port({
+        secretEnvironment,
+        ...(waitingOn === "concurrency" ? { concurrencyEnv: () => held.promise } : {}),
+      });
+      const start = vi.spyOn(host, "start");
+      const withdrawn = new AbortController();
+      const failure = new Error("call withdrawn");
+      const pending = shell.start({ command: "echo must-not-run", signal: withdrawn.signal });
+      const rejected = expect(pending).rejects.toBe(failure);
+      if (waitingOn === "secrets") {
+        await vi.waitFor(() =>
+          expect(secretEnvironment).toHaveBeenCalledExactlyOnceWith(withdrawn.signal),
+        );
+      }
+      withdrawn.abort(failure);
+      // Leave the host promise held: cancellation must not depend on its settling.
+      await rejected;
+      if (waitingOn === "concurrency") expect(secretEnvironment).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+      expect(host.list("session-1")).toEqual([]);
+      expect(getEventListeners(withdrawn.signal, "abort")).toEqual([]);
+    },
+    1_000,
+  );
 
   it("forwards title and tail, and answers a withdrawn call without touching the host", async () => {
     const { port: shell } = port();

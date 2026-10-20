@@ -42,6 +42,7 @@
 import type { OpenNativeBinding, SessionEngine } from "@volli/session-engine";
 import { PERSON_STARTED, SESSION_READ } from "@volli/shared";
 import type {
+  SessionEvent,
   SessionListingRow,
   SessionProjection,
   SessionProvenance,
@@ -49,6 +50,9 @@ import type {
 } from "@volli/shared";
 
 import { sessionListingRow } from "./listing-row";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("activity-watch");
 
 /**
  * How long writes are gathered before the dirty Sessions are re-folded.
@@ -95,7 +99,7 @@ export interface SessionActivityWatchPorts {
    * not make a listing row live until one of these bindings exists again.
    * Read once per flush so every row in a publication burst sees one snapshot.
    */
-  listOpenNativeBindings?: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
+  listOpenNativeBindings: () => readonly Pick<OpenNativeBinding, "attachmentId">[];
   /**
    * Every folded Session's projection, handed over BEFORE the row-difference
    * gate below (VC-133).
@@ -119,6 +123,18 @@ export interface SessionActivityWatchPorts {
    */
   observe?: (projection: SessionProjection) => void;
   /**
+   * Every fact `observe` committed, handed over synchronously the moment the
+   * write resolves — before the coalescing timer, and before the caller that
+   * wrote it continues (VC-577).
+   *
+   * For a reader that must never lag a durable write: the host's live-work
+   * count, which a quit decision reads inside `before-quit` and so cannot
+   * wait out {@link DEFAULT_COALESCE_MS}. Only `observe` can write the facts
+   * that open or close a turn. Must not throw; a throw is reported and the
+   * write's own result is still returned.
+   */
+  observeEvent?: (event: SessionEvent) => void;
+  /**
    * A Session this process just minted, announced from the create itself
    * rather than from a fold (VC-133).
    *
@@ -138,7 +154,7 @@ export interface SessionActivityWatchPorts {
   observeBirth?: (sessionId: string) => void;
   /** Overridable for tests; defaults to {@link DEFAULT_COALESCE_MS}. */
   coalesceMs?: number;
-  /** Diagnostics seam. Defaults to `console.warn`. */
+  /** Diagnostics seam. Defaults to the host log. */
   onError?: (error: unknown) => void;
 }
 
@@ -171,7 +187,7 @@ export function watchSessionActivity(
 ): SessionActivityWatch {
   const coalesceMs = ports.coalesceMs ?? DEFAULT_COALESCE_MS;
   const onError =
-    ports.onError ?? ((error: unknown) => console.warn("[volli] session activity watch:", error));
+    ports.onError ?? ((error: unknown) => log.warn("session activity watch failed", { error }));
   const provenanceOf = ports.provenanceOf ?? (() => PERSON_STARTED);
   const readOf = ports.readOf ?? (() => SESSION_READ);
 
@@ -209,7 +225,7 @@ export function watchSessionActivity(
     const ids = [...dirty];
     dirty.clear();
     const liveAttachmentIds = new Set(
-      (ports.listOpenNativeBindings?.() ?? []).map((binding) => binding.attachmentId),
+      ports.listOpenNativeBindings().map((binding) => binding.attachmentId),
     );
     for (const sessionId of ids) {
       try {
@@ -258,8 +274,29 @@ export function watchSessionActivity(
       mark(request.sessionId);
       return result;
     },
+    async recordToolRefresh(request) {
+      const event = await engine.recordToolRefresh(request);
+      if (event !== null) {
+        if (ports.observeEvent !== undefined) {
+          try {
+            ports.observeEvent(event);
+          } catch (error) {
+            onError(error);
+          }
+        }
+        mark(event.sessionId);
+      }
+      return event;
+    },
     async observe(observation) {
       const event = await engine.observe(observation);
+      if (ports.observeEvent !== undefined) {
+        try {
+          ports.observeEvent(event);
+        } catch (error) {
+          onError(error);
+        }
+      }
       mark(event.sessionId);
       return event;
     },

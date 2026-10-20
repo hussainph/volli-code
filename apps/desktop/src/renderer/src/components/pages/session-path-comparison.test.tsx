@@ -105,7 +105,7 @@ describe("SessionPathComparison", () => {
 
   // VC-159/R8: `osxkeychain` is the STOCK macOS Git setup, so this pane used
   // to warn every reader about their own default. The diagnosis still exists
-  // (`@volli/host-core/credential-helper-diagnostics`) — it now rides the failed fetch
+  // (`credentialHelperIssues`, `@volli/host-core/worktree`) — it now rides the failed fetch
   // or push it can account for, where it is news rather than noise.
   it("says nothing about Git credential helpers", () => {
     const html = renderToStaticMarkup(<SessionPathComparison environment={environment()} />);

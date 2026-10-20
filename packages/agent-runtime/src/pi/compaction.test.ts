@@ -126,7 +126,7 @@ const reader: ConversationReader = {
  * `getCurrentTools` and `withoutSystemMessages`, and one that wants the
  * structure — how many system messages, where, whether the head is doubled —
  * reads the list itself. Folding here would hide the second kind: two identical
- * heads fold to one string (VC-421 review).
+ * heads fold to one string (VC-421).
  */
 function scriptedModels(replies: readonly string[], sent: TranscriptContext[] = []): Models {
   const faux = fauxProvider({
@@ -639,7 +639,7 @@ describe("compactSession", () => {
     // to the model. The path is read off the sidecar, which never holds the
     // head but can hold a tool-change system message Pi persisted; priced
     // beside the attachment's own tools, that declaration used to count twice
-    // (VC-421 review, finding A). A system message is not a cut point and
+    // (VC-421). A system message is not a cut point and
     // says nothing to the summarizer, so the only difference between the two
     // runs is the one declaration — and it must make none.
     //
@@ -689,7 +689,7 @@ describe("compactSession", () => {
   });
 
   it("prices tokensBefore as the transcript the live turn sends: the head, then the path", async () => {
-    // The one spelling the estimator has (VC-421 review, B): the sidecar
+    // The one spelling the estimator has (VC-421): the sidecar
     // conversation behind the attachment's head, composed here from the same
     // prompt and tools the native request carries in fields of its own. So
     // the durable number is the projection of exactly that array — prompt and

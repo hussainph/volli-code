@@ -483,13 +483,25 @@ describe("coordinationVerbAllowed", () => {
   // Derived from the registry rather than restated, so a coordination verb
   // added later fails here until someone decides whether a Session holds it.
   it("grants a Session every coordination-tier verb the registry declares", () => {
-    const coordination = VERB_REGISTRY.filter((entry) => verbTier(entry) === "coordination").map(
-      (entry) => entry.key,
-    );
+    // A `user` verb (VC-623) is coordination tier but never a Session's: the
+    // admission gate judges it by the door's actor and reads no list for it.
+    const coordination = VERB_REGISTRY.filter(
+      (entry) => verbTier(entry) === "coordination" && entry.actor === "session",
+    ).map((entry) => entry.key);
 
     expect(coordination.length).toBeGreaterThan(0);
     for (const verb of coordination) {
       expect(coordinationVerbAllowed(policy, "session", verb), verb).toBe(true);
+    }
+  });
+
+  it("lists no person-only verb for any actor kind, by default (VC-623)", () => {
+    for (const entry of VERB_REGISTRY.filter((candidate) => candidate.actor === "user")) {
+      for (const kind of AUTHORITY_ACTOR_KINDS) {
+        expect(coordinationVerbAllowed(policy, kind, entry.key), `${kind} ${entry.key}`).toBe(
+          false,
+        );
+      }
     }
   });
 

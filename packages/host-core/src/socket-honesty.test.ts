@@ -23,15 +23,16 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
-import { createAgentCommandService } from "@volli/host-core/agent-commands";
-import { insertProject, updateProjectAuthorityPolicy } from "@volli/host-core/db/projects-repo";
-import { listTicketsByProject, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { listComments } from "@volli/host-core/db/comments-repo";
-import { openTestDb, testProject, testSession, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+import { createAgentCommandService } from "./agent-commands";
+import { testHostHandlers } from "./testing/host-handlers";
+import { insertProject, updateProjectAuthorityPolicy } from "./db/projects-repo";
+import { listTicketsByProject, insertTicket } from "./db/tickets-repo";
+import { listComments } from "./db/comments-repo";
+import { openTestDb, testProject, testSession, testTicket } from "./db/test-helpers";
+import type { TestDb } from "./db/test-helpers";
 import { createTestSessionEngine } from "./testing/session-engine";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
+import { insertSession } from "./session-control/test-support";
+import { createSessionTokenRegistry } from "./session-tokens";
 
 let ctx: TestDb;
 
@@ -53,6 +54,7 @@ function scenario() {
 
   const tokens = createSessionTokenRegistry();
   const service = createAgentCommandService({
+    handlers: testHostHandlers({ db: ctx.db }),
     db: ctx.db,
     sessionEngine: createTestSessionEngine(ctx.db),
     appVersion: "1.2.3",
@@ -340,5 +342,88 @@ describe("per-project policy, which is what decides all of it", () => {
       expect(refused.error.reason).toContain("this project allows a session caller");
       expect(refused.error.next).toContain("A person can change it in Settings");
     }
+  });
+
+  // VC-789. `--project` names where a write lands, never who is writing: the
+  // token proved which project this Session belongs to, and an argument the
+  // caller chose cannot swap that for a project that narrowed nothing.
+  it("keeps its own project's narrowing when --project names another project", async () => {
+    const { run, session, addSecondProject } = scenario();
+    addSecondProject();
+    updateProjectAuthorityPolicy(
+      ctx.db,
+      "project-one",
+      { actors: { session: { coordinationVerbs: ["ticket.comment"] } } },
+      100,
+    );
+
+    expect(
+      await run("ticket.create", { title: "Elsewhere", project: "BB" }, session),
+    ).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+    expect(listTicketsByProject(ctx.db, "project-two").map(({ title }) => title)).toEqual([
+      "Their work",
+    ]);
+    expect(
+      await run("label.merge", { from: "old", into: "new", project: "BB" }, session),
+    ).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+  });
+
+  // The raw socket accepts `args.project` on any verb, declared or not, so the
+  // same substitution must not drop the caller's policy from a ticket write.
+  it("refuses a raw ticket write that names the target project from a Session narrowed at home", async () => {
+    const { run, session, addSecondProject } = scenario();
+    addSecondProject();
+    updateProjectAuthorityPolicy(
+      ctx.db,
+      "project-one",
+      { actors: { session: { coordinationVerbs: ["ticket.move"] } } },
+      100,
+    );
+
+    expect(
+      await run("ticket.comment", { id: "BB-1", message: "Hi", project: "BB" }, session),
+    ).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+    expect(listComments(ctx.db, "ticket-two")).toEqual([]);
+  });
+
+  // Both directions still hold with `--project`: the named project's own
+  // narrowing binds the write, and two allows remain two allows.
+  it("judges a --project write by both projects, and admits it when both allow", async () => {
+    const { run, session, addSecondProject } = scenario();
+    addSecondProject();
+
+    expect(
+      await run("ticket.create", { title: "Cross-project", project: "BB" }, session),
+    ).toMatchObject({ ok: true });
+    expect(listTicketsByProject(ctx.db, "project-two").map(({ title }) => title)).toContain(
+      "Cross-project",
+    );
+
+    updateProjectAuthorityPolicy(
+      ctx.db,
+      "project-two",
+      { actors: { session: { coordinationVerbs: ["ticket.comment"] } } },
+      100,
+    );
+    expect(
+      await run("ticket.create", { title: "Narrowed there", project: "BB" }, session),
+    ).toMatchObject({ ok: false, error: { code: "FORBIDDEN_ACTOR" } });
+  });
+
+  // No Session means no token-proved project, so the selector is still all the
+  // caller has to say where it stands — unchanged by VC-789.
+  it("still lets an unauthenticated caller's --project name the project it acts from", async () => {
+    const { run, addSecondProject } = scenario();
+    addSecondProject();
+    updateProjectAuthorityPolicy(
+      ctx.db,
+      "project-two",
+      { actors: { unauthenticated: { coordinationVerbs: ["ticket.create"] } } },
+      100,
+    );
+
+    expect(await run("ticket.create", { title: "From CI", project: "BB" }, {})).toMatchObject({
+      ok: true,
+    });
   });
 });

@@ -21,8 +21,14 @@
  *     forbids, and only something with a timer can guarantee the next look.
  *  2. **Performing the steps.** Recording a skip through the durable command
  *     ledger, asking the Run door, moving the cursor. Each step carries the
- *     cursor position it earns, so a crash between two steps repeats at most
- *     one of them — and the command ids below make that repeat idempotent.
+ *     cursor position it earns, so a crash between a step and its cursor
+ *     advance meets that occurrence again on the next pass. A repeated skip
+ *     names the same command id below, so the ledger collapses it. A Run
+ *     does not repeat as a Run: after a relaunch the policy returns its
+ *     occurrence as a skip, under a different command id. So before a skip
+ *     is recorded, this module asks the ledger whether the Run for the
+ *     skip's first occurrence was already accepted, and if it was, moves the
+ *     cursor past that occurrence and records nothing for it.
  *  3. **A refusal that is not a silence.** Only the caller of the Run door
  *     learns it said no, so recording that refusal as a Skipped occurrence is
  *     the host's job rather than the policy's.
@@ -35,8 +41,10 @@
 import { createHash } from "node:crypto";
 
 import {
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   automationTriggerSchedule,
   evaluateSchedulePass,
+  nextScheduleOccurrence,
   type Automation,
   type AutomationSchedule,
   type SchedulePassStep,
@@ -44,6 +52,10 @@ import {
 
 import type { AutomationSkipIntent } from "./engine";
 import type { ScheduleCursors } from "./schedule-cursor";
+import type { LogFields } from "../log/logger";
+import { hostLogger } from "../log/root";
+
+const schedulerLog = hostLogger("automation-scheduler");
 
 /**
  * How long the timer sleeps at most, however far away the next occurrence is.
@@ -55,26 +67,6 @@ import type { ScheduleCursors } from "./schedule-cursor";
  * machine has been doing something else.
  */
 export const AUTOMATION_SCHEDULE_TICK_MS = 60_000;
-
-/**
- * How late a Run may still start, in milliseconds.
- *
- * Two minutes. VC-112's contract is that a Run may start late but never early,
- * and this is where "late" stops meaning late and starts meaning missed. A
- * timer that fires a few seconds behind, a machine briefly busy at 09:00, a
- * process that took a moment to boot — all inside, and exactly this late still
- * runs. A closed app, a slept laptop, a machine off for the weekend — all
- * outside, and all recorded as Skipped occurrences instead, because starting
- * unattended work hours after anyone expected it is how a person learns to
- * switch the feature off.
- *
- * The window says only WHETHER an occurrence still runs. What the resulting
- * skip then claims about the world is a separate question the policy answers
- * from `watchingSince`: an occurrence older than this process says the app was
- * closed, and one this running process simply failed to reach says that
- * instead.
- */
-export const AUTOMATION_SCHEDULE_LATE_GRACE_MS = 2 * 60_000;
 
 /**
  * How many missed occurrences one pass will count.
@@ -110,6 +102,12 @@ export interface AutomationSchedulerPorts {
   advanceCursor(input: { automationId: string; through: number }): Promise<void>;
   /** Records a Skipped occurrence through the durable command ledger. */
   recordSkip(input: { commandId: string; skip: AutomationSkipIntent }): Promise<void>;
+  /**
+   * Whether the Run door already ACCEPTED this command: a Run that started, or
+   * one that relaunch recovery will finish. A command it refused answers
+   * false, because that occurrence is still owed a skip.
+   */
+  runAccepted(commandId: string): Promise<boolean>;
   /** Starts one Run against the Project — the same door a person's Run uses. */
   startRun(input: {
     commandId: string;
@@ -118,7 +116,7 @@ export interface AutomationSchedulerPorts {
   }): Promise<ScheduledRunOutcome>;
   setTimer(delayMs: number, fire: () => void): NodeJS.Timeout;
   clearTimer(handle: NodeJS.Timeout): void;
-  log?(message: string): void;
+  log?(msg: string, fields?: LogFields): void;
 }
 
 export interface AutomationScheduler {
@@ -203,7 +201,7 @@ export function scheduleSkipCommandId(automationId: string, dueAt: number): stri
 }
 
 export function createAutomationScheduler(ports: AutomationSchedulerPorts): AutomationScheduler {
-  const log = ports.log ?? ((message: string) => console.error(message));
+  const log = ports.log ?? schedulerLog.error;
   let timer: NodeJS.Timeout | null = null;
   let stopped = false;
   /**
@@ -295,17 +293,41 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
     cursors: ScheduleCursors,
     now: number,
   ): Promise<number> {
-    const owed = evaluateSchedulePass({
-      schedule: automation.schedule,
-      staggerKey: automation.id,
-      cursor: cursors[automation.id] ?? null,
-      now,
-      watchingSince,
-      graceMs: AUTOMATION_SCHEDULE_LATE_GRACE_MS,
-      missedLimit: AUTOMATION_SCHEDULE_MISSED_LIMIT,
-    });
-    for (const step of owed.steps) await perform(automation, step);
-    return owed.nextDueAt;
+    let cursor = cursors[automation.id] ?? null;
+    for (;;) {
+      const owed = evaluateSchedulePass({
+        schedule: automation.schedule,
+        staggerKey: automation.id,
+        cursor,
+        now,
+        watchingSince,
+        graceMs: AUTOMATION_SCHEDULE_LATE_GRACE_MS,
+        missedLimit: AUTOMATION_SCHEDULE_MISSED_LIMIT,
+      });
+      const [first] = owed.steps;
+      if (first?.kind === "skip" && cursor !== null) {
+        // A skip's walk starts at the first occurrence after the cursor. If
+        // that occurrence's Run was already accepted, the process died after
+        // starting it and before moving the cursor. Recording it as missed
+        // would put a false "Volli wasn't running" row beside the Run that
+        // started, with a "Run now" that invites a duplicate. So the cursor
+        // moves past it, nothing is recorded, and the rest of the gap is
+        // evaluated from there. Each round moves the cursor forward, so the
+        // loop ends.
+        const firstMissed = nextScheduleOccurrence({
+          schedule: automation.schedule,
+          staggerKey: automation.id,
+          after: cursor,
+        });
+        if (await ports.runAccepted(scheduleRunCommandId(automation.id, firstMissed))) {
+          await ports.advanceCursor({ automationId: automation.id, through: firstMissed });
+          cursor = firstMissed;
+          continue;
+        }
+      }
+      for (const step of owed.steps) await perform(automation, step);
+      return owed.nextDueAt;
+    }
   }
 
   async function sweep(): Promise<void> {
@@ -331,9 +353,10 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
         // One schedule's failure must not stop the others: this is the process
         // that decides whether ANY unattended work happens, so it fails per
         // schedule rather than per host. The next pass retries it.
-        log(
-          `[volli] automation schedule ${automation.id} could not be evaluated: ${errorText(error)}`,
-        );
+        log("automation schedule could not be evaluated", {
+          automationId: automation.id,
+          error,
+        });
       }
     }
     if (earliest === null) {
@@ -351,7 +374,7 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
     pass = pass
       .then(() => (stopped ? undefined : sweep()))
       .catch((error: unknown) => {
-        log(`[volli] automation scheduler pass failed: ${errorText(error)}`);
+        log("automation scheduler pass failed", { error });
         // AND LOOK AGAIN. A pass can fail whole — a locked database at launch,
         // an unreadable projection — and a scheduler that only logged that
         // would stay disarmed for as long as the app stays open: no Runs, no
@@ -382,8 +405,4 @@ export function createAutomationScheduler(ports: AutomationSchedulerPorts): Auto
       return pass;
     },
   };
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

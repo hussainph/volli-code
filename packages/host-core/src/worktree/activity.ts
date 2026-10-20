@@ -8,17 +8,29 @@
  * running in there?" is two answers; one module is the only way the automatic
  * path and the manual one can be held to the same protection.
  */
+import type { BackgroundShellHost } from "../shell/background-shell-host";
 import { isInside } from "./paths";
 
 /**
  * A directory something is doing work in right now, and which surface is doing
  * it. The surface travels with the directory because the refusal has to name an
- * action the user can actually reach, and stopping an agent and closing a
- * terminal are different doors.
+ * action the user can actually reach: stopping an agent or background shell
+ * and closing a terminal are different doors.
  */
 export interface BusyWorktreeSite {
   directory: string;
-  surface: "terminal" | "agent";
+  surface: "terminal" | "agent" | "shell";
+}
+
+/**
+ * Background shells hold their cwd between turns, just like terminals. Read the
+ * process set, not the attachment-owned listing: disposed shells still count
+ * while terminating, and only process exit clears their busy evidence.
+ */
+export function liveShellWorktreeSites(
+  shells: Pick<BackgroundShellHost, "liveCwds">,
+): BusyWorktreeSite[] {
+  return shells.liveCwds().map((directory) => ({ directory, surface: "shell" }));
 }
 
 /** Every directory a local execution surface is working in that could block destroying `target`. */
@@ -55,7 +67,12 @@ export function busySiteWithin(
  * chat is stopped (the composer's Stop, or Esc); a terminal is closed.
  */
 export function busyRefusal(site: BusyWorktreeSite): string {
-  return site.surface === "agent"
-    ? "An agent is still running in this worktree. Stop it first."
-    : "A terminal is still running in this worktree. Close it first.";
+  switch (site.surface) {
+    case "agent":
+      return "An agent is still running in this worktree. Stop it first.";
+    case "shell":
+      return "A background shell is still running in this worktree. Stop it first.";
+    case "terminal":
+      return "A terminal is still running in this worktree. Close it first.";
+  }
 }

@@ -5,11 +5,9 @@
  *   pnpm -C packages/agent-runtime run bench:runtime            # fast probe
  *   pnpm -C packages/agent-runtime run bench:runtime:published  # the quoted arm
  *
- * The table it prints is the deliverable. The assertions around it are what
- * make the table worth reading: each one is a property VC-356's decision rests
- * on, and each is a property of the shipped runtime rather than of this file.
- * If one of the caches this ticket added stops working, these fail loudly
- * instead of quietly making the design note wrong.
+ * The printed table is checked against the shipped runtime: the assertions
+ * verify its context-projection and prompt-assembly cache behavior (VC-356). A cache
+ * regression fails the benchmark rather than producing an unchecked claim.
  */
 
 import { describe, expect, it } from "vite-plus/test";

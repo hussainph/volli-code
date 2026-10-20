@@ -21,7 +21,16 @@
  * secrets were sealed with — is a {@link SecretKeyUnavailableError}. The store
  * lets that one error through with its message, which names the fix and never
  * a key byte; every other failure stays the store's generic sentence.
+ *
+ * The store turns these refusals into its credential status (VC-641,
+ * `secrets/credential-state.ts`): a refusal locks or refuses credentials, it
+ * never stops a host from booting.
  */
+
+import type { SecretKeyRefusal } from "@volli/shared";
+
+/** A client is told the refusal, so it is client wire vocabulary (`@volli/shared`, VC-632). */
+export type { SecretKeyRefusal } from "@volli/shared";
 
 /** Seals and opens the secret store's file. Electron's `safeStorage` has this shape. */
 export interface SecretKeyPort {
@@ -31,33 +40,14 @@ export interface SecretKeyPort {
   encryptString(value: string): Buffer;
   /** Opens what {@link encryptString} sealed, or throws. */
   decryptString(value: Buffer): string;
-}
-
-/** Why a secret key could not be used. Each one has a fix a person can make. */
-export type SecretKeyRefusal =
-  /** The key file grants group or other users any access. */
-  | "too-open"
-  /** The key file belongs to another user. */
-  | "wrong-owner"
-  /** The key path names something other than a regular file. */
-  | "not-a-file"
-  /** The key file holds something other than one base64-encoded 32-byte key. */
-  | "malformed"
-  /** The key file could not be read or written. */
-  | "unreadable"
   /**
-   * The key file's filesystem cannot make hard links (some FUSE, s3fs and
-   * container volumes), so Volli cannot create the key there atomically.
+   * Checks an existing key now, without creating one or touching the sealed
+   * file, and throws the {@link SecretKeyUnavailableError} a later seal or
+   * open would. Optional: the keychain adapter has nothing to check until
+   * secrets exist, and must not touch the keychain before then.
    */
-  | "no-hard-links"
-  /** Sealed secrets exist and their key file does not. */
-  | "missing"
-  /** The key file is not the key the secrets were sealed with. */
-  | "wrong-key"
-  /** The secrets were sealed by a different adapter (the macOS keychain). */
-  | "other-adapter"
-  /** `VOLLI_SECRET_KEY_FILE` is not an absolute path. */
-  | "relative-path";
+  probe?(): void;
+}
 
 /**
  * A secret key a person has to fix before stored secrets open or save. The

@@ -13,6 +13,18 @@ import type {
 import { TooltipProvider } from "@renderer/components/ui/tooltip";
 import { StoragePane } from "./storage-pane";
 
+// The build-artifact section reads its setting on mount over the Session RPC
+// client (`worktree.trimSettings`, VC-608).
+vi.mock("@renderer/lib/session-rpc-ipc-link", () => ({
+  sessionRpcClient: () => ({
+    worktree: {
+      trimSettings: {
+        query: async () => ({ keepPatterns: [".env"], trimOnFinish: true }),
+      },
+    },
+  }),
+}));
+
 vi.mock("@renderer/lib/toast", () => ({ toastError: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), warning: vi.fn() } }));
 
@@ -161,13 +173,6 @@ beforeEach(() => {
         orphans,
         cleanupOrphans,
         deleteOrphan: vi.fn(),
-        // The build-artifact section reads its setting on mount and scans only
-        // when asked (VC-340); this suite is about the orphan cleanup, so the
-        // trim door answers empty.
-        trimSettings: async () => ({
-          ok: true,
-          settings: { keepPatterns: [".env"], trimOnFinish: true },
-        }),
         trimScan: async () => ({ ok: true, worktrees: [] }),
         trim: vi.fn(),
         setTrimSettings: vi.fn(),
@@ -516,10 +521,9 @@ describe("Storage → Orphaned worktrees", () => {
     expect(text).toContain("pruned during startup at");
   });
 
-  // The re-review's S2: every item settled `failed`, then the app died before
-  // the run closed. Nothing is pending and the run never finished, so both
-  // callouts used to skip it — the one failure shape with no warning and no way
-  // back anywhere on the pane.
+  // Every item settled `failed`, then the app died before the run closed.
+  // Nothing is pending and the run never finished, so both callouts used to skip
+  // it — the one failure shape with no warning and no way back anywhere on the pane.
   it("offers a way back from an interrupted run whose every item failed", async () => {
     const at = Date.UTC(2026, 7, 18, 9, 30);
     orphans.mockResolvedValueOnce({
@@ -560,8 +564,7 @@ describe("Storage → Orphaned worktrees", () => {
     expect(findByText("Scan again")).toBeTruthy();
   });
 
-  // The re-review's C6: the retention window is what every date on this list
-  // was measured against.
+  // The retention window is what every date on this list was measured against.
   it("marks the scan out of date when the retention window changes, and withdraws Clean up", async () => {
     orphans.mockResolvedValue(scanned);
 

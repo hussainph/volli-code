@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import { isCommandIntentConflict } from "@volli/shared";
 import type {
   ObservabilityEvent,
   ObservabilitySink,
@@ -22,8 +23,11 @@ import {
   isSessionStreamFrame,
   isSessionStreamOverlay,
   NativeAttachmentError,
+  SessionRuntimeCommandConflictError,
   SessionRuntimeConflictError,
+  SessionEngineCommandConflictError,
   SessionRuntimeNotFoundError,
+  SESSION_HISTORY_WINDOW,
   SNAPSHOT_ARTIFACT_READ_CONCURRENCY,
   type BindingHandle,
   type HarnessCommand,
@@ -1408,44 +1412,36 @@ describe("SessionRuntime native adapter contract", () => {
   });
 
   it("stops a snapshot's artifact pool after a mid-pool read rejects", async () => {
-    // VC-383: Feed the pool only transcript events, so every first-window
-    // cursor index is a read. The successful peers wait until the failure is
-    // visible; an old worker would then keep consuming later indices, while a
-    // stopped pool has only this first window in its attempt log.
+    // VC-383: Feed the pool only transcript events, so every claimed cursor
+    // index is a read. The read issued halfway through the first pool fails;
+    // its peers wait until that failure is visible. An old worker would then
+    // keep consuming later indices, while a stopped pool has only its first
+    // window in its attempt log. Which indices the first window covers is the
+    // window's business (VC-315 reads newest first), so the failure is chosen
+    // by issue order rather than by position.
     const memory = createInMemoryTranscriptArtifactStore();
     const artifactCount = SNAPSHOT_ARTIFACT_READ_CONCURRENCY * 2 + 1;
-    const failedArtifact = Math.floor(SNAPSHOT_ARTIFACT_READ_CONCURRENCY / 2);
+    const failedRead = Math.floor(SNAPSHOT_ARTIFACT_READ_CONCURRENCY / 2);
     const failure = new Error("transcript artifact cannot be verified");
-    const artifactIndexes = new Map<string, number>();
-    const reads: number[] = [];
-    const failedRead = new Gate();
+    let reads = 0;
+    let settledPeers = 0;
     const releasePeers = new Gate();
     const firstWindowSettled = new Gate();
-    let settledPeers = 0;
     const artifacts: TranscriptArtifactStore = {
-      write: async (record) => {
-        const reference = await memory.write(record);
-        artifactIndexes.set(reference.id, artifactIndexes.size);
-        return reference;
-      },
+      write: (record) => memory.write(record),
       read: async (reference) => {
-        const index = artifactIndexes.get(reference.id)!;
-        reads.push(index);
-        if (index === failedArtifact) {
-          failedRead.resolve();
-          throw failure;
-        }
-        if (index < SNAPSHOT_ARTIFACT_READ_CONCURRENCY) {
-          await releasePeers.promise;
-          settledPeers += 1;
-          if (settledPeers === SNAPSHOT_ARTIFACT_READ_CONCURRENCY - 1) {
-            firstWindowSettled.resolve();
-          }
+        const issued = reads;
+        reads += 1;
+        if (issued === failedRead) throw failure;
+        await releasePeers.promise;
+        settledPeers += 1;
+        if (settledPeers === SNAPSHOT_ARTIFACT_READ_CONCURRENCY - 1) {
+          firstWindowSettled.resolve();
         }
         return memory.read(reference);
       },
     };
-    const seeded = composition({ artifacts });
+    const seeded = composition({ artifacts: memory });
     const sessionId = await createAndAttach(seeded.runtime);
     for (let index = 0; index < artifactCount; index += 1) {
       await seeded.adapter.emit({
@@ -1475,15 +1471,13 @@ describe("SessionRuntime native adapter contract", () => {
     }).runtime;
 
     const snapshot = runtime.snapshot({ sessionId });
-    await failedRead.promise;
     await expect(snapshot).rejects.toBe(failure);
     releasePeers.resolve();
     await firstWindowSettled.promise;
     await settleMicrotasks();
 
-    expect(reads).toHaveLength(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
-    expect(reads).toContain(failedArtifact);
-    expect(reads.length).toBeLessThan(transcriptEvents.length);
+    expect(reads).toBe(SNAPSHOT_ARTIFACT_READ_CONCURRENCY);
+    expect(reads).toBeLessThan(transcriptEvents.length);
   });
 
   it("reads every artifact when a snapshot has fewer events than its window", async () => {
@@ -3445,6 +3439,46 @@ describe("SessionRuntime native adapter contract", () => {
     expect(first.adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
   });
 
+  it("releases a delivery's re-bind that finishes attaching after close instead of binding it", async () => {
+    const first = composition();
+    const sessionId = await createAndAttach(first.runtime);
+    await first.runtime.close();
+    const latestTurnId = (await first.engine.getSession({ sessionId }))?.latestTurnId;
+    const attachStarted = new Gate();
+    const releaseAttach = new Gate();
+    first.adapter.attachStarted = () => attachStarted.resolve();
+    first.adapter.attachGate = releaseAttach.promise;
+    // Buffered during the attach: only an activated sink would record it.
+    first.adapter.attachObservation = {
+      kind: "turn",
+      state: "started",
+      turnId: "turn-after-close",
+      occurredAt: 150,
+    };
+    const recovered = composition({
+      engine: first.engine,
+      adapter: first.adapter,
+      runtimeIdPrefix: "closed-delivery-",
+    });
+
+    const sending = recovered.runtime.command({
+      commandId: "closed-delivery",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("late-bind") },
+    });
+    await attachStarted.promise;
+    await recovered.runtime.close();
+    releaseAttach.resolve();
+
+    await expect(sending).rejects.toThrow("Session runtime is closed");
+    expect(first.adapter.attaches).toBe(2);
+    expect(first.adapter.dispatches).toBe(0);
+    expect(first.adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
+    const projection = await first.engine.getSession({ sessionId });
+    expect(projection?.turnActive).toBe(false);
+    expect(projection?.latestTurnId).toBe(latestTurnId);
+  });
+
   it("validates subscriptions, stops delivery after unsubscribe, and makes close idempotent", async () => {
     const { runtime, adapter } = composition();
     const sessionId = await createAndAttach(runtime);
@@ -3470,6 +3504,71 @@ describe("SessionRuntime native adapter contract", () => {
     await runtime.close();
     expect(adapter.releases).toBe(1);
     await expect(runtime.snapshot({ sessionId })).rejects.toThrow("Session runtime is closed");
+  });
+
+  it("stops a replay at the next frame when its signal aborts, and reads nothing once aborted", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    const history = (await runtime.projection({ sessionId })).throughSequence;
+    expect(history).toBeGreaterThan(2);
+
+    // Aborted before it began: no listener, no read, a disposer that does nothing.
+    const early = new AbortController();
+    early.abort();
+    const never: unknown[] = [];
+    const none = await runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: early.signal },
+      (emission) => void never.push(emission),
+    );
+    none();
+    expect(never).toEqual([]);
+
+    // Aborted while the history is still being read: not one frame arrives.
+    const reading = new AbortController();
+    const unread: unknown[] = [];
+    const pending = runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: reading.signal },
+      (emission) => void unread.push(emission),
+    );
+    reading.abort();
+    (await pending)();
+    expect(unread).toEqual([]);
+
+    // Aborted by the listener after the first replayed frame: nothing more arrives.
+    const midway = new AbortController();
+    const seen: number[] = [];
+    const stop = await runtime.subscribe(
+      { sessionId, afterSequence: 0, signal: midway.signal },
+      (emission) => {
+        if (!isSessionStreamFrame(emission)) return;
+        seen.push(emission.sequence);
+        midway.abort();
+      },
+    );
+    expect(seen).toEqual([1]);
+    await adapter.emit({ kind: "turn", state: "started", turnId: "after-abort", occurredAt: 500 });
+    expect(seen).toEqual([1]);
+    stop();
+
+    // Aborting a live subscription ends it as its disposer would.
+    const live = new AbortController();
+    const delivered: number[] = [];
+    const head = (await runtime.projection({ sessionId })).throughSequence;
+    const dispose = await runtime.subscribe(
+      { sessionId, afterSequence: head, signal: live.signal },
+      (emission) => {
+        if (isSessionStreamFrame(emission)) delivered.push(emission.sequence);
+      },
+    );
+    live.abort();
+    await adapter.emit({
+      kind: "turn",
+      state: "completed",
+      turnId: "after-abort",
+      occurredAt: 600,
+    });
+    expect(delivered).toEqual([]);
+    dispose();
   });
 
   it("reports missing sessions, bindings, and invalid persisted binding metadata explicitly", async () => {
@@ -3991,9 +4090,12 @@ describe("SessionRuntime native adapter contract", () => {
     await readStarted;
     await runtime.close();
     releaseRead();
-    await pending;
+    // Close emptied the binding map, so the send re-binds after close: that
+    // late handle is released rather than dispatched to (VC-467).
+    await expect(pending).rejects.toThrow("Session runtime is closed");
     stop();
-    expect(adapter.releaseReasons).toContain("shutdown");
+    expect(adapter.releaseReasons).toEqual(["shutdown", "shutdown"]);
+    expect(adapter.dispatches).toBe(0);
 
     const emptyEvents: SessionEngine = {
       ...engine,
@@ -4772,6 +4874,91 @@ async function settleMicrotasks(): Promise<void> {
   for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
 }
 
+/**
+ * A runtime whose ledger reads are recorded per Session, for the cache bounds:
+ * `seeds` are folds built from nothing (`getBaseSession`), `reads` every ledger
+ * read at all. The fake adapter keeps only its newest sink, so `open` captures
+ * each Session's as it attaches.
+ */
+function countingComposition() {
+  const base = composition();
+  const seeds: string[] = [];
+  const reads: string[] = [];
+  const engine: SessionEngine = {
+    ...base.engine,
+    getBaseSession: async (query) => {
+      seeds.push(query.sessionId);
+      reads.push(query.sessionId);
+      return base.engine.getBaseSession(query);
+    },
+    listEvents: async (query) => {
+      reads.push(query.sessionId);
+      return base.engine.listEvents(query);
+    },
+  };
+  const { runtime, adapter } = composition({ engine, adapter: base.adapter });
+  let created = 0;
+  const create = async (): Promise<string> => {
+    created += 1;
+    const result = await runtime.command({
+      commandId: `counted-create-${created}`,
+      command: {
+        kind: "session.create",
+        projectId: "project-1",
+        ticketId: null,
+        role: "project",
+        parentSessionId: null,
+        title: null,
+      },
+    });
+    return result.sessionId;
+  };
+  return {
+    runtime,
+    adapter,
+    seeds,
+    reads,
+    /** A Session on its own attachment, and the message id its turn-1 deltas address. */
+    async open(): Promise<{
+      sessionId: string;
+      attachmentId: string;
+      sink: ObservationSink;
+      messageId: string;
+    }> {
+      const sessionId = await create();
+      await runtime.command({
+        commandId: `counted-attach-${sessionId}`,
+        sessionId,
+        command: { kind: "adapter.attach", continuity: "fresh" },
+      });
+      const attachmentId = (await runtime.snapshot({ sessionId })).projection.liveExecutor!.id;
+      return {
+        sessionId,
+        attachmentId,
+        sink: adapter.sink!,
+        messageId: `fake:${attachmentId}:turn-1:0`,
+      };
+    },
+    /** Folds Sessions nobody watches or streams, enough to evict every unexempt fold twice. */
+    async crowd(): Promise<void> {
+      for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) {
+        await runtime.projection({ sessionId: await create() });
+      }
+    },
+    /** What a chat opened now is handed for the Session's messages in flight. */
+    async baselines(sessionId: string): Promise<TranscriptDelta[]> {
+      const emissions: SessionStreamEmission[] = [];
+      const afterSequence = (await runtime.snapshot({ sessionId })).throughSequence;
+      (
+        await runtime.subscribe({ sessionId, afterSequence }, (emission) => {
+          emissions.push(emission);
+        })
+      )();
+      return overlaysIn(emissions).map(({ delta }) => delta);
+    },
+  };
+}
+
 describe("SessionRuntime transient transcript overlay", () => {
   it("publishes compaction progress without writing it to history", async () => {
     const { runtime, adapter } = composition();
@@ -5177,6 +5364,7 @@ describe("SessionRuntime transient transcript overlay", () => {
     const sessions: string[] = [];
     // One past the limit, so the first Session's in-flight message is the one
     // evicted — and an evicted overlay is a message the next reset rebuilds.
+    // None of them has a turn open: a turn holds its overlay (below).
     for (let index = 0; index <= 8; index += 1) {
       const created = await runtime.command({
         commandId: `overlay-create-${index}`,
@@ -5214,6 +5402,135 @@ describe("SessionRuntime transient transcript overlay", () => {
 
     expect(seen.get(sessions[0]!)).toEqual([]);
     expect(seen.get(sessions[8]!)).toMatchObject([{ delta: { op: "reset" } }]);
+  });
+
+  /**
+   * The bounds are on Sessions with no turn running (VC-466). A streaming
+   * Session reads its overlay on every delta and its fold at every step, and
+   * the overlay holds the only baseline its message in flight has, so neither
+   * is evicted while the turn runs, however many other Sessions stream between
+   * its deltas.
+   */
+  it("keeps every streaming Session's overlay and fold, however many stream at once", async () => {
+    const { runtime, seeds, reads, open, crowd, baselines } = countingComposition();
+    // Both bounds are eight: twice that stream at once, and nobody watches.
+    const streams: Awaited<ReturnType<typeof open>>[] = [];
+    for (let index = 0; index < PROJECTION_CACHE_LIMIT * 2; index += 1) streams.push(await open());
+    for (const { sink } of streams) await sink.emit(startedTurn("turn-1"));
+    // A Session's first delta seeds its overlay: the one read its turn owes.
+    for (const [index, { sink }] of streams.entries()) {
+      await sink.emit(textDelta(`Session ${index}`));
+    }
+
+    reads.length = 0;
+    // Round-robin, so each Session's next delta lands after fifteen others'.
+    for (let round = 0; round < 3; round += 1) {
+      for (const { sink } of streams) await sink.emit(textDelta(` ${round}`));
+    }
+    expect(reads).toEqual([]);
+
+    // Nor do background reads of other Sessions evict a turn's fold.
+    await crowd();
+    seeds.length = 0;
+    for (const { sessionId } of streams) await runtime.projection({ sessionId });
+    expect(seeds).toEqual([]);
+
+    // A chat opened mid-stream on the least recently streamed Session is handed
+    // the whole message in flight.
+    const first = streams[0]!;
+    expect(await baselines(first.sessionId)).toEqual([
+      foldedMessage("Session 0 0 1 2", first.messageId),
+    ]);
+
+    await runtime.close();
+  });
+
+  it.each(["completed", "interrupted"] as const)(
+    "returns a Session's overlay and fold to the bounds once its turn is %s",
+    async (state) => {
+      const { runtime, seeds, open, crowd, baselines } = countingComposition();
+      const settling = await open();
+      await settling.sink.emit(startedTurn("turn-1"));
+      await settling.sink.emit(textDelta("Hel"));
+      // Its message never settled, so the overlay still holds it: from here only
+      // the bound can drop it.
+      await settling.sink.emit({ kind: "turn", state, turnId: "turn-1", occurredAt: 600 });
+
+      // Eight more overlays with no turn open take it past the overlay bound,
+      // and the crowd takes its fold past the other.
+      for (let index = 0; index < 8; index += 1) {
+        await (await open()).sink.emit(textDelta(`Other ${index}`));
+      }
+      await crowd();
+
+      seeds.length = 0;
+      await runtime.projection({ sessionId: settling.sessionId });
+      expect(seeds).toEqual([settling.sessionId]);
+      expect(await baselines(settling.sessionId)).toEqual([]);
+
+      await runtime.close();
+    },
+  );
+
+  /**
+   * A turn whose binding goes away never reports its own end, so the exemption
+   * has to go with the binding: otherwise the fold of a Session nothing is
+   * running would stay exempt from the bound for the rest of the process.
+   */
+  it.each(["released", "closed", "failed"] as const)(
+    "returns a Session's fold to the bound once its binding is %s mid-turn",
+    async (end) => {
+      const { runtime, seeds, open, crowd } = countingComposition();
+      const ending = await open();
+      await ending.sink.emit(startedTurn("turn-1"));
+      await ending.sink.emit(textDelta("Hel"));
+      if (end === "released") {
+        await runtime.command({
+          commandId: "mid-turn-release",
+          sessionId: ending.sessionId,
+          command: { kind: "adapter.release", attachmentId: ending.attachmentId },
+        });
+      } else {
+        await ending.sink.emit({ kind: "attachment", state: end });
+      }
+
+      await crowd();
+      seeds.length = 0;
+      await runtime.projection({ sessionId: ending.sessionId });
+      expect(seeds).toEqual([ending.sessionId]);
+
+      await runtime.close();
+    },
+  );
+
+  it("keeps the fold of a Session whose accepted message has not opened its turn yet", async () => {
+    const { runtime, adapter, seeds, open, crowd } = countingComposition();
+    const { sessionId } = await open();
+    const dispatchStarted = new Gate();
+    const releaseDispatch = new Gate();
+    adapter.dispatchStarted = () => dispatchStarted.resolve();
+    adapter.dispatchGate = releaseDispatch.promise;
+    const sending = runtime.command({
+      commandId: "accepted-start",
+      sessionId,
+      command: { kind: "message.submit", message: userMessage("accepted-start") },
+    });
+    await dispatchStarted.promise;
+
+    await crowd();
+    seeds.length = 0;
+    await runtime.projection({ sessionId });
+    expect(seeds).toEqual([]);
+
+    // A command that settles without opening a turn takes the exemption with it.
+    releaseDispatch.resolve();
+    await sending;
+    await crowd();
+    seeds.length = 0;
+    await runtime.projection({ sessionId });
+    expect(seeds).toEqual([sessionId]);
+
+    await runtime.close();
   });
 
   it("re-seeds the overlay after a failed read rather than reporting sequence zero", async () => {
@@ -5875,6 +6192,33 @@ describe("SessionRuntime person's stop command", () => {
   });
 });
 
+// VC-564: the host protocol answers these two, and only these, `command-conflict`.
+it("names a command id reused for a different intent, in flight or durable, as a command conflict", async () => {
+  const { runtime } = composition();
+  const sessionId = await createAndAttach(runtime);
+  const request = {
+    commandId: "stop",
+    sessionId,
+    command: { kind: "session.stop" as const, reason: "Runaway" },
+  };
+  const first = runtime.command(request);
+  const inFlight = runtime
+    .command({ ...request, command: { ...request.command, reason: "Changed" } })
+    .catch((error: unknown) => error);
+  await first;
+  const durable = await runtime
+    .command({ ...request, command: { ...request.command, reason: "Changed again" } })
+    .catch((error: unknown) => error);
+
+  expect(await inFlight).toBeInstanceOf(SessionRuntimeCommandConflictError);
+  expect(await inFlight).toBeInstanceOf(SessionRuntimeConflictError);
+  expect(durable).toBeInstanceOf(SessionEngineCommandConflictError);
+  expect(isCommandIntentConflict(await inFlight)).toBe(true);
+  expect(isCommandIntentConflict(durable)).toBe(true);
+  expect(isCommandIntentConflict(new SessionRuntimeConflictError("ledger fact"))).toBe(false);
+  expect(isCommandIntentConflict(new Error("different intent"))).toBe(false);
+});
+
 it("replays a completed stop after release and across a runtime restart without touching an executor", async () => {
   const { runtime, engine, adapter } = composition();
   const sessionId = await createAndAttach(runtime);
@@ -6003,4 +6347,153 @@ it("replays a stop if its failed release was subsequently closed by another acto
   expect(adapter.releases).toBe(1);
   adapter.releaseFailure = null;
   await runtime.close();
+});
+
+const historyFrameBytes = (frame: SessionStreamFrame) =>
+  new TextEncoder().encode(JSON.stringify(frame)).length;
+
+/** Every page from `before` back to the first event, oldest page first. */
+async function pageBackThrough(
+  runtime: SessionRuntime,
+  sessionId: string,
+  before: number | null,
+): Promise<SessionStreamFrame[][]> {
+  const pages: SessionStreamFrame[][] = [];
+  for (let cursor = before; cursor !== null;) {
+    const page = await runtime.history({ sessionId, before: cursor });
+    pages.unshift([...page.frames]);
+    expect(page.before === null || page.before <= cursor).toBe(true);
+    cursor = page.before;
+  }
+  return pages;
+}
+
+function historyReply(index: number, chars: number): RuntimeObservation {
+  return {
+    kind: "message-settled",
+    turnId: `turn-${index}`,
+    occurredAt: 600 + index,
+    message: { entryId: `reply-${index}`, role: "assistant", text: "x".repeat(chars) },
+  };
+}
+
+describe("SessionRuntime bounded history window (VC-315)", () => {
+  it("snapshots only the newest events, and pages back through every one exactly once", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    for (let index = 0; index < SESSION_HISTORY_WINDOW.events + 40; index += 1) {
+      await adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
+    }
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.frames).toHaveLength(SESSION_HISTORY_WINDOW.events);
+    expect(snapshot.frames.at(-1)!.sequence).toBe(snapshot.throughSequence);
+    expect(snapshot.before).toBe(snapshot.frames[0]!.sequence);
+    const older = await pageBackThrough(runtime, sessionId, snapshot.before);
+    const sequences = [...older.flat(), ...snapshot.frames].map(({ sequence }) => sequence);
+    expect(sequences).toEqual(Array.from({ length: snapshot.throughSequence }, (_, i) => i + 1));
+  });
+
+  it("ends a window at its byte bound, reading no artifact the window does not return", async () => {
+    const memory = createInMemoryTranscriptArtifactStore();
+    let reads = 0;
+    const artifacts: TranscriptArtifactStore = {
+      write: (record) => memory.write(record),
+      read: (reference) => {
+        reads += 1;
+        return memory.read(reference);
+      },
+    };
+    const { runtime, adapter } = composition({ artifacts });
+    const sessionId = await createAndAttach(runtime);
+    const replies = 80;
+    for (let index = 0; index < replies; index += 1)
+      await adapter.emit(historyReply(index, 40_000));
+    reads = 0;
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    const bytes = snapshot.frames.reduce((sum, frame) => sum + historyFrameBytes(frame), 0);
+    expect(bytes).toBeLessThanOrEqual(SESSION_HISTORY_WINDOW.bytes);
+    expect(snapshot.frames.length).toBeLessThan(SESSION_HISTORY_WINDOW.events);
+    // The frame just older than the window is the one that did not fit.
+    const [refused] = (await runtime.history({ sessionId, before: snapshot.before! })).frames.slice(
+      -1,
+    );
+    expect(bytes + historyFrameBytes(refused!)).toBeGreaterThan(SESSION_HISTORY_WINDOW.bytes);
+    // Lazy: what the snapshot read is bounded by its window, not by the history.
+    expect(snapshot.transcript.length).toBeLessThan(replies);
+    reads = 0;
+    await runtime.snapshot({ sessionId });
+    expect(reads).toBeLessThan(snapshot.transcript.length + 32);
+    const older = await pageBackThrough(runtime, sessionId, snapshot.before);
+    const replayed = [...older.flat(), ...snapshot.frames].filter(
+      ({ event }) => event.payload.kind === "transcript.referenced",
+    );
+    expect(replayed).toHaveLength(replies);
+  });
+
+  it("returns one frame larger than the byte bound alone, rather than never advancing", async () => {
+    const { runtime, adapter } = composition();
+    const sessionId = await createAndAttach(runtime);
+    await adapter.emit(historyReply(0, 1_000));
+    await adapter.emit(historyReply(1, SESSION_HISTORY_WINDOW.bytes + 1_000));
+
+    const snapshot = await runtime.snapshot({ sessionId });
+
+    expect(snapshot.frames).toHaveLength(1);
+    expect(historyFrameBytes(snapshot.frames[0]!)).toBeGreaterThan(SESSION_HISTORY_WINDOW.bytes);
+    expect(snapshot.before).toBe(snapshot.throughSequence);
+    const older = await runtime.history({ sessionId, before: snapshot.before! });
+    expect(older.before).toBeNull();
+    expect(older.frames.at(-1)!.sequence).toBe(snapshot.throughSequence - 1);
+  });
+
+  it("reads a sparse ledger without repeating a frame", async () => {
+    // A ledger that skipped a retired kind has holes in its sequences, and a
+    // double that ignores the range read entirely answers with every event.
+    const seeded = composition();
+    const sessionId = await createAndAttach(seeded.runtime);
+    for (let index = 0; index < 70; index += 1) {
+      await seeded.adapter.emit({ kind: "turn", state: "started", turnId: `turn-${index}` });
+    }
+    const sparse = (await seeded.engine.listEvents({ sessionId })).filter(
+      ({ sequence }) => sequence % 3 !== 0,
+    );
+    const runtime = composition({
+      engine: { ...seeded.engine, listEvents: async () => sparse },
+      adapter: new FakeAdapter(),
+    }).runtime;
+
+    const page = await runtime.history({ sessionId, before: sparse.at(-1)!.sequence + 1 });
+
+    expect(page.before).toBeNull();
+    expect(page.frames.map(({ sequence }) => sequence)).toEqual(
+      sparse.map(({ sequence }) => sequence),
+    );
+  });
+
+  it("refuses a malformed cursor, an unknown Session and a closed runtime", async () => {
+    const { runtime } = composition();
+    const sessionId = await createAndAttach(runtime);
+
+    await expect(runtime.history({ sessionId, before: 1 })).resolves.toEqual({
+      frames: [],
+      before: null,
+    });
+    await expect(runtime.history({ sessionId, before: 0 })).rejects.toThrow(
+      "Session history cursor must be a positive integer",
+    );
+    await expect(runtime.history({ sessionId, before: 1.5 })).rejects.toThrow(
+      "Session history cursor must be a positive integer",
+    );
+    await expect(runtime.history({ sessionId: "missing", before: 2 })).rejects.toBeInstanceOf(
+      SessionRuntimeNotFoundError,
+    );
+    await runtime.close();
+    await expect(runtime.history({ sessionId, before: 2 })).rejects.toThrow(
+      "Session runtime is closed",
+    );
+  });
 });

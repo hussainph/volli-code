@@ -1,6 +1,9 @@
 import type Database from "better-sqlite3";
 import type { Synchronous } from "@volli/shared";
 import { guardCachedStatements } from "./prepared";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("db");
 
 /**
  * One JS thread, no transaction across an await (VC-551). Independent writes
@@ -58,7 +61,7 @@ export const throwTransactionViolation: TransactionViolationHandler = (violation
 
 /** Composition selects this explicitly for packaged builds, never from NODE_ENV. */
 export const logTransactionViolation: TransactionViolationHandler = (violation) => {
-  console.error("[volli] SQLite transaction ownership violation:", violation);
+  log.error("sqlite transaction ownership violation", { error: violation });
 };
 
 /**

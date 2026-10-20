@@ -1,26 +1,24 @@
 /**
  * The one place a Web Access secret is written, read, or admitted not to exist.
  *
- * Volli had no stored secret of its own before this: Pi owns its provider
- * credentials in its own file store, and every other setting is plain. So this
- * module is a precedent, and it is written as one — a single named owner with
- * four methods, rather than reads of the `secrets` table sprinkled across
- * whichever module happened to need a key. Everything that wants the Brave key
- * goes through here, which is what makes "the key never reaches the renderer" a
- * claim a reader can check by looking at this file's callers instead of the
- * whole app.
+ * All access to a Web Access key goes through this module's four methods,
+ * rather than direct reads of the `secrets` table. Its callers make the
+ * boundary checkable: the key never reaches the renderer.
  *
  * **Where the key rests, and why it is not the keychain.** The key sits in the
  * profile's own `secrets` table, in the clear, under a user-only `Application
- * Support` directory — the same trade Pi already makes for the credentials that
- * actually matter (`~/.pi/agent/auth.json`, 0600), and the same one opencode and
- * Codex make. Electron's `safeStorage` used to encrypt this, and it bought
- * little: it guarded the least sensitive secret in the app while raising a
+ * Support` directory. Electron's `safeStorage` used to encrypt it but raised a
  * macOS keychain prompt on every Session attach for anyone whose build
- * signature had changed since the item was created. A threat model that accepts
- * a plaintext OAuth token on disk does not get to demand a keychain for a search
- * key. See migration 023 and `legacy-safe-storage.ts` for what became of the
+ * signature had changed since the item was created. See migration 023 and
+ * `legacy-safe-storage.ts` for what became of the
  * keys stored the old way.
+ *
+ * **Sealed mirror (VC-631, VC-643).** This table remains the source of truth
+ * with a sealed mirror (`credential-mirror.ts`),
+ * resealed after each save and clear and reconciled on every launch, under a
+ * keychain-wrapped key that is asked for once per launch, never per attach.
+ * Reads stay here until the read switch (VC-644). So, today, the key is still
+ * in the clear in this table: nothing may claim it is encrypted.
  *
  * **Nothing here appears in a message.** A refusal names the situation and never
  * the secret, and never how long the key is — either would be a fact about the
@@ -28,7 +26,7 @@
  */
 import type Database from "better-sqlite3";
 
-import { deleteSecret, hasSecret, readSecret, writeSecret } from "@volli/host-core/db/secrets-repo";
+import { deleteSecret, hasSecret, readSecret, writeSecret } from "../db/secrets-repo";
 
 /**
  * The name the Brave key is stored under.

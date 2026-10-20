@@ -1,4 +1,7 @@
+import type { execFile } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { INVENTORY_TIMEOUT_MS } from "../process/inventory";
+import { createProcessInspector } from "./park";
 import type { ParkConfig, ProcessInspector } from "./park";
 import { ParkController } from "./park-controller";
 import type { ParkableSession } from "./park-controller";
@@ -32,9 +35,10 @@ let pidSeq = 5000;
 /** A distinct fake pid per session so park-tree assertions can't collide. */
 const nextPid = () => (pidSeq += 1);
 
-function makeSession(pid = nextPid()): ParkableSession {
+function makeSession(pid = nextPid(), spawnLedgerId: string | null = null): ParkableSession {
   return {
     pty: { pid },
+    spawnLedgerId,
     parkedPids: null,
     parkedManually: false,
     quietCpuSamples: 0,
@@ -46,8 +50,42 @@ function makeSession(pid = nextPid()): ParkableSession {
 
 /** A `now` comfortably past the idle threshold from a fresh session. */
 const idleNow = () => Date.now() + 10_000;
-/** Real-time pause; mid-window actions land inside the 5ms breathe window. */
-const tick = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+/**
+ * Starts a sweep and returns once its breathe window is OPEN: every parked
+ * tree has been CONT'd and the verdict is waiting on the window's clock. The
+ * window then stays open until {@link closeBreatheWindow}, however long the
+ * test takes to act in it.
+ *
+ * The window is a real `setTimeout`, so a test that raced it with a shorter
+ * real one (a 1 ms pause inside a 5 ms window) was ordered by the wall clock:
+ * a worker descheduled for more than ~4 ms between arming the two timers on a
+ * loaded CI runner saw the window close first, and the verdict ran before the
+ * mid-window action it was meant to observe (VC-717). Only `setTimeout` is
+ * faked; `Date.now` stays real, as the activity timestamps compare it.
+ */
+async function openBreatheWindow(
+  controller: ParkController,
+  session: ParkableSession,
+  contCalls: () => number[],
+): Promise<{ sweepDone: Promise<void> }> {
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  const sweepDone = controller.sweep(idleNow());
+  // Let the sweep reach the window: any microtask-only work before it runs,
+  // and no fake time passes.
+  await vi.advanceTimersByTimeAsync(0);
+  expect(contCalls()).toEqual([session.pty.pid]);
+  // Wrapped: an async function returning the bare promise would adopt it, and
+  // wait for the very verdict the window is holding back.
+  return { sweepDone };
+}
+
+/** Lets the breathe window's full duration elapse, so the verdict runs. */
+async function closeBreatheWindow({ sweepDone }: { sweepDone: Promise<void> }): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ENABLED_CONFIG.breatheWindowMs);
+  vi.useRealTimers();
+  await sweepDone;
+}
 
 /** A controller wired to a fresh fake inspector + empty session map. */
 function harness(config: ParkConfig = ENABLED_CONFIG) {
@@ -55,15 +93,22 @@ function harness(config: ParkConfig = ENABLED_CONFIG) {
   const sessions = new Map<string, ParkableSession>();
   const flush = vi.fn((_id: string): void => {});
   const pushParkState = vi.fn((_id: string): void => {});
+  const markParked = vi.fn((_rowId: string, _parkedAt: number | null): void => {});
   const controller = new ParkController({
     config,
     inspector: parts.inspector,
     sessions,
     flush,
     pushParkState,
+    ledger: { markParked },
   });
-  const register = (id: string, pid?: number): ParkableSession => {
-    const session = makeSession(pid);
+  /** Each session's ledger row is `row-<id>`; `null` opts out of a row. */
+  const register = (
+    id: string,
+    pid?: number,
+    spawnLedgerId: string | null = `row-${id}`,
+  ): ParkableSession => {
+    const session = makeSession(pid, spawnLedgerId);
     sessions.set(id, session);
     return session;
   };
@@ -72,10 +117,30 @@ function harness(config: ParkConfig = ENABLED_CONFIG) {
     parts.signal.mock.calls.filter((call) => call[1] === sig).map((call) => call[0]);
   const stopCalls = () => signalledWith("SIGSTOP");
   const contCalls = () => signalledWith("SIGCONT");
-  return { ...parts, sessions, flush, pushParkState, controller, register, stopCalls, contCalls };
+  /** The durable parked mark each row was last left with (absent: never written). */
+  const marks = (): Map<string, "parked" | "running"> =>
+    new Map(
+      markParked.mock.calls.map(([rowId, parkedAt]) => [
+        rowId,
+        parkedAt === null ? "running" : "parked",
+      ]),
+    );
+  return {
+    ...parts,
+    sessions,
+    flush,
+    pushParkState,
+    markParked,
+    marks,
+    controller,
+    register,
+    stopCalls,
+    contCalls,
+  };
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -364,6 +429,154 @@ describe("ParkController.sweep", () => {
   });
 });
 
+describe("ParkController's durable parked mark (VC-833)", () => {
+  it("marks the row parked before the first SIGSTOP, and wake clears it", async () => {
+    const { controller, register, markParked, signal, marks } = harness();
+    register("s");
+    expect(await controller.park("s", { manual: false })).toEqual({ ok: true });
+    expect(markParked).toHaveBeenCalledWith("row-s", expect.any(Number));
+    expect(markParked.mock.invocationCallOrder[0]).toBeLessThan(
+      signal.mock.invocationCallOrder[0]!,
+    );
+    expect(marks().get("row-s")).toBe("parked");
+
+    controller.wake("s");
+    expect(marks().get("row-s")).toBe("running");
+  });
+
+  it("writes nothing before a refusal that stopped nothing", async () => {
+    const { controller, register, markParked } = harness();
+    const session = register("s");
+    session.visible = true;
+    await controller.park("s", { manual: false });
+    expect(markParked).not.toHaveBeenCalled();
+  });
+
+  it("clears the mark when a park is abandoned after stopping the tree", async () => {
+    const { controller, register, descendants, sessions, marks } = harness();
+    register("s");
+    descendants.mockResolvedValueOnce([200]).mockImplementationOnce(async () => {
+      sessions.delete("s");
+      return [200];
+    });
+    await controller.park("s", { manual: true });
+    expect(marks().get("row-s")).toBe("running");
+
+    register("t");
+    descendants.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("pgrep unavailable"));
+    await expect(controller.park("t", { manual: true })).rejects.toThrow("pgrep unavailable");
+    expect(marks().get("row-t")).toBe("running");
+  });
+
+  it("writes no mark for a session the ledger never recorded", async () => {
+    const { controller, register, markParked } = harness();
+    register("s", undefined, null);
+    await controller.park("s", { manual: true });
+    controller.wake("s");
+    expect(markParked).not.toHaveBeenCalled();
+  });
+
+  it("keeps the mark across a quiet breathe and clears it when the tree is left running", async () => {
+    const h = harness();
+    const session = h.register("s");
+    await h.controller.park("s", { manual: false });
+    await h.controller.sweep(idleNow()); // quiet window: re-frozen
+    expect(session.parkedPids).not.toBeNull();
+    expect(h.marks().get("row-s")).toBe("parked");
+
+    h.cpuPercents.mockResolvedValue(new Map([[session.pty.pid, 5]]));
+    await h.controller.sweep(idleNow()); // busy window: woken
+    expect(session.parkedPids).toBeNull();
+    expect(h.marks().get("row-s")).toBe("running");
+  });
+
+  it("clears the mark when a refused re-freeze leaves the tree running", async () => {
+    const { controller, register, descendants, marks } = harness();
+    const session = register("s");
+    await controller.park("s", { manual: false });
+    const baseline = session.lastActivityAt;
+    descendants.mockResolvedValueOnce([]).mockImplementationOnce(async () => {
+      session.lastActivityAt = baseline + 5000;
+      return [];
+    });
+    await controller.sweep(idleNow());
+    expect(session.parkedPids).toBeNull();
+    expect(marks().get("row-s")).toBe("running");
+  });
+
+  it("clears the mark of a session killed while its re-freeze was collecting", async () => {
+    const { controller, register, descendants, sessions, marks, stopCalls } = harness();
+    register("s");
+    await controller.park("s", { manual: false });
+    descendants.mockResolvedValueOnce([]).mockImplementationOnce(async () => {
+      // A kill here skips wake(): breathe already set parkedPids to null.
+      sessions.delete("s");
+      return [];
+    });
+    await controller.sweep(idleNow());
+    expect(stopCalls()).toHaveLength(1); // only the original park
+    expect(marks().get("row-s")).toBe("running");
+  });
+
+  it("clears the mark when the re-freeze throws before stopping anything", async () => {
+    const { controller, register, descendants, marks, pushParkState } = harness();
+    const session = register("s");
+    await controller.park("s", { manual: false });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    descendants.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("pgrep unavailable"));
+    await controller.sweep(idleNow());
+    expect(session.parkedPids).toBeNull();
+    expect(marks().get("row-s")).toBe("running");
+    expect(pushParkState).toHaveBeenLastCalledWith("s");
+    expect(consoleError).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a sweep over the real inspector whose lsof never answers (VC-833)", () => {
+  it("ends at the inspector's bound, and the next sweep runs and parks", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    let lsofHangs = true;
+    const lsofKills: unknown[] = [];
+    const stub = (
+      file: string,
+      args: string[],
+      _options: unknown,
+      cb: (err: Error | null, stdout?: string, stderr?: string) => void,
+    ) => {
+      const child = { kill: (signal: unknown) => lsofKills.push(signal) };
+      if (file === "pgrep") cb(Object.assign(new Error("no children"), { code: 1 }));
+      else if (file === "ps") cb(null, `${args.at(-1)} 0.0\n`, "");
+      else if (!lsofHangs) cb(Object.assign(new Error("no listeners"), { code: 1 }));
+      return child;
+    };
+    const sessions = new Map<string, ParkableSession>();
+    const session = makeSession(nextPid(), "row-s");
+    sessions.set("s", session);
+    const controller = new ParkController({
+      config: { ...ENABLED_CONFIG, quietSamplesRequired: 1 },
+      inspector: createProcessInspector(stub as unknown as typeof execFile),
+      sessions,
+      flush: () => {},
+      pushParkState: () => {},
+      ledger: { markParked: () => {} },
+    });
+
+    const first = controller.sweep(idleNow());
+    await vi.advanceTimersByTimeAsync(INVENTORY_TIMEOUT_MS);
+    await first;
+    expect(lsofKills).toEqual(["SIGKILL"]);
+    expect(consoleError).toHaveBeenCalledOnce();
+    expect(session.parkedPids).toBeNull();
+
+    lsofHangs = false;
+    await controller.sweep(idleNow());
+    expect(session.parkedPids).toEqual([session.pty.pid]);
+    expect(kill).toHaveBeenCalledWith(session.pty.pid, "SIGSTOP");
+  });
+});
+
 describe("ParkController.breathe (via sweep)", () => {
   /** Registers a hidden session, auto-parks it, and clears signal/push history. */
   async function autoParked(config: ParkConfig = ENABLED_CONFIG) {
@@ -383,11 +596,10 @@ describe("ParkController.breathe (via sweep)", () => {
   });
 
   it("wakes on activity during the window instead of re-freezing", async () => {
-    const { controller, session, stopCalls, pushParkState } = await autoParked();
-    const sweepDone = controller.sweep(idleNow());
-    await tick(1);
+    const { controller, session, contCalls, stopCalls, pushParkState } = await autoParked();
+    const window = await openBreatheWindow(controller, session, contCalls);
     session.lastActivityAt = Date.now() + 100; // output/input during the window
-    await sweepDone;
+    await closeBreatheWindow(window);
     expect(stopCalls()).toEqual([]);
     expect(pushParkState).toHaveBeenCalledWith("s");
   });
@@ -429,10 +641,9 @@ describe("ParkController.breathe (via sweep)", () => {
   it("lets a Park Now landing mid-window beat a busy verdict and stay manual", async () => {
     const { controller, session, cpuPercents, signal, stopCalls, contCalls } = await autoParked();
     cpuPercents.mockResolvedValue(new Map([[session.pty.pid, 5]])); // would wake
-    const sweepDone = controller.sweep(idleNow());
-    await tick(1);
+    const window = await openBreatheWindow(controller, session, contCalls);
     expect(await controller.park("s", { manual: true })).toEqual({ ok: true });
-    await sweepDone;
+    await closeBreatheWindow(window);
     expect(stopCalls()).toEqual([session.pty.pid]); // re-frozen despite the busy tree
     expect(session.parkedManually).toBe(true);
     // Now exempt from the duty cycle: a further sweep leaves it frozen.

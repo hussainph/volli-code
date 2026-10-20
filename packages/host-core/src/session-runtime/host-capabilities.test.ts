@@ -1,32 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
-import { resolveAgentToolSurface, type CodeModeBirth, type SessionRole } from "@volli/shared";
+import type { CodeModeBirth, SessionRole, SessionToolId } from "@volli/shared";
 import { resolveHostToolSurface } from "./host-capabilities";
-import { PI_TOOLS } from "./pi-adapter";
+import { MAIN_SURFACE_BASELINE } from "./fixtures/main-surface-baseline";
 import type { SessionWebPorts } from "../web/ports";
 
 const desktop = { askUser: true, requestSecret: true, browser: true, shells: true };
-// The shipped index.ts order, not derived from the new helper being tested.
-const desktopInteraction = [
-  "ask_user",
-  "web_fetch",
-  "web_search",
-  "browser_tabs",
-  "browser_navigate",
-  "browser_snapshot",
-  "browser_act",
-  "browser_screenshot",
-  "browser_console",
-  "browser_acquire",
-  "browser_release",
-  "todo_write",
-  "shell_start",
-  "shell_output",
-  "shell_kill",
-  "browser_find",
-  "classify",
-  "request_secret",
-  "codemode",
-] as const;
+// Membership only: the resolver reads which ports exist, never calls them.
 const web: SessionWebPorts = {
   webFetch: async () => {
     throw new Error("membership only");
@@ -42,44 +21,86 @@ const codeModeBirth: CodeModeBirth = {
   largeServers: new Set(),
 };
 
-describe("host capabilities at Session birth", () => {
-  it.each<SessionRole>(["project", "ticket", "subagent"])(
-    "keeps the desktop's %s surface byte-identical, including Role filtering",
-    (role) => {
-      for (const hasWeb of [false, true]) {
-        for (const classify of [false, true]) {
-          for (const offered of [false, true]) {
-            const interaction = desktopInteraction.filter(
-              (tool) =>
-                !((tool === "web_fetch" || tool === "web_search") && !hasWeb) &&
-                !(tool === "classify" && !classify) &&
-                !(tool === "codemode" && !offered),
-            );
-            expect(
-              JSON.stringify(
-                resolveHostToolSurface({
-                  capabilities: desktop,
-                  web: hasWeb ? web : {},
-                  role,
-                  grants: [],
-                  mcpTools: [],
-                  classify,
-                  codeModeBirth: { ...codeModeBirth, offered },
-                }),
-              ),
-            ).toBe(
-              JSON.stringify(
-                resolveAgentToolSurface({
-                  role,
-                  grants: [],
-                  mcpTools: [],
-                  capabilities: { coding: PI_TOOLS.tools, interaction },
-                }),
-              ),
-            );
+// The a1 verifier's exact combination matrix, in its enumeration order
+// (fixtures/main-surface-baseline.ts records one entry per combination). The
+// default-argument call shape the backfill path uses — `resolve(role, [])` —
+// is the (grants=[], within=undefined, mcpTools=[], birth=undefined,
+// classify=false) entry of this matrix.
+const roles: SessionRole[] = ["project", "ticket", "subagent"];
+const grantsFor = (role: SessionRole): readonly (readonly string[])[] =>
+  role === "subagent" ? [[]] : [[], ["session.start"], ["ticket.create", "session.start"]];
+const withins: readonly (undefined | readonly SessionToolId[])[] = [
+  undefined,
+  ["read", "todo_write", "session.start", "browser_tabs", "codemode", "shell_start", "web_fetch"],
+];
+// Deliberately not a valid definition: the frozen baseline records what the
+// resolver refuses, so the malformed shape is part of the matrix.
+const mcp = [
+  { server: "srv", name: "lookup", description: "d", inputSchema: { type: "object" } },
+] as never;
+const births: readonly (CodeModeBirth | undefined)[] = [
+  undefined,
+  { ...codeModeBirth, offered: false },
+  codeModeBirth,
+];
+
+interface Combo {
+  hasWeb: boolean;
+  role: SessionRole;
+  grants: readonly string[];
+  within: undefined | readonly SessionToolId[];
+  withMcp: boolean;
+  birth: CodeModeBirth | undefined;
+  classify: boolean;
+}
+const combos: Combo[] = [];
+for (const hasWeb of [false, true]) {
+  for (const role of roles) {
+    for (const grants of grantsFor(role)) {
+      for (const within of withins) {
+        for (const withMcp of [false, true]) {
+          for (const birth of births) {
+            for (const classify of [false, true]) {
+              combos.push({ hasWeb, role, grants, within, withMcp, birth, classify });
+            }
           }
         }
       }
+    }
+  }
+}
+
+describe("host capabilities at Session birth", () => {
+  it.each<SessionRole>(roles)(
+    "freezes main's shipped %s surface across every verified birth combination",
+    (role) => {
+      expect(combos).toHaveLength(MAIN_SURFACE_BASELINE.table.length);
+      combos.forEach((combo, index) => {
+        if (combo.role !== role) return;
+        let actual: string;
+        try {
+          actual = JSON.stringify(
+            resolveHostToolSurface({
+              capabilities: desktop,
+              web: combo.hasWeb ? web : {},
+              role: combo.role,
+              grants: combo.grants,
+              ...(combo.within === undefined ? {} : { within: combo.within }),
+              mcpTools: combo.withMcp ? mcp : [],
+              classify: combo.classify,
+              ...(combo.birth === undefined ? {} : { codeModeBirth: combo.birth }),
+            }),
+          );
+        } catch (error) {
+          actual = `THROW:${(error as Error).message}`;
+        }
+        const slot = MAIN_SURFACE_BASELINE.table[index];
+        const expected =
+          slot < 0
+            ? `THROW:${MAIN_SURFACE_BASELINE.errors[-slot - 1]}`
+            : JSON.stringify(MAIN_SURFACE_BASELINE.surfaces[slot].split(","));
+        expect(actual, JSON.stringify({ index, ...combo })).toBe(expected);
+      });
     },
   );
 

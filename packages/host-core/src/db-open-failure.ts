@@ -39,7 +39,7 @@ import { DatabaseFromNewerVersionError } from "./db/schema-compatibility";
  * — main cannot read the root manifest at runtime (it is not packaged), so
  * the test is what keeps this string from drifting into a lie.
  */
-export const REQUIRED_NODE_RANGE = "^24.15.0";
+export const REQUIRED_NODE_RANGE = "^24.16.0";
 
 /**
  * The signatures a wrong-ABI or missing native build leaves in its error.
@@ -199,8 +199,8 @@ export function describeDbOpenFailure(
  * report of the plain-language message can still be diagnosed from the log they
  * attach.
  *
- * Unframed: the one call site's `console.error` prefix already says a database
- * open failed, and repeating it in the payload is the doubling this module's
+ * Unframed: the one call site's log message already says a database open
+ * failed, and repeating it in the payload is the doubling this module's
  * CONTRACT exists to prevent.
  */
 export function dbOpenFailureLogLine(error: unknown): string {

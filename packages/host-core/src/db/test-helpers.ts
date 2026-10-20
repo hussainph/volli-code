@@ -13,7 +13,8 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { createSessionRecord, createTicket } from "@volli/shared";
 import type { Project, SessionRecord, Ticket } from "@volli/shared";
-import { migrate } from "./migrations";
+import { MIGRATIONS, migrate } from "./migrations";
+import type { Migration } from "./migrations";
 import { guardTransactionOwnership, throwTransactionViolation } from "./transaction-gate";
 
 /**
@@ -41,6 +42,40 @@ import { guardTransactionOwnership, throwTransactionViolation } from "./transact
  */
 export function openRawDb(dbPath: string): Database.Database {
   return new Database(dbPath);
+}
+
+/**
+ * Hand-applies the migrations `include` selects, in order, to a scratch
+ * fixture: how a suite builds a database at an OLDER version for a migration
+ * to then upgrade. Each runs exactly as it always has (its own `apply` if it
+ * has one, its `sql` otherwise), one autocommit statement at a time, with the
+ * handle's foreign-key setting untouched. What is different is that SQLite is
+ * not asked to flush those commits to disk: `synchronous` is OFF while the
+ * fixture is built and put back before this returns, so whatever the test
+ * runs next (usually `migrate`, with its fsync'd rollback point) runs exactly
+ * as it did before.
+ *
+ * WHY (VC-717). CI strace counted 527 fsyncs for the v34 reconciler test
+ * and 815 for the v43 kind-index test. Phase timings put 122–136 ms and
+ * 156–175 ms respectively in these fixture builds on an idle runner;
+ * slow flushes multiply that cost. A fixture's power-loss durability is
+ * not under test. Keep the statement order and transaction boundaries,
+ * but avoid hundreds of unnecessary flushes before the actual migration.
+ */
+export function applyMigrationsByHand(
+  db: Database.Database,
+  include: (migration: Migration) => boolean,
+): void {
+  const previous = db.pragma("synchronous", { simple: true }) as number;
+  db.pragma("synchronous = OFF");
+  try {
+    for (const migration of MIGRATIONS.filter(include)) {
+      if (migration.apply !== undefined) migration.apply(db);
+      else db.exec(migration.sql);
+    }
+  } finally {
+    db.pragma(`synchronous = ${previous}`);
+  }
 }
 
 export interface TestDb {

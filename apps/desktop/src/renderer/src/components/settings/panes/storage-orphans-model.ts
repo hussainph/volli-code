@@ -13,11 +13,10 @@
  * describe a cleanup as something a launch did, and never call a run a
  * success when something in it failed or is still uncertain.
  *
- * Review round two moved the confirmed cleanup onto a real command contract —
- * `{ commandId, scanRevision, itemIds }` — and split what used to be one loose
- * `status` field into `state` (with `executing`/`indeterminate` alongside
- * `pending`/`completed`/`skipped`/`failed`), gave every item an id and its own
- * `startedAt`/`settledAt`, and moved the preservation policy into
+ * Confirmed cleanup uses the command contract `{ commandId, scanRevision,
+ * itemIds }`. Each item's `state` distinguishes `executing`/`indeterminate`
+ * from `pending`/`completed`/`skipped`/`failed`, with an id and its own
+ * `startedAt`/`settledAt`. The preservation policy lives in
  * `@volli/shared`'s typed vocabulary. This module follows that contract
  * exactly; nothing here re-derives a policy sentence or a path main did not
  * already name.
@@ -25,6 +24,7 @@
 import { CLEANUP_PRESERVATION_RULES, preservationRuleText } from "@volli/shared";
 
 import type {
+  DirtyWorktreeOrphan,
   KeptWorktreeMetadata,
   KeptWorktreeOrphan,
   OrphanAgeBasis,
@@ -38,7 +38,7 @@ import type {
 
 /** The scan snapshot the pane holds, as the IPC result delivers it. */
 export interface OrphansScan {
-  /** The opaque revision a confirmed cleanup must name (VC-284 review C1). */
+  /** The opaque revision a confirmed cleanup must name (VC-284). */
   revision: string;
   scannedAt: number;
   retentionDays: number;
@@ -47,15 +47,15 @@ export interface OrphansScan {
   keptRecent: KeptWorktreeOrphan[];
   keptMetadata: KeptWorktreeMetadata[];
   unreadableProjects: UnreadableWorktreeProject[];
-  dirty: { path: string; projectId?: string; projectName?: string; reason: string }[];
+  dirty: DirtyWorktreeOrphan[];
   runs: OrphanCleanupRun[];
 }
 
 /**
  * Exactly what a cleanup would change, and what it would leave alone. The
  * confirmation renders this and the request sends `scanRevision`/`itemIds` —
- * one object, so what is shown and what is asked for cannot drift (VC-284
- * review C1/C2/C4). It carries no paths of its own: `worktrees` and
+ * one object, so what is shown and what is asked for cannot drift (VC-284).
+ * It carries no paths of its own: `worktrees` and
  * `metadata` are main's own scan rows, so a row shown is a row an id in
  * `itemIds` can only ever mean.
  */
@@ -67,7 +67,7 @@ export interface CleanupPlan {
   /**
    * The preservation policy's sentences, rendered from
    * `CLEANUP_PRESERVATION_RULES` through `preservationRuleText` — never a
-   * hand-written list (VC-284 review S3), so this can never silently drift
+   * hand-written list (VC-284), so this can never silently drift
    * from what main actually enforces.
    */
   preservation: string[];
@@ -96,7 +96,7 @@ export function hasCleanupWork(scan: OrphansScan): boolean {
 
 /**
  * Whether the retention window has moved since this scan measured its
- * proposal (VC-284 re-review C6).
+ * proposal (VC-284).
  *
  * Every eligibility date on screen was computed against `scan.retentionDays`.
  * Change the setting and those dates describe a policy that no longer exists —
@@ -125,7 +125,7 @@ function moment(at: number): string {
 
 /**
  * The clock a deadline was measured against, in words a person can argue with
- * (VC-284 review C6): a deadline whose basis is invisible cannot be
+ * (VC-284): a deadline whose basis is invisible cannot be
  * questioned when it looks wrong.
  */
 export function ageBasisText(basis: OrphanAgeBasis): string {
@@ -154,7 +154,7 @@ export function describeRemovable(
  * A kept row: which project, the deadline and its basis when there is one, or
  * the honest reason there isn't.
  *
- * An ACTIVE row carries its eligibility date too (VC-284 re-review C6). The
+ * An ACTIVE row carries its eligibility date too (VC-284). The
  * acceptance asks Storage to show each KNOWN eligibility date and its basis,
  * and a checkout that is old enough but occupied has one — saying only "in use"
  * hides the fact that it is otherwise eligible, which is exactly what a person
@@ -182,16 +182,75 @@ export function describeMetadata(entry: PrunableWorktreeMetadata): string {
   return `${entry.projectName} — stale git record (${entry.reason}). Cleanup would prune the record; nothing on disk changes.`;
 }
 
-/** A stale record cleanup will NOT prune, and why (VC-284 review C6). */
+/** A stale record cleanup will NOT prune, and why (VC-284). */
 export function describeKeptMetadata(entry: KeptWorktreeMetadata): string {
   const why =
     entry.reason === "ticket-linked" ? "still linked to a ticket" : "not owned by this database";
   return `${entry.projectName} — stale git record (${entry.gitReason}) kept — ${why}.`;
 }
 
-/** A project whose worktrees couldn't even be listed — reported, not hidden (VC-284 review C6). */
+/** A project whose worktrees couldn't even be listed — reported, not hidden (VC-284). */
 export function describeUnreadableProject(entry: UnreadableWorktreeProject): string {
   return `${entry.projectName} — worktrees couldn't be listed: ${entry.error}.`;
+}
+
+/**
+ * What one dirty-orphan row leads with and offers (VC-292).
+ *
+ * The ticket that claims the folder comes first, so a reason that says "use
+ * Remove worktree on that ticket" sits beside a way to open it; the path is
+ * secondary (whole on hover and copy). Every state the row cannot act on is a
+ * named fallback rather than a button left to fail.
+ */
+export interface DirtyOrphanRow {
+  /** The ticket's display id, or `null` when no ticket claims the folder. */
+  displayId: string | null;
+  /** The ticket's title, or the folder's own name when there is no ticket. */
+  title: string;
+  /**
+   * The explicit fallbacks, as badges: an archived ticket, no ticket at all,
+   * a folder the scan could not open. Empty when the row can act on itself.
+   */
+  notices: string[];
+  /** The ticket to open, in its own project, when it is on the board to be opened. */
+  openTicket: { projectId: string; ticketId: string } | null;
+  /**
+   * Whether this list's own Delete applies. A folder a ticket still claims is
+   * that ticket's to clear — main refuses the delete — so the row offers the
+   * ticket instead of a button that can only fail.
+   */
+  deletable: boolean;
+  /** The secondary line: the project, then why the scan won't touch it. */
+  meta: string;
+}
+
+export function dirtyOrphanRow(orphan: DirtyWorktreeOrphan): DirtyOrphanRow {
+  const ticket = orphan.ticket;
+  const notices: string[] = [];
+  if (ticket === undefined) notices.push("No ticket");
+  else if (ticket.archived) notices.push("Archived ticket");
+  if (orphan.pathReadable === false) notices.push("Can't read folder");
+  const reason =
+    ticket?.archived === true
+      ? `${orphan.reason} Restore ${ticket.displayId} from the Archive to open it.`
+      : orphan.reason;
+  return {
+    displayId: ticket?.displayId ?? null,
+    title: ticket?.title ?? folderName(orphan.path),
+    notices,
+    openTicket:
+      ticket === undefined || ticket.archived
+        ? null
+        : { projectId: ticket.projectId, ticketId: ticket.id },
+    deletable: ticket === undefined,
+    meta: orphan.projectName ? `${orphan.projectName} — ${reason}` : reason,
+  };
+}
+
+/** The last segment of a path — the one part of it a person named or recognises. */
+function folderName(path: string): string {
+  const segments = path.split(/[\\/]/).filter((segment) => segment.length > 0);
+  return segments.at(-1) ?? path;
 }
 
 /** The retention window Storage shows so an eligibility date can be understood. */
@@ -200,7 +259,7 @@ export function retentionNote(retentionDays: number): string {
 }
 
 /**
- * The policy row the list itself carries (VC-284 review C6): the configured
+ * The policy row the list itself carries (VC-284): the configured
  * retention window, and the difference between an orphan and a ticket's
  * checkout. It is a ROW rather than prose under a control because the
  * acceptance asks Storage to SHOW the retention period — a summoned tooltip is
@@ -227,7 +286,7 @@ export interface HistoryRow {
 export function describeCompleted(run: OrphanCleanupRun, item: OrphanCleanupItem): string {
   const project = item.projectName ?? "Unknown project";
   // An outcome a later launch established is NOT timestamped as the moment the
-  // change happened (VC-284 re-review C3/C6): nobody watched that instant. What
+  // change happened (VC-284): nobody watched that instant. What
   // is known is the window — the cleanup started, the app stopped, and this is
   // when somebody looked — so the row says that rather than printing the launch
   // clock as a removal time.
@@ -255,8 +314,8 @@ export function describeCompleted(run: OrphanCleanupRun, item: OrphanCleanupItem
 }
 
 /**
- * The truthful label for one SETTLED item, whatever it settled as (VC-284
- * review C6/S2). A skip is the preservation policy working and says which rule
+ * The truthful label for one SETTLED item, whatever it settled as (VC-284).
+ * A skip is the preservation policy working and says which rule
  * spared the path; a failure and an unresolvable outcome say what went wrong,
  * in the same place and with the same timestamp discipline as a removal — a
  * destructive act whose refusals are invisible is one nobody can audit.
@@ -268,7 +327,7 @@ export function describeSettled(run: OrphanCleanupRun, item: OrphanCleanupItem):
   const reason = item.detail ?? "no reason recorded";
   // Same rule as a completed one: an outcome a later launch established is
   // stamped when somebody LOOKED, so the row says "recorded at", never that
-  // this is when the act failed (VC-284 re-review C3/C6).
+  // this is when the act failed (VC-284).
   if (item.reconciledAt !== null) {
     const confirmed = moment(item.reconciledAt);
     const verdict =
@@ -293,7 +352,7 @@ export function describeSettled(run: OrphanCleanupRun, item: OrphanCleanupItem):
  * included, not skipped: a pruned record is a completed act just as much as a
  * removed folder is. And every outcome is shown, not only the successful ones
  * — the previous version listed completed removals alone, so a path a cleanup
- * refused, failed on, or could not resolve left no trace at all (review C6/S2).
+ * refused, failed on, or could not resolve left no trace at all.
  * `pending` and `executing` are the two states that are NOT history: one is
  * work nobody attempted, the other is described by its run's own row.
  */
@@ -327,7 +386,7 @@ export interface PreservationHistoryRow {
 /**
  * The recorded preservation policy for every run that actually did something,
  * rendered through the same `preservationRuleText` the confirmation uses
- * (VC-284 review S3) — never a second, independent description of the same
+ * (VC-284) — never a second, independent description of the same
  * policy. A rule id this build does not recognise (a record written by a
  * later version) still reads, because `preservationRuleText` renders it
  * rather than dropping it.
@@ -351,7 +410,7 @@ export function preservationHistoryRows(
  * attempted. `executing`/`indeterminate` items get their own honest phrase
  * rather than being folded into "pending" — the world genuinely does not know
  * whether they took, which is a different statement from "never touched"
- * (VC-284 review C3/#6).
+ * (VC-284).
  */
 export function describeInterrupted(run: OrphanCleanupRun): string {
   const completed = run.items.filter((item) => item.state === "completed").length;
@@ -373,7 +432,7 @@ export function describeInterrupted(run: OrphanCleanupRun): string {
 /**
  * Runs that stopped mid-flight and still owe somebody an account.
  *
- * Two facts qualify a run, not one (VC-284 re-review S2). `interruptedAt` is
+ * Two facts qualify a run, not one (VC-284). `interruptedAt` is
  * the interruption itself, recorded by the launch that found the run open — so
  * a run whose every item settled `failed` before the app died still surfaces,
  * with its Scan-again. The older rule only looked for unsettled items, which
@@ -391,7 +450,7 @@ export function unfinishedRuns(runs: readonly OrphanCleanupRun[]): OrphanCleanup
 
 /**
  * A run that FINISHED but left something failed or indeterminate behind
- * (VC-284 review S2): distinct from `unfinishedRuns`, whose runs never even
+ * (VC-284): distinct from `unfinishedRuns`, whose runs never even
  * settled. This is the case the old pane's `toast.success` erased — a run can
  * close out and still owe someone an explanation.
  */
@@ -405,7 +464,7 @@ export function runsWithFailures(runs: readonly OrphanCleanupRun[]): OrphanClean
 
 /**
  * The one actionable line for a run that finished owing someone an explanation
- * (VC-284 review S2). It counts rather than repeats: every failed path and its
+ * (VC-284). It counts rather than repeats: every failed path and its
  * reason is already a row of its own in {@link historyRows}, and this row's job
  * is to be the thing a person notices and the place the recovery hangs off.
  */
@@ -438,7 +497,7 @@ export interface CleanupOutcome {
 }
 
 /**
- * The review's S2: a run containing `failed` items got `toast.success(...)`.
+ * A run containing `failed` items must never get `toast.success(...)`.
  * Every mutation this run attempted is accounted for, so the run itself
  * always "finishes" — but a finish with a failure in it is a warning, not a
  * success, and it names the recovery (scan again) in the same sentence.
@@ -464,7 +523,7 @@ const REJECTION_TEXT: Record<OrphanCleanupRejectionCode, (error: string) => stri
 };
 
 /**
- * The honest sentence for a refused cleanup command (VC-284 review C1): each
+ * The honest sentence for a refused cleanup command (VC-284): each
  * rejection code has its own recovery, so `"scan-superseded"` always names
  * Scan again, while `"unknown-items"` and `"conflict"` get their own sentence
  * rather than sharing one generic failure message.

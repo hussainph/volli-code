@@ -10,21 +10,17 @@ import { makeAgentError } from "@volli/shared";
 import type { AgentRequest, AgentResponse } from "@volli/shared";
 
 import { createAgentCommandService } from "./agent-commands";
+import { testHostHandlers } from "./testing/host-handlers";
 import {
   createAgentSocketLifecycle,
   startAgentSocket,
   type AgentSocketServer,
 } from "./agent-socket";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import {
-  openTestDb,
-  testProject,
-  testSession,
-  type TestDb,
-} from "@volli/host-core/db/test-helpers";
+import { insertProject } from "./db/projects-repo";
+import { openTestDb, testProject, testSession, type TestDb } from "./db/test-helpers";
 import { createTestSessionEngine } from "./testing/session-engine";
-import { insertSession } from "@volli/host-core/session-control/test-support";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
+import { insertSession } from "./session-control/test-support";
+import { createSessionTokenRegistry } from "./session-tokens";
 
 let ctx: TestDb;
 let server: AgentSocketServer | undefined;
@@ -207,7 +203,7 @@ describe("agent socket", () => {
   });
 
   // The Settings → CLI pane reads this at call time: it must track the server's
-  // actual ownership, not latch the boot's answer (VC-52 review N1).
+  // actual ownership, not latch the boot's answer (VC-52).
   it("measures liveness — false before a server is claimed, true while owned, false after shutdown", async () => {
     const close = vi.fn(async () => {});
     const lifecycle = createAgentSocketLifecycle({
@@ -333,6 +329,7 @@ describe("agent socket", () => {
     insertSession(ctx.db, testSession("project-one", null, { id: sessionId }));
     const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
+      handlers: testHostHandlers({ db: ctx.db }),
       db: ctx.db,
       sessionEngine: createTestSessionEngine(ctx.db),
       appVersion: "1.2.3",
@@ -396,6 +393,26 @@ describe("agent socket", () => {
       ok: false,
       error: makeAgentError("DB_UNAVAILABLE", "Database failed to open."),
     });
+  });
+
+  it("refuses an operator token that is not a string before anything executes (VC-623)", async () => {
+    ctx = openTestDb();
+    const socketPath = join(dirname(ctx.dbPath), "volli.sock");
+    const execute = vi.fn(async (): Promise<AgentResponse> => ({ v: 1, ok: true, data: {} }));
+    server = await startAgentSocket({ socketPath, execute });
+
+    expect(
+      await rawRoundTrip(
+        socketPath,
+        JSON.stringify({
+          v: 1,
+          cmd: "board",
+          args: {},
+          ctx: { cwd: "/repo/volli", env: { operatorToken: { forged: true } } },
+        }),
+      ),
+    ).toMatchObject({ ok: false, error: { code: "SOCKET_PROTOCOL" } });
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("still writes the reply after the client half-closes, even when execute awaits", async () => {

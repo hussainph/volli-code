@@ -390,8 +390,8 @@ function Intro() {
     <div className="flex flex-col gap-2">
       <p className="text-heading text-foreground">Local usage surfaces</p>
       <p className="max-w-content text-sm leading-prose text-muted-foreground">
-        Cost lives where work lives — the rails only. No chrome-band readout and no composer pill,
-        both cut by owner ruling. Every figure below is drawn from a real{" "}
+        Cost lives where work lives — the rails only. No chrome-band readout and no composer pill.
+        Every figure below is drawn from a real{" "}
         <code className="font-mono text-ui">summarizeSessionUsage</code> over fixture operations, so
         the notation is the shipping notation rather than a mock-up of it.
       </p>

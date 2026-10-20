@@ -16,6 +16,7 @@ import { Switch } from "@renderer/components/ui/switch";
 import { useLatestAsync } from "@renderer/hooks/use-latest-async";
 import { sessionRpcClient } from "@renderer/lib/session-rpc-ipc-link";
 import { toastError } from "@renderer/lib/toast";
+import { hasVisibleExperiments, useExperimentsStore } from "@renderer/stores/experiments";
 
 type LoadState =
   | { status: "loading" }
@@ -34,6 +35,10 @@ export function ExperimentalSettings() {
     setState({ status: "loading" });
     try {
       const snapshot = await sessionRpcClient().settings.experiments.query();
+      // The host's answer heals the app-wide projection too: a boot read that
+      // failed (and stays failed) or an environment-locked flag this page
+      // cannot save still reaches every flagged surface once it is seen here.
+      useExperimentsStore.getState().receive(snapshot);
       if (!reads.isCurrent(token)) return;
       setState({ status: "loaded", snapshot });
     } catch (error) {
@@ -62,6 +67,8 @@ export function ExperimentalSettings() {
     const generation = ++saveGeneration.current;
     try {
       const snapshot = await sessionRpcClient().settings.setExperiment.mutate({ id, enabled });
+      // The host's answer, wherever this page went: flagged surfaces follow it.
+      useExperimentsStore.getState().receive(snapshot);
       if (generation !== saveGeneration.current) return;
       setState({ status: "loaded", snapshot });
     } catch (error) {
@@ -74,10 +81,12 @@ export function ExperimentalSettings() {
   }
 
   const snapshot = state.status === "loaded" ? state.snapshot : null;
+  if (snapshot !== null && !hasVisibleExperiments(snapshot)) return null;
+  const experiments = EXPERIMENTS.filter(({ id }) => snapshot?.[id].visible !== false);
 
   return (
     <PrefSection title="Experimental" icon={FlaskIcon}>
-      {EXPERIMENTS.map((experiment) => {
+      {experiments.map((experiment) => {
         const value = snapshot?.[experiment.id];
         const environmentLocked = value?.source === "environment";
         return (

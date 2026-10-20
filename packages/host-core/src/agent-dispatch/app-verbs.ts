@@ -33,10 +33,10 @@ import type {
   SessionEnvRepair,
 } from "@volli/shared";
 
-import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
-import { readWorkspaceEnvironment } from "@volli/host-core/session-env";
-import { readModelAccessDefaults } from "@volli/host-core/session-runtime/model-access-preferences";
-import { PI_TOOLS } from "@volli/host-core/session-runtime/pi-adapter";
+import { listMaterializableLinks } from "../db/blobs-repo";
+import { readWorkspaceEnvironment } from "../session-env";
+import { readModelAccessDefaults } from "../session-runtime/model-access-preferences";
+import { PI_TOOLS } from "../session-runtime/pi-adapter";
 import { composeProjectBrief, composeTicketBrief } from "./briefs";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
@@ -173,7 +173,7 @@ export async function notifyVerb(
     label: `Native notification ${JSON.stringify(title.trim())}`,
   });
   if (preview !== null) return preview;
-  // The OUTCOME, not the attempt (VC-295 round 2). This is an operation a
+  // The OUTCOME, not the attempt (VC-295). This is an operation a
   // caller asked for, so an alert the system would not show is a failed
   // operation and has to read as one — `{ notified: true }` over a refused
   // delivery is exactly the silent swallow CLAUDE.md forbids, and the caller is

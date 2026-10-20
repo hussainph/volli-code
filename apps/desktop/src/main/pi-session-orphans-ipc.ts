@@ -10,7 +10,7 @@ import type { DbHandle } from "./data-ipc";
 import { PI_SESSION_ORPHAN_CHANNELS, PI_SESSION_ORPHAN_IPC } from "./ipc-descriptors";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
-import { PiSessionOrphanService } from "@volli/host-core/pi-session-orphans";
+import { PiSessionOrphanService } from "@volli/host-core/session-runtime";
 
 /**
  * Registers the read-only Pi inventory and its separate confirmed reclaim.

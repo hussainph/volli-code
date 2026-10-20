@@ -14,18 +14,31 @@
  * pending. Read "Breaking an older reader" above {@link MIGRATIONS} before
  * adding a migration.
  */
-import { randomUUID } from "node:crypto";
-import { copyFileSync, lstatSync, renameSync, rmSync } from "node:fs";
+import { BOARD_COMMAND_RECEIPTS_MIGRATION } from "./board-receipts-migration";
 import { CLOUD_IDENTITY_MIGRATION } from "./cloud-identity-migration";
 import { HOST_NOTICE_OUTBOX_MIGRATION } from "./host-notice-outbox-migration";
+import {
+  applyProjectRemovedColumn,
+  PROJECT_REMOVED_COLUMN_MIGRATION,
+} from "./project-removed-migration";
+import { SESSION_FOLLOW_UP_MIGRATION } from "./session-follow-up-migration";
+import {
+  applySpawnLedgerParkedColumn,
+  SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
+} from "./spawn-ledger-parked-migration";
+import { WEB_CREDENTIAL_SOURCE_MIGRATION } from "./web-credential-migration";
+import {
+  LOCKED_FINGERPRINTS,
+  MIGRATION_HISTORY_MIGRATION,
+  recordAppliedMigrations,
+  type MigrationFingerprints,
+} from "./migration-history";
+import { assertMigrationDiskSpace, type DiskProbe } from "./disk-preflight";
 import { compactNativeObservationEventId } from "@volli/shared/native-observation-id";
 import type Database from "better-sqlite3";
-import {
-  BACKUP_RETENTION_LOG_PREFIX,
-  logMigrationBackupRetention,
-  pruneMigrationBackups,
-} from "./backup-retention";
-import { assertDatabaseIntegrity, verifyMigrationBackup } from "./backup-integrity";
+import { logMigrationBackupRetention, pruneMigrationBackups } from "./backup-retention";
+import { assertDatabaseIntegrity } from "./backup-integrity";
+import { MIGRATION_RECOVERY_ACTION, publishRollbackPoint } from "./database-file";
 import {
   compactMigrationDatabase,
   logMigrationCompaction,
@@ -220,9 +233,8 @@ ALTER TABLE tickets DROP COLUMN harness_id;
 `;
 
 /**
- * Migration 005: a durable per-project ticket-number counter (found during
- * PR #34 review — commit 83a7298 introduced real hard-delete from the
- * archive). `nextTicketNumberForProject` used to be `MAX(ticket_number) + 1`
+ * Migration 005: a durable per-project ticket-number counter.
+ * Computing `nextTicketNumberForProject` as `MAX(ticket_number) + 1`
  * over the table's *remaining* rows, so deleting a project's highest-numbered
  * ticket freed its number: the next ticket created reused a dead ticket's
  * display id, and its worktree branch `volli/<PREFIX>-<n>-<slug>` could
@@ -305,8 +317,7 @@ ALTER TABLE tickets ADD COLUMN pr_url TEXT;
  * Migration 010: the retention "Keep" pin (CONCEPT #16, issue #76).
  * `tickets.retention_keep` (0/1, default 0) is an EXPLICIT per-ticket exemption
  * from BOTH retention paths — the PR-merge archive prompt AND the Done-TTL sweep
- * (Vibe Kanban's source-verified bug is a TTL sweep that ignores its own pinned
- * flag; the keep pin here must be honored by both). Unlike the transient
+ * (the keep pin must be honored by both). Unlike the transient
  * merge/conflict/archive-ready state (computed, never stored — decision #42),
  * the pin is durable user intent, so it is a real column. Additive; every
  * existing row starts `0` (not kept).
@@ -380,7 +391,7 @@ ALTER TABLE projects ADD COLUMN theme_seed TEXT;
 `;
 
 /**
- * Migration 014: per-project canvas + appearance (the arc theming migration).
+ * Migration 014: per-project canvas and appearance.
  * Two nullable columns, replacing what 013's four columns meant rather than
  * what they held: a project now overrides the CANVAS (the authored gradient)
  * and/or the APPEARANCE, independently, and `NULL` still means *inherit*.
@@ -670,8 +681,7 @@ ALTER TABLE projects ADD COLUMN runtime_preferences TEXT
  * ticket-keyed, id-keyed, no deduplication, and structurally unable to be
  * referenced from a chat message. Dropping it costs nothing — `createAttachment`
  * never had a caller, so the table has never held a row in any build that
- * shipped. (Vibe Kanban shipped that same owner-keyed shape and had to migrate
- * off it for exactly this reason; we get to skip the migration.)
+ * shipped.
  *
  * `blobs` is content-addressed: the sha256 IS the primary key, so re-attaching
  * a file the user has already attached is an INSERT OR IGNORE rather than a
@@ -799,14 +809,14 @@ ALTER TABLE web_access_settings_new RENAME TO web_access_settings;
  *
  *  - **main lineage**: `user_version = 23` means VC-158's web-keys migration
  *    ran; these three columns are missing.
- *  - **branch lineage** (the VC-111 dogfood profile): `user_version = 23`
+ *  - **branch lineage** (VC-111): `user_version = 23`
  *    means THIS migration's DDL ran under its original number; the columns
  *    exist, and the web-keys rebuild never happened — `secrets` still holds
  *    `ciphertext` while every reader now expects `value`.
  *
  * A plain-SQL 024 picks one population and breaks the other — re-adding an
  * existing column is the exact "duplicate column name: skill_modes" boot
- * failure the dogfood profile hit. So this is the runner's one `apply`
+ * failure this reconciler prevents. This is an `apply`
  * migration: it probes `table_info` and runs only what the database in front
  * of it is missing — the column adds, the secrets rebuild, both, or (for a
  * fully-reconciled copy) neither. Probing over renumbering because a probe
@@ -1184,7 +1194,7 @@ CREATE INDEX ticket_signals_latest ON ticket_signals(ticket_id, kind, created_at
 `;
 
 /**
- * Migration 029: a durable total order for Ticket Events (VC-85 review).
+ * Migration 029: a durable total order for Ticket Events (VC-85).
  *
  * `created_at` is metadata, not a cursor: two commits can share one
  * millisecond, clocks can move, and imported events can arrive out of timestamp
@@ -1791,7 +1801,7 @@ UPDATE sessions
 const MIGRATION_040_SESSION_ROLE = `${MIGRATION_040_SESSION_ROLE_COLUMN}${MIGRATION_040_SESSION_ROLE_BACKFILL}`;
 
 /**
- * Migration 041: the Session's parent becomes a column (VC-9 review).
+ * Migration 041: the Session's parent becomes a column (VC-9).
  *
  * The parent link is the fact the `subagent` Role MEANS, and it lives on the
  * `session.create` intent and the Session itself, not in a host table
@@ -1887,7 +1897,7 @@ CREATE INDEX session_receipts_session_sequence ON session_command_receipts(sessi
 `;
 
 /**
- * Migration 043: the orphan CLEANUP command ledger (VC-284 review S1/C3).
+ * Migration 043: the orphan CLEANUP command ledger (VC-284).
  *
  * Deleting a worktree directory is a destructive product act, so it takes the
  * shape every other product write takes (docs/BOUNDARIES.md rule 5): a command
@@ -2465,6 +2475,11 @@ END;
  * writer's rows flowing into the new shape, and the contract step that drops
  * the old shape is the one that raises the floor.
  *
+ * CI checks your answer against a real older build (VC-633,
+ * `n1-compatibility.test.ts`): the latest release and the PR's base must
+ * write to a profile migrated to head, or refuse it byte-identically when you
+ * raised the floor. Its writes are a sample, not a proof; the rule is yours.
+ *
  * When unsure, raise it: a refusal names itself and the remedy, while a wrong
  * "compatible" corrupts silently. `app_state` and its
  * `volli:min-reader-version` key are permanent; no migration may remove them.
@@ -2772,6 +2787,38 @@ export const MIGRATIONS: readonly Migration[] = [
     name: "cloud identity — host, workspace epochs, workers, checkout leases, devices (VC-550)",
     sql: CLOUD_IDENTITY_MIGRATION,
   },
+  {
+    version: 59,
+    name: "web credential source revision and sealed mirror receipt — step E (VC-643)",
+    sql: WEB_CREDENTIAL_SOURCE_MIGRATION,
+  },
+  {
+    version: 60,
+    name: "migration history — each applied version with its lock fingerprint (VC-633)",
+    sql: MIGRATION_HISTORY_MIGRATION,
+  },
+  {
+    version: 61,
+    name: "session follow-up queue — host-owned commands and release evidence (VC-675)",
+    sql: SESSION_FOLLOW_UP_MIGRATION,
+  },
+  {
+    version: 62,
+    name: "board command receipts — idempotent board commands by command id (VC-565)",
+    sql: BOARD_COMMAND_RECEIPTS_MIGRATION,
+  },
+  {
+    version: 63,
+    name: "spawned_processes.parked_at — terminals a crash left SIGSTOPped (VC-833)",
+    sql: SPAWN_LEDGER_PARKED_COLUMN_MIGRATION,
+    apply: applySpawnLedgerParkedColumn,
+  },
+  {
+    version: 64,
+    name: "projects.removed_at — removing a project detaches it instead of deleting (VC-822)",
+    sql: PROJECT_REMOVED_COLUMN_MIGRATION,
+    apply: applyProjectRemovedColumn,
+  },
 ];
 
 /**
@@ -2789,8 +2836,8 @@ function applyMigration053ProjectDecisionModel(db: Database.Database): void {
 }
 
 /**
- * VC-478 keeps 053; VC-480 dogfood already stamped that same number for the
- * approval ledger. Both lineages therefore enter 054 with different schemas.
+ * VC-478 used 053 for decision models; VC-480 branch builds used that number
+ * for the approval ledger. The lineages enter 054 with different schemas.
  * Repair the skipped decision-model column before creating any missing ledger
  * tables, without rewinding user_version or rebuilding populated tables.
  */
@@ -3324,6 +3371,20 @@ export interface MigrateOptions {
   toVersion?: number;
   /** Tests only: a migration list other than {@link MIGRATIONS}. */
   migrations?: readonly Migration[];
+  /**
+   * Tests only: the fingerprints recorded in `migration_history`. Defaults to
+   * this build's lock, or to none for a test's own migration list, whose
+   * versions the lock does not describe.
+   */
+  fingerprints?: MigrationFingerprints;
+  /** Tests only: the disk the free-space preflight reads. */
+  disk?: DiskProbe;
+  /**
+   * The caller already ran the free-space preflight, before it opened its
+   * writable handle (`openVolliDb`), so a refusal there left the file and its
+   * WAL byte-identical. The runner does not measure a second time.
+   */
+  diskChecked?: boolean;
 }
 
 /**
@@ -3335,8 +3396,7 @@ export function migrate(
   dbPath: string,
   options: MigrateOptions = {},
 ): boolean {
-  const recovery =
-    "Recovery action: quit Volli and restore the newest integrity-checked clean backup before retrying the upgrade.";
+  const recovery = MIGRATION_RECOVERY_ACTION;
   let currentVersion: number;
   try {
     currentVersion = db.pragma("user_version", { simple: true }) as number;
@@ -3357,6 +3417,11 @@ export function migrate(
   // Only an already-populated database needs a safety copy — a fresh
   // `user_version = 0` db has nothing pre-migration to protect.
   if (currentVersion > 0) {
+    // Before anything is written: the safety copy and the rewrite after it
+    // need about twice the database free, and running out halfway names
+    // neither the cause nor the remedy (VC-633). It fails open: only a
+    // measurement that worked and shows too little room refuses.
+    if (options.diskChecked !== true) assertMigrationDiskSpace(dbPath, options.disk);
     try {
       assertDatabaseIntegrity(db);
     } catch (error) {
@@ -3365,81 +3430,9 @@ export function migrate(
         { cause: error },
       );
     }
-    const checkpoint = db.pragma("wal_checkpoint(TRUNCATE)") as { busy: number }[];
-    if (checkpoint.length !== 1 || checkpoint[0].busy !== 0) {
-      throw new Error(`Migration refused: WAL checkpoint did not complete. ${recovery}`);
-    }
-    const backupPath = `${dbPath}.backup-v${currentVersion}`;
-    // Stage separately so a failed copy/check cannot overwrite an existing
-    // clean rollback point at the same version (e.g. after a failed upgrade).
-    const stagedPath = `${backupPath}.pending-${randomUUID()}`;
-    copyFileSync(dbPath, stagedPath);
-    try {
-      verifyMigrationBackup(stagedPath);
-    } catch (error) {
-      const quarantinePath = `${stagedPath}.corrupt`;
-      try {
-        renameSync(stagedPath, quarantinePath);
-        console.error(BACKUP_RETENTION_LOG_PREFIX, { action: "quarantined", name: quarantinePath });
-      } catch (quarantineError) {
-        console.error(BACKUP_RETENTION_LOG_PREFIX, {
-          action: "failed",
-          operation: "quarantine",
-          name: stagedPath,
-          error: quarantineError,
-        });
-      }
-      throw new Error(`Migration refused: safety copy failed integrity verification. ${recovery}`, {
-        cause: error,
-      });
-    }
-    // Readonly WAL verification can create empty WAL/SHM files. These belong
-    // only to our unique staged snapshot, not to any existing backup family.
-    for (const suffix of ["-wal", "-shm"]) rmSync(`${stagedPath}${suffix}`, { force: true });
-    // A verified backup's readonly check can leave WAL/SHM behind. Preserve
-    // the entire old family before publishing, including on restore/re-upgrade.
-    // Never attach an old WAL or journal to the newly verified base file.
-    const preservedPath = `${backupPath}.preserved-${randomUUID()}`;
-    const moved: string[] = [];
-    try {
-      const existingSuffixes = ["", "-wal", "-shm", "-journal"].filter((suffix) => {
-        const info = lstatSync(`${backupPath}${suffix}`, { throwIfNoEntry: false });
-        if (info === undefined) return false;
-        if (!info.isFile()) throw new Error("existing safety copy family is not regular files");
-        return true;
-      });
-      if (existingSuffixes.length > 0 && existingSuffixes[0] !== "") {
-        throw new Error("existing safety copy family is missing its base");
-      }
-      for (const suffix of existingSuffixes) {
-        renameSync(`${backupPath}${suffix}`, `${preservedPath}${suffix}`);
-        moved.push(suffix);
-      }
-      renameSync(stagedPath, backupPath);
-    } catch (error) {
-      // Restore sidecars before the base; on rollback failure leave the base
-      // aside, not at a rollback name with an incomplete family.
-      for (const suffix of moved.toReversed()) {
-        try {
-          renameSync(`${preservedPath}${suffix}`, `${backupPath}${suffix}`);
-          moved.pop();
-        } catch (rollbackError) {
-          console.error(BACKUP_RETENTION_LOG_PREFIX, {
-            action: "failed",
-            operation: "preserve",
-            name: preservedPath,
-            error: rollbackError,
-          });
-          break;
-        }
-      }
-      throw new Error(
-        `Migration refused: could not preserve and publish the safety copy. Recovery action: quit Volli and recover the complete backup family kept beside ${backupPath} before retrying.`,
-        { cause: error },
-      );
-    }
-    if (moved.length > 0)
-      console.info(BACKUP_RETENTION_LOG_PREFIX, { action: "preserved", name: preservedPath });
+    // The rollback point is a published database file: durable, verified,
+    // and never torn behind the migration it protects (VC-628).
+    publishRollbackPoint(db, dbPath, currentVersion);
   }
 
   const applyPendingMigrations = db.transaction(() => {
@@ -3456,6 +3449,15 @@ export function migrate(
         raiseMinReaderVersion(db, migration.version, Date.now());
       }
     }
+
+    // The history of what ran, in the same transaction as the schema change
+    // it records (VC-633). A no-op until migration 060 has created it.
+    recordAppliedMigrations(
+      db,
+      pending.map((migration) => migration.version),
+      options.fingerprints ?? (options.migrations === undefined ? LOCKED_FINGERPRINTS : {}),
+      Date.now(),
+    );
 
     const foreignKeyViolations = db.pragma("foreign_key_check") as unknown[];
     if (foreignKeyViolations.length > 0) {

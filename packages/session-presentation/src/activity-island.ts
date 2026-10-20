@@ -288,8 +288,7 @@ export interface ActivityIslandFeel {
 }
 
 /**
- * "Lively" — 0.55s / 0.25 bounce, chosen in round 3 over "Crisp" (0.35 /
- * 0.08). One spring drives everything that moves in the pill so the width
+ * A 0.55s spring with 0.25 bounce drives everything in the pill so the width
  * morph, a cluster's entrance and the drop's rise read as one material.
  */
 export const ISLAND_SPRING = { duration: 0.55, bounce: 0.25 } as const;

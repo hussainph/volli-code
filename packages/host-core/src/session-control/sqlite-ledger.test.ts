@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createSessionEngine } from "@volli/session-engine";
 import { createSessionProjectionCheckpoint, roleImpliedByTicket } from "@volli/shared";
 import type { SessionEvent, SessionLedger, SessionObservation, SessionUsage } from "@volli/shared";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { internSessionEventProvenance } from "@volli/host-core/db/session-event-provenance";
-import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
+import { insertProject } from "../db/projects-repo";
+import { internSessionEventProvenance } from "../db/session-event-provenance";
+import { openTestDb, testProject, testTicket } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
+import { insertTicket } from "../db/tickets-repo";
 import { workingSessionCount } from "../session-concurrency";
 import { createSqliteSessionLedger } from "./sqlite-ledger";
 

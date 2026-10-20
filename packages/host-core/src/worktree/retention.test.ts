@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
-import { getTicketRow, insertTicket, updateTicketFields } from "@volli/host-core/db/tickets-repo";
+import { recordTicketEvent } from "../db/events-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import { getTicketRow, insertTicket, updateTicketFields } from "../db/tickets-repo";
 import {
   archiveAndClean,
   DEFAULT_RETENTION_TTL_DAYS,
@@ -20,7 +20,7 @@ import {
 import type { BusyWorktreeSite } from "./activity";
 import { runGitCapturing, runGitCapturingAsync } from "./git";
 import { setTrimSettings } from "./trim-settings";
-import { listTicketEvents } from "@volli/host-core/db/events-repo";
+import { listTicketEvents } from "../db/events-repo";
 import { scriptedGit } from "./scripted-git";
 
 // `computeArchiveReadiness` (+ its ArchiveReadiness*/ types) moved to
@@ -144,9 +144,9 @@ describe("archiveAndClean", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git, gitAsync, calls } = statusGit(wt, gitDir, false);
+    const { gitAsync, calls } = statusGit(wt, gitDir, false);
 
-    const result = await archiveAndClean({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "t1");
+    const result = await archiveAndClean({ db: ctx.db, gitAsync, blobsRoot: "unused" }, "t1");
     expect(result.ok).toBe(true);
 
     const row = getTicketRow(ctx.db, "t1")!;
@@ -161,9 +161,9 @@ describe("archiveAndClean", () => {
     const wt = tempDir("wt");
     const gitDir = tempDir("gitdir");
     seed(wt);
-    const { git, gitAsync, calls } = statusGit(wt, gitDir, true);
+    const { gitAsync, calls } = statusGit(wt, gitDir, true);
 
-    const result = await archiveAndClean({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "t1");
+    const result = await archiveAndClean({ db: ctx.db, gitAsync, blobsRoot: "unused" }, "t1");
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("uncommitted work");
@@ -177,8 +177,8 @@ describe("archiveAndClean", () => {
 
   it("archives a PR-less ticket with no worktree (nothing to remove)", async () => {
     seed(null);
-    const { git, gitAsync } = scriptedGit(() => "");
-    const result = await archiveAndClean({ db: ctx.db, git, gitAsync, blobsRoot: "unused" }, "t1");
+    const { gitAsync } = scriptedGit(() => "");
+    const result = await archiveAndClean({ db: ctx.db, gitAsync, blobsRoot: "unused" }, "t1");
     expect(result.ok).toBe(true);
     expect(getTicketRow(ctx.db, "t1")!.archived_at).not.toBeNull();
   });
@@ -464,6 +464,17 @@ describe("trimFinishedWorktree", () => {
     return listTicketEvents(ctx.db, "t1").filter((e) => e.payload.kind === "worktree_trimmed");
   }
 
+  it("skips trim when activity is unavailable, including JS callers", async () => {
+    const wt = seedWorktree();
+    seedTicket(wt, "done");
+    const { busySites: _supplier, ...missing } = trimDeps();
+    expect(await trimFinishedWorktree(missing, "t1")).toMatchObject({
+      kind: "skipped",
+      reason: expect.stringContaining("activity is unavailable"),
+    });
+    expect(existsSync(join(wt, "node_modules"))).toBe(true);
+    expect(trimEvents()).toEqual([]);
+  });
   it("trims a Done ticket's worktree, keeps its .env, and accounts for both", async () => {
     const wt = seedWorktree();
     seedTicket(wt, "done");

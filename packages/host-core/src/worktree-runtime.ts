@@ -15,11 +15,10 @@ import { blobsRoot } from "./blob-store";
 import type { HostEventBus } from "./ports";
 import {
   createOrphanCleanupEngine,
-  runGitCapturing,
   runGitCapturingAsync,
   SqliteOrphanCleanupLedger,
 } from "./worktree";
-import type { OrphanCleanupEngine, WorktreeDeps, WorktreePhase } from "./worktree";
+import type { OrphanCleanupEngine, WorktreePorts, WorktreePhase } from "./worktree";
 
 /** Pushes a phase transition to every open window (renderer mirrors it in a keyed store map). */
 function broadcastPhase(events: HostEventBus, ticketId: string, phase: WorktreePhase): void {
@@ -40,7 +39,7 @@ function resolveHome(): string {
 /**
  * The `~` every worktree path is built from — the same value `deps.home`
  * carries, exposed for the callers that need to ask an ownership question
- * (containers.ts) outside a `WorktreeDeps` bundle.
+ * (containers.ts) outside a `WorktreePorts` bundle.
  */
 export function worktreeHomeDir(): string {
   return resolveHome();
@@ -58,10 +57,9 @@ export function worktreeDeps(
   db: Database.Database,
   ports: { events: HostEventBus },
   options: { dataDir: string },
-): WorktreeDeps {
+): WorktreePorts {
   return {
     db,
-    git: runGitCapturing,
     gitAsync: runGitCapturingAsync,
     home: resolveHome(),
     onPhase: (ticketId, phase) => broadcastPhase(ports.events, ticketId, phase),
@@ -70,7 +68,7 @@ export function worktreeDeps(
 }
 
 /**
- * The orphan-cleanup command core, one per database handle (VC-284 review S1).
+ * The orphan-cleanup command core, one per database handle (VC-284).
  *
  * Memoized on the handle rather than rebuilt per call, because the SQLite
  * ledger serializes its transactions through an instance-local promise tail: a

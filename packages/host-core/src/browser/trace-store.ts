@@ -100,7 +100,7 @@ export interface BrowserTraceStepInput {
   pictureId: string | null;
 }
 
-export interface BrowserTraceStoreDependencies {
+export interface BrowserTraceStorePorts {
   createId: () => string;
   now: () => number;
   /** The frame a step's picture id names, from the picture store's live set. */
@@ -123,7 +123,7 @@ export class BrowserTraceStore {
   private readonly frameLimit: number;
   private readonly maxAgeMs: number;
 
-  constructor(private readonly deps: BrowserTraceStoreDependencies) {
+  constructor(private readonly deps: BrowserTraceStorePorts) {
     this.traceLimit = deps.traceLimit ?? BROWSER_TRACE_LIMIT;
     this.frameLimit = deps.frameLimit ?? BROWSER_TRACE_FRAME_LIMIT;
     this.maxAgeMs = deps.maxAgeMs ?? BROWSER_TRACE_MAX_AGE_MS;

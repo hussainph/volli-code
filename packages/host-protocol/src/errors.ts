@@ -44,17 +44,49 @@ export type HostErrorCodeCoverage = AssertNever<Exclude<TRPC_ERROR_CODE_KEY, Hos
 export const HOST_ERROR_REASON_CODES = {
   "protocol-version-unsupported": "PRECONDITION_FAILED",
   "hello-invalid": "BAD_REQUEST",
+  /** Client-side: the host's welcome failed `validateWelcome` (an upstream answered badly). */
+  "welcome-invalid": "BAD_GATEWAY",
   "credential-invalid": "UNAUTHORIZED",
   "workspace-unknown": "NOT_FOUND",
+  /** A host-scoped connection cannot call a Workspace operation. */
+  "workspace-scope-required": "FORBIDDEN",
   "workspace-epoch-fenced": "PRECONDITION_FAILED",
   "workspace-split-brain": "CONFLICT",
   "lease-epoch-fenced": "PRECONDITION_FAILED",
   "verb-refused": "FORBIDDEN",
   "command-conflict": "CONFLICT",
+  "queue-revision-conflict": "CONFLICT",
   "subscription-overflow": "TOO_MANY_REQUESTS",
   "subscription-resnapshot-required": "PRECONDITION_FAILED",
   "subscription-source-failed": "INTERNAL_SERVER_ERROR",
+  /** The connection already holds as many open subscriptions as its door allows. */
+  "subscription-limit": "TOO_MANY_REQUESTS",
+  /**
+   * One answer or stream frame would exceed the door's frame bound
+   * (`HOST_PROTOCOL_MAX_FRAME_BYTES` on the WebSocket). Refused whole, never
+   * truncated; a bounded or paged read is the way to what it held.
+   */
+  "response-too-large": "PAYLOAD_TOO_LARGE",
+  /** Client-side: a HOST answer failed its public operation output schema. */
+  "response-invalid": "BAD_GATEWAY",
   "operation-unavailable": "NOT_IMPLEMENTED",
+  /**
+   * Sign-ins (VC-702). No such flow on this connection: a flow another
+   * connection owns answers exactly as an absent one.
+   */
+  "sign-in-unknown": "NOT_FOUND",
+  /** The flow, step or callback grant is not in a state to take this. */
+  "sign-in-conflict": "CONFLICT",
+  /** This host cannot sign in that way: an unknown provider, method or git host. */
+  "sign-in-unsupported": "PRECONDITION_FAILED",
+  /**
+   * Client-side: the client host link (VC-670) had no validated connection to
+   * send on, or lost it before the host answered. A call is never queued for a
+   * later connection, so a mutation that meets this was either never sent or
+   * has an unknown outcome; its `commandId` is what makes an explicit retry
+   * safe.
+   */
+  "host-unreachable": "SERVICE_UNAVAILABLE",
 } as const satisfies Record<string, HostErrorCode>;
 export type HostErrorReason = keyof typeof HOST_ERROR_REASON_CODES;
 
@@ -77,6 +109,15 @@ export function isHostError(value: unknown): value is HostError {
   }
   if (value.reason === undefined) return true;
   return isHostErrorReason(value.reason) && HOST_ERROR_REASON_CODES[value.reason] === value.code;
+}
+
+/**
+ * Whether a failure says "your cursor cannot be resumed; re-read the snapshot
+ * and subscribe from its cursor" (`subscription-resnapshot-required`). A
+ * client link branches on this, never on message text.
+ */
+export function isResnapshotRequired(error: unknown): boolean {
+  return readHostError(error).reason === "subscription-resnapshot-required";
 }
 
 /** Read a HostError, data.hostError, or legacy data.code failure on either link. */

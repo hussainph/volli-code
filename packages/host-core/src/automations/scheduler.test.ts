@@ -15,11 +15,15 @@
 import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vite-plus/test";
-import { nextScheduleOccurrence, type Automation, type AutomationSchedule } from "@volli/shared";
+import {
+  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
+  nextScheduleOccurrence,
+  type Automation,
+  type AutomationSchedule,
+} from "@volli/shared";
 
 import type { AutomationSkipIntent } from "./engine";
 import {
-  AUTOMATION_SCHEDULE_LATE_GRACE_MS,
   AUTOMATION_SCHEDULE_TICK_MS,
   createAutomationScheduler,
   schedulableAutomations,
@@ -57,6 +61,8 @@ interface Harness {
   ports: AutomationSchedulerPorts;
   scheduler: ReturnType<typeof createAutomationScheduler>;
   runs: { commandId: string; automationId: string; projectId: string }[];
+  /** Run command ids the door accepted — what a relaunch reads back from the ledger. */
+  accepted: Set<string>;
   skips: { commandId: string; skip: AutomationSkipIntent }[];
   cursors: ScheduleCursors;
   logs: string[];
@@ -77,11 +83,14 @@ function harness(options: {
   cursors?: ScheduleCursors;
   runOutcome?: (input: { automationId: string }) => ScheduledRunOutcome;
   listAutomations?: () => Promise<readonly Automation[]>;
+  /** Run command ids an earlier process already got accepted, on the same ledger. */
+  accepted?: Iterable<string>;
 }): Harness {
   let now = options.now;
   let enabled = [...(options.enabled ?? ["a1"])];
   const cursors: ScheduleCursors = { ...options.cursors };
   const runs: Harness["runs"] = [];
+  const accepted = new Set(options.accepted);
   const skips: Harness["skips"] = [];
   const logs: string[] = [];
   const delays: number[] = [];
@@ -103,9 +112,12 @@ function harness(options: {
       skips.push(input);
       return Promise.resolve();
     },
+    runAccepted: (commandId) => Promise.resolve(accepted.has(commandId)),
     startRun: (input) => {
       runs.push(input);
-      return Promise.resolve(options.runOutcome?.(input) ?? { ok: true });
+      const outcome = options.runOutcome?.(input) ?? { ok: true };
+      if (outcome.ok) accepted.add(input.commandId);
+      return Promise.resolve(outcome);
     },
     setTimer: (delayMs, fireTimer) => {
       delays.push(delayMs);
@@ -115,7 +127,16 @@ function harness(options: {
     clearTimer: () => {
       pending = null;
     },
-    log: (message) => logs.push(message),
+    // One line per call: the message, then each field (an Error as its message).
+    log: (msg, fields = {}) =>
+      logs.push(
+        [
+          msg,
+          ...Object.values(fields).map((value) =>
+            value instanceof Error ? value.message : String(value),
+          ),
+        ].join(" "),
+      ),
   };
 
   const scheduler = createAutomationScheduler(ports);
@@ -123,6 +144,7 @@ function harness(options: {
     ports,
     scheduler,
     runs,
+    accepted,
     skips,
     cursors,
     logs,
@@ -408,6 +430,88 @@ describe("a skip and a silence never look the same", () => {
     // And the occurrence is still consumed: a refused Run is not retried on a
     // loop, it is recorded and the next occurrence stands.
     expect(h.cursors["a1"]).toBe(nextDue);
+  });
+});
+
+describe("a crash between a Run and its cursor", () => {
+  /**
+   * The window: the Run door accepted the occurrence's Run, then the process
+   * died before the cursor moved. Modelled as an `advanceCursor` that never
+   * lands, after which a NEW scheduler opens over the same cursors and ledger.
+   */
+  async function crashAfterRunAccepted(nextDue: number): Promise<Harness> {
+    const h = harness({ now: nextDue, cursors: { a1: nextDue - 1 } });
+    h.ports.advanceCursor = () => Promise.reject(new Error("process killed"));
+    await h.scheduler.start();
+    expect(h.runs.map((run) => run.commandId)).toEqual([scheduleRunCommandId("a1", nextDue)]);
+    expect(h.cursors["a1"]).toBe(nextDue - 1);
+    return h;
+  }
+
+  it("does not record the occurrence that ran as missed on relaunch", async () => {
+    const nextDue = due(Date.parse("2026-06-10T12:00:00Z"));
+    const crashed = await crashAfterRunAccepted(nextDue);
+
+    // Relaunch 40 seconds later, on the same ledger.
+    const relaunched = harness({
+      now: nextDue + 40_000,
+      cursors: { ...crashed.cursors },
+      accepted: crashed.accepted,
+    });
+    await relaunched.scheduler.start();
+
+    // One history row for the occurrence: the Run. No "Volli wasn't running".
+    expect(crashed.skips).toEqual([]);
+    expect(relaunched.skips).toEqual([]);
+    expect(relaunched.runs).toEqual([]);
+    expect(relaunched.cursors["a1"]).toBe(nextDue);
+  });
+
+  it("counts only the occurrences after it in the closed-app gap that follows", async () => {
+    const nextDue = due(Date.parse("2026-06-10T12:00:00Z"));
+    const crashed = await crashAfterRunAccepted(nextDue);
+
+    // The app stays closed through three more nights.
+    const third = due(due(due(nextDue)));
+    const relaunched = harness({
+      now: third + 3_600_000,
+      cursors: { ...crashed.cursors },
+      accepted: crashed.accepted,
+    });
+    await relaunched.scheduler.start();
+
+    expect(relaunched.runs).toEqual([]);
+    expect(relaunched.skips).toHaveLength(1);
+    expect(relaunched.skips[0]).toMatchObject({
+      commandId: scheduleSkipCommandId("a1", third),
+      skip: { dueAt: third, missedCount: 3, reason: { kind: "app-closed" } },
+    });
+    expect(relaunched.cursors["a1"]).toBe(third);
+  });
+
+  it("still owes a skip for a refused Run whose skip never reached the ledger", async () => {
+    // A refusal is not an accepted Run, so it cannot be stepped over: if the
+    // process dies before the refusal's skip is written, the relaunch still
+    // records a skip for that occurrence rather than a silence.
+    const nextDue = due(Date.parse("2026-06-10T12:00:00Z"));
+    const crashed = harness({
+      now: nextDue,
+      cursors: { a1: nextDue - 1 },
+      runOutcome: () => ({ ok: false, code: "MODEL_REQUIRED", error: "Choose a default model." }),
+    });
+    crashed.ports.recordSkip = () => Promise.reject(new Error("process killed"));
+    await crashed.scheduler.start();
+    expect(crashed.accepted.size).toBe(0);
+
+    const relaunched = harness({
+      now: nextDue + 40_000,
+      cursors: { ...crashed.cursors },
+      accepted: crashed.accepted,
+    });
+    await relaunched.scheduler.start();
+    expect(relaunched.skips).toHaveLength(1);
+    expect(relaunched.skips[0]?.skip.dueAt).toBe(nextDue);
+    expect(relaunched.cursors["a1"]).toBe(nextDue);
   });
 });
 

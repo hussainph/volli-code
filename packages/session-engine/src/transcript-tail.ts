@@ -36,6 +36,8 @@ export interface SessionTranscriptTailEntry {
   text: string;
   /** The harness's own names for the tool calls in this message, in order. */
   tools: readonly string[];
+  /** Display-only delivery evidence for a submitted user message, never an interaction answer. */
+  delivery?: string;
 }
 
 export interface SessionTranscriptTail {
@@ -100,7 +102,10 @@ export async function readSessionTranscriptTail(
     ? Math.max(0, Math.trunc(requestedTextLimit))
     : TRANSCRIPT_TAIL_TEXT_LIMIT;
   const events = await ports.listEvents({ sessionId: input.sessionId });
-  const tail: { at: number; reference: TranscriptReference }[] = [];
+  const tail: { event: SessionEvent; reference: TranscriptReference }[] = [];
+  const receipts = new Map<string, string>();
+  const deliveredCommands = new Set<string>();
+  const observedReferences = new Set<string>();
   let messages = 0;
   let turns = 0;
   let turnDepth = 0;
@@ -108,28 +113,77 @@ export async function readSessionTranscriptTail(
     if (event.payload.kind === "turn.started") {
       turns += 1;
       turnDepth = 0;
+      if (event.commandId != null) deliveredCommands.add(event.commandId);
     }
+    if (event.payload.kind === "command.receipt.recorded") {
+      const receipt = event.payload.receipt;
+      receipts.set(receipt.commandId, receipt.status);
+      if (receipt.status === "accepted" || receipt.status === "completed")
+        deliveredCommands.add(receipt.commandId);
+    }
+    if (event.payload.kind === "transcript.referenced")
+      observedReferences.add(event.payload.reference.id);
     const reference = transcriptReferenceFor(event);
     if (reference === null) continue;
     messages += 1;
     turnDepth += 1;
-    tail.push({ at: event.occurredAt, reference });
+    tail.push({ event, reference });
     if (tail.length > limit) tail.shift();
   }
   const readArtifact = ports.readArtifact;
   if (readArtifact === undefined) return { entries: [], messages, unreadable: 0, turns, turnDepth };
-  const entries: SessionTranscriptTailEntry[] = [];
+  const hydrated: {
+    event: SessionEvent;
+    reference: TranscriptReference;
+    message: UIMessage;
+    entry: SessionTranscriptTailEntry;
+  }[] = [];
+  const reads = new Map<string, Promise<SessionTranscriptArtifact>>();
+  const observedMessages = new Set<string>();
   let unreadable = 0;
-  for (const { at, reference } of tail) {
+  for (const { event, reference } of tail) {
     // A store that cannot answer for one artifact must not cost the caller the
     // whole peek: the reason to run this command at all is that something is
     // wrong, and the activity counts beside it are still true.
     try {
-      entries.push(tailEntry(at, (await readArtifact(reference)).message, textLimit));
+      let read = reads.get(reference.id);
+      if (read === undefined) {
+        read = readArtifact(reference);
+        reads.set(reference.id, read);
+      }
+      const { message } = await read;
+      const entry = tailEntry(event.occurredAt, message, textLimit);
+      hydrated.push({ event, reference, message, entry });
+      if (event.payload.kind === "transcript.referenced" && message.role === "user")
+        observedMessages.add(message.id);
     } catch {
       unreadable += 1;
     }
   }
+  const entries = hydrated.map(({ event, reference, message, entry }) => {
+    if (
+      event.payload.kind === "command.recorded" &&
+      event.payload.command.intent.kind === "message.submit" &&
+      message.role === "user"
+    ) {
+      const commandId = event.payload.command.id;
+      // Once the prompt reached the runtime, a later failure can make its
+      // receipt unreconciled, but cannot undo delivery. Observation identity
+      // comes from bodies already in this tail, or an identical reference in
+      // the ledger: never read historical artifacts just to seek more proof.
+      entry.delivery =
+        deliveredCommands.has(commandId) ||
+        observedReferences.has(reference.id) ||
+        observedMessages.has(message.id)
+          ? "Delivered"
+          : receipts.get(commandId) === "rejected"
+            ? "Not delivered"
+            : receipts.get(commandId) === "unreconciled"
+              ? "Delivery unconfirmed"
+              : "Pending";
+    }
+    return entry;
+  });
   return { entries, messages, unreadable, turns, turnDepth };
 }
 

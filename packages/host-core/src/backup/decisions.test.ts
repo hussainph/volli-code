@@ -7,16 +7,16 @@
  * — which is the ticket's actual requirement: new persisted data cannot be
  * added without an explicit include/rebuild/exclude decision.
  */
-import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "@volli/host-core/secrets";
-import { MCP_CREDENTIAL_FILE_NAME } from "@volli/host-core/mcp/credential-store";
+import { SECRET_KEY_FILE_NAME, SECRET_STORE_FILE_NAME } from "../secrets";
+import { MCP_CREDENTIAL_FILE_NAME } from "../mcp/credential-store";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { volliRuntimePaths } from "@volli/host-core/agent-runtime";
-import { blobsRoot } from "@volli/host-core/blob-store";
-import { browserPicturesRoot } from "@volli/host-core/browser/picture-disk";
-import { openTestDb } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { sessionTranscriptsRoot } from "@volli/host-core/session-runtime/transcript-artifacts";
+import { volliRuntimePaths } from "../host-profile";
+import { blobsRoot } from "../blob-store";
+import { browserPicturesRoot } from "../browser/picture-disk";
+import { openTestDb } from "../db/test-helpers";
+import type { TestDb } from "../db/test-helpers";
+import { sessionTranscriptsRoot } from "../session-runtime/transcript-artifacts";
 import {
   BACKUP_INCLUDED_TABLES,
   COLUMN_REDACTIONS,

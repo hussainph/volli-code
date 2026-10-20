@@ -48,6 +48,14 @@
  * grounds to refuse). Inside the tree, a symlink pointing out of it and a
  * directory sitting on another filesystem are kept rather than followed: an
  * `rm -rf` across a mount point is not a trim.
+ *
+ * A directory below the root that holds a `.git` entry — a clone's `.git/`
+ * directory or a linked worktree's `.git` file — is a nested git repository: it
+ * is kept whole and not walked, wherever it sits, including inside a directory
+ * git collapsed into one ignored entry (`vendor/`, `.claude/worktrees/`). Its
+ * commits, stashes and uncommitted work exist nowhere else. This is
+ * `git clean -fdX` with a single `-f`, and the nested repository's own ignore
+ * rules are not applied: keeping it whole is the rule a person can predict.
  */
 import { existsSync } from "node:fs";
 import { lstat, readdir, realpath, rm } from "node:fs/promises";
@@ -83,7 +91,7 @@ export interface TrimInput {
   keepPatterns?: readonly string[];
   /** Measure and report, delete nothing — what the UI previews with. */
   dryRun?: boolean;
-  /** Absent means nothing structured can be asked, so nothing structured blocks. */
+  /** Absent means activity cannot be checked: trim fails closed. */
   busySites?: BusyWorktreeSites;
 }
 
@@ -168,7 +176,8 @@ function reportPath(relative: string, directory: boolean): string {
  * Plans one node, recursing into directories. A directory whose whole subtree is
  * removable comes back as a single `remove` — one `rm` for the 100k-file
  * `node_modules`, instead of 100k of them — and only a subtree holding something
- * preserved, cross-device, or pointing out of the worktree comes back `split`.
+ * preserved, cross-device, pointing out of the worktree, or a nested git
+ * repository comes back `split`.
  *
  * Sizes are apparent bytes (`lstat`), summed as the plan is built because the
  * walk has to happen anyway. For a pnpm tree they overstate what the filesystem
@@ -220,6 +229,9 @@ async function planNode(context: PlanContext, relative: string): Promise<NodePla
   } catch {
     return { kind: "keep", reason: "Volli couldn't read it" };
   }
+  if (await holdsGitEntry(absolute, entries)) {
+    return { kind: "keep", reason: "it is a nested git repository" };
+  }
 
   // Directory inodes are not counted: the number in the report is the bytes of
   // the FILES a removal takes, which is the number a person can compare against
@@ -246,6 +258,34 @@ async function planNode(context: PlanContext, relative: string): Promise<NodePla
   }
   if (whole) return { kind: "remove", bytes, directory: true };
   return { kind: "split", removed, kept };
+}
+
+/**
+ * Whether a directory holds a `.git` entry of any type — a clone's directory, a
+ * linked worktree's gitfile — which makes it a repository of its own. git finds
+ * `.git` by opening that path, so on a case-insensitive disk (macOS's default)
+ * a `.GIT` is one too; a name that differs only in case is confirmed by asking
+ * the filesystem for `.git` itself, which answers the way git's lookup does.
+ * The exact name needs no second read, so the common walk costs nothing extra.
+ */
+async function holdsGitEntry(
+  absolute: string,
+  entries: readonly { name: string }[],
+): Promise<boolean> {
+  for (const entry of entries) {
+    if (entry.name === ".git") return true;
+    if (entry.name.toLowerCase() !== ".git") continue;
+    try {
+      await lstat(join(absolute, ".git"));
+      return true;
+    } catch (caught) {
+      // ENOENT is a case-sensitive disk, where `.GIT` is an ordinary name. Any
+      // other failure is an unanswered question, and an unanswered question
+      // about a repository keeps it.
+      if ((caught as NodeJS.ErrnoException).code !== "ENOENT") return true;
+    }
+  }
+  return false;
 }
 
 // ---- enumeration -----------------------------------------------------------
@@ -354,7 +394,9 @@ export async function trimIgnoredArtifacts(
   // the orphan delete, and the cleanup ask it. VC-284 wrote that module because
   // two copies of "is anything running in there?" is two answers; a trim with its
   // own copy would have been the third.
-  const busy = busySiteWithin(worktreePath, (await input.busySites?.(worktreePath)) ?? []);
+  if (typeof input.busySites !== "function")
+    return err("Worktree activity is unavailable; refusing to trim.");
+  const busy = busySiteWithin(worktreePath, await input.busySites(worktreePath));
   if (busy !== null) return err(busyRefusal(busy));
 
   const tracked = await trackedChangeRefusal(git, worktreePath);

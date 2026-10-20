@@ -7,8 +7,7 @@ import { DOC_SECTIONS } from "../data/navigation";
  * it, with a link to each page's Markdown mirror.
  *
  * Volli's users point coding agents at things. This is the address you give an
- * agent when you want it to read the docs, and it's what cursor.com/docs links
- * from the foot of every page.
+ * agent when you want it to read the docs; the footer links it on every page.
  *
  * The sidebar and this index share one navigation definition. The build
  * rejects an unlisted page rather than publishing an incomplete index.

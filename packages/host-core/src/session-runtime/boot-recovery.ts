@@ -50,6 +50,10 @@ export interface BootRecoveryEngine {
 
 export interface BootRecoveryOptions {
   engine: BootRecoveryEngine;
+  /** Only this host's bindings are owned by its restart. Defaults to desktop. */
+  venue?: SessionExecutionVenue;
+  /** Host-specific upgrade ownership; never broadens ordinary runtime authority. */
+  ownsLegacyVenue?(venue: SessionExecutionVenue): boolean;
   /** Rehydrate and reconcile a structured attachment that lost its process mid-turn. */
   reconcile(input: { sessionId: string; attachmentId: string }): Promise<void>;
   projectIds: readonly string[];
@@ -61,6 +65,15 @@ export interface BootRecoveryOptions {
    * sweep continues.
    */
   onError: (attachmentId: string, error: unknown) => void;
+  /**
+   * Whether the host is shutting down. Read at each async boundary: once it
+   * answers yes, the sweep starts no new project query or attachment work and
+   * leaves the remaining bindings as the prior process left them, for the next
+   * launch to recover. A reconcile rejected under a closing host is a stop,
+   * not a lost sidecar — nothing durable is recorded for it. Legacy callers
+   * that omit this always sweep to completion.
+   */
+  shouldStop?(): boolean;
 }
 
 /**
@@ -69,17 +82,27 @@ export interface BootRecoveryOptions {
  */
 export async function closeStaleAttachments(options: BootRecoveryOptions): Promise<number> {
   let closed = 0;
+  const venue = options.venue ?? { id: "local", kind: "local" };
+  const owns = (attachment: BootRecoveryAttachment) =>
+    (attachment.venue.id === venue.id && attachment.venue.kind === venue.kind) ||
+    (options.ownsLegacyVenue?.(attachment.venue) ?? false);
+  // Shutdown is not a failure: once the host is closing, only the attachment
+  // already in flight may finish, and a reconcile unblocked by that close is a
+  // stop, not a lost sidecar — no durable fact is recorded from it.
+  const stopping = () => options.shouldStop?.() ?? false;
   for (const projectId of options.projectIds) {
+    if (stopping()) return closed;
     const sessions = await options.engine.listSessions({ projectId, scope: "all" });
     for (const projection of sessions) {
       for (const attachment of projection.attachments) {
+        if (stopping()) return closed;
         // A local process restart cannot recover the promise that parked a
-        // host permission question, even if the turn already interrupted or its
-        // sidecar is lost. Retiring it grants no allowance or confirmation.
-        if (attachment.adapterId === STRUCTURED_ADAPTER_ID && attachment.venue.kind === "local") {
+        // permission or model question, even if the turn already interrupted
+        // or its sidecar is lost. Retiring it invents no answer or allowance.
+        if (attachment.adapterId === STRUCTURED_ADAPTER_ID && owns(attachment)) {
           for (const interaction of projection.interactions?.active ?? []) {
-            if (interaction.attachmentId !== attachment.id || interaction.kind !== "permission")
-              continue;
+            if (stopping()) return closed;
+            if (interaction.attachmentId !== attachment.id) continue;
             try {
               await options.engine.observe({
                 id: options.newId(),
@@ -99,7 +122,8 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
             }
           }
         }
-        if (needsStructuredTurnRecovery(projection, attachment)) {
+        if (stopping()) return closed;
+        if (needsStructuredTurnRecovery(projection, attachment, owns(attachment))) {
           try {
             await options.reconcile({
               sessionId: projection.session.id,
@@ -107,6 +131,7 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
             });
             continue;
           } catch (error) {
+            if (stopping()) return closed;
             // The host found a turn with no surviving process. Record that
             // failure predicate even when the runtime could not reconstruct
             // its own sidecar, then close the unusable attachment so the
@@ -114,11 +139,12 @@ export async function closeStaleAttachments(options: BootRecoveryOptions): Promi
             options.onError(attachment.id, error);
             await tryRaiseCrashRecoveryAttention(options, projection.session.id, attachment.id);
           }
-        } else if (!isStaleOnBoot(attachment)) {
+        } else if (!isStaleOnBoot(attachment, owns(attachment))) {
           continue;
         } else if (projection.turnActive) {
           await tryRaiseCrashRecoveryAttention(options, projection.session.id, attachment.id);
         }
+        if (stopping()) return closed;
         try {
           await closeInterrupted(options, projection.session.id, attachment.id);
           closed += 1;
@@ -160,7 +186,7 @@ function raiseCrashRecoveryAttention(
         id: "desktop-recovery",
         detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
       },
-      venue: { id: "local", kind: "local" },
+      venue: options.venue ?? { id: "local", kind: "local" },
     },
     attention: {
       id: `${attachmentId}:boot-recovery`,
@@ -189,7 +215,7 @@ function closeInterrupted(
         id: "desktop-recovery",
         detail: { sessionOrigin: { kind: "volli", reason: "relaunch-recovery" } },
       },
-      venue: { id: "local", kind: "local" },
+      venue: options.venue ?? { id: "local", kind: "local" },
     },
     outcome: "interrupted",
   });
@@ -198,19 +224,16 @@ function closeInterrupted(
 function needsStructuredTurnRecovery(
   session: BootRecoverySession,
   attachment: BootRecoveryAttachment,
+  owned: boolean,
 ): boolean {
   return (
     session.turnActive &&
     attachment.adapterId === STRUCTURED_ADAPTER_ID &&
-    attachment.venue.kind === "local" &&
+    owned &&
     attachment.status === "open"
   );
 }
 
-function isStaleOnBoot(attachment: BootRecoveryAttachment): boolean {
-  return (
-    attachment.adapterId !== STRUCTURED_ADAPTER_ID &&
-    attachment.venue.kind === "local" &&
-    attachment.status === "open"
-  );
+function isStaleOnBoot(attachment: BootRecoveryAttachment, owned: boolean): boolean {
+  return attachment.adapterId !== STRUCTURED_ADAPTER_ID && owned && attachment.status === "open";
 }

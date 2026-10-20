@@ -307,9 +307,10 @@ describe("SubagentPeekDialog", () => {
     await act(async () =>
       dialog()!.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click(),
     );
+    // This child is idle: omitted delivery means immediate, not a host follow-up.
     expect(childSubmit).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ text: "Follow up with the child" }),
-      "queue",
+      undefined,
     );
     expect(parentSubmit).not.toHaveBeenCalled();
     expect(useChatDraftsStore.getState().drafts[CHILD]?.text ?? "").toBe("");

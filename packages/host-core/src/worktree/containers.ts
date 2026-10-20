@@ -25,7 +25,7 @@
 import { basename, join } from "node:path";
 import type Database from "better-sqlite3";
 
-import { listProjects } from "@volli/host-core/db/projects-repo";
+import { listProjects } from "../db/projects-repo";
 import { isInside } from "./paths";
 
 /** Strips a single trailing slash so `basename` never returns `""`. */

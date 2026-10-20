@@ -21,7 +21,24 @@ import { proseBytes, seededRandom } from "./deterministic.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_DIR = resolve(HERE, "..", "..", "..");
-const BASE_TIME = Date.UTC(2025, 0, 15, 12, 0, 0);
+const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
+/**
+ * How the captured owner profile's Sessions split across the sidebar bands, as
+ * recorded in the sidebar-nesting lab scratch: 14 Active rows at the busiest
+ * moment and 141 Previous rows, out of the 1,198 Sessions `real` reproduces.
+ * Other presets keep the same ratios.
+ */
+const OWNER_BAND_SHARES = Object.freeze({ sessions: 1_198, active: 14, previous: 141 });
+/**
+ * Margins that keep every generated Session well clear of a band boundary, so
+ * a run that starts minutes or hours after generation reads the same bands.
+ * The newest Previous row is this far past the quiet window; the oldest is
+ * this far inside the age bound; aged-out history starts this far past it.
+ */
+const BAND_MARGIN_MS = Object.freeze({ active: 2 * MINUTE, previous: 10 * MINUTE, aged: DAY });
+/** How far back the aged-out history reaches, past the Previous age bound. */
+const AGED_HISTORY_SPAN_MS = 112 * DAY;
 const PROJECT_ID = "perf-project";
 const PROJECT_PREFIX = "PERF";
 const PROVENANCE = Object.freeze({
@@ -29,6 +46,14 @@ const PROVENANCE = Object.freeze({
   venue: { id: "local:perf", kind: "local" },
 });
 const STATUSES = ["backlog", "todo", "doing", "needs_review", "done"];
+/** The column ticket `index` is generated into; `createTickets` deals them round-robin. */
+function ticketStatus(index) {
+  return STATUSES[index % STATUSES.length];
+}
+/** The ticket Session `index` belongs to; Sessions cycle across every ticket. */
+function sessionTicketIndex(sessionIndex, tickets) {
+  return sessionIndex % tickets;
+}
 const PRIORITIES = ["low", "medium", "high"];
 const FIXTURE_FILE = "performance-fixture.json";
 const PORTABLE_ROOT = "/__volli_performance_fixture__";
@@ -41,6 +66,7 @@ function parseArgs(argv) {
     const argument = argv[index];
     if (argument === "--preset") args.preset = argv[++index];
     else if (argument === "--seed") args.seed = Number(argv[++index]);
+    else if (argument === "--clock") args.clock = parseClock(argv[++index]);
     else if (argument === "--output") args.output = argv[++index];
     else if (argument === "--force") args.force = true;
     else if (argument === "--verify") args.verify = true;
@@ -58,6 +84,8 @@ function usage() {
     "",
     `  --preset NAME           fixture scale: ${PRESET_NAMES.join("|")} (default: real)`,
     "  --seed N                deterministic seed",
+    "  --clock TIME            generation clock, ISO or epoch ms (default: now);",
+    "                          with the seed, it fully determines the database",
     "  --output DIR            profile directory to create",
     "  --force                 replace an existing output directory",
     "  --verify                reopen and verify after generation",
@@ -65,6 +93,125 @@ function usage() {
 }
 
 export { seededRandom } from "./deterministic.mjs";
+
+/**
+ * The generation clock: epoch milliseconds, from an ISO date or a bare integer.
+ * Every fixture timestamp is relative to it, so it is part of the fixture's
+ * identity the way the seed is — same seed, same clock, same database.
+ */
+export function parseClock(value) {
+  const clock = /^\d+$/.test(String(value)) ? Number(value) : Date.parse(value);
+  if (!Number.isSafeInteger(clock) || clock <= 0) {
+    throw new Error(`--clock must be an ISO date or epoch milliseconds, got ${value}`);
+  }
+  return clock;
+}
+
+function recencySeed(seed) {
+  // A stream of its own, so the recency schedule never shares a sequence with
+  // the per-Session event streams (`seed + sessionIndex`).
+  return Number.parseInt(
+    createHash("sha256").update(`${seed}:session-recency`).digest("hex").slice(0, 8),
+    16,
+  );
+}
+
+/**
+ * When every Session last did anything, relative to the generation clock, and
+ * which sidebar band that puts it in.
+ *
+ * A frozen base date put all 1,198 Sessions past `PREVIOUS_MAX_AGE_MS` the day
+ * it was a week old, so both bands measured empty (VC-415). The schedule is now
+ * explicit, against the sidebar's own `windows` (`session-band-windows.ts`):
+ *
+ * - `active`: the newest Sessions, quiet inside the quiet window and UNREAD.
+ *   Unread is what makes the band stable: a run measures for an hour or more
+ *   and the window is thirty minutes, so a band held by recency alone would
+ *   shrink between repetitions. An unread Session never ages out of Active
+ *   (`activeGroup`) — true of the owner's profile too: work finished while
+ *   nobody was looking stays up.
+ * - `previous`: the Sessions the Previous band RENDERS — between the quiet
+ *   window and the age bound, skewed toward recent the way a real corpus is,
+ *   and never on a Done ticket, because the sidebar cleans a Done ticket's
+ *   Sessions away an hour after it lands there (`DONE_LINGER_MS`). The long
+ *   chat is one of them: the benchmark opens it, which reads it, so an unread
+ *   Active long chat would make the Active count depend on interaction order.
+ * - `aged`: everything else, past the age bound — history the band never shows.
+ *
+ * `stableUntil` is the first instant any band would change on the clock alone:
+ * the oldest Previous row reaching the age bound.
+ */
+export function sessionRecencySchedule({ sessions, tickets, seed, clock, eventCounts, windows }) {
+  if (eventCounts.length !== sessions) throw new Error("one event count per Session");
+  const activeQuietWindowMs = windows.ACTIVE_QUIET_WINDOW_MS;
+  const previousMaxAgeMs = windows.PREVIOUS_MAX_AGE_MS;
+  if (!Number.isSafeInteger(activeQuietWindowMs) || !Number.isSafeInteger(previousMaxAgeMs)) {
+    throw new Error("sidebar band windows are missing");
+  }
+  const scale = sessions / OWNER_BAND_SHARES.sessions;
+  const active = Math.min(sessions - 1, Math.max(1, Math.round(OWNER_BAND_SHARES.active * scale)));
+  const previous = Math.min(
+    sessions - active,
+    Math.max(1, Math.round(OWNER_BAND_SHARES.previous * scale)),
+  );
+  const onDoneTicket = (index) => ticketStatus(sessionTicketIndex(index, tickets)) === "done";
+  const bands = Array(sessions).fill("aged");
+  for (let index = sessions - active; index < sessions; index += 1) bands[index] = "active";
+  // Newest first below the Active ones, skipping Done tickets, until the band
+  // holds the owner's count.
+  bands[0] = "previous";
+  let placed = 1;
+  for (let index = sessions - active - 1; index > 0 && placed < previous; index -= 1) {
+    if (onDoneTicket(index)) continue;
+    bands[index] = "previous";
+    placed += 1;
+  }
+  if (placed < previous) throw new Error(`only ${placed} Sessions can render in Previous`);
+  if (onDoneTicket(0)) throw new Error("the long chat's ticket must not be Done");
+  const aged = bands.flatMap((band, index) => (band === "aged" ? [index] : []));
+  const agedRank = new Map(aged.map((index, rank) => [index, rank]));
+  const random = seededRandom(recencySeed(seed));
+  const previousNewest = activeQuietWindowMs + BAND_MARGIN_MS.previous;
+  const previousOldest = previousMaxAgeMs - BAND_MARGIN_MS.aged;
+  const entries = bands.map((band, index) => {
+    let ageMs;
+    if (band === "active") {
+      ageMs = Math.round(random() * (activeQuietWindowMs - BAND_MARGIN_MS.active));
+    } else if (band === "previous") {
+      ageMs = Math.round(
+        previousNewest + Math.pow(random(), 1.7) * (previousOldest - previousNewest),
+      );
+    } else {
+      // Oldest first by index, evenly spread, so the history is a long tail
+      // rather than a cliff just past the bound.
+      ageMs = Math.round(
+        previousMaxAgeMs +
+          BAND_MARGIN_MS.aged +
+          ((aged.length - agedRank.get(index)) / aged.length) * AGED_HISTORY_SPAN_MS,
+      );
+    }
+    const lastActivityAt = clock - ageMs;
+    // The fold dates a Session by its newest event, which lands `eventCounts`
+    // milliseconds after creation (`occurredAt = createdAt + sequence`).
+    return { band, createdAt: lastActivityAt - eventCounts[index], lastActivityAt };
+  });
+  const oldestPrevious = Math.min(
+    ...entries.filter((entry) => entry.band === "previous").map((entry) => entry.lastActivityAt),
+  );
+  return {
+    entries,
+    earliestCreatedAt: Math.min(...entries.map((entry) => entry.createdAt)),
+    summary: {
+      activeQuietWindowMs,
+      previousMaxAgeMs,
+      // Rows each band renders at `generatedAt` (the Previous ones are all off
+      // Done tickets), and the history past the age bound that neither shows.
+      sessions: { active, previous, agedOut: aged.length },
+      unreadSessions: active,
+      stableUntil: new Date(oldestPrevious + previousMaxAgeMs).toISOString(),
+    },
+  };
+}
 
 /**
  * Allocate an exact count with a deterministic Pareto-like long tail and an
@@ -245,14 +392,18 @@ async function loadProductionModules() {
   restoreNodeEnv();
   try {
     const load = (path) => vite.ssrLoadModule(resolve(APP_DIR, path));
-    const [db, sessionControl, sessionEngine, artifacts, shared, migrations] = await Promise.all([
-      load("../../packages/host-core/src/db/index.ts"),
-      load("../../packages/host-core/src/session-control/index.ts"),
-      vite.ssrLoadModule("@volli/session-engine"),
-      load("../../packages/host-core/src/session-runtime/transcript-artifacts.ts"),
-      vite.ssrLoadModule("@volli/shared"),
-      load("../../packages/host-core/src/db/migrations.ts"),
-    ]);
+    const [db, sessionControl, sessionEngine, artifacts, shared, migrations, bandWindows] =
+      await Promise.all([
+        load("../../packages/host-core/src/db/index.ts"),
+        load("../../packages/host-core/src/session-control/index.ts"),
+        vite.ssrLoadModule("@volli/session-engine"),
+        load("../../packages/host-core/src/session-runtime/transcript-artifacts.ts"),
+        vite.ssrLoadModule("@volli/shared"),
+        load("../../packages/host-core/src/db/migrations.ts"),
+        // The sidebar's own band windows, from the leaf the band builder
+        // re-exports — never a copy (VC-415).
+        load("src/renderer/src/components/sidebar/session-band-windows.ts"),
+      ]);
     return {
       vite,
       ...db,
@@ -260,6 +411,7 @@ async function loadProductionModules() {
       ...sessionEngine,
       ...artifacts,
       shared,
+      bandWindows,
       // One source of truth; adding a migration cannot stale the fixture harness.
       currentDbSchemaVersion: migrations.MIGRATIONS.at(-1).version,
     };
@@ -345,7 +497,7 @@ async function assertSafeForceTarget(targetPath) {
   if (refusal !== null) throw new Error(`Refusing --force deletion: ${refusal}`);
 }
 
-function createTickets(db, preset, paths) {
+function createTickets(db, preset, paths, timeline) {
   const insert = db.prepare(
     `INSERT INTO tickets
        (id, project_id, ticket_number, title, body, status, priority, uses_worktree,
@@ -358,7 +510,7 @@ function createTickets(db, preset, paths) {
   );
   const positions = new Map(STATUSES.map((status) => [status, 0]));
   for (let index = 0; index < preset.tickets; index += 1) {
-    const status = STATUSES[index % STATUSES.length];
+    const status = ticketStatus(index);
     const hasWorktree = index < preset.liveWorktrees;
     // The first N paths are shared by two tickets; the rest are unique. The
     // overlap count therefore describes paths with >1 live ticket exactly.
@@ -379,8 +531,11 @@ function createTickets(db, preset, paths) {
       worktreePath,
       branch: hasWorktree ? `perf/ticket-${digits(4, index + 1)}` : null,
       baseBranch: hasWorktree ? "main" : null,
-      createdAt: BASE_TIME - (preset.tickets - index) * 60_000,
-      updatedAt: BASE_TIME - index * 1_000,
+      // Every ticket predates every Session: the sidebar cleans away a Session
+      // created before its ticket entered its current column, and with no
+      // status change on record that entry is the ticket's own creation.
+      createdAt: timeline.earliestCreatedAt - (preset.tickets - index) * MINUTE,
+      updatedAt: timeline.clock - index * 1_000,
     });
     positions.set(status, positions.get(status) + 1);
   }
@@ -390,7 +545,7 @@ function createTickets(db, preset, paths) {
   );
 }
 
-function createTicketEvents(db, preset) {
+function createTicketEvents(db, preset, clock) {
   const allocations = distributeExact(preset.tickets, preset.ticketEvents);
   const insert = db.prepare(
     `INSERT INTO ticket_events (id, ticket_id, kind, actor, payload, created_at)
@@ -411,13 +566,13 @@ function createTicketEvents(db, preset) {
         ticketId: ticketId(ticketIndex),
         kind: payload.kind,
         payload: JSON.stringify(payload),
-        createdAt: BASE_TIME - (ticketIndex * 10_000 + sequence),
+        createdAt: clock - (ticketIndex * 10_000 + sequence),
       });
     }
   }
 }
 
-function createSessionRows(db, preset) {
+function createSessionRows(db, preset, timeline) {
   const insert = db.prepare(
     `INSERT INTO sessions (id, project_id, ticket_id, title, created_at, role, parent_session_id)
      VALUES (@id, @projectId, @ticketId, @title, @createdAt, 'ticket', NULL)`,
@@ -428,14 +583,14 @@ function createSessionRows(db, preset) {
       projectId: PROJECT_ID,
       // Session 1 is the long-chat target on ticket 1. Sessions cycle across
       // every ticket so listing and workspace reads see the full cardinality.
-      ticketId: ticketId(index % preset.tickets),
+      ticketId: ticketId(sessionTicketIndex(index, preset.tickets)),
       title: index === 0 ? "VC-353 long chat benchmark" : `Fixture Session ${digits(4, index + 1)}`,
-      createdAt: BASE_TIME - (preset.sessions - index) * 30_000,
+      createdAt: timeline.entries[index].createdAt,
     });
   }
 }
 
-function createCommands(db, preset) {
+function createCommands(db, preset, timeline) {
   const allocations = distributeExact(preset.sessions, preset.sessionCommands);
   const insert = db.prepare(
     `INSERT INTO session_commands (id, session_id, created_at, intent, route)
@@ -456,21 +611,46 @@ function createCommands(db, preset) {
       insert.run({
         id: commandId(sessionIndex, index),
         sessionId: sessionId(sessionIndex),
-        createdAt: BASE_TIME - sessionIndex * 30_000 + index,
+        createdAt: timeline.entries[sessionIndex].createdAt + index,
         intent: JSON.stringify(intent),
       });
     }
   }
 }
 
-async function createEvents(db, preset, seed, artifactStore, assertSessionEvent) {
-  const allocation = allocateLongTail({
+function sessionEventAllocation(preset, seed) {
+  return allocateLongTail({
     count: preset.sessions,
     total: preset.sessionEvents,
     minimum: 5,
     maximum: preset.maxSessionEvents,
     seed,
   });
+}
+
+/**
+ * The receipts that hold the Active band up for the length of a run; see
+ * {@link sessionRecencySchedule}. Stamped from the Session's own last activity,
+ * which is when the production edge (`markSessionUnread`) would have stamped it.
+ */
+function createReadReceipts(db, timeline) {
+  const insert = db.prepare(
+    "INSERT INTO session_read_receipts (session_id, unread_since) VALUES (?, ?)",
+  );
+  for (const [index, entry] of timeline.entries.entries()) {
+    if (entry.band === "active") insert.run(sessionId(index), entry.lastActivityAt);
+  }
+}
+
+async function createEvents(
+  db,
+  preset,
+  seed,
+  allocation,
+  timeline,
+  artifactStore,
+  assertSessionEvent,
+) {
   const insertAttachment = db.prepare(
     `INSERT INTO session_attachments
        (id, session_id, adapter_id, venue_id, venue_kind, continuity, native_id,
@@ -511,12 +691,12 @@ async function createEvents(db, preset, seed, artifactStore, assertSessionEvent)
     for (let sessionIndex = 0; sessionIndex < allocation.length; sessionIndex += 1) {
       const id = sessionId(sessionIndex);
       const attachmentId = `perf-attachment-${digits(4, sessionIndex + 1)}`;
-      const ticket = ticketId(sessionIndex % preset.tickets);
+      const ticket = ticketId(sessionTicketIndex(sessionIndex, preset.tickets));
       const title =
         sessionIndex === 0
           ? "VC-353 long chat benchmark"
           : `Fixture Session ${digits(4, sessionIndex + 1)}`;
-      const createdAt = BASE_TIME - (preset.sessions - sessionIndex) * 30_000;
+      const createdAt = timeline.entries[sessionIndex].createdAt;
       insertAttachment.run({
         id: attachmentId,
         sessionId: id,
@@ -646,7 +826,7 @@ async function createEvents(db, preset, seed, artifactStore, assertSessionEvent)
  * makes the resulting physical size page-exact (rounded up from the byte
  * target) and keeps the allocation order deterministic for a given seed.
  */
-function createChurnFreelist(db, preset, seed, pageSize) {
+function createChurnFreelist(db, preset, seed, pageSize, clock) {
   const targetPageCount = Math.ceil(preset.targetFileBytes / pageSize);
   if (db.pragma("page_count", { simple: true }) >= targetPageCount) return 0;
 
@@ -673,7 +853,7 @@ function createChurnFreelist(db, preset, seed, pageSize) {
         ticketId: ticketId(rows % preset.tickets),
         kind: payload.kind,
         payload: JSON.stringify(payload),
-        createdAt: BASE_TIME - rows,
+        createdAt: clock - rows,
       });
       rows += 1;
     }
@@ -731,6 +911,11 @@ async function physicalDatabaseBytes(db, dbPath) {
 export async function generateFixture(input) {
   const preset = presetNamed(input.preset);
   const paths = fixturePaths(input.outputDirectory);
+  // Read once and recorded in the manifest: every row is stamped relative to
+  // this instant, so a fixture built now has Sessions inside the sidebar's
+  // windows now, and passing the recorded clock back rebuilds it exactly.
+  const clock = input.clock === undefined ? Date.now() : parseClock(input.clock);
+  const eventAllocation = sessionEventAllocation(preset, input.seed);
   if (input.force) {
     await assertSafeForceTarget(paths.userDataDir);
     await rm(paths.userDataDir, { recursive: true, force: true });
@@ -750,12 +935,32 @@ export async function generateFixture(input) {
   let db;
   let result;
   try {
+    const recency = sessionRecencySchedule({
+      sessions: preset.sessions,
+      tickets: preset.tickets,
+      seed: input.seed,
+      clock,
+      eventCounts: eventAllocation,
+      windows: modules.bandWindows,
+    });
+    const timeline = { clock, ...recency };
     // This is the production file-backed open/migration path by requirement —
     // never :memory:, never a copied schema.
     db = modules.openVolliDb(paths.dbPath);
     if (db.pragma("user_version", { simple: true }) !== modules.currentDbSchemaVersion) {
       throw new Error("fresh fixture did not migrate to the current database schema");
     }
+    // The migrations stamp two facts of their own that are not the seed's or
+    // the clock's: the wall time each migration applied at (VC-633) and a
+    // random credential-mirror lineage id (VC-643). Both are per-database
+    // bookkeeping no benchmark reads, and leaving them live made two same-seed
+    // fixtures differ byte-for-byte. Pin them to the recipe instead, then
+    // VACUUM the still-empty database so no page keeps the overwritten bytes.
+    db.prepare("UPDATE migration_history SET applied_at = ?").run(clock);
+    db.prepare("UPDATE web_credential_source SET source_id = ? WHERE id = 1").run(
+      createHash("sha256").update(`${input.seed}:web-credential-source`).digest("hex").slice(0, 32),
+    );
+    db.exec("VACUUM");
     db.pragma("synchronous = OFF");
     db.pragma("temp_store = MEMORY");
     db.prepare(
@@ -768,30 +973,33 @@ export async function generateFixture(input) {
       "VC-353 Performance Fixture",
       PORTABLE_PROJECT_PATH,
       PROJECT_PREFIX,
-      BASE_TIME,
-      BASE_TIME,
+      clock,
+      clock,
     );
-    createTickets(db, preset, { ...paths, worktreeRoot: PORTABLE_WORKTREE_ROOT });
-    createTicketEvents(db, preset);
-    createSessionRows(db, preset);
-    createCommands(db, preset);
+    createTickets(db, preset, { ...paths, worktreeRoot: PORTABLE_WORKTREE_ROOT }, timeline);
+    createTicketEvents(db, preset, clock);
+    createSessionRows(db, preset, timeline);
+    createCommands(db, preset, timeline);
     const artifactStore = modules.createFileTranscriptArtifactStore(
       modules.sessionTranscriptsRoot(paths.userDataDir),
     );
-    const eventAllocation = await createEvents(
+    await createEvents(
       db,
       preset,
       input.seed,
+      eventAllocation,
+      timeline,
       artifactStore,
       modules.shared.assertSessionEvent,
     );
+    createReadReceipts(db, timeline);
     const insertAppState = db.prepare(
       "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?)",
     );
     insertAppState.run(
       "volli:projects-ui",
       JSON.stringify({ selectedProjectId: PROJECT_ID }),
-      BASE_TIME,
+      clock,
     );
     const fixtureModel = {
       providerId: "openai-codex",
@@ -808,14 +1016,14 @@ export async function generateFixture(input) {
         deep: fixtureModel,
         visual: fixtureModel,
       }),
-      BASE_TIME,
+      clock,
     );
-    // The owner's 373 MB file held 173 MB of session_events and ~200 MB the
+    // The 373 MB target includes 173 MB of session_events and ~200 MB the
     // fixture cannot attribute row-for-row (indexes, months of churn, deleted
     // history). The fixture reproduces the Session Event mass exactly and
     // reproduces the remaining physical file mass as free pages, which is what
     // churn actually leaves behind. It does not claim equivalent live content.
-    createChurnFreelist(db, preset, input.seed, db.pragma("page_size", { simple: true }));
+    createChurnFreelist(db, preset, input.seed, db.pragma("page_size", { simple: true }), clock);
     db.pragma("wal_checkpoint(TRUNCATE)");
     const physicalBytes = await physicalDatabaseBytes(db, paths.dbPath);
     // What the sidebar shows is the FOLDED title, not the row the generator
@@ -824,15 +1032,9 @@ export async function generateFixture(input) {
     // never renders. Ask the production projection what it will display and
     // publish that, so the runner never hard-codes a guess about the fold.
     const projectedLongChatTitle = (
-      await modules
-        .createSessionEngine({
-          ledger: modules.createSqliteSessionLedger(db),
-          clock: { now: () => BASE_TIME },
-          ids: { next: () => "manifest-id-not-used" },
-          onProjectionCheckpointFailure: modules.createCheckpointFailureReporter(),
-          yieldToHost: () => new Promise((done) => setImmediate(done)),
-        })
-        .getSession({ sessionId: sessionId(0) })
+      await fixtureEngine(modules, modules.createSqliteSessionLedger(db), clock).getSession({
+        sessionId: sessionId(0),
+      })
     )?.session?.title;
     if (typeof projectedLongChatTitle !== "string" || projectedLongChatTitle.length === 0) {
       throw new Error("long Session projection produced no title for the manifest");
@@ -844,7 +1046,9 @@ export async function generateFixture(input) {
       schemaVersion: FIXTURE_SCHEMA_VERSION,
       preset: input.preset,
       seed: input.seed,
-      generatedAt: new Date(BASE_TIME).toISOString(),
+      // The generation clock, to the millisecond. With the seed it is the
+      // whole recipe: `--seed N --clock <generatedAt>` rebuilds this database.
+      generatedAt: new Date(clock).toISOString(),
       databaseSchemaVersion: db.pragma("user_version", { simple: true }),
       projectId: PROJECT_ID,
       projectPrefix: PROJECT_PREFIX,
@@ -862,6 +1066,9 @@ export async function generateFixture(input) {
       },
       workspaceTickets: [ticketId(0), switchTicketId],
       counts: { ...preset },
+      // Which sidebar band each Session was generated into, at `generatedAt`,
+      // and until when that holds without new input (VC-415).
+      recency: recency.summary,
       busiestSessionEvents: Math.max(...eventAllocation),
       eventDistribution: eventDistribution(eventAllocation),
       eventAllocationSha256: createHash("sha256")
@@ -919,6 +1126,133 @@ export async function localizeFixture(profileDirectory) {
   await mkdir(paths.worktreeRoot, { recursive: true });
   await Promise.all(worktreePaths.map((path) => mkdir(path, { recursive: true })));
   return paths;
+}
+
+/**
+ * A read-only Session engine over the fixture, dated at its generation clock.
+ * Every reader here (the manifest's title projection, verification, the
+ * sidebar input) only folds; the id source exists because the engine needs
+ * one, and a read that ever minted an id would be a bug worth seeing.
+ */
+function fixtureEngine(modules, ledger, clock) {
+  return modules.createSessionEngine({
+    ledger,
+    clock: { now: () => clock },
+    ids: { next: () => "fixture-read-id-not-used" },
+    onProjectionCheckpointFailure: modules.createCheckpointFailureReporter(),
+    yieldToHost: () => new Promise((done) => setImmediate(done)),
+  });
+}
+
+/**
+ * The manifest's band claims, re-derived from the production fold at the
+ * recorded clock: how old each Session's `lastActivityAt` is, and which
+ * Sessions carry an unread receipt. A change to the event mix that moved a
+ * Session's recency (a new kind the fold dates by, say) fails here instead of
+ * quietly emptying a band again.
+ */
+async function verifyRecency(db, engine, manifest, clock) {
+  if (manifest.recency === undefined) {
+    throw new Error("fixture predates its generation clock (VC-415); regenerate it");
+  }
+  const { activeQuietWindowMs, previousMaxAgeMs } = manifest.recency;
+  const roster = await engine.listSessions({ projectId: PROJECT_ID, scope: "all" });
+  const sessions = { active: 0, previous: 0, agedOut: 0 };
+  const activeIds = [];
+  for (const projection of roster) {
+    const age = clock - projection.lastActivityAt;
+    if (age < 0) throw new Error(`${projection.session.id} is dated after the generation clock`);
+    if (age < activeQuietWindowMs) {
+      sessions.active += 1;
+      activeIds.push(projection.session.id);
+    } else if (age < previousMaxAgeMs) sessions.previous += 1;
+    else sessions.agedOut += 1;
+  }
+  if (JSON.stringify(sessions) !== JSON.stringify(manifest.recency.sessions)) {
+    throw new Error(
+      `fixture recency differs: expected ${JSON.stringify(manifest.recency.sessions)}, got ${JSON.stringify(sessions)}`,
+    );
+  }
+  const unreadIds = db
+    .prepare(
+      "SELECT session_id AS id FROM session_read_receipts WHERE unread_since IS NOT NULL ORDER BY session_id",
+    )
+    .all()
+    .map((row) => row.id);
+  if (JSON.stringify(unreadIds) !== JSON.stringify(activeIds.toSorted())) {
+    throw new Error(
+      `unread receipts ${JSON.stringify(unreadIds)} are not exactly the Active Sessions ${JSON.stringify(activeIds.toSorted())}`,
+    );
+  }
+  return { sessions, unreadSessions: unreadIds.length, stableUntil: manifest.recency.stableUntil };
+}
+
+/**
+ * Refuses a fixture whose sidebar bands will not hold for a whole run. Bands
+ * are relative to the generation clock, so a reused profile drifts: past
+ * `stableUntil` its oldest Previous rows have aged out, and a run against it
+ * would measure a shorter band than its manifest describes. `runMarginMs` is
+ * how long the caller expects to be measuring.
+ */
+export function assertFixtureBandsCurrent(manifest, now, runMarginMs = 0) {
+  const stableUntil = Date.parse(manifest.recency?.stableUntil ?? "");
+  if (!Number.isFinite(stableUntil)) {
+    throw new Error("fixture predates its generation clock (VC-415); regenerate it");
+  }
+  // The bands must hold until the run ENDS, not only when it starts.
+  if (now + runMarginMs >= stableUntil) {
+    throw new Error(
+      `fixture generated at ${manifest.generatedAt} holds its sidebar bands only until ${manifest.recency.stableUntil}, inside this run's ${Math.round(runMarginMs / 60_000)} min margin; regenerate it`,
+    );
+  }
+}
+
+/**
+ * What the sidebar is handed for this fixture, read through the production
+ * listing path main serves it from: the bounded project Session listing (as
+ * `volli:session-list` answers it), the board's tickets, and their column
+ * entry times. No executor is bound, which is what a fresh launch sees.
+ * `fixture.test.mjs` feeds this to the renderer's `buildActiveSessionListing`.
+ */
+export async function readFixtureSidebarInput(outputDirectory) {
+  const paths = fixturePaths(outputDirectory);
+  const manifest = JSON.parse(await readFile(paths.manifestPath, "utf8"));
+  const clock = Date.parse(manifest.generatedAt);
+  const modules = await loadProductionModules();
+  let db;
+  try {
+    const [ticketsRepo, eventsRepo] = await Promise.all([
+      modules.vite.ssrLoadModule(
+        resolve(APP_DIR, "../../packages/host-core/src/db/tickets-repo.ts"),
+      ),
+      modules.vite.ssrLoadModule(
+        resolve(APP_DIR, "../../packages/host-core/src/db/events-repo.ts"),
+      ),
+    ]);
+    db = modules.openVolliDb(paths.dbPath);
+    const engine = fixtureEngine(modules, modules.createSqliteSessionLedger(db), clock);
+    const listing = modules.boundedSessionListing(
+      await modules.projectSessionListing(
+        {
+          db,
+          listSessions: (query) => engine.listSessions(query),
+          liveAttachmentIds: () => new Set(),
+        },
+        PROJECT_ID,
+      ),
+    );
+    return {
+      clock,
+      recency: manifest.recency,
+      rows: listing.sessions,
+      omitted: listing.omitted,
+      tickets: ticketsRepo.listTicketsByProject(db, PROJECT_ID),
+      statusEntries: eventsRepo.listTicketStatusEntries(db, PROJECT_ID),
+    };
+  } finally {
+    db?.close();
+    await modules.vite.close();
+  }
 }
 
 function tableCount(db, table) {
@@ -1016,14 +1350,10 @@ export async function verifyFixture(outputDirectory, expected = {}) {
       modules.shared.decodeSessionEventPayload(JSON.parse(row.payload), `session_events ${row.id}`);
       decodedEventCount += 1;
     }
+    const clock = Date.parse(manifest.generatedAt);
     const ledger = modules.createSqliteSessionLedger(db);
-    const engine = modules.createSessionEngine({
-      ledger,
-      clock: { now: () => BASE_TIME },
-      ids: { next: () => "verification-id-not-used" },
-      onProjectionCheckpointFailure: modules.createCheckpointFailureReporter(),
-      yieldToHost: () => new Promise((done) => setImmediate(done)),
-    });
+    const engine = fixtureEngine(modules, ledger, clock);
+    const recency = await verifyRecency(db, engine, manifest, clock);
     const projections = await engine.listSessions({
       projectId: PROJECT_ID,
       scope: "ticket",
@@ -1092,6 +1422,7 @@ export async function verifyFixture(outputDirectory, expected = {}) {
       decodedEventCount,
       busiestSessionEvents: busiest.count,
       longProjectionModel: longProjection.modelSelection,
+      recency,
       firstArtifactMessageId: artifact.message.id,
       manifestSha256: createHash("sha256")
         .update(await readFile(paths.manifestPath))
@@ -1131,6 +1462,7 @@ async function main() {
     seed: args.seed,
     outputDirectory,
     force: args.force,
+    clock: args.clock,
   });
   const verification = args.verify
     ? await verifyFixture(outputDirectory, { preset: args.preset })

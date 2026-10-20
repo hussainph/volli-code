@@ -32,7 +32,7 @@
  * or a push after the view moved — so a switch on this page cannot show a
  * value the database did not accept. The push matters for the fault half: a
  * delivery failure lands in the background at whatever moment the OS refuses
- * an alert, and this page may already be open when it does (round 5). It
+ * an alert, and this page may already be open when it does (while notifications arrive). It
  * subscribes first and reads second, like every other primed surface, so a
  * push that lands between the two is not lost.
  */

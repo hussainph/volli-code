@@ -29,12 +29,14 @@ import type {
   AgentResponse,
   AuthorityPolicy,
   DoctorFacts,
+  HarnessId,
   ModelAccessSnapshot,
   Project,
   PromptResource,
   SessionActivityState,
   SessionProjection,
   SessionRecord,
+  SessionReadVerb,
   SessionRole,
   SessionEnvRepair,
   SessionEnvReport,
@@ -46,16 +48,18 @@ import type {
   HarnessEventNotice,
   SessionHarnessNotice,
   SessionStartedNotice,
-  TicketMovedNotice,
 } from "@volli/shared";
 
 import type { NotificationOutcome, NotificationRequest } from "@volli/shared";
-import type { AutoTitleRequest } from "@volli/host-core/session-runtime/auto-title";
-import type { Sessions } from "@volli/host-core/session-runtime/sessions";
-import type { BusyWorktreeSites } from "@volli/host-core/worktree/activity";
-import type { RunGit, RunGitAsync } from "@volli/host-core/worktree";
+import type { AutoTitleRequest } from "../session-runtime/auto-title";
+import type { Sessions } from "../session-runtime/sessions";
+import type { HandlerPolicy, HostHandlerMap } from "../handlers/handler-map";
+import type { RunGitAsync } from "../worktree";
+import type { VerifyOperatorToken } from "./resolution";
 
 export interface AgentCommandServiceOptions {
+  /** Execution venue for host-issued Session facts; desktop keeps local. */
+  venue?: import("@volli/shared").SessionExecutionVenue;
   db: Database.Database;
   /** The app composition root's one durable Session Engine. */
   sessionEngine: SessionEngine;
@@ -63,16 +67,11 @@ export interface AgentCommandServiceOptions {
   now?: () => number;
   newId?: () => string;
   /**
-   * The git runner the read-only worktree commands execute through. All git
-   * calls stay inside the worktree module (CONCEPT #42); this seam only lets
-   * tests substitute a scripted runner. Defaults to {@link runGitCapturing}.
-   */
-  git?: RunGit;
-  /**
-   * The non-blocking git runner for verbs that can execute user-configured
-   * hooks or scan complete Change Sets. Defaults to {@link runGitCapturingAsync}
-   * and is separate from {@link git} so a caller cannot accidentally put a
-   * long-running child back onto Electron main.
+   * The git runner every worktree verb executes through — the non-blocking
+   * one. All git calls stay inside the worktree module (CONCEPT #42); this seam
+   * only lets tests substitute a scripted runner. Defaults to
+   * {@link runGitCapturingAsync}. There is no synchronous runner here, so a
+   * verb cannot put a git child back onto Electron main's thread (VC-786).
    */
   gitAsync?: RunGitAsync;
   /**
@@ -80,7 +79,7 @@ export interface AgentCommandServiceOptions {
    * threaded into the worktree read verbs' disk-existence seam so a stamped-
    * but-deleted directory refuses with INVALID_REQUEST rather than letting
    * status.ts's errs-dirty fallback report `uncommitted: true` for a tree that's
-   * gone. Same seam shape as {@link git} — defaults to {@link existsSync}; tests
+   * gone. The same kind of seam as {@link gitAsync} — defaults to {@link existsSync}; tests
    * substitute a scripted predicate.
    */
   worktreeExists?: (path: string) => boolean;
@@ -166,7 +165,7 @@ export interface AgentCommandServiceOptions {
   }) => Promise<void>;
   /**
    * Fires one model-call title refinement (VC-81) behind a kickoff-derived
-   * heuristic title, on the owner's ladder — utility default, then the
+   * heuristic title, using the model ladder — utility default, then the
    * Session's own model, then the Role's default. Never fires for an
    * explicit `--title` (that is already a person's choice), and never
    * rejects: the heuristic is the fallback the titler keeps on failure.
@@ -180,14 +179,15 @@ export interface AgentCommandServiceOptions {
    * action is the only door into the new session's tab.
    */
   onSessionStarted?: (notice: SessionStartedNotice) => void;
-  /** The same busy-worktree guard as IPC; Done trims must never remove live dependencies. */
-  busyWorktreeSites?: BusyWorktreeSites;
   /**
-   * Interrupts every live agent attachment of a ticket after a committed
-   * backward move. Its command and receipt are Session evidence; Esc leaves
-   * the terminal attachment alive. Absent (tests) means a no-op.
+   * The host's handler map (VC-668), as far as this door projects it: every
+   * verb that is also a catalog command is bound in `table.ts` as a
+   * projection of `handlers[key]`, never as a handler of its own. A Done
+   * move's trim, its interrupts and its armed arrival therefore belong to the
+   * handler, which the composition root built once for every door. The
+   * projection invokes it only under {@link AgentCommandContext.handlerPolicy}.
    */
-  interruptTicketSessions?: (ticketId: string) => string[] | Promise<string[]>;
+  handlers: HostHandlerMap;
   /**
    * Called after a socket command COMMITS a planning mutation, with the exact
    * ticket it resolved and touched — the scope index.ts broadcasts as
@@ -198,18 +198,6 @@ export interface AgentCommandServiceOptions {
    * Absent (tests) means the broadcast is a no-op.
    */
   onMutation?: (change: Omit<DataChangedEvent, "entity">) => void;
-  /**
-   * Called after `ticket.move` COMMITS a real column change, carrying the
-   * before/after fact main's pending-arrival coordinator cannot reconstruct
-   * afterward (VC-226).
-   *
-   * Separate from {@link AgentCommandOptions.onMutation}, which only tells
-   * renderers to re-read planning data. CONTEXT.md makes an explicit `volli
-   * ticket move` a Deliberate move with the same semantics as a drag, so this
-   * seam creates the same one durable countdown even when no renderer exists.
-   * Never called for a same-column no-op. Absent in tests means no observer.
-   */
-  onDeliberateMove?: (notice: TicketMovedNotice) => void;
   /**
    * Called for every canonical harness event this door ingests (harness-events),
    * after any session-record write it implies has committed — the notice
@@ -255,6 +243,28 @@ export interface AgentCommandServiceOptions {
    */
   verifySessionToken?: (token: string | undefined) => string | null;
   /**
+   * Verifies a hostd-issued operator token (VC-623), answering who it was
+   * issued for or `null`.
+   *
+   * Absent means this host accepts none — desktop, which issues none — so a
+   * request carrying one is the unauthenticated actor, exactly as it would be
+   * without it. Reached only by a request with no Session evidence at all
+   * (`presentedOperatorToken`), so it can never change how a Session's request
+   * is judged.
+   */
+  verifyOperatorToken?: VerifyOperatorToken;
+  /**
+   * How `project.add` detects a new project's base branch (VC-623). Defaults
+   * to the same async detector the app's Add Project uses; tests script it.
+   */
+  detectBaseBranch?: (path: string) => Promise<string | null>;
+  /**
+   * Called once for every write an operator token was presented for, after it
+   * was answered: who, which verb, and how it ended (VC-623). The host's audit
+   * line. Never handed the token itself.
+   */
+  onOperatorWrite?: (record: OperatorWriteRecord) => void;
+  /**
    * Reads one project's resolved authority policy for the admission gate
    * (VC-163).
    *
@@ -276,8 +286,29 @@ export interface AgentCommandServiceOptions {
   skillsIndex?: (projectId: string) => Promise<PromptResource | null>;
 }
 
+/** One operator write, as {@link AgentCommandServiceOptions.onOperatorWrite} reports it. */
+export interface OperatorWriteRecord {
+  /** The login the token was issued for. */
+  readonly login: string;
+  readonly cmd: string;
+  readonly ok: boolean;
+  /** The refusal's code when `ok` is false. */
+  readonly code: AgentErrorCode | null;
+}
+
 export interface AgentCommandService {
   execute(request: AgentRequest): Promise<AgentResponse>;
+  /**
+   * One of the socket's Session reads for a caller bound to ONE Workspace
+   * (the host protocol's WebSocket, VC-663): the same handler `execute`
+   * runs, with its roster forced to that project. Another Workspace's
+   * Session answers `SESSION_NOT_FOUND`, exactly as an absent one does.
+   */
+  executeInWorkspace(
+    verb: SessionReadVerb,
+    workspaceId: string,
+    args: Record<string, unknown>,
+  ): Promise<AgentResponse>;
 }
 
 /**
@@ -296,6 +327,16 @@ export interface EnvSessionIdentity {
 }
 
 /**
+ * A launch a wrapper minted a harness session id for, held until the harness
+ * proves the launch happened (VC-807). Until then it is a promise, not a fact:
+ * `claude --version` mints too, and never starts a session.
+ */
+export interface PendingHarnessLaunch {
+  readonly harnessId: HarnessId;
+  readonly harnessSessionId: string;
+}
+
+/**
  * The service state and request-scoped snapshot one verb handler runs against.
  *
  * `options` is the composition root verbatim, because most of what a handler
@@ -311,8 +352,6 @@ export interface AgentCommandContext {
   readonly now: () => number;
   /** {@link AgentCommandServiceOptions.newId}, defaulted to `randomUUID`. */
   readonly newId: () => string;
-  /** {@link AgentCommandServiceOptions.git}, defaulted to `runGitCapturing`. */
-  readonly git: RunGit;
   /** {@link AgentCommandServiceOptions.gitAsync}, defaulted to `runGitCapturingAsync`. */
   readonly gitAsync: RunGitAsync;
   /** {@link AgentCommandServiceOptions.worktreeExists}, defaulted to `existsSync`. */
@@ -335,6 +374,12 @@ export interface AgentCommandContext {
    * Session are exactly what it exists to serialize.
    */
   readonly terminalUpdateLocks: Map<string, Promise<void>>;
+  /**
+   * The launch each Session's wrapper last minted an id for and that has not
+   * yet proved itself — see `sessionHarnessVerb`. Service-lived: the mint and
+   * the startup hook that confirms it arrive on separate requests.
+   */
+  readonly pendingLaunches: Map<string, PendingHarnessLaunch>;
   /** Every registered project, listed once per request. */
   readonly projects: readonly Project[];
   /**
@@ -396,10 +441,11 @@ export interface AgentCommandContext {
    * Who to ATTRIBUTE this caller's writes to, decided once by the dispatch
    * (VC-163).
    *
-   * Either the authenticated session actor its token proves, or
-   * `unauthenticated`. Never `user`: a socket call cannot establish that a
-   * person made it, and attributing one anyway is the grant-by-absence VC-92
-   * §6.3 ruled dead.
+   * The authenticated session actor its token proves, `user` when a
+   * hostd-issued operator token proves the person (VC-623, VC-92 §6.3's
+   * amendment), or `unauthenticated`. Never `user` on absence: a socket call
+   * without that proof cannot establish that a person made it, and attributing
+   * one anyway is the grant-by-absence VC-92 §6.3 ruled dead.
    *
    * Handlers read this rather than deriving their own, so the actor a write is
    * ATTRIBUTED to is by construction the same actor the admission gate
@@ -415,6 +461,13 @@ export interface AgentCommandContext {
    * judged them: that runs off the token alone.
    */
   readonly actor: TicketEventActor | null;
+  /**
+   * This request's policy at the handler map (VC-668): a projected verb
+   * reaches `handlers[key]` only through it. It judges the socket's own
+   * coordination policy for this request again, at the map, and admits only
+   * the key this request's verb projects.
+   */
+  readonly handlerPolicy: HandlerPolicy;
 }
 
 /**

@@ -30,9 +30,9 @@ import {
 } from "@volli/shared";
 
 import { materializeBlobs } from "../blob-materialize";
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { recordTicketEvent } from "../db/events-repo";
+import { getProjectById } from "../db/projects-repo";
+import { getTicketRow } from "../db/tickets-repo";
 import { updateTicketFieldsCommand } from "../ticket-commands";
 import { refExists, resolveBaseBranch } from "./base";
 import { GitError, stderrOf } from "./git";
@@ -42,7 +42,7 @@ import { copyIncludedFiles } from "./include";
 import { setPhase } from "./phase";
 import { reconcile } from "./reconcile";
 import { withRepositoryWorktreeTurn } from "./repository-turn";
-import { err, ok, type RunGitAsync, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type RunGitAsync, type WorktreePorts, type WorktreeResult } from "./types";
 
 /**
  * The success value of `ensure`: the resolved identity plus whether THIS run
@@ -73,7 +73,7 @@ type Stage = "create" | "copy" | "attachments";
 
 /** Records the failure event + phase, returns the typed error Result. */
 function fail(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
   stage: Stage,
   message: string,
@@ -104,7 +104,11 @@ async function addWorktree(
   try {
     await runAdd();
   } catch (first) {
-    // Vibe Kanban: a stale registration can defeat the first add; prune + one retry.
+    // A deadline is not a stale registration: retrying would run the whole
+    // checkout again inside the repository's turn, and git has already
+    // cleaned up after the stopped one.
+    if (first instanceof GitError && first.timedOut) throw first;
+    // A stale registration can defeat the first add; prune and retry once.
     try {
       await git(["worktree", "prune"], projectPath);
       await runAdd();
@@ -115,7 +119,7 @@ async function addWorktree(
 }
 
 async function runEnsure(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
 ): Promise<WorktreeResult<EnsureOutcome>> {
   const ticket = getTicketRow(deps.db, ticketId);
@@ -191,10 +195,14 @@ async function runEnsure(
         addWorktree(git, project.path, addArgs, prune),
       );
     } catch (caught) {
+      // A timeout is reported as one: the stderr of a stopped add is git's own
+      // "Preparing worktree" line and progress, which names no cause.
       const message =
-        caught instanceof GitError && caught.stderr.trim()
-          ? caught.stderr.trim()
-          : "git worktree add failed";
+        caught instanceof GitError && caught.timedOut
+          ? caught.message
+          : caught instanceof GitError && caught.stderr.trim()
+            ? caught.stderr.trim()
+            : "git worktree add failed";
       return fail(deps, ticketId, "create", message, stderrOf(caught));
     }
   }
@@ -265,7 +273,7 @@ async function runEnsure(
  * ticket joins the in-flight promise instead of running the pipeline twice.
  */
 export function ensure(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
 ): Promise<WorktreeResult<EnsureOutcome>> {
   const existing = inflight.get(ticketId);

@@ -18,8 +18,8 @@
  *
  * Spends real money through the developer's own Pi credentials, so it never
  * runs by default. Results print as tables and land as JSON beside this file,
- * in `results/phase2/` (phase 1's runs stay in `results/`), for the design
- * note.
+ * in `results/phase2/` (unpooled runs use `results/`). Generated run data is
+ * local output, not repository content.
  */
 
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";

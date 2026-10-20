@@ -171,6 +171,19 @@ describe("createActiveTargetRegistry — focused Sessions (VC-30)", () => {
     expect(onFocusedSessions).toHaveBeenLastCalledWith(new Set());
   });
 
+  it("treats no window at all as nothing focused — a menu-bar host still alerts (VC-577)", () => {
+    // Menu-bar mode destroys every window; a stale report must not outlive it.
+    let windows = [fakeWindow(1, { focused: true })];
+    const registry = createActiveTargetRegistry({ windows: () => windows });
+    registry.report(1, target("s1"));
+    expect(registry.focusedSessionIds()).toEqual(new Set(["s1"]));
+
+    windows = [];
+
+    expect(registry.focusedTargets()).toEqual([]);
+    expect(registry.focusedSessionIds()).toEqual(new Set());
+  });
+
   it("works with no listener at all", () => {
     const windows = [fakeWindow(1, { focused: true })];
     const registry = createActiveTargetRegistry({ windows: () => windows });

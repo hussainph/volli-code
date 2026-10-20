@@ -1,16 +1,13 @@
 import type Database from "better-sqlite3";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  createFixtureProfile,
-  FIXTURE_NATIVE_USAGE_EVENT_ID,
-} from "@volli/host-core/backup/test-fixture";
+import { createFixtureProfile, FIXTURE_NATIVE_USAGE_EVENT_ID } from "@volli/host-core/testing";
 import {
   assertSessionStorageContentUnchanged,
   computeSessionStorageContentDigest,
   computeSessionStorageContentDigestAtPath,
   type SessionStorageContentDigest,
-} from "@volli/host-core/db/session-storage-digest";
+} from "@volli/host-core/db";
 
 type DigestTable = keyof SessionStorageContentDigest;
 

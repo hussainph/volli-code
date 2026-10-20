@@ -94,6 +94,9 @@ try {
     "/packages/host-core/src/session-concurrency.ts",
   );
   const commandsModule = await vite.ssrLoadModule("/packages/host-core/src/agent-commands.ts");
+  const handlersModule = await vite.ssrLoadModule(
+    "/packages/host-core/src/testing/host-handlers.ts",
+  );
 
   db = openVolliDb(join(temporaryDirectory, "volli.db"));
   for (let index = 0; index < PROJECT_COUNT; index += 1) {
@@ -236,6 +239,8 @@ try {
 
   // ── Arm 2: a load verb through the CLI door ─────────────────────────────
   const service = commandsModule.createAgentCommandService({
+    // The host's handler map (VC-668); `ticket.list` never reaches it.
+    handlers: handlersModule.testHostHandlers({ db }),
     db,
     appVersion: "bench",
     sessionEngine: engine,

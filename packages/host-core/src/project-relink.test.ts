@@ -14,18 +14,14 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import type { AgentRequest } from "@volli/shared";
 
-import { insertProject, getProjectById, listProjects } from "@volli/host-core/db/projects-repo";
-import { projectForCreate } from "@volli/host-core/agent-dispatch/resolution";
-import {
-  insertTicket,
-  listTicketsByProject,
-  listWorktreePathsByProject,
-} from "@volli/host-core/db/tickets-repo";
-import { openTestDb, testProject, testTicket } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
-import { scriptedGit } from "@volli/host-core/worktree/scripted-git";
-import { inspectProjectFolder, relinkProject } from "@volli/host-core/project-relink";
-import type { FolderProbe, ProjectRelinkDeps } from "@volli/host-core/project-relink";
+import { detachProject, insertProject, getProjectById, listProjects } from "./db/projects-repo";
+import { projectForCreate } from "./agent-dispatch/resolution";
+import { insertTicket, listTicketsByProject, listWorktreePathsByProject } from "./db/tickets-repo";
+import { openTestDb, testProject, testTicket } from "./db/test-helpers";
+import type { TestDb } from "./db/test-helpers";
+import { scriptedGit } from "./worktree/scripted-git";
+import { inspectProjectFolder, relinkProject } from "./project-relink";
+import type { FolderProbe, ProjectRelinkPorts } from "./project-relink";
 
 let ctx: TestDb;
 
@@ -43,7 +39,7 @@ function present(folder: string): FolderProbe {
  * nothing is accidentally read as the same directory — and whose git and
  * directory moves always succeed.
  */
-function deps(overrides: Partial<ProjectRelinkDeps> = {}): ProjectRelinkDeps {
+function deps(overrides: Partial<ProjectRelinkPorts> = {}): ProjectRelinkPorts {
   return {
     db: ctx.db,
     probeFolder: async (path) => present(`dev:${path}`),
@@ -98,6 +94,25 @@ describe("relinkProject", () => {
     });
     expect(getProjectById(ctx.db, "p1")?.path).toBe("/Users/me/volli");
     expect(getProjectById(ctx.db, "p2")?.path).toBe("/Users/me/atlas");
+  });
+
+  // VC-822: a removed project is detached, not deleted, and keeps its path for
+  // its return. Relinking onto it used to fail on the path's UNIQUE constraint.
+  it("refuses the folder of a removed project, naming it, and changes nothing", async () => {
+    ctx = openTestDb();
+    insertProject(ctx.db, testProject({ id: "p1", name: "Volli", path: "/Users/me/volli" }));
+    insertProject(ctx.db, testProject({ id: "p2", name: "Old", path: "/Users/me/old" }));
+    detachProject(ctx.db, "p2", 5);
+
+    const outcome = await relinkProject(deps(), { projectId: "p1", path: "/Users/me/old" });
+
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: "claimed",
+      error: "This folder belongs to Old, which was removed. Add it again instead.",
+    });
+    expect(getProjectById(ctx.db, "p1")?.path).toBe("/Users/me/volli");
+    expect(getProjectById(ctx.db, "p2")?.path).toBe("/Users/me/old");
   });
 
   // macOS is case-insensitive by default, so these two paths name ONE folder.

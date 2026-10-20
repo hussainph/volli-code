@@ -181,13 +181,18 @@ export class BrowserAgentCoordinator {
   }
 
   /**
-   * Releases one attachment's controllers after all of its internal work,
-   * including input cleanup, has settled. The shared debugger is detached only
-   * after the last attachment leaves the tab.
+   * Releases one attachment's controllers after its internal work and each
+   * tab's queued input and lifecycle barriers have settled. The shared debugger
+   * is detached only after the last attachment leaves the tab.
    */
   releaseOwner(owner: string, released: () => void): void {
     const owned = [...this.#tabs].filter(([, state]) => state.owners.has(owner));
-    const current = owned.flatMap(([, state]) => [...(state.workByOwner.get(owner) ?? [])]);
+    // Lifecycle barriers and other attachments' input share this tab too.
+    // Draining only this owner's work could detach or destroy through them.
+    const current = owned.flatMap(([, state]) => [
+      ...(state.workByOwner.get(owner) ?? []),
+      ...(state.busy > 0 ? [state.tail] : []),
+    ]);
     const finish = (): void => {
       for (const [tabId, state] of owned) {
         state.controllers.get(owner)?.dispose();

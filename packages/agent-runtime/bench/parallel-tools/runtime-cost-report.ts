@@ -369,9 +369,8 @@ export function buildRuntimeCostReport(
 /**
  * Above this relative standard deviation a figure is describing the machine,
  * not the code, and must not be quoted as a result. A shared machine under
- * load routinely puts these benchmarks past it, which is the failure this
- * exists to make visible: a quiet-looking table with a noisy figure in it is
- * how a wrong number ends up in a design note.
+ * load routinely puts these benchmarks past it. The report must identify
+ * noisy samples so an apparently precise table does not support a false claim.
  */
 const QUOTABLE_RSD = 0.2;
 

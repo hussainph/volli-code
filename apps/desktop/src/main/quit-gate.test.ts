@@ -18,6 +18,7 @@ import {
   updateInstallQuitInFlight,
 } from "./quit-gate";
 import { registerAgentSocketWillQuit } from "./agent-socket-quit";
+import { prepareDesktopQuit } from "./host-runtime";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -249,71 +250,112 @@ describe("registerAcceptedQuitCoordinator", () => {
     });
   }
 
-  it("forces one accepted quit after the shutdown deadline and observes late settlements", async () => {
-    vi.useFakeTimers();
-    const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
-    let finishSessions!: () => void;
-    let failSocket!: (error: unknown) => void;
-    const shutdownNativeSessions = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          finishSessions = resolve;
-        }),
-    );
-    const shutdownAgentSocket = vi.fn(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          failSocket = reject;
-        }),
-    );
-    const reportFailure = vi.fn();
-    const exit = vi.fn();
-    registerAcceptedQuitCoordinator({
-      lifecycle: {
-        on(event, listener) {
-          handlers.set(event, listener);
+  it.each([false, true])(
+    "forces one accepted quit after the shutdown deadline (throwing diagnostic: %s) and observes late settlements",
+    async (throws) => {
+      vi.useFakeTimers();
+      const onShutdownDeadline = vi.fn(() => {
+        if (throws) throw new Error("diagnostic failed");
+      });
+      const handlers = new Map<string, (event: { preventDefault(): void }) => void>();
+      let finishSessions!: () => void;
+      let failSocket!: (error: unknown) => void;
+      const shutdownNativeSessions = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishSessions = resolve;
+          }),
+      );
+      const shutdownAgentSocket = vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failSocket = reject;
+          }),
+      );
+      const reportFailure = vi.fn();
+      const exit = vi.fn();
+      registerAcceptedQuitCoordinator({
+        lifecycle: {
+          on(event, listener) {
+            handlers.set(event, listener);
+          },
+          exit,
         },
-        exit,
-      },
-      shutdownNativeSessions,
-      shutdownAgentSocket,
-      shutdownDeadlineMs: 25,
-      reportFailure,
-    });
+        shutdownNativeSessions,
+        shutdownAgentSocket,
+        shutdownDeadlineMs: 25,
+        onShutdownDeadline,
+        reportFailure,
+      });
 
-    const first = { preventDefault: vi.fn() };
-    handlers.get("before-quit")?.(first);
-    await vi.advanceTimersByTimeAsync(0);
-    const repeated = { preventDefault: vi.fn() };
-    handlers.get("before-quit")?.(repeated);
+      const first = { preventDefault: vi.fn() };
+      handlers.get("before-quit")?.(first);
+      await vi.advanceTimersByTimeAsync(0);
+      const repeated = { preventDefault: vi.fn() };
+      handlers.get("before-quit")?.(repeated);
 
-    expect(first.preventDefault).toHaveBeenCalledExactlyOnceWith();
-    expect(repeated.preventDefault).toHaveBeenCalledExactlyOnceWith();
-    expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
-    expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
-    expect(exit).not.toHaveBeenCalled();
+      expect(first.preventDefault).toHaveBeenCalledExactlyOnceWith();
+      expect(repeated.preventDefault).toHaveBeenCalledExactlyOnceWith();
+      expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+      expect(exit).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(25);
 
-    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
-      new Error("Application shutdown did not settle within 25ms."),
-    );
-    expect(exit).not.toHaveBeenCalled();
-    await vi.runOnlyPendingTimersAsync();
-    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(onShutdownDeadline).toHaveBeenCalledExactlyOnceWith(25);
+      expect(reportFailure).toHaveBeenCalledExactlyOnceWith(
+        new Error("Application shutdown did not settle within 25ms."),
+      );
+      expect(exit).not.toHaveBeenCalled();
+      await vi.runOnlyPendingTimersAsync();
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
 
-    finishSessions();
-    failSocket(new Error("late socket failure"));
-    await vi.advanceTimersByTimeAsync(0);
-    handlers.get("before-quit")?.({ preventDefault: vi.fn() });
-    await vi.advanceTimersByTimeAsync(25);
+      finishSessions();
+      failSocket(new Error("late socket failure"));
+      await vi.advanceTimersByTimeAsync(0);
+      handlers.get("before-quit")?.({ preventDefault: vi.fn() });
+      await vi.advanceTimersByTimeAsync(25);
 
-    expect(reportFailure).toHaveBeenNthCalledWith(2, new Error("late socket failure"));
-    expect(reportFailure).toHaveBeenCalledTimes(2);
-    expect(exit).toHaveBeenCalledTimes(1);
-    expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
-    expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
-  });
+      expect(reportFailure).toHaveBeenNthCalledWith(2, new Error("late socket failure"));
+      expect(reportFailure).toHaveBeenCalledTimes(2);
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(shutdownNativeSessions).toHaveBeenCalledTimes(1);
+      expect(shutdownAgentSocket).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "background-stop reporting cannot change an accepted quit (throwing reporter: %s)",
+    async (throws) => {
+      vi.useFakeTimers();
+      let quit!: (event: { preventDefault(): void }) => void;
+      const exit = vi.fn();
+      const failure = new Error("background stop failed");
+      const reportFailure = vi.fn(() => {
+        if (throws) throw new Error("reporter failed");
+      });
+      const shutdownNativeSessions = vi.fn(async () => {});
+      registerAcceptedQuitCoordinator({
+        lifecycle: {
+          on: (_event, listener) => {
+            quit = listener;
+          },
+          exit,
+        },
+        stopBackgroundWork: () => {
+          throw failure;
+        },
+        shutdownNativeSessions,
+        shutdownAgentSocket: async () => {},
+        reportFailure,
+      });
+      quit({ preventDefault: vi.fn() });
+      await vi.runAllTimersAsync();
+      expect(reportFailure).toHaveBeenCalledExactlyOnceWith(failure);
+      expect(shutdownNativeSessions).toHaveBeenCalledOnce();
+      expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+    },
+  );
 
   it("still forces an accepted quit when deadline failure reporting throws", async () => {
     vi.useFakeTimers();
@@ -539,6 +581,47 @@ describe("registerAcceptedQuitCoordinator", () => {
     expect(event.preventDefault).toHaveBeenCalled();
     expect(shutdownNativeSessions).not.toHaveBeenCalled();
     expect(shutdownAgentSocket).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+});
+
+describe("one host quit trigger", () => {
+  it("preserves synchronous producer, draft, terminal and repack ordering on cancellation", async () => {
+    const calls: string[] = [];
+    let trigger!: (event: { preventDefault(): void }) => void;
+    const shutdown = vi.fn(async () => {});
+    const exit = vi.fn();
+    registerAcceptedQuitCoordinator({
+      lifecycle: {
+        on: (_event, listener) => {
+          trigger = listener;
+        },
+        exit,
+      },
+      shutdownNativeSessions: shutdown,
+      shutdownAgentSocket: shutdown,
+      reportFailure: vi.fn(),
+      prepareQuit: (event) =>
+        prepareDesktopQuit(event, {
+          stopAutomations: () => {
+            calls.push("automations.stop");
+          },
+          unsavedQuit: (attempt) => {
+            calls.push("draft.gate");
+            refuseQuit(attempt);
+          },
+          terminalQuit: (attempt) => {
+            if (!quitAlreadyRefused(attempt)) calls.push("terminal.kill");
+          },
+          abortRepack: () => {
+            calls.push("repack.abort");
+          },
+        }),
+    });
+    trigger({ preventDefault: vi.fn() });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(calls).toEqual(["automations.stop", "draft.gate", "repack.abort"]);
+    expect(shutdown).not.toHaveBeenCalled();
     expect(exit).not.toHaveBeenCalled();
   });
 });

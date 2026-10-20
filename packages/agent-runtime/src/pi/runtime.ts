@@ -46,6 +46,9 @@ import {
   errorMessage,
   isActivityKind,
   isMcpToolId,
+  isCodeCallable,
+  isDeclaredRoute,
+  routeOf,
   isPromptResource,
   NOOP_OBSERVABILITY_SINK,
   ObservabilityReducer,
@@ -95,6 +98,11 @@ import {
 import { createContextTokenProjector } from "./token-counting";
 import { conversationIsEmpty, systemHead, withSystemHead } from "./transcript-context";
 import {
+  canAnnounceToolRefresh,
+  toolRefreshId,
+  toolRefreshMessage,
+} from "./tool-refresh-announcements";
+import {
   ANTHROPIC_COMPACT_BETA,
   nativeCompactionAvailable,
   providerCompactionFromDetails,
@@ -128,12 +136,14 @@ import { providerReasoningDropped, withoutReasoning } from "./reasoning";
 import { migrateLegacySidecar } from "./sidecar-migration";
 import { MAIN_BRANCH, SIDECAR_IDENTITY, type SidecarIdentity } from "./sidecar-storage";
 import { createSessionTools, type CodeModeBuilder } from "./tools";
+import { retainOmitted, sameToolSpec } from "./refresh-tools";
 import { privateSecretExecution } from "./secrets";
 import { CodeModeJournal } from "../codemode/journal";
 import {
   createCodeModeTool,
   type CodeModeSandboxAssets,
   type NestedToolEvent,
+  type SurfaceTool,
 } from "../codemode/tool";
 import {
   savedOutputDirectoriesIn,
@@ -221,6 +231,11 @@ const COMPACTION_WORK_REASON_VALUES: readonly CompactionWorkReason[] = PI_COMPAC
 export interface PiRuntimeHostOptions {
   /** Directory that owns every attachment's Pi JSONL recovery sidecar. */
   sessionDataDir: string;
+  /** Code Mode transcript pictures use the host's bounded screenshot store. */
+  persistActivityImage?: (
+    sessionId: string,
+    image: { data: string; mimeType: string },
+  ) => string | null;
   /**
    * The Pi model collection this host runs on.
    *
@@ -345,6 +360,7 @@ export interface PiRuntimeHostOptions {
 /** Everything {@link attachSession} needs, with the default already chosen. */
 interface PiRuntimeHost {
   sessionDataDir: string;
+  persistActivityImage: PiRuntimeHostOptions["persistActivityImage"];
   /** One bound across every attachment's saved tool output (VC-469). */
   toolOutputLedger: ToolOutputLedger;
   parallelMcpReads: boolean;
@@ -403,6 +419,7 @@ export function createPiAgentRuntime(options: PiRuntimeHostOptions): AgentRuntim
   const access = resolveModelAccess(options);
   const host: PiRuntimeHost = {
     sessionDataDir: options.sessionDataDir,
+    persistActivityImage: options.persistActivityImage,
     toolOutputLedger: new ToolOutputLedger({ dataDirectory: options.sessionDataDir }),
     parallelMcpReads: options.parallelMcpReads === true,
     codeModeSandbox: options.codeModeSandbox,
@@ -1906,6 +1923,44 @@ async function attachSession(
       nativeRoute,
     );
     const recoveredPath = replayable.path;
+    // The host can retire a question card, but the lost process cannot finish
+    // its ask_user tool call. Pair every replayable unanswered ask with a
+    // durable failed result before another provider request sees it. This is
+    // not a resolution: no choice or reply was obtained. Ordinary Pi messages
+    // keep the repair readable by older runtimes, and a second attach finds
+    // the result instead of repairing the same call again.
+    const unansweredQuestions = new Set<string>();
+    for (const message of contextMessages(recoveredPath)) {
+      if (message.role === "assistant") {
+        for (const block of (message as AssistantMessage).content) {
+          if (block.type === "toolCall" && block.name === "ask_user")
+            unansweredQuestions.add(block.id);
+        }
+      } else if (message.role === "toolResult") {
+        unansweredQuestions.delete(message.toolCallId);
+      }
+    }
+    for (const toolCallId of unansweredQuestions) {
+      const message: AgentMessage = {
+        role: "toolResult",
+        toolCallId,
+        toolName: "ask_user",
+        content: [
+          {
+            type: "text",
+            text: "The question was abandoned when the runtime restarted. No answer was obtained.",
+          },
+        ],
+        isError: true,
+        timestamp: host.now(),
+      };
+      const entryId = await mainBranch.appendMessage(message, attachContext);
+      const entry = await sidecar.getEntry(entryId, attachContext);
+      /* v8 ignore next -- appendMessage promises the message entry it returned. */
+      if (entry?.type !== "message")
+        throw new Error("Pi question recovery result was not persisted.");
+      recoveredPath.push(entry);
+    }
     const recoveredCompaction = recoveredPath.findLast((entry) => entry.type === "compaction");
     let nativeCompactionState =
       recoveredCompaction?.type === "compaction"
@@ -1936,7 +1991,9 @@ async function attachSession(
       if (observation.state === "raised") activeAttentionReasons.add(observation.reason);
       else activeAttentionReasons.delete(observation.reason);
     }
-    const persistObservation = async <T extends RecoverableMarker>(observation: T): Promise<T> => {
+    const persistObservation = async <T extends RecoverableMarker>(
+      observation: T,
+    ): Promise<T & { occurredAt: number; recoveryCursor: string }> => {
       const durable = JSON.parse(JSON.stringify(observation)) as T;
       // Refused at the write, not discovered at the read — with the same
       // predicate recovery applies, so writer and validator cannot drift. A
@@ -2016,13 +2073,19 @@ async function attachSession(
       activeAttentionReasons.add("runtime-failure");
     }
     for (const recoveredTurnId of openTurnIds) {
-      await persistObservation({
-        kind: "attention",
-        state: "raised",
-        reason: "partial-turn",
-        message: "A recovered Pi turn ended before its completion marker was committed.",
-      });
-      activeAttentionReasons.add("partial-turn");
+      // Attention identity is frozen per attachment/reason, not per notice.
+      // A generic restart warning must not replace an active diagnostic (such
+      // as conflicting settled history) with a warning the host may retire.
+      // Still interrupt every open turn even when its warning is already held.
+      if (!activeAttentionReasons.has("partial-turn")) {
+        await persistObservation({
+          kind: "attention",
+          state: "raised",
+          reason: "partial-turn",
+          message: "A recovered Pi turn ended before its completion marker was committed.",
+        });
+        activeAttentionReasons.add("partial-turn");
+      }
       await persistObservation({ kind: "turn", state: "interrupted", turnId: recoveredTurnId });
     }
     // A notice that the last process was reconnecting describes a wait no
@@ -2108,24 +2171,83 @@ async function attachSession(
     });
     // Nested calls reach the same tools, environment and host ports as direct calls.
     const codeModeJournal = new CodeModeJournal();
-    const buildCodeMode: CodeModeBuilder = (surface, surfaceTools) =>
+    let callableSurface: readonly SurfaceTool[] = [];
+    let liveCodeMode: ReturnType<typeof createCodeModeTool> | undefined;
+    let codeModeSurface = spec.tools.codeMode;
+    const codeModeFor = (
+      surface: NonNullable<SessionRuntimeSpec["tools"]["codeMode"]>,
+      surfaceTools: readonly SurfaceTool[],
+      input: SessionRuntimeSpec,
+    ) =>
       createCodeModeTool({
         surface,
         tools: surfaceTools,
         observe: (event) => observeToolActivity(event),
         journal: codeModeJournal,
-        // The same switch the Agent's own batches obey (VC-454).
         honourParallelReads: host.parallelMcpReads,
         output: toolOutput,
         sandbox: host.codeModeSandbox,
-        signal: spec.signal,
+        signal: input.signal,
         now: host.now,
       });
-    const { tools, toolExecution } = applyToolDispatch(
-      createSessionTools(spec, ownedToolEnv, toolOutput, buildCodeMode),
-      spec.tools.mcp ?? [],
-      host.parallelMcpReads,
-    );
+    const liveWrapper = (tool: ReturnType<typeof createCodeModeTool>) => ({
+      ...tool,
+      // The description belongs to the last cold subset, but execution always
+      // reaches the live effective registry, including additions between runs.
+      execute: async (id: string, params: unknown, signal?: AbortSignal) => {
+        await refreshTools("code-mode");
+        return liveCodeMode!.execute(id, params as { code: string }, signal);
+      },
+    });
+    const rebuildTools = (input: SessionRuntimeSpec, warm: boolean) => {
+      // Builders stage all changes locally. A declaration/dispatch failure must
+      // leave the applied spec and executable registry retryable together.
+      let stagedCallable = callableSurface;
+      let stagedSurface = codeModeSurface;
+      let stagedCodeMode = liveCodeMode;
+      const buildEffective: CodeModeBuilder = (surface, surfaceTools) => {
+        if (warm) {
+          const retained = new Map(callableSurface.map((entry) => [entry.id, entry]));
+          for (const entry of surfaceTools) {
+            if (
+              !retained.has(entry.id) &&
+              isCodeCallable(entry.id, routeOf(surface, entry.id)) &&
+              !isDeclaredRoute(routeOf(surface, entry.id))
+            )
+              retained.set(entry.id, entry);
+          }
+          stagedCallable = [...retained.values()];
+        } else {
+          stagedCallable = retainOmitted(callableSurface, surfaceTools, (entry) => entry.id);
+        }
+        stagedSurface = {
+          ...surface,
+          ...(warm && codeModeSurface !== undefined ? codeModeSurface : {}),
+          routes: warm
+            ? { ...surface.routes, ...codeModeSurface?.routes }
+            : { ...codeModeSurface?.routes, ...surface.routes },
+        };
+        stagedCodeMode = codeModeFor(stagedSurface, stagedCallable, input);
+        return liveWrapper(stagedCodeMode);
+      };
+      let declared = createSessionTools(input, ownedToolEnv, toolOutput, buildEffective);
+      if (input.declarationTools !== undefined) {
+        declared = createSessionTools(
+          input,
+          ownedToolEnv,
+          toolOutput,
+          (surface, surfaceTools) => liveWrapper(codeModeFor(surface, surfaceTools, input)),
+          input.declarationTools,
+        );
+      }
+      const rebuilt = applyToolDispatch(declared, input.tools.mcp ?? [], host.parallelMcpReads);
+      return { rebuilt, stagedCallable, stagedSurface, stagedCodeMode };
+    };
+    const initialTools = rebuildTools(spec, false);
+    callableSurface = initialTools.stagedCallable;
+    codeModeSurface = initialTools.stagedSurface;
+    liveCodeMode = initialTools.stagedCodeMode;
+    const { tools, toolExecution } = initialTools.rebuilt;
     // Composed here, once per attachment: the array is half of the Session's
     // Cache Prefix (VC-164), and a provider that orders tools ahead of the
     // system prompt throws the prompt away too when it changes. Reattachment
@@ -2134,6 +2256,9 @@ async function attachSession(
     // seam, where a host-side recomposition would actually show up.
 
     let turnId = randomUUID();
+    // Pi keeps isStreaming true while awaited agent_end observers settle, but
+    // its loop has already stopped accepting steering for that attempt.
+    let acceptingSteer = false;
     let failure: (RuntimeFailure & { stopDetail: SessionStopDetail }) | undefined;
     let closed = false;
     let cancelled = false;
@@ -2243,6 +2368,7 @@ async function attachSession(
       delivery: AcceptedMessageCommandMarker["delivery"];
       message: UserMessage;
       resources: readonly PromptResource[];
+      accepted?: () => void;
     };
     type PendingRetryDelivery = {
       commandId: string | null;
@@ -2282,6 +2408,24 @@ async function attachSession(
      */
     const pendingQueuedDeliveries = new Map<AgentMessage, PendingMessageDelivery>();
     const acceptedUserMessages = new WeakSet<UserMessage>();
+    // Command ids are the host's immutable intent identities. A replay after
+    // acceptance must acknowledge the same marker, never open another turn.
+    const acceptedMessageCommands = new Map(
+      recoveredMarkers.flatMap((marker) =>
+        marker.kind === "command-accepted" && marker.operation === "message.submit"
+          ? [[marker.commandId, marker.delivery] as const]
+          : [],
+      ),
+    );
+    const acceptedCommandTimes = new Map(
+      recoveredMarkers.flatMap((marker) =>
+        marker.kind === "command-accepted" ? [[marker.commandId, marker.occurredAt] as const] : [],
+      ),
+    );
+    const acceptanceTime = (commandId: string | undefined): { acceptedAt?: number } => {
+      const acceptedAt = commandId === undefined ? undefined : acceptedCommandTimes.get(commandId);
+      return acceptedAt === undefined ? {} : { acceptedAt };
+    };
     const persistAcceptedDelivery = async (
       delivery: PendingDelivery | undefined,
       acceptedTurnId: string,
@@ -2293,7 +2437,7 @@ async function attachSession(
         return false;
       }
       if (delivery.operation === "message.submit") {
-        await persistObservation({
+        const marker = await persistObservation({
           kind: "command-accepted",
           commandId: delivery.commandId,
           operation: delivery.operation,
@@ -2304,14 +2448,18 @@ async function attachSession(
           // distinguish typed absence from a user-authored delimiter lookalike.
           resources: delivery.resources,
         });
+        acceptedCommandTimes.set(delivery.commandId, marker.occurredAt);
+        acceptedMessageCommands.set(delivery.commandId, delivery.delivery);
+        delivery.accepted?.();
       } else {
-        await persistObservation({
+        const marker = await persistObservation({
           kind: "command-accepted",
           commandId: delivery.commandId,
           operation: delivery.operation,
           delivery: delivery.delivery,
           turnId: acceptedTurnId,
         });
+        acceptedCommandTimes.set(delivery.commandId, marker.occurredAt);
       }
       return true;
     };
@@ -2370,6 +2518,7 @@ async function attachSession(
 
     let providerStop = new ProviderStopCapture(credentialRedaction);
     const streamWithCompaction: StreamFn = (requestModel, context, options) => {
+      lastProviderActivity = host.now();
       const capture = new ProviderStopCapture(credentialRedaction);
       providerStop = capture;
       const maxTokens = outputCeiling(requestModel, context);
@@ -2419,10 +2568,10 @@ async function attachSession(
     // back at the head of every array this runtime rebuilds from the sidecar
     // (compaction, model switch), so the prefix is the same bytes on every
     // request of the attachment and the projector's memo hits on it.
-    const head = systemHead(
+    let head = systemHead(
       composeSystemPrompt({
         role: spec.identity.role,
-        tools: spec.tools,
+        tools: spec.declarationTools ?? spec.tools,
         promptResources: spec.promptResources,
       }),
       tools,
@@ -2483,6 +2632,193 @@ async function attachSession(
       // converts identically under both.
       convertToLlm,
     });
+    // Provider caches have no reliable expiry observation. Anthropic's Pi
+    // adapter supports both 5m and 1h retention (including an environment
+    // override), so use its longest lifetime, not an assumed 5m default.
+    // OpenAI extended retention is 24h; routers/unknown providers use the same
+    // conservative window. This is an eligibility rule, never a cache-hit claim.
+    // Recovery includes the last durable activity, not the attach wall clock.
+    let lastProviderActivity =
+      recoveredEntries.length === 0
+        ? undefined
+        : recoveredEntries.reduce((latest, entry) => Math.max(latest, entry.timestamp), 0);
+    const turnRefreshTrigger = (): "cold-turn" | "warm-turn" => {
+      const ttl =
+        agent.state.model.provider === "anthropic" && agent.state.model.api === "anthropic-messages"
+          ? 60 * 60_000
+          : 24 * 60 * 60_000;
+      return lastProviderActivity === undefined || host.now() - lastProviderActivity >= ttl
+        ? "cold-turn"
+        : "warm-turn";
+    };
+    // Scan the entire durable conversation, including carried messages, not
+    // just the retained compaction window: a discovery already summarized out
+    // of context must not recur on attach.
+    const announcedRefreshIds = new Set(
+      conversationPath(recoveredEntries, conversationReader).flatMap((entry) => {
+        if (entry.type !== "message") return [];
+        const id = toolRefreshId(entry.message);
+        return id === undefined ? [] : [id];
+      }),
+    );
+    const pendingAnnouncements: AgentMessage[] = [];
+    const deferredRefreshes = new Map<
+      string,
+      NonNullable<SessionRuntimeSpec["toolRefreshAnnouncements"]>[number]
+    >();
+    // Standalone pre-ledger callers have no durable ID; do not let their legacy
+    // discovery message rewrite a warm prefix either. Production always has IDs.
+    const deferredLegacyAnnouncements: AgentMessage[] = [];
+    let announcementAppendFailed = false;
+    const announceRefreshes = async (
+      input: SessionRuntimeSpec,
+      allowed: boolean,
+    ): Promise<void> => {
+      for (const fact of input.toolRefreshAnnouncements ?? []) deferredRefreshes.set(fact.id, fact);
+      // Do not append a sidecar receipt until the message can really be sent.
+      // The host ledger re-supplies these facts on recovery; same-bundle/null
+      // refresh results must not lose the pending IDs in this attachment either.
+      if (!allowed) return;
+      while (deferredLegacyAnnouncements.length > 0) {
+        const message = deferredLegacyAnnouncements[0]!;
+        await mainBranch.appendMessage(message, piContext());
+        deferredLegacyAnnouncements.shift();
+        pendingAnnouncements.push(message);
+      }
+      if (announcementAppendFailed) {
+        // An append may reject after its commit. Re-read receipts before retrying
+        // so even that ambiguous outcome cannot produce a duplicate message.
+        const entries = await mainBranch.findEntries({ order: "oldestFirst" }, piContext());
+        for (const entry of entries) {
+          if (entry.type !== "message") continue;
+          const id = toolRefreshId(entry.message);
+          if (id === undefined || announcedRefreshIds.has(id)) continue;
+          announcedRefreshIds.add(id);
+          pendingAnnouncements.push(entry.message);
+        }
+        announcementAppendFailed = false;
+      }
+      for (const announcement of deferredRefreshes.values()) {
+        if (announcedRefreshIds.has(announcement.id)) continue;
+        const message = toolRefreshMessage(announcement.namespaces, host.now(), announcement.id);
+        try {
+          await mainBranch.appendMessage(message, piContext());
+        } catch (error) {
+          announcementAppendFailed = true;
+          throw error;
+        }
+        announcedRefreshIds.add(announcement.id);
+        pendingAnnouncements.push(message);
+      }
+      // Durable partial batches remain pending for a retry (or recovery).
+      // The caller publishes only after all writes and close checks succeeded.
+    };
+    // Replays the ledger-write/sidecar-append gap even when the effective bundle
+    // was already adopted by the previous process and therefore is unchanged.
+    await announceRefreshes(
+      spec,
+      canAnnounceToolRefresh(agent.state.model, turnRefreshTrigger() === "warm-turn"),
+    );
+    agent.state.messages.push(...pendingAnnouncements.splice(0));
+    let refreshTail: Promise<unknown> = Promise.resolve();
+    // The host revision gate returns its cached desired object on steady checks.
+    // Remember only fully applied inputs: failed builds/appends must retry even
+    // when the adapter has already cached that same object. Boundary checks still
+    // compare declarations, since a cold epoch can advance with unchanged IDs.
+    let lastSuccessfulInput: SessionRuntimeSpec | undefined;
+    const refreshTools = (
+      trigger: Parameters<NonNullable<SessionRuntimeSpec["refreshTools"]>>[0]["trigger"],
+      refreshModel: SessionRuntimeSpec["model"] = {
+        providerId: agent.state.model.provider,
+        modelId: agent.state.model.id,
+        reasoningLevel: agent.state.thinkingLevel,
+      },
+      announcementModel = agent.state.model,
+    ): Promise<boolean> => {
+      const work = refreshTail.then(async () => {
+        if (closed) return false;
+        const next = (await spec.refreshTools?.({ trigger, model: refreshModel })) ?? null;
+        if (closed) throw new Error("This attachment is closed.");
+        const warm = trigger === "warm-turn" || trigger === "code-mode";
+        const allowed = canAnnounceToolRefresh(announcementModel, warm);
+        if (next === null) {
+          if (!warm) {
+            await announceRefreshes(spec, allowed);
+            if (closed) throw new Error("This attachment is closed.");
+            agent.state.messages.push(...pendingAnnouncements.splice(0));
+          }
+          return false;
+        }
+        if (trigger === "code-mode" && next === lastSuccessfulInput) return false;
+        // Even a host returning its full durable desired state on every check
+        // must not regenerate provider declarations or reannounce additions.
+        const candidate = {
+          ...next,
+          refreshTools: next.refreshTools ?? spec.refreshTools,
+          ...(warm ? { declarationTools: spec.declarationTools ?? spec.tools } : {}),
+        };
+        if (sameToolSpec(spec, candidate)) {
+          await announceRefreshes(candidate, allowed);
+          if (closed) throw new Error("This attachment is closed.");
+          agent.state.messages.push(...pendingAnnouncements.splice(0));
+          lastSuccessfulInput = next;
+          return false;
+        }
+        const previousIds = new Set(callableSurface.map((entry) => entry.id));
+        const staged = rebuildTools(candidate, warm);
+        const additions = staged.stagedCallable.filter((entry) => !previousIds.has(entry.id));
+        const merged = warm
+          ? agent.state.tools
+          : retainOmitted(agent.state.tools, staged.rebuilt.tools, (tool) => tool.name);
+        const nextHead = warm
+          ? head
+          : systemHead(
+              composeSystemPrompt({
+                role: candidate.identity.role,
+                tools: candidate.declarationTools ?? candidate.tools,
+                promptResources: candidate.promptResources,
+              }),
+              merged,
+            );
+        await announceRefreshes(candidate, allowed);
+        // Standalone callers predating the host ledger still receive discovery.
+        // Production always supplies durable facts (including []), never fake IDs.
+        if (candidate.toolRefreshAnnouncements === undefined && warm && additions.length > 0) {
+          const namespaces = new Map<string, number>();
+          for (const entry of additions) {
+            const namespace = entry.mcp === undefined ? "volli" : `mcp:${entry.mcp.serverId}`;
+            namespaces.set(namespace, (namespaces.get(namespace) ?? 0) + 1);
+          }
+          const message = toolRefreshMessage(
+            [...namespaces].map(([name, count]) => ({ name, count })),
+            host.now(),
+          );
+          if (allowed) {
+            await mainBranch.appendMessage(message, piContext());
+            pendingAnnouncements.push(message);
+          } else deferredLegacyAnnouncements.push(message);
+        }
+        // Close drains this work before cleanup, but must never adopt its result.
+        if (closed) throw new Error("This attachment is closed.");
+        // Commit only after all builds and the durable discovery append succeed.
+        agent.state.messages.push(...pendingAnnouncements.splice(0));
+        callableSurface = staged.stagedCallable;
+        codeModeSurface = staged.stagedSurface;
+        liveCodeMode = staged.stagedCodeMode;
+        spec = candidate;
+        if (!warm) {
+          agent.state.tools = merged;
+          agent.toolExecution = staged.rebuilt.toolExecution;
+          head = nextHead;
+          agent.state.messages = withSystemHead(head, agent.state.messages.slice(1));
+        }
+        lastSuccessfulInput = next;
+        return true;
+      });
+      // Serialise parallel program starts without poisoning later attempts.
+      refreshTail = work.catch(() => undefined);
+      return work;
+    };
     // Interrupting, closing and cancelling the attachment all arrive here, which
     // is why one flag answers for all three downstream.
     interruptTurn = () => {
@@ -2652,6 +2988,7 @@ async function attachSession(
         operation: "executor.retry" as const,
         delivery: "retry" as const,
       };
+      await refreshTools(turnRefreshTrigger());
       await agent.continue();
       return { kind: "delivered", delivery: "retry" };
     };
@@ -2914,7 +3251,10 @@ async function attachSession(
           // Already whole: the summary, the restored resources and the kept
           // turns without their reasoning, all read off the entry just written
           // — behind the head, which the entry never holds.
-          agent.state.messages = withSystemHead(head, outcome.messages);
+          const messageCount = agent.state.messages.length;
+          await refreshTools("compaction");
+          const announcements = agent.state.messages.slice(messageCount);
+          agent.state.messages = withSystemHead(head, [...outcome.messages, ...announcements]);
           nativeCompactionState = providerCompactionFromDetails(outcome.entry.details);
         }
         // Recorded before the compaction fact, so a crash between the two
@@ -3028,8 +3368,17 @@ async function attachSession(
     // loop owns a separate context snapshot: replacing Agent.state alone would
     // appear to compact while the next request still sent the entire history.
     agent.prepareNextTurnWithContext = async ({ context }, signal) => {
+      const refreshed = await refreshTools(turnRefreshTrigger());
       const changed = await compactBeforeTurn([...pendingQueuedDeliveries.keys()], signal);
-      return changed ? { context: { ...context, messages: [...agent.state.messages] } } : undefined;
+      return changed || refreshed || spec.refreshTools !== undefined
+        ? {
+            context: {
+              ...context,
+              tools: [...agent.state.tools],
+              messages: [...agent.state.messages],
+            },
+          }
+        : undefined;
     };
 
     /**
@@ -3108,13 +3457,22 @@ async function attachSession(
       const observedAt = host.now();
       const retained = activityByToolCallId.get(event.toolCallId);
       const startedAt = retained?.startedAt ?? observedAt;
+      const persistActivityImage = host.persistActivityImage;
       const activity = mapPiActivity(
         event,
-        event.type === "tool_execution_end"
-          ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
-          : event.type === "tool_execution_start"
-            ? { turnId, observedAt }
-            : { turnId, startedAt, observedAt },
+        {
+          ...(event.type === "tool_execution_end"
+            ? { turnId, input: retained?.input, startedAt: retained?.startedAt, observedAt }
+            : event.type === "tool_execution_start"
+              ? { turnId, observedAt }
+              : { turnId, startedAt, observedAt }),
+          ...(persistActivityImage === undefined
+            ? {}
+            : {
+                persistImage: (image: { data: string; mimeType: string }) =>
+                  persistActivityImage(spec.identity.sessionId, image),
+              }),
+        },
         credentialRedaction,
       );
 
@@ -3133,6 +3491,7 @@ async function attachSession(
 
     unsubscribe = agent.subscribe(async (event, runSignal) => {
       if (event.type === "agent_start") {
+        acceptingSteer = true;
         // A resumed attempt is the same turn continuing, so it neither starts one
         // nor refreshes the budget it is spending.
         const resumed = resumingTurn;
@@ -3194,6 +3553,7 @@ async function attachSession(
       }
 
       if (event.type === "message_end") {
+        if (event.message.role === "assistant") lastProviderActivity = host.now();
         if (event.message.role === "user") {
           const delivery = pendingQueuedDeliveries.get(event.message);
           if (delivery !== undefined) {
@@ -3284,11 +3644,24 @@ async function attachSession(
       if (event.type !== "agent_end") {
         return;
       }
+      acceptingSteer = false;
       activityByToolCallId.clear();
       if (pendingReasoningDrop !== undefined) {
         const dropped = await persistObservation(pendingReasoningDrop);
         pendingReasoningDrop = undefined;
         await commitObservation(dropped);
+      }
+      // A provider may finish normally after the person pressed Stop (the
+      // final chunk can race the abort, or the transport may ignore it). The
+      // runtime's own interruption is authoritative even without an error
+      // stop reason: never report that deliberately cut-short turn completed.
+      // Teardown may still drain a normal finish; this rule names a live Stop.
+      if (failure === undefined && interrupting && !closed) {
+        await clearTransportNotice();
+        await commitObservation(
+          await persistObservation({ kind: "turn", state: "interrupted", turnId }),
+        );
+        return;
       }
       if (failure === undefined) {
         await clearTransportNotice();
@@ -3407,6 +3780,7 @@ async function attachSession(
         images = [],
         resources = [],
         settle = "turn",
+        targetTurnId,
       ): Promise<DeliveryOutcome> {
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
@@ -3427,9 +3801,43 @@ async function attachSession(
         if (closed || cancelled) {
           return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
         }
+        const accepted =
+          commandId === undefined ? undefined : acceptedMessageCommands.get(commandId);
+        if (accepted !== undefined)
+          return {
+            kind: "delivered",
+            delivery: accepted,
+            turnOpened: false,
+            ...acceptanceTime(commandId),
+          };
+        // Host queue release waits for durable acceptance, not Pi's volatile
+        // followUp array. Projected turn end arrives while agent_end observers
+        // are still awaited; wait out that closing window before prompting.
+        if (delivery === "queue" && settle === "opened") {
+          while (agent.state.isStreaming) await agent.waitForIdle();
+          if (closed || cancelled)
+            return { kind: "rejected", reason: "closed", message: "This attachment is closed." };
+        }
+        // Revalidate after every wait and before touching Pi's volatile queue.
+        // A targeted command may only join that still-accepting turn; neither
+        // an idle prompt nor late-queue draining may give it another turn.
+        if (targetTurnId !== undefined && (!acceptingSteer || turnId !== targetTurnId)) {
+          return {
+            kind: "rejected",
+            reason: "busy-unsupported",
+            message: "The targeted turn is no longer accepting steering.",
+          };
+        }
         const framedText = appendPromptResources(text, resources);
         if (agent.state.isStreaming) {
           const message = queuedUserMessage(framedText, images);
+          const acceptedBoundary =
+            delivery === "steer" &&
+            settle === "opened" &&
+            commandId !== undefined &&
+            targetTurnId !== undefined
+              ? Promise.withResolvers<void>()
+              : null;
           const pending = {
             commandId: commandId ?? null,
             operation: "message.submit" as const,
@@ -3437,12 +3845,23 @@ async function attachSession(
             message,
             resources,
           };
-          pendingQueuedDeliveries.set(message, pending);
+          const durablePending: PendingMessageDelivery = {
+            ...pending,
+            ...(acceptedBoundary === null ? {} : { accepted: acceptedBoundary.resolve }),
+          };
+          pendingQueuedDeliveries.set(message, durablePending);
           if (delivery === "steer") agent.steer(message);
           else agent.followUp(message);
+          if (acceptedBoundary !== null) {
+            // Host-owned steering cannot retire its durable payload on a
+            // volatile steer-array enqueue. Wait for the consumption marker.
+            await Promise.race([acceptedBoundary.promise, agent.waitForIdle()]);
+            if (!acceptedMessageCommands.has(commandId!))
+              throw new Error("Queued steering acceptance is uncertain; reconcile before retrying");
+          }
           // No `turnOpened`: this message joined a turn that was already
           // running, which is the distinction a supervisor reads (VC-324).
-          return { kind: "delivered", delivery };
+          return { kind: "delivered", delivery, ...acceptanceTime(commandId) };
         }
         consumeRunFailure();
         // Before the message is composed, not after: compaction can change what
@@ -3451,16 +3870,17 @@ async function attachSession(
         // rather than admitted onto a context this turn is already composing
         // against; everything from here to `prompt` is synchronous, so there is
         // no gap between releasing it and Pi owning the array itself.
-        await rewritingTheContext(() =>
-          compactBeforeTurn([
+        await rewritingTheContext(async () => {
+          await refreshTools(turnRefreshTrigger());
+          return compactBeforeTurn([
             queuedUserMessage(
               conversationIsEmpty(agent.state.messages)
                 ? composeFirstUserMessage(spec, framedText)
                 : framedText,
               images,
             ),
-          ]),
-        );
+          ]);
+        });
         // Asked of the conversation, not of the array: the array is never empty
         // now that the system head lives in it (see `transcript-context.ts`).
         const delivered = conversationIsEmpty(agent.state.messages)
@@ -3513,14 +3933,19 @@ async function attachSession(
           if (failed !== undefined) {
             throw failed;
           }
-          return { kind: "delivered", delivery: "prompt", turnOpened: opening.opened };
+          return {
+            kind: "delivered",
+            delivery: "prompt",
+            turnOpened: opening.opened,
+            ...acceptanceTime(commandId),
+          };
         }
         await run();
         const failed = consumeRunFailure();
         if (failed !== undefined) {
           throw failed;
         }
-        return { kind: "delivered", delivery: "prompt" };
+        return { kind: "delivered", delivery: "prompt", ...acceptanceTime(commandId) };
       },
 
       async selectModel(selection) {
@@ -3590,6 +4015,13 @@ async function attachSession(
         // reached through OAuth or an endpoint override cannot replay a
         // checkpoint the metered public API minted (VC-331).
         const selectedRoute = await nativeCompactionAvailable(selected, models, spec.signal);
+        const refreshTrigger =
+          selected.provider === agent.state.model.provider &&
+          selected.id === agent.state.model.id &&
+          selected.api === agent.state.model.api &&
+          selection.reasoningLevel === agent.state.thinkingLevel
+            ? turnRefreshTrigger()
+            : "model-switch";
         await rewritingTheContext(async () => {
           const { path } = compactionPathForModel(
             await conversationBranch(),
@@ -3597,11 +4029,18 @@ async function attachSession(
             selectedRoute,
           );
           const latest = path.findLast((entry) => entry.type === "compaction");
-          nativeCompactionState =
+          const nextNativeCompactionState =
             latest?.type === "compaction"
               ? providerCompactionFromDetails(latest.details)
               : undefined;
-          agent.state.messages = withSystemHead(head, contextMessages(path));
+          const messageCount = agent.state.messages.length;
+          // Stage the selected pair for the host without applying it to Pi. A
+          // rejected refresh leaves model, reasoning and opaque context intact.
+          await refreshTools(refreshTrigger, selection, selected);
+          if (closed) throw new Error("This attachment is closed.");
+          const appended = agent.state.messages.slice(messageCount);
+          agent.state.messages = withSystemHead(head, [...contextMessages(path), ...appended]);
+          nativeCompactionState = nextNativeCompactionState;
           agent.state.model = selected;
           agent.state.thinkingLevel = selection.reasoningLevel;
         });
@@ -3624,7 +4063,9 @@ async function attachSession(
         await settleRun();
         const failed = observationDelivery.consumeFailure();
         if (failed !== undefined) throw failed;
-        return outcome;
+        return outcome.kind === "delivered"
+          ? { ...outcome, ...acceptanceTime(commandId) }
+          : outcome;
       },
 
       /**
@@ -3723,6 +4164,7 @@ async function attachSession(
         interruptTurn();
         await agent.waitForIdle();
         await detachedRunSettled;
+        await refreshTail;
         unsubscribe?.();
         unsubscribe = undefined;
         stopWatchingResume?.();

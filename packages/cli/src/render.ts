@@ -516,6 +516,14 @@ function sessionStateCell(session: Record<string, unknown>): unknown {
     : cell;
 }
 
+/**
+ * What a terminal peek's `parked` state means: the warm-park tier SIGSTOPs an
+ * idle process tree, so the output tail stops where it is until something wakes
+ * it. Said beside the word, so a caller does not have to guess what a frozen
+ * tail means.
+ */
+const PARKED_EXPLANATION = "paused while idle; output stops until it wakes";
+
 /** A wire origin (Session ids already public handles) as one line; `null` is unknown, never the user. */
 function originText(value: unknown): string {
   return formatSessionOrigin(readSessionOrigin(value));
@@ -583,6 +591,44 @@ function resumedByText(session: Record<string, unknown>): string | null {
     : null;
 }
 
+function hasSessionSignal(signal: unknown): signal is Record<string, unknown> {
+  return isRecord(signal) && (signal["kind"] === "done" || signal["kind"] === "blocked");
+}
+
+function sessionSignalReason(signal: unknown): string | null {
+  if (!hasSessionSignal(signal)) return null;
+  const reason = signal["reason"];
+  return typeof reason === "string" && reason.trim().length > 0 ? reason : null;
+}
+
+/** Only host facts belong inline; the Session's reason belongs in quoted prose. */
+function sessionSignalLine(signal: unknown): string {
+  if (!hasSessionSignal(signal)) return "signal  -";
+  return `signal  ${signal["kind"]} · ${ageText(signal["ageMs"])} ago`;
+}
+
+function pendingQuestionLines(data: Record<string, unknown>): string[] {
+  const blocks = (recordsAt(data, "pendingQuestions") ?? []).map((question, index) => {
+    const lines = [String(question["title"] ?? "Question")];
+    if (typeof question["detail"] === "string") lines.push(question["detail"]);
+    for (const prompt of recordsAt(question, "prompts") ?? []) {
+      lines.push(String(prompt["label"] ?? "Question"));
+      if (typeof prompt["detail"] === "string") lines.push(prompt["detail"]);
+      for (const option of recordsAt(prompt, "options") ?? []) {
+        lines.push(
+          `- ${String(option["label"] ?? option["id"] ?? "Option")}${typeof option["description"] === "string" ? `: ${option["description"]}` : ""}`,
+        );
+      }
+      if (prompt["multiple"] === true) lines.push("Multiple choices allowed.");
+      if (prompt["custom"] === true) lines.push("A typed answer is allowed.");
+    }
+    return { label: `pending question ${index + 1}`, text: terminalSafeText(lines.join("\n")) };
+  });
+  return blocks.length === 0
+    ? []
+    : untrustedProseResponseLines({ response: "pending questions", blocks });
+}
+
 function renderSessionShow(data: Record<string, unknown>): string | null {
   if (typeof data["id"] !== "string" || typeof data["status"] !== "string") return null;
   const lines = [
@@ -625,8 +671,35 @@ function renderSessionShow(data: Record<string, unknown>): string | null {
   lines.push(
     `created  ${ageText(data["ageMs"])} ago`,
     `last activity  ${ageText(data["lastActivityAgeMs"])} ago`,
+    sessionSignalLine(data["signal"]),
   );
+  const reason = sessionSignalReason(data["signal"]);
+  if (reason !== null) {
+    if (reason.length > TICKET_SHOW_PROSE_MAX_CHARS) {
+      lines.push(
+        `The signal reason was truncated to its first ${TICKET_SHOW_PROSE_MAX_CHARS} characters; use --json for the rest.`,
+      );
+    }
+    lines.push(
+      ...untrustedProseResponseLines({
+        response: "session show response",
+        blocks: [{ label: "signal reason", text: reason.slice(0, TICKET_SHOW_PROSE_MAX_CHARS) }],
+      }),
+    );
+  }
+  lines.push(...pendingQuestionLines(data));
   return lines.join("\n");
+}
+
+/**
+ * When the provider's allowance comes back, as a UTC instant a reader can act
+ * on. The wire carries epoch milliseconds, which stay the value in `--json`;
+ * text that printed them raw left the reader a number to decode by hand.
+ */
+function resetInstantText(resetsAt: number | null): string {
+  if (resetsAt === null) return "not stated";
+  const instant = new Date(resetsAt);
+  return Number.isNaN(instant.getTime()) ? "not stated" : instant.toISOString();
 }
 
 /** Free-form provider text gets the same trust envelope as another Session's answer. */
@@ -634,7 +707,7 @@ function sessionStopLines(session: Record<string, unknown>): string[] {
   if (!isRecord(session["interruption"])) return [];
   const detail = decodeSessionStopDetail(session["interruption"], "interruption");
   return [
-    `${sessionStopSummary(detail)}; retry: ${detail.retry}; reset: ${detail.resetsAt ?? "not stated"}.`,
+    `${sessionStopSummary(detail)}; retry: ${detail.retry}; reset: ${resetInstantText(detail.resetsAt)}.`,
     ...untrustedProseResponseLines({
       response: "provider stop detail",
       blocks: [
@@ -667,6 +740,78 @@ function ageText(value: unknown): string {
 }
 
 /**
+ * The one fact a peek can state about a quiet chat whose newest message is the
+ * person's: nothing has answered it. Only idle and interrupted qualify, because
+ * those are the states with no turn running to answer it. The newest message
+ * must be readable: an unreadable tail hides whether a reply exists.
+ *
+ * The line names what the transcript shows and no cause. Why it went unanswered
+ * comes from the host's runtime fields, not a guess based on this tail.
+ */
+function unansweredMessageLines(
+  data: Record<string, unknown>,
+  transcript: readonly unknown[],
+): string[] {
+  if (data["status"] !== "idle" && data["status"] !== "interrupted") return [];
+  const unreadable = data["unreadable"];
+  if (typeof unreadable === "number" && unreadable > 0) return [];
+  const newest = transcript.at(-1);
+  return isRecord(newest) && newest["role"] === "user"
+    ? ["no assistant message since the last user message"]
+    : [];
+}
+
+/** Existing host facts, including queue ownership outside the transcript.
+ * Reasons and message bodies retain the CLI's untrusted-prose envelope. */
+function runtimePeekLines(data: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const blocks: Array<{ label: string; text: string }> = [];
+  const attention = data["attention"];
+  if (isRecord(attention) && typeof attention["message"] === "string") {
+    lines.push(
+      `${terminalSafeInline(attention["message"])}${typeof attention["recovery"] === "string" ? ` · ${terminalSafeInline(attention["recovery"])}` : ""}`,
+    );
+    if (typeof attention["detail"] === "string")
+      blocks.push({ label: "runtime detail", text: attention["detail"] });
+  }
+  const stopped = data["stopped"];
+  if (isRecord(stopped) && isRecord(stopped["by"])) {
+    const actor = stopped["by"];
+    lines.push(
+      `Stopped by ${terminalSafeInline(actor["kind"])}${actor["kind"] === "session" ? ` ${terminalSafeInline(actor["sessionId"])}` : ""}`,
+    );
+    if (typeof stopped["reason"] === "string")
+      blocks.push({ label: "stop reason", text: stopped["reason"] });
+  }
+  if (hasSessionSignal(data["signal"])) {
+    lines.push(sessionSignalLine(data["signal"]));
+    const reason = sessionSignalReason(data["signal"]);
+    if (reason !== null) blocks.push({ label: "signal reason", text: reason });
+  }
+  if (data["lastTurnOutcome"] === "failed") lines.push("Last turn failed");
+  const pending = recordsAt(data, "pendingMessages") ?? [];
+  const count = data["pendingMessageCount"];
+  if (typeof count === "number" && count > 0)
+    lines.push(`${count} ${count === 1 ? "message" : "messages"} waiting`);
+  for (const [index, message] of pending.entries()) {
+    const text =
+      typeof message["text"] === "string" && message["text"].length > 0
+        ? message["text"]
+        : "[Attachment]";
+    blocks.push({
+      label: `pending message ${index + 1}: ${terminalSafeInline(message["label"])}`,
+      text: `${text}${typeof message["detail"] === "string" ? `\n${message["detail"]}` : ""}`,
+    });
+  }
+  return [
+    ...lines,
+    ...(blocks.length === 0
+      ? []
+      : untrustedProseResponseLines({ response: "session runtime state", blocks })),
+  ];
+}
+
+/**
  * A chat Session's peek: one activity line, then one line per transcript
  * message. The activity line leads because it answers the question the command
  * was run to ask — alive, doing what, since when — and the tail below it is
@@ -679,12 +824,19 @@ function renderChatPeek(data: Record<string, unknown>, transcript: readonly unkn
     `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
     `last ${ageText(data["lastActivityAgeMs"])}`,
     `turn ${countCell(data["turns"])} depth ${countCell(data["turnDepth"])}`,
-    ...(typeof unreadable === "number" && unreadable > 0 ? [`${unreadable} unreadable`] : []),
+    // Counted, not listed: each unreadable message is a row the tail could not
+    // print, so the count says what the reader is missing.
+    ...(typeof unreadable === "number" && unreadable > 0
+      ? [`${unreadable} unreadable ${unreadable === 1 ? "message" : "messages"}`]
+      : []),
     ...sessionOriginHeaderCells(data),
   ].join("  ");
   return [
     header,
     ...sessionStopLines(data),
+    ...runtimePeekLines(data),
+    ...pendingQuestionLines(data),
+    ...unansweredMessageLines(data, transcript),
     ...transcript.filter(isRecord).map(transcriptLine),
   ].join("\n");
 }
@@ -715,20 +867,24 @@ function renderSessionAnswer(data: Record<string, unknown>): string {
     ...(typeof data["title"] === "string" ? [terminalSafeInline(data["title"])] : []),
   ].join("  ");
   const answer = data["answer"];
-  if (typeof answer !== "string") {
-    return [
-      header,
-      unreadable
-        ? "Its last message could not be read from the transcript store."
-        : "It has said nothing yet.",
-    ].join("\n");
-  }
+  const reason = sessionSignalReason(data["signal"]);
+  const blocks = [
+    ...(typeof answer === "string" ? [{ label: "final message", text: answer }] : []),
+    ...(reason === null ? [] : [{ label: "signal reason", text: reason }]),
+  ];
   return [
     header,
-    ...untrustedProseResponseLines({
-      response: "session answer response",
-      blocks: [{ label: "final message", text: answer }],
-    }),
+    ...(typeof answer === "string"
+      ? []
+      : [
+          unreadable
+            ? "Its last message could not be read from the transcript store."
+            : "It has said nothing yet.",
+        ]),
+    ...(blocks.length === 0
+      ? []
+      : untrustedProseResponseLines({ response: "session answer response", blocks })),
+    ...(hasSessionSignal(data["signal"]) ? [sessionSignalLine(data["signal"])] : []),
   ].join("\n");
 }
 
@@ -741,7 +897,9 @@ function transcriptLine(entry: Record<string, unknown>): string {
   const said = `${tools.length > 0 ? `[${tools.map(terminalSafeInline).join(" ")}]` : ""}${
     tools.length > 0 && text.length > 0 ? " " : ""
   }${terminalSafeInline(text)}`;
-  return `${ageText(entry["ageMs"])}  ${terminalSafeInline(entry["role"])}${said.length > 0 ? `  ${said}` : ""}`;
+  const delivery =
+    typeof entry["delivery"] === "string" ? ` [${terminalSafeInline(entry["delivery"])}]` : "";
+  return `${ageText(entry["ageMs"])}  ${terminalSafeInline(entry["role"])}${delivery}${said.length > 0 ? `  ${said}` : ""}`;
 }
 
 /** The worktree.status snapshot: branch→base, worktree path, dirty/sequencer/sync. */
@@ -1332,8 +1490,11 @@ function renderStableLines(command: string, data: unknown, full: boolean): strin
     // is an activity line plus a transcript.
     if (Array.isArray(data["transcript"])) return renderChatPeek(data, data["transcript"]);
     const output = typeof data["output"] === "string" ? data["output"] : "";
+    // `parked` says nothing useful by itself: the processes are paused, so the
+    // output below is not new. The explanation rides the word.
+    const parked = data["status"] === "parked" ? ` (${PARKED_EXPLANATION})` : "";
     const header = [
-      `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}`,
+      `${terminalSafeInline(data["session"])}  ${terminalSafeInline(sessionStateCell(data))}${parked}`,
       ...sessionOriginHeaderCells(data),
     ].join("  ");
     return `${header}${output.length > 0 ? `\n${output}` : ""}`;

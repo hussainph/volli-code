@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildHostHello,
   checkWorkspaceFence,
+  createHostNonce,
   encodeHostHello,
   HOST_HELLO_PARAM,
+  HOST_PROTOCOL_CLOSE_CODES,
   HOST_PROTOCOL_VERSIONS,
   isHostFeature,
   isHostHello,
+  isHostNonce,
   isProtocolVersionRange,
   negotiateFeatures,
   negotiateProtocolVersion,
@@ -30,6 +34,7 @@ const hello: HostHello = {
   lastSeen: { epoch: 2, hostId: HOST },
   features: ["sessions", "terminals.stream", "from-the-future"],
   credential: "device-token",
+  nonce: "q2Vh7wJcJ0rX3m3d4cQ9tA",
 };
 const offer: HostOffer = {
   host: { id: HOST, version: "0.3.0" },
@@ -68,8 +73,24 @@ describe("negotiateWelcome", () => {
         workspace: { id: WORKSPACE, epoch: 2 },
         actor: device,
         features: ["sessions", "terminals.stream"],
+        proof: null,
       },
     });
+  });
+
+  it("never grants host.workspaces to a Workspace, retaining shared host features", () => {
+    const features = ["host.workspaces", "sign-ins", "auth.callback", "host.logs", "sessions"];
+    expect(negotiateWelcome({ ...hello, features }, { ...offer, features }, device)).toMatchObject({
+      ok: true,
+      welcome: { features: ["sign-ins", "auth.callback", "host.logs", "sessions"] },
+    });
+    expect(
+      negotiateWelcome(
+        { ...hello, features: ["host.workspaces"] },
+        { ...offer, features: ["host.workspaces"] },
+        device,
+      ),
+    ).toMatchObject({ ok: true, welcome: { features: [] } });
   });
 
   it("welcomes first contact, which has seen no epoch", () => {
@@ -107,6 +128,117 @@ describe("negotiateWelcome", () => {
       ok: false,
       error: { code: "PRECONDITION_FAILED", reason: "workspace-epoch-fenced" },
     });
+  });
+});
+
+describe("desktop × hostd version skew (pre-VC-669 v1 peer contract)", () => {
+  // Frozen PR-base peer declarations, not derived from this build's constants.
+  // App versions are self-description: both releases speak wire v1. The
+  // feature subsets model an older installation and an additive newer one;
+  // they do not claim a real old hostd process is booted by this unit test.
+  const oldDesktop: HostHello = {
+    ...hello,
+    protocol: { min: 1, max: 1 },
+    client: { kind: "desktop", version: "0.3.0" },
+    features: ["sessions", "sessions.subscribe", "session.read", "unknown.client.feature"],
+  };
+  const newDesktop: HostHello = {
+    ...hello,
+    protocol: HOST_PROTOCOL_VERSIONS,
+    client: { kind: "desktop", version: "0.4.0" },
+    features: ["sessions", "sessions.subscribe", "model-access", "future.area", "sessions"],
+  };
+  const oldHostd: HostOffer = {
+    ...offer,
+    protocol: { min: 1, max: 1 },
+    host: { id: HOST, version: "0.3.0" },
+    features: ["sessions", "sessions.subscribe", "session.read"],
+  };
+  const newHostd: HostOffer = {
+    ...offer,
+    protocol: HOST_PROTOCOL_VERSIONS,
+    host: { id: HOST, version: "0.4.0" },
+    features: ["model-access", "sessions", "sessions.subscribe", "session.read", "model-access"],
+  };
+
+  it.each([
+    {
+      cell: "old desktop × old hostd",
+      desktop: oldDesktop,
+      hostd: oldHostd,
+      features: ["sessions", "sessions.subscribe", "session.read"],
+    },
+    {
+      cell: "new desktop × old hostd",
+      desktop: newDesktop,
+      hostd: oldHostd,
+      features: ["sessions", "sessions.subscribe"],
+    },
+    {
+      cell: "old desktop × new hostd",
+      desktop: oldDesktop,
+      hostd: newHostd,
+      features: ["sessions", "sessions.subscribe", "session.read"],
+    },
+    {
+      cell: "new desktop × new hostd",
+      desktop: newDesktop,
+      hostd: newHostd,
+      features: ["model-access", "sessions", "sessions.subscribe"],
+    },
+  ])(
+    "welcomes $cell with only the deduplicated feature intersection",
+    ({ desktop, hostd, features }) => {
+      // Use the serialized hello, so skew covers the actual connectionParams
+      // grammar as well as negotiation, never app-version arithmetic.
+      const decoded = readHostHello(encodeHostHello(desktop));
+      expect(decoded).toStrictEqual(desktop);
+      expect(negotiateWelcome(decoded!, hostd, device)).toStrictEqual({
+        ok: true,
+        welcome: {
+          protocolVersion: 1,
+          host: hostd.host,
+          workspace: hostd.workspace,
+          actor: device,
+          features,
+          proof: null,
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      cell: "new desktop drops v1 × old hostd",
+      desktop: { ...newDesktop, protocol: { min: 2, max: 2 } },
+      hostd: oldHostd,
+      message: "This host speaks protocol 1; the client speaks 2",
+    },
+    {
+      cell: "old desktop × new hostd drops v1",
+      desktop: oldDesktop,
+      hostd: { ...newHostd, protocol: { min: 2, max: 2 } },
+      message: "This host speaks protocol 2; the client speaks 1",
+    },
+  ])(
+    "refuses $cell rather than falling back by app version or feature",
+    ({ desktop, hostd, message }) => {
+      expect(negotiateWelcome(desktop, hostd, device)).toStrictEqual({
+        ok: false,
+        error: { code: "PRECONDITION_FAILED", reason: "protocol-version-unsupported", message },
+      });
+    },
+  );
+
+  it("still intersects protocol ranges when the newer peer advertises an overlapping extension", () => {
+    // Synthetic future ranges exercise both directions without claiming this
+    // build implements v2 (HOST_PROTOCOL_VERSIONS remains the actual offer).
+    expect(
+      negotiateWelcome({ ...newDesktop, protocol: { min: 1, max: 2 } }, oldHostd, device),
+    ).toMatchObject({ ok: true, welcome: { protocolVersion: 1 } });
+    expect(
+      negotiateWelcome(oldDesktop, { ...newHostd, protocol: { min: 1, max: 2 } }, device),
+    ).toMatchObject({ ok: true, welcome: { protocolVersion: 1 } });
   });
 });
 
@@ -161,6 +293,8 @@ describe("the hello on the wire", () => {
       { ...hello, features: ["Sessions"] },
       { ...hello, features: Array.from({ length: 257 }, (_, index) => `f${index}`) },
       { ...hello, credential: 7 },
+      { ...hello, credential: "c".repeat(8193) },
+      { ...hello, client: { kind: "desktop", version: "v".repeat(129) } },
     ];
     for (const value of broken) expect(isHostHello(value)).toBe(false);
   });
@@ -172,5 +306,84 @@ describe("the hello on the wire", () => {
     expect(isHostFeature("terminals..stream")).toBe(false);
     expect(isHostFeature(`a${"b".repeat(128)}`)).toBe(false);
     expect(isHostFeature(7)).toBe(false);
+  });
+});
+
+describe("the hello's nonce (VC-663, D6)", () => {
+  it("is required v1 wire: a hello without one, or with a short or non-base64url one, is refused", () => {
+    const { nonce: _nonce, ...withoutNonce } = hello;
+    for (const value of [
+      withoutNonce,
+      { ...hello, nonce: null },
+      { ...hello, nonce: "too-short" },
+      { ...hello, nonce: "q2Vh7wJcJ0rX3m3d4cQ9tA==" },
+      { ...hello, nonce: "a".repeat(129) },
+    ]) {
+      expect(isHostHello(value)).toBe(false);
+    }
+    expect(readHostHello(encodeHostHello({ ...hello, nonce: "" }))).toBeNull();
+  });
+
+  it("is minted fresh with 256 bits per handshake, base64url without padding", () => {
+    const nonces = new Set(Array.from({ length: 64 }, () => createHostNonce()));
+    expect(nonces.size).toBe(64);
+    for (const nonce of nonces) {
+      expect(nonce).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+      expect(isHostNonce(nonce)).toBe(true);
+    }
+  });
+});
+
+describe("buildHostHello", () => {
+  it("builds a hello the host can read, with every version this build speaks and a fresh nonce", () => {
+    const input = {
+      client: { kind: "mobile" as const, version: "1.0.0" },
+      workspaceId: WORKSPACE,
+      credential: "device-token",
+      features: ["sessions"],
+      lastSeen: null,
+    };
+    const first = buildHostHello(input);
+    expect(first).toStrictEqual({
+      protocol: HOST_PROTOCOL_VERSIONS,
+      client: { kind: "mobile", version: "1.0.0" },
+      workspaceId: WORKSPACE,
+      lastSeen: null,
+      features: ["sessions"],
+      credential: "device-token",
+      nonce: first.nonce,
+    });
+    expect(isHostHello(first)).toBe(true);
+    expect(readHostHello(encodeHostHello(first))).toStrictEqual(first);
+    expect(buildHostHello(input).nonce).not.toBe(first.nonce);
+  });
+
+  it("keeps a narrower version range the client chose", () => {
+    const range = { min: 1, max: 1 };
+    expect(
+      buildHostHello({
+        client: { kind: "cli", version: "1" },
+        workspaceId: WORKSPACE,
+        credential: "c",
+        features: [],
+        lastSeen: { epoch: 2, hostId: HOST },
+        protocol: range,
+      }).protocol,
+    ).toBe(range);
+  });
+});
+
+describe("HOST_PROTOCOL_CLOSE_CODES", () => {
+  it("are fixed application codes, distinct, and frozen", () => {
+    expect(HOST_PROTOCOL_CLOSE_CODES).toStrictEqual({
+      handshakeRefused: 4400,
+      credentialInvalid: 4401,
+      helloTimeout: 4408,
+      responseTooLarge: 4413,
+    });
+    const codes = Object.values(HOST_PROTOCOL_CLOSE_CODES);
+    expect(new Set(codes).size).toBe(codes.length);
+    for (const code of codes) expect(code >= 4000 && code <= 4999).toBe(true);
+    expect(Object.isFrozen(HOST_PROTOCOL_CLOSE_CODES)).toBe(true);
   });
 });

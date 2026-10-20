@@ -54,9 +54,27 @@ const dataChanges = createDataChangeCoalescer({
   },
 });
 
+/**
+ * Who else hears every `data-changed` the moment it is published, before the
+ * windows' coalescing: the board's change feed (VC-565), which stamps each
+ * one so a Client following the feed misses no writer's change.
+ */
+const dataChangedTaps = new Set<(change: DataChangeScope) => void>();
+
+/** Hears every `data-changed` published on {@link windowEventBus}; returns the untap. */
+export function tapDataChanged(listener: (change: DataChangeScope) => void): () => void {
+  dataChangedTaps.add(listener);
+  return () => {
+    dataChangedTaps.delete(listener);
+  };
+}
+
 /** How each host topic reaches the windows: its channel, and for one, its cadence. */
 const WINDOW_DELIVERY: { [T in HostBroadcastEventTopic]: (payload: HostEventMap[T]) => void } = {
-  "data-changed": (change) => dataChanges.queue(change),
+  "data-changed": (change) => {
+    for (const tap of dataChangedTaps) tap(change);
+    dataChanges.queue(change);
+  },
   "session-activity": (notice) => sendToEveryWindow("volli:session-activity", notice),
   "session-retitled": (event) => sendToEveryWindow("volli:session-retitled", event),
   "sessions-interrupted": (event) => sendToEveryWindow("volli:sessions-interrupted", event),
@@ -186,20 +204,6 @@ export function broadcastUpdateState(state: UpdateUiState): void {
  */
 export function broadcastSessionActivity(notice: SessionActivityNotice): void {
   windowEventBus.publish("session-activity", notice);
-}
-
-/**
- * Announce a retitle main made on its own behalf (VC-81 auto-titling).
- *
- * Every other retitle is a renderer action that moves its own labels
- * optimistically as it goes. This one has no renderer behind it — the CLI door
- * has no window at all — and `session.retitle` reaches the ledger WITHOUT the
- * runtime publish, so no live subscriber is told. Without this the model's
- * title is durably correct and invisible until an unrelated refresh, which is
- * the whole feature failing to appear.
- */
-export function broadcastSessionRetitled(sessionId: string, title: string): void {
-  windowEventBus.publish("session-retitled", { sessionId, title });
 }
 
 /**

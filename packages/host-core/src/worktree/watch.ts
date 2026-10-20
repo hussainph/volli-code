@@ -16,20 +16,21 @@
  * Keep or dismissing takes effect immediately, without waiting for a poll. A
  * background READ failure is silent (a read is not a mutation — no toasts).
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve as resolvePath } from "node:path";
 import type Database from "better-sqlite3";
 import type { TicketEventActor, TicketStatus } from "@volli/shared";
 import type { PrCheck, TicketRetentionState } from "@volli/shared";
 
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
-import { prepared } from "@volli/host-core/db/prepared";
+import { recordTicketEvent } from "../db/events-repo";
+import { getProjectById } from "../db/projects-repo";
+import { prepared } from "../db/prepared";
 import {
   listRetentionCandidates,
   listTrimCandidates,
   updateTicketFields,
   type TicketRow,
-} from "@volli/host-core/db/tickets-repo";
+} from "../db/tickets-repo";
 import type { NotificationRequest } from "@volli/shared";
 import { ghDiscoverPr, ghPrStatus, type RunNet } from "./net";
 import {
@@ -38,9 +39,12 @@ import {
   reclaimIfStale,
   retentionTtlMs,
   trimFinishedWorktree,
-  type ReclaimDeps,
-  type TrimFinishDeps,
+  type ReclaimPorts,
+  type TrimFinishPorts,
 } from "./retention";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("worktree-watch");
 
 export type { TicketRetentionState } from "@volli/shared";
 
@@ -53,6 +57,13 @@ const AUTOMATION_ACTOR: TicketEventActor = { kind: "automation" };
 export const RETENTION_POLL_INTERVAL_MS = 60_000;
 /** Exponential-backoff ceiling: ~15 min. */
 export const RETENTION_MAX_BACKOFF_MS = 15 * 60_000;
+/**
+ * How long a Done ticket with no `pr_url` keeps looking for one (VC-836). A PR
+ * is normally open (and stamped) long before its ticket reaches Done, so this
+ * only has to outlast an agent that opened it late or a stretch offline; past
+ * it, the ticket is read as having no PR without a `gh pr list` every cycle.
+ */
+const DONE_DISCOVERY_GRACE_MS = 7 * 24 * 60 * 60_000;
 
 /** The watch's tunables — derived once from the environment. */
 export interface RetentionWatchConfig {
@@ -124,7 +135,7 @@ export function createRetentionStore(): RetentionStore {
 // --- poll deps + step -------------------------------------------------------
 
 /** The poll step's injected seams — DB, network, clock, and notify/broadcast callbacks. */
-export interface RetentionPollDeps {
+export interface RetentionPollPorts {
   db: Database.Database;
   net: RunNet;
   /** Injected clock (never `Date.now()` inline) — the TTL and readiness read it. */
@@ -145,13 +156,13 @@ export interface RetentionPollDeps {
    * the pure read it has always been: nothing is deleted, the prompts still
    * appear, and the only thing lost is the automatic disk reclaim.
    */
-  reclaim?: ReclaimDeps;
+  reclaim?: ReclaimPorts;
   /**
    * The trim-on-finish pass (VC-340). Absent — in tests, and in a degraded boot
    * that could not build the worktree seams — leaves the poll exactly as it was:
    * no worktree gives up its ignored content, and nothing else changes.
    */
-  trim?: TrimFinishDeps;
+  trim?: TrimFinishPorts;
 }
 
 /** The poll cycle's outcome — the driver reads it to update backoff and broadcast. */
@@ -171,6 +182,65 @@ function hasPrMergedEvent(db: Database.Database, ticketId: string): boolean {
     "SELECT COUNT(*) as n FROM ticket_events WHERE ticket_id = ? AND kind = 'pr_merged'",
   ).get(ticketId);
   return (row?.n ?? 0) > 0;
+}
+
+/**
+ * Whether a `pr_merged` event records THIS url merging (VC-836) — the durable
+ * fact that lets a fresh launch skip a PR an earlier one already saw merge. An
+ * event for a different url (the ticket's pr_url was re-pointed at a new PR)
+ * says nothing about the current one, so it does not count.
+ */
+function hasPrMergedEventFor(db: Database.Database, ticketId: string, url: string): boolean {
+  const rows = prepared<[string], { payload: string }>(
+    db,
+    "SELECT payload FROM ticket_events WHERE ticket_id = ? AND kind = 'pr_merged'",
+  ).all(ticketId);
+  return rows.some((row) => {
+    try {
+      return (JSON.parse(row.payload) as { url?: unknown }).url === url;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * The terminal observation for a ticket's current PR, when one is already known
+ * (VC-836): merged and closed PRs do not change, so re-reading them every cycle
+ * only spends the user's GitHub API budget. Known from this launch's last
+ * observation of the same url — a merge only once its one-shot event landed,
+ * so a failed write still retries through a fresh read — or, after a restart,
+ * from the durable `pr_merged` event for that url. A new `pr_url` is never
+ * terminal until it is read. `null` means the PR must be polled.
+ */
+function knownTerminalObservation(
+  deps: RetentionPollPorts,
+  store: RetentionStore,
+  ticketId: string,
+  prUrl: string,
+): RetentionObservation | null {
+  const last = store.observations.get(ticketId);
+  if (last !== undefined && last.prUrl === prUrl) {
+    if (last.prState === "closed") return last;
+    if (last.prState === "merged" && store.notifiedMerged.has(ticketId)) return last;
+  }
+  if (hasPrMergedEventFor(deps.db, ticketId, prUrl)) {
+    return { prUrl, prState: "merged", hasConflicts: false, checks: [] };
+  }
+  return null;
+}
+
+/**
+ * Whether a ticket with no `pr_url` should still run discovery (VC-836): any
+ * ticket outside Done does, and a Done ticket does for
+ * {@link DONE_DISCOVERY_GRACE_MS} after it entered Done. A Done ticket whose
+ * entry the log cannot date has been there longer than anything the log
+ * remembers, so it is past the grace too.
+ */
+function shouldDiscover(deps: RetentionPollPorts, ticket: TicketRow): boolean {
+  if (ticket.status !== "done") return true;
+  const doneEntryAt = doneEntryTimestamp(deps.db, ticket.id);
+  return doneEntryAt !== null && deps.now() - doneEntryAt < DONE_DISCOVERY_GRACE_MS;
 }
 
 /**
@@ -198,12 +268,32 @@ function observationChanged(a: RetentionObservation | undefined, b: RetentionObs
 }
 
 /**
- * Resolves the cwd a `gh` call runs in for a ticket: its worktree if it still
- * exists on disk, else the project checkout (the worktree may have been removed
- * on archive while the branch + `pr_url` are retained and still worth watching).
+ * Whether `dir` is a git checkout `gh` can run in: a `.git` directory, or a
+ * `.git` file whose `gitdir:` target still exists. An empty leftover directory
+ * or a linked worktree whose admin dir was pruned fails every `gh` call with
+ * "not a git repository" (VC-836).
  */
-function ghCwd(deps: RetentionPollDeps, ticket: TicketRow): string | null {
-  if (ticket.worktree_path && existsSync(ticket.worktree_path)) return ticket.worktree_path;
+function hasUsableGit(dir: string): boolean {
+  // One read, no stat first: reading a directory fails with EISDIR, which is
+  // the ordinary-checkout answer, and anything else that fails is unusable.
+  let gitfile: string;
+  try {
+    gitfile = readFileSync(join(dir, ".git"), "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EISDIR";
+  }
+  const target = /^gitdir:\s*(.+?)\s*$/m.exec(gitfile)?.[1];
+  return target !== undefined && existsSync(resolvePath(dir, target));
+}
+
+/**
+ * Resolves the cwd a `gh` call runs in for a ticket: its worktree if it is still
+ * a usable checkout, else the project checkout (the worktree may have been
+ * removed on archive while the branch + `pr_url` are retained and still worth
+ * watching, or left behind as a directory git no longer recognises).
+ */
+function ghCwd(deps: RetentionPollPorts, ticket: TicketRow): string | null {
+  if (ticket.worktree_path && hasUsableGit(ticket.worktree_path)) return ticket.worktree_path;
   const project = getProjectById(deps.db, ticket.project_id);
   return project?.path ?? null;
 }
@@ -211,9 +301,12 @@ function ghCwd(deps: RetentionPollDeps, ticket: TicketRow): string | null {
 /**
  * One poll cycle (issue #76). For every non-archived worktree/branch ticket:
  *  1. DISCOVER — a ticket with a branch but no `pr_url` runs `gh pr list`; a
- *     found PR stamps `pr_url` + records `pr_opened` (automation).
+ *     found PR stamps `pr_url` + records `pr_opened` (automation). A Done
+ *     ticket stops looking after {@link DONE_DISCOVERY_GRACE_MS} (VC-836).
  *  2. STATUS — a ticket with a `pr_url` runs `gh pr view`; the parsed state,
- *     conflict flag, and failing checks become its observation.
+ *     conflict flag, and failing checks become its observation. A PR already
+ *     known merged or closed is not read again (VC-836): its known state feeds
+ *     the reclaim and trim below with no `gh` call.
  *  3. MERGE — the FIRST observation of `merged` records `pr_merged` (automation)
  *     and fires ONE native notification (deduped in-memory AND against the
  *     event log, so a restart never re-notifies).
@@ -221,11 +314,11 @@ function ghCwd(deps: RetentionPollDeps, ticket: TicketRow): string | null {
  * keeps its previous observation. Never throws.
  */
 export async function pollRetention(
-  deps: RetentionPollDeps,
+  deps: RetentionPollPorts,
   store: RetentionStore,
 ): Promise<PollResult> {
   const result: PollResult = { changed: false, attempted: 0, failed: 0 };
-  /** Tickets this cycle saw merged — finished, whatever column they are in. */
+  /** Tickets this cycle knows merged — finished, whatever column they are in. */
   const mergedThisCycle = new Set<string>();
 
   for (const ticket of listRetentionCandidates(deps.db)) {
@@ -245,7 +338,7 @@ export async function pollRetention(
       let prUnresolved = false;
 
       // (1) DISCOVER — adopt an agent-opened PR for a branch with no stored url.
-      if (prUrl === null && ticket.branch) {
+      if (prUrl === null && ticket.branch && shouldDiscover(deps, ticket)) {
         result.attempted += 1;
         const discovered = await ghDiscoverPr(deps.net, {
           worktreePath: cwd,
@@ -253,10 +346,10 @@ export async function pollRetention(
         });
         if (!discovered.ok) {
           result.failed += 1;
-          console.error(
-            `[retention] discover failed for ${ticket.id}:`,
-            discovered.failure.message,
-          );
+          log.error("pull request discovery failed", {
+            ticketId: ticket.id,
+            error: discovered.failure.message,
+          });
           continue;
         }
         if (discovered.value.url !== null) {
@@ -284,12 +377,33 @@ export async function pollRetention(
         continue;
       }
 
+      // A merged or closed PR does not change: answer from what is already
+      // known instead of a fresh read (VC-836). The reclaim and the trim still
+      // run, fed by that known state, so a ticket merged in an earlier launch
+      // keeps its schedule without spending a `gh` call.
+      const terminal = knownTerminalObservation(deps, store, ticket.id, prUrl);
+      if (terminal !== null) {
+        if (observationChanged(store.observations.get(ticket.id), terminal)) result.changed = true;
+        store.observations.set(ticket.id, terminal);
+        if (terminal.prState === "merged") {
+          // Known merged means the one-shot event exists, which is exactly
+          // what the dedup below would have found.
+          store.notifiedMerged.add(ticket.id);
+          mergedThisCycle.add(ticket.id);
+        }
+        if (await maybeReclaim(deps, ticket, terminal.prState)) result.changed = true;
+        continue;
+      }
+
       // (2) STATUS — read the PR's live state.
       result.attempted += 1;
       const status = await ghPrStatus(deps.net, { worktreePath: cwd, prUrl });
       if (!status.ok) {
         result.failed += 1;
-        console.error(`[retention] status failed for ${ticket.id}:`, status.failure.message);
+        log.error("pull request status failed", {
+          ticketId: ticket.id,
+          error: status.failure.message,
+        });
         continue;
       }
 
@@ -338,7 +452,7 @@ export async function pollRetention(
       // half the question of whether a Done ticket is finished.
       if (await maybeReclaim(deps, ticket, observation.prState)) result.changed = true;
     } catch (error) {
-      console.error(`[retention] poll failed for ${ticket.id}:`, error);
+      log.error("retention poll failed", { ticketId: ticket.id, error });
     }
   }
 
@@ -366,7 +480,7 @@ export async function pollRetention(
  * rest of the pass.
  */
 async function runTrimPass(
-  deps: RetentionPollDeps,
+  deps: RetentionPollPorts,
   mergedThisCycle: ReadonlySet<string>,
 ): Promise<boolean> {
   const trim = deps.trim;
@@ -383,13 +497,15 @@ async function runTrimPass(
       });
       if (outcome.kind !== "trimmed") continue;
       changed = true;
-      console.log(
-        `[retention] trimmed ${outcome.report.removed.length} ignored path(s) ` +
-          `(${outcome.report.totalBytes} bytes, kept ${outcome.report.kept.length}) ` +
-          `from ${outcome.report.worktreePath}`,
-      );
+      log.info("ignored paths trimmed", {
+        ticketId,
+        removed: outcome.report.removed.length,
+        bytes: outcome.report.totalBytes,
+        kept: outcome.report.kept.length,
+        worktreePath: outcome.report.worktreePath,
+      });
     } catch (error) {
-      console.error(`[retention] trim failed for ${ticketId}:`, error);
+      log.error("trim failed", { ticketId, error });
     }
   }
   return changed;
@@ -406,7 +522,7 @@ async function runTrimPass(
  * Returns whether anything changed, so the caller broadcasts.
  */
 async function maybeReclaim(
-  deps: RetentionPollDeps,
+  deps: RetentionPollPorts,
   ticket: TicketRow,
   prState: "open" | "merged" | "closed" | null,
 ): Promise<boolean> {
@@ -439,7 +555,7 @@ async function maybeReclaim(
  * means DISCOVER naturally retries the stamp on the next poll — no separate
  * retry bookkeeping needed.
  */
-function stampDiscoveredPr(deps: RetentionPollDeps, ticket: TicketRow, url: string): boolean {
+function stampDiscoveredPr(deps: RetentionPollPorts, ticket: TicketRow, url: string): boolean {
   try {
     const now = deps.now();
     const write = deps.db.transaction(() => {
@@ -449,7 +565,7 @@ function stampDiscoveredPr(deps: RetentionPollDeps, ticket: TicketRow, url: stri
     write();
     return true;
   } catch (error) {
-    console.error(`[retention] failed to stamp discovered PR for ${ticket.id}:`, error);
+    log.error("failed to stamp discovered pull request", { ticketId: ticket.id, error });
     // Operational, and deliberately outside the switches: this is a durable
     // write that failed in a background pass with no other user-visible
     // surface (CLAUDE.md's never-swallow rule). A "worktree maintenance"
@@ -486,7 +602,7 @@ const EMPTY_OBSERVATION: RetentionObservation = {
  * toggle or dismissal is reflected instantly, between polls.
  */
 export function getRetentionState(
-  deps: RetentionPollDeps,
+  deps: RetentionPollPorts,
   store: RetentionStore,
   ticketId: string,
 ): TicketRetentionState | null {
@@ -532,16 +648,22 @@ export function getRetentionState(
  * pattern, but self-rescheduling with `setTimeout` so the delay can back off on
  * failure). Owns the transient {@link RetentionStore}; exposes `triggerNow`
  * (the on-focus/manual poll), the composed `getState`, and `dismiss`.
+ *
+ * `stop()` only disarms the timer; a poll already in flight keeps running and
+ * still writes (a `pr_opened` stamp, a `pr_merged` event, a reclaim). A host
+ * that is about to close the database stops the watch and then awaits
+ * {@link RetentionWatcher.settled} (VC-627).
  */
 export class RetentionWatcher {
   private readonly store = createRetentionStore();
   private timer: NodeJS.Timeout | null = null;
   private failures = 0;
-  private running = false;
+  /** The poll in flight, if any. Never rejects; `null` between polls. */
+  private inFlight: Promise<void> | null = null;
   private started = false;
 
   constructor(
-    private readonly deps: RetentionPollDeps,
+    private readonly deps: RetentionPollPorts,
     private readonly config: RetentionWatchConfig,
   ) {}
 
@@ -552,7 +674,7 @@ export class RetentionWatcher {
     this.schedule(this.config.intervalMs);
   }
 
-  /** Stops the recurring poll. */
+  /** Stops the recurring poll. A poll already in flight runs on: see {@link settled}. */
   stop(): void {
     this.started = false;
     if (this.timer !== null) {
@@ -568,6 +690,16 @@ export class RetentionWatcher {
       this.timer = null;
     }
     void this.runOnce();
+  }
+
+  /**
+   * Resolves once no poll is in flight — including one a trigger started while
+   * this waited. Never rejects and adds no delay of its own. It does not stop
+   * the watch: after {@link stop}, nothing reschedules, so this is the last
+   * write the watch makes.
+   */
+  async settled(): Promise<void> {
+    while (this.inFlight !== null) await this.inFlight;
   }
 
   /** The composed retention state for a ticket (or `null` when unknown). */
@@ -594,8 +726,11 @@ export class RetentionWatcher {
 
   private async runOnce(): Promise<void> {
     // A trigger that lands mid-poll is dropped; the in-flight run reschedules.
-    if (this.running) return;
-    this.running = true;
+    if (this.inFlight !== null) return;
+    let finished!: () => void;
+    this.inFlight = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
     try {
       const result = await pollRetention(this.deps, this.store);
       this.failures =
@@ -603,10 +738,12 @@ export class RetentionWatcher {
     } catch (error) {
       // Defensive: pollRetention already swallows per-ticket read failures, but a
       // catastrophic failure must never leave an unhandled rejection.
-      console.error("[retention] poll cycle failed:", error);
+      log.error("retention poll cycle failed", { error });
       this.failures += 1;
     } finally {
-      this.running = false;
+      this.inFlight = null;
+      // Waiters resume on a later microtask, after the reschedule below.
+      finished();
       this.schedule(nextBackoffDelay(this.failures, this.config));
     }
   }

@@ -3,6 +3,8 @@ export * from "./quick-open-rank";
 export * from "./file-save-policy";
 export * from "./file-workspace";
 export * from "./tab-order";
+export * from "./version-order";
+export * from "./update-failure";
 export * from "./split-view";
 export * from "./board";
 export * from "./ticket";
@@ -13,6 +15,17 @@ export * from "./harness-command";
 export * from "./harness";
 export * from "./token-list";
 export * from "./verb-registry";
+export * from "./tool-refresh-copy";
+export * from "./tool-refresh-delta";
+export * from "./catalog-actor";
+export * from "./command-intent-conflict";
+export * from "./queue-revision-conflict";
+export * from "./operation-unavailable";
+export * from "./handler-refused";
+export * from "./handler-keys";
+export * from "./desktop-entries";
+export type * from "./browser-app-shortcut";
+export * from "./host-link-relay";
 export * from "./agent-surface";
 export * from "./agent-product";
 export * from "./agent-plan";
@@ -24,9 +37,11 @@ export * from "./automation-schedule-pass";
 export * from "./model-access-policy";
 export * from "./decision-model";
 export * from "./secret-redaction";
+export * from "./structured-log";
 export * from "./model-auto-select";
 export * from "./model-mark-color";
 export * from "./model-access-sign-in";
+export * from "./host-sign-ins";
 export * from "./usage-limits";
 export * from "./compaction-policy";
 export * from "./authority";
@@ -45,6 +60,7 @@ export * from "./session-host-notice";
 export * from "./session-todo";
 export * from "./ticket-branch";
 export * from "./ticket-comment";
+export * from "./board-change";
 export * from "./blob";
 export * from "./markdown-image";
 export * from "./ticket-events";
@@ -76,6 +92,9 @@ export * from "./session-cursor-motion";
 export * from "./label";
 export * from "./legacy-import";
 export * from "./fs-entries";
+export type * from "./file-types";
+export { SHELL_MAX_PER_SESSION } from "./background-shell";
+export type * from "./background-shell";
 export * from "./walk-prune";
 export * from "./errors";
 export * from "./terminal";
@@ -107,6 +126,7 @@ export * from "./native-observation-id";
 export * from "./session-rpc-wire";
 export * from "./park";
 export * from "./volli-dir";
+export * from "./operator-token";
 export * from "./retention";
 export * from "./theme/tokens";
 export * from "./theme/definition";
@@ -117,6 +137,7 @@ export * from "./theme/generate";
 export * from "./theme/veil";
 export * from "./theme/ghostty-overlay";
 export * from "./theme/app-state";
+export * from "./app-state-keys";
 export * from "./theme/project-override";
 export * from "./theme/editor-themes";
 
@@ -131,6 +152,7 @@ export type {
   WorktreeWatchErrorEvent,
   WorktreeBranchListing,
   DirtyWorktreeOrphan,
+  DirtyWorktreeOrphanTicket,
   RemovableWorktreeOrphan,
   KeptWorktreeOrphan,
   PrunableWorktreeMetadata,
@@ -148,3 +170,8 @@ export type {
   PrCheck,
   TicketRetentionState,
 } from "./worktree-host";
+export * from "./sign-in-catalog";
+export * from "./remote-hosts";
+export * from "./host-workspaces";
+export * from "./remote-host-health";
+export * from "./git-url";

@@ -12,23 +12,30 @@ import {
   isTicketStatus,
   MUTATION_PLAN_CONTRACT,
   pathContains,
+  routeOf,
   shortSessionId,
 } from "@volli/shared";
-import type { AgentRequest, AgentResponse, Project, SessionEvent } from "@volli/shared";
+import type {
+  AgentHelpSurface,
+  AgentRequest,
+  AgentResponse,
+  Project,
+  SessionEvent,
+} from "@volli/shared";
 import type Database from "better-sqlite3";
 
-import { listMaterializableLinks } from "@volli/host-core/db/blobs-repo";
-import { listRecentComments } from "@volli/host-core/db/comments-repo";
-import { listRecentTicketEvents } from "@volli/host-core/db/events-repo";
-import { findLabelByName, listAllLabels } from "@volli/host-core/db/labels-repo";
-import { listLatestSignals } from "@volli/host-core/db/signals-repo";
+import { listMaterializableLinks } from "../db/blobs-repo";
+import { listRecentComments } from "../db/comments-repo";
+import { listRecentTicketEvents } from "../db/events-repo";
+import { findLabelByName, listAllLabels } from "../db/labels-repo";
+import { listLatestSignals } from "../db/signals-repo";
 import {
   getTicket,
   listArchivedTicketsByProject,
   listTicketsByProject,
   listWorktreePathsByProject,
-} from "@volli/host-core/db/tickets-repo";
-import { isInside } from "@volli/host-core/worktree/paths";
+} from "../db/tickets-repo";
+import { isInside } from "../worktree/paths";
 import { composeTicketBrief } from "./briefs";
 import { failure } from "./context";
 import type { AgentCommandContext } from "./context";
@@ -99,13 +106,24 @@ function environmentProjectRoot(
 }
 
 /** Reads VC-164's frozen list without backfilling or consulting current Settings. */
-function recordedAgentToolSurface(events: readonly SessionEvent[]): readonly string[] | null {
+function recordedAgentToolSurface(
+  events: readonly SessionEvent[],
+): Pick<AgentHelpSurface, "tools" | "routes" | "mcpServerIds"> | null {
   for (const event of events) {
     if (
       event.payload.kind === "session.input.recorded" &&
       event.payload.input.kind === "tool-surface"
     ) {
-      return event.payload.input.tools;
+      const input = event.payload.input;
+      return {
+        tools: input.tools,
+        routes: Object.fromEntries(
+          input.tools.map((tool) => [tool, routeOf(input.codeMode, tool)]),
+        ),
+        mcpServerIds: Object.fromEntries(
+          (input.mcpTools ?? []).map((tool) => [tool.providerName, tool.serverId]),
+        ),
+      };
     }
   }
   return null;
@@ -188,7 +206,7 @@ export async function identifyVerb(
           : {
               agentSurface: {
                 role: envSession.role,
-                tools: frozenTools,
+                ...frozenTools,
               },
             }),
         ...(env === undefined ? {} : { env }),
@@ -249,7 +267,12 @@ export async function boardVerb(
     : resolved.response;
 }
 
-/** `volli project list` — every registered project, with its ticket counts. */
+/**
+ * `volli project list` — every registered project, with its ticket counts.
+ * Each row carries its `id` (VC-710), which is the project's Workspace id: a
+ * desktop lists a remote host's projects over SSH with this and opens one.
+ * Additive JSON only; the text rendering is unchanged.
+ */
 export async function projectListVerb(
   context: AgentCommandContext,
   _request: AgentRequest,
@@ -260,6 +283,7 @@ export async function projectListVerb(
     ok: true,
     data: {
       projects: projects.map((project) => ({
+        id: project.id,
         name: project.name,
         prefix: project.ticketPrefix,
         path: project.path,
@@ -301,9 +325,11 @@ export async function ticketListVerb(
   const priority = request.args["priority"];
   const label = request.args["label"];
   const limit = request.args["limit"];
+  const body = request.args["body"];
   const listPriorityError = invalidPriorityResponse(priority);
   if (listPriorityError) return listPriorityError;
   if (
+    (body !== undefined && typeof body !== "boolean") ||
     (status !== undefined && !isTicketStatus(status)) ||
     (label !== undefined && typeof label !== "string") ||
     (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0))
@@ -323,7 +349,15 @@ export async function ticketListVerb(
         (canonicalLabel !== undefined && ticket.labels.includes(canonicalLabel)),
     )
     .slice(0, typeof limit === "number" ? limit : undefined)
-    .map((ticket) => agentTicket(ticket, resolved.project));
+    .map((ticket) => {
+      const row = agentTicket(ticket, resolved.project);
+      if (body !== false) return row;
+      // `body: false` (`--no-body`, and every human table) omits the one field
+      // that is most of the answer (VC-824). Opt-in, so a caller that reads
+      // `body` from the default rows keeps it.
+      const { body: _body, ...summary } = row;
+      return summary;
+    });
   return { v: 1, ok: true, data: { tickets } };
 }
 

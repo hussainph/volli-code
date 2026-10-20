@@ -273,6 +273,8 @@ export type ExecutionVenue = "local";
  * lets {@link SessionToolBinding} carry the right thing for each.
  */
 export interface RuntimeToolBundle {
+  /** Compatible versioned verb copy; absent preserves historical description bytes. */
+  refreshDescriptions?: true;
   /** Coding tools, in the order this venue offers them. */
   tools: readonly CodingToolId[];
   /**
@@ -306,6 +308,8 @@ export interface RuntimeToolBundle {
   mcp?: readonly McpToolDefinition[];
   /** New MCP-management wire names. Absent on historical frozen surfaces using mcp_* names. */
   mcpManagementNames?: "server";
+  /** Multi-question ask_user declaration, frozen at birth; absent keeps the original surface. */
+  askUserQuestions?: true;
   /**
    * Whether this Session's surface names `codemode`, and if so the route of
    * every other tool and the limits each script run is held to (VC-471).
@@ -454,8 +458,15 @@ export interface RuntimeAskUserOption {
   description?: string;
 }
 
+/** One related decision in the simplified, birth-marked ask_user declaration. */
+export interface RuntimeAskUserQuestion {
+  question: string;
+  /** Short answer choices. Empty means prose only; free text is always available. */
+  choices: readonly string[];
+}
+
 /**
- * One question the model decided to put to the person driving the Session.
+ * One request the model decided to put to the person driving the Session.
  *
  * A separate port from {@link RuntimeAskRequest}, and separate for a reason that
  * survives their similar shapes: an escalation is the runtime's own policy
@@ -470,6 +481,8 @@ export interface RuntimeAskUserOption {
 export interface RuntimeAskUserRequest {
   /** The runtime's own id for the asking call, so the question can be shown against it. */
   toolCallId: string;
+  /** Related decisions in the birth-marked declaration; historical flat calls stay unchanged. */
+  questions?: readonly RuntimeAskUserQuestion[];
   /** What the model wants to know, in its own words. */
   question: string;
   /** Absent or empty means the model wants prose rather than a choice. */
@@ -524,6 +537,11 @@ export interface RuntimeWebDocument {
   /** Whether the boundary cut the text short of the document's end. */
   truncated: boolean;
   /**
+   * The text before the character bound cut it, when that bound did (VC-237):
+   * for the runtime to save beside the Session, never to show the model.
+   */
+  whole?: RuntimeWholeText;
+  /**
    * How a GitHub page URL was read instead of as a page, when it was: a `blob`
    * URL as the raw file it shows, a `tree` URL as the listing GitHub's git
    * trees API gives for that directory. Set only when the answer came from the
@@ -531,6 +549,27 @@ export interface RuntimeWebDocument {
    * rather than prose, so the runtime states it in its own words.
    */
   via?: "github-raw-file" | "github-directory-listing";
+}
+
+/**
+ * The whole of a read whose bounded copy is what the model reads (VC-237).
+ *
+ * A host bound exists to keep one result small enough for a conversation, and
+ * a dense page is exactly where the part it cut is the part someone needs. So
+ * the host hands the runtime this beside the bounded copy, and the runtime
+ * saves it to the Session's own saved tool output and names the file in the
+ * result: the model reads the bounded copy, and the rest only by asking for
+ * it. Untrusted exactly as the bounded copy is, and never part of the content
+ * a model is sent.
+ */
+export interface RuntimeWholeText {
+  text: string;
+  /**
+   * Whether even this stops at one of Volli's own bounds short of the source's
+   * end — the most of a page a parse or a tree walk takes on, or the console a
+   * tab keeps — because the whole is still a bounded read, not an unbounded one.
+   */
+  bounded: boolean;
 }
 
 /**
@@ -661,6 +700,20 @@ export interface RuntimeBrowserSnapshot extends RuntimeBrowserPage {
   /** Whether the host cut the tree at its own bound before the page ended. */
   truncated: boolean;
   /**
+   * The tree printed past the bound that cut {@link snapshotText}, when one
+   * did (VC-237), for the runtime to save. Only the elements
+   * {@link snapshotText} shows carry refs in it: an element past the cut was
+   * never shown, so it has no ref to act on.
+   */
+  whole?: RuntimeWholeText;
+  /**
+   * Whether the tree exposed nothing at all (VC-277): the page has rendered no
+   * accessible structure yet, or draws without any. A read that failed or
+   * timed out never answers with this — it fails the call — so an empty
+   * {@link snapshotText} with this false is Volli's bound, never the page.
+   */
+  empty: boolean;
+  /**
    * An opaque id for the picture the host took of the page after this call
    * changed it, for the person's transcript card — never the bytes, which
    * stay with the host (VC-238). Null when nothing changed (a plain read) or
@@ -677,6 +730,16 @@ export interface RuntimeBrowserActResult extends RuntimeBrowserSnapshot {
    * was empty. Null altogether for page-level actions (press, scroll, wait).
    */
   target: { ref: string; name: string | null } | null;
+  /**
+   * What Volli saw move between the tab as the action found it and the fresh
+   * read after it (VC-277), so a click the page ignored reads differently
+   * from one that worked: the tab's URL, its navigation generation, and the
+   * accessibility tree's content — roles, names, values and states such as
+   * checked or expanded, but not focus, which every click moves. The tree is
+   * compared with the latest read before the action, so a page that changes
+   * by itself can read as changed.
+   */
+  changed: { url: boolean; generation: boolean; tree: boolean };
 }
 
 /**
@@ -764,6 +827,12 @@ export interface RuntimeBrowserConsoleMessage {
 export interface RuntimeBrowserConsole extends RuntimeBrowserPage {
   messages: readonly RuntimeBrowserConsoleMessage[];
   truncated: boolean;
+  /**
+   * The longer console the host keeps, when {@link messages} left part of it
+   * out (VC-237), for the runtime to save: every message it still holds,
+   * oldest first, each cut only to that longer record's own bound.
+   */
+  kept?: { messages: readonly RuntimeBrowserConsoleMessage[]; bounded: boolean };
 }
 
 /**
@@ -1065,6 +1134,12 @@ export interface RuntimeWorkspaceEnvironment {
 }
 
 /** Everything the Agent Runtime needs to start one Session, whatever its Role. */
+export interface RuntimeToolRefreshAnnouncement {
+  /** Session Event id, never an attachment-local id. */
+  id: string;
+  namespaces: readonly { name: string; count: number }[];
+}
+
 export interface SessionRuntimeSpec {
   identity: RuntimeSessionIdentity;
   /**
@@ -1086,6 +1161,29 @@ export interface SessionRuntimeSpec {
   workspaceEnvironment?: RuntimeWorkspaceEnvironment;
   promptResources?: readonly PromptResource[];
   tools: RuntimeToolBundle;
+  /**
+   * Last cold provider-visible bundle. Omitted when equal to `tools`.
+   * Warm additions behind Code Mode change the executable bundle only; startup
+   * and recovery must render this subset, not regenerate the cached declaration
+   * from the larger executable registry. Direct additions cannot happen warm.
+   */
+  declarationTools?: RuntimeToolBundle;
+  /** Durable warm refresh facts whose keyed discovery messages survive sidecar retries/recovery. */
+  toolRefreshAnnouncements?: readonly RuntimeToolRefreshAnnouncement[];
+  /**
+   * Recompute and durably record an additions-only compatible surface before
+   * returning its full desired spec, including unchanged durable state on retry.
+   * Null also means unchanged; the runtime compares tool bundles and wired IDs.
+   * Warm/code-mode calls may add code-only tools, but must preserve provider declarations, routes and
+   * description bytes. Cold triggers may also upgrade compatible declarations.
+   * The model is the currently selected pair, not necessarily the birth model.
+   * The runtime awaits this before the next program or provider turn; failures
+   * propagate through that operation rather than silently losing an update.
+   */
+  refreshTools?: (request: {
+    trigger: "cold-turn" | "warm-turn" | "compaction" | "model-switch" | "code-mode";
+    model: ModelSelection;
+  }) => Promise<SessionRuntimeSpec | null>;
   /** Opaque Pi sidecar locator from the durable Session Attachment. */
   recovery?: RuntimeRecoveryRef;
   /**
@@ -1167,7 +1265,7 @@ export interface SessionRuntimeSpec {
       signal: AbortSignal,
     ): Promise<"signed in" | "declined" | "still missing">;
     redact(text: string): string;
-    /** Whether images may carry a credential; absent means fail closed. */
+    /** Whether credential values are held; absent means shell spills are disabled. */
     hasValues?(): boolean;
   };
   /**
@@ -1950,6 +2048,12 @@ export type DeliveryOutcome =
       kind: "delivered";
       delivery: "prompt" | "queue" | "steer" | "retry";
       /**
+       * Timestamp of the durable command acceptance marker, when one exists.
+       * Live receipts and recovery must name the same acceptance. Absent for
+       * volatile queue admission and callers without a command identity.
+       */
+      acceptedAt?: number;
+      /**
        * True only when this delivery OPENED a turn that is still running
        * (VC-324) — the `settle: "opened"` answer on an idle target.
        *
@@ -2027,6 +2131,11 @@ export interface RuntimeAttachmentHandle {
      * behaviour it was written against.
      */
     settle?: RuntimeMessageSettle,
+    /**
+     * A host-owned steer may only join this still-accepting turn. Refuse if
+     * it ended or changed while delivery waited; never open another turn.
+     */
+    targetTurnId?: string,
   ): Promise<DeliveryOutcome>;
   /** Apply a validated model policy only while this attachment is idle. */
   selectModel(selection: ModelSelection): Promise<ModelSelectionOutcome>;

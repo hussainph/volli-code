@@ -4,7 +4,7 @@
  */
 import { app } from "electron";
 import type Database from "better-sqlite3";
-import { worktreeDeps as buildWorktreeDeps } from "@volli/host-core/worktree-runtime";
+import { worktreeDeps as buildWorktreeDeps } from "@volli/host-core/worktree";
 import { windowEventBus } from "./broadcast";
 
 export function worktreeDeps(db: Database.Database) {

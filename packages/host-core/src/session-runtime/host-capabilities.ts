@@ -16,7 +16,12 @@ export interface HostToolCapabilities {
   shells: boolean;
 }
 
-/** Preserve the shipped desktop order: these bytes are part of the cache prefix. */
+/**
+ * Membership, not order. The caller lists which ports exist, in whatever order
+ * it pleases; the shared resolver emits them in `NON_CODING_TOOL_IDS` order —
+ * the canonical bytes the Cache Prefix is taken over — so membership is what
+ * survives this call, never the passed order.
+ */
 export function resolveHostToolSurface(input: {
   capabilities: HostToolCapabilities;
   web: SessionWebPorts;

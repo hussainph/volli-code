@@ -20,8 +20,8 @@
  * database that no restore output ever touches.
  */
 import Database from "better-sqlite3";
-import { migrate, SCHEMA_HEAD } from "@volli/host-core/db/migrations";
-import { MIN_READER_VERSION_KEY } from "@volli/host-core/db/schema-compatibility";
+import { migrate, SCHEMA_HEAD } from "../db/migrations";
+import { MIN_READER_VERSION_KEY } from "../db/schema-compatibility";
 import { BACKUP_INCLUDED_TABLES, redactionsForTable } from "./decisions";
 import type { RedactionRule } from "./decisions";
 

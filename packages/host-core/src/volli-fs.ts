@@ -55,7 +55,7 @@ import type {
   FileWriteResult,
   Result,
   RevealResult,
-} from "./file-types";
+} from "@volli/shared";
 import type { HostClientEventSink } from "./ports/events";
 import type { FileChangedEvent, DirChangedEvent } from "@volli/shared";
 import { clientCapabilities, type ClientCapabilityPort } from "./ports/client";

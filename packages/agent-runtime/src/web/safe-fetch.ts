@@ -86,12 +86,9 @@ export type WebFetchRuleId = (typeof WEB_FETCH_RULE_IDS)[number] | WebTargetRule
  * that does not resolve is a fact about the URL or the network — the same fact
  * any client would have met — and the useful response is a better URL or a
  * later retry. A non-public address, a disallowed scheme or a type Volli does
- * not read is Volli's policy, and there the useful response is to stop. Telling
- * a model that a 404 was "refused" and "must not be attempted another way" was
- * measured doing the opposite of both: in the owner's transcripts a plain HTTP
- * status was the most common web refusal by far — more than every other rule
- * put together — and the models that met one read a policy wall and gave up or
- * went to `curl`.
+ * not read is Volli's policy, and there the useful response is to stop. An HTTP
+ * error must not read as a policy wall: the caller may correct the URL or retry
+ * through the guarded tool, rather than bypassing its checks with the shell.
  */
 const OUTCOME_RULES: ReadonlySet<WebFetchRuleId> = new Set([
   "fetch.status",
@@ -751,6 +748,9 @@ function document(
 
   let text: string;
   let truncated: boolean;
+  // Whether the text itself already stops at one of this module's own bounds
+  // (extraction's), which the character bound below then cuts further.
+  let bounded = false;
   // `html` is narrowed away here, so what reaches the contract is exactly the
   // two kinds the contract allows: text that arrived as text, and text that
   // had to be taken out of markup to exist.
@@ -771,10 +771,13 @@ function document(
       );
     }
     text = extracted.text;
+    bounded = extracted.truncated;
     truncated = extracted.truncated || extracted.text.length > limits.textChars;
     returned = "markdown";
   } else if (listing !== undefined) {
     text = listing.text;
+    // A listing keeps itself inside the character bound and names the URL
+    // that continues it, so there is never more of it to hand on.
     truncated = listing.cut;
     returned = "text";
   } else {
@@ -795,6 +798,9 @@ function document(
       `${named(target.hostname)} served a page with no readable text in it; its content is probably rendered by scripts, which Volli does not run.`,
     );
   }
+  // Over the character bound, the text the bound cut travels beside the cut
+  // copy (VC-237): the model reads the cut copy, and the runtime saves this.
+  const cut = text.length > limits.textChars;
   return {
     requestedUrl,
     finalUrl: target.url,
@@ -802,6 +808,7 @@ function document(
     contentType: returned,
     text: truncated ? text.slice(0, limits.textChars) : text,
     truncated,
+    ...(cut ? { whole: { text, bounded } } : {}),
     ...(read?.kind === "raw-file" ? { via: "github-raw-file" as const } : {}),
     ...(listing === undefined ? {} : { via: "github-directory-listing" as const }),
   };

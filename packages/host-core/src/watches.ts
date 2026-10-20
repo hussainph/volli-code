@@ -102,13 +102,17 @@ import type {
 } from "@volli/session-engine";
 import { readSessionAnswer } from "@volli/session-engine";
 
-import type { SubscribeSessionWake } from "@volli/host-core/session-control/session-wake";
+import type { SubscribeSessionWake } from "./session-control/session-wake";
 import type { TicketWake } from "./ticket-wake";
+import type { DetachedWorkPort } from "./detached-work";
 import {
   cutAtCodePoint,
   deliverHostNotice,
   errorText,
-} from "@volli/host-core/session-runtime/host-notice-delivery";
+} from "./session-runtime/host-notice-delivery";
+import { hostLogger } from "./log/root";
+
+const log = hostLogger("watches");
 
 /** How long one watcher's changes are gathered before they are delivered as one notice. */
 export const WATCH_COALESCE_MS = 1_500;
@@ -117,6 +121,8 @@ export const WATCH_COALESCE_MS = 1_500;
 export const WATCH_ANSWER_NOTICE_LIMIT = 4_000;
 
 export interface WatchesPorts {
+  /** A timer's in-flight delivery must finish before the host closes SQLite. */
+  detachedWork?: DetachedWorkPort;
   subscribeSessionWake: SubscribeSessionWake;
   subscribeTicketWake: (listener: (wake: TicketWake) => void) => () => void;
   runtime: Pick<SessionRuntime, "command" | "subscribe" | "projection">;
@@ -213,12 +219,14 @@ function sessionLabel(targetSessionId: string, title: string | null): string {
 }
 
 /**
- * Who stopped a watched Session. A stop by the watcher itself is never worded
- * here: {@link onSessionWake} does not report it.
+ * Who stopped a watched Session, as the reader reads it. A notice never names
+ * a stop by its watcher ({@link onSessionWake} does not report one), so only
+ * the watch receipt passes `readerSessionId` to say "by this Session".
  */
-function stoppedBy(by: SessionStopActor): string {
+export function stoppedBy(by: SessionStopActor, readerSessionId?: string): string {
   if (by.kind === "user") return "by the user";
   if (by.kind === "watchdog") return "by Volli's watchdog";
+  if (by.sessionId === readerSessionId) return "by this Session";
   return `by Session ${shortSessionId(by.sessionId)}`;
 }
 
@@ -243,7 +251,8 @@ function ticketActor(event: TicketEvent, watcherSessionId: string): string {
 }
 
 export function createWatches(ports: WatchesPorts): Watches {
-  const report = ports.report ?? ((message) => console.error(`[volli] ${message}`));
+  const report =
+    ports.report ?? ((message) => log.error("watch notice failed", { detail: message }));
   const newId = ports.newId ?? randomUUID;
   const coalesceMs = ports.coalesceMs ?? WATCH_COALESCE_MS;
   const setTimer = ports.setTimeout ?? ((callback, ms) => setTimeout(callback, ms));
@@ -284,9 +293,10 @@ export function createWatches(ports: WatchesPorts): Watches {
     if (watcher.timer !== undefined) return;
     watcher.timer = setTimer(() => {
       watcher.timer = undefined;
-      void flush(watcher).catch((error: unknown) => {
+      const work = flush(watcher).catch((error: unknown) => {
         report(`watch notice for ${shortSessionId(watcher.sessionId)} failed: ${errorText(error)}`);
       });
+      ports.detachedWork?.track(work);
     }, coalesceMs);
   }
 

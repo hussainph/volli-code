@@ -1,9 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { commitRemaining } from "./commit";
+import { runGitCapturingAsync } from "./git";
+import { runNet } from "./net";
 import { netFailure, scriptedNet } from "./scripted-net";
 import { scriptedGit } from "./scripted-git";
 
@@ -160,5 +163,125 @@ describe("commitRemaining", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("pre-commit hook: lint failed");
+  });
+
+  it.each(["UU", "AA", "DD", "AU", "UA", "DU", "UD"])(
+    "refuses an unmerged %s entry with no sequencer marker, never staging or committing",
+    async (xy) => {
+      const git = probeGit(tempDir("gitdir"), ` M src/a.ts\n${xy} src/conflicted.ts\n`);
+      const { run, calls } = scriptedNet(() => ({}));
+      const result = await commitRemaining(git, run, { worktreePath: "/wt", displayId: "VC-12" });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatch(/unresolved conflicts/i);
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it("refuses unmerged entries under includeUnstaged: false too (nothing runs)", async () => {
+    const git = probeGit(tempDir("gitdir"), "UU src/conflicted.ts\n");
+    const { run, calls } = scriptedNet(() => ({}));
+    const result = await commitRemaining(git, run, {
+      worktreePath: "/wt",
+      displayId: "VC-12",
+      includeUnstaged: false,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/unresolved conflicts/i);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+// VC-838: the conflicts that leave unmerged index entries but NO sequencer
+// marker (stash pop, merge --squash). Real git, because the bug is the gap
+// between what the marker probe sees and what `git add -A` silently resolves.
+describe("commitRemaining with real git", () => {
+  let dir: string;
+  const raw = (args: readonly string[]): string =>
+    execFileSync("git", [...args], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+  const commitAll = (message: string): void => {
+    raw(["add", "-A"]);
+    raw(["commit", "--quiet", "-m", message]);
+  };
+  const head = (): string => raw(["rev-parse", "HEAD"]).trim();
+  const run = (input: { includeUnstaged?: boolean } = {}) =>
+    commitRemaining(runGitCapturingAsync, runNet, {
+      worktreePath: dir,
+      displayId: "VC-838",
+      ...input,
+    });
+
+  beforeEach(() => {
+    dir = realpathSync(tempDir("commit-real"));
+    raw(["init", "--quiet", "--initial-branch=main"]);
+    raw(["config", "user.name", "Test"]);
+    raw(["config", "user.email", "test@example.com"]);
+    raw(["config", "commit.gpgsign", "false"]);
+    // No inherited global hooks: the commit outcome must be git's alone.
+    raw(["config", "core.hooksPath", tempDir("no-hooks")]);
+    writeFileSync(join(dir, "file.txt"), "base\n");
+    commitAll("initial");
+  });
+
+  it("refuses a stash-pop conflict: HEAD does not move and nothing is staged", async () => {
+    writeFileSync(join(dir, "file.txt"), "stashed\n");
+    raw(["stash", "--quiet"]);
+    writeFileSync(join(dir, "file.txt"), "committed\n");
+    commitAll("diverge");
+    expect(() => raw(["stash", "pop"])).toThrow();
+    // The premise: a conflict-marked file, an unmerged entry, and no sequencer marker.
+    expect(readFileSync(join(dir, "file.txt"), "utf8")).toContain("<<<<<<<");
+    expect(raw(["status", "--porcelain"])).toContain("UU file.txt");
+    const before = head();
+
+    for (const includeUnstaged of [true, false]) {
+      const result = await run({ includeUnstaged });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatch(/unresolved conflicts/i);
+    }
+    expect(head()).toBe(before);
+    // Still unmerged: the refusal resolved nothing behind the person's back.
+    expect(raw(["status", "--porcelain"])).toContain("UU file.txt");
+  });
+
+  it("refuses a merge --squash conflict (git writes no MERGE_HEAD for --squash)", async () => {
+    raw(["checkout", "--quiet", "-b", "topic"]);
+    writeFileSync(join(dir, "file.txt"), "topic\n");
+    commitAll("topic");
+    raw(["checkout", "--quiet", "main"]);
+    writeFileSync(join(dir, "file.txt"), "main\n");
+    commitAll("main");
+    expect(() => raw(["merge", "--squash", "topic"])).toThrow();
+    expect(() => raw(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"])).toThrow();
+    expect(readFileSync(join(dir, "file.txt"), "utf8")).toContain("<<<<<<<");
+    const before = head();
+
+    const result = await run();
+    expect(result.ok).toBe(false);
+    expect(head()).toBe(before);
+  });
+
+  it("still commits a clean squash merge with no conflicts", async () => {
+    raw(["checkout", "--quiet", "-b", "topic"]);
+    writeFileSync(join(dir, "topic.txt"), "topic\n");
+    commitAll("topic");
+    raw(["checkout", "--quiet", "main"]);
+    raw(["merge", "--squash", "--quiet", "topic"]);
+    const before = head();
+
+    const result = await run();
+    expect(result).toEqual({
+      ok: true,
+      value: { committed: true, message: "chore(VC-838): commit remaining work" },
+    });
+    expect(head()).not.toBe(before);
+    expect(raw(["status", "--porcelain"])).toBe("");
   });
 });

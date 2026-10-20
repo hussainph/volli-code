@@ -11,9 +11,8 @@ import type {
 } from "../ipc/contract";
 // The project-roots registry lives in ./project-roots so main-process
 // consumers (this file, pty.ts) share one instance.
-import { isRealPathWithinRoots, syncProjectRoots } from "@volli/host-core/project-roots";
-import { isInside } from "@volli/host-core/worktree/paths";
-import { worktreesHome } from "@volli/host-core/worktree-runtime";
+import { isRealPathWithinRoots, syncProjectRoots } from "@volli/host-core/board";
+import { isInside, worktreesHome } from "@volli/host-core/worktree";
 
 /** Project checkouts OR the app-owned worktree home (ticket Files navigator). */
 function isBrowsableFsPath(absPath: string): boolean {
@@ -73,7 +72,14 @@ export function registerIpcHandlers(): void {
           // walking this listing never descends through one — but a DIRECTLY
           // requested path is followed for real, which is why the containment
           // check above resolves symlinks instead of comparing strings.
-          .map((dirent) => ({ name: dirent.name, kind: dirent.isDirectory() ? "dir" : "file" }));
+          .map((dirent) => {
+            const entry: DirEntry = {
+              name: dirent.name,
+              kind: dirent.isDirectory() ? "dir" : "file",
+            };
+            if (dirent.isSymbolicLink()) entry.link = true;
+            return entry;
+          });
         entries.sort(compareDirEntries);
         return { ok: true, entries };
       } catch (error) {

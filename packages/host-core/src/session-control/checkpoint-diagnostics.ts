@@ -13,13 +13,17 @@
  * per Session per listing. The first failure is always reported, later ones are
  * counted and summarized, so the signal survives without becoming noise.
  */
+import type { LogFields } from "../log/logger";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("session-checkpoint");
 
 /** How long a burst of identical failures is summarized into one line. */
 const REPORT_INTERVAL_MS = 60_000;
 
 export interface CheckpointFailureReporterPorts {
-  /** Defaults to `console.warn`; injected so a test can read what was emitted. */
-  warn?: (message: string) => void;
+  /** Defaults to the host log; injected so a test can read what was emitted. */
+  warn?: (msg: string, fields: LogFields) => void;
   /** Defaults to `Date.now`; injected so a test controls the throttle window. */
   now?: () => number;
 }
@@ -32,7 +36,7 @@ export interface CheckpointFailureReporterPorts {
 export function createCheckpointFailureReporter(
   ports: CheckpointFailureReporterPorts = {},
 ): (error: unknown) => void {
-  const warn = ports.warn ?? ((message: string) => console.warn(message));
+  const warn = ports.warn ?? ((msg: string, fields: LogFields) => log.warn(msg, fields));
   const now = ports.now ?? Date.now;
   let reportedAt: number | null = null;
   let suppressed = 0;
@@ -43,17 +47,10 @@ export function createCheckpointFailureReporter(
       suppressed += 1;
       return;
     }
-    const since =
-      suppressed === 0 ? "" : ` (${suppressed} more since the previous report were suppressed)`;
+    // The count is what tells a permanently failing cache from one that missed once.
+    const fields: LogFields = suppressed === 0 ? { error } : { suppressed, error };
     reportedAt = at;
     suppressed = 0;
-    warn(
-      `[session-checkpoint] projection checkpoint unusable; refolded from the event log${since}: ${describe(error)}`,
-    );
+    warn("projection checkpoint unusable; refolded from the event log", fields);
   };
-}
-
-function describe(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return typeof error === "string" ? error : String(error);
 }

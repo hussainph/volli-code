@@ -5,6 +5,9 @@ import type { SessionAttachmentProjection, SessionProjection } from "@volli/shar
 
 import { watchSessionActivity } from "./activity-watch";
 
+/** No executor binding is open: these rows rest at not-live. */
+const noOpenBindings = () => [];
+
 /** An open structured attachment — what turns `turnActive` into a `working` row. */
 function openAttachment(): SessionAttachmentProjection {
   return {
@@ -75,6 +78,7 @@ function stubEngine(current: () => SessionProjection | null) {
   const engine = {
     createSession: vi.fn(async () => ({ session: { id: "session-1" } })),
     getOrRecordSessionInput: vi.fn(async () => ({})),
+    recordToolRefresh: vi.fn(async () => ({ sessionId: "session-1" })),
     observe: vi.fn(async () => ({ sessionId: "session-1" })),
     submit: vi.fn(async () => ({})),
     completeModelSelection: vi.fn(async () => ({})),
@@ -99,7 +103,7 @@ describe("watchSessionActivity", () => {
     const publish = vi.fn();
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
-      { publish },
+      { listOpenNativeBindings: noOpenBindings, publish },
     );
 
     await watch.engine.submit({
@@ -139,7 +143,7 @@ describe("watchSessionActivity", () => {
     }));
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
-      { publish, provenanceOf },
+      { listOpenNativeBindings: noOpenBindings, publish, provenanceOf },
     );
 
     await watch.engine.observe({} as never);
@@ -166,7 +170,7 @@ describe("watchSessionActivity", () => {
     const readOf = vi.fn(() => ({ unreadSince: 4_000 }));
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
-      { publish, readOf },
+      { listOpenNativeBindings: noOpenBindings, publish, readOf },
     );
 
     await watch.engine.observe({} as never);
@@ -181,7 +185,7 @@ describe("watchSessionActivity", () => {
     const publish = vi.fn();
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
-      { publish },
+      { listOpenNativeBindings: noOpenBindings, publish },
     );
 
     await watch.engine.observe({} as never);
@@ -198,7 +202,7 @@ describe("watchSessionActivity", () => {
     let read = { unreadSince: null as number | null };
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
-      { publish, readOf: () => read },
+      { listOpenNativeBindings: noOpenBindings, publish, readOf: () => read },
     );
     const write = async () => {
       await watch.engine.observe({} as never);
@@ -273,7 +277,7 @@ describe("watchSessionActivity", () => {
   it("coalesces a burst of writes into one fold", async () => {
     const publish = vi.fn();
     const engine = stubEngine(() => projection());
-    const watch = watchSessionActivity(engine, { publish });
+    const watch = watchSessionActivity(engine, { listOpenNativeBindings: noOpenBindings, publish });
 
     await watch.engine.observe({} as never);
     await watch.engine.observe({} as never);
@@ -290,7 +294,11 @@ describe("watchSessionActivity", () => {
     const onError = vi.fn();
     const engine = stubEngine(() => projection());
     (engine.getSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("ledger gone"));
-    const watch = watchSessionActivity(engine, { publish, onError });
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      onError,
+    });
 
     await expect(watch.engine.observe({} as never)).resolves.toBeDefined();
     await watch.flush();
@@ -305,7 +313,7 @@ describe("watchSessionActivity", () => {
     const onError = vi.fn();
     const watch = watchSessionActivity(
       stubEngine(() => null),
-      { publish, onError },
+      { listOpenNativeBindings: noOpenBindings, publish, onError },
     );
 
     await watch.engine.observe({} as never);
@@ -320,7 +328,7 @@ describe("watchSessionActivity", () => {
     const publish = vi.fn();
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
-      { publish },
+      { listOpenNativeBindings: noOpenBindings, publish },
     );
 
     watch.stop();
@@ -333,7 +341,7 @@ describe("watchSessionActivity", () => {
   it("marks the Session behind every mutating method, not only the two obvious ones", async () => {
     const publish = vi.fn();
     const engine = stubEngine(() => projection());
-    const watch = watchSessionActivity(engine, { publish });
+    const watch = watchSessionActivity(engine, { listOpenNativeBindings: noOpenBindings, publish });
 
     await watch.engine.createSession({} as never);
     await watch.engine.getOrRecordSessionInput({ sessionId: "session-1" } as never);
@@ -352,10 +360,7 @@ describe("watchSessionActivity", () => {
     const publish = vi.fn();
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
-      {
-        publish,
-        coalesceMs: 0,
-      },
+      { listOpenNativeBindings: noOpenBindings, publish, coalesceMs: 0 },
     );
 
     await watch.engine.observe({} as never);
@@ -367,10 +372,7 @@ describe("watchSessionActivity", () => {
     const publish = vi.fn();
     const watch = watchSessionActivity(
       stubEngine(() => projection()),
-      {
-        publish,
-        coalesceMs: 5,
-      },
+      { listOpenNativeBindings: noOpenBindings, publish, coalesceMs: 5 },
     );
 
     await watch.engine.observe({} as never);
@@ -380,16 +382,21 @@ describe("watchSessionActivity", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("reports a fold failure through console.warn when given no diagnostics seam", async () => {
+  it("reports a fold failure to the host log when given no diagnostics seam", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const engine = stubEngine(() => projection());
     (engine.getSession as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("ledger gone"));
-    const watch = watchSessionActivity(engine, { publish: vi.fn() });
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+    });
 
     await watch.engine.observe({} as never);
     await watch.flush();
 
-    expect(warn).toHaveBeenCalledWith("[volli] session activity watch:", expect.any(Error));
+    expect(warn).toHaveBeenCalledWith("[activity-watch] session activity watch failed", {
+      error: expect.objectContaining({ name: "Error", message: "ledger gone" }),
+    });
     warn.mockRestore();
     watch.stop();
   });
@@ -419,7 +426,10 @@ describe("watchSessionActivity", () => {
       })),
     };
     Object.assign(engine, reads);
-    const watch = watchSessionActivity(engine, { publish: vi.fn() });
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+    });
 
     await watch.engine.getSession({ sessionId: "session-1" });
     await watch.engine.getBaseSession({ sessionId: "session-1" });
@@ -447,7 +457,12 @@ describe("watchSessionActivity", () => {
     const engine = stubEngine(() => state);
     const observe = vi.fn();
     const publish = vi.fn();
-    const watch = watchSessionActivity(engine, { publish, observe, coalesceMs: 0 });
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish,
+      observe,
+      coalesceMs: 0,
+    });
 
     await watch.engine.submit({ sessionId: "session-1" } as never);
     await watch.flush();
@@ -465,11 +480,70 @@ describe("watchSessionActivity", () => {
     watch.stop();
   });
 
+  it("hands every committed fact over synchronously as its write resolves, before any fold (VC-577)", async () => {
+    const engine = stubEngine(() => projection());
+    const observeEvent = vi.fn();
+    const onError = vi.fn();
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+      observeEvent,
+      onError,
+    });
+    const event = await watch.engine.observe({} as never);
+    expect(observeEvent).toHaveBeenCalledExactlyOnceWith(event);
+    // A throwing reader is reported, and the write's own result still returns.
+    const failure = new Error("reader");
+    observeEvent.mockImplementation(() => {
+      throw failure;
+    });
+    await expect(watch.engine.observe({} as never)).resolves.toEqual({ sessionId: "session-1" });
+    expect(onError).toHaveBeenCalledWith(failure);
+    watch.stop();
+  });
+
+  it("announces committed tool refreshes, ignores no-ops and contains observer failures", async () => {
+    const engine = stubEngine(() => projection());
+    const observeEvent = vi.fn();
+    const onError = vi.fn();
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+      observeEvent,
+      onError,
+    });
+    const event = await watch.engine.recordToolRefresh({} as never);
+    expect(observeEvent).toHaveBeenCalledWith(event);
+    const failure = new Error("refresh reader");
+    observeEvent.mockImplementation(() => {
+      throw failure;
+    });
+    await expect(watch.engine.recordToolRefresh({} as never)).resolves.toEqual({
+      sessionId: "session-1",
+    });
+    expect(onError).toHaveBeenCalledWith(failure);
+    vi.mocked(engine.recordToolRefresh).mockResolvedValue(null);
+    await expect(watch.engine.recordToolRefresh({} as never)).resolves.toBeNull();
+    expect(observeEvent).toHaveBeenCalledTimes(2);
+    watch.stop();
+    const withoutObserver = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+    });
+    vi.mocked(engine.recordToolRefresh).mockResolvedValue(event);
+    await withoutObserver.engine.recordToolRefresh({} as never);
+    withoutObserver.stop();
+  });
+
   it("does not require an observer", async () => {
     // Optional for the reason `provenanceOf` is: a test that only asks whether
     // a write was noticed has no notification channel to hand in.
     const engine = stubEngine(() => projection());
-    const watch = watchSessionActivity(engine, { publish: vi.fn(), coalesceMs: 0 });
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+      coalesceMs: 0,
+    });
     await watch.engine.submit({ sessionId: "session-1" } as never);
     await watch.engine.createSession({} as never);
     await expect(watch.flush()).resolves.toBeUndefined();
@@ -488,6 +562,7 @@ describe("watchSessionActivity", () => {
       expect(observeBirth).toHaveBeenCalledWith("session-1");
     });
     const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
       publish: vi.fn(),
       observe,
       observeBirth,
@@ -506,7 +581,12 @@ describe("watchSessionActivity", () => {
     // necessarily create, so none of them may claim a baseline.
     const engine = stubEngine(() => projection());
     const observeBirth = vi.fn();
-    const watch = watchSessionActivity(engine, { publish: vi.fn(), observeBirth, coalesceMs: 0 });
+    const watch = watchSessionActivity(engine, {
+      listOpenNativeBindings: noOpenBindings,
+      publish: vi.fn(),
+      observeBirth,
+      coalesceMs: 0,
+    });
 
     await watch.engine.submit({ sessionId: "session-1" } as never);
     await watch.engine.observe({} as never);

@@ -261,6 +261,7 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
       "--label": { kind: "value", key: "label" },
       "--project": { kind: "value", key: "project" },
       "--limit": { kind: "value", key: "limit", parse: positiveIntValue },
+      "--no-body": { kind: "flag", key: "body", value: false },
     },
   },
   "ticket.show": {
@@ -398,6 +399,11 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   conflicts: PROJECT_ONLY,
   "project.list": { options: {} },
+  // The operator's bootstrap write (VC-623). The path rides as `id`, the
+  // registry's one positional; `positionalLabel` names it `<path>` for readers.
+  "project.add": {
+    options: { "--name": { kind: "value", key: "name" }, "--dry-run": DRY_RUN },
+  },
   "label.list": PROJECT_ONLY,
   // No `--dry-run` here on purpose: omitting `--apply` IS the preview, and a
   // second way to ask for one would only invite the belief that the plain form
@@ -453,6 +459,16 @@ export const CLI_MECHANICS: Partial<Record<VerbKey, VerbMechanics>> = {
   },
   // A handle and nothing else (VC-9): the answer is read whole or not at all.
   "session.answer": { options: {} },
+  "session.start": {
+    options: {
+      "-m": { kind: "value", key: "message" },
+      "--message": { kind: "value", key: "message" },
+      "--title": { kind: "value", key: "title" },
+      "--model": { kind: "value", key: "model" },
+      "--tier": { kind: "value", key: "tier" },
+      "--reasoning": { kind: "value", key: "reasoning" },
+    },
+  },
   "session.done": REASON_ONLY,
   "session.blocked": REASON_ONLY,
   "session.link": { options: { "--dry-run": DRY_RUN } },
@@ -494,11 +510,15 @@ interface VerbRoute {
 }
 
 /** CLI-executable routes projected from any supplied registry table. */
-function routesFrom(entries: readonly VerbEntry[]): ReadonlyMap<string, VerbRoute> {
+function routesFrom(
+  entries: readonly VerbEntry[],
+  operator: boolean,
+): ReadonlyMap<string, VerbRoute> {
   return new Map(
     entries.flatMap((entry) => {
       const mechanics = CLI_MECHANICS[entry.key as VerbKey];
-      return mechanics === undefined || !entry.accessModes.includes("cli")
+      return mechanics === undefined ||
+        !(entry.accessModes.includes("cli") || (operator && entry.operatorCli === true))
         ? []
         : [[cliVerbName(entry.key), { entry, mechanics }] as const];
     }),
@@ -573,7 +593,7 @@ function parseVerb(route: VerbRoute, rest: readonly string[]): CliParseResult {
       // An optional id simply falls through to the option walk; a required one
       // is a usage error.
       if (entry.positionalId !== "optional") {
-        return usage(`${cliVerbName(entry.key)} requires <id>`);
+        return usage(`${cliVerbName(entry.key)} requires <${entry.positionalLabel ?? "id"}>`);
       }
     } else {
       args["id"] = id;
@@ -652,11 +672,12 @@ function parseVerb(route: VerbRoute, rest: readonly string[]): CliParseResult {
 export function parseCliArgs(
   argv: readonly string[],
   entries: readonly VerbEntry[] = VERB_REGISTRY,
+  options: { operator?: boolean } = {},
 ): CliParseResult {
   if (argv.includes("--help") || argv.includes("-h")) return helpFromFlag(argv);
   if (argv[0] === "help") return parseHelp(argv.slice(1));
 
-  const routes = routesFrom(entries);
+  const routes = routesFrom(entries, options.operator === true);
   if (argv.length >= 2) {
     const pair = routes.get(`${argv[0]} ${argv[1]}`);
     if (pair !== undefined) return parseVerb(pair, argv.slice(2));

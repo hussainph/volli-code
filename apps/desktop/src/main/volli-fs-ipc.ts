@@ -1,10 +1,33 @@
 /** Desktop IPC door for the host file services. */
 import { basename, dirname } from "node:path";
 import type { WebContents } from "electron";
-import { clientEventSink } from "./client-event-sink";
+import { pageClientEventSink } from "./client-event-sink";
 import { applySkillModes, errorMessage, projectCommandsDir, projectSkillsDir } from "@volli/shared";
 import { FILE_CHANNELS, FILE_IPC } from "./ipc-descriptors";
-import { searchFiles } from "@volli/host-core/file-search";
+import {
+  searchFiles,
+  loadPromptTemplates,
+  writePromptTemplate,
+  loadSkills,
+  buildFileIndex,
+  readFile,
+  writeFile,
+  createFile,
+  createDirectory,
+  renameEntry,
+  duplicateFile,
+  createArtifact,
+  resolveSafePath,
+  resolveSafeDir,
+  resolveProjectPath,
+  resolveFileScope,
+  resolveExternalFileTarget,
+  resolveLiveWorktree,
+  searchRoot,
+  FileWatchManager,
+  DirWatchManager,
+  type HostFileServices,
+} from "@volli/host-core/files";
 import { systemExternalAppGateway } from "./external-apps";
 import type { ExternalAppGateway } from "./external-apps";
 import type {
@@ -34,32 +57,10 @@ import type {
   WorktreeRevealInput,
 } from "../ipc/contract";
 import type { DbHandle } from "./data-ipc";
-import { getProjectById } from "@volli/host-core/db/projects-repo";
+import { getProjectById } from "@volli/host-core/db";
 import { registerDegradedIpcHandlers, registerGuardedIpcHandlers } from "./ipc-registry";
 import type { IpcHandlerTable } from "./ipc-registry";
-import { loadPromptTemplates, writePromptTemplate } from "@volli/host-core/prompt-templates";
-import { loadSkills } from "@volli/host-core/skills";
 
-import {
-  buildFileIndex,
-  readFile,
-  writeFile,
-  createFile,
-  createDirectory,
-  renameEntry,
-  duplicateFile,
-  createArtifact,
-  resolveSafePath,
-  resolveSafeDir,
-  resolveProjectPath,
-  resolveFileScope,
-  resolveExternalFileTarget,
-  resolveLiveWorktree,
-  searchRoot,
-  FileWatchManager,
-  DirWatchManager,
-} from "@volli/host-core/volli-fs";
-import type { HostFileServices } from "@volli/host-core/file-services";
 /** The live watch managers `registerFileIpcHandlers` owns — one per watch surface. */
 export interface FileIpcWatchManagers {
   files: FileWatchManager;
@@ -273,7 +274,7 @@ export function registerFileIpcHandlers(
       if (!resolved.ok) return resolved;
       const { source, filePath } = resolved.value;
       return manager.watch(
-        clientEventSink(sender),
+        pageClientEventSink(sender),
         input.projectId,
         input.ticketId ?? null,
         input.relPath,
@@ -291,7 +292,7 @@ export function registerFileIpcHandlers(
     // this handler relied on.
     "volli:file-unwatch": (input: FilePathInput, sender: WebContents): Result => {
       manager.unwatch(
-        clientEventSink(sender),
+        pageClientEventSink(sender),
         input.projectId,
         input.ticketId ?? null,
         input.relPath,
@@ -307,7 +308,7 @@ export function registerFileIpcHandlers(
       const resolved = await resolveSafeDir(project.projectPath, input.relPath);
       if (!resolved.ok) return resolved;
       return dirManager.watch(
-        clientEventSink(sender),
+        pageClientEventSink(sender),
         input.projectId,
         input.relPath,
         resolved.dirPath,
@@ -319,7 +320,7 @@ export function registerFileIpcHandlers(
     // drop its subscription even if the directory has since been deleted (which
     // is often exactly why it collapsed).
     "volli:dir-unwatch": (input: DirPathInput, sender: WebContents): Result => {
-      dirManager.unwatch(clientEventSink(sender), input.projectId, input.relPath);
+      dirManager.unwatch(pageClientEventSink(sender), input.projectId, input.relPath);
       return { ok: true };
     },
 

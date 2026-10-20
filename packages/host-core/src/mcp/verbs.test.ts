@@ -23,22 +23,16 @@ import {
 } from "@volli/shared";
 import type { RuntimeAskChoice, RuntimeAskRequest, RuntimeSessionIdentity } from "@volli/shared";
 
-import { createAgentToolDoor } from "@volli/host-core/agent-tool-door";
-import type { VerbBudgetAsk } from "@volli/host-core/agent-tool-door";
-import { listMcpOperations } from "@volli/host-core/db/mcp-operations-repo";
-import { listMcpServers, putMcpServer } from "@volli/host-core/db/mcp-servers-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import {
-  openRawDb,
-  openTestDb,
-  testProject,
-  testTicket,
-  type TestDb,
-} from "@volli/host-core/db/test-helpers";
-import type { McpProtocolClient } from "@volli/host-core/mcp/discovery";
-import { serversForFrozenMcpTools } from "@volli/host-core/mcp/session-host";
-import { McpSettingsService } from "@volli/host-core/mcp/settings";
+import { createAgentToolDoor } from "../agent-tool-door";
+import type { VerbBudgetAsk } from "../agent-tool-door";
+import { listMcpOperations } from "../db/mcp-operations-repo";
+import { listMcpServers, putMcpServer } from "../db/mcp-servers-repo";
+import { insertProject } from "../db/projects-repo";
+import { insertTicket } from "../db/tickets-repo";
+import { openRawDb, openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
+import type { McpProtocolClient } from "./discovery";
+import { serversForFrozenMcpTools } from "./session-host";
+import { McpSettingsService } from "./settings";
 
 let ctx: TestDb;
 /** A handle a test reopened after a simulated relaunch, so `afterEach` can close it. */
@@ -211,6 +205,15 @@ function askingWith(choice: RuntimeAskChoice) {
 /** Install one server for real, so the toggle/remove suites have something to act on. */
 async function installed(h: ReturnType<typeof harness>, tools = "read_file") {
   return h.call("mcp.install", { ...LOCAL, tools, confirm: "apply" });
+}
+
+/** Successful writes describe cache-safe additions and parent-bound inheritance. */
+function expectWhoGetsTheChange(text: string): void {
+  expect(text).toContain("New root Sessions get the updated MCP tools");
+  expect(text).toContain("before the next program");
+  expect(text).toContain("delegated helpers inherit their parent's current recorded MCP tools");
+  expect(text).not.toContain("These tools are not available in this Session");
+  expect(text).not.toContain("next Session created");
 }
 
 afterEach(() => {
@@ -441,8 +444,8 @@ describe("mcp_install applies only on the explicit second call", () => {
 
     expect(result.text).toContain("Installed Acme Files");
     // Acceptance 3: the honest explanation, in the result text.
-    expect(result.text).toContain("frozen when it is created");
-    expect(result.text).toContain("next Session created");
+    expect(result.text).toContain("cold prompt cache");
+    expectWhoGetsTheChange(result.text);
     const [server] = listMcpServers(h.db, "project-one");
     expect(server?.catalog.map((tool) => [tool.name, tool.enabled])).toEqual([
       ["read_file", true],
@@ -630,14 +633,14 @@ describe("mcp_install when the attempt stops", () => {
 });
 
 describe("mcp_remove refuses to act without confirmation (acceptance 8)", () => {
-  it("previews, naming the reattachment it breaks and the safer verb", async () => {
+  it("previews, naming unavailable calls and the safer verb", async () => {
     const h = harness();
     await installed(h);
 
     const result = await h.call("mcp.remove", { server: "files" });
 
     expect(result.text).toContain("PREVIEW");
-    expect(result.text).toContain("fail to reattach");
+    expect(result.text).toContain("named unavailable error");
     expect(result.text).toContain("server_disable");
     expect(listMcpServers(h.db, "project-one")).toHaveLength(1);
   });
@@ -654,7 +657,7 @@ describe("mcp_remove refuses to act without confirmation (acceptance 8)", () => 
     );
 
     expect(asking.seen[0]).toMatchObject({ cause: "confirm.mcp-remove", tool: "mcp_remove" });
-    expect(asking.seen[0]?.reason).toContain("fail to reattach");
+    expect(asking.seen[0]?.reason).toContain("named unavailable error");
     expect(result.text).toMatch(/declined/);
     expect(listMcpServers(h.db, "project-one")).toHaveLength(1);
   });
@@ -688,6 +691,11 @@ describe("mcp_enable, mcp_disable, mcp_tools and mcp_refresh", () => {
 
     expect(result.text).toContain("Turned Acme Files off");
     expect(result.text).toContain("can still reattach");
+    // Nothing was taken from this Session, so the install copy's "not available
+    // in this Session" would be false here.
+    expect(result.text).toContain("keeps every tool it already holds");
+    expect(result.text).toContain("answers that the server is disabled");
+    expect(result.text).not.toContain("not available in this Session");
     expect(listMcpServers(h.db, "project-one")[0]?.enabled).toBe(false);
     expect(h.settings.selectedTools("project-one")).toEqual([]);
   });
@@ -700,7 +708,7 @@ describe("mcp_enable, mcp_disable, mcp_tools and mcp_refresh", () => {
     const result = await h.call("mcp.enable", { server: "files" });
 
     expect(result.text).toContain("Turned Acme Files on");
-    expect(result.text).toContain("next Session created");
+    expectWhoGetsTheChange(result.text);
     expect(h.settings.selectedTools("project-one").map((tool) => tool.toolName)).toEqual([
       "read_file",
     ]);
@@ -1015,10 +1023,11 @@ describe("what an install reaches, and what it must not", () => {
     ]);
     // The result says so in plain words rather than leaving the model to
     // discover it by calling a tool that is not there.
-    expect(result.text).toContain("not available in this Session");
+    expect(result.text).toContain("Existing tools are never removed");
+    expectWhoGetsTheChange(result.text);
   });
 
-  it("breaks reattachment for an older Session once its server is removed (acceptance 8)", async () => {
+  it("keeps attachment viable when a retained server is removed (acceptance 8)", async () => {
     const h = harness();
     await installed(h);
     const born = h.settings.selectedTools("project-one");
@@ -1030,11 +1039,8 @@ describe("what an install reaches, and what it must not", () => {
 
     await h.call("mcp.remove", { server: "files", confirm: "apply" });
 
-    expect(() => serversForFrozenMcpTools(h.settings.list("project-one"), born)).toThrow(
-      /required MCP server is missing/,
-    );
-    // And re-adding under the SAME id is what puts those Sessions back —
-    // the recovery mcp_remove's own warning names.
+    expect(serversForFrozenMcpTools(h.settings.list("project-one"), born)).toEqual([]);
+    // Re-adding under the same id restores retained tools' transport.
     await installed(h);
     expect(
       serversForFrozenMcpTools(h.settings.list("project-one"), born).map((server) => server.id),

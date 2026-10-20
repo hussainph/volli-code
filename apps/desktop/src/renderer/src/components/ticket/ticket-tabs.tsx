@@ -506,6 +506,7 @@ export function TicketTabStrip({
                 `align="end"` because the control sits at the strip's right edge
                 — the menu hangs back into the window rather than off it. */}
             <NewSessionControl
+              projectId={list.projectId}
               disabled={creating}
               placement="strip"
               align="end"
@@ -537,7 +538,7 @@ export function TicketTabStrip({
             title={`${railCollapsed ? "Show" : "Hide"} details (⌥⌘B)`}
           >
             {/* scale-x-[-1] mirrors the left-sidebar glyph so it reads as the
-                RIGHT panel (VS Code's secondary-sidebar convention). */}
+                RIGHT panel; each caret points toward the rail it toggles. */}
             <SidebarSimpleIcon className="size-3.5 scale-x-[-1]" />
           </Button>
         </>

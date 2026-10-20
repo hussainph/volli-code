@@ -29,16 +29,16 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 
-import { registerThemeIpcHandlers } from "./theme-ipc";
+import { desktopThemeHooks, registerThemeIpcHandlers, type ThemeIpcHooks } from "./theme-ipc";
 import { defaultFsDeps } from "./fs-deps";
 import {
   getFirstPaintHint,
   getGlobalAppearance,
   getGlobalCanvas,
-} from "@volli/host-core/db/theme-repo";
-import { getProjectById, insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject } from "@volli/host-core/db/test-helpers";
-import type { TestDb } from "@volli/host-core/db/test-helpers";
+  getProjectById,
+  insertProject,
+} from "@volli/host-core/db";
+import { openTestDb, testProject, type TestDb } from "@volli/host-core/testing";
 
 let ctx: TestDb;
 let userDataDir: string;
@@ -461,28 +461,89 @@ describe("canvas writes (migration 014)", () => {
     expect(getGlobalAppearance(ctx.db)).toBeNull();
   });
 
-  it("records the first-paint hint and repaints every window's edge from it", () => {
-    const project = testProject({ ticketPrefix: "VC" });
-    insertProject(ctx.db, project);
+  /** Registers the handlers with {@link desktopThemeHooks} over fake surfaces. */
+  function setupDesktopSurfaces(db: Database.Database = ctx.db) {
+    const windows = [{ setBackgroundColor: vi.fn() }, { setBackgroundColor: vi.fn() }];
+    const browserTabs = { setThemeBackground: vi.fn() };
+    const hooks: ThemeIpcHooks = desktopThemeHooks({ windows: () => windows, browserTabs });
     const deps = {
       fs: defaultFsDeps(userDataDir),
       now: Date.now,
       appearance: () => "dark" as const,
     };
-    const onFirstPaintChanged = vi.fn();
     registerThemeIpcHandlers(
-      { ok: true, db: ctx.db },
+      { ok: true, db },
       { ...deps, fs: { ...deps.fs, homeDir: join(userDataDir, "fake-home"), env: {} } },
-      { onFirstPaintChanged },
+      hooks,
     );
+    return { windows, browserTabs };
+  }
 
-    const hint = { appearance: "light", background: "#f4efe9" } as const;
-    expect(invoke<Result>("volli:theme-first-paint-set", hint)).toEqual({ ok: true });
+  const EDGE = "#f4efe9";
+  const PLANE = "#fdded2";
 
-    expect(getFirstPaintHint(ctx.db)).toEqual(hint);
-    // Fired AFTER the write, so a window never repaints to a background that
-    // failed to persist.
-    expect(onFirstPaintChanged).toHaveBeenCalledWith(hint);
+  it("records the first-paint hint, repaints window edges from it, and Browser planes from the plane rung", () => {
+    const { windows, browserTabs } = setupDesktopSurfaces();
+
+    const report = { appearance: "light", background: EDGE, planeBackground: PLANE } as const;
+    expect(invoke<Result>("volli:theme-first-paint-set", report)).toEqual({ ok: true });
+
+    // The plane color is live-only: the stored hint stays the two values main
+    // needs at window construction.
+    expect(getFirstPaintHint(ctx.db)).toEqual({ appearance: "light", background: EDGE });
+    for (const window of windows) expect(window.setBackgroundColor).toHaveBeenCalledWith(EDGE);
+    // The plane rung, never the window edge: the edge color inside a Browser
+    // pane is a slab of base fill (VC-302).
+    expect(browserTabs.setThemeBackground).toHaveBeenCalledOnce();
+    expect(browserTabs.setThemeBackground).toHaveBeenCalledWith(PLANE);
+  });
+
+  it("repaints Browser planes even when the hint's write fails, and leaves window edges alone", () => {
+    const locked = new Proxy(ctx.db, {
+      get: (target, prop) =>
+        prop === "prepare"
+          ? () => {
+              throw new Error("database is locked");
+            }
+          : boundMember(target, prop),
+    });
+    const { windows, browserTabs } = setupDesktopSurfaces(locked);
+
+    try {
+      invoke("volli:theme-first-paint-set", {
+        appearance: "light",
+        background: EDGE,
+        planeBackground: PLANE,
+      });
+    } catch {
+      // However the failed write surfaces, the plane is already painted.
+    }
+
+    expect(browserTabs.setThemeBackground).toHaveBeenCalledWith(PLANE);
+    // A window edge still waits for a background that persisted.
+    for (const window of windows) expect(window.setBackgroundColor).not.toHaveBeenCalled();
+  });
+
+  it("drops a plane color that is not a hex color without refusing the hint", () => {
+    const { windows, browserTabs } = setupDesktopSurfaces();
+
+    expect(
+      invoke<Result>("volli:theme-first-paint-set", {
+        appearance: "dark",
+        background: "#141210",
+        planeBackground: "transparent",
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      invoke<Result>("volli:theme-first-paint-set", {
+        appearance: "dark",
+        background: "#141210",
+      }),
+    ).toEqual({ ok: true });
+
+    expect(getFirstPaintHint(ctx.db)).toEqual({ appearance: "dark", background: "#141210" });
+    expect(windows[0]?.setBackgroundColor).toHaveBeenCalledWith("#141210");
+    expect(browserTabs.setThemeBackground).not.toHaveBeenCalled();
   });
 
   // `auto` is the one value main cannot act on at window construction, which is
@@ -491,7 +552,11 @@ describe("canvas writes (migration 014)", () => {
     setup();
 
     expect(
-      invoke<Result>("volli:theme-first-paint-set", { appearance: "auto", background: "#141210" }),
+      invoke<Result>("volli:theme-first-paint-set", {
+        appearance: "auto",
+        background: "#141210",
+        planeBackground: "#1c1310",
+      }),
     ).toEqual({ ok: false, error: "Invalid first-paint hint" });
     expect(getFirstPaintHint(ctx.db)).toBeNull();
   });

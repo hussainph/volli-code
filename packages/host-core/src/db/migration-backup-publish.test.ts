@@ -1,10 +1,12 @@
 import {
   copyFileSync,
+  linkSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
   existsSync,
 } from "node:fs";
@@ -16,12 +18,19 @@ import { openRawDb } from "./test-helpers";
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
-  return { ...fs, renameSync: vi.fn(fs.renameSync) };
+  return {
+    ...fs,
+    renameSync: vi.fn(fs.renameSync),
+    linkSync: vi.fn(fs.linkSync),
+    unlinkSync: vi.fn(fs.unlinkSync),
+  };
 });
 const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
 let directory: string;
 afterEach(() => {
   vi.mocked(renameSync).mockReset().mockImplementation(actualFs.renameSync);
+  vi.mocked(linkSync).mockReset().mockImplementation(actualFs.linkSync);
+  vi.mocked(unlinkSync).mockReset().mockImplementation(actualFs.unlinkSync);
   if (directory) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -46,21 +55,27 @@ describe("migration backup publication failure recovery", () => {
       const before = suffixes.map((suffix) => readFileSync(`${backupPath}${suffix}`));
       db.exec("UPDATE recovery_probe SET value = 'current source'");
       let failed = false;
-      vi.mocked(renameSync).mockImplementation((from, to) => {
-        const path = String(from);
-        const destination = String(to);
-        const shouldFail =
-          failure === "base"
-            ? path === backupPath
-            : failure === "sidecar"
-              ? path === `${backupPath}-shm`
-              : path.includes(".pending-") && destination === backupPath;
-        if (!failed && shouldFail) {
-          failed = true;
-          throw new Error("injected rename failure");
-        }
-        if (failure === "rollback" && failed && destination === `${backupPath}-shm`)
+      const fail = () => {
+        failed = true;
+        throw new Error("injected failure");
+      };
+      // The old family is preserved by link (sidecars, then base) and its old
+      // names released (base, then sidecars) before the new copy is renamed in.
+      vi.mocked(linkSync).mockImplementation((from, to) => {
+        const source = String(from);
+        if (!failed && failure === "base" && source === backupPath) fail();
+        // Undo puts the base back last; failing it is a failed rollback.
+        if (failure === "rollback" && failed && String(to) === backupPath)
           throw new Error("injected rollback failure");
+        actualFs.linkSync(from, to);
+      });
+      vi.mocked(unlinkSync).mockImplementation((path) => {
+        if (!failed && failure === "sidecar" && String(path) === `${backupPath}-shm`) fail();
+        actualFs.unlinkSync(path);
+      });
+      vi.mocked(renameSync).mockImplementation((from, to) => {
+        const publishing = String(from).includes(".pending-") && String(to) === backupPath;
+        if (!failed && (failure === "publish" || failure === "rollback") && publishing) fail();
         actualFs.renameSync(from, to);
       });
       try {
@@ -72,11 +87,19 @@ describe("migration backup publication failure recovery", () => {
           value: "current source",
         });
         if (failure === "rollback") {
+          // The base could not be put back: the old name holds only second
+          // names of the sidecars, and the whole family sits preserved.
           expect(existsSync(backupPath)).toBe(false);
           const name = readdirSync(directory).find((entry) =>
             /^volli\.db\.backup-v55\.preserved-[\da-f-]+$/.test(entry),
           );
           expect(name).toBeDefined();
+          expect(
+            suffixes.map((suffix) => readFileSync(join(directory, `${name}${suffix}`))),
+          ).toEqual(before);
+          // The next attempt resumes: those second names go, nothing else.
+          vi.mocked(linkSync).mockImplementation(actualFs.linkSync);
+          expect(migrate(db, dbPath)).toBe(true);
           expect(
             suffixes.map((suffix) => readFileSync(join(directory, `${name}${suffix}`))),
           ).toEqual(before);

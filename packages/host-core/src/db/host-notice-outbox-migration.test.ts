@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { createTestSessionEngine } from "../testing/session-engine";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openRawDb, testProject } from "@volli/host-core/db/test-helpers";
-import { MIGRATIONS, migrate } from "@volli/host-core/db/migrations";
+import { insertProject } from "./projects-repo";
+import { openRawDb, testProject } from "./test-helpers";
+import { MIGRATIONS, migrate } from "./migrations";
 
 const LATEST_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version;
 

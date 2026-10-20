@@ -2,9 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyQuietAppPolicy,
+  hideDockForMenuBar,
   quietWindowPolicy,
   revealWindow,
   sealQuietAppActivation,
+  showDockAfterMenuBar,
 } from "./quiet-windows";
 
 describe("quietWindowPolicy", () => {
@@ -159,5 +161,45 @@ describe("revealWindow", () => {
       relativeLevel: -1,
       atReveal: { ignoresMouseEvents: true, relativeLevel: -1 },
     });
+  });
+});
+
+function dockApp() {
+  const calls: string[] = [];
+  return {
+    calls,
+    app: {
+      dock: {
+        hide: () => calls.push("dock.hide"),
+        show: () => {
+          calls.push("dock.show");
+          return Promise.resolve();
+        },
+      },
+    },
+  };
+}
+
+describe("menu-bar Dock state (VC-577)", () => {
+  it("hides and shows the Dock icon for an ordinary launch", () => {
+    const { app, calls } = dockApp();
+    const policy = quietWindowPolicy({}, "darwin");
+    hideDockForMenuBar(app, policy);
+    showDockAfterMenuBar(app, policy);
+    expect(calls).toEqual(["dock.hide", "dock.show"]);
+  });
+
+  it("never touches a quiet smoke's Dock, which its activation policy already hid", () => {
+    const { app, calls } = dockApp();
+    const policy = quietWindowPolicy({ VOLLI_QUIET_WINDOWS: "1" }, "darwin");
+    hideDockForMenuBar(app, policy);
+    showDockAfterMenuBar(app, policy);
+    expect(calls).toEqual([]);
+  });
+
+  it("tolerates a platform with no Dock", () => {
+    const policy = quietWindowPolicy({}, "linux");
+    expect(() => hideDockForMenuBar({}, policy)).not.toThrow();
+    expect(() => showDockAfterMenuBar({}, policy)).not.toThrow();
   });
 });

@@ -59,17 +59,15 @@ export { CHAT_DRAFTS_APP_STATE_KEY };
 /**
  * Where a message that left the box currently stands.
  *
- * - `sending` — a round trip is open on it. The surface draws nothing: the
- *   transcript is already showing the message, and a second copy under the
- *   composer would read as a message that failed to leave.
- * - `queued` — the Session's release queue holds it. The queue is renderer
- *   memory, so this is its only copy that outlives the window.
+ * - `sending` — a round trip is open on it. The timeline shows it as pending
+ *   until the host's transcript or queue takes ownership.
+ * - `queued` — legacy renderer-owned follow-up recovery. New follow-ups are
+ *   host-owned and retire this local copy only after durable acceptance.
  * - `unsent` — nothing took it. It belongs back in front of the person who
  *   wrote it, as its own message rather than welded onto whatever they typed
  *   next.
  *
- * A renderer that has just booted has no round trip open and no release queue,
- * so hydration reads every held message back as `unsent` — see
+ * Hydration conservatively reads every legacy held message back as `unsent` — see
  * {@link readPersistedDrafts}. That is what makes a crash mid-send show up as
  * words waiting rather than as words gone.
  */
@@ -95,12 +93,18 @@ export interface HeldMessage {
    */
   attachments?: readonly BlobLinkView[];
   state: HeldMessageState;
+  /** A receipt arrived before its stream projection; never lose that visible handoff. */
+  deliveryAccepted?: true;
+  /** Local submit intent only; older builds ignore it and recover the words. */
+  delivery?: "send" | "queue" | "steer";
 }
 
 /** What crosses into this store when a message leaves the box. */
 export interface HeldMessageInput {
   id: string;
   text: string;
+  /** Local submit intent only; hydration always recovers as unsent. */
+  delivery?: "send" | "queue" | "steer";
   resources?: readonly PromptResource[];
   attachments?: readonly BlobLinkView[];
 }
@@ -241,16 +245,6 @@ export interface ChatDraftsState {
     id: string,
     amend: (message: HeldMessage) => HeldMessage,
   ): void;
-  /**
-   * Starts an explicit steer from the displayed strip in one durable write.
-   *
-   * Queue-only neighbors gain `queued` copies in their current display order
-   * before the target can leave the renderer queue. Existing held states stay
-   * intact; only the target becomes `sending`. Unlike {@link holdMessage}, the
-   * current composer text stays where it is because every row already left the
-   * box earlier.
-   */
-  beginQueuedSteer(sessionId: string, visible: readonly HeldMessageInput[], targetId: string): void;
   /**
    * Re-states where a held message stands. Update-only: a Session closed while
    * its message was in flight has no draft left to write, and minting one would
@@ -765,40 +759,6 @@ export function createChatDraftsStore(storage?: StateStorage) {
               const next = [...held];
               next[index] = amend(held[index]!);
               return next;
-            }),
-          beginQueuedSteer: (sessionId, visible, targetId) =>
-            set((state) => {
-              const draft = draftFor(state.drafts, sessionId);
-              const visibleById = new Map(visible.map((entry) => [entry.id, entry]));
-              const existingIds = new Set(draft.held.map((entry) => entry.id));
-              // Existing held chronology wins, including a hidden `sending`
-              // entry whose refusal may make it visible again later.
-              const held: HeldMessage[] = draft.held.map((entry) => {
-                const displayed = visibleById.get(entry.id);
-                if (displayed === undefined) return entry;
-                return {
-                  ...entry,
-                  text: displayed.text,
-                  // The row is also what `beginQueuedSteer` persists back, so
-                  // the files riding the displayed copy must survive the
-                  // round trip — the same rule `resources` follows (VC-49).
-                  ...(displayed.attachments === undefined || displayed.attachments.length === 0
-                    ? {}
-                    : { attachments: displayed.attachments }),
-                  state: entry.id === targetId ? "sending" : entry.state,
-                };
-              });
-              // What is missing is queue-only, already ordered by the strip.
-              for (const entry of visible) {
-                if (existingIds.has(entry.id)) continue;
-                held.push({ ...entry, state: entry.id === targetId ? "sending" : "queued" });
-              }
-              return {
-                drafts: {
-                  ...state.drafts,
-                  [sessionId]: { ...draft, held, touchedAt: Date.now() },
-                },
-              };
             }),
           markHeld: (sessionId, id, state) =>
             reviseHeld(sessionId, (held) => {

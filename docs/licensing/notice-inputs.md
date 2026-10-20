@@ -16,10 +16,10 @@ The reasoning, and the questions still open, are in `dependency-license-review.m
 
 ## 1. LGPL — libvips, shipped inside the desktop app
 
-Package: `@img/sharp-libvips-darwin-arm64@1.3.3`  
+Package: `@img/sharp-libvips-darwin-arm64@1.3.4`  
 SPDX: `LGPL-3.0-or-later`  
 Upstream: https://github.com/lovell/sharp-libvips.git  
-Payload: `./lib/libvips-cpp.8.18.6.dylib`, loaded at run time by `@img/sharp-darwin-arm64`'s native addon.
+Payload: `./lib/libvips-cpp.8.18.7.dylib`, loaded at run time by `@img/sharp-darwin-arm64`'s native addon.
 
 ### 1a. Notice text (LGPLv3 sections 4(a) and 4(c))
 
@@ -28,7 +28,7 @@ Section 4(a) wants prominent notice that the library is used and is covered by t
 
 **Nothing in this draft is conditional any more.** Both facts it asserts about the
 shipped artifact are true and mechanically checked: the GPL and LGPL texts §1b names are
-in the bundle (hash-pinned against gnu.org), and the relink freedom has Installation
+in the bundle (hash-pinned against their canonical sources), and the relink freedom has Installation
 Information behind it.
 
 The relink sentence is NO LONGER conditional. VC-409 ruled on §B2: Volli keeps LGPL libvips
@@ -41,7 +41,10 @@ This application uses libvips, bundled as a prebuilt shared library together wit
 dependencies. libvips and several of the components it links are used under the terms of
 the GNU Lesser General Public License version 3 or later.
 
+cairo 1.18.6: LGPL-2.1 OR MPL-1.1, used under LGPL-2.1. Source: https://gitlab.freedesktop.org/cairo/cairo/-/raw/1.18.6/COPYING
+
 Components used under an LGPL license:
+  - cairo
   - fribidi
   - glib
   - libexif
@@ -54,8 +57,10 @@ Components used under an LGPL license:
 libvips itself is available from https://github.com/libvips/libvips and the prebuilt
 package from https://github.com/lovell/sharp-libvips.
 
-Copies of the GNU General Public License v3 and the GNU Lesser General Public License v3
-accompany this application.
+License copies accompany this application:
+  - LGPL-2.1.txt
+  - GPL-3.0.txt
+  - LGPL-3.0.txt
 
 The library is dynamically linked and ships as a separate, unmodified file inside the
 application bundle, so it can be replaced with a compatible build. Instructions for doing so,
@@ -76,13 +81,14 @@ Section 4(b) requires a copy of BOTH documents. They are not generated here, on 
 they must be byte-verbatim canonical copies, and a reflowed or paraphrased GPL is not a copy
 of it.
 
-**Both now ship**, downloaded verbatim from gnu.org and copied into the bundle at
+**The applicable texts now ship**, obtained verbatim from their canonical sources and copied into the bundle at
 `Contents/Resources/licensing/`. `check:licenses` hashes them against the recorded
 sha256, so an edit, a truncation or a reformat fails the build rather than shipping a
 document that is no longer a copy of the license it names.
 
 | File | Canonical source |
 | --- | --- |
+| `LGPL-2.1.txt` | <https://gitlab.freedesktop.org/cairo/cairo/-/raw/1.18.6/COPYING-LGPL-2.1> |
 | `GPL-3.0.txt` | <https://www.gnu.org/licenses/gpl-3.0.txt> |
 | `LGPL-3.0.txt` | <https://www.gnu.org/licenses/lgpl-3.0.txt> |
 
@@ -95,7 +101,7 @@ reproduced below because it is the only license statement the package carries.
 | Library | Used under the terms of |
 | --- | --- |
 | aom | BSD 2-Clause + Alliance for Open Media Patent License 1.0 <https://aomedia.org/license/patent-license/> |
-| cairo | Mozilla Public License 2.0 |
+| cairo | Mozilla Public License 1.1 |
 | cgif | MIT License |
 | expat | MIT License |
 | fontconfig | fontconfig License <https://gitlab.freedesktop.org/fontconfig/fontconfig/blob/main/COPYING> (BSD-like) |
@@ -132,19 +138,19 @@ Also stated by the README:
 
 | Component | Version |
 | --- | --- |
-| aom | 3.15.0 |
+| aom | 3.15.1 |
 | archive | 3.8.9 |
-| cairo | 1.18.4 |
-| cgif | 0.5.3 |
+| cairo | 1.18.6 |
+| cgif | 0.5.4 |
 | exif | 0.6.26 |
-| expat | 2.8.3 |
+| expat | 2.8.5 |
 | ffi | 3.8.0 |
 | fontconfig | 2.18.3 |
 | freetype | 2.14.3 |
-| fribidi | 1.0.16 |
-| glib | 2.89.4 |
-| harfbuzz | 14.3.1 |
-| heif | 1.23.2 |
+| fribidi | 1.0.17 |
+| glib | 2.90.0 |
+| harfbuzz | 14.5.0 |
+| heif | 1.23.5 |
 | highway | 1.4.0 |
 | imagequant | 2.4.1 |
 | lcms | 2.19.1 |
@@ -153,12 +159,12 @@ Also stated by the README:
 | pixman | 0.46.4 |
 | png | 1.6.58 |
 | proxy-libintl | 0.5 |
-| rsvg | 2.62.91 |
+| rsvg | 2.63.2 |
 | tiff | 4.7.2 |
 | uhdr | 2.0.2 |
-| vips | 8.18.6 |
+| vips | 8.18.7 |
 | webp | 1.6.0 |
-| xml2 | 2.15.3 |
+| xml2 | 2.15.4 |
 | zlib-ng | 2.3.3 |
 
 The two tables are reproduced side by side rather than joined: upstream keys them

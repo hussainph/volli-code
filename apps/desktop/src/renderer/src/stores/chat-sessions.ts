@@ -26,13 +26,15 @@ import { create } from "zustand";
 
 import {
   applyProjection,
-  dequeueSlice,
+  applyQueue,
+  applySnapshotWindow,
   disposeChatClient,
-  enqueueSlice,
   foldStreamBatch,
   getOrCreateChatClient,
+  getChatClient,
   markAttaching,
   markDelivered,
+  prependSliceHistory,
   retitleSlice,
   seedSlice,
   settleSlice,
@@ -40,13 +42,22 @@ import {
   type ChatSessionTransport,
   type ChatSessionWrites,
   type QueuedMessage,
+  type MessageDelivery,
 } from "@volli/session-presentation";
 import { toast } from "sonner";
 
 import { renameChatSession } from "@renderer/chat/rename";
-import { browserChatTransport } from "@renderer/chat/transport";
+import { remoteHostNow } from "@renderer/stores/remote-project";
+import { useHostModelSheet } from "@renderer/stores/host-model-sheet";
+import { chatTransportFor } from "@renderer/chat/transport";
 import { toastError } from "@renderer/lib/toast";
-import { useChatDraftsStore, type ChatDraft } from "@renderer/stores/chat-drafts";
+import { flushPendingAppStateKey } from "@renderer/lib/app-state-storage";
+import {
+  CHAT_DRAFTS_APP_STATE_KEY,
+  useChatDraftsStore,
+  type ChatDraft,
+} from "@renderer/stores/chat-drafts";
+import { projectOfSession, rememberSessionProject } from "@renderer/lib/session-project";
 import { useTicketSessionRecordsStore } from "@renderer/stores/ticket-session-records";
 import { useUiStore } from "@renderer/stores/ui";
 
@@ -74,7 +85,16 @@ export interface CreateChatSessionInput {
   autoSelect?: { request: string };
 }
 
+/** Renderer-only receipt shadow; it never owns delivery or crosses the wire. */
+export interface IdleSend extends QueuedMessage {
+  accepted: boolean;
+}
+
 export interface ChatSessionsState extends ChatSessionWrites {
+  /** Sent bubbles survive view remounts and queue-before-transcript delivery. */
+  idleSends: Readonly<Record<string, readonly IdleSend[]>>;
+  rememberIdleSend(sessionId: string, message: QueuedMessage, accepted?: boolean): void;
+  forgetIdleSend(sessionId: string, messageId: string): void;
   /**
    * Mints one durable Session and attaches its first executor, resolving the id.
    *
@@ -87,10 +107,23 @@ export interface ChatSessionsState extends ChatSessionWrites {
   /** Promotes one provisional Draft in place, serialized across concurrent sends. */
   promoteChatSession(sessionId: string): Promise<boolean>;
   /** Attaches a client to a Session that is already durable — the hydration path. */
-  adoptChatSession(sessionId: string): void;
+  /**
+   * `projectId`, when the caller knows it, routes the Session to its host's
+   * transport (VC-713); absent, the project is read from this window's
+   * Drafts and listings, and a Session none of them names is This Mac's.
+   */
+  adoptChatSession(sessionId: string, projectId?: string): void;
+  /**
+   * Re-homes the resident Sessions of these projects (VC-713, B4): each one's
+   * client is replaced by one on the transport its project resolves to now —
+   * a remote project's new Workspace, or the closed transport in its host's
+   * name — and re-reads its snapshot. Called when a binding starts or stops,
+   * or a project's Workspace is let go of or claimed again.
+   */
+  rebindChatSessions(projectIds: readonly string[]): void;
   /** Drops the Session from this surface. The Session itself is untouched. */
   closeChatSession(sessionId: string): void;
-  enqueue(sessionId: string, message: QueuedMessage): void;
+  enqueue(sessionId: string, message: QueuedMessage): Promise<MessageDelivery>;
   /**
    * Retitles a Session on this surface ahead of its stream.
    *
@@ -133,8 +166,9 @@ export interface ChatSessionsState extends ChatSessionWrites {
    * Resident for the reason the client is: a chat view mounts and unmounts
    * freely, and the tabs a person left open are not a fact about whether the
    * ticket detail is on screen. Deliberately NOT persisted — a durable Session
-   * is recovered from its own record, and the workspace store's active tab id
-   * is the only thing that has to survive a restart.
+   * is recovered from its own record, and which tabs come back is the workspace
+   * store's to remember: a ticket's active tab id, and Home's whole strip
+   * (`homeTabOrder`, VC-105).
    */
   openTabs: Readonly<Record<string, readonly string[]>>;
   /**
@@ -223,11 +257,20 @@ function blobLinkDrafts(
   }));
 }
 
-/** Factory so tests get isolated instances (sessions.ts's convention). */
+/**
+ * Factory so tests get isolated instances (sessions.ts's convention).
+ *
+ * `transport` answers per project (VC-713): a Session on a remote host goes
+ * over its Workspace's link, everything else over IPC exactly as before.
+ */
 export function createChatSessionsStore(
-  transport: () => ChatSessionTransport = browserChatTransport,
+  transport: (projectId: string | null) => ChatSessionTransport = chatTransportFor,
 ) {
   return create<ChatSessionsState>()((set, get, api) => {
+    // Which project each Session belongs to, so its client — created once,
+    // kept in the registry — gets that project's transport (VC-713). The
+    // Sessions this store starts or adopts are recorded; any other is found
+    // in the listings it was opened from (`lib/session-project`).
     // A close after create but before Blob transfer finishes cannot delete the
     // durable row, but it must stop that in-flight promotion from attaching a
     // resident runtime behind the closed tab.
@@ -248,9 +291,23 @@ export function createChatSessionsStore(
       });
     };
 
+    const retireAcceptedHeld = (sessionId: string) => {
+      const slice = get().sessions[sessionId];
+      if (slice === undefined) return;
+      const accepted = new Set([
+        ...slice.queue.map((message) => message.id),
+        ...slice.transcript.durableMessages.map((message) => message.id),
+      ]);
+      const drafts = useChatDraftsStore.getState();
+      for (const message of drafts.drafts[sessionId]?.held ?? []) {
+        if (message.deliveryAccepted && accepted.has(message.id))
+          drafts.dropHeld(sessionId, message.id);
+      }
+    };
+
     const attach = (sessionId: string) =>
       getOrCreateChatClient(sessionId, {
-        ...transport(),
+        ...transport(projectOfSession(sessionId)),
         store: api,
         // The two desktop-owned effects the core names but never imports
         // (VC-169): an event failure surfaces as an error toast, and the
@@ -298,6 +355,8 @@ export function createChatSessionsStore(
       input: CreateChatSessionInput,
       makeClient: boolean,
     ): Promise<string | null> => {
+      // Keep the identity the request addresses even if project selection or pairing changes.
+      const remoteHost = remoteHostNow(input.projectId);
       let created: Awaited<ReturnType<ChatSessionTransport["createSession"]>>;
       try {
         created = await edge.createSession({
@@ -315,10 +374,23 @@ export function createChatSessionsStore(
           ...(input.autoSelect === undefined ? {} : { autoSelect: input.autoSelect }),
         });
       } catch (failure) {
-        // A create refused for the missing default model is a predictable
-        // configuration state, not an error: the recovery is Model Access,
-        // so this opens it instead of raising a toast about it (VC-53).
+        // A missing default has one recovery: local Model Access (VC-53),
+        // or the named host's picker (VC-729), never this Mac's preferences
+        // for a remote Session.
         if (isDefaultModelRequired(errorMessage(failure))) {
+          if (remoteHost !== null) {
+            toastError(`Could not start Session: ${remoteHost.name} has no default model yet`, {
+              action: {
+                label: "Choose a model",
+                onClick: () =>
+                  useHostModelSheet.getState().open({
+                    hostId: remoteHost.id,
+                    hostName: remoteHost.name,
+                  }),
+              },
+            });
+            return null;
+          }
           useUiStore.getState().setSettingsOpen(true, "model-access");
           return null;
         }
@@ -346,19 +418,48 @@ export function createChatSessionsStore(
         toastError("Could not start Session. Try sending again.");
         return null;
       }
+      rememberSessionProject(created.sessionId, input.projectId);
       if (makeClient) makeResident(created.sessionId, input.ticketId);
       return created.sessionId;
     };
 
     return {
       sessions: {},
+      idleSends: {},
+      rememberIdleSend(sessionId, message, accepted = false) {
+        set((state) => {
+          const rows = state.idleSends[sessionId] ?? [];
+          const previous = rows.find((row) => row.id === message.id);
+          const next = { ...message, accepted: accepted || previous?.accepted === true };
+          return {
+            idleSends: {
+              ...state.idleSends,
+              [sessionId]:
+                previous === undefined
+                  ? [...rows, next]
+                  : rows.map((row) => (row.id === message.id ? next : row)),
+            },
+          };
+        });
+      },
+      forgetIdleSend(sessionId, messageId) {
+        set((state) => {
+          const rows = state.idleSends[sessionId];
+          if (!rows?.some((row) => row.id === messageId)) return state;
+          const remaining = rows.filter((row) => row.id !== messageId);
+          const idleSends = { ...state.idleSends };
+          if (remaining.length === 0) delete idleSends[sessionId];
+          else idleSends[sessionId] = remaining;
+          return { idleSends };
+        });
+      },
       openTabs: {},
       rehomedTicketBySession: {},
       starting: {},
       provisionalActive: {},
 
       async createChatSession(input) {
-        const edge = transport();
+        const edge = transport(input.projectId);
         // The Session is durable and addressable NOW — the id resolves and the
         // caller lands the tab while `makeResident`'s attach runs behind it.
         return mint(edge, input, true);
@@ -366,7 +467,7 @@ export function createChatSessionsStore(
 
       promoteChatSession(sessionId) {
         return useChatDraftsStore.getState().promote(sessionId, async (provisional) => {
-          const edge = transport();
+          const edge = transport(provisional.projectId);
           // The chat image budget is a per-Session rule, so a Draft's imports
           // were never held to it — there was no Session to measure (VC-358).
           // Ask it HERE, before anything durable exists: a strip that cannot
@@ -505,7 +606,8 @@ export function createChatSessionsStore(
       // no attachment attempt, so there is nothing in flight for `starting` to
       // name, and the composer is gated by whether an executor is live — which
       // the arriving snapshot answers — and never by this.
-      adoptChatSession(sessionId) {
+      adoptChatSession(sessionId, projectId) {
+        if (projectId !== undefined) rememberSessionProject(sessionId, projectId);
         // A Draft tab can travel through the same sidebar/split doors as a
         // durable chat. Opening that view must not manufacture a resident
         // client (and therefore an attach) before its first message promotes it.
@@ -516,13 +618,37 @@ export function createChatSessionsStore(
         void client.connect();
       },
 
+      rebindChatSessions(projectIds) {
+        const moved = new Set(projectIds);
+        for (const sessionId of Object.keys(get().sessions)) {
+          const projectId = projectOfSession(sessionId);
+          if (projectId === null || !moved.has(projectId)) continue;
+          // The old client holds the old owner's transport and stream
+          // allocator; a new one takes the project's transport as it resolves
+          // NOW and re-reads its snapshot, keeping the slice (and the Draft
+          // store's held messages) as they are.
+          disposeChatClient(sessionId);
+          // A failure the old owner reported (its stream lost, its host not
+          // connected) was that transport's; the new client re-reads and
+          // reports its own if the failure is still there.
+          if (get().sessions[sessionId]?.sessionError != null) get().settle(sessionId, null);
+          void attach(sessionId).connect();
+        }
+      },
+
       closeChatSession(sessionId) {
+        // The Session's project stays recorded (`lib/session-project`): a
+        // later reopen from a roster that has moved on must still know a
+        // remote Session is remote (VC-713, B1).
         disposeChatClient(sessionId);
         set((state) => {
-          if (state.sessions[sessionId] === undefined) return state;
+          if (state.sessions[sessionId] === undefined && state.idleSends[sessionId] === undefined)
+            return state;
           const sessions = { ...state.sessions };
+          const idleSends = { ...state.idleSends };
           delete sessions[sessionId];
-          return { sessions };
+          delete idleSends[sessionId];
+          return { sessions, idleSends };
         });
       },
 
@@ -535,10 +661,21 @@ export function createChatSessionsStore(
         update(sessionId, (slice) =>
           foldStreamBatch(slice, frames, overlays, progress, clearLiveCompaction),
         );
+        retireAcceptedHeld(sessionId);
+      },
+
+      applySnapshot(sessionId, window, projection) {
+        update(sessionId, (slice) => applySnapshotWindow(slice, window, projection));
+        retireAcceptedHeld(sessionId);
+      },
+
+      prependHistory(sessionId, requested, page) {
+        update(sessionId, (slice) => prependSliceHistory(slice, requested, page));
       },
 
       setProjection(sessionId, projection) {
         update(sessionId, (slice) => applyProjection(slice, projection));
+        retireAcceptedHeld(sessionId);
       },
 
       attaching(sessionId) {
@@ -553,12 +690,41 @@ export function createChatSessionsStore(
         update(sessionId, (slice) => settleSlice(slice, error));
       },
 
-      enqueue(sessionId, message) {
-        update(sessionId, (slice) => enqueueSlice(slice, message));
+      async enqueue(sessionId, message) {
+        const client = getChatClient(sessionId);
+        if (client === undefined) {
+          toast.error("Message not queued: Session is no longer open");
+          return Promise.resolve("refused");
+        }
+        const drafts = useChatDraftsStore.getState();
+        // Creator kickoffs need the same crash-safe recovery as composer sends.
+        if (!drafts.drafts[sessionId]?.held.some((row) => row.id === message.id))
+          drafts.holdMessage(sessionId, message);
+        if (!(await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY))) {
+          drafts.markHeld(sessionId, message.id, "unsent");
+          return "refused";
+        }
+        const outcome = await client.submit(message, "queue");
+        const shadow = get().idleSends[sessionId]?.find((row) => row.id === message.id);
+        if (shadow !== undefined) {
+          if (outcome === "refused") get().forgetIdleSend(sessionId, message.id);
+          else get().rememberIdleSend(sessionId, message, true);
+        }
+        if (outcome === "refused") drafts.markHeld(sessionId, message.id, "unsent");
+        else {
+          drafts.amendHeldMessage(sessionId, message.id, (held) => ({
+            ...held,
+            delivery: "queue",
+            deliveryAccepted: true,
+          }));
+          retireAcceptedHeld(sessionId);
+        }
+        await flushPendingAppStateKey(CHAT_DRAFTS_APP_STATE_KEY);
+        return outcome;
       },
-
-      dequeue(sessionId, id) {
-        update(sessionId, (slice) => dequeueSlice(slice, id));
+      setQueue(sessionId, queue, revision) {
+        update(sessionId, (slice) => applyQueue(slice, queue, revision));
+        retireAcceptedHeld(sessionId);
       },
 
       retitle(sessionId, title) {
@@ -826,6 +992,7 @@ export function createChatSessionsStore(
           return { rehomedTicketBySession, openTabs, provisionalActive };
         });
         for (const sessionId of abandonedDraftIds) {
+          get().closeChatSession(sessionId);
           useChatDraftsStore.getState().discardProvisional(sessionId);
         }
       },
@@ -849,14 +1016,22 @@ export function createChatSessionsStore(
             delete nextOpenTabs[ownerId];
           }
           const sessions = { ...state.sessions };
+          const idleSends = { ...state.idleSends };
           const rehomedTicketBySession = { ...state.rehomedTicketBySession };
           const provisionalActive = { ...state.provisionalActive };
           for (const ownerId of ownerIds) delete provisionalActive[ownerId];
           for (const sessionId of removedSessionIds) {
             delete sessions[sessionId];
+            delete idleSends[sessionId];
             delete rehomedTicketBySession[sessionId];
           }
-          return { openTabs: nextOpenTabs, sessions, rehomedTicketBySession, provisionalActive };
+          return {
+            openTabs: nextOpenTabs,
+            sessions,
+            idleSends,
+            rehomedTicketBySession,
+            provisionalActive,
+          };
         });
         // This path means the owning project is gone, not merely that a tab was
         // closed or a Ticket left the live board. No surface remains from which

@@ -43,11 +43,16 @@ interface StoredFile {
   info: Stats;
 }
 
+/** One caller of the store's `syncDirectory`, answered by the next directory sync. */
+type DirectorySyncWaiter = PromiseWithResolvers<void>;
+
 /**
  * A content-addressed, append-only store for durable transcript artifacts.
  *
  * The ledger is allowed to reference a returned artifact only after this store
- * has synced its bytes and atomically made them visible at their digest path.
+ * has synced its bytes and atomically made them visible at their digest path,
+ * and a directory sync begun after that name appeared has finished. Concurrent
+ * publications share that directory sync (VC-465): see `syncDirectory`.
  * Artifact names are derived solely from validated SHA-256 digests, so callers
  * never influence filesystem paths.
  *
@@ -65,6 +70,13 @@ export interface FileTranscriptArtifactStoreOptions {
 
 export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
   #ready: Promise<void> | undefined;
+  /** Canonical sizes by artifact id; see {@link byteLength}. */
+  readonly #sizes = new StartOverCache<number>();
+  /** Names a finished directory sync covers since this store last changed them; see {@link ensureDurableName}. */
+  readonly #durableNames = new StartOverCache<true>();
+  /** Callers the next directory sync answers: none of them is covered by one already running. */
+  #directorySyncWaiters: DirectorySyncWaiter[] = [];
+  #directorySyncRunning = false;
   readonly #gzipBytes: (canonicalBytes: Buffer) => Promise<Buffer>;
 
   constructor(
@@ -98,26 +110,54 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     await this.ensureDirectory();
 
     const { compressed, legacy } = this.pathsFor(reference.id);
-    try {
-      await this.verifyStored(compressed, digest, "gzip");
-      return reference;
-    } catch (error) {
-      if (!isMissing(error)) throw error;
-    }
-    try {
-      await this.verifyStored(legacy, digest, "plain");
-      return reference;
-    } catch (error) {
-      if (!isMissing(error)) throw error;
-    }
-
-    await this.publishCompressed(canonicalBytes, digest, compressed);
+    const present = (await this.holdsVerified(compressed, digest, "gzip"))
+      ? compressed
+      : (await this.holdsVerified(legacy, digest, "plain"))
+        ? legacy
+        : undefined;
+    if (present === undefined) await this.publishCompressed(canonicalBytes, digest, compressed);
+    else await this.ensureDurableName(present);
     return reference;
   }
 
   async read(reference: TranscriptReference): Promise<SessionTranscriptArtifact> {
     const bytes = await this.readCanonicalBytes(reference);
     return parseArtifact(bytes, reference.id);
+  }
+
+  /**
+   * The artifact's canonical size, from what the file already persists beside
+   * its body (VC-315): a gzip member's trailer records its uncompressed size
+   * (ISIZE, RFC 1952 § 2.3.1), and a legacy plain file is its canonical
+   * bytes. One open and at most four bytes read, never the body, never a
+   * gunzip — so a session's history window is chosen without touching the
+   * bodies it leaves out, and an excluded corrupt body cannot fail it.
+   *
+   * Unverified by design: the digest is checked when the body is read, which
+   * happens only for a frame the window returns, and the window rechecks its
+   * bound on the bodies it hydrated. A size that is unreadable is `null`.
+   * Content-addressed, so a size once read is cached for the store's life.
+   */
+  async byteLength(reference: TranscriptReference): Promise<number | null> {
+    const cached = this.#sizes.get(reference.id);
+    if (cached !== undefined) return cached;
+    let size: number | null;
+    try {
+      validateReference(reference);
+      const { compressed, legacy } = this.pathsFor(reference.id);
+      try {
+        size = await storedCanonicalSize(compressed, "gzip");
+      } catch (error) {
+        // A present compressed path is authoritative, as it is for a read.
+        if (!isMissing(error)) throw error;
+        size = await storedCanonicalSize(legacy, "plain");
+      }
+    } catch {
+      return null;
+    }
+    if (size === null) return null;
+    this.#sizes.set(reference.id, size);
+    return size;
   }
 
   /** Reads either disk form and returns verified, uncompressed canonical bytes. */
@@ -184,6 +224,7 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     if (!sameFile(before, after)) {
       throw new Error("Legacy transcript artifact changed during repack");
     }
+    this.#durableNames.delete(legacy);
     await unlink(legacy);
     await this.syncDirectory();
   }
@@ -237,6 +278,8 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
       // link is an atomic no-replace publish. If another writer won the race,
       // its compressed bytes must independently inflate and verify.
       let linked = false;
+      // Whatever this name held before, it is not the entry about to land.
+      this.#durableNames.delete(destination);
       try {
         await link(temporary, destination);
         linked = true;
@@ -245,6 +288,9 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
       }
 
       if (linked) {
+        // Shared with every publication linked before it starts, and a failure
+        // rejects them all; the name stays out of #durableNames, so the next
+        // write of these bytes syncs the directory again before reporting it.
         await this.syncDirectory();
         try {
           // The one successful read-back that gates a normal repack deletion:
@@ -256,6 +302,7 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
           try {
             const destinationInfo = await lstat(destination);
             if (sameFile(temporaryInfo, destinationInfo)) {
+              this.#durableNames.delete(destination);
               await unlink(destination);
               await this.syncDirectory();
             }
@@ -268,6 +315,7 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
           }
           throw error;
         }
+        this.#durableNames.set(destination, true);
         return;
       }
 
@@ -279,7 +327,6 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
         const existing = await readStoredFile(destination);
         existingBefore = existing.info;
         await verifiedBytes(existing.stored, expectedDigest, "gzip");
-        return;
       } catch (error) {
         if (!repairCorruptExisting || existingBefore === undefined) throw error;
 
@@ -292,6 +339,7 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
           // Another process changed the winner. Accept it only if it is now a
           // valid artifact; never overwrite a path we did not diagnose.
           await this.verifyStored(destination, expectedDigest, "gzip");
+          await this.ensureDurableName(destination);
           return;
         }
         await rename(temporary, destination);
@@ -301,7 +349,12 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
         if (!sameFile(temporaryInfo, installed)) {
           throw new Error("Compressed transcript artifact changed during repair", { cause: error });
         }
+        this.#durableNames.set(destination, true);
+        return;
       }
+      // Outside the try: a failed sync must never send a valid winner to repair.
+      // The winner may still be waiting on its own directory sync.
+      await this.ensureDurableName(destination);
     } finally {
       if (handle) await handle.close().catch(() => undefined);
       if (!temporaryMoved) await unlink(temporary).catch(() => undefined);
@@ -325,7 +378,85 @@ export class FileTranscriptArtifactStore implements TranscriptArtifactStore {
     await this.readAndVerify(path, expectedDigest, form);
   }
 
-  private async syncDirectory(): Promise<void> {
+  /** Whether `path` holds verified bytes for the digest. Missing is `false`; any other fault throws. */
+  private async holdsVerified(
+    path: string,
+    expectedDigest: string,
+    form: "gzip" | "plain",
+  ): Promise<boolean> {
+    try {
+      await this.verifyStored(path, expectedDigest, form);
+      return true;
+    } catch (error) {
+      if (isMissing(error)) return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Makes a name this store found, rather than linked itself, durable before
+   * it is reported published.
+   *
+   * A visible name is not yet a durable one. Another write of the same bytes
+   * may have linked it and still be waiting for its directory sync, and an
+   * earlier process may have stopped between its link and its sync. Either
+   * way, returning the reference now would let the ledger point at a name a
+   * crash can still take back. One directory sync begun after the name was
+   * seen covers it. The store then remembers the name, so a repeat write of
+   * the same bytes costs no sync.
+   */
+  private async ensureDurableName(path: string): Promise<void> {
+    if (this.#durableNames.has(path)) return;
+    await this.syncDirectory();
+    this.#durableNames.set(path, true);
+  }
+
+  /**
+   * Resolves once a sync of the store's directory that STARTED after this call
+   * has finished, and rejects with its error if that sync fails (VC-465).
+   *
+   * A new name is durable only after its directory is synced, and on macOS
+   * that sync is a full device flush (`F_FULLFSYNC`) the device lets barely
+   * two of run at once. One sync per publication made every Session in flight
+   * queue behind every other's. So this is a group commit: at most one
+   * directory sync runs at a time, and the next one answers every caller that
+   * asked before it started. Each of them made its change before asking, so
+   * that one sync covers them all. A caller that asks while a sync is running
+   * waits for the next one, because the running one may have started before
+   * its change. When a sync fails, every caller it would have answered
+   * rejects, so none of them reports its artifact published.
+   *
+   * Each file's own `sync()` is not shared: it is what makes that file's
+   * bytes durable before any name points at them, and no file call makes
+   * another file's bytes durable.
+   */
+  private syncDirectory(): Promise<void> {
+    const waiter = Promise.withResolvers<void>();
+    this.#directorySyncWaiters.push(waiter);
+    if (!this.#directorySyncRunning) void this.drainDirectorySyncs();
+    return waiter.promise;
+  }
+
+  /** Runs directory syncs until no caller is waiting. Never rejects: each failure goes to its callers. */
+  private async drainDirectorySyncs(): Promise<void> {
+    this.#directorySyncRunning = true;
+    try {
+      while (this.#directorySyncWaiters.length > 0) {
+        const batch = this.#directorySyncWaiters;
+        this.#directorySyncWaiters = [];
+        try {
+          await this.syncDirectoryOnce();
+          for (const waiter of batch) waiter.resolve();
+        } catch (error) {
+          for (const waiter of batch) waiter.reject(error);
+        }
+      }
+    } finally {
+      this.#directorySyncRunning = false;
+    }
+  }
+
+  private async syncDirectoryOnce(): Promise<void> {
     const directory = await open(this.baseDirectory, "r");
     try {
       await directory.sync();
@@ -463,6 +594,69 @@ async function readStoredFile(path: string): Promise<StoredFile> {
     const info = await handle.stat();
     if (!info.isFile()) throw notRegularFile();
     return { stored: await handle.readFile(), info };
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * How many entries each of a store's caches holds before it starts over. A
+ * window looks at a few hundred artifacts, so this holds every size a busy
+ * day of opens asks for (a few dozen bytes each) and every name it writes (a
+ * path each) in a few megabytes at most.
+ */
+const STORE_CACHE_ENTRIES = 16_384;
+
+/**
+ * A store-life cache that starts over once it holds {@link STORE_CACHE_ENTRIES}
+ * keys. Everything one holds can be found again on disk, so forgetting an
+ * entry costs one more read (a size) or one more directory sync (a durable
+ * name), never a wrong answer.
+ */
+class StartOverCache<V> {
+  readonly #entries = new Map<string, V>();
+
+  get(key: string): V | undefined {
+    return this.#entries.get(key);
+  }
+
+  has(key: string): boolean {
+    return this.#entries.has(key);
+  }
+
+  set(key: string, value: V): void {
+    if (this.#entries.size >= STORE_CACHE_ENTRIES) this.#entries.clear();
+    this.#entries.set(key, value);
+  }
+
+  delete(key: string): void {
+    this.#entries.delete(key);
+  }
+}
+/** A gzip member is at least a 10-byte header and an 8-byte trailer. */
+const GZIP_MIN_BYTES = 18;
+
+/**
+ * A stored file's canonical size, from its metadata: the gzip trailer's
+ * ISIZE, or a plain file's length. Opened like a read ({@link STORED_READ_FLAGS}),
+ * so a symlink or a FIFO at the path is refused the same way. `null` for a
+ * gzip file too short to have a trailer.
+ */
+async function storedCanonicalSize(path: string, form: "gzip" | "plain"): Promise<number | null> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(path, STORED_READ_FLAGS);
+  } catch (error) {
+    throw refusedLink(error);
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw notRegularFile();
+    if (form === "plain") return info.size;
+    if (info.size < GZIP_MIN_BYTES) return null;
+    const trailer = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(trailer, 0, 4, info.size - 4);
+    return bytesRead === 4 ? trailer.readUInt32LE(0) : null;
   } finally {
     await handle.close();
   }

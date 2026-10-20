@@ -86,45 +86,49 @@ vi.mock("node-pty", () => ({ spawn }));
 // `parseSetupSentinel` stay REAL so the sentinel contract is exercised end to
 // end. The runtime deps bundle is replaced so phase broadcasts don't touch
 // electron and `worktreesHome` is a stable stand-in.
-vi.mock("@volli/host-core/worktree", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@volli/host-core/worktree")>();
+vi.mock("../../../../packages/host-core/src/worktree/index", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../packages/host-core/src/worktree/index")>();
   return { ...actual, ensure: ensureWorktree };
 });
 vi.mock("./worktree-host", () => ({
   worktreeDeps: (db: unknown) => ({ db, git: () => "", onPhase: onWorktreePhase }),
 }));
-vi.mock("@volli/host-core/worktree-runtime", () => ({
+vi.mock("../../../../packages/host-core/src/worktree-runtime", () => ({
   worktreesHome: () => "/volli-test-worktrees",
 }));
 
-import { confirmDestructiveClose, desktopPtyHost, registerTerminalIpcHandlers } from "./pty";
-import { PtyManager } from "@volli/host-core/pty/manager";
+import { confirmDestructiveClose, desktopPtyPorts, registerTerminalIpcHandlers } from "./pty";
+import { PtyManager, type ParkConfig, type ProcessInspector } from "@volli/host-core/pty";
 import { clientEventSink } from "./client-event-sink";
 import { abandonAcceptedUpdateInstall, beginAcceptedUpdateInstall, refuseQuit } from "./quit-gate";
-import { createAgentCommandService } from "@volli/host-core/agent-commands";
-import type { ParkConfig, ProcessInspector } from "@volli/host-core/pty/park";
-import { importBlob } from "@volli/host-core/blob-import";
-import { blobsRoot, removeBlob } from "@volli/host-core/blob-store";
-import { listTicketEvents, recordSessionResumedOnce } from "@volli/host-core/db/events-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
+import { createAgentCommandService } from "@volli/host-core/agents";
+import { importBlob, blobsRoot, removeBlob } from "@volli/host-core/files";
+import {
+  listTicketEvents,
+  recordSessionResumedOnce,
+  insertProject,
+  deleteTicket,
+  insertTicket,
+} from "@volli/host-core/db";
 import {
   getSession,
   insertSession,
   listSessions,
   listTicketSessions,
-} from "@volli/host-core/session-control/test-support";
-import {
   openTestDb,
   testProject,
   testSession,
   testTicket,
   type TestDb,
-} from "@volli/host-core/db/test-helpers";
-import type { HarnessId } from "@volli/shared";
-import { deleteTicket, insertTicket } from "@volli/host-core/db/tickets-repo";
-import { syncProjectRoots } from "@volli/host-core/project-roots";
-import { createTestSessionEngine } from "./test-session-engine";
-import { createSessionTokenRegistry } from "@volli/host-core/session-tokens";
+  createTestSessionEngine,
+  testHostHandlers,
+} from "@volli/host-core/testing";
+import type { HarnessId, TerminalDataEvent } from "@volli/shared";
+import type { TerminalEngine } from "@renderer/terminal/engine";
+import { deliverTerminalOutput } from "@renderer/terminal/output-dispatch";
+import { syncProjectRoots } from "@volli/host-core/board";
+import { createSessionTokenRegistry } from "@volli/host-core/sessions";
 
 let ptyPidSeq = 1000;
 /** A distinct fake pid per session, so park-tree assertions can't collide. */
@@ -862,6 +866,110 @@ describe("flow control", () => {
 
   it("ignores an ack for an unknown session", () => {
     expect(() => sendAck(makeWebContents(), "nope", 10)).not.toThrow();
+  });
+});
+
+/**
+ * The renderer's half of flow control, driven end to end (VC-821): main's real
+ * IPC adapter sends `volli:terminal-data`, the renderer's real dispatcher feeds
+ * an engine and acks over `volli:terminal-ack`. The engine here parses LATE, as
+ * xterm does — it queues every chunk and only releases it when the test says
+ * so — and the IPC hop is explicit, so nothing is acked before it could be.
+ */
+describe("flow control through the renderer's output dispatch", () => {
+  /** `yes`-style output: a chunk per batch window, `chars` wide. */
+  const CHUNK = 10_000;
+
+  function wireRenderer(sender: WebContentsDouble) {
+    const unparsed: Array<() => void> = [];
+    const inFlight: TerminalDataEvent[] = [];
+    let throwOnWrite = false;
+    const engine: TerminalEngine = {
+      attach: vi.fn(),
+      write: (_data, onParsed) => {
+        // xterm refuses a write past its discard watermark before queueing it.
+        if (throwOnWrite) throw new Error("write data discarded");
+        if (onParsed !== undefined) unparsed.push(onParsed);
+      },
+      onData: () => () => {},
+      onResize: () => () => {},
+      setPaused: vi.fn(),
+      fit: vi.fn(),
+      focus: vi.fn(),
+      adjustFontSize: vi.fn(),
+      resetFontSize: vi.fn(),
+      dispose: vi.fn(),
+    };
+    sender.send.mockImplementation((channel: string, payload: unknown) => {
+      if (channel === "volli:terminal-data") inFlight.push(payload as TerminalDataEvent);
+    });
+    return {
+      /** Delivers every sent batch to the renderer — one IPC hop. */
+      deliver() {
+        for (const event of inFlight.splice(0)) {
+          deliverTerminalOutput(event, engine, (sessionId, chars) =>
+            sendAck(sender, sessionId, chars),
+          );
+        }
+      },
+      /** The engine finishes parsing everything it has queued. */
+      parseAll() {
+        for (const release of unparsed.splice(0)) release();
+      },
+      throwOnNextWrites(value: boolean) {
+        throwOnWrite = value;
+      },
+    };
+  }
+
+  it("pauses the pty while the engine has not parsed a burst, and resumes once it has", async () => {
+    vi.useFakeTimers();
+    const { pty, sender } = await createSession();
+    const renderer = wireRenderer(sender);
+
+    // Acking on receipt (the defect) returned every chunk's credit one hop
+    // later, so this burst never paused the producer however far behind the
+    // parser fell.
+    for (let i = 0; i < 20 && pty.pause.mock.calls.length === 0; i += 1) {
+      pty.emitData("y\n".repeat(CHUNK / 2));
+      flushBatchWindow();
+      renderer.deliver();
+    }
+    expect(pty.pause).toHaveBeenCalledTimes(1);
+    expect(pty.resume).not.toHaveBeenCalled();
+
+    renderer.parseAll();
+    expect(pty.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a thrown write's credit, so the pty still resumes after the burst", async () => {
+    vi.useFakeTimers();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { pty, sender } = await createSession();
+      const renderer = wireRenderer(sender);
+
+      for (let i = 0; i < 20 && pty.pause.mock.calls.length === 0; i += 1) {
+        pty.emitData("y\n".repeat(CHUNK / 2));
+        flushBatchWindow();
+        renderer.deliver();
+      }
+      expect(pty.pause).toHaveBeenCalledTimes(1);
+
+      // One more batch was already in flight when the pty paused; the engine
+      // refuses it. Its 10k chars are above the 5k low watermark, so a lost
+      // ack here would hold the pty paused forever.
+      pty.emitData("y\n".repeat(CHUNK / 2));
+      flushBatchWindow();
+      renderer.throwOnNextWrites(true);
+      renderer.deliver();
+      renderer.throwOnNextWrites(false);
+
+      renderer.parseAll();
+      expect(pty.resume).toHaveBeenCalledTimes(1);
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 
@@ -1915,6 +2023,7 @@ describe("resume launch (issue #78)", () => {
     // wrapper does, since Volli exported the token into that terminal.
     const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
+      handlers: testHostHandlers({ db: testDb.db }),
       db: testDb.db,
       sessionEngine,
       appVersion: "1.2.3",
@@ -1964,6 +2073,7 @@ describe("resume launch (issue #78)", () => {
     if (!launched.ok) throw new Error(`expected session, got ${launched.error}`);
     const tokens = createSessionTokenRegistry();
     const service = createAgentCommandService({
+      handlers: testHostHandlers({ db: testDb.db }),
       db: testDb.db,
       sessionEngine,
       appVersion: "1.2.3",
@@ -2363,7 +2473,8 @@ describe("worktree ticket sessions", () => {
     expect(() => pty.emitExit(1)).not.toThrow();
 
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("failed to record setup failure"),
+      "[worktree-setup] failed to record setup failure",
+      expect.objectContaining({ ticketId: "wt1" }),
     );
     expect(listTicketEvents(testDb.db, "wt1")).toEqual([]);
   });
@@ -2544,14 +2655,14 @@ describe("warm park", () => {
 
   beforeEach(() => {
     parts = makeInspector();
-    parkManager = new PtyManager(
-      desktopPtyHost(),
-      testDb.db,
-      "",
-      fixtureSessionEngine,
-      parts.inspector,
-      ENABLED_CONFIG,
-    );
+    parkManager = new PtyManager({
+      host: desktopPtyPorts(),
+      db: testDb.db,
+      dbError: "",
+      sessionEngine: fixtureSessionEngine,
+      inspector: parts.inspector,
+      parkConfig: ENABLED_CONFIG,
+    });
   });
 
   /** Spawns a session on `parkManager` and returns its id, fake pty, and window. */
@@ -2722,17 +2833,17 @@ describe("warm park", () => {
     });
 
     it("refuses even a manual park when parking is disabled", async () => {
-      const disabled = new PtyManager(
-        desktopPtyHost(),
-        testDb.db,
-        "",
-        fixtureSessionEngine,
-        parts.inspector,
-        {
+      const disabled = new PtyManager({
+        host: desktopPtyPorts(),
+        db: testDb.db,
+        dbError: "",
+        sessionEngine: fixtureSessionEngine,
+        inspector: parts.inspector,
+        parkConfig: {
           ...ENABLED_CONFIG,
           enabled: false,
         },
-      );
+      });
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       const sender = makeWebContents();
@@ -2938,17 +3049,17 @@ describe("warm park", () => {
 
   describe("sweep", () => {
     it("does nothing when parking is disabled", async () => {
-      const disabled = new PtyManager(
-        desktopPtyHost(),
-        testDb.db,
-        "",
-        fixtureSessionEngine,
-        parts.inspector,
-        {
+      const disabled = new PtyManager({
+        host: desktopPtyPorts(),
+        db: testDb.db,
+        dbError: "",
+        sessionEngine: fixtureSessionEngine,
+        inspector: parts.inspector,
+        parkConfig: {
           ...ENABLED_CONFIG,
           enabled: false,
         },
-      );
+      });
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       await disabled.create(asWc(makeWebContents()), {
@@ -3045,18 +3156,18 @@ describe("warm park", () => {
     });
 
     it("runs on its interval via startParkSweep and halts on stopParkSweep", async () => {
-      const manager2 = new PtyManager(
-        desktopPtyHost(),
-        testDb.db,
-        "",
-        fixtureSessionEngine,
-        parts.inspector,
-        {
+      const manager2 = new PtyManager({
+        host: desktopPtyPorts(),
+        db: testDb.db,
+        dbError: "",
+        sessionEngine: fixtureSessionEngine,
+        inspector: parts.inspector,
+        parkConfig: {
           ...ENABLED_CONFIG,
           idleThresholdMs: 0,
           quietSamplesRequired: 1,
         },
-      );
+      });
       const pty = makeFakePty();
       spawn.mockReturnValueOnce(pty);
       const created = await manager2.create(asWc(makeWebContents()), {
@@ -3078,17 +3189,17 @@ describe("warm park", () => {
     });
 
     it("startParkSweep is inert when disabled, and stopParkSweep tolerates no timer", () => {
-      const disabled = new PtyManager(
-        desktopPtyHost(),
-        testDb.db,
-        "",
-        fixtureSessionEngine,
-        parts.inspector,
-        {
+      const disabled = new PtyManager({
+        host: desktopPtyPorts(),
+        db: testDb.db,
+        dbError: "",
+        sessionEngine: fixtureSessionEngine,
+        inspector: parts.inspector,
+        parkConfig: {
           ...ENABLED_CONFIG,
           enabled: false,
         },
-      );
+      });
       expect(() => {
         disabled.startParkSweep();
         disabled.stopParkSweep();

@@ -10,9 +10,8 @@
  *    into the Done column — the anchor the TTL counts from;
  *  - `computeArchiveReadiness` (re-exported from `@volli/shared` — it's pure
  *    and dependency-free, so it lives there), the verdict (merge vs TTL vs
- *    neither) with the Keep-pin and dismissal exemptions folded in — the one
- *    place the Vibe-Kanban bug (a TTL sweep that ignores its own pin) is
- *    forbidden;
+ *    neither) with the Keep-pin and dismissal exemptions applied to both
+ *    merge and TTL cleanup paths;
  *  - `archiveAndClean`, the human-disposes composition: it reuses `remove`
  *    (dirty ALWAYS refuses via the shared refusal contract) and the existing
  *    archive path, adding no new git call site (decision #42).
@@ -26,10 +25,10 @@ import {
   type TicketStatus,
 } from "@volli/shared";
 
-import { getAllAppState, setAppState } from "@volli/host-core/db/app-state-repo";
-import { recordTicketEvent } from "@volli/host-core/db/events-repo";
-import { prepared } from "@volli/host-core/db/prepared";
-import { getTicketRow } from "@volli/host-core/db/tickets-repo";
+import { getAllAppState, setAppState } from "../db/app-state-repo";
+import { recordTicketEvent } from "../db/events-repo";
+import { prepared } from "../db/prepared";
+import { getTicketRow } from "../db/tickets-repo";
 import { archiveTicketCommand } from "../ticket-commands";
 import type { WorktreeTrimReport } from "@volli/shared";
 import type { BusyWorktreeSites } from "./activity";
@@ -37,7 +36,7 @@ import type { AgentSiteReleaseReport } from "./agent-sites";
 import { remove, type WorktreeRemoveOptions } from "./remove";
 import { trimIgnoredArtifacts } from "./trim";
 import { getTrimSettings } from "./trim-settings";
-import { err, ok, type WorktreeDeps, type WorktreeResult } from "./types";
+import { err, ok, type WorktreePorts, type WorktreeResult } from "./types";
 
 /** The `app_state` key the retention settings JSON lives under. */
 export const RETENTION_SETTINGS_KEY = "volli:retention";
@@ -147,7 +146,7 @@ const USER_ACTOR: TicketEventActor = { kind: "user" };
  * ever PROMPTS, the human disposes.
  */
 export async function archiveAndClean(
-  deps: WorktreeDeps,
+  deps: WorktreePorts,
   ticketId: string,
   opts: Pick<WorktreeRemoveOptions, "releaseAgentSites"> = {},
 ): Promise<WorktreeResult<void>> {
@@ -174,8 +173,8 @@ const AUTOMATION_ACTOR: TicketEventActor = { kind: "automation" };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The seams {@link reclaimIfStale} needs beyond the worktree bundle. */
-export interface ReclaimDeps {
-  worktree: WorktreeDeps;
+export interface ReclaimPorts {
+  worktree: WorktreePorts;
   now: () => number;
   /** Ends the bindings rooted in the checkout, exactly as the manual remove does. */
   releaseAgentSites?: (directory: string) => Promise<AgentSiteReleaseReport>;
@@ -218,7 +217,7 @@ const SKIP = (reason: string): ReclaimOutcome => ({ kind: "skipped", reason });
  * mid-flight rebase, lock, or unreadable git aborts the whole thing.
  */
 export async function reclaimIfStale(
-  deps: ReclaimDeps,
+  deps: ReclaimPorts,
   ticketId: string,
   prState: "open" | "merged" | "closed" | null,
 ): Promise<ReclaimOutcome> {
@@ -274,8 +273,8 @@ export async function reclaimIfStale(
 // ---- trim on finish (VC-340) -----------------------------------------------
 
 /** The seams {@link trimFinishedWorktree} needs beyond the worktree bundle. */
-export interface TrimFinishDeps {
-  worktree: WorktreeDeps;
+export interface TrimFinishPorts {
+  worktree: WorktreePorts;
   now: () => number;
   /** Where work is genuinely in flight; a busy worktree is never trimmed. */
   busySites?: BusyWorktreeSites;
@@ -306,7 +305,7 @@ const TRIM_SKIP = (reason: string): TrimFinishOutcome => ({ kind: "skipped", rea
  * agent, an open terminal, or a changed tracked file stops it there.
  */
 export async function trimFinishedWorktree(
-  deps: TrimFinishDeps,
+  deps: TrimFinishPorts,
   ticketId: string,
   opts: { prMerged?: boolean } = {},
 ): Promise<TrimFinishOutcome> {
@@ -326,10 +325,12 @@ export async function trimFinishedWorktree(
   // turns it off mid-session has turned it off for the next Done move too.
   if (!settings.trimOnFinish) return TRIM_SKIP("automatic trim is off");
 
+  if (typeof deps.busySites !== "function")
+    return TRIM_SKIP("Worktree activity is unavailable; refusing to trim.");
   const trimmed = await trimIgnoredArtifacts(deps.worktree.gitAsync, {
     worktreePath: ticket.worktree_path,
     keepPatterns: settings.keepPatterns,
-    ...(deps.busySites === undefined ? {} : { busySites: deps.busySites }),
+    busySites: deps.busySites,
   });
   if (!trimmed.ok) return TRIM_SKIP(trimmed.error);
   // Nothing removed is not an event: a worktree that was already trimmed (or

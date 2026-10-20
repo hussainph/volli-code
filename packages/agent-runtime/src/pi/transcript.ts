@@ -66,8 +66,8 @@ const REASONING_SIGNAL =
  * person, and re-sending it just spends another turn arriving at the same
  * sentence.
  *
- * Every alternative is a sentence the owner's ledger recorded raised as a dead
- * end (VC-443), pinned by a table in `transcript.test.ts`:
+ * Recognized provider and SDK transport failures (VC-443) are pinned by a
+ * table in `transcript.test.ts`:
  *
  * - the socket itself — Node's errno names, undici's `fetch failed`,
  *   `other side closed` and bare `terminated` (a body cut mid-read; anchored,

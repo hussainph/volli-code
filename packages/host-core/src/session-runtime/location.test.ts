@@ -4,15 +4,15 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { roleImpliedByTicket } from "@volli/shared";
 import type { Session } from "@volli/shared";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { insertTicket } from "@volli/host-core/db/tickets-repo";
-import { openTestDb, testProject, testTicket, type TestDb } from "@volli/host-core/db/test-helpers";
+import { detachProject, insertProject, reattachProject } from "../db/projects-repo";
+import { insertTicket } from "../db/tickets-repo";
+import { openTestDb, testProject, testTicket, type TestDb } from "../db/test-helpers";
 
 // Only `ensure` is stood in for, so `prepare` can be asked the one question no
 // return value answers: whether a ticketless Session touches git at all.
 const { ensureWorktree } = vi.hoisted(() => ({ ensureWorktree: vi.fn() }));
-vi.mock("@volli/host-core/worktree", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@volli/host-core/worktree")>();
+vi.mock("../worktree", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../worktree")>();
   return { ...actual, ensure: ensureWorktree };
 });
 vi.mock("../worktree-runtime", () => ({ worktreeDeps: (db: unknown) => ({ db }) }));
@@ -22,13 +22,13 @@ const dataChanged = vi.fn();
 const ports = { events: { publish: dataChanged } };
 const options = { dataDir: "/profile" };
 
-import { createDesktopSessionLocationResolver } from "./location";
+import { createSessionLocationResolver } from "./location";
 import {
   acquireDeletionLease,
   acquireWorktreeStartLease,
   resetDeletionLeasesForTest,
   UNDER_DELETION_REFUSAL,
-} from "@volli/host-core/worktree/deletion-lease";
+} from "../worktree/deletion-lease";
 
 let testDb: TestDb | undefined;
 let scratchRoot: string | undefined;
@@ -62,6 +62,24 @@ function ticketSession(projectId: string, ticketId: string): Session {
 }
 
 describe("desktop Session location resolver", () => {
+  it("uses the host venue for resolution and preparation", async () => {
+    testDb = openTestDb();
+    const project = testProject({ id: "p", path: "/repo" });
+    insertProject(testDb.db, project);
+    const resolver = createSessionLocationResolver(testDb.db, ports, {
+      ...options,
+      venue: { id: "hostd", kind: "remote" },
+    });
+    const session = { ...ticketSession("p", "unused"), role: "project" as const, ticketId: null };
+    expect(await resolver.resolve(session)).toEqual({
+      directory: "/repo",
+      venue: { id: "hostd", kind: "remote" },
+    });
+    expect(await resolver.prepare!(session)).toEqual({
+      directory: "/repo",
+      venue: { id: "hostd", kind: "remote" },
+    });
+  });
   it("routes Board Sessions to the Main checkout and ticket Sessions to their worktree", async () => {
     testDb = openTestDb();
     const project = testProject({ id: "project-1", path: "/repo/main" });
@@ -71,7 +89,7 @@ describe("desktop Session location resolver", () => {
     });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.resolve({
@@ -113,7 +131,7 @@ describe("desktop Session location resolver", () => {
     insertTicket(testDb.db, ticket);
     insertProject(testDb.db, otherProject);
     insertTicket(testDb.db, foreignTicket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.resolve({
@@ -169,7 +187,7 @@ describe("desktop Session location resolver", () => {
     testDb = openTestDb();
     const project = testProject({ id: "project-1", path: "/repo/main" });
     insertProject(testDb.db, project);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.prepare({
@@ -191,7 +209,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", usesWorktree: false });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
 
     await expect(
       resolver.prepare({
@@ -218,7 +236,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
 
     // Present: the check before a turn is one `existsSync` and no git at all.
@@ -257,7 +275,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
     const reuse = (restamped: boolean) => ({
       ok: true,
@@ -290,7 +308,7 @@ describe("desktop Session location resolver", () => {
     const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
     insertProject(testDb.db, project);
     insertTicket(testDb.db, ticket);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
     const session = ticketSession(project.id, ticket.id);
 
     // `ensure` refused: `prepare`'s own error already names the worktree and
@@ -321,7 +339,7 @@ describe("desktop Session location resolver", () => {
     const root = scratch();
     const project = testProject({ id: "project-1", path: join(root, "main") });
     insertProject(testDb.db, project);
-    const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
     const session: Session = {
       id: "project-session",
       projectId: project.id,
@@ -338,7 +356,39 @@ describe("desktop Session location resolver", () => {
     expect(ensureWorktree).not.toHaveBeenCalled();
   });
 
-  // VC-284 re-review C4. An agent start is the other side of the deletion
+  // VC-822: removal detaches a project and keeps its Sessions, so nothing may
+  // start one there: not a new binding, and not a turn on a binding that
+  // outlived the removal. Reading where it ran starts nothing and still works.
+  it("refuses to start or reaffirm a Session of a removed project, until it is re-added", async () => {
+    testDb = openTestDb();
+    const root = scratch();
+    const project = testProject({ id: "project-1", path: root });
+    insertProject(testDb.db, project);
+    const resolver = createSessionLocationResolver(testDb.db, ports, options);
+    const session: Session = {
+      id: "project-session",
+      projectId: project.id,
+      ticketId: null,
+      role: "project",
+      parentSessionId: null,
+      title: null,
+      createdAt: 0,
+    };
+    const removed =
+      "This Session's project was removed from Volli. Add its folder again to use it.";
+
+    detachProject(testDb.db, project.id, 1);
+
+    await expect(resolver.prepare(session)).rejects.toThrow(removed);
+    await expect(resolver.reaffirm(session, root)).rejects.toThrow(removed);
+    await expect(resolver.resolve(session)).resolves.toMatchObject({ directory: root });
+
+    reattachProject(testDb.db, project.id, 2);
+    await expect(resolver.prepare(session)).resolves.toMatchObject({ directory: root });
+    await expect(resolver.reaffirm(session, root)).resolves.toBeUndefined();
+  });
+
+  // VC-284. An agent start is the other side of the deletion
   // lease: a Session can still be bound to a directory this app now calls an
   // orphan (deleting a ticket only clears `sessions.ticket_id`), so "an agent is
   // about to work here" and "a cleanup is about to remove here" are two acts
@@ -353,7 +403,7 @@ describe("desktop Session location resolver", () => {
       const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
       insertProject(testDb.db, project);
       insertTicket(testDb.db, ticket);
-      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+      const resolver = createSessionLocationResolver(testDb.db, ports, options);
       const session = ticketSession(project.id, ticket.id);
 
       const removing = acquireDeletionLease(worktreePath);
@@ -378,7 +428,7 @@ describe("desktop Session location resolver", () => {
       const root = scratch();
       const project = testProject({ id: "project-1", path: root });
       insertProject(testDb.db, project);
-      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+      const resolver = createSessionLocationResolver(testDb.db, ports, options);
       const session: Session = {
         id: "project-session",
         projectId: project.id,
@@ -406,7 +456,7 @@ describe("desktop Session location resolver", () => {
       const ticket = testTicket(project.id, { id: "ticket-1", worktreePath });
       insertProject(testDb.db, project);
       insertTicket(testDb.db, ticket);
-      const resolver = createDesktopSessionLocationResolver(testDb.db, ports, options);
+      const resolver = createSessionLocationResolver(testDb.db, ports, options);
       const session = ticketSession(project.id, ticket.id);
 
       let leaseDuringEnsure: unknown = "unasked";

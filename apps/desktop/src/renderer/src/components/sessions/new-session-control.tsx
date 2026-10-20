@@ -41,6 +41,7 @@ import { ChatCircleIcon } from "@phosphor-icons/react/dist/csr/ChatCircle";
 import { PlusIcon } from "@phosphor-icons/react/dist/csr/Plus";
 import { TerminalWindowIcon } from "@phosphor-icons/react/dist/csr/TerminalWindow";
 
+import { readOnlyMark, useCanWrite } from "@renderer/components/hosts/use-hosts";
 import { Button } from "@renderer/components/ui/button";
 import {
   ContextMenu,
@@ -157,7 +158,8 @@ export function newSessionMenuRows(
 }
 
 export function NewSessionControl({
-  disabled,
+  projectId,
+  disabled: booting,
   placement = "strip",
   align = "start",
   shortcuts = false,
@@ -166,6 +168,11 @@ export function NewSessionControl({
   onNewBrowser,
   onNewTerminal,
 }: {
+  /**
+   * The project a new Session would run in. While its host cannot serve
+   * (VC-576) the whole control stands down, greyed as in the lab.
+   */
+  projectId: string | null;
   /** A Session of either kind is already booting. */
   disabled: boolean;
   placement?: NewSessionPlacement;
@@ -198,6 +205,8 @@ export function NewSessionControl({
   onNewTerminal(): void;
 }) {
   const drawing = DRAWING[placement];
+  const canWrite = useCanWrite(projectId);
+  const disabled = booting || !canWrite;
 
   // Whether the menu that is closing should keep its hands off the caret.
   //
@@ -244,6 +253,7 @@ export function NewSessionControl({
             too (and the halves cancel their own `disabled:opacity-50`, which
             would otherwise multiply into an unreadable 25%). */}
         <div
+          {...readOnlyMark(canWrite)}
           className={cn(
             // `transition-transform` already covers `scale` (v4 expands it to
             // transform,translate,scale,rotate), so only the reduced-motion

@@ -13,6 +13,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { homedir, constants as osConstants, tmpdir } from "node:os";
@@ -21,8 +22,10 @@ import { fileURLToPath } from "node:url";
 import type { Context } from "../context";
 import {
   type ExecutionEnv,
+  type ForegroundShellExecutor,
   ExecutionError,
   err,
+  type FileByteReader,
   FileError,
   type FileInfo,
   type FileKind,
@@ -463,16 +466,125 @@ class NodeTextLineReader implements TextLineReader {
   }
 }
 
+/**
+ * Positional reads over a regular file opened by {@link NodeExecutionEnv.openFileReader}
+ * (VC-801). Each read is bounded by its caller; nothing here buffers the file.
+ */
+class NodeFileByteReader implements FileByteReader {
+  readonly size: number;
+  private readonly file: Awaited<ReturnType<typeof openFile>>;
+  private readonly path: string;
+  private closed = false;
+
+  constructor(file: Awaited<ReturnType<typeof openFile>>, path: string, size: number) {
+    this.file = file;
+    this.path = path;
+    this.size = size;
+  }
+
+  async read(
+    position: number,
+    length: number,
+    context: Context,
+    into?: Uint8Array,
+  ): Promise<Result<Uint8Array, FileError>> {
+    const aborted = abortResult<Uint8Array>(context.abortSignal, this.path);
+    if (aborted) return aborted;
+    if (this.closed) return err(new FileError("invalid", "File reader is closed", this.path));
+    try {
+      const buffer = into ?? Buffer.allocUnsafe(length);
+      let filled = 0;
+      while (filled < length) {
+        const { bytesRead } = await this.file.read(
+          buffer,
+          filled,
+          length - filled,
+          position + filled,
+        );
+        const afterReadAbort = abortResult<Uint8Array>(context.abortSignal, this.path);
+        if (afterReadAbort) return afterReadAbort;
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      return ok(buffer.subarray(0, filled));
+    } catch (error) {
+      return err(toFileError(error, this.path));
+    }
+  }
+
+  async close(_context: Context): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      await this.file.close();
+    } catch {
+      // Closing is best-effort, including after cancellation or an earlier I/O failure.
+    }
+  }
+}
+
+const NOT_A_REGULAR_FILE =
+  "Not a regular file (a FIFO, device or socket); only regular files can be read";
+
+/** Why a file of this kind cannot be read, or nothing when it is a regular file. */
+function notRegularFile(
+  stats: { isFile(): boolean; isDirectory(): boolean },
+  path: string,
+): FileError | undefined {
+  if (stats.isFile()) return undefined;
+  return stats.isDirectory()
+    ? new FileError("is_directory", "Path is a directory", path)
+    : new FileError("invalid", NOT_A_REGULAR_FILE, path);
+}
+
+/**
+ * Why an open failed. A socket cannot be opened at all, and its errno differs
+ * by platform (ENXIO, or macOS's EOPNOTSUPP, which libuv leaves unnamed), so
+ * the path's kind is looked up after the failure, to choose the words only.
+ */
+async function openFailure(error: unknown, path: string): Promise<FileError> {
+  try {
+    const refusal = notRegularFile(await stat(path), path);
+    if (refusal) return refusal;
+  } catch {
+    // The open's own error says it better.
+  }
+  return toFileError(error, path);
+}
+
+async function regularFileReader(
+  file: Awaited<ReturnType<typeof openFile>>,
+  path: string,
+  context: Context,
+): Promise<Result<FileByteReader, FileError>> {
+  const aborted = abortResult<FileByteReader>(context.abortSignal, path);
+  if (aborted) return aborted;
+  try {
+    const stats = await file.stat();
+    const refusal = notRegularFile(stats, path);
+    return refusal ? err(refusal) : ok(new NodeFileByteReader(file, path, stats.size));
+  } catch (error) {
+    return err(toFileError(error, path));
+  }
+}
+
 export class NodeExecutionEnv implements ExecutionEnv {
   cwd: string;
   private shellPath?: string;
   private shellEnv?: NodeJS.ProcessEnv;
   private activeChildPids = new Set<number>();
+  private readonly foregroundExecutor?: ForegroundShellExecutor;
 
-  constructor(options: { cwd: string; shellPath?: string; shellEnv?: NodeJS.ProcessEnv }) {
+  constructor(options: {
+    cwd: string;
+    shellPath?: string;
+    shellEnv?: NodeJS.ProcessEnv;
+    foregroundExecutor?: ForegroundShellExecutor;
+  }) {
     this.cwd = options.cwd;
     this.shellPath = options.shellPath;
     this.shellEnv = options.shellEnv;
+    this.foregroundExecutor = options.foregroundExecutor;
   }
 
   async absolutePath(path: string, _context: Context): Promise<Result<string, FileError>> {
@@ -493,6 +605,8 @@ export class NodeExecutionEnv implements ExecutionEnv {
     const timeoutMsResult = resolveTimeoutMs(options?.timeout);
     if (!timeoutMsResult.ok) return err(timeoutMsResult.error);
     const timeoutMs = timeoutMsResult.value;
+    const foreground =
+      options?.foregroundCallId === undefined ? undefined : this.foregroundExecutor;
 
     const cwd = options?.cwd ? resolvePath(this.cwd, options.cwd) : this.cwd;
     const shellConfig = await getShellConfig(this.shellPath);
@@ -522,8 +636,11 @@ export class NodeExecutionEnv implements ExecutionEnv {
       let spillStart: Promise<void> | undefined;
       let spillStream: WriteStream | undefined;
       let spillBackpressured = false;
+      const captureFailure = new AbortController();
+      let foregroundControl: { pauseOutput(): void; resumeOutput(): void } | undefined;
 
       const onAbort = () => {
+        if (foreground !== undefined) captureFailure.abort();
         if (child?.pid) killProcessTree(child.pid);
       };
       const failCallback = (error: unknown) => {
@@ -554,12 +671,14 @@ export class NodeExecutionEnv implements ExecutionEnv {
         resolvePromise(result);
       };
       const pauseOutput = () => {
+        foregroundControl?.pauseOutput();
         child?.stdout?.pause();
         child?.stderr?.pause();
       };
       const resumeOutput = () => {
         if (callbackError || spillError || timedOut || signal?.aborted || spillBackpressured)
           return;
+        foregroundControl?.resumeOutput();
         child?.stdout?.resume();
         child?.stderr?.resume();
       };
@@ -622,43 +741,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
         });
       };
 
-      try {
-        const commandFromStdin = shellConfig.value.commandTransport === "stdin";
-        child = spawn(
-          shellConfig.value.shell,
-          commandFromStdin ? shellConfig.value.args : [...shellConfig.value.args, command],
-          {
-            cwd,
-            detached: process.platform !== "win32",
-            env: getShellEnv(this.shellEnv, options?.env, options?.inheritEnv),
-            stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-            windowsHide: true,
-          },
-        );
-        if (child.pid) this.activeChildPids.add(child.pid);
-        if (commandFromStdin) {
-          child.stdin?.on("error", () => {});
-          child.stdin?.end(command);
-        }
-      } catch (error) {
-        const cause = toError(error);
-        settle(err(new ExecutionError("spawn_error", cause.message, cause)));
-        return;
-      }
-
-      timeoutId =
-        timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => {
-              timedOut = true;
-              onAbort();
-            }, timeoutMs);
-
-      if (signal) {
-        if (signal.aborted) onAbort();
-        else signal.addEventListener("abort", onAbort, { once: true });
-      }
-
       const feed = (chunk: Uint8Array) => {
         try {
           const wasTruncated = capture.truncated;
@@ -677,17 +759,85 @@ export class NodeExecutionEnv implements ExecutionEnv {
           failCallback(error);
         }
       };
-      child.stdout?.on("data", feed);
-      child.stderr?.on("data", feed);
+      let completion: Promise<{
+        code: number | null;
+        signal: string | null;
+        background?: { shellId: string };
+      }>;
+      if (foreground !== undefined) {
+        // The host owns cancellation and timeout: promotion withdraws both without killing the child.
+        completion = foreground({
+          command,
+          shellConfig: shellConfig.value,
+          cwd,
+          env: Object.fromEntries(
+            Object.entries(getShellEnv(this.shellEnv, options?.env, options?.inheritEnv)).filter(
+              (entry): entry is [string, string] => entry[1] !== undefined,
+            ),
+          ),
+          toolCallId: options!.foregroundCallId!,
+          timeout: options?.timeout,
+          signal:
+            signal === undefined
+              ? captureFailure.signal
+              : AbortSignal.any([signal, captureFailure.signal]),
+          onOutput: feed,
+          onReady: (control) => {
+            foregroundControl = control;
+            options?.onForegroundReady?.();
+          },
+        });
+      } else {
+        try {
+          const commandFromStdin = shellConfig.value.commandTransport === "stdin";
+          child = spawn(
+            shellConfig.value.shell,
+            commandFromStdin ? shellConfig.value.args : [...shellConfig.value.args, command],
+            {
+              cwd,
+              detached: process.platform !== "win32",
+              env: getShellEnv(this.shellEnv, options?.env, options?.inheritEnv),
+              stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
+              windowsHide: true,
+            },
+          );
+          if (child.pid) this.activeChildPids.add(child.pid);
+          if (commandFromStdin) {
+            child.stdin?.on("error", () => {});
+            child.stdin?.end(command);
+          }
+        } catch (error) {
+          const cause = toError(error);
+          settle(err(new ExecutionError("spawn_error", cause.message, cause)));
+          return;
+        }
 
-      void waitForChildProcess(
-        child,
-        () =>
-          spillError === undefined &&
-          spillStart !== undefined &&
-          (spillStream === undefined || spillBackpressured),
-      ).then(
-        async ({ code, signal: exitSignal }) => {
+        timeoutId =
+          timeoutMs === undefined
+            ? undefined
+            : setTimeout(() => {
+                timedOut = true;
+                onAbort();
+              }, timeoutMs);
+
+        if (signal) {
+          if (signal.aborted) onAbort();
+          else signal.addEventListener("abort", onAbort, { once: true });
+        }
+
+        child.stdout?.on("data", feed);
+        child.stderr?.on("data", feed);
+
+        completion = waitForChildProcess(
+          child,
+          () =>
+            spillError === undefined &&
+            spillStart !== undefined &&
+            (spillStream === undefined || spillBackpressured),
+        );
+      }
+      void completion.then(
+        async ({ code, signal: exitSignal, background }) => {
           await finishSpill();
           try {
             capture.finish();
@@ -695,7 +845,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
           } catch (error) {
             failCallback(error);
           }
-          if (callbackError) {
+          if (callbackError && background === undefined) {
             settle(err(callbackError));
             return;
           }
@@ -703,11 +853,11 @@ export class NodeExecutionEnv implements ExecutionEnv {
             settle(err(new ExecutionError("timeout", `timeout:${options?.timeout}`)));
             return;
           }
-          if (signal?.aborted) {
+          if (signal?.aborted && background === undefined) {
             settle(err(new ExecutionError("aborted", "aborted")));
             return;
           }
-          if (spillError) {
+          if (spillError && background === undefined) {
             settle(err(spillError));
             return;
           }
@@ -715,19 +865,61 @@ export class NodeExecutionEnv implements ExecutionEnv {
           // A process killed by a signal (e.g. OOM killer) has no exit code; map it
           // to the conventional 128 + signal number so callers do not mistake it
           // for a successful exit.
-          const exitCode = code ?? (exitSignal ? 128 + (osConstants.signals[exitSignal] ?? 0) : 1);
+          const exitCode =
+            background === undefined
+              ? (code ??
+                (exitSignal ? 128 + (osConstants.signals[exitSignal as NodeJS.Signals] ?? 0) : 1))
+              : 0;
           settle(
             ok({
               exitCode,
+              ...(background === undefined ? {} : { backgroundShellId: background.shellId }),
+              ...(background !== undefined &&
+              (callbackError !== undefined || spillError !== undefined)
+                ? { backgroundCaptureIncomplete: true }
+                : {}),
               truncation: output.truncation,
-              ...(output.spillPath === undefined ? {} : { spillPath: output.spillPath }),
+              ...(output.spillPath === undefined || spillError !== undefined
+                ? {}
+                : { spillPath: output.spillPath }),
               ...(output.lastLineBytes === undefined
                 ? {}
                 : { lastLineBytes: output.lastLineBytes }),
             }),
           );
         },
-        (error: Error) => settle(err(new ExecutionError("spawn_error", error.message, error))),
+        async (error: Error) => {
+          await finishSpill();
+          try {
+            capture.finish();
+            capture.flush();
+          } catch (cause) {
+            failCallback(cause);
+          }
+          const failure =
+            callbackError ??
+            spillError ??
+            (error instanceof ExecutionError
+              ? error
+              : new ExecutionError(
+                  signal?.aborted
+                    ? "aborted"
+                    : "code" in error &&
+                        (error.code === "aborted" ||
+                          error.code === "timeout" ||
+                          error.code === "callback_error")
+                      ? error.code
+                      : options?.timeout !== undefined &&
+                          error.message.endsWith(
+                            `Command timed out after ${options.timeout} seconds`,
+                          )
+                        ? "timeout"
+                        : "spawn_error",
+                  error.message,
+                  error,
+                ));
+          settle(err(failure));
+        },
       );
     });
   }
@@ -797,6 +989,32 @@ export class NodeExecutionEnv implements ExecutionEnv {
     } catch (error) {
       return err(toFileError(error, resolved));
     }
+  }
+
+  /**
+   * Judged on the open descriptor rather than on the path, so there is no
+   * check-then-use window for a swap to slip a device past (VC-801; see
+   * docs/development/codeql-triage.md). Opened non-blocking, so a FIFO cannot
+   * hold the open, and without a controlling terminal, so a terminal cannot
+   * become one; neither flag changes anything for a regular file. A socket
+   * cannot be opened at all, and is refused in the same words.
+   */
+  async openFileReader(path: string, context: Context): Promise<Result<FileByteReader, FileError>> {
+    const resolved = resolvePath(this.cwd, path);
+    const aborted = abortResult<FileByteReader>(context.abortSignal, resolved);
+    if (aborted) return aborted;
+    let file: Awaited<ReturnType<typeof openFile>>;
+    try {
+      file = await openFile(
+        resolved,
+        constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOCTTY,
+      );
+    } catch (error) {
+      return err(await openFailure(error, resolved));
+    }
+    const opened = await regularFileReader(file, resolved, context);
+    if (!opened.ok) await file.close().catch(() => undefined);
+    return opened;
   }
 
   async writeFile(

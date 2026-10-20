@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -7,12 +8,146 @@ import {
   createGitCapturingAsyncRunner,
   GIT_COMMAND_TIMEOUT_MS,
   GIT_MAX_CONCURRENT_CHILDREN,
+  GIT_MUTATION_TIMEOUT_MS,
   GitError,
   parseWorktreeList,
   resetGitChildSlotsForTest,
+  runGitCapturing,
+  runGitCapturingAsync,
   stderrOf,
   withGitChildSlot,
 } from "./git";
+
+describe("the local git argument boundary", () => {
+  const unsafe: readonly (readonly string[])[] = [
+    ["--upload-pack=echo injected"],
+    ["-c", "core.sshCommand=echo injected", "status"],
+    ["ls-remote", "--upload-pack=echo injected", "."],
+    ["clone", "--upload-pack=echo injected", "."],
+    ["fetch", "--upload-pack=echo injected", "origin"],
+    ["rev-parse", "--verify", "--quiet", "--upload-pack=echo injected"],
+    ["rev-parse", "-ref"],
+    ["rev-parse", "--end-of-options", "-ref"],
+    ["rev-parse", "--verify", "--end-of-options", "-ref"],
+    ["merge-base", "-ref", "HEAD"],
+    ["merge", "--no-edit", "--upload-pack=echo injected"],
+    ["diff", "--numstat", "-ref...HEAD"],
+    ["diff", "--ext-diff", "HEAD"],
+    ["rev-list", "--count", "-ref..HEAD"],
+    ["show", "--output=unexpected-file"],
+    ["cat-file", "-e", "-ref:path"],
+    ["ls-files", "--upload-pack=echo injected", "--", "file.txt"],
+    ["symbolic-ref", "--quiet", "-ref"],
+    ["log", "-1", "--format=%ct", "-ref"],
+    ["log", "HEAD", "--not", "-ref", "--remotes", "--max-count=1", "--format=%H"],
+    ["for-each-ref", "-ref", "--sort=-committerdate", "--format=%(refname:short)"],
+    ["worktree", "add", "-b", "-branch", "./path", "HEAD"],
+    ["worktree", "add", "-path", "HEAD"],
+    ["worktree", "add", "-b", "branch", "./path", "-ref"],
+    ["worktree", "repair", "-path"],
+    ["worktree", "repair", "--", "-path"],
+    ["worktree", "remove", "-path"],
+    ["worktree", "remove", "--force", "-path"],
+    ["worktree", "remove", "--force", "--", "-path"],
+    ["worktree", "remove", "--force", "./path", "./another-path"],
+    ["rev-parse", "--git-path", "-path"],
+    ["rev-parse", "HEAD\0"],
+  ];
+
+  it("rejects option-prefixed refs, repository operands and network commands before sync spawn", () => {
+    for (const args of unsafe) {
+      // An unusable cwd proves rejection happened before invoking git, not
+      // because a command failed after its injected option was interpreted.
+      expect(() => runGitCapturing(args, "/nonexistent-volli-git-argument-test")).toThrow(
+        "Unsafe or unsupported local git arguments.",
+      );
+    }
+  });
+
+  it("enforces the same boundary on the async runner", async () => {
+    for (const args of unsafe) {
+      await expect(
+        runGitCapturingAsync(args, "/nonexistent-volli-git-argument-test"),
+      ).rejects.toThrow("Unsafe or unsupported local git arguments.");
+    }
+  });
+
+  it("preserves local reads, ranges, literal -prefixed filenames and worktree lifecycle", async () => {
+    const dir = mkdtempSync(join(process.cwd(), ".git-args-test-"));
+    const raw = (args: readonly string[]): string =>
+      execFileSync("git", [...args], { cwd: dir, encoding: "utf8" });
+    try {
+      raw(["init", "--quiet", "--initial-branch=main"]);
+      writeFileSync(join(dir, "-file.txt"), "literal option-looking path\n");
+      writeFileSync(join(dir, "space name.txt"), "spaces remain valid\n");
+      raw(["add", "--", "-file.txt", "space name.txt"]);
+      raw([
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--quiet",
+        "-m",
+        "initial",
+      ]);
+      raw(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+      const reads = [
+        // These non-verifying forms must return just the revision, not echo
+        // the runner's option fence into sync / Change Set measurements.
+        ["rev-parse", "HEAD"],
+        ["rev-parse", "main"],
+        ["rev-parse", "origin/main"],
+        ["rev-parse", "main^{commit}"],
+        ["rev-parse", "--verify", "--quiet", "main^{commit}"],
+        ["rev-parse", "--git-dir"],
+        ["rev-parse", "--git-common-dir"],
+        ["rev-parse", "--git-path", "FETCH_HEAD"],
+        ["merge-base", "main", "HEAD"],
+        ["diff", "--numstat", "main...HEAD"],
+        ["diff", "--raw", "--numstat", "-z", "-M", "main"],
+        ["rev-list", "--left-right", "--count", "main...HEAD"],
+        ["show", "HEAD:-file.txt"],
+        ["cat-file", "-e", "HEAD:space name.txt"],
+        ["ls-files", "-z", "--", "-file.txt"],
+        ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        ["log", "-1", "--format=%ct", "main"],
+        ["log", "HEAD", "--not", "main", "--remotes", "--max-count=1", "--format=%H"],
+        ["log", "HEAD", "--not", "--remotes", "--max-count=1", "--format=%H"],
+        ["for-each-ref", "refs/heads", "--sort=-committerdate", "--format=%(refname:short)"],
+        ["--no-optional-locks", "worktree", "list", "--porcelain"],
+      ];
+      for (const args of reads) {
+        const expected = raw(args);
+        expect(runGitCapturing(args, dir)).toBe(expected);
+        expect(await runGitCapturingAsync(args, dir)).toBe(expected);
+      }
+      await runGitCapturingAsync(
+        ["worktree", "add", "-b", "topic", "./space checkout", "main"],
+        dir,
+      );
+      expect(existsSync(join(dir, "space checkout", "-file.txt"))).toBe(true);
+      runGitCapturing(["worktree", "repair", "./space checkout"], dir);
+      expect(await runGitCapturingAsync(["merge", "--no-edit", "main"], dir)).toContain(
+        "Already up to date",
+      );
+      await runGitCapturingAsync(["worktree", "remove", "./space checkout"], dir);
+      // Removal and confirmed orphan cleanup use both runners. Exercise clean
+      // and forced dirty removal, not just creation through the argument fence.
+      for (const runner of [runGitCapturing, runGitCapturingAsync]) {
+        await runner(["worktree", "add", "./clean checkout", "topic"], dir);
+        await runner(["worktree", "remove", "./clean checkout"], dir);
+        expect(existsSync(join(dir, "clean checkout"))).toBe(false);
+        await runner(["worktree", "add", "./dirty checkout", "topic"], dir);
+        writeFileSync(join(dir, "dirty checkout", "untracked.txt"), "keep unless forced\n");
+        await runner(["worktree", "remove", "--force", "./dirty checkout"], dir);
+        expect(existsSync(join(dir, "dirty checkout"))).toBe(false);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("the runner factory's deadline", () => {
   it("refuses a deadline that is not a positive finite number", () => {
@@ -383,6 +518,148 @@ describe("the bounded async git runner", () => {
     expect(failure).toBeInstanceOf(GitError);
     expect(failure).toMatchObject({ timedOut: true });
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+/**
+ * A real repository with one committed file, for the mutation-deadline tests
+ * below. Real git rather than a stand-in, because the claims are about what
+ * git itself leaves on disk when its child is stopped.
+ */
+function mutationRepo(): { dir: string; raw: (args: readonly string[]) => string } {
+  const dir = mkdtempSync(join(tmpdir(), "volli-git-mutation-"));
+  const raw = (args: readonly string[]): string =>
+    execFileSync("git", [...args], { cwd: dir, encoding: "utf8" });
+  raw(["init", "--quiet", "--initial-branch=main"]);
+  raw(["config", "user.name", "Test"]);
+  raw(["config", "user.email", "test@example.com"]);
+  raw(["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(dir, ".gitattributes"), "*.txt filter=slow\n");
+  writeFileSync(join(dir, "file.txt"), "content\n");
+  raw(["add", "."]);
+  raw(["commit", "--quiet", "-m", "initial"]);
+  return { dir, raw };
+}
+
+/** Installs an executable hook in the repository's own hooks directory. */
+function installHook(dir: string, name: string, body: string): void {
+  const hooks = join(dir, ".git", "hooks");
+  mkdirSync(hooks, { recursive: true });
+  writeFileSync(join(hooks, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+}
+
+/** Every `*.lock` left anywhere under the repository's git directory. */
+function lockFilesUnder(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (at: string): void => {
+    if (!existsSync(at)) return;
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith(".lock")) found.push(path);
+    }
+  };
+  walk(join(dir, ".git"));
+  return found;
+}
+
+describe("local mutations are not held to the read deadline (VC-785)", () => {
+  it("lets a `worktree add` whose post-checkout hook outlasts the read deadline finish", async () => {
+    // The production shape at a short scale: the read deadline is 200 ms and
+    // the hook sleeps a second, the way a husky/lefthook install or an LFS
+    // smudge outlasts 8 s on a real repository. Under one shared SIGKILL
+    // deadline the add is killed mid-hook and the Session never starts.
+    const { dir, raw } = mutationRepo();
+    const marker = join(dir, "post-checkout.ran");
+    installHook(dir, "post-checkout", `sleep 1\ntouch "${marker}"`);
+    const git = createGitCapturingAsyncRunner({ timeoutMs: 200 });
+    try {
+      await git(["worktree", "add", "-b", "topic", "./checkout", "main"], dir);
+
+      expect(existsSync(marker)).toBe(true);
+      expect(existsSync(join(dir, "checkout", "file.txt"))).toBe(true);
+      // Finished, not merely started: git drops its "initializing" lock only
+      // once the checkout is complete.
+      expect(raw(["worktree", "list", "--porcelain"])).not.toContain("locked");
+      expect(lockFilesUnder(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a `merge` whose hook outlasts the read deadline finish", async () => {
+    const { dir, raw } = mutationRepo();
+    raw(["checkout", "--quiet", "-b", "topic"]);
+    writeFileSync(join(dir, "other.md"), "other\n");
+    raw(["add", "other.md"]);
+    raw(["commit", "--quiet", "-m", "topic"]);
+    raw(["checkout", "--quiet", "main"]);
+    writeFileSync(join(dir, "main.md"), "main\n");
+    raw(["add", "main.md"]);
+    raw(["commit", "--quiet", "-m", "main"]);
+    installHook(dir, "pre-merge-commit", "sleep 1");
+    const git = createGitCapturingAsyncRunner({ timeoutMs: 200 });
+    try {
+      await git(["merge", "--no-edit", "topic"], dir);
+
+      expect(raw(["log", "-1", "--format=%P"]).trim().split(" ")).toHaveLength(2);
+      expect(lockFilesUnder(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops a mutation past its own backstop politely: git cleans up, its children die, and it says it timed out", async () => {
+    // A smudge filter slows the checkout itself, which `worktree add` runs as
+    // a CHILD `reset --hard` holding `index.lock` while the admin dir carries
+    // its "initializing" lock. SIGKILL to git alone strands all of it, and the
+    // child goes on checking files out; SIGTERM to the whole group lets each
+    // git process run its own lock and junk cleanup.
+    const { dir, raw } = mutationRepo();
+    const marker = join(dir, "filter.ran");
+    raw(["config", "filter.slow.smudge", `sleep 2; touch "${marker}"; cat`]);
+    const git = createGitCapturingAsyncRunner({
+      timeoutMs: 100,
+      mutationTimeoutMs: 600,
+      mutationKillGraceMs: 2_000,
+    });
+    try {
+      const failure = await git(["worktree", "add", "-b", "topic", "./checkout", "main"], dir).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(GitError);
+      expect(failure).toMatchObject({ timedOut: true });
+      expect((failure as GitError).message).toMatch(/timed out/);
+      expect(stderrOf(failure)).toMatch(/timed out after 600ms\.$/);
+      expect(lockFilesUnder(dir)).toEqual([]);
+      expect(existsSync(join(dir, ".git", "worktrees", "checkout"))).toBe(false);
+      expect(raw(["worktree", "list", "--porcelain"])).not.toContain("locked");
+
+      // The filter was signalled with git: it never reaches its write.
+      await new Promise<void>((resolve) => setTimeout(resolve, 2_500));
+      expect(existsSync(marker)).toBe(false);
+      expect(lockFilesUnder(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("refuses a mutation backstop or grace that is not a positive finite number", () => {
+    for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => createGitCapturingAsyncRunner({ mutationTimeoutMs: value })).toThrow(
+        /positive finite number/,
+      );
+      expect(() => createGitCapturingAsyncRunner({ mutationKillGraceMs: value })).toThrow(
+        /positive finite number/,
+      );
+    }
+  });
+
+  it("gives mutations a longer backstop than reads in production", () => {
+    expect(GIT_COMMAND_TIMEOUT_MS).toBe(8_000);
+    expect(GIT_MUTATION_TIMEOUT_MS).toBeGreaterThan(GIT_COMMAND_TIMEOUT_MS);
   });
 });
 

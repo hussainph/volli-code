@@ -15,7 +15,7 @@ import {
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { SecretKeyPort } from "../ports/secret-key";
+import { SecretKeyUnavailableError, type SecretKeyPort } from "../ports/secret-key";
 import { isSecretName, SecretStore } from "./store";
 
 // A real authenticated cipher fixture: unlike base64, neither metadata nor
@@ -107,8 +107,10 @@ describe("SecretStore persistence", () => {
     expect(decrypted.version).toBe(1);
     expect(decrypted.secrets).toHaveLength(2);
     expect(JSON.stringify(decrypted)).not.toContain("ephemeral-session-value");
+    const opened = vi.mocked(encryption.decryptString).mock.calls.length;
     const relaunched = new SecretStore(path, encryption);
-    expect(encryption.decryptString).toHaveBeenCalledTimes(1);
+    // Lazy: constructing opens nothing.
+    expect(encryption.decryptString).toHaveBeenCalledTimes(opened);
     expect(relaunched.list()).toEqual([global, project]);
     expect(relaunched.environment("s", "p")).toEqual({
       API_TOKEN: "durable-global-value",
@@ -124,7 +126,7 @@ describe("SecretStore persistence", () => {
     new SecretStore(path, encryption).list();
     expect(statSync(path).mode & 0o777).toBe(0o600);
     store.put({ name: "TOKEN", value: "replacement", scope: "always" });
-    expect(readdirSync(dir)).toEqual(["credentials.enc"]);
+    expect(readdirSync(dir)).toEqual(["credentials.enc", "host-credentials.lock"]);
   });
 
   it("keeps session values entirely in memory without encryption", () => {
@@ -163,8 +165,15 @@ describe("SecretStore persistence", () => {
 
     store.put({ name: "TOKEN", value: "existing-value", scope: "always" });
     const before = readFileSync(path);
-    expect(() => new SecretStore(path, disabled).list()).toThrow(
-      "Could not decrypt secret storage.",
+    const reopened = new SecretStore(path, disabled);
+    expect(reopened.list()).toEqual([]);
+    expect(reopened.status()).toEqual({
+      state: "locked",
+      reason: "unavailable",
+      unavailable: ["session-env"],
+    });
+    expect(() => reopened.put({ name: "TOKEN", value: "new-value", scope: "always" })).toThrow(
+      "Secret encryption is unavailable here, so saved secrets stay locked.",
     );
     expect(disabled.decryptString).not.toHaveBeenCalled();
     expect(readFileSync(path)).toEqual(before);
@@ -176,8 +185,11 @@ describe("SecretStore persistence", () => {
     original.put({ name: "TOKEN", value: "planted-value", scope: "always" });
     const before = readFileSync(target);
     symlinkSync(target, path);
-    expect(() => store.list()).toThrow("Could not read secret storage.");
-    expect(() => store.put({ name: "TOKEN", value: "mine", scope: "always" })).toThrow();
+    expect(store.list()).toEqual([]);
+    expect(store.status()).toMatchObject({ state: "locked", reason: "store-unreadable" });
+    expect(() => store.put({ name: "TOKEN", value: "mine", scope: "always" })).toThrow(
+      "Could not read secret storage.",
+    );
     expect(lstatSync(path).isSymbolicLink()).toBe(true);
     expect(readFileSync(target)).toEqual(before);
     expect(encryption.decryptString).not.toHaveBeenCalled();
@@ -185,9 +197,17 @@ describe("SecretStore persistence", () => {
 
   it("rejects non-files and does not destroy corrupt ciphertext", () => {
     mkdirSync(path);
-    expect(() => store.list()).toThrow("Could not decrypt secret storage.");
+    expect(store.list()).toEqual([]);
+    expect(store.status()).toEqual({
+      state: "corrupt",
+      reason: null,
+      unavailable: ["session-env"],
+    });
     rmSync(path, { recursive: true });
     writeFileSync(path, "corrupt private-value");
+    // Remembered until unlock: a locked keychain is asked once, not by every read.
+    expect(store.status().state).toBe("corrupt");
+    expect(store.unlock().state).toBe("corrupt");
     const before = readFileSync(path);
     const error = caught(() =>
       store.put({ name: "TOKEN", value: "replacement-private-value", scope: "always" }),
@@ -210,29 +230,66 @@ describe("SecretStore persistence", () => {
     expect(error.cause).toBeUndefined();
     expect(store.list()).toHaveLength(1);
     expect(readFileSync(path)).toEqual(before);
-    expect(readdirSync(dir)).toEqual(["credentials.enc"]);
+    expect(readdirSync(dir)).toEqual(["credentials.enc", "host-credentials.lock"]);
     vi.mocked(encryption.decryptString).mockImplementation(() => {
       throw new Error("original-value leaked by codec");
     });
-    expect(caught(() => new SecretStore(path, encryption).list()).message).toBe(
+    const reopened = new SecretStore(path, encryption);
+    expect(reopened.list()).toEqual([]);
+    expect(reopened.status().state).toBe("corrupt");
+    expect(caught(() => reopened.put({ name: "OTHER", value: "v", scope: "always" })).message).toBe(
       "Could not decrypt secret storage.",
     );
   });
 
-  it("sanitizes filesystem write errors, does not update memory, and cleans temporary files", () => {
-    store.list(); // Cache the empty store before placing a directory at the file path.
+  it.skipIf(process.getuid?.() === 0)(
+    "sanitizes filesystem write errors, does not update memory, and cleans temporary files",
+    () => {
+      store.list(); // Takes the lock once, so it exists before the directory turns read-only.
+      chmodSync(dir, 0o500);
+      try {
+        const error = caught(() =>
+          store.put({ name: "TOKEN", value: "private-value", scope: "always" }),
+        );
+        expect(error.message).toBe("Could not persist encrypted secrets.");
+        expect(error.message).not.toContain(dir);
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+      expect(store.list()).toEqual([]);
+      expect(store.status().state).toBe("empty");
+      expect(readdirSync(dir)).toEqual(["host-credentials.lock"]);
+    },
+  );
+
+  it("finds a directory where the file was, on its next read, as corrupt", () => {
+    store.list();
     mkdirSync(path);
-    const error = caught(() =>
-      store.put({ name: "TOKEN", value: "private-value", scope: "always" }),
+    expect(caught(() => store.put({ name: "TOKEN", value: "v", scope: "always" })).message).toBe(
+      "Could not decrypt secret storage.",
     );
-    expect(error.message).toBe("Could not persist encrypted secrets.");
+    expect(store.status().state).toBe("corrupt");
+  });
+
+  it("leaves a newer build's file alone: locked, never rewritten (VC-642)", () => {
+    writeFileSync(path, encryption.encryptString(JSON.stringify({ version: 2, secrets: [] })));
+    const before = readFileSync(path);
     expect(store.list()).toEqual([]);
-    expect(readdirSync(dir)).toEqual(["credentials.enc"]);
+    expect(store.status()).toEqual({
+      state: "locked",
+      reason: "newer-format",
+      unavailable: ["session-env"],
+    });
+    expect(() => store.put({ name: "TOKEN", value: "v", scope: "always" })).toThrow("newer Volli");
+    expect(readFileSync(path)).toEqual(before);
   });
 
   it.each([
-    { version: 2, secrets: [] },
+    null,
+    5,
     { version: 1, secrets: {} },
+    { version: 1, secrets: [null] },
+    { version: "2", secrets: [] },
     {
       version: 1,
       secrets: [{ id: "x", name: "PATH", value: "unsafe", scope: "always", lastUsedAt: null }],
@@ -257,7 +314,10 @@ describe("SecretStore persistence", () => {
   ])("rejects malformed decrypted schemas without leaking or overwriting them (%#)", (file) => {
     writeFileSync(path, encryption.encryptString(JSON.stringify(file)));
     const before = readFileSync(path);
-    expect(caught(() => store.list()).message).toBe("Could not decrypt secret storage.");
+    expect(store.list()).toEqual([]);
+    expect(store.redact("unsafe")).toBe("unsafe");
+    expect(store.status().state).toBe("corrupt");
+    store.revoke("x");
     expect(readFileSync(path)).toEqual(before);
   });
 });
@@ -280,14 +340,26 @@ describe("SecretStore scopes and metadata", () => {
     });
     store.put({ name: "OTHER", value: "other", scope: "project", projectId: "elsewhere" });
     store.put({ name: "ISOLATED", value: "isolated", scope: "session", sessionId: "another" });
+    // Same name, another Session: its own slot, not a replacement.
+    store.put({ name: "TOKEN", value: "another-session", scope: "session", sessionId: "another" });
+    expect(store.environment("another", "p")).toMatchObject({ TOKEN: "another-session" });
     expect(store.environment("s", "p")).toEqual({ TOKEN: "session" });
     expect(store.environment("other-session", "p")).toEqual({ TOKEN: "project" });
     expect(store.environment("s", "elsewhere")).toEqual({ TOKEN: "global", OTHER: "other" });
     expect(store.list("p").map((item) => item.id)).toEqual([global.id, project.id, session.id]);
+    expect(store.list().filter((item) => item.name === "TOKEN")).toHaveLength(4);
     expect(store.list().every((item) => !("value" in item))).toBe(true);
     const copy = store.list()[0]!;
     copy.name = "MUTATED";
     expect(store.list()[0]?.name).toBe("TOKEN");
+  });
+
+  it("keeps one Project slot per project for the same name", () => {
+    const first = store.put({ name: "TOKEN", value: "p1", scope: "project", projectId: "p1" });
+    const second = store.put({ name: "TOKEN", value: "p2", scope: "project", projectId: "p2" });
+    expect(second.id).not.toBe(first.id);
+    expect(store.environment("s", "p1")).toEqual({ TOKEN: "p1" });
+    expect(store.environment("s", "p2")).toEqual({ TOKEN: "p2" });
   });
 
   it("updates lastUsedAt only for selected values and persists durable timestamps", () => {
@@ -385,6 +457,12 @@ describe("live output redaction", () => {
     expect(store.redactPartial("log\nReady ALMOND123\nWAL")).toBe("log\n‹secret:MULTILINE›");
     expect(store.redactPartial("log\nReady ALMOND123\nWALNUT456")).toBe("log\n‹secret:MULTILINE›");
     expect(store.redactPartial("log\nReady elsewhere")).toBe("log\nReady elsewhere");
+  });
+
+  it("withholds an unfinished credential-shaped tail even with no stored value", () => {
+    expect(store.redactPartial("ready https://alice:opaque")).toBe("ready https://[redacted]");
+    expect(store.redactPartial("ready eyJheader")).toBe("ready [redacted]");
+    expect(store.redactPartial("ready")).toBe("ready");
   });
 
   it("uses the longest trailing prefix and handles repeated overlapping characters", () => {
@@ -554,4 +632,136 @@ describe("validation and non-disclosure", () => {
     caught(() => store.put({ name: "TOKEN", value: "private-value", scope: "always" }));
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
+});
+
+describe("SecretStore when stored credentials are locked (VC-641)", () => {
+  function lockedCodec(): SecretKeyPort {
+    const inner = codec();
+    let locked = false;
+    return {
+      ...inner,
+      decryptString: vi.fn((value: Buffer) => {
+        if (locked) throw new SecretKeyUnavailableError("unavailable", "The keychain is locked.");
+        return inner.decryptString(value);
+      }),
+      lock: () => {
+        locked = true;
+      },
+      unlock: () => {
+        locked = false;
+      },
+    } as SecretKeyPort & { lock(): void; unlock(): void };
+  }
+
+  it("reports empty with no sealed file and ready once something is sealed", () => {
+    expect(store.status()).toEqual({ state: "empty", reason: null, unavailable: [] });
+    expect(store.problem()).toBeNull();
+    store.put({ name: "TOKEN", value: "stored-value", scope: "always" });
+    expect(store.status()).toEqual({ state: "ready", reason: null, unavailable: [] });
+    expect(new SecretStore(path, encryption).status().state).toBe("ready");
+  });
+
+  it("keeps Session-scoped secrets, injection and redaction working while stored ones are locked", () => {
+    const keychain = lockedCodec() as SecretKeyPort & { lock(): void; unlock(): void };
+    new SecretStore(path, keychain).put({
+      name: "STORED",
+      value: "stored-sentinel-value",
+      scope: "always",
+    });
+    const before = readFileSync(path);
+    keychain.lock();
+    const locked = new SecretStore(path, keychain);
+    expect(locked.status()).toEqual({
+      state: "locked",
+      reason: "unavailable",
+      unavailable: ["session-env"],
+    });
+    expect(locked.problem()).toBe("The keychain is locked.");
+    locked.put({ name: "LIVE", value: "live-value", scope: "session", sessionId: "s" });
+    expect(locked.list().map((item) => item.name)).toEqual(["LIVE"]);
+    expect(locked.available("STORED", "s", "p")).toBe(false);
+    expect(locked.environment("s", "p")).toEqual({ LIVE: "live-value" });
+    expect(locked.redact("live-value stored-sentinel-value")).toBe(
+      "‹secret:LIVE› stored-sentinel-value",
+    );
+    expect(locked.hasValues()).toBe(true);
+    // A persistent save is refused with the reason, never sealed over the file.
+    expect(() =>
+      locked.put({ name: "NEW", value: "new-value", scope: "project", projectId: "p" }),
+    ).toThrow("The keychain is locked.");
+    locked.revoke("not-listed");
+    expect(readFileSync(path)).toEqual(before);
+    expect(JSON.stringify(locked.status())).not.toContain("value");
+    // The keychain was asked once, not by every read.
+    expect(keychain.decryptString).toHaveBeenCalledTimes(1);
+
+    keychain.unlock();
+    expect(locked.unlock().state).toBe("ready");
+    expect(locked.environment("s", "p")).toEqual({
+      STORED: "stored-sentinel-value",
+      LIVE: "live-value",
+    });
+    expect(locked.unlock().state).toBe("ready");
+  });
+
+  it("resets a lock with nothing sealed to an empty store", () => {
+    const keychain = lockedCodec() as SecretKeyPort & { lock(): void };
+    const refusing = {
+      ...keychain,
+      probe: () => {
+        throw new SecretKeyUnavailableError("malformed", "Not a key.");
+      },
+    };
+    const locked = new SecretStore(path, refusing);
+    expect(locked.status()).toMatchObject({ state: "locked", reason: "malformed" });
+    expect(locked.reset()).toEqual({
+      archive: null,
+      synced: true,
+      status: { state: "locked", reason: "malformed", unavailable: ["session-env"] },
+    });
+  });
+
+  it("resets only what it cannot open, and never deletes the sealed file", () => {
+    expect(() => store.reset()).toThrow(
+      "Saved secrets are not locked, so there is nothing to reset.",
+    );
+    store.put({ name: "TOKEN", value: "stored-value", scope: "always" });
+    expect(() => store.reset()).toThrow("Saved secrets are not locked");
+    const before = readFileSync(path);
+
+    const keychain = lockedCodec() as SecretKeyPort & { lock(): void; unlock(): void };
+    keychain.lock();
+    const locked = new SecretStore(path, keychain);
+    const { archive, status } = locked.reset(new Date("2026-10-05T00:00:00.000Z"));
+    expect(status).toEqual({ state: "empty", reason: null, unavailable: [] });
+    expect(readdirSync(dir)).toEqual([archive, "host-credentials.lock"]);
+    expect(readFileSync(join(dir, archive!))).toEqual(before);
+    // Every read opens the file again (VC-642), so the backend must open what it sealed.
+    keychain.unlock();
+    locked.put({ name: "TOKEN", value: "re-entered", scope: "always" });
+    expect(locked.status().state).toBe("ready");
+    expect(readdirSync(dir).toSorted()).toEqual(
+      [archive, "credentials.enc", "host-credentials.lock"].toSorted(),
+    );
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "answers a reset it could not finish with a sentence that names no path",
+    () => {
+      writeFileSync(path, "corrupt");
+      expect(store.status().state).toBe("corrupt");
+      chmodSync(dir, 0o500);
+      try {
+        const error = caught(() => store.reset());
+        expect(error.message).toBe("Could not set the saved secrets aside.");
+        expect(error.cause).toBeUndefined();
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+      expect(readFileSync(path, "utf8")).toBe("corrupt");
+      expect(store.status().state).toBe("corrupt");
+      // A corrupt store has no key refusal to tell; the host names the file itself.
+      expect(store.problem()).toBeNull();
+    },
+  );
 });

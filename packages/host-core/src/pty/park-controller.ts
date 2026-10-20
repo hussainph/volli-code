@@ -11,18 +11,24 @@
 // ParkableSession} — the SAME mutable objects the manager holds, which is what
 // keeps wake-before-write/kill coherent across the two modules — plus two
 // injected side-effect hooks (flush buffered output, push park state to the
-// window). That directness is what lets it be unit-tested with a fake inspector
-// and hand-built sessions, no PtyManager required.
+// window) and the spawn ledger's parked mark (VC-833). That directness is what
+// lets it be unit-tested with a fake inspector and hand-built sessions, no
+// PtyManager required.
 
 import { breatheShouldWake, isParkCandidate, treeIsCpuQuiet } from "@volli/shared";
 import type { TerminalIoResult } from "@volli/shared";
 import type { ParkConfig, ProcessInspector } from "./park";
+import { hostLogger } from "../log/root";
+
+const log = hostLogger("park");
 
 /** The park-relevant view of a live session. Structurally satisfied by the
  *  manager's Session (same mutable objects — the controller and manager share
  *  state through them, which is what keeps wake-before-write/kill coherent). */
 export interface ParkableSession {
   readonly pty: { readonly pid: number };
+  /** The shell's spawn-ledger row, which carries the durable parked mark; null when unrecorded. */
+  readonly spawnLedgerId: string | null;
   parkedPids: number[] | null;
   parkedManually: boolean;
   quietCpuSamples: number;
@@ -31,7 +37,19 @@ export interface ParkableSession {
   lastActivityAt: number;
 }
 
-export interface ParkControllerDeps {
+/**
+ * Where the controller records which trees it has SIGSTOPped (VC-833). Memory
+ * alone loses that the moment the host dies: the PTY's hangup SIGHUP then pends
+ * on the stopped shell and the tree stays frozen. A durable mark is what lets
+ * the next launch find it and SIGCONT it. Best-effort by contract, like every
+ * ledger write — it must never throw into a park or wake.
+ */
+export interface ParkLedger {
+  /** `parkedAt` when the row's tree is (about to be) stopped; `null` once it runs again. */
+  markParked(rowId: string, parkedAt: number | null): void;
+}
+
+export interface ParkControllerPorts {
   config: ParkConfig;
   inspector: ProcessInspector;
   /** The manager's live registry — the SAME Map instance, read-only here. */
@@ -40,6 +58,8 @@ export interface ParkControllerDeps {
   flush(sessionId: string): void;
   /** Push the session's current park/keep-awake state to its window. */
   pushParkState(sessionId: string): void;
+  /** The durable parked mark. */
+  ledger: ParkLedger;
 }
 
 /** Plain awaitable pause; the breathe window between SIGCONT and the verdict. */
@@ -56,7 +76,13 @@ export class ParkController {
   /** Guards against a slow sweep's async stages overlapping the next tick. */
   private sweeping = false;
 
-  constructor(private readonly deps: ParkControllerDeps) {}
+  constructor(private readonly deps: ParkControllerPorts) {}
+
+  /** Sets (`true`) or clears the session's durable parked mark, when it has a row. */
+  private markParked(session: ParkableSession, parked: boolean): void {
+    if (session.spawnLedgerId === null) return;
+    this.deps.ledger.markParked(session.spawnLedgerId, parked ? Date.now() : null);
+  }
 
   /**
    * Parks a session: SIGSTOP its whole process tree so macOS compresses/pages
@@ -125,8 +151,13 @@ export class ParkController {
     const stopped = new Set<number>(stopOrder);
     const abortPark = (error: string): TerminalIoResult => {
       for (const pid of stopOrder.toReversed()) this.deps.inspector.signal(pid, "SIGCONT");
+      this.markParked(session, false);
       return { ok: false, error };
     };
+    // The mark is written BEFORE the first SIGSTOP: a host that dies between
+    // the two must leave a row saying "maybe frozen" (which the next launch's
+    // SIGCONT makes harmless either way), never a frozen tree with no row.
+    this.markParked(session, true);
     for (const pid of stopOrder) this.deps.inspector.signal(pid, "SIGSTOP");
     // A child may have spawned between listing and its parent's stop; re-scan and
     // stop any newcomer until the tree is stable (bounded so a fork bomb can't
@@ -171,6 +202,7 @@ export class ParkController {
     const parkedPids = session.parkedPids;
     if (parkedPids === null) return { ok: true };
     for (const pid of parkedPids.toReversed()) this.deps.inspector.signal(pid, "SIGCONT");
+    this.markParked(session, false);
     session.parkedPids = null;
     session.parkedManually = false;
     session.quietCpuSamples = 0;
@@ -249,6 +281,13 @@ export class ParkController {
           const manual = session.parkedManually;
           session.parkedPids = null;
           const refrozen = await this.park(id, { manual, activityBaseline: activityAtStart });
+          if (!refrozen.ok && session.parkedPids === null) {
+            // The tree runs: breathe CONT'd it and the re-freeze stopped
+            // nothing (or CONT'd what it had). The mark the earlier park left
+            // must not outlive that — a kill landing mid-park skips wake(),
+            // since parkedPids was already null.
+            this.markParked(session, false);
+          }
           if (
             !refrozen.ok &&
             this.deps.sessions.get(id) === session &&
@@ -268,10 +307,15 @@ export class ParkController {
       // no longer judge them. Fail open — waking every one still marked parked
       // beats re-freezing unjudged, possibly-working sessions. A session whose
       // re-freeze threw mid-park is already CONT'd and unmarked; it just needs
-      // its renderer badge synced.
+      // its renderer badge synced — and, when the re-freeze threw before it
+      // stopped anything, its durable mark cleared: that tree is running.
       for (const { id, session } of breathing) {
-        if (stillBreathing(id, session)) this.wake(id);
-        else if (this.deps.sessions.get(id) === session) this.deps.pushParkState(id);
+        if (stillBreathing(id, session)) {
+          this.wake(id);
+          continue;
+        }
+        if (session.parkedPids === null) this.markParked(session, false);
+        if (this.deps.sessions.get(id) === session) this.deps.pushParkState(id);
       }
       throw error;
     }
@@ -355,7 +399,7 @@ export class ParkController {
       // Inspection is best-effort: a failed pgrep/ps/lsof degrades to "nothing
       // parks this sweep" (breathe already woke anything it couldn't judge) —
       // never an unhandled rejection, never a session left wrongly frozen.
-      console.error("[park] sweep failed; no sessions parked this sweep:", error);
+      log.error("sweep failed; no sessions parked this sweep", { error });
     } finally {
       this.sweeping = false;
     }

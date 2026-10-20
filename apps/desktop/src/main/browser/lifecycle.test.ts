@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { TicketEvent, TicketEventPayload } from "@volli/shared";
 
 import { closeHeadlessTabsOnTicketArchive } from "./lifecycle";
-import type { TicketWake } from "@volli/host-core/ticket-wake";
+import type { TicketWake } from "@volli/host-core/board";
 
 function wakeSeam() {
   const listeners = new Set<(wake: TicketWake) => void>();

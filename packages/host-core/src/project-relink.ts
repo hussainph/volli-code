@@ -39,9 +39,15 @@ import type {
   ProjectRelinkSubject,
 } from "@volli/shared";
 
-import { getProjectById, listProjects, updateProjectPath } from "@volli/host-core/db/projects-repo";
+import {
+  findProjectByPath,
+  getProjectById,
+  isProjectRemoved,
+  listProjects,
+  updateProjectPath,
+} from "./db/projects-repo";
 import { runGitCapturingAsync } from "./worktree/git";
-import { listWorktreeSitesByProject, updateTicketFields } from "@volli/host-core/db/tickets-repo";
+import { listWorktreeSitesByProject, updateTicketFields } from "./db/tickets-repo";
 import { busySiteWithin } from "./worktree/activity";
 import type { BusyWorktreeSites } from "./worktree/activity";
 import { projectContainerName } from "./worktree/containers";
@@ -100,7 +106,7 @@ export async function inspectProjectFolder(
   return { ok: true, path: project.path, state: probe.state };
 }
 
-export interface ProjectRelinkDeps {
+export interface ProjectRelinkPorts {
   db: Database.Database;
   /**
    * What a look at a folder finds. A seam for the same reason every other one
@@ -147,7 +153,7 @@ export type ProjectRelinkOutcome =
  * could not follow the row by themselves.
  */
 export async function relinkProject(
-  deps: ProjectRelinkDeps,
+  deps: ProjectRelinkPorts,
   request: ProjectRelinkRequest,
 ): Promise<ProjectRelinkOutcome> {
   const probeFolder = deps.probeFolder ?? probeFolderOnDisk;
@@ -175,6 +181,16 @@ export async function relinkProject(
   });
   if (!validation.ok) {
     return { ok: false, error: validation.error, refusal: validation.refusal };
+  }
+  // A removed project keeps its folder's path for its return (VC-822): the
+  // folder is that project's to be added again, not this one's to take over.
+  const holder = findProjectByPath(deps.db, validation.path);
+  if (holder !== undefined && isProjectRemoved(deps.db, holder.id)) {
+    return {
+      ok: false,
+      refusal: "claimed",
+      error: `This folder belongs to ${holder.name}, which was removed. Add it again instead.`,
+    };
   }
 
   const relinked = updateProjectPath(deps.db, project.id, validation.path, now());
@@ -249,7 +265,7 @@ async function identifiedProjects(
  * how many: the destructive guards need the first one to name it in a refusal,
  * and this needs the count to put a number in a warning.
  */
-async function countLiveSessionsIn(deps: ProjectRelinkDeps, directory: string): Promise<number> {
+async function countLiveSessionsIn(deps: ProjectRelinkPorts, directory: string): Promise<number> {
   if (deps.busyWorktreeSites === undefined) return 0;
   const sites = await deps.busyWorktreeSites(directory);
   return sites.filter((site) => busySiteWithin(directory, [site]) !== null).length;
@@ -297,7 +313,7 @@ interface ContainerMove {
  * worktrees where they are costs cleanup, not work.
  */
 async function moveWorktreeContainer(
-  deps: ProjectRelinkDeps,
+  deps: ProjectRelinkPorts,
   project: Project,
   newPath: string,
   now: number,
@@ -366,7 +382,7 @@ async function moveWorktreeContainer(
  * notice tells the person the one command that finishes it.
  */
 async function repairWorktreeLinks(
-  deps: ProjectRelinkDeps,
+  deps: ProjectRelinkPorts,
   projectPath: string,
   found: { worktrees: readonly string[]; relocated: readonly string[] },
 ): Promise<boolean> {

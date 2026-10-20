@@ -22,7 +22,7 @@ import {
   loginShellPath,
   probeLoginShellPath,
   resetLoginShellPathCache,
-  type LoginShellProbeDeps,
+  type LoginShellProbePorts,
 } from "./login-shell-path";
 
 /**
@@ -79,7 +79,7 @@ export async function detectInstalledHarnesses(pathValue: string): Promise<Harne
  * an empty host, and nothing may treat it as one — an install whose PATH failed
  * to resolve once still has every harness it had a minute ago.
  */
-export async function detectHarnesses(deps?: LoginShellProbeDeps): Promise<HarnessId[] | null> {
+export async function detectHarnesses(deps?: LoginShellProbePorts): Promise<HarnessId[] | null> {
   const pathValue = deps
     ? await probeLoginShellPath(DETECTION_PROBE, deps)
     : await loginShellPath();
@@ -267,10 +267,17 @@ export type UserBinPathState =
   /** The user edited the managed block; their version was preserved. */
   | "conflict";
 
+/** Trim only trailing slashes in one pass, even on model-controlled PATH entries. */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 47) end -= 1;
+  return path.slice(0, end);
+}
+
 /** Whether `loginPath` already reaches `<home>/.local/bin`. */
 export function loginPathHasUserBin(loginPath: string, home: string): boolean {
-  const userBin = join(home, ".local", "bin").replace(/\/+$/, "");
-  return loginPath.split(":").some((entry) => entry.replace(/\/+$/, "") === userBin);
+  const userBin = withoutTrailingSlashes(join(home, ".local", "bin"));
+  return loginPath.split(":").some((entry) => withoutTrailingSlashes(entry) === userBin);
 }
 
 /**

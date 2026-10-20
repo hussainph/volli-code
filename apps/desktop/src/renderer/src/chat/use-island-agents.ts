@@ -93,9 +93,9 @@ export function islandAgentLabel(record: Pick<ChatSessionRecord, "title">): stri
  *
  *  • `idle` is `done` or `failed` by `outcome` (VC-269 ruling): a turn that
  *    completed is done; one that was interrupted or whose executor failed is
- *    failed. `outcome === null` on an idle row is the NEWBORN case (fix-first,
- *    review c5714a22): a child sits `idle` for one beat between its row
- *    appearing and its first `turn.started` landing, before any turn has ever
+ *    failed. `outcome === null` on an idle row is the NEWBORN case: a child sits
+ *    `idle` for one beat between its row appearing and its first `turn.started`
+ *    landing, before any turn has ever
  *    ended — that is "not finished yet", not "done", so it reads `working`
  *    rather than lying that a freshly delegated helper already finished.
  *  • `interrupted` (VC-324) is `failed` — the same word an `idle` row with an
@@ -269,7 +269,7 @@ export function useIslandAgents(
         // The door is the mount's when it supplies one; otherwise the
         // window's RPC bridge, adapted — undefined where there is neither,
         // which presses nowhere. Read at press time, like every door here.
-        const bridge = api ?? browserIslandAgentsApi();
+        const bridge = api ?? browserIslandAgentsApi(projectId);
         if (bridge === undefined) return;
         void (async () => {
           try {
@@ -289,7 +289,7 @@ export function useIslandAgents(
         })();
       },
     }),
-    [api, flash, labelOf, openSession, peekSession],
+    [api, flash, labelOf, openSession, peekSession, projectId],
   );
 
   return React.useMemo(() => ({ model: { agents }, actions }), [agents, actions]);

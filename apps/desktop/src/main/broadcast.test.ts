@@ -11,7 +11,6 @@ import type { HostEventMap, HostBroadcastEventTopic } from "@volli/host-core/por
 import {
   broadcastDataChanged,
   broadcastPendingArmedRuns,
-  broadcastSessionRetitled,
   broadcastSessionsInterrupted,
   broadcastSystemAppearance,
   flushDataChangedForTest,
@@ -203,7 +202,7 @@ describe("the host event bus over every window (VC-554)", () => {
     const window = windowFixture();
     windows.push(window);
 
-    broadcastSessionRetitled("s", "Named");
+    windowEventBus.publish("session-retitled", { sessionId: "s", title: "Named" });
     broadcastSessionsInterrupted("t", ["s"]);
     broadcastSystemAppearance(true);
 

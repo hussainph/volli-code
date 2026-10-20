@@ -10,8 +10,8 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { DEFAULT_NOTIFICATION_PREFERENCES } from "@volli/shared";
 
-import { setAppState } from "@volli/host-core/db/app-state-repo";
-import { openTestDb, type TestDb } from "@volli/host-core/db/test-helpers";
+import { setAppState } from "@volli/host-core/db";
+import { openTestDb, type TestDb } from "@volli/host-core/testing";
 import { NOTIFICATION_PREFERENCES_KEY } from "../notification-preferences";
 import {
   createNotificationSettings,
@@ -155,7 +155,7 @@ describe("a delivery Electron reported as failed", () => {
     expect(settings().view().deliveryFailure).toBeNull();
   });
 
-  it("is retired by a later delivery the OS took (round 5)", () => {
+  it("is retired by a later delivery the OS took", () => {
     // The fault it described is not the state of things any more; a page
     // still showing it would ask the person to fix what already works.
     ctx = openTestDb();

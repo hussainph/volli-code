@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { MCP_CONNECTION_TIMEOUT_MS, MCP_ERROR_MAX_CHARS } from "@volli/shared";
 import type { McpProtocolClient } from "./discovery";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
+import { detachProject, insertProject } from "../db/projects-repo";
+import { MemoryMcpCredentialStore } from "./credential-store";
+import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { McpSettingsService, MCP_CANCELLED_MESSAGE } from "./settings";
+import { McpSessionHost, serversForFrozenMcpTools } from "./session-host";
 
 let ctx: TestDb;
 let listedTools: readonly { name: string; description?: string; inputSchema: unknown }[];
@@ -161,7 +163,9 @@ describe("McpSettingsService", () => {
 
   it("edits, enables, disables, changes selected tools, and removes without affecting stored history", async () => {
     const settings = service();
+    expect(settings.surfaceRevision("p1")).toBe(0);
     await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    expect(settings.surfaceRevision("p1")).toBe(1);
 
     expect(settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: false }).ok).toBe(
       true,
@@ -176,6 +180,123 @@ describe("McpSettingsService", () => {
     expect(settings.selectedTools("p1").map((tool) => tool.toolName)).toEqual(["later"]);
     expect(settings.remove({ projectId: "p1", serverId: "server-1" })).toEqual({ ok: true });
     expect(settings.list("p1")).toEqual([]);
+    expect(settings.surfaceRevision("p1")).toBe(5);
+    expect(settings.surfaceRevision("other-project")).toBe(0);
+    expect(settings.remove({ projectId: "p1", serverId: "missing" }).ok).toBe(false);
+    expect(settings.surfaceRevision("p1")).toBe(5);
+  });
+
+  it("answers whether a server is configured and enabled, re-reading only after a change (VC-771)", async () => {
+    const settings = service();
+    expect(settings.configured("p1", "server-1")).toBeUndefined();
+    await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+    // Another project's id is not this project's server.
+    expect(settings.configured("other-project", "server-1")).toBeUndefined();
+
+    // A write behind the service's back (nothing in the app does this) goes
+    // unseen: the answer is remembered, not re-read per call.
+    ctx.db.prepare("UPDATE mcp_servers SET enabled = 0 WHERE id = 'server-1'").run();
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+
+    // A change through the service is seen at once.
+    settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: true });
+    settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: false });
+    expect(settings.configured("p1", "server-1")).toEqual({ enabled: false });
+    settings.remove({ projectId: "p1", serverId: "server-1" });
+    expect(settings.configured("p1", "server-1")).toBeUndefined();
+  });
+
+  it("stops a server for Sessions that hold its tools when a person disables or removes it (VC-771)", async () => {
+    const settings = service();
+    await settings.save({ projectId: "p1", server: draft, enabledTools: ["echo"] });
+    const sessionClose = vi.fn(async () => undefined);
+    const open = vi.fn(async (): Promise<McpProtocolClient> => ({
+      listTools: async () => [],
+      callTool: async () => ({ content: [{ type: "text", text: "echo ok" }] }),
+      close: sessionClose,
+    }));
+    const host = new McpSessionHost({
+      workspacePath: "/repo/project",
+      servers: serversForFrozenMcpTools(settings.list("p1"), settings.selectedTools("p1")),
+      open,
+      configured: (serverId) => settings.configured("p1", serverId),
+    });
+    const call = { serverId: "server-1", toolName: "echo", arguments: {}, toolCallId: "c1" };
+    const signal = new AbortController().signal;
+    try {
+      await host.port.call(call, signal);
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: false });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledOnce());
+      expect((await host.port.call(call, signal)).isError).toBe(true);
+
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+      expect(await host.port.call(call, signal)).toEqual({
+        content: [{ type: "text", text: "echo ok" }],
+        isError: false,
+      });
+      expect(open).toHaveBeenCalledTimes(2);
+      // Saved again, switched off in the same edit.
+      await settings.save({
+        projectId: "p1",
+        server: { ...draft, enabled: false },
+        enabledTools: ["echo"],
+      });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledTimes(2));
+      settings.setEnabled({ projectId: "p1", serverId: "server-1", enabled: true });
+      await host.port.call(call, signal);
+      expect(open).toHaveBeenCalledTimes(3);
+      settings.remove({ projectId: "p1", serverId: "server-1" });
+      await vi.waitFor(() => expect(sessionClose).toHaveBeenCalledTimes(3));
+    } finally {
+      await host.close();
+    }
+  });
+});
+
+// VC-796, VC-822: a removed project is detached, not deleted, so its server
+// rows stay; but no Settings screen shows them any more, and a credential
+// nobody can see is one nobody would think to revoke. They go by name, once
+// the project is off the rail.
+describe("McpSettingsService on a project's removal", () => {
+  it("names the project's servers, then forgets the credentials of every one off the rail", async () => {
+    const credentials = new MemoryMcpCredentialStore();
+    const settings = new McpSettingsService({
+      db: ctx.db,
+      now: () => 100,
+      credentials,
+      open: async (): Promise<McpProtocolClient> => ({
+        listTools: async () => listedTools,
+        callTool: vi.fn(async () => ({ content: [] })),
+        close: closed,
+      }),
+    });
+    insertProject(ctx.db, testProject({ id: "p2", path: "/repo/other" }));
+    await settings.save({ projectId: "p1", server: draft, enabledTools: [] });
+    await settings.save({
+      projectId: "p2",
+      server: { ...draft, id: "server-2" },
+      enabledTools: [],
+    });
+    credentials.update("server-1", () => ({ secrets: { TOKEN: "one" } }));
+    credentials.update("server-2", () => ({ secrets: { TOKEN: "two" } }));
+    // A record whose server row is gone altogether is no one's either.
+    credentials.update("server-gone", () => ({ secrets: { TOKEN: "gone" } }));
+
+    const serverIds = settings.disconnectProject("p1");
+    expect(serverIds).toEqual(["server-1"]);
+    // Before the removal commits, nothing is forgotten.
+    settings.forgetRemovedServers(serverIds);
+    expect(credentials.read("server-1")).toEqual({ secrets: { TOKEN: "one" } });
+
+    detachProject(ctx.db, "p1", 200);
+    settings.forgetRemovedServers([...serverIds, "server-2", "server-gone"]);
+    expect(credentials.read("server-1")).toBeUndefined();
+    expect(credentials.read("server-gone")).toBeUndefined();
+    expect(credentials.read("server-2")).toEqual({ secrets: { TOKEN: "two" } });
+    // The server itself is kept for the project's return, without its secrets.
+    expect(settings.list("p1").map(({ id }) => id)).toEqual(["server-1"]);
   });
 });
 

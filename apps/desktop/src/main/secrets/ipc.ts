@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import type { WebContents } from "electron";
-import type { SecretService } from "@volli/host-core/secrets/service";
+import type { SecretService } from "@volli/host-core/secrets";
 import type { VolliInvokeContract } from "../../ipc/contract";
 
 function record(raw: unknown): Record<string, unknown> {
@@ -58,13 +58,17 @@ export function registerSecretIpc(
   handle("volli:secret-decline", (id) => {
     return service.decline(text(id)).then(() => ({ ok: true }));
   });
+  // Stored-secret reads and changes never wait on the main thread (VC-642): the
+  // service retries asynchronously while another Volli process holds the lock.
   handle("volli:secret-revoke", (id) => {
-    service.store.revoke(text(id));
-    return { ok: true };
+    return service.revoke(text(id)).then(() => ({ ok: true }));
   });
   handle("volli:secret-replace", (raw) => {
     const input = record(raw);
-    service.replace(text(input["id"]), text(input["value"]));
-    return { ok: true };
+    return service.replace(text(input["id"]), text(input["value"])).then(() => ({ ok: true }));
   });
+  // Locked stored secrets (VC-641): try again, or set them aside after the
+  // renderer's confirm. Neither has an agent, verb or socket equivalent.
+  handle("volli:secrets-unlock", () => service.unlock());
+  handle("volli:secrets-reset", () => service.reset());
 }

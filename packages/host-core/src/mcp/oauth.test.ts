@@ -17,9 +17,9 @@ import { join } from "node:path";
 import type { McpServerDraft, RuntimeAskChoice, RuntimeAskRequest } from "@volli/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { putMcpServer } from "@volli/host-core/db/mcp-servers-repo";
-import { insertProject } from "@volli/host-core/db/projects-repo";
-import { openTestDb, testProject, type TestDb } from "@volli/host-core/db/test-helpers";
+import { putMcpServer } from "../db/mcp-servers-repo";
+import { insertProject } from "../db/projects-repo";
+import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import { FileMcpCredentialStore } from "./credential-store";
 import { approveInBrowser, startOAuthFixture, type OAuthFixture } from "./fixtures/oauth-fixture";
 import { McpOAuthBroker, mcpOAuthCallbackOptions } from "./oauth";

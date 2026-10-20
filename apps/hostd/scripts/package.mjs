@@ -4,7 +4,8 @@
  * "Packaging"). CI runs it inside the digest-pinned Linux host image
  * (.devcontainer/host/Dockerfile) after a host-only install, so the Node it
  * copies and the natives it builds are that image's: Node = .nvmrc, glibc =
- * Debian bookworm's.
+ * Debian bookworm's. release.yml's hostd-darwin job runs it natively on a
+ * macOS runner of each architecture, under the nodejs.org Node = .nvmrc.
  *
  *   node apps/hostd/scripts/package.mjs --out <dir>
  *
@@ -19,7 +20,7 @@
  *   lib/volli.cjs       the volli CLI bundle
  *   lib/probe-natives.cjs  loads and exercises every native module
  *   lib/node_modules/   `pnpm deploy --prod` of @volli/hostd: the externals only
- *   share/systemd/volli-hostd.service, share/launchd/com.volli.hostd.plist
+ *   share/systemd/volli-hostd.{service,socket}, share/launchd/com.volli.hostd.plist
  *   MANIFEST.json, README.md, LICENSE
  */
 import { execFileSync } from "node:child_process";
@@ -33,9 +34,11 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +88,7 @@ run("pnpm", ["--filter", "@volli/hostd", "--filter", "@volli/cli", "run", "build
 cpSync(join(APP, "dist"), join(stage, "lib", "hostd"), { recursive: true });
 copyFileSync(join(ROOT, "packages", "cli", "dist", "volli.cjs"), join(stage, "lib", "volli.cjs"));
 copyFileSync(join(HERE, "probe-natives.cjs"), join(stage, "lib", "probe-natives.cjs"));
+copyFileSync(join(HERE, "probe-codemode.mjs"), join(stage, "lib", "probe-codemode.mjs"));
 
 // 2. The externals, from the lockfile, flat so lib/hostd/hostd.cjs resolves them.
 // Install scripts run: node-pty has no Linux prebuild and compiles here.
@@ -123,8 +127,36 @@ for (const native of ["better-sqlite3", "node-pty"]) {
     if (!ours) rmSync(join(prebuilds, entry), { recursive: true, force: true });
   }
 }
+// node-pty forks through `spawn-helper` on macOS, and its published darwin
+// prebuilds carry it without the execute bit, so every spawn fails with
+// "posix_spawnp failed" (step 5's probe found it). Linux has no helper.
+for (const dir of ["prebuilds", join("build", "Release")]) {
+  const root = join(stage, "lib", "node_modules", "node-pty", dir);
+  if (!existsSync(root)) continue;
+  const helpers =
+    dir === "prebuilds"
+      ? readdirSync(root).map((entry) => join(root, entry, "spawn-helper"))
+      : [join(root, "spawn-helper")];
+  for (const helper of helpers) if (existsSync(helper)) chmodSync(helper, 0o755);
+}
 
-// 3. Node itself, and the launchers.
+// Code Mode executes in a worker with an ES-module loader. Ship its published
+// files and QuickJS together; the host half stays bundled, but neither this
+// worker nor its bare quickjs-wasi import can be an in-bundle chunk.
+const runtimePackage = join(ROOT, "packages", "agent-runtime");
+const sandboxRoot = realpathSync(
+  join(runtimePackage, "node_modules", "@earendil-works", "pi-codemode"),
+);
+const quickjsRoot = dirname(
+  createRequire(join(sandboxRoot, "package.json")).resolve("quickjs-wasi/quickjs.wasm"),
+);
+cpSync(sandboxRoot, join(stage, "lib", "node_modules", "@earendil-works", "pi-codemode"), {
+  recursive: true,
+});
+cpSync(quickjsRoot, join(stage, "lib", "node_modules", "quickjs-wasi"), { recursive: true });
+
+// 3. Node itself, and the launchers. `readlink -f` is in macOS's own
+// readlink from 12.3, and this Node already needs 13.5 or later.
 copyFileSync(process.execPath, join(stage, "bin", "node"));
 chmodSync(join(stage, "bin", "node"), 0o755);
 const launcher = (bundle) => `#!/bin/sh
@@ -138,14 +170,24 @@ writeFileSync(join(stage, "bin", "volli"), launcher("volli.cjs"), { mode: 0o755 
 // 4. Service templates and documents.
 mkdirSync(join(stage, "share", "systemd"), { recursive: true });
 mkdirSync(join(stage, "share", "launchd"), { recursive: true });
-copyFileSync(
-  join(APP, "packaging", "volli-hostd.service"),
-  join(stage, "share", "systemd", "volli-hostd.service"),
-);
+for (const unit of ["volli-hostd.service", "volli-hostd.socket"]) {
+  copyFileSync(join(APP, "packaging", unit), join(stage, "share", "systemd", unit));
+}
 copyFileSync(
   join(APP, "packaging", "com.volli.hostd.plist"),
   join(stage, "share", "launchd", "com.volli.hostd.plist"),
 );
+// The agent browser's sandbox on Ubuntu 23.10+ (VC-619), and its probe.
+mkdirSync(join(stage, "share", "apparmor"), { recursive: true });
+copyFileSync(
+  join(APP, "packaging", "volli-chromium.apparmor"),
+  join(stage, "share", "apparmor", "volli-chromium"),
+);
+copyFileSync(
+  join(APP, "scripts", "probe-chromium-sandbox.sh"),
+  join(stage, "share", "probe-chromium-sandbox.sh"),
+);
+chmodSync(join(stage, "share", "probe-chromium-sandbox.sh"), 0o755);
 copyFileSync(join(APP, "README.md"), join(stage, "README.md"));
 copyFileSync(join(ROOT, "LICENSE"), join(stage, "LICENSE"));
 
@@ -183,10 +225,17 @@ writeFileSync(
 
 // 5. Prove the natives load under the shipped Node before anything is archived.
 run(join(stage, "bin", "node"), [join(stage, "lib", "probe-natives.cjs")]);
+run(join(stage, "bin", "node"), [join(stage, "lib", "probe-codemode.mjs")]);
 
 // 6. The archive and its checksum.
 const archive = join(out, `${name}.tar.gz`);
-run("tar", ["-czf", archive, "-C", staging, name]);
+// macOS's bsdtar would otherwise add AppleDouble `._*` entries and extended
+// attributes from the build machine; the archive should hold only the files.
+// GNU tar has neither option and needs neither, so they are Darwin-only.
+const tarFlags = process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : [];
+run("tar", [...tarFlags, "-czf", archive, "-C", staging, name], {
+  env: { ...process.env, COPYFILE_DISABLE: "1" },
+});
 rmSync(staging, { recursive: true, force: true });
 const digest = createHash("sha256").update(readFileSync(archive)).digest("hex");
 writeFileSync(`${archive}.sha256`, `${digest}  ${name}.tar.gz\n`);

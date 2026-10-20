@@ -25,7 +25,7 @@
  *
  * Pi's `direct` is Volli's `both`: Pi's direct tools are also callable from
  * codemode, and Volli needs a word for a tool that is NOT (`ask_user`, the
- * todo list, background shells, screenshots). Pi's `codemode` exposure is
+ * todo list, background shells, bash). Pi's `codemode` exposure is
  * Volli's `code`, and `codemode-deferred` is `deferred`.
  *
  * ## Why the routes are frozen
@@ -137,13 +137,14 @@ export const CODE_MODE_LIMIT_BOUNDS: Readonly<
  * How much of a Session's surface goes through Code Mode, chosen per model.
  *
  * - `off` — no `codemode` tool, unless a large MCP server needs one (see
- *   `code-mode-policy.ts`); every other tool is declared and called directly.
+ *   `code-mode-policy.ts`); every other tool stays declared. When `codemode`
+ *   is offered, its callable tools are also available from programs.
  * - `both` — `codemode` beside every tool, each tool also declared: the model
  *   picks per step. Costs the `codemode` description on every turn.
  * - `only` — `codemode` instead of every capability group a program can call
- *   whole (coding, web, each MCP server…); groups with a member a program
- *   cannot call (the Browser's screenshot, the shells, a person's question)
- *   stay declared whole.
+ *   whole (web, each MCP server…); groups with a direct-only member (bash,
+ *   shells, a person's question), or one N−1 cannot call (screenshots, holds,
+ *   newly callable verbs), stay declared whole.
  */
 export const CODE_MODE_MODES = ["off", "both", "only"] as const;
 export type CodeModeMode = (typeof CODE_MODE_MODES)[number];
@@ -154,6 +155,8 @@ export function isCodeModeMode(value: unknown): value is CodeModeMode {
 
 /** Code Mode as one Session was born with it. */
 export interface CodeModeSurface {
+  /** Description generation frozen at birth; absent keeps the pre-0.2.2 wording. N−1 ignores this additive field. */
+  descriptionVersion?: 2;
   /**
    * The route of every tool in the frozen surface except `codemode` itself,
    * keyed by the durable tool id. Exactly those keys: a missing one or an
@@ -188,11 +191,6 @@ export interface CodeModeSurface {
  *   which fold the list out of the model's own calls.
  * - The background shells start processes that outlive the script that
  *   started them, which a run's cancellation could not then reach.
- * - `browser_screenshot` returns an image. Phase 1 lets no image into a
- *   script or out of one (see the runtime's result shaping), so a screenshot
- *   from code would be a call whose whole result is thrown away.
- * - The hold pair is a turn-level promise to a person about a tab; a script
- *   gets holds implicitly through its writes, as a direct call does.
  */
 const DIRECT_ONLY_CAPABILITIES: ReadonlySet<string> = new Set([
   "ask_user",
@@ -201,18 +199,12 @@ const DIRECT_ONLY_CAPABILITIES: ReadonlySet<string> = new Set([
   "shell_start",
   "shell_output",
   "shell_kill",
-  "browser_screenshot",
-  "browser_acquire",
-  "browser_release",
 ]);
 
 /**
- * Verbs a script may call. Everything else in the registry stays direct.
- *
- * Starting and delegating Sessions and watching them are the multi-Session
- * shape VC-245 measured; `mcp.list` is a read. The rest of the agent-control
- * family (stop, send, Automation runs) and every MCP mutation stay where a
- * person can see each one called on its own.
+ * N−1's callable verbs. Newly callable tools must stay declared, and their
+ * groups stay whole under `only`, until the N−1 floor passes this release
+ * (VC-748). An older build can then still call them directly on downgrade.
  */
 const CODE_CALLABLE_VERBS: ReadonlySet<string> = new Set([
   "session.start",
@@ -267,28 +259,32 @@ export function toolGroupOf(tool: string, definition?: McpToolDefinition): strin
  */
 export function defaultToolRoute(tool: SessionToolId, mcpRoute?: ToolRoute): ToolRoute {
   if (isMcpToolId(tool)) return mcpRoute ?? "both";
-  if ((CAPABILITY_TOOL_IDS as readonly string[]).includes(tool)) {
-    return DIRECT_ONLY_CAPABILITIES.has(tool) ? "direct" : "both";
-  }
-  // What is left is the verb half of the vocabulary.
-  return CODE_CALLABLE_VERBS.has(tool) ? "both" : "direct";
+  return tool === "execute" || tool === CODE_MODE_TOOL_ID || DIRECT_ONLY_CAPABILITIES.has(tool)
+    ? "direct"
+    : "both";
 }
 
 /**
- * Whether a program may call `tool` on `route` — the route, held to the
- * rules {@link defaultToolRoute} was written from.
- *
- * A record is host-written, but it is durable data, and durable data can be
- * damaged. Read through this, a record that routed `shell_start`, `ask_user`
- * or an agent-control verb into programs still leaves it direct: the
- * exclusions above are about what a program cannot do safely, and no record
- * decides those. `codemode` itself is never callable from a program.
+ * Read the frozen route, not today's birth policy. In particular, legacy
+ * `execute` routes keep bash callable; new Sessions route it `direct`.
+ * Safety exclusions and self-calls are refused even in a damaged record.
  */
 export function isCodeCallable(tool: string, route: ToolRoute): boolean {
-  if (!isCodeCallableRoute(route) || tool === CODE_MODE_TOOL_ID) return false;
+  return (
+    isCodeCallableRoute(route) && tool !== CODE_MODE_TOOL_ID && !DIRECT_ONLY_CAPABILITIES.has(tool)
+  );
+}
+
+/** Whether N−1 could call this tool from a program (birth routing only). */
+function isPreviouslyCallable(tool: string): boolean {
   if (isMcpToolId(tool)) return true;
   if ((CAPABILITY_TOOL_IDS as readonly string[]).includes(tool)) {
-    return !DIRECT_ONLY_CAPABILITIES.has(tool);
+    return (
+      !DIRECT_ONLY_CAPABILITIES.has(tool) &&
+      tool !== "browser_screenshot" &&
+      tool !== "browser_acquire" &&
+      tool !== "browser_release"
+    );
   }
   return CODE_CALLABLE_VERBS.has(tool);
 }
@@ -317,11 +313,13 @@ export function codeModeSurfaceFor(input: {
     (input.mcpTools ?? []).map((definition) => [definition.providerName as string, definition]),
   );
   const tools = input.tools.filter((tool) => tool !== CODE_MODE_TOOL_ID);
-  // A group leaves the declared array only when every member this surface
-  // holds can be called from a program.
+  // A group leaves the declared array only when every held member is
+  // callable in this build AND in N−1. Bash stays declared for new Sessions.
   const mixed = new Set<string>();
   for (const tool of tools) {
-    if (!isCodeCallable(tool, "both")) mixed.add(toolGroupOf(tool, definitions.get(tool)));
+    if (defaultToolRoute(tool) !== "both" || !isPreviouslyCallable(tool)) {
+      mixed.add(toolGroupOf(tool, definitions.get(tool)));
+    }
   }
   const routes: Record<string, ToolRoute> = {};
   for (const tool of tools) {
@@ -332,11 +330,12 @@ export function codeModeSurfaceFor(input: {
       continue;
     }
     const callable = defaultToolRoute(tool) === "both";
-    if (!callable || mode === "off") routes[tool] = "direct";
-    else if (mode === "both" || mixed.has(toolGroupOf(tool, definition))) routes[tool] = "both";
+    if (!callable) routes[tool] = "direct";
+    else if (mode !== "only" || mixed.has(toolGroupOf(tool, definition))) routes[tool] = "both";
     else routes[tool] = "code";
   }
   return {
+    descriptionVersion: 2,
     routes,
     limits: { ...(input.limits ?? DEFAULT_CODE_MODE_LIMITS) },
     ...(input.mode === undefined ? {} : { mode }),
@@ -397,6 +396,9 @@ export function parseCodeModeSurface(
   // Session a newer build created. Every key this build DOES know is held to
   // its rule above and below; the routes, which bind the tool array, stay
   // exact in both directions.
+  if (row.descriptionVersion !== undefined && row.descriptionVersion !== 2) {
+    throw new Error(`${context}.descriptionVersion is 2 or absent`);
+  }
   if (row.mode !== undefined && !isCodeModeMode(row.mode)) {
     throw new Error(`${context}.mode is not a Code Mode mode`);
   }
@@ -406,6 +408,7 @@ export function parseCodeModeSurface(
   return {
     routes,
     limits,
+    ...(row.descriptionVersion === 2 ? { descriptionVersion: 2 as const } : {}),
     ...(row.mode === undefined ? {} : { mode: row.mode }),
     ...(row.nudge === true ? { nudge: true as const } : {}),
   };

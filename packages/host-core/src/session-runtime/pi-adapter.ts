@@ -83,6 +83,7 @@ import {
   isConfirmCause,
   isCredentialConfirmCause,
   DEFAULT_INTERACTION_PROMPT_ID,
+  promptId,
   errorMessage,
   isMcpToolId,
   readSkillResources,
@@ -107,6 +108,7 @@ import {
   type RuntimeClassifyPort,
   type RuntimeCallScope,
   type RuntimeObservation,
+  type RuntimeToolRefreshAnnouncement,
   type RuntimeShellPort,
   type RuntimeContextCarry,
   type RuntimeRecoveryRef,
@@ -117,6 +119,7 @@ import {
   type SessionInteractionOption,
   type SessionInteractionResolution,
   type SessionToolId,
+  type SessionInput,
   type SessionNativeDetail,
   type SessionNativeReference,
   type SessionRuntimeSpec,
@@ -124,7 +127,7 @@ import {
 } from "@volli/shared";
 import type { SecretWaitPublisher } from "../secrets/wait-publisher";
 
-type DesktopSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
+type AttachmentSecretPort = NonNullable<SessionRuntimeSpec["secret"]> & {
   withdraw?(interactionId: string): Promise<void>;
   cancelPending?(): Promise<void>;
   dispose?(): Promise<void>;
@@ -133,7 +136,10 @@ import type { UIMessage } from "ai";
 import type { SessionWebPorts } from "../web/ports";
 import { readWorkspaceEnvironment } from "../session-env";
 import type { TurnAttachments } from "../turn-attachments";
+import { hostLogger } from "../log/root";
 import { STRUCTURED_ADAPTER_ID } from "./sessions";
+
+const log = hostLogger("pi-adapter");
 
 /**
  * The one adapter id. Pi is the structured product's single target executor.
@@ -209,8 +215,14 @@ interface PiRuntimeContextFields {
    * the durable Cache Prefix shape, which an attachment must rebind honestly.
    */
   toolSurface: readonly SessionToolId[];
+  /** Last cold provider-visible epoch; executable membership may be ahead while warm. */
+  declarationSurface?: Extract<SessionInput, { kind: "tool-surface" }>;
+  toolRefreshAnnouncements?: readonly RuntimeToolRefreshAnnouncement[];
+  refreshDescriptions?: true;
   /** Absent on historical sessions: rebind their original mcp_* wire spelling. */
   mcpManagementNames?: "server";
+  /** Absent on historical Sessions, whose single-question declaration stays unchanged. */
+  askUserQuestions?: true;
   /** Sanitized MCP definitions frozen beside their dynamic names. */
   mcpTools?: readonly McpToolDefinition[];
   /** Code Mode's frozen routes and limits, present exactly when `toolSurface` names `codemode` (VC-471). */
@@ -251,15 +263,20 @@ export type PiRuntimeContext =
  * optional: it is the one door that keeps a hold from outliving its turn, and
  * a port built without it would keep holds silently.
  */
-export type DesktopBrowserPort = RuntimeBrowserPort & { turnEnded: () => void };
+export type AttachmentBrowserPort = RuntimeBrowserPort & {
+  turnEnded: (options?: { closeHeadlessOwned: boolean }) => void;
+};
 
 /**
  * The runtime's shell port with the one lifecycle door the adapter drives
  * (VC-270): the attachment ending. Required rather than optional, for
- * {@link DesktopBrowserPort}'s reason — it is what keeps a Session's shells
- * from outliving it.
+ * {@link AttachmentBrowserPort}'s reason — it is what keeps a Session's shells
+ * from outliving it. A completed Subagent turn drives the same door early
+ * (VC-809): every shell the child owns, running or exited, is killed and
+ * forgotten (its removal published), and the port keeps serving the
+ * attachment for a turn a person resumes it with.
  */
-export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
+export type AttachmentShellPort = RuntimeShellPort & { dispose: () => void };
 
 /** Main-owned MCP port with attachment cleanup for its clients/transports. */
 /**
@@ -268,7 +285,7 @@ export type DesktopShellPort = RuntimeShellPort & { dispose: () => void };
  * the question to the person driving through the same parked-question
  * machinery a verb's confirmation uses.
  */
-export type DesktopMcpPort = {
+export type AttachmentMcpPort = {
   call(
     request: RuntimeMcpCall,
     signal: AbortSignal,
@@ -284,7 +301,7 @@ export type DesktopMcpPort = {
  * The six writes still take the hold, because the port does that for every
  * writer, hold tools or not.
  */
-function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
+function withoutHoldPair(port: AttachmentBrowserPort): AttachmentBrowserPort {
   // A shallow copy is safe here, unlike in `browserHoldPort`, because the
   // desktop's port is an object literal of closures (`createAgentBrowserPort`)
   // with no `this` to lose; and the adapter keeps telling the ORIGINAL about
@@ -294,7 +311,7 @@ function withoutHoldPair(port: DesktopBrowserPort): DesktopBrowserPort {
 }
 
 /** The port without `find`, for a surface frozen before `browser_find` (VC-364). */
-function withoutFind(port: DesktopBrowserPort): DesktopBrowserPort {
+function withoutFind(port: AttachmentBrowserPort): AttachmentBrowserPort {
   // Safe as a shallow copy for `withoutHoldPair`'s reasons.
   const { find: _find, ...withoutSearch } = port;
   return withoutSearch;
@@ -302,9 +319,9 @@ function withoutFind(port: DesktopBrowserPort): DesktopBrowserPort {
 
 /** The port a frozen surface binds: exactly the optional tools it recorded. */
 function browserForSurface(
-  port: DesktopBrowserPort,
+  port: AttachmentBrowserPort,
   surface: { holdPair: boolean; find: boolean },
-): DesktopBrowserPort {
+): AttachmentBrowserPort {
   const held = surface.holdPair ? port : withoutHoldPair(port);
   return surface.find ? held : withoutFind(held);
 }
@@ -318,6 +335,13 @@ export interface PiAdapterOptions {
   sessionDataDir: string;
   /** Resolves durable Session identity to the Role it runs under; `null` when it cannot. */
   resolveRuntimeContext: (sessionId: string) => Promise<PiRuntimeContext | null>;
+  /** Persist additions before the runtime adopts new bindings at a cache-safe boundary. */
+  refreshRuntimeContext?: (
+    sessionId: string,
+    request: Parameters<NonNullable<SessionRuntimeSpec["refreshTools"]>>[0],
+  ) => Promise<PiRuntimeContext | null>;
+  /** Drop attachment-only refresh memo after outstanding callbacks have drained. */
+  releaseRuntimeContext?: (sessionId: string) => void;
   /** Injectable Pi model collection, for deterministic tests and host-owned credentials. */
   models?: PiRuntimeHostOptions["models"];
   /**
@@ -390,7 +414,7 @@ export interface PiAdapterOptions {
      */
     sessionId: string;
     attachmentId: string;
-  }) => DesktopBrowserPort;
+  }) => AttachmentBrowserPort;
   /**
    * The desktop's background shell capability for one Session (VC-270),
    * scoped on {@link resolveBrowserPort}'s terms and resolved once per
@@ -409,7 +433,7 @@ export interface PiAdapterOptions {
     sessionId: string;
     attachmentId: string;
     workspacePath: string;
-  }) => DesktopShellPort;
+  }) => AttachmentShellPort;
   /**
    * The Session's decision port (VC-478), bound to the Session and its project
    * by the host. Absent means a Session whose frozen surface names `classify`
@@ -422,7 +446,7 @@ export interface PiAdapterOptions {
     /** Output filtering is universal; requesting/injection stays frozen membership. */
     allowInjection: boolean;
     wait: SecretWaitPublisher;
-  }) => DesktopSecretPort;
+  }) => AttachmentSecretPort;
   /**
    * Main-process MCP host for this attachment's exact frozen definitions.
    * Membership stays in Session history; this resolver owns only clients,
@@ -434,7 +458,7 @@ export interface PiAdapterOptions {
     attachmentId: string;
     workspacePath: string;
     mcpTools: readonly McpToolDefinition[];
-  }) => DesktopMcpPort;
+  }) => AttachmentMcpPort;
   /**
    * Runs one product verb a Session's frozen Agent Tool Surface names, in main's
    * own process (VC-162).
@@ -512,6 +536,7 @@ export interface PiAdapterOptions {
    * bundled (VC-471). Decides nothing about which Sessions have Code Mode.
    */
   codeModeSandbox?: PiRuntimeHostOptions["codeModeSandbox"];
+  persistActivityImage?: PiRuntimeHostOptions["persistActivityImage"];
   /** Injectable runtime factory. Defaults to the real Pi-backed runtime. */
   createRuntime?: (options: PiRuntimeHostOptions) => AgentRuntime;
   /**
@@ -702,6 +727,7 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
   const create = options.createRuntime ?? createPiAgentRuntime;
   const runtime = create({
     sessionDataDir: options.sessionDataDir,
+    ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.models === undefined ? {} : { models: options.models }),
     ...(options.credentials === undefined ? {} : { credentials: options.credentials }),
     ...(options.catalogReady === undefined ? {} : { catalogReady: options.catalogReady }),
@@ -719,6 +745,9 @@ export function createPiRuntimeHost(options: PiAdapterOptions): PiRuntimeHost {
       ? {}
       : { parallelMcpReads: options.parallelMcpReads }),
     ...(options.codeModeSandbox === undefined ? {} : { codeModeSandbox: options.codeModeSandbox }),
+    ...(options.persistActivityImage === undefined
+      ? {}
+      : { persistActivityImage: options.persistActivityImage }),
   });
 
   return {
@@ -768,6 +797,7 @@ function piNativeAdapter(
           "configuration_invalid",
         );
       }
+      const mcpTools = context.mcpTools ?? [];
       const binding = new PiBinding({
         spec,
         sink,
@@ -795,14 +825,14 @@ function piNativeAdapter(
         }),
         resolveSecretPort: options.resolveSecretPort,
         mcp:
-          (context.mcpTools?.length ?? 0) === 0
+          mcpTools.length === 0
             ? undefined
             : options.resolveMcpPort?.({
                 projectId: context.projectId,
                 sessionId: spec.sessionId,
                 attachmentId: spec.attachmentId,
                 workspacePath: spec.directory,
-                mcpTools: context.mcpTools ?? [],
+                mcpTools,
               }),
         callVerb: options.callVerb,
         prepareTurnAttachments: options.prepareTurnAttachments,
@@ -810,6 +840,10 @@ function piNativeAdapter(
         // worktree ticket's isolated checkout has its own `node_modules`
         // question, and the main checkout's answer is not it.
         workspaceEnvironment: measureWorkspaceEnvironment(spec.directory),
+        refreshRuntimeContext: options.refreshRuntimeContext,
+        releaseRuntimeContext: options.releaseRuntimeContext,
+        resolveMcpPort: options.resolveMcpPort,
+        resolveWebPorts: options.resolveWebPorts,
       });
       try {
         binding.bind(await runtime.startSession(binding.runtimeSpec()));
@@ -877,36 +911,49 @@ interface PiBindingOptions {
   /** What this Session may reach on the web, already resolved. `{}` is "nothing". */
   web: SessionWebPorts;
   /** The Session's scoped Browser capability; `undefined` is "no browser". */
-  browser: DesktopBrowserPort | undefined;
+  browser: AttachmentBrowserPort | undefined;
   /** The Session's scoped background shell capability; `undefined` is "no shells". */
-  shell: DesktopShellPort | undefined;
+  shell: AttachmentShellPort | undefined;
   /** The Session's decision port (VC-478), or undefined when this launch wired none. */
   classify: RuntimeClassifyPort | undefined;
   resolveSecretPort: PiAdapterOptions["resolveSecretPort"];
   /** Attachment-scoped MCP host for the frozen dynamic definitions. */
-  mcp: DesktopMcpPort | undefined;
+  mcp: AttachmentMcpPort | undefined;
   callVerb: PiAdapterOptions["callVerb"];
   prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
-  /** The workspace's package state as measured at attach; `undefined` when nobody measured. */
-  workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
+  /** The workspace's package state, always measured by the attach path. */
+  workspaceEnvironment: RuntimeWorkspaceEnvironment;
+  refreshRuntimeContext: PiAdapterOptions["refreshRuntimeContext"];
+  releaseRuntimeContext: PiAdapterOptions["releaseRuntimeContext"];
+  resolveMcpPort: PiAdapterOptions["resolveMcpPort"];
+  resolveWebPorts: PiAdapterOptions["resolveWebPorts"];
 }
 
 class PiBinding implements BindingHandle {
   readonly #spec: NativeAttachmentSpec;
   readonly #sink: ObservationSink;
-  readonly #context: PiRuntimeContext;
+  #context: PiRuntimeContext;
   readonly #recovery: RuntimeRecoveryRef | undefined;
   readonly #carry: ReturnType<typeof piContextCarry>;
   readonly #now: () => number;
-  readonly #web: SessionWebPorts;
-  readonly #browser: DesktopBrowserPort | undefined;
-  readonly #shell: DesktopShellPort | undefined;
+  #web: SessionWebPorts;
+  readonly #browser: AttachmentBrowserPort | undefined;
+  readonly #shell: AttachmentShellPort | undefined;
   readonly #classify: RuntimeClassifyPort | undefined;
-  readonly #secret: DesktopSecretPort | undefined;
-  readonly #mcp: DesktopMcpPort | undefined;
+  #secret: AttachmentSecretPort | undefined;
+  readonly #resolveSecretPort: PiAdapterOptions["resolveSecretPort"];
+  #mcp: AttachmentMcpPort | undefined;
+  readonly #mcpPorts = new Set<AttachmentMcpPort>();
+  #refreshTail: Promise<void> = Promise.resolve();
+  #refreshedSpec: SessionRuntimeSpec | null = null;
+  #releasePromise: Promise<void> | undefined;
+  readonly #refreshRuntimeContext: PiAdapterOptions["refreshRuntimeContext"];
+  readonly #releaseRuntimeContext: PiAdapterOptions["releaseRuntimeContext"];
+  readonly #resolveMcpPort: PiAdapterOptions["resolveMcpPort"];
+  readonly #resolveWebPorts: PiAdapterOptions["resolveWebPorts"];
   readonly #callVerb: PiAdapterOptions["callVerb"];
   readonly #prepareTurnAttachments: PiAdapterOptions["prepareTurnAttachments"];
-  readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment | undefined;
+  readonly #workspaceEnvironment: RuntimeWorkspaceEnvironment;
   readonly #abort = new AbortController();
   /** Questions the runtime is parked on, by the interaction id they were asked under. */
   readonly #asked = new Map<string, ParkedAsk>();
@@ -938,10 +985,24 @@ class PiBinding implements BindingHandle {
     this.#browser = options.browser;
     this.#shell = options.shell;
     this.#classify = options.classify;
-    this.#secret = options.resolveSecretPort?.({
-      sessionId: options.spec.sessionId,
-      projectId: options.context.projectId,
-      allowInjection: options.context.toolSurface.includes("request_secret"),
+    this.#resolveSecretPort = options.resolveSecretPort;
+    this.#secret = this.#secretFor(options.context);
+    this.#mcp = options.mcp;
+    if (options.mcp !== undefined) this.#mcpPorts.add(options.mcp);
+    this.#refreshRuntimeContext = options.refreshRuntimeContext;
+    this.#releaseRuntimeContext = options.releaseRuntimeContext;
+    this.#resolveMcpPort = options.resolveMcpPort;
+    this.#resolveWebPorts = options.resolveWebPorts;
+    this.#callVerb = options.callVerb;
+    this.#prepareTurnAttachments = options.prepareTurnAttachments;
+    this.#workspaceEnvironment = options.workspaceEnvironment;
+  }
+
+  #secretFor(context: PiRuntimeContext): AttachmentSecretPort | undefined {
+    return this.#resolveSecretPort?.({
+      sessionId: this.#spec.sessionId,
+      projectId: context.projectId,
+      allowInjection: context.toolSurface.includes("request_secret"),
       wait: {
         opened: (metadata) =>
           this.#observe({
@@ -979,10 +1040,6 @@ class PiBinding implements BindingHandle {
           ),
       },
     });
-    this.#mcp = options.mcp;
-    this.#callVerb = options.callVerb;
-    this.#prepareTurnAttachments = options.prepareTurnAttachments;
-    this.#workspaceEnvironment = options.workspaceEnvironment;
   }
 
   /**
@@ -1004,8 +1061,7 @@ class PiBinding implements BindingHandle {
     return this.#native;
   }
 
-  runtimeSpec(): SessionRuntimeSpec {
-    const context = this.#context;
+  runtimeSpec(context: PiRuntimeContext = this.#context): SessionRuntimeSpec {
     const identity = {
       sessionId: this.#spec.sessionId,
       rootThreadId: context.rootThreadId,
@@ -1102,20 +1158,23 @@ class PiBinding implements BindingHandle {
             };
     const runtimeSpec: SessionRuntimeSpec = {
       identity: sessionIdentity,
+      ...(this.#refreshRuntimeContext === undefined
+        ? {}
+        : {
+            refreshTools: (request) => this.#refreshTools(request),
+          }),
       // The directory the Session Engine PREPARED: for a worktree ticket the
       // isolated checkout — never the main one — and for a ticketless Session
       // the project root, which is the only place it was ever going to run.
       workspacePath: this.#spec.directory,
       venue: "local",
-      model: this.#context.model,
-      brief: { text: this.#context.brief },
-      // Spread, not assigned, for the same reason `promptResources` is: an
-      // unmeasured workspace must reach the prompt as an ABSENT field rather
-      // than one set to undefined, so "nobody measured" and "measured, nothing
-      // to say" stay the same silent prompt and neither poses as the other.
-      ...(this.#workspaceEnvironment === undefined
+      model: context.model,
+      ...(context.toolRefreshAnnouncements === undefined
         ? {}
-        : { workspaceEnvironment: this.#workspaceEnvironment }),
+        : { toolRefreshAnnouncements: context.toolRefreshAnnouncements }),
+      brief: { text: context.brief },
+      // Every attach measures the workspace; carry that same measurement.
+      workspaceEnvironment: this.#workspaceEnvironment,
       // The seam `composeSystemPrompt` renders as delimited RESOURCE sections.
       // Omitted rather than empty when the Session named no skills, so a spec
       // with no resources is a spec with no resources field — same shape the
@@ -1123,6 +1182,7 @@ class PiBinding implements BindingHandle {
       ...(context.promptResources.length === 0 ? {} : { promptResources: context.promptResources }),
       tools: {
         tools: context.toolSurface.filter(isPiCodingTool),
+        ...(context.refreshDescriptions === true ? { refreshDescriptions: true as const } : {}),
         // The todo tool's membership (VC-6), read back off the frozen record
         // exactly as the verb half is and for the same reason: it has no port,
         // so nothing else could decide it, and re-deriving it from today's
@@ -1137,6 +1197,9 @@ class PiBinding implements BindingHandle {
         ...(context.mcpManagementNames === undefined
           ? {}
           : { mcpManagementNames: context.mcpManagementNames }),
+        ...(context.askUserQuestions === undefined
+          ? {}
+          : { askUserQuestions: context.askUserQuestions }),
         ...(mcpTools.length === 0 ? {} : { mcp: mcpTools }),
         ...(wantsCodeMode ? { codeMode: context.codeMode! } : {}),
       },
@@ -1194,6 +1257,21 @@ class PiBinding implements BindingHandle {
               ),
           }),
     };
+    if (context.declarationSurface !== undefined) {
+      const { declarationSurface: declaration, ...base } = context;
+      // Build descriptor inputs from the last cold epoch, using the same
+      // deterministic adapter as executable bindings. No separate order oracle.
+      const declared = this.runtimeSpec({
+        ...base,
+        toolSurface: declaration.tools,
+        mcpTools: declaration.mcpTools,
+        codeMode: declaration.codeMode,
+        askUserQuestions: declaration.askUserQuestions,
+        refreshDescriptions: declaration.refreshDescriptions,
+      } as PiRuntimeContext).tools;
+      if (JSON.stringify(declared) !== JSON.stringify(runtimeSpec.tools))
+        runtimeSpec.declarationTools = declared;
+    }
     // `sessionToolIds` is the same derivation `createSessionTools` consumes.
     // Comparing the full ordered list here prevents corrupted/non-canonical
     // durable data from silently becoming a different provider tool array.
@@ -1203,6 +1281,87 @@ class PiBinding implements BindingHandle {
       );
     }
     return runtimeSpec;
+  }
+
+  #refreshTools(
+    request: Parameters<NonNullable<SessionRuntimeSpec["refreshTools"]>>[0],
+  ): Promise<SessionRuntimeSpec | null> {
+    if (this.#releasing) return Promise.resolve(null);
+    const refresh = this.#refreshTail.then(async () => {
+      if (this.#releasing) return null;
+      const updated = await this.#refreshRuntimeContext!(this.#spec.sessionId, request);
+      // The host may have committed a durable addition while release began.
+      // It belongs to the next attachment, not to ports this one is disposing.
+      if (this.#releasing || updated === null) return null;
+      // Return the SAME desired spec on a cheap revision hit. Runtime adoption
+      // or announcement may have failed after this adapter finished; null would
+      // strand that retry until restart. Successful runtime checks memoize it.
+      if (updated === this.#context) return this.#refreshedSpec;
+      if (
+        updated.toolSurface.includes("request_secret") &&
+        !this.#context.toolSurface.includes("request_secret")
+      ) {
+        await this.#secret?.dispose?.();
+        this.#secret = undefined;
+        if (this.#releasing) return null;
+        this.#secret = this.#secretFor(updated);
+      }
+      const previousMcp = this.#mcp;
+      const previousWeb = this.#web;
+      let createdPort: AttachmentMcpPort | undefined;
+      try {
+        const definitions = updated.mcpTools ?? [];
+        if (JSON.stringify(definitions) !== JSON.stringify(this.#context.mcpTools ?? [])) {
+          const port = this.#resolveMcpPort?.({
+            projectId: updated.projectId,
+            sessionId: this.#spec.sessionId,
+            attachmentId: this.#spec.attachmentId,
+            workspacePath: this.#spec.directory,
+            mcpTools: definitions,
+          });
+          // Own the port immediately, even if another resolver/spec validation throws.
+          if (port !== undefined && !this.#mcpPorts.has(port)) {
+            this.#mcpPorts.add(port);
+            createdPort = port;
+          }
+          this.#mcp = port;
+        }
+        this.#web = this.#resolveWebPorts?.() ?? this.#web;
+        const next = this.runtimeSpec(updated);
+        this.#context = updated;
+        this.#refreshedSpec = next;
+        return next;
+      } catch (error) {
+        this.#mcp = previousMcp;
+        this.#web = previousWeb;
+        if (createdPort !== undefined) {
+          try {
+            await this.#disposeMcpPort(createdPort);
+          } catch (disposeError) {
+            throw new AggregateError(
+              [error, disposeError],
+              "Tool refresh and MCP cleanup failed.",
+              {
+                cause: disposeError,
+              },
+            );
+          }
+        }
+        throw error;
+      }
+    });
+    // A rejected callback still drains, and must not poison later refreshes/release.
+    this.#refreshTail = refresh.then(
+      () => undefined,
+      () => undefined,
+    );
+    return refresh;
+  }
+
+  async #disposeMcpPort(port: AttachmentMcpPort): Promise<void> {
+    // Claim before calling user code, including synchronous/async failures.
+    if (!this.#mcpPorts.delete(port)) return;
+    await port.dispose();
   }
 
   /**
@@ -1266,7 +1425,7 @@ class PiBinding implements BindingHandle {
         try {
           const outcome = await handle.retry(command.commandId);
           return outcome.kind === "delivered"
-            ? this.#accepted(command.commandId)
+            ? this.#accepted(command.commandId, undefined, undefined, outcome.acceptedAt)
             : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
         } catch (error) {
           return this.#unknown(command.commandId, error);
@@ -1400,26 +1559,42 @@ class PiBinding implements BindingHandle {
    * is harmless either way, because the claim in {@link PiBinding.#take} lets
    * only one path end any of them.
    */
-  async release(_reason: ReleaseReason): Promise<void> {
-    if (this.#releasing) return;
+  release(_reason: ReleaseReason): Promise<void> {
+    if (this.#releasePromise !== undefined) return this.#releasePromise;
     this.#releasing = true;
+    this.#releasePromise = this.#finishRelease();
+    return this.#releasePromise;
+  }
+
+  async #finishRelease(): Promise<void> {
+    const failures: unknown[] = [];
+    const cleanup = async (work: () => unknown): Promise<void> => {
+      try {
+        await work();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
     // Iterated live rather than over a snapshot: a question that slipped in
-    // between two awaits here is one this loop still has to withdraw, and a
-    // question the map no longer holds is one something else already ended.
+    // between two awaits here is one this loop still has to withdraw.
     for (const asked of [this.#asked, this.#askedUser]) {
-      for (const interactionId of asked.keys()) await this.#withdraw(interactionId, true);
+      for (const interactionId of asked.keys())
+        await cleanup(() => this.#withdraw(interactionId, true));
     }
-    await this.#secret?.cancelPending?.();
+    await cleanup(() => this.#secret?.cancelPending?.());
     this.#abort.abort();
     this.#released = true;
-    this.#browser?.dispose?.();
-    // Before the handle closes: the execution environment's cleanup revokes
-    // the attachment's token, and a shell still being SIGTERMed should not
-    // outlive the identity it was spawned under (VC-270).
-    this.#shell?.dispose();
-    await this.#mcp?.dispose();
-    await this.#handle?.close();
-    await this.#secret?.dispose?.();
+    // Drain callbacks AND binding/failed-adoption cleanup before taking the
+    // disposal snapshot. New callbacks are refused from release's first tick.
+    await this.#refreshTail;
+    await cleanup(() => this.#releaseRuntimeContext?.(this.#spec.sessionId));
+    await cleanup(() => this.#browser?.dispose?.());
+    // Before close revokes the execution environment's attachment token (VC-270).
+    await cleanup(() => this.#shell?.dispose());
+    await Promise.all([...this.#mcpPorts].map((port) => cleanup(() => this.#disposeMcpPort(port))));
+    await cleanup(() => this.#handle?.close());
+    await cleanup(() => this.#secret?.dispose?.());
+    if (failures.length > 0) throw new AggregateError(failures, "Attachment cleanup failed.");
   }
 
   async #submit(
@@ -1468,9 +1643,15 @@ class PiBinding implements BindingHandle {
         attachments.images,
         resources,
         command.settle ?? "turn",
+        command.targetTurnId,
       );
       return outcome.kind === "delivered"
-        ? this.#accepted(command.commandId, outcome.delivery, outcome.turnOpened)
+        ? this.#accepted(
+            command.commandId,
+            outcome.delivery,
+            outcome.turnOpened,
+            outcome.acceptedAt,
+          )
         : this.#rejected(command.commandId, REJECTION_CODES[outcome.reason], outcome.message);
     } catch (error) {
       // The prompt reached Pi and something after it failed. "Unknown" is the
@@ -1573,11 +1754,32 @@ class PiBinding implements BindingHandle {
       label: option.label,
       description: option.description ?? null,
     }));
-    const multiple = request.multiple === true;
-    // A closed question with nothing to choose between asks for an answer that
-    // cannot be given, so the model's `false` is overruled exactly there rather
-    // than opening a card no press can ever satisfy.
-    const custom = options.length === 0 || request.allowOther !== false;
+    const prompts =
+      request.questions === undefined
+        ? [
+            {
+              id: DEFAULT_INTERACTION_PROMPT_ID,
+              label: request.question,
+              detail: null,
+              options,
+              multiple: request.multiple === true,
+              // Preserve historical calls, including the closed prose-only override.
+              custom: options.length === 0 || request.allowOther !== false,
+            },
+          ]
+        : request.questions.map((question, index) => ({
+            id: promptId(index),
+            label: question.question,
+            detail: null,
+            options: question.choices.map((choice, choiceIndex) => ({
+              id: `choice:${choiceIndex}`,
+              label: choice,
+              description: null,
+            })),
+            multiple: false,
+            custom: true,
+          }));
+    const first = prompts[0]!;
     await this.#observe({
       kind: "interaction",
       state: "opened",
@@ -1585,20 +1787,11 @@ class PiBinding implements BindingHandle {
       interaction: {
         id: interactionId,
         kind: "question",
-        title: request.question,
+        title: first.label,
         detail: null,
-        options,
-        multiple,
-        prompts: [
-          {
-            id: DEFAULT_INTERACTION_PROMPT_ID,
-            label: request.question,
-            detail: null,
-            options,
-            multiple,
-            custom,
-          },
-        ],
+        options: first.options,
+        multiple: first.multiple,
+        prompts,
         native: this.#native,
       },
     });
@@ -1713,11 +1906,12 @@ class PiBinding implements BindingHandle {
     commandId: string,
     delivery?: Extract<DeliveryReceipt, { status: "accepted" }>["delivery"],
     turnOpened?: boolean,
+    acceptedAt?: number,
   ): DeliveryReceipt {
     return {
       commandId,
       status: "accepted",
-      acceptedAt: this.#now(),
+      acceptedAt: acceptedAt ?? this.#now(),
       native: this.#native,
       // Both fields are transport answers only. The durable Receipt still says
       // that the Command was accepted; the live caller learns how it landed.
@@ -1785,7 +1979,25 @@ class PiBinding implements BindingHandle {
     // than after: a hold outliving its turn by even the sink's write would be
     // a hold with nobody driving, and the person's pill would say otherwise.
     if (observation.kind === "turn" && observation.state !== "started") {
-      this.#browser?.turnEnded();
+      // Only completed delegates retire their own headless pages. Board and
+      // Ticket turns (and interrupted delegates) retain theirs for continuation.
+      // Capture at this boundary, before stream delivery can resume the child.
+      if (this.#context.role === "subagent" && observation.state === "completed") {
+        this.#browser?.turnEnded({ closeHeadlessOwned: true });
+        // Its background shells end here too (VC-809), killed as Volli's so
+        // no exit notice follows: a dev server left running would otherwise
+        // reopen the answered child when it exits, long after the parent was
+        // told. The port stays usable for a turn a person resumes it with.
+        // Like the tab cleanup, a failure here must not cost the delegate its
+        // answer: it is logged, and the attachment's end retries the kill.
+        try {
+          this.#shell?.dispose();
+        } catch (error) {
+          log.warn("completed delegate background shell cleanup failed", { error });
+        }
+      } else {
+        this.#browser?.turnEnded();
+      }
     }
     return this.#sink.emit(observation);
   }

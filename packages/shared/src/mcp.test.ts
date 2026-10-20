@@ -1244,11 +1244,12 @@ describe("mcpEndpointSecretRefusal", () => {
 });
 
 describe("mcpRemovalWarning", () => {
-  it("names the reattachment older Sessions lose, and offers disabling instead", () => {
+  it("names unavailable calls without orphaning Sessions, and offers disabling instead", () => {
     const warning = mcpRemovalWarning("Files");
 
     expect(warning).toContain("Files");
-    expect(warning).toContain("fail to reattach");
+    expect(warning).toContain("named unavailable error");
+    expect(warning).toContain("can reattach");
     expect(warning).toContain("server_disable");
     expect(warning).toMatch(/cannot be removed by an agent at all/);
   });

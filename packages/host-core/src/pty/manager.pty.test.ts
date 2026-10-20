@@ -19,8 +19,9 @@ import { openTestDb, testProject, type TestDb } from "../db/test-helpers";
 import type { HostClientEventSink, HostEventMap, HostEventTopic } from "../ports";
 import { syncProjectRoots } from "../project-roots";
 import { worktreeDeps } from "../worktree-runtime";
-import { PtyManager, type PtyHost } from "./manager";
+import { PtyManager, type PtyManagerPorts } from "./manager";
 import { parkConfigFromEnv } from "./park";
+import type { ParkLedger } from "./park-controller";
 
 /** A client connection: what it was sent, and a disconnect the test pulls. */
 function makeClient(id: string) {
@@ -69,11 +70,15 @@ async function until(predicate: () => boolean, what: string, timeoutMs = 10_000)
   }
 }
 
-/** A ledger that remembers each shell's pid and when the supervisor saw it exit. */
+/**
+ * A ledger that remembers each shell's pid, when the supervisor saw it exit,
+ * and whether its tree is marked parked (VC-833).
+ */
 function makeLedger() {
   const pids: number[] = [];
   const exited = new Set<number>();
-  const ledger: SpawnLedgerPort = {
+  const parked = new Set<number>();
+  const ledger: SpawnLedgerPort & ParkLedger = {
     recordSpawn: (row) => {
       pids.push(row.pid);
       return String(pids.length - 1);
@@ -81,8 +86,12 @@ function makeLedger() {
     markExited: (id) => {
       exited.add(Number(id));
     },
+    markParked: (id, parkedAt) => {
+      if (parkedAt === null) parked.delete(Number(id));
+      else parked.add(Number(id));
+    },
   };
-  return { ledger, pids, exited };
+  return { ledger, pids, exited, parked };
 }
 
 const isAlive = (pid: number): boolean => {
@@ -98,6 +107,7 @@ let testDb: TestDb;
 let root: string;
 let dataDir: string;
 let manager: PtyManager;
+let host: PtyManagerPorts;
 let ledger: ReturnType<typeof makeLedger>;
 
 beforeEach(async () => {
@@ -112,22 +122,19 @@ beforeEach(async () => {
   syncProjectRoots([root]);
   ledger = makeLedger();
   const events = { publish: () => {} };
-  const host: PtyHost = {
+  host = {
     events,
     worktreeDeps: (db) => worktreeDeps(db, { events }, { dataDir }),
     ensureHarnessWorkspaceFiles: async () => ({ refused: [] }),
   };
-  manager = new PtyManager(
+  manager = new PtyManager({
     host,
-    testDb.db,
-    "",
-    createTestSessionEngine(testDb.db),
-    undefined,
-    parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
-    null,
-    "",
-    ledger.ledger,
-  );
+    db: testDb.db,
+    dbError: "",
+    sessionEngine: createTestSessionEngine(testDb.db),
+    parkConfig: parkConfigFromEnv({ VOLLI_PARK_DISABLE: "1" }, process.platform),
+    spawnLedger: ledger.ledger,
+  });
 });
 
 afterEach(async () => {
@@ -153,6 +160,18 @@ async function start(client: ReturnType<typeof makeClient>, onDisconnect?: "clos
 }
 
 describe("terminal supervisor on node-pty under plain Node (VC-560)", () => {
+  it("uses a supplied host venue for terminal births and observations", async () => {
+    Object.assign(host, { venue: { id: "hostd", kind: "remote" } });
+    const sessionId = await start(makeClient("remote"));
+    const engine = createTestSessionEngine(testDb.db);
+    const projection = await engine.getSession({ sessionId });
+    expect(projection!.attachments[0]!.venue).toEqual({ id: "hostd", kind: "remote" });
+    expect(
+      (await engine.listEvents({ sessionId })).every(
+        (event) => event.provenance.venue?.id === "hostd",
+      ),
+    ).toBe(true);
+  });
   it("detaches without killing, and an attach resyncs the retained output without replaying input", async () => {
     const first = makeClient("first");
     const sessionId = await start(first);
@@ -226,6 +245,49 @@ describe("terminal supervisor on node-pty under plain Node (VC-560)", () => {
     expect(manager.peek(sessionId, 1)).toBeUndefined();
   });
 
+  it("marks a parked shell's ledger row, and a kill clears the mark and ends the tree (VC-833)", async () => {
+    const parking = new PtyManager({
+      host,
+      db: testDb.db,
+      dbError: "",
+      sessionEngine: createTestSessionEngine(testDb.db),
+      parkConfig: { ...parkConfigFromEnv({}, "darwin"), enabled: true },
+      spawnLedger: ledger.ledger,
+    });
+    const owner = makeClient("owner");
+    const created = await parking.create(owner.sink, {
+      workspaceId: "w",
+      cwd: root,
+      cols: 80,
+      rows: 24,
+    });
+    if (!created.ok) throw new Error(created.error);
+    const pid = ledger.pids[0] ?? -1;
+    try {
+      expect(await parking.park(owner.sink, created.sessionId, { manual: true })).toEqual({
+        ok: true,
+      });
+      expect(ledger.parked.has(0)).toBe(true);
+      expect(parking.wake(owner.sink, created.sessionId)).toEqual({ ok: true });
+      expect(ledger.parked.has(0)).toBe(false);
+
+      expect(await parking.park(owner.sink, created.sessionId, { manual: true })).toEqual({
+        ok: true,
+      });
+      expect(ledger.parked.has(0)).toBe(true);
+      parking.killAll();
+      expect(ledger.parked.size).toBe(0);
+      await until(() => ledger.exited.has(0), "the parked shell to exit after the quit's kill");
+    } finally {
+      // A failed assertion must not leave this test's own shell frozen behind
+      // it — which is the very leak under test.
+      if (isAlive(pid)) {
+        process.kill(-pid, "SIGCONT");
+        parking.killAll();
+      }
+    }
+  });
+
   it("kills a close-policy client's terminal when it disconnects, as a desktop window's", async () => {
     const window = makeClient("window");
     const sessionId = await start(window);
@@ -233,6 +295,41 @@ describe("terminal supervisor on node-pty under plain Node (VC-560)", () => {
     window.disconnect();
     expect(manager.peek(sessionId, 1)).toBeUndefined();
     await until(() => ledger.exited.has(0), "the shell to exit after its window closed");
+  });
+
+  it("delivers a large final output and UTF-8 tail before exit", async () => {
+    const owner = makeClient("owner");
+    const sessionId = await start(owner);
+    const publish = owner.sink.publish.bind(owner.sink);
+    owner.sink.publish = (topic, payload) => {
+      publish(topic, payload);
+      if (topic === "terminal-data") {
+        const data = payload as TerminalDataEvent;
+        // Model a consuming client, after the pipeline has accounted its send.
+        queueMicrotask(() => manager.ack(owner.sink, sessionId, data.data.length));
+      }
+    };
+    manager.write(
+      owner.sink,
+      sessionId,
+      "printf '%0200000d' 0; printf '\\342\\230\\203-%s\\n' $((4+4)); exit 3\r",
+    );
+    await until(
+      () => owner.events.some((event) => event.topic === "terminal-exit"),
+      "the exit event",
+    );
+    const exitIndex = owner.events.findIndex((event) => event.topic === "terminal-exit");
+    const output = owner.events
+      .slice(0, exitIndex)
+      .filter((event) => event.topic === "terminal-data")
+      .map((event) => (event.payload as TerminalDataEvent).data)
+      .join("");
+    expect(output).toContain("0".repeat(200_000));
+    expect(output).toContain("☃-8");
+    expect(owner.events[exitIndex]?.payload).toEqual({ sessionId, exitCode: 3 });
+    expect(owner.events.slice(exitIndex + 1).some((event) => event.topic === "terminal-data")).toBe(
+      false,
+    );
   });
 
   it("delivers the shell's exit to the attached client after its final output", async () => {

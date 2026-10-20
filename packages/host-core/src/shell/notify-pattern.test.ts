@@ -205,14 +205,24 @@ describe("bounded shell notice patterns", () => {
     "matches adversarial bounded repeats without backtracking: %s",
     (pattern) => {
       const test = compile(pattern);
-      const started = performance.now();
-      for (let i = 0; i < 20; i += 1) {
-        expect(test("a".repeat(180) + "b")).toBe(false);
-        expect(test("a".repeat(180))).toBe(true);
-      }
+      const miss = "a".repeat(180) + "b";
+      const hit = "a".repeat(180);
       // A regression tripwire, not the safety proof: the old engine could spend
       // >500ms on just ONE such line; the algorithm above visits <= S*(L+1) states.
-      expect(performance.now() - started).toBeLessThan(500);
+      // So budget EACH line against that documented 500ms (VC-656): one shared
+      // 500ms wall across all 40 matches measured 639ms under coverage on a
+      // loaded runner, while each line cost ~16ms there — and a backtracking
+      // engine still trips this on its first line, not only in aggregate.
+      let slowest = 0;
+      for (let i = 0; i < 20; i += 1) {
+        let started = performance.now();
+        expect(test(miss)).toBe(false);
+        slowest = Math.max(slowest, performance.now() - started);
+        started = performance.now();
+        expect(test(hit)).toBe(true);
+        slowest = Math.max(slowest, performance.now() - started);
+      }
+      expect(slowest, `slowest single line took ${slowest.toFixed(1)}ms`).toBeLessThan(500);
     },
   );
 

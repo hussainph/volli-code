@@ -118,10 +118,10 @@ describe("OTEL_* never enters the process environment", () => {
     // moved (VC-622) — is the strongest available check that module-load side
     // effects do not configure OpenTelemetry through the environment — which is
     // how most OTel setups are wired, and is exactly what Volli must not do.
-    await import("@volli/host-core/observability/otlp");
-    await import("@volli/host-core/observability/settings");
-    await import("@volli/host-core/observability/sink");
-    await import("@volli/host-core/observability/genai");
+    await import("@volli/host-core/integrations");
+    await import("@volli/host-core/integrations");
+    await import("@volli/host-core/integrations");
+    await import("@volli/host-core/integrations");
     expect(Object.keys(process.env).filter((name) => name.startsWith("OTEL_"))).toEqual(before);
   });
 });
