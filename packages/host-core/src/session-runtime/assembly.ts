@@ -458,14 +458,23 @@ export function createRuntimeAssembly(options: RuntimeAssemblyOptions) {
               const grants = verbToolsOf(current.tools).filter(
                 (tool) => verbEntry(tool)?.retired === undefined,
               );
-              const tools = sessionToolSurface.resolve(
-                session.role,
-                session.role === "subagent" ? [] : grants,
-                parentId === null ? undefined : (parent?.tools ?? []),
-                mcpTools,
-                birth,
-                await sessionToolSurface.resolveClassify?.(session.projectId),
-              );
+              const tools = sessionToolSurface
+                .resolve(
+                  session.role,
+                  session.role === "subagent" ? [] : grants,
+                  parentId === null ? undefined : (parent?.tools ?? []),
+                  mcpTools,
+                  birth,
+                  await sessionToolSurface.resolveClassify?.(session.projectId),
+                )
+                .filter(
+                  // VC-861 is new-birth authority, not an additive refresh grant.
+                  // Preserve old Ticket surfaces across cold turns and reattach.
+                  (tool) =>
+                    tool !== "session.send" ||
+                    session.role !== "ticket" ||
+                    current.tools.includes("session.send"),
+                );
               const candidateCodeMode = codeMode.surfaceFor(birth, tools, mcpTools);
               const candidate = {
                 kind: "tool-surface" as const,

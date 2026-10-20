@@ -279,8 +279,8 @@ export interface RuntimeToolBundle {
   tools: readonly CodingToolId[];
   /**
    * Product verbs from `bundle(Role) ∪ grants(session)`, in canonical registry
-   * order. Absent means none — the Ticket Role's default bundle has no
-   * agent-control tool, while a durable birth grant may add one scoped verb.
+   * order. Absent means none. New Ticket Sessions carry delegation-scoped
+   * steering; durable birth grants may add other scoped verbs.
    *
    * Membership comes from here; execution comes from
    * {@link SessionRuntimeSpec.callVerb}. A bundle naming a verb with no port

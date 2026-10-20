@@ -1110,14 +1110,18 @@ describe("pollRetention — terminal PRs are not re-polled (VC-836)", () => {
 
   it("500 Done tickets merged in an earlier launch and 10 open PRs cost 10 gh calls a cycle", async () => {
     seedProject();
-    for (let i = 0; i < 500; i += 1) {
-      const url = `https://x/pull/m${i}`;
-      seedNamed({ id: `m${i}`, status: "done", prUrl: url, doneAt: 0 });
-      recordMerged(`m${i}`, url);
-    }
-    for (let i = 0; i < 10; i += 1) {
-      seedNamed({ id: `o${i}`, status: "needs_review", prUrl: `https://x/pull/o${i}` });
-    }
+    // Fixture durability is not under test: one commit avoids thousands of
+    // autocommit disk flushes consuming the test's timeout on a busy runner.
+    ctx.db.transaction(() => {
+      for (let i = 0; i < 500; i += 1) {
+        const url = `https://x/pull/m${i}`;
+        seedNamed({ id: `m${i}`, status: "done", prUrl: url, doneAt: 0 });
+        recordMerged(`m${i}`, url);
+      }
+      for (let i = 0; i < 10; i += 1) {
+        seedNamed({ id: `o${i}`, status: "needs_review", prUrl: `https://x/pull/o${i}` });
+      }
+    })();
     const { run, calls } = scriptedNet((_file, args) =>
       String(args[2]).includes("/pull/m") ? prView({ state: "MERGED" }) : prView(),
     );

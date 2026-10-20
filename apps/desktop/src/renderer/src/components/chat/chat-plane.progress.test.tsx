@@ -184,26 +184,26 @@ describe("calm message delivery timing", () => {
     expect(footer()).toBeNull();
   });
 
-  it("keeps durable pending steering quiet, not only held messages", async () => {
-    await render(
-      <ChatTurn
-        messages={[user]}
-        context={{
-          ...context,
-          deliveryLabels: new Map([[user.id, "Pending"]]),
-          steeringMessages: new Set([user.id]),
-        }}
-        live={false}
-      />,
-    );
-    expect(footer()).toBeNull();
-    await advance(599);
-    expect(footer()).toBeNull();
-    await advance(1);
-    expect(footer()).toBeNull();
-    await advance(1000);
-    expect(footer()).toBeNull();
-  });
+  it.each(["Pending", "Delivered", "Delivery unconfirmed"] as const)(
+    "never shows durable %s plumbing, even after the local wait delay",
+    async (label) => {
+      await render(
+        <ChatTurn
+          messages={[user]}
+          context={{
+            ...context,
+            deliveryLabels: new Map([[user.id, label]]),
+          }}
+          live={false}
+        />,
+      );
+      expect(footer()).toBeNull();
+      await advance(599);
+      expect(footer()).toBeNull();
+      await advance(1);
+      expect(footer()).toBeNull();
+    },
+  );
 
   it("never flashes state for a send accepted before 600ms, including after its old deadline", async () => {
     const message = {
@@ -242,20 +242,21 @@ describe("calm message delivery timing", () => {
     expect(footer()?.textContent).toBe("Queued");
   });
 
-  it.each(["Not delivered", "Delivery unconfirmed"] as const)(
-    "shows %s immediately even if pending has not reached its delay",
-    async (label) => {
-      await render(
-        <ChatTurn messages={[user]} context={context} live={false} deliveryLabel="Sending…" />,
-      );
-      await advance(100);
-      expect(footer()).toBeNull();
-      await render(
-        <ChatTurn messages={[user]} context={context} live={false} deliveryLabel={label} />,
-      );
-      expect(footer()?.textContent).toBe(label);
-    },
-  );
+  it("shows a durable refusal immediately even if the local wait has not reached its delay", async () => {
+    await render(
+      <ChatTurn messages={[user]} context={context} live={false} deliveryLabel="Sending…" />,
+    );
+    await advance(100);
+    expect(footer()).toBeNull();
+    await render(
+      <ChatTurn
+        messages={[user]}
+        context={{ ...context, deliveryLabels: new Map([[user.id, "Not delivered"]]) }}
+        live={false}
+      />,
+    );
+    expect(footer()?.textContent).toBe("Not delivered");
+  });
 
   it("starts a fresh delay when the same component receives a different message", async () => {
     await render(

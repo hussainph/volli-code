@@ -43,9 +43,9 @@ function frame(
     transcript: message === null ? null : { message },
   };
 }
-const submitted = () =>
+const submitted = (sequence = 1) =>
   frame(
-    1,
+    sequence,
     {
       kind: "command.recorded",
       command: {
@@ -61,8 +61,8 @@ const submitted = () =>
     },
     user,
   );
-function receipt(status: CommandReceipt["status"], commandId = "command") {
-  const common = { id: "receipt", commandId, recordedAt: 2, sequence: 2 };
+function receipt(status: CommandReceipt["status"], commandId = "command", sequence = 2) {
+  const common = { id: "receipt", commandId, recordedAt: sequence, sequence };
   const value: CommandReceipt =
     status === "accepted"
       ? {
@@ -76,7 +76,7 @@ function receipt(status: CommandReceipt["status"], commandId = "command") {
         : status === "completed"
           ? { ...common, status, result: { kind: "message.submitted", sessionId: "session" } }
           : { ...common, status, detail: "unknown" };
-  return frame(2, { kind: "command.receipt.recorded", receipt: value });
+  return frame(sequence, { kind: "command.receipt.recorded", receipt: value });
 }
 describe("message ownership through the real renderer codec", () => {
   it("keeps intent pending until a runtime acceptance fact", () => {
@@ -97,20 +97,31 @@ describe("message ownership through the real renderer codec", () => {
       "Delivery unconfirmed",
     );
   });
-  it("takes correlated turn start as acceptance, never unrelated starts or receipts", () => {
+  it("does not use synthetic turn correlation as acceptance or call a running turn refused", () => {
     const started = (id: string | null) =>
       frame(2, { kind: "turn.started", attachmentId: "attachment", turnId: "turn" }, null, id);
-    expect(messageDeliveryLabels([submitted(), started("command")]).get(user.id)).toBe("Delivered");
+    expect(messageDeliveryLabels([submitted(), started("command")]).get(user.id)).toBe("Pending");
     expect(
-      messageDeliveryLabels([submitted(), started("command"), receipt("unreconciled")]).get(
+      messageDeliveryLabels([submitted(), started(null), receipt("rejected", "command", 3)]).get(
         user.id,
       ),
-    ).toBe("Delivered");
+    ).toBe("Delivery unconfirmed");
+    expect(
+      messageDeliveryLabels([submitted(), started(null), receipt("unreconciled")]).get(user.id),
+    ).toBe("Delivery unconfirmed");
     expect(
       messageDeliveryLabels([submitted(), started(null), receipt("accepted", "another")]).get(
         user.id,
       ),
     ).toBe("Pending");
+    // A turn preceding the submit cannot have run this message.
+    expect(
+      messageDeliveryLabels([
+        frame(1, { kind: "turn.started", attachmentId: "attachment", turnId: "old-turn" }),
+        submitted(2),
+        receipt("rejected", "command", 3),
+      ]).get(user.id),
+    ).toBe("Not delivered");
   });
   it("accepts runtime transcript observation and tolerates future or missing envelopes", () => {
     const observed = frame(
